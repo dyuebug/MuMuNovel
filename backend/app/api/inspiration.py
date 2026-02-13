@@ -141,7 +141,7 @@ async def generate_options(
             
             # 如果是重试，在提示词中强调格式要求
             if attempt > 0:
-                system_prompt += f"\n\n⚠️ 这是第{attempt + 1}次生成，请务必严格按照JSON格式返回，确保options数组包含6个有效选项！"
+                system_prompt += f"\n\n这是第{attempt + 1}次生成，请只返回合法JSON，并确保options里有6个有效选项。"
             
             # 调用AI生成选项
             # 关键改进：使用递减的temperature以保持后续阶段与前文的一致性
@@ -302,25 +302,25 @@ async def refine_options(
             # 添加反馈信息到提示词
             feedback_instruction = f"""
 
-⚠️ 用户对之前的选项不太满意，提供了以下反馈：
+用户对上一轮选项不满意，反馈如下：
 「{feedback}」
 
-之前生成的选项：
+上一轮选项：
 {chr(10).join([f"- {opt}" for opt in previous_options]) if previous_options else "（无）"}
 
-请根据用户的反馈调整生成策略，提供更符合用户期望的新选项。
-注意：
-1. 仔细理解用户的反馈意图
-2. 生成的新选项要明显体现用户要求的调整方向
-3. 保持与已有上下文的一致性
-4. 确保返回6个有效选项
+请根据反馈调整方向，给出更贴近用户预期的新选项。
+要求：
+1. 先理解反馈意图，再改写方向
+2. 新选项要体现用户提出的偏好变化
+3. 与已有上下文保持一致，不跑题
+4. 返回6个有效选项
 """
             
             system_prompt += feedback_instruction
             
             # 如果是重试，强调格式要求
             if attempt > 0:
-                system_prompt += f"\n\n⚠️ 这是第{attempt + 1}次生成，请务必严格按照JSON格式返回！"
+                system_prompt += f"\n\n这是第{attempt + 1}次生成，请只返回合法JSON。"
             
             # 调用AI生成选项
             temperature = TEMPERATURE_SETTINGS.get(step, 0.7)
@@ -446,7 +446,7 @@ async def quick_generate(
         # 格式化提示词
         prompts = {
             "system": PromptService.format_prompt(system_template, existing=existing_text),
-            "user": "请补全小说信息"
+            "user": "请在不偏离现有信息的前提下补全缺失字段，只返回JSON。"
         }
         
         # 调用AI - 流式生成并累积文本

@@ -1611,15 +1611,15 @@ async def generate_chapter_content_stream(
                 
                 logger.info(f"开始AI流式创作章节 {chapter_id}")
                 
-                # 🎨 方案一：将写作风格注入到系统提示词（最高优先级）
+                # 🎨 方案一：将写作风格注入到系统提示词（优先参考）
                 system_prompt_with_style = None
                 if style_content:
-                    system_prompt_with_style = f"""【🎨 写作风格要求 - 最高优先级】
+                    system_prompt_with_style = f"""【🎨 写作风格参考】
 
 {style_content}
 
-⚠️ 请严格遵循上述写作风格要求进行创作，这是最重要的指令！
-确保在整个章节创作过程中始终保持风格的一致性。"""
+请优先贴合上述写作风格进行创作。
+整章语气尽量保持一致，自然表达，不要写成模板腔。"""
                     logger.info(f"✅ 已将写作风格注入系统提示词（{len(style_content)}字符）")
                 
                 # 🔢 计算 max_tokens 限制
@@ -2921,12 +2921,12 @@ async def generate_single_chapter_for_batch(
     # 🎨 方案一：将写作风格注入到系统提示词（批量生成）
     system_prompt_with_style = None
     if style_content:
-        system_prompt_with_style = f"""【🎨 写作风格要求 - 最高优先级】
+        system_prompt_with_style = f"""【🎨 写作风格参考】
 
 {style_content}
 
-⚠️ 请严格遵循上述写作风格要求进行创作，这是最重要的指令！
-确保在整个章节创作过程中始终保持风格的一致性。"""
+请优先贴合上述写作风格进行创作。
+整章语气尽量保持一致，自然表达，不要写成模板腔。"""
         logger.info(f"✅ 批量生成 - 已将写作风格注入系统提示词（{len(style_content)}字符）")
     
     # 🔢 计算 max_tokens 限制（批量生成）
