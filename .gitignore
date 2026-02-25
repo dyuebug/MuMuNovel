@@ -124,3 +124,7 @@ backend/embedding/
 
 # 提示词工坊实例标识（每个部署实例必须唯一）
 backend/.instance_id
+# AI 工具配置目录
+.claude/
+.spec-workflow/
+.zcf/
