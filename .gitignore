@@ -115,7 +115,6 @@ embed_build.py
 
 
 data/
-docs/
 data_old/
 backend/migrate_all_databases.py
 test_api.py
