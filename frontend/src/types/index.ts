@@ -18,6 +18,10 @@ export interface Settings {
   api_provider: string;
   api_key: string;
   api_base_url: string;
+  api_backup_urls?: string[];
+  provider_type?: string;
+  fallback_strategy?: 'auto' | 'manual';
+  azure_api_version?: string;
   llm_model: string;
   temperature: number;
   max_tokens: number;
@@ -31,6 +35,10 @@ export interface SettingsUpdate {
   api_provider?: string;
   api_key?: string;
   api_base_url?: string;
+  api_backup_urls?: string[];
+  provider_type?: string;
+  fallback_strategy?: 'auto' | 'manual';
+  azure_api_version?: string;
   llm_model?: string;
   temperature?: number;
   max_tokens?: number;
@@ -43,6 +51,10 @@ export interface APIKeyPresetConfig {
   api_provider: string;
   api_key: string;
   api_base_url?: string;
+  api_backup_urls?: string[];
+  provider_type?: string;
+  fallback_strategy?: 'auto' | 'manual';
+  azure_api_version?: string;
   llm_model: string;
   temperature: number;
   max_tokens: number;

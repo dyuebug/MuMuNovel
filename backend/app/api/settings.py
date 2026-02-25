@@ -93,8 +93,15 @@ async def get_user_ai_service(
     else:
         logger.debug(f"用户 {user.user_id} 没有配置MCP插件，禁用MCP")
     
+    # 解析 backup_urls（数据库存储为 JSON 字符串）
+    backup_urls = None
+    if settings.api_backup_urls:
+        try:
+            backup_urls = json.loads(settings.api_backup_urls) if isinstance(settings.api_backup_urls, str) else settings.api_backup_urls
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(f"用户 {user.user_id} 的 api_backup_urls 解析失败，忽略备用地址")
+
     # ✅ 使用支持MCP的工厂函数创建AI服务实例
-    # 传递 user_id 和 db_session，使得 AIService 能够自动加载用户配置的MCP工具
     return create_user_ai_service_with_mcp(
         api_provider=settings.api_provider,
         api_key=settings.api_key,
@@ -102,10 +109,12 @@ async def get_user_ai_service(
         model_name=settings.llm_model,
         temperature=settings.temperature,
         max_tokens=settings.max_tokens,
-        user_id=user.user_id,          # ✅ 传递 user_id
-        db_session=db,                 # ✅ 传递 db_session
+        user_id=user.user_id,
+        db_session=db,
         system_prompt=settings.system_prompt,
-        enable_mcp=enable_mcp,         # 根据MCP插件状态动态决定
+        enable_mcp=enable_mcp,
+        backup_urls=backup_urls,
+        fallback_strategy=settings.fallback_strategy,
     )
 
 
@@ -164,7 +173,11 @@ async def save_settings(
     
     # 准备数据
     settings_dict = data.model_dump(exclude_unset=True)
-    
+
+    # api_backup_urls 需要序列化为 JSON 字符串存储
+    if 'api_backup_urls' in settings_dict and settings_dict['api_backup_urls'] is not None:
+        settings_dict['api_backup_urls'] = json.dumps(settings_dict['api_backup_urls'], ensure_ascii=False)
+
     if settings:
         # 更新现有设置
         for key, value in settings_dict.items():
@@ -237,6 +250,11 @@ async def update_settings(
     
     # 更新设置
     update_data = data.model_dump(exclude_unset=True)
+
+    # api_backup_urls 需要序列化为 JSON 字符串存储
+    if 'api_backup_urls' in update_data and update_data['api_backup_urls'] is not None:
+        update_data['api_backup_urls'] = json.dumps(update_data['api_backup_urls'], ensure_ascii=False)
+
     for key, value in update_data.items():
         setattr(settings, key, value)
     
@@ -278,55 +296,82 @@ async def get_available_models(
 ):
     """
     从配置的 API 获取可用的模型列表
-    
+
     Args:
         api_key: API 密钥
         api_base_url: API 基础 URL
-        provider: API 提供商 (openai, anthropic, azure, custom)
-    
+        provider: API 提供商 (openai, anthropic, azure, newapi, custom)
+
     Returns:
         模型列表
     """
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            if provider == "openai" or provider == "azure" or provider == "custom":
-                # OpenAI 兼容接口获取模型列表
+            # OpenAI 兼容接口（包括 openai/azure/newapi/custom）
+            if provider in ["openai", "azure", "newapi", "custom"]:
                 url = f"{api_base_url.rstrip('/')}/models"
-                headers = {
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
-                }
-                
-                logger.info(f"正在从 {url} 获取模型列表")
-                response = await client.get(url, headers=headers)
-                response.raise_for_status()
-                
-                data = response.json()
-                models = []
-                
-                if "data" in data and isinstance(data["data"], list):
-                    for model in data["data"]:
-                        model_id = model.get("id", "")
-                        # 返回所有模型，不进行过滤
-                        if model_id:
-                            models.append({
-                                "value": model_id,
-                                "label": model_id,
-                                "description": model.get("description", "") or f"Created: {model.get('created', 'N/A')}"
-                            })
-                
-                if not models:
-                    raise HTTPException(
-                        status_code=404,
-                        detail="未能从 API 获取到可用的模型列表"
-                    )
-                
-                logger.info(f"成功获取 {len(models)} 个模型")
-                return {
-                    "provider": provider,
-                    "models": models,
-                    "count": len(models)
-                }
+
+                # Azure 使用 api-key 头，其他使用 Bearer
+                if provider == "azure":
+                    headers = {
+                        "api-key": api_key,
+                        "Content-Type": "application/json"
+                    }
+                else:
+                    headers = {
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    }
+
+                logger.info(f"正在从 {url} 获取模型列表 (provider: {provider})")
+
+                try:
+                    response = await client.get(url, headers=headers)
+                    response.raise_for_status()
+
+                    data = response.json()
+                    models = []
+
+                    if "data" in data and isinstance(data["data"], list):
+                        for model in data["data"]:
+                            model_id = model.get("id", "")
+                            if model_id:
+                                models.append({
+                                    "value": model_id,
+                                    "label": model_id,
+                                    "description": model.get("description", "") or f"Created: {model.get('created', 'N/A')}"
+                                })
+
+                    if not models:
+                        # Azure 可能无法获取模型列表，提供友好提示
+                        if provider == "azure":
+                            return {
+                                "provider": provider,
+                                "models": [],
+                                "count": 0,
+                                "message": "Azure OpenAI 无法自动获取模型列表，请手动填写部署名称到模型字段"
+                            }
+                        raise HTTPException(
+                            status_code=404,
+                            detail="未能从 API 获取到可用的模型列表"
+                        )
+
+                    logger.info(f"成功获取 {len(models)} 个模型")
+                    return {
+                        "provider": provider,
+                        "models": models,
+                        "count": len(models)
+                    }
+                except httpx.HTTPStatusError as e:
+                    if provider == "azure" and e.response.status_code in [404, 403]:
+                        # Azure 端点可能不支持 /models，返回友好提示
+                        return {
+                            "provider": provider,
+                            "models": [],
+                            "count": 0,
+                            "message": "Azure OpenAI 无法自动获取模型列表，请手动填写部署名称到模型字段"
+                        }
+                    raise
                 
             elif provider == "anthropic":
                 # Anthropic models API

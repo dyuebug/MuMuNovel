@@ -1,7 +1,8 @@
 """设置相关的Pydantic模型"""
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Optional, List
 from datetime import datetime
+import json
 
 
 class SettingsBase(BaseModel):
@@ -11,6 +12,10 @@ class SettingsBase(BaseModel):
     api_provider: Optional[str] = Field(default="openai", description="API提供商")
     api_key: Optional[str] = Field(default=None, description="API密钥")
     api_base_url: Optional[str] = Field(default=None, description="自定义API地址")
+    api_backup_urls: Optional[List[str]] = Field(default=None, description="备用API地址列表")
+    provider_type: Optional[str] = Field(default="openai", description="Provider类型(openai/azure/newapi/custom)")
+    fallback_strategy: Optional[str] = Field(default="auto", description="端点切换策略(auto/manual)")
+    azure_api_version: Optional[str] = Field(default=None, description="Azure API版本")
     llm_model: Optional[str] = Field(default="gpt-4", description="模型名称")
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0, description="温度参数")
     max_tokens: Optional[int] = Field(default=2000, ge=1, description="最大token数")
@@ -31,11 +36,25 @@ class SettingsUpdate(SettingsBase):
 class SettingsResponse(SettingsBase):
     """设置响应模型"""
     model_config = ConfigDict(from_attributes=True, protected_namespaces=())
-    
+
     id: str
     user_id: str
     created_at: datetime
     updated_at: datetime
+
+    @field_validator('api_backup_urls', mode='before')
+    @classmethod
+    def parse_backup_urls(cls, v):
+        """数据库存储为 JSON 字符串，反序列化为 List[str]"""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                return parsed if isinstance(parsed, list) else None
+            except (json.JSONDecodeError, TypeError):
+                return None
+        return v
 
 
 # ========== API配置预设相关模型 ==========
@@ -47,6 +66,10 @@ class APIKeyPresetConfig(BaseModel):
     api_provider: str = Field(..., description="API提供商")
     api_key: str = Field(..., description="API密钥")
     api_base_url: Optional[str] = Field(None, description="自定义API地址")
+    api_backup_urls: Optional[List[str]] = Field(None, description="备用API地址列表")
+    provider_type: Optional[str] = Field(default="openai", description="Provider类型(openai/azure/newapi/custom)")
+    fallback_strategy: Optional[str] = Field(default="auto", description="端点切换策略(auto/manual)")
+    azure_api_version: Optional[str] = Field(None, description="Azure API版本")
     llm_model: str = Field(..., description="模型名称")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="温度参数")
     max_tokens: int = Field(default=2000, ge=1, description="最大token数")

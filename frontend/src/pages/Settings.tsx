@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Card, Form, Input, Button, Select, Slider, InputNumber, message, Space, Typography, Spin, Modal, Alert, Grid, Tabs, List, Tag, Popconfirm, Empty, Row, Col } from 'antd';
+import { Card, Form, Input, Button, Select, Slider, InputNumber, message, Space, Typography, Spin, Modal, Alert, Grid, Tabs, List, Tag, Popconfirm, Empty, Row, Col, Radio } from 'antd';
 import { SaveOutlined, DeleteOutlined, ReloadOutlined, InfoCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, ThunderboltOutlined, PlusOutlined, EditOutlined, CopyOutlined, WarningOutlined } from '@ant-design/icons';
 import { settingsApi, mcpPluginApi } from '../services/api';
 import type { SettingsUpdate, APIKeyPreset, PresetCreateRequest, APIKeyPresetConfig } from '../types';
 import { eventBus, EventNames } from '../store/eventBus';
+import ProviderSelector from '../components/ProviderSelector';
+import EndpointListEditor from '../components/EndpointListEditor';
+import AzureConfigGuide from '../components/AzureConfigGuide';
 
 const { Title, Text } = Typography;
-const { Option } = Select;
 const { useBreakpoint } = Grid;
 const { TextArea } = Input;
 
@@ -49,6 +51,15 @@ export default function SettingsPage() {
   const [fetchingPresetModels, setFetchingPresetModels] = useState(false);
   const [presetModelsFetched, setPresetModelsFetched] = useState(false);
 
+  // API 兼容性相关状态
+  const [selectedProvider, setSelectedProvider] = useState('openai');
+  const [endpoints, setEndpoints] = useState<Array<{
+    url: string;
+    type: 'primary' | 'fallback';
+    status?: 'success' | 'error' | 'pending' | 'untested';
+  }>>([]);
+  const [fallbackStrategy, setFallbackStrategy] = useState<'auto' | 'manual'>('auto');
+
   useEffect(() => {
     loadSettings();
     if (activeTab === 'presets') {
@@ -75,6 +86,21 @@ export default function SettingsPage() {
     try {
       const settings = await settingsApi.getSettings();
       form.setFieldsValue(settings);
+
+      // 初始化 API 兼容性相关状态
+      setSelectedProvider(settings.provider_type || settings.api_provider || 'openai');
+      setFallbackStrategy(settings.fallback_strategy || 'auto');
+      // 构建端点列表：主端点 + 备端点
+      const endpointList: Array<{ url: string; type: 'primary' | 'fallback'; status?: 'success' | 'error' | 'pending' | 'untested' }> = [];
+      if (settings.api_base_url) {
+        endpointList.push({ url: settings.api_base_url, type: 'primary', status: 'untested' });
+      }
+      if (settings.api_backup_urls && settings.api_backup_urls.length > 0) {
+        settings.api_backup_urls.forEach(url => {
+          endpointList.push({ url, type: 'fallback', status: 'untested' });
+        });
+      }
+      setEndpoints(endpointList);
 
       // 判断是否为默认设置（id='0'表示来自.env的默认配置）
       if (settings.id === '0' || !settings.id) {
@@ -108,6 +134,19 @@ export default function SettingsPage() {
   const handleSave = async (values: SettingsUpdate) => {
     setLoading(true);
     try {
+      // 注入 API 兼容性字段
+      const saveData: SettingsUpdate = {
+        ...values,
+        provider_type: selectedProvider,
+        fallback_strategy: fallbackStrategy,
+        api_backup_urls: endpoints.filter(e => e.type === 'fallback').map(e => e.url).filter(Boolean),
+      };
+      // 如果主端点列表有值，同步 api_base_url
+      const primaryEndpoint = endpoints.find(e => e.type === 'primary');
+      if (primaryEndpoint?.url) {
+        saveData.api_base_url = primaryEndpoint.url;
+      }
+
       // 检查是否与 MCP 缓存的配置不一致
       const verifiedConfigStr = localStorage.getItem('mcp_verified_config');
       let configChanged = false;
@@ -116,15 +155,15 @@ export default function SettingsPage() {
         try {
           const verifiedConfig = JSON.parse(verifiedConfigStr);
           configChanged =
-            verifiedConfig.provider !== values.api_provider ||
-            verifiedConfig.baseUrl !== values.api_base_url ||
-            verifiedConfig.model !== values.llm_model;
+            verifiedConfig.provider !== saveData.api_provider ||
+            verifiedConfig.baseUrl !== saveData.api_base_url ||
+            verifiedConfig.model !== saveData.llm_model;
         } catch (e) {
           console.error('Failed to parse verified config:', e);
         }
       }
       
-      await settingsApi.saveSettings(values);
+      await settingsApi.saveSettings(saveData);
       message.success('设置已保存');
       setHasSettings(true);
       setIsDefaultSettings(false);
@@ -142,12 +181,12 @@ export default function SettingsPage() {
         if (activePreset) {
           const presetConfig = activePreset.config;
           const configMismatch =
-            presetConfig.api_provider !== values.api_provider ||
-            presetConfig.api_key !== values.api_key ||
-            presetConfig.api_base_url !== values.api_base_url ||
-            presetConfig.llm_model !== values.llm_model ||
-            presetConfig.temperature !== values.temperature ||
-            presetConfig.max_tokens !== values.max_tokens;
+            presetConfig.api_provider !== saveData.api_provider ||
+            presetConfig.api_key !== saveData.api_key ||
+            presetConfig.api_base_url !== saveData.api_base_url ||
+            presetConfig.llm_model !== saveData.llm_model ||
+            presetConfig.temperature !== saveData.temperature ||
+            presetConfig.max_tokens !== saveData.max_tokens;
           
           if (configMismatch) {
             // 配置已变更，清除前端的激活状态标记
@@ -241,6 +280,9 @@ export default function SettingsPage() {
           temperature: 0.7,
           max_tokens: 2000,
         });
+        setSelectedProvider('openai');
+        setEndpoints([{ url: 'https://api.openai.com/v1', type: 'primary', status: 'untested' }]);
+        setFallbackStrategy('auto');
         message.info('已重置为默认值，请点击保存');
       },
     });
@@ -270,17 +312,28 @@ export default function SettingsPage() {
     });
   };
 
-  const apiProviders = [
-    { value: 'openai', label: 'OpenAI Compatible', defaultUrl: 'https://api.openai.com/v1' },
-    // { value: 'anthropic', label: 'Anthropic (Claude)', defaultUrl: 'https://api.anthropic.com' },
-    { value: 'gemini', label: 'Google Gemini', defaultUrl: 'https://generativelanguage.googleapis.com/v1beta' },
-  ];
-
   const handleProviderChange = (value: string) => {
-    const provider = apiProviders.find(p => p.value === value);
-    if (provider && provider.defaultUrl) {
-      form.setFieldValue('api_base_url', provider.defaultUrl);
+    setSelectedProvider(value);
+    // 对于 openai 兼容族，统一走 openai 的默认 URL
+    const providerDefaultUrls: Record<string, string> = {
+      openai: 'https://api.openai.com/v1',
+      newapi: '',
+      azure: '',
+      custom: '',
+      gemini: 'https://generativelanguage.googleapis.com/v1beta',
+    };
+    const defaultUrl = providerDefaultUrls[value] || '';
+    if (defaultUrl) {
+      form.setFieldValue('api_base_url', defaultUrl);
+      // 同步更新端点列表的主端点
+      setEndpoints(prev => {
+        if (prev.length === 0) return [{ url: defaultUrl, type: 'primary', status: 'untested' as const }];
+        const updated = [...prev];
+        updated[0] = { ...updated[0], url: defaultUrl, status: 'untested' as const };
+        return updated;
+      });
     }
+    form.setFieldValue('provider_type', value);
     // 清空模型列表，需要重新获取
     setModelOptions([]);
     setModelsFetched(false);
@@ -480,10 +533,15 @@ export default function SettingsPage() {
 
   // 预设编辑窗口：提供商变更时更新默认URL并清空模型列表
   const handlePresetProviderChange = (value: string) => {
-    const provider = apiProviders.find(p => p.value === value);
-    if (provider && provider.defaultUrl) {
-      presetForm.setFieldValue('api_base_url', provider.defaultUrl);
+    const providerDefaultUrls: Record<string, string> = {
+      openai: 'https://api.openai.com/v1',
+      gemini: 'https://generativelanguage.googleapis.com/v1beta',
+    };
+    const defaultUrl = providerDefaultUrls[value];
+    if (defaultUrl) {
+      presetForm.setFieldValue('api_base_url', defaultUrl);
     }
+    presetForm.setFieldValue('provider_type', value);
     // 清空模型列表，需要重新获取
     setPresetModelOptions([]);
     setPresetModelsFetched(false);
@@ -499,6 +557,10 @@ export default function SettingsPage() {
         llm_model: values.llm_model,
         temperature: values.temperature,
         max_tokens: values.max_tokens,
+        provider_type: values.api_provider,
+        api_backup_urls: values.api_backup_urls || [],
+        fallback_strategy: values.fallback_strategy || 'auto',
+        azure_api_version: values.azure_api_version,
       };
 
       if (editingPreset) {
@@ -768,8 +830,12 @@ export default function SettingsPage() {
     switch (provider) {
       case 'openai':
         return 'blue';
-      // case 'anthropic':
-      //   return 'purple';
+      case 'azure':
+        return 'cyan';
+      case 'newapi':
+        return 'orange';
+      case 'custom':
+        return 'purple';
       case 'gemini':
         return 'green';
       default:
@@ -1033,14 +1099,16 @@ export default function SettingsPage() {
                             name="api_provider"
                             rules={[{ required: true, message: '请选择API提供商' }]}
                           >
-                            <Select size={isMobile ? 'middle' : 'large'} onChange={handleProviderChange}>
-                              {apiProviders.map(provider => (
-                                <Option key={provider.value} value={provider.value}>
-                                  {provider.label}
-                                </Option>
-                              ))}
-                            </Select>
+                            <ProviderSelector
+                              value={selectedProvider}
+                              onChange={(value) => {
+                                handleProviderChange(value);
+                                form.setFieldValue('api_provider', value);
+                              }}
+                            />
                           </Form.Item>
+
+                          <AzureConfigGuide visible={selectedProvider === 'azure'} />
 
                           <Form.Item
                             label={
@@ -1081,7 +1149,45 @@ export default function SettingsPage() {
                             <Input
                               size={isMobile ? 'middle' : 'large'}
                               placeholder="https://api.openai.com/v1"
+                              onChange={(e) => {
+                                // 同步更新端点列表的主端点
+                                const url = e.target.value;
+                                setEndpoints(prev => {
+                                  if (prev.length === 0) return [{ url, type: 'primary', status: 'untested' as const }];
+                                  const updated = [...prev];
+                                  updated[0] = { ...updated[0], url, status: 'untested' as const };
+                                  return updated;
+                                });
+                              }}
                             />
+                          </Form.Item>
+
+                          {/* 备用端点配置 */}
+                          <Form.Item
+                            label={
+                              <Space size={4}>
+                                <span>端点配置</span>
+                                <InfoCircleOutlined
+                                  title="配置主备端点，主端点失败时自动切换到备端点"
+                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                />
+                              </Space>
+                            }
+                          >
+                            <EndpointListEditor
+                              endpoints={endpoints}
+                              onChange={setEndpoints}
+                              loading={testingApi}
+                            />
+                          </Form.Item>
+
+                          <Form.Item
+                            label="端点切换策略"
+                          >
+                            <Radio.Group value={fallbackStrategy} onChange={(e) => setFallbackStrategy(e.target.value)}>
+                              <Radio value="auto">自动降级（主端点失败自动切换备端点）</Radio>
+                              <Radio value="manual">手动切换</Radio>
+                            </Radio.Group>
                           </Form.Item>
 
                           <Form.Item
@@ -1537,6 +1643,9 @@ export default function SettingsPage() {
                 >
                   <Select placeholder="选择提供商" onChange={handlePresetProviderChange}>
                     <Select.Option value="openai">OpenAI</Select.Option>
+                    <Select.Option value="azure">Azure OpenAI</Select.Option>
+                    <Select.Option value="newapi">NewAPI</Select.Option>
+                    <Select.Option value="custom">自定义</Select.Option>
                     <Select.Option value="gemini">Google Gemini</Select.Option>
                   </Select>
                 </Form.Item>

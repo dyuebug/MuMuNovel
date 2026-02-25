@@ -77,6 +77,9 @@ class AIService:
         user_id: Optional[str] = None,
         db_session: Optional[Any] = None,
         enable_mcp: bool = True,
+        # API 兼容性参数
+        backup_urls: Optional[List[str]] = None,
+        fallback_strategy: Optional[str] = "auto",
     ):
         self.api_provider = api_provider or app_settings.default_ai_provider
         self.default_model = default_model or app_settings.default_model
@@ -97,11 +100,22 @@ class AIService:
         self._gemini_provider: Optional[GeminiProvider] = None
         
         # 初始化 OpenAI
-        openai_key = api_key if api_provider == "openai" else app_settings.openai_api_key
-        if openai_key:
-            base_url = api_base_url if api_provider == "openai" else app_settings.openai_base_url
-            client = OpenAIClient(openai_key, base_url or "https://api.openai.com/v1", self.config)
-            self._openai_provider = OpenAIProvider(client)
+        openai_compatible_providers = {'openai', 'newapi', 'azure', 'custom'}
+        if api_provider in openai_compatible_providers or (api_provider is None and app_settings.default_ai_provider in openai_compatible_providers):
+            openai_key = api_key if api_provider in openai_compatible_providers else app_settings.openai_api_key
+            if openai_key:
+                base_url = api_base_url if api_provider in openai_compatible_providers else app_settings.openai_base_url
+                # 根据 fallback_strategy 决定是否传递 backup_urls
+                effective_backup = backup_urls if fallback_strategy == "auto" else None
+                effective_provider = api_provider or app_settings.default_ai_provider
+                client = OpenAIClient(
+                    openai_key,
+                    base_url or "https://api.openai.com/v1",
+                    self.config,
+                    backup_urls=effective_backup,
+                    compat_profile=effective_provider,
+                )
+                self._openai_provider = OpenAIProvider(client)
         
         # 初始化 Anthropic
         anthropic_key = api_key if api_provider == "anthropic" else app_settings.anthropic_api_key
@@ -145,16 +159,31 @@ class AIService:
         self._tools_loaded = False
         logger.debug(f"🔧 MCP工具状态已重置: enable_mcp={self._enable_mcp}, _tools_loaded=False")
     
+    def _normalize_provider(self, provider: str) -> str:
+        """
+        归一化 provider 类型
+
+        将 newapi/azure/custom 归一为 openai-compatible 族
+        """
+        openai_compatible = {'openai', 'newapi', 'azure', 'custom'}
+        normalized = provider.lower()
+        if normalized in openai_compatible:
+            return 'openai'
+        return normalized
+
     def _get_provider(self, provider: Optional[str] = None) -> BaseAIProvider:
         """获取对应的 Provider"""
-        p = provider or self.api_provider
+        original_provider = provider or self.api_provider
+        p = self._normalize_provider(original_provider)
+
         if p == "openai" and self._openai_provider:
+            logger.debug(f"路由 provider: {original_provider} -> openai")
             return self._openai_provider
         if p == "anthropic" and self._anthropic_provider:
             return self._anthropic_provider
         if p == "gemini" and self._gemini_provider:
             return self._gemini_provider
-        raise ValueError(f"Provider {p} 未初始化")
+        raise ValueError(f"Provider {original_provider} (归一化为 {p}) 未初始化")
 
     async def _prepare_mcp_tools(self, auto_mcp: bool = True, force_refresh: bool = False) -> Optional[List[Dict]]:
         """
@@ -518,6 +547,8 @@ def create_user_ai_service(
     temperature: float,
     max_tokens: int,
     system_prompt: Optional[str] = None,
+    backup_urls: Optional[List[str]] = None,
+    fallback_strategy: Optional[str] = "auto",
 ) -> AIService:
     """创建用户 AI 服务（不带MCP支持）"""
     return AIService(
@@ -528,6 +559,8 @@ def create_user_ai_service(
         default_temperature=temperature,
         default_max_tokens=max_tokens,
         default_system_prompt=system_prompt,
+        backup_urls=backup_urls,
+        fallback_strategy=fallback_strategy,
     )
 
 
@@ -542,10 +575,12 @@ def create_user_ai_service_with_mcp(
     db_session,
     system_prompt: Optional[str] = None,
     enable_mcp: bool = True,
+    backup_urls: Optional[List[str]] = None,
+    fallback_strategy: Optional[str] = "auto",
 ) -> AIService:
     """
     创建支持MCP的用户AI服务
-    
+
     Args:
         api_provider: AI提供商
         api_key: API密钥
@@ -557,7 +592,9 @@ def create_user_ai_service_with_mcp(
         db_session: 数据库会话
         system_prompt: 系统提示词
         enable_mcp: 是否启用MCP工具
-        
+        backup_urls: 备用API地址列表
+        fallback_strategy: 端点切换策略(auto/manual)
+
     Returns:
         配置好的AIService实例
     """
@@ -572,4 +609,6 @@ def create_user_ai_service_with_mcp(
         user_id=user_id,
         db_session=db_session,
         enable_mcp=enable_mcp,
+        backup_urls=backup_urls,
+        fallback_strategy=fallback_strategy,
     )

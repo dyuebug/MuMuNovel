@@ -1,6 +1,6 @@
 """OpenAI 客户端"""
 import json
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any, AsyncGenerator, Dict, Optional, List
 
 from app.logger import get_logger
 from .base_client import BaseAIClient
@@ -11,11 +11,46 @@ logger = get_logger(__name__)
 class OpenAIClient(BaseAIClient):
     """OpenAI API 客户端"""
 
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        config=None,
+        backup_urls: Optional[List[str]] = None,
+        compat_profile: str = "openai",
+    ):
+        """
+        初始化 OpenAI 客户端
+
+        Args:
+            api_key: API 密钥
+            base_url: API 基础 URL
+            config: 客户端配置
+            backup_urls: 备用 URL 列表
+            compat_profile: 兼容性配置文件 (openai/newapi/azure/custom)
+        """
+        super().__init__(api_key, base_url, config, backup_urls)
+        self.compat_profile = compat_profile.lower()
+
     def _build_headers(self) -> Dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        """
+        构建请求头
+
+        根据 compat_profile 使用不同的认证方式：
+        - openai/newapi/custom: Authorization: Bearer
+        - azure: api-key
+        """
+        if self.compat_profile == "azure":
+            return {
+                "api-key": self.api_key,
+                "Content-Type": "application/json",
+            }
+        else:
+            # openai/newapi/custom 使用标准 Bearer 认证
+            return {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
 
     def _build_payload(
         self,
