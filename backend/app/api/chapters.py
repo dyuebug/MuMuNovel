@@ -5,7 +5,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 import json
 import asyncio
-from typing import Optional
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 from asyncio import Queue, Lock
 
@@ -61,6 +61,10 @@ logger = get_logger(__name__)
 # 全局数据库写入锁（每个用户一个锁，用于保护SQLite写入操作）
 db_write_locks: dict[str, Lock] = {}
 
+# 后台任务SSE订阅表（task_id -> subscriber queues）
+task_stream_subscribers: dict[str, list[Queue]] = {}
+task_stream_lock = Lock()
+
 
 async def get_db_write_lock(user_id: str) -> Lock:
     """获取或创建用户的数据库写入锁"""
@@ -68,6 +72,51 @@ async def get_db_write_lock(user_id: str) -> Lock:
         db_write_locks[user_id] = Lock()
         logger.debug(f"🔒 为用户 {user_id} 创建数据库写入锁")
     return db_write_locks[user_id]
+
+
+async def subscribe_task_stream(task_id: str) -> Queue:
+    """订阅任务流，返回订阅队列"""
+    queue: Queue = Queue(maxsize=200)
+    async with task_stream_lock:
+        task_stream_subscribers.setdefault(task_id, []).append(queue)
+    return queue
+
+
+async def unsubscribe_task_stream(task_id: str, queue: Queue):
+    """取消任务流订阅"""
+    async with task_stream_lock:
+        queues = task_stream_subscribers.get(task_id, [])
+        if queue in queues:
+            queues.remove(queue)
+        if not queues and task_id in task_stream_subscribers:
+            del task_stream_subscribers[task_id]
+
+
+async def publish_task_stream_event(task_id: str, event: Dict[str, Any]):
+    """向任务流订阅者广播事件（不阻塞主流程）"""
+    async with task_stream_lock:
+        subscribers = list(task_stream_subscribers.get(task_id, []))
+    if not subscribers:
+        return
+
+    stale_queues: List[Queue] = []
+    for q in subscribers:
+        try:
+            q.put_nowait(event)
+        except asyncio.QueueFull:
+            # 队列已满，保留连接但丢弃当前事件，避免阻塞后台任务
+            logger.debug(f"任务流队列已满，丢弃事件: task={task_id}, type={event.get('type')}")
+        except Exception:
+            stale_queues.append(q)
+
+    if stale_queues:
+        async with task_stream_lock:
+            queues = task_stream_subscribers.get(task_id, [])
+            for q in stale_queues:
+                if q in queues:
+                    queues.remove(q)
+            if not queues and task_id in task_stream_subscribers:
+                del task_stream_subscribers[task_id]
 
 
 @router.post("", response_model=ChapterResponse, summary="创建章节")
@@ -1815,6 +1864,125 @@ async def generate_chapter_content_stream(
     return create_sse_response(event_generator())
 
 
+@router.post("/{chapter_id}/generate-background", summary="AI创作章节内容（后台任务）")
+async def generate_chapter_content_background(
+    chapter_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    generate_request: ChapterGenerateRequest = ChapterGenerateRequest(),
+    db: AsyncSession = Depends(get_db),
+    user_ai_service: AIService = Depends(get_user_ai_service)
+):
+    """
+    创建单章节后台生成任务（立即返回 task_id，可轮询状态）
+
+    说明：
+    - 任务执行复用批量生成执行器，chapter_count 固定为 1
+    - 与其他任务可并行执行（不同任务并发，写操作按用户锁串行提交）
+    - 状态查询复用: GET /api/chapters/batch-generate/{task_id}/status
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    # 验证章节存在和权限
+    chapter_result = await db.execute(
+        select(Chapter).where(Chapter.id == chapter_id)
+    )
+    chapter = chapter_result.scalar_one_or_none()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="章节不存在")
+
+    project = await verify_project_access(chapter.project_id, user_id, db)
+
+    # 前置条件校验
+    can_generate, error_msg, _ = await check_prerequisites(db, chapter)
+    if not can_generate:
+        raise HTTPException(status_code=400, detail=error_msg)
+
+    # 防重复：同章节已有 pending/running 任务则直接返回已有任务ID
+    active_result = await db.execute(
+        select(BatchGenerationTask)
+        .where(BatchGenerationTask.user_id == user_id)
+        .where(BatchGenerationTask.project_id == chapter.project_id)
+        .where(BatchGenerationTask.status.in_(['pending', 'running']))
+        .order_by(BatchGenerationTask.created_at.desc())
+    )
+    active_tasks = active_result.scalars().all()
+    for task in active_tasks:
+        chapter_ids = task.chapter_ids or []
+        if chapter_id in chapter_ids:
+            return {
+                "task_id": task.id,
+                "chapter_id": chapter_id,
+                "status": task.status,
+                "message": "章节已有后台生成任务在执行",
+                "estimated_time_minutes": calculate_estimated_time(
+                    chapter_count=1,
+                    target_word_count=task.target_word_count or 3000,
+                    enable_analysis=bool(task.enable_analysis)
+                )
+            }
+
+    style_id = generate_request.style_id
+    target_word_count = generate_request.target_word_count or 3000
+    custom_model = generate_request.model if hasattr(generate_request, 'model') else None
+    temp_narrative_perspective = (
+        generate_request.narrative_perspective
+        if hasattr(generate_request, 'narrative_perspective')
+        else None
+    )
+
+    # 单章节后台任务默认开启分析，保持与原单章生成体验一致
+    task = BatchGenerationTask(
+        project_id=chapter.project_id,
+        user_id=user_id,
+        start_chapter_number=chapter.chapter_number,
+        chapter_count=1,
+        chapter_ids=[chapter_id],
+        style_id=style_id,
+        target_word_count=target_word_count,
+        enable_analysis=True,
+        max_retries=3,
+        status='pending',
+        total_chapters=1,
+        completed_chapters=0,
+        failed_chapters=[],
+        current_retry_count=0
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+
+    # 启动后台执行
+    background_tasks.add_task(
+        execute_batch_generation_in_order,
+        batch_id=task.id,
+        user_id=user_id,
+        ai_service=user_ai_service,
+        custom_model=custom_model,
+        temp_narrative_perspective=temp_narrative_perspective
+    )
+
+    estimated_time = calculate_estimated_time(
+        chapter_count=1,
+        target_word_count=target_word_count,
+        enable_analysis=True
+    )
+    logger.info(
+        f"🚀 创建单章后台生成任务: task={task.id}, chapter={chapter.chapter_number}, "
+        f"project={project.id}, estimated={estimated_time}分钟"
+    )
+
+    return {
+        "task_id": task.id,
+        "chapter_id": chapter_id,
+        "status": "pending",
+        "message": "后台生成任务已创建，可并行执行其他任务",
+        "estimated_time_minutes": estimated_time
+    }
+
+
 @router.get("/{chapter_id}/analysis/status", summary="查询章节分析任务状态")
 async def get_analysis_task_status(
     chapter_id: str,
@@ -2378,6 +2546,71 @@ async def get_batch_generation_status(
     )
 
 
+@router.get("/batch-generate/{batch_id}/stream", summary="订阅批量/单章后台生成任务事件流")
+async def stream_batch_generation_events(
+    batch_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    任务事件流（SSE）：
+    - chunk: 实时文本片段（单章后台生成时可用于边生成边预览）
+    - progress: 阶段进度消息
+    - done/error: 任务完成/失败信号
+    """
+    user_id = getattr(request.state, 'user_id', None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    # 权限校验：仅任务所属用户可订阅
+    result = await db.execute(
+        select(BatchGenerationTask).where(BatchGenerationTask.id == batch_id)
+    )
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="批量生成任务不存在")
+    if task.user_id != user_id:
+        raise HTTPException(status_code=403, detail="无权访问该任务")
+
+    async def event_generator():
+        queue = await subscribe_task_stream(batch_id)
+        try:
+            yield await SSEResponse.send_progress("已连接任务事件流", 0, "processing")
+
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield SSEResponse.format_sse(event)
+
+                    if event.get("type") in {"done", "error"}:
+                        break
+                except asyncio.TimeoutError:
+                    # 心跳 + 状态兜底检查，防止无事件时连接假死
+                    yield await SSEResponse.send_heartbeat()
+
+                    status_result = await db.execute(
+                        select(BatchGenerationTask.status, BatchGenerationTask.error_message)
+                        .where(BatchGenerationTask.id == batch_id)
+                    )
+                    row = status_result.first()
+                    if not row:
+                        yield await SSEResponse.send_error("任务不存在", 404)
+                        break
+
+                    status = row[0]
+                    error_message = row[1]
+                    if status in {"completed", "cancelled"}:
+                        yield await SSEResponse.send_done()
+                        break
+                    if status == "failed":
+                        yield await SSEResponse.send_error(error_message or "任务失败", 500)
+                        break
+        finally:
+            await unsubscribe_task_stream(batch_id, queue)
+
+    return create_sse_response(event_generator())
+
+
 @router.get("/project/{project_id}/batch-generate/active", summary="获取项目当前运行中的批量生成任务")
 async def get_active_batch_generation(
     project_id: str,
@@ -2457,7 +2690,8 @@ async def execute_batch_generation_in_order(
     batch_id: str,
     user_id: str,
     ai_service: AIService,
-    custom_model: Optional[str] = None
+    custom_model: Optional[str] = None,
+    temp_narrative_perspective: Optional[str] = None
 ):
     """
     按顺序执行批量生成任务（后台任务）
@@ -2498,9 +2732,16 @@ async def execute_batch_generation_in_order(
             task.status = 'running'
             task.started_at = datetime.now()
             await db_session.commit()
-        
+        await publish_task_stream_event(batch_id, {
+            "type": "progress",
+            "message": "任务开始执行",
+            "progress": 5,
+            "status": "running"
+        })
+
         # 维护上一章的摘要，用于传递给下一章（防重复上下文）
         last_generated_summary = None
+        stream_chunks = bool(task.total_chapters == 1)
 
         # 按顺序生成每个章节
         for idx, chapter_id in enumerate(task.chapter_ids, 1):
@@ -2508,6 +2749,12 @@ async def execute_batch_generation_in_order(
             await db_session.refresh(task)
             if task.status == 'cancelled':
                 logger.info(f"🛑 批量生成任务已被取消: {batch_id}")
+                await publish_task_stream_event(batch_id, {
+                    "type": "error",
+                    "error": "任务已取消",
+                    "code": 400
+                })
+                await publish_task_stream_event(batch_id, {"type": "done"})
                 return
             
             # 更新当前章节
@@ -2543,6 +2790,13 @@ async def execute_batch_generation_in_order(
                         logger.info(f"🔄 [{idx}/{task.total_chapters}] 重试生成章节 (第{retry_count}次): 第{chapter.chapter_number}章 《{chapter.title}》")
                     else:
                         logger.info(f"📝 [{idx}/{task.total_chapters}] 开始生成章节: 第{chapter.chapter_number}章 《{chapter.title}》")
+                        await publish_task_stream_event(batch_id, {
+                            "type": "chapter_start",
+                            "chapter_id": chapter_id,
+                            "chapter_number": chapter.chapter_number,
+                            "title": chapter.title,
+                            "progress": 15
+                        })
                     
                     # 检查前置条件（每次都检查，确保顺序性）
                     can_generate, error_msg, _ = await check_prerequisites(db_session, chapter)
@@ -2560,7 +2814,10 @@ async def execute_batch_generation_in_order(
                         ai_service=ai_service,
                         write_lock=write_lock,
                         custom_model=custom_model,
-                        previous_summary_context=last_generated_summary
+                        previous_summary_context=last_generated_summary,
+                        temp_narrative_perspective=temp_narrative_perspective,
+                        stream_task_id=batch_id,
+                        stream_chunks=stream_chunks
                     )
                     
                     # 更新上一章摘要，供下一章使用
@@ -2569,10 +2826,23 @@ async def execute_batch_generation_in_order(
                         logger.info(f"📝 已更新上一章摘要上下文: {last_generated_summary[:50]}...")
                     
                     logger.info(f"✅ 章节生成完成: 第{chapter.chapter_number}章")
+                    await publish_task_stream_event(batch_id, {
+                        "type": "progress",
+                        "message": f"章节生成完成：第{chapter.chapter_number}章",
+                        "progress": 80 if not task.enable_analysis else 70,
+                        "status": "running"
+                    })
                     
                     # 如果启用同步分析
                     if task.enable_analysis:
                         logger.info(f"🔍 开始同步分析章节: 第{chapter.chapter_number}章")
+                        await publish_task_stream_event(batch_id, {
+                            "type": "analysis_started",
+                            "chapter_id": chapter_id,
+                            "chapter_number": chapter.chapter_number,
+                            "message": "章节分析开始",
+                            "progress": 85
+                        })
                         
                         # 分析重试机制（最多3次）
                         analysis_retry_count = 0
@@ -2650,6 +2920,12 @@ async def execute_batch_generation_in_order(
                                         await db_session.commit()
                                     
                                     logger.error(f"🛑 批量生成中断: 第{chapter.chapter_number}章分析失败")
+                                    await publish_task_stream_event(batch_id, {
+                                        "type": "error",
+                                        "error": task.error_message or "章节分析失败",
+                                        "code": 500
+                                    })
+                                    await publish_task_stream_event(batch_id, {"type": "done"})
                                     return  # 立即终止整个批量生成任务
                     
                     # 标记成功
@@ -2660,8 +2936,15 @@ async def execute_batch_generation_in_order(
                         task.completed_chapters += 1
                         task.current_retry_count = 0  # 重置重试计数
                         await db_session.commit()
-                    
+
                     logger.info(f"✅ 进度: {task.completed_chapters}/{task.total_chapters}")
+                    completed_ratio = task.completed_chapters / max(task.total_chapters, 1)
+                    await publish_task_stream_event(batch_id, {
+                        "type": "progress",
+                        "message": f"任务进度：{task.completed_chapters}/{task.total_chapters}",
+                        "progress": 15 + int(completed_ratio * 80),
+                        "status": "running"
+                    })
                     
                 except Exception as e:
                     last_error = str(e)
@@ -2705,7 +2988,13 @@ async def execute_batch_generation_in_order(
                             logger.error(f"🛑 批量生成中断: 因启用同步分析，任何错误都会中断任务以确保职业信息和剧情连贯性")
                         else:
                             logger.error(f"🛑 批量生成终止于第{chapter.chapter_number}章")
-                        
+                        await publish_task_stream_event(batch_id, {
+                            "type": "error",
+                            "error": task.error_message or last_error,
+                            "code": 500
+                        })
+                        await publish_task_stream_event(batch_id, {"type": "done"})
+
                         return
         
         # 全部完成
@@ -2715,8 +3004,15 @@ async def execute_batch_generation_in_order(
             task.current_chapter_id = None
             task.current_chapter_number = None
             await db_session.commit()
-        
+
         logger.info(f"✅ 批量生成任务全部完成: {batch_id}, 成功生成 {task.completed_chapters} 章")
+        await publish_task_stream_event(batch_id, {
+            "type": "progress",
+            "message": "任务已完成",
+            "progress": 100,
+            "status": "success"
+        })
+        await publish_task_stream_event(batch_id, {"type": "done"})
         
     except Exception as e:
         logger.error(f"❌ 批量生成任务异常: {str(e)}", exc_info=True)
@@ -2727,6 +3023,12 @@ async def execute_batch_generation_in_order(
                     task.error_message = str(e)[:500]
                     task.completed_at = datetime.now()
                     await db_session.commit()
+                await publish_task_stream_event(batch_id, {
+                    "type": "error",
+                    "error": task.error_message or str(e),
+                    "code": 500
+                })
+                await publish_task_stream_event(batch_id, {"type": "done"})
             except Exception as commit_error:
                 logger.error(f"❌ 更新任务失败状态失败: {str(commit_error)}")
     finally:
@@ -2743,7 +3045,10 @@ async def generate_single_chapter_for_batch(
     ai_service: AIService,
     write_lock: Lock,
     custom_model: Optional[str] = None,
-    previous_summary_context: Optional[str] = None
+    previous_summary_context: Optional[str] = None,
+    temp_narrative_perspective: Optional[str] = None,
+    stream_task_id: Optional[str] = None,
+    stream_chunks: bool = False
 ) -> Optional[str]:
     """
     为批量生成执行单个章节的生成（非流式）
@@ -2790,6 +3095,14 @@ async def generate_single_chapter_for_batch(
             if style.user_id is None or style.user_id == user_id:
                 style_content = style.prompt_content or ""
     
+    # 临时人称 > 项目默认 > 系统默认
+    chapter_perspective = (
+        temp_narrative_perspective or
+        project.narrative_perspective or
+        '第三人称'
+    )
+    logger.info(f"📝 批量生成 - 使用叙事人称: {chapter_perspective}")
+
     # 🚀 根据大纲模式选择独立的上下文构建器（批量生成）
     if outline_mode == 'one-to-one':
         # 1-1模式
@@ -2845,7 +3158,7 @@ async def generate_single_chapter_for_batch(
                 chapter_outline=chapter_context.chapter_outline,
                 target_word_count=target_word_count,
                 genre=project.genre or '未设定',
-                narrative_perspective=project.narrative_perspective or '第三人称',
+                narrative_perspective=chapter_perspective,
                 previous_chapter_content=chapter_context.continuation_point,
                 characters_info=chapter_context.chapter_characters or '暂无角色信息',
                 chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
@@ -2864,7 +3177,7 @@ async def generate_single_chapter_for_batch(
                 chapter_outline=chapter_context.chapter_outline,
                 target_word_count=target_word_count,
                 genre=project.genre or '未设定',
-                narrative_perspective=project.narrative_perspective or '第三人称',
+                narrative_perspective=chapter_perspective,
                 characters_info=chapter_context.chapter_characters or '暂无角色信息',
                 chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                 foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
@@ -2892,7 +3205,7 @@ async def generate_single_chapter_for_batch(
                 target_word_count=target_word_count,
                 continuation_point=chapter_context.continuation_point,
                 genre=project.genre or '未设定',
-                narrative_perspective=project.narrative_perspective or '第三人称',
+                narrative_perspective=chapter_perspective,
                 characters_info=chapter_context.chapter_characters or '暂无角色信息',
                 chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                 foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
@@ -2911,7 +3224,7 @@ async def generate_single_chapter_for_batch(
                 chapter_outline=chapter_context.chapter_outline,
                 target_word_count=target_word_count,
                 genre=project.genre or '未设定',
-                narrative_perspective=project.narrative_perspective or '第三人称',
+                narrative_perspective=chapter_perspective,
                 characters_info=chapter_context.chapter_characters or '暂无角色信息',
                 chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                 foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
@@ -2962,6 +3275,13 @@ async def generate_single_chapter_for_batch(
     # 批量生成中的流式生成（非SSE，不需要修改进度显示）
     async for chunk in ai_service.generate_text_stream(**generate_kwargs):
         full_content += chunk
+        if stream_task_id and stream_chunks:
+            await publish_task_stream_event(stream_task_id, {
+                "type": "chunk",
+                "chapter_id": chapter.id,
+                "chapter_number": chapter.chapter_number,
+                "content": chunk
+            })
     
     # 更新章节内容到数据库（使用锁保护）
     async with write_lock:

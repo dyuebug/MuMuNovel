@@ -538,6 +538,121 @@ async def test_should_create_batch_generation_task_and_query_status(
         assert task.chapter_count == 2
 
 
+async def test_should_create_single_chapter_background_generation_task(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    outline = await create_outline(
+        chapters_session_factory,
+        project_id=project.id,
+        order_index=1,
+        title="单章后台生成大纲",
+    )
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="待后台生成章节",
+        content=None,
+        outline_id=outline.id,
+    )
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/generate-background",
+        json={"target_word_count": 1200},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["chapter_id"] == chapter.id
+    assert body["status"] == "pending"
+    assert body["task_id"]
+
+    async with chapters_session_factory() as session:
+        task = await session.get(BatchGenerationTask, body["task_id"])
+        assert task is not None
+        assert task.chapter_count == 1
+        assert task.chapter_ids == [chapter.id]
+        assert task.target_word_count == 1200
+        assert task.enable_analysis is True
+
+
+async def test_should_reuse_active_background_task_for_same_chapter(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    outline = await create_outline(
+        chapters_session_factory,
+        project_id=project.id,
+        order_index=1,
+        title="复用任务大纲",
+    )
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="待复用任务章节",
+        content=None,
+        outline_id=outline.id,
+    )
+
+    first = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/generate-background",
+        json={"target_word_count": 900},
+    )
+    assert first.status_code == 200
+    first_task_id = first.json()["task_id"]
+
+    second = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/generate-background",
+        json={"target_word_count": 900},
+    )
+    assert second.status_code == 200
+    second_body = second.json()
+    assert second_body["task_id"] == first_task_id
+    assert "已有后台生成任务" in second_body["message"]
+
+
+async def test_should_reject_stream_subscription_from_other_user(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="订阅权限测试章节",
+        content=None,
+    )
+
+    async with chapters_session_factory() as session:
+        task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=1,
+            chapter_count=1,
+            chapter_ids=[chapter.id],
+            status="running",
+            total_chapters=1,
+            completed_chapters=0,
+        )
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+        task_id = task.id
+
+    response = await chapters_client.get(
+        f"/api/chapters/batch-generate/{task_id}/stream",
+        headers={"x-test-user-id": "other-user"},
+    )
+    assert response.status_code == 403
+
+
 async def test_should_return_404_when_batch_status_task_missing(chapters_client):
     response = await chapters_client.get("/api/chapters/batch-generate/missing/status")
     assert response.status_code == 404
