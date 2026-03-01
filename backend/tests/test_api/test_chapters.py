@@ -604,6 +604,60 @@ async def test_should_return_latest_chapter_quality_metrics(
     assert body["generated_at"] is not None
 
 
+def test_should_build_runtime_prompt_with_serial_style_guard():
+    project = SimpleNamespace(
+        world_time_period="近未来",
+        world_location="临海三环",
+        world_atmosphere="潮湿压迫",
+        world_rules="门影会在镜面附近折返",
+    )
+
+    runtime_prompt = chapters_api._build_chapter_runtime_system_prompt(
+        project=project,
+        style_content="写作风格建议：低AI连载感",
+        chapter_outline="【关键事件】\n- 主角带队撤离\n- 出现镜面门",
+        previous_summary="上一章队伍已进入高风险走廊",
+        style_name="低AI连载感",
+        style_preset_id="low_ai_serial",
+    )
+
+    assert "连载感优先" in runtime_prompt
+    assert "情绪要有层次" in runtime_prompt
+    assert "台词长度控制：单句以6-18字为主" not in runtime_prompt
+
+
+def test_should_resolve_generation_temperature_by_style_profile():
+    serial_profile = chapters_api._detect_style_profile(
+        style_name="低AI连载感",
+        style_preset_id="low_ai_serial",
+        style_content="",
+    )
+    life_profile = chapters_api._detect_style_profile(
+        style_name="低AI生活化",
+        style_preset_id="low_ai_life",
+        style_content="",
+    )
+    default_profile = chapters_api._detect_style_profile(
+        style_name="默认风格",
+        style_preset_id="",
+        style_content="",
+    )
+
+    assert chapters_api._resolve_generation_temperature(serial_profile) == pytest.approx(0.82)
+    assert chapters_api._resolve_generation_temperature(life_profile) == pytest.approx(0.78)
+    assert chapters_api._resolve_generation_temperature(default_profile) == pytest.approx(0.72)
+
+
+def test_should_append_serial_guard_when_apply_style_to_prompt():
+    merged_prompt = chapters_api.WritingStyleManager.apply_style_to_prompt(
+        base_prompt="基础提示词",
+        style_content="写作风格建议：低AI连载感，强调现场感",
+    )
+
+    assert "连载强化要点" in merged_prompt
+    assert "人物情绪要有层次" in merged_prompt
+
+
 async def test_should_create_single_chapter_background_generation_task(
     chapters_client,
     chapters_session_factory,

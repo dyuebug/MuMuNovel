@@ -18,8 +18,41 @@ class WritingStyleManager:
         Returns:
             组合后的提示词
         """
-        # 在基础提示词末尾添加风格要求
-        return f"{base_prompt}\n\n{style_content}\n\n用中文母语者的日常表达写作，长短句穿插，读起来顺口自然。对话要像真人在说话，别端着：少讲道理，多给反应；一句台词尽量只表达一个意图，允许打断、停顿和留白。网络热梗可以按场景点到即止，别硬塞、别堆梗。直接输出章节正文，不要加章节标题和额外说明。"
+        style_profile = "default"
+        if "连载感" in style_content:
+            style_profile = "low_ai_serial"
+        elif "生活化" in style_content:
+            style_profile = "low_ai_life"
+
+        common_guard = (
+            "写作执行要点："
+            "用中文母语者的自然表达写作，长短句穿插，读起来顺口。"
+            "对话要像真人交流，少讲道理，多给反应和潜台词。"
+            "出现设定术语时，尽量在场景中补一句通俗解释。"
+            "直接输出章节正文，不要加章节标题和额外说明。"
+        )
+
+        serial_guard = (
+            "连载强化要点："
+            "保持追更节奏，中段给小波折，章末留自然未完感。"
+            "人物情绪要有层次，不要开口就结论化表态。"
+            "让配角有主动选择，避免只当信息传声筒。"
+        )
+
+        life_guard = (
+            "生活化强化要点："
+            "优先用动作、表情和场景噪声传递情绪，别把解释写满。"
+            "允许少量口语毛边，避免句句工整。"
+        )
+
+        profile_guard = ""
+        if style_profile == "low_ai_serial":
+            profile_guard = serial_guard
+        elif style_profile == "low_ai_life":
+            profile_guard = life_guard
+
+        # 在基础提示词末尾追加风格要求与执行护栏
+        return f"{base_prompt}\n\n{style_content}\n\n{common_guard}\n{profile_guard}".strip()
 
 
 class PromptService:

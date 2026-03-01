@@ -408,13 +408,47 @@ def _extract_outline_anchor_lines(chapter_outline: Optional[str], max_lines: int
     return deduped
 
 
+def _detect_style_profile(
+    style_name: Optional[str],
+    style_preset_id: Optional[str],
+    style_content: Optional[str] = None,
+) -> str:
+    """识别写作风格画像，用于运行时护栏和采样参数调整。"""
+    preset = (style_preset_id or "").strip().lower()
+    name = (style_name or "").strip().lower()
+    content = (style_content or "").strip()
+
+    if preset == "low_ai_serial" or "低ai连载感" in name or "连载感" in content:
+        return "low_ai_serial"
+    if preset == "low_ai_life" or "低ai生活化" in name or "生活化" in content:
+        return "low_ai_life"
+    return "default"
+
+
+def _resolve_generation_temperature(style_profile: str) -> float:
+    """根据写作风格返回更合适的生成温度。"""
+    if style_profile == "low_ai_serial":
+        return 0.82
+    if style_profile == "low_ai_life":
+        return 0.78
+    return 0.72
+
+
 def _build_chapter_runtime_system_prompt(
     project: Project,
     style_content: str,
     chapter_outline: Optional[str],
-    previous_summary: Optional[str] = None
+    previous_summary: Optional[str] = None,
+    style_name: Optional[str] = None,
+    style_preset_id: Optional[str] = None,
 ) -> str:
     """构建章节生成运行时系统提示词（风格、世界锚点、剧情锚点与护栏）。"""
+    style_profile = _detect_style_profile(
+        style_name=style_name,
+        style_preset_id=style_preset_id,
+        style_content=style_content,
+    )
+
     style_block = (
         f"【🎨 写作风格参考】\n\n{style_content}\n\n"
         if style_content else ""
@@ -433,6 +467,32 @@ def _build_chapter_runtime_system_prompt(
         if previous_summary else ""
     )
 
+    guard_lines = [
+        "- 先写正在发生的动作与人物反应，再补必要解释；让读者先“看到”，再“理解”",
+        "- 对话要区分人物声线：同一信息由不同角色说出来，词汇和语气必须有差别",
+        "- 情绪要有层次：至少体现“触发→压住/回避→外露”中的两个阶段，避免一步到位喊口号",
+        "- 遇到设定术语时，用角色追问、吐槽或误解补一句人话解释，不要硬塞定义",
+        "- 关键桥段尽量写成“动作→反馈→余波/代价”，避免整段概述",
+        "- 保留少量口语颗粒和不完美句，不要把每句都修成工整书面句",
+        "- 避免模板化开头和总结腔，如“总之/综上/值得注意的是/在这个过程中”",
+    ]
+
+    if style_profile == "low_ai_serial":
+        guard_lines.extend(
+            [
+                "- 连载感优先：中段要有一次小波折或误判，结尾留“自然未完感”，不要生硬反转",
+                "- 主角和至少1名核心配角都要出现可见情绪反差（嘴硬、迟疑、硬撑、破防等）",
+                "- 配角不能只附和主角，至少让一名配角做出会改变局面的主动选择",
+            ]
+        )
+    elif style_profile == "low_ai_life":
+        guard_lines.extend(
+            [
+                "- 生活化优先：通过细小动作、语气词、场景噪声传递情绪，不堆抽象形容词",
+                "- 对白允许打断、改口和留白，避免角色轮流端着讲道理",
+            ]
+        )
+
     return f"""{style_block}【🌍 世界观锚点】
 - 时间背景：{project.world_time_period or '未设定'}
 - 地理位置：{project.world_location or '未设定'}
@@ -440,17 +500,7 @@ def _build_chapter_runtime_system_prompt(
 - 世界规则：{project.world_rules or '未设定'}
 
 {outline_anchor_block}{previous_summary_block}【创作护栏】
-- 对话口吻像真人交流，短句优先，可打断、停顿，避免角色轮流讲道理
-- 台词长度控制：单句以6-18字为主，超过28字必须拆句；单次发言尽量不超过2句
-- 若单段出现连续术语，请在三句内用角色互动补一句通俗解释
-- 每段较长对白后补一处动作/表情/环境反应，避免“纯台词墙”
-- 关键情节按“动作→反馈→后果”推进，避免只做概述
-- 至少安排一段双向博弈式对白，体现人物立场差异和临场情绪
-- 至少出现一次“目标受阻→角色选择→代价/新麻烦”的戏剧链条
-- 节奏闸门：每400-600字必须出现一次新阻力或意外变化，禁止长段平推
-- 关键情节点体现世界规则如何影响角色选择、风险或收益
-- 至少让1名核心配角出现一次反预期行为，并在当场补一句动机解释
-- 配角不能只做信息播报器，至少在一处情节里主动改变局面
+{chr(10).join(guard_lines)}
 """
 
 
@@ -1868,6 +1918,8 @@ async def generate_chapter_content_stream(
                 # 获取写作风格
                 await sync_low_ai_presets(db_session)
                 style_content = ""
+                style_name = ""
+                style_preset_id = ""
                 if style_id:
                     # 使用指定的风格
                     style_result = await db_session.execute(
@@ -1878,6 +1930,8 @@ async def generate_chapter_content_stream(
                         # 验证风格是否可用：全局预设风格（user_id为NULL）或者当前用户的自定义风格
                         if style.user_id is None or style.user_id == current_user_id:
                             style_content = style.prompt_content or ""
+                            style_name = style.name or ""
+                            style_preset_id = style.preset_id or ""
                             style_type = "全局预设" if style.user_id is None else "用户自定义"
                             logger.info(f"使用指定风格: {style.name} ({style_type})")
                         else:
@@ -2074,7 +2128,9 @@ async def generate_chapter_content_stream(
                     project=project,
                     style_content=style_content,
                     chapter_outline=chapter_context.chapter_outline,
-                    previous_summary=chapter_context.previous_chapter_summary
+                    previous_summary=chapter_context.previous_chapter_summary,
+                    style_name=style_name,
+                    style_preset_id=style_preset_id,
                 )
                 if style_content:
                     logger.info(f"✅ 已将写作风格注入系统提示词（{len(style_content)}字符）")
@@ -2091,7 +2147,14 @@ async def generate_chapter_content_stream(
                     "prompt": prompt,
                     "system_prompt": system_prompt_with_style,
                     "tool_choice": "required",
-                    "max_tokens": calculated_max_tokens  # 添加 max_tokens 限制
+                    "max_tokens": calculated_max_tokens,  # 添加 max_tokens 限制
+                    "temperature": _resolve_generation_temperature(
+                        _detect_style_profile(
+                            style_name=style_name,
+                            style_preset_id=style_preset_id,
+                            style_content=style_content,
+                        )
+                    ),
                 }
                 if custom_model:
                     logger.info(f"  使用自定义模型: {custom_model}")
@@ -3518,6 +3581,8 @@ async def generate_single_chapter_for_batch(
     # 获取写作风格
     await sync_low_ai_presets(db_session)
     style_content = ""
+    style_name = ""
+    style_preset_id = ""
     if style_id:
         style_result = await db_session.execute(
             select(WritingStyle).where(WritingStyle.id == style_id)
@@ -3526,6 +3591,8 @@ async def generate_single_chapter_for_batch(
         if style:
             if style.user_id is None or style.user_id == user_id:
                 style_content = style.prompt_content or ""
+                style_name = style.name or ""
+                style_preset_id = style.preset_id or ""
     
     # 临时人称 > 项目默认 > 系统默认
     chapter_perspective = (
@@ -3690,7 +3757,9 @@ async def generate_single_chapter_for_batch(
         project=project,
         style_content=style_content,
         chapter_outline=chapter_context.chapter_outline,
-        previous_summary=chapter_context.previous_chapter_summary
+        previous_summary=chapter_context.previous_chapter_summary,
+        style_name=style_name,
+        style_preset_id=style_preset_id,
     )
     if style_content:
         logger.info(f"✅ 批量生成 - 已将写作风格注入系统提示词（{len(style_content)}字符）")
@@ -3709,7 +3778,14 @@ async def generate_single_chapter_for_batch(
         "prompt": prompt,
         "system_prompt": system_prompt_with_style,
         "tool_choice": "required",
-        "max_tokens": calculated_max_tokens  # 添加 max_tokens 限制
+        "max_tokens": calculated_max_tokens,  # 添加 max_tokens 限制
+        "temperature": _resolve_generation_temperature(
+            _detect_style_profile(
+                style_name=style_name,
+                style_preset_id=style_preset_id,
+                style_content=style_content,
+            )
+        ),
     }
     # 如果传入了自定义模型，使用指定的模型
     if custom_model:
