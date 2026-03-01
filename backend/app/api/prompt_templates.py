@@ -18,12 +18,81 @@ from app.schemas.prompt_template import (
     PromptTemplateExport,
     PromptTemplateExportItem,
     PromptTemplateImportResult,
-    PromptTemplatePreviewRequest
+    PromptTemplatePreviewRequest,
+    PromptTemplateSyncStatusItem,
+    PromptTemplateSyncStatusResponse,
+    PromptTemplateSyncToDefaultResponse,
 )
 from app.services.prompt_service import PromptService
+from app.services.prompt_template_sync_service import (
+    build_template_sync_status,
+    managed_template_keys,
+    sync_managed_template_if_legacy,
+)
 from app.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+async def _sync_managed_templates_for_user(db: AsyncSession, user_id: str) -> int:
+    """Sync managed templates when user content still equals known legacy default."""
+    synced_count = 0
+    for template_key in managed_template_keys():
+        system_content = getattr(PromptService, template_key, None)
+        if not system_content:
+            continue
+
+        system_info = PromptService.get_system_template_info(template_key)
+        updated = await sync_managed_template_if_legacy(
+            db=db,
+            user_id=user_id,
+            template_key=template_key,
+            system_template_content=system_content,
+            system_template_info=system_info,
+        )
+        if updated:
+            synced_count += 1
+
+    if synced_count > 0:
+        logger.info(
+            "Prompt template managed sync applied: user_id=%s, count=%s",
+            user_id,
+            synced_count,
+        )
+
+    return synced_count
+
+
+async def _build_sync_status_items(
+    db: AsyncSession,
+    user_id: str,
+    template_keys: List[str],
+) -> List[PromptTemplateSyncStatusItem]:
+    """Build sync status items for given template keys."""
+    if not template_keys:
+        return []
+
+    result = await db.execute(
+        select(PromptTemplate).where(
+            PromptTemplate.user_id == user_id,
+            PromptTemplate.template_key.in_(template_keys),
+        )
+    )
+    user_templates = {item.template_key: item for item in result.scalars().all()}
+
+    items: List[PromptTemplateSyncStatusItem] = []
+    for template_key in template_keys:
+        system_info = PromptService.get_system_template_info(template_key)
+        system_content = getattr(PromptService, template_key, None)
+        item_payload = build_template_sync_status(
+            template_key=template_key,
+            system_template_content=system_content,
+            system_template_info=system_info,
+            user_template=user_templates.get(template_key),
+        )
+        items.append(PromptTemplateSyncStatusItem(**item_payload))
+
+    return items
 
 def calculate_content_hash(content: str) -> str:
     """计算模板内容的SHA256哈希值"""
@@ -47,6 +116,9 @@ async def get_all_templates(
     if not user_id:
         raise HTTPException(status_code=401, detail="未登录")
     
+    # Keep managed templates in sync so system upgrades can be observed.
+    await _sync_managed_templates_for_user(db, user_id)
+
     query = select(PromptTemplate).where(PromptTemplate.user_id == user_id)
     
     if category:
@@ -88,6 +160,9 @@ async def get_templates_by_category(
         raise HTTPException(status_code=401, detail="未登录")
     
     # 1. 查询用户自定义模板
+    # Keep managed templates in sync so system upgrades can be observed.
+    await _sync_managed_templates_for_user(db, user_id)
+
     result = await db.execute(
         select(PromptTemplate)
         .where(PromptTemplate.user_id == user_id)
@@ -173,6 +248,81 @@ async def get_system_defaults(
     }
 
 
+@router.get("/sync-status", response_model=PromptTemplateSyncStatusResponse)
+async def get_template_sync_status(
+    request: Request,
+    managed_only: bool = Query(True, description="Only include managed template keys"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get template drift/sync status for frontend badges.
+    """
+    user_id = getattr(request.state, 'user_id', None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    # Keep managed templates in sync first, then return current status.
+    await _sync_managed_templates_for_user(db, user_id)
+
+    if managed_only:
+        template_keys = managed_template_keys()
+    else:
+        template_keys = [item["template_key"] for item in PromptService.get_all_system_templates()]
+
+    items = await _build_sync_status_items(db, user_id, template_keys)
+    return PromptTemplateSyncStatusResponse(
+        total=len(items),
+        managed_only=managed_only,
+        items=items,
+    )
+
+
+@router.post("/{template_key}/sync-to-default", response_model=PromptTemplateSyncToDefaultResponse)
+async def sync_template_to_default(
+    template_key: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    One-click sync a template back to system default.
+    """
+    user_id = getattr(request.state, 'user_id', None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    system_template = PromptService.get_system_template_info(template_key)
+    system_content = getattr(PromptService, template_key, None)
+    if not system_template or not system_content:
+        raise HTTPException(status_code=404, detail=f"系统默认模板 {template_key} 不存在")
+
+    result = await db.execute(
+        select(PromptTemplate).where(
+            PromptTemplate.user_id == user_id,
+            PromptTemplate.template_key == template_key,
+        )
+    )
+    template = result.scalar_one_or_none()
+
+    if template:
+        await db.delete(template)
+        await db.commit()
+        action = "reset_to_system_default"
+        message = "已同步到系统默认模板"
+        logger.info("用户 %s 同步模板到系统默认: %s", user_id, template_key)
+    else:
+        action = "already_system_default"
+        message = "当前已是系统默认模板"
+
+    status_items = await _build_sync_status_items(db, user_id, [template_key])
+    status = status_items[0]
+    return PromptTemplateSyncToDefaultResponse(
+        template_key=template_key,
+        action=action,
+        message=message,
+        status=status,
+    )
+
+
 @router.get("/{template_key}", response_model=PromptTemplateResponse)
 async def get_template(
     template_key: str,
@@ -187,6 +337,9 @@ async def get_template(
     if not user_id:
         raise HTTPException(status_code=401, detail="未登录")
     
+    # Keep managed templates in sync so system upgrades can be observed.
+    await _sync_managed_templates_for_user(db, user_id)
+
     result = await db.execute(
         select(PromptTemplate).where(
             PromptTemplate.user_id == user_id,

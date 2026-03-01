@@ -87,3 +87,35 @@ class PromptTemplatePreviewRequest(BaseModel):
     """提示词模板预览请求"""
     template_content: str = Field(..., description="模板内容")
     parameters: dict = Field(..., description="参数字典")
+
+
+class PromptTemplateSyncStatusItem(BaseModel):
+    """Template sync status for frontend badge rendering."""
+    template_key: str = Field(..., description="Template key")
+    template_name: str = Field(..., description="Display name")
+    category: Optional[str] = Field(None, description="Template category")
+    has_custom_template: bool = Field(..., description="Whether user has custom template")
+    is_active: bool = Field(..., description="Whether custom template is active")
+    sync_status: str = Field(..., description="system_default|up_to_date|legacy_default|customized|system_template_missing")
+    is_diff_from_system: bool = Field(..., description="Whether content differs from system default")
+    is_legacy_default: bool = Field(..., description="Whether custom content is a known legacy default copy")
+    can_auto_sync: bool = Field(..., description="Whether backend can auto-sync safely")
+    can_sync_to_default: bool = Field(..., description="Whether manual sync-to-default action is available")
+    user_content_hash: Optional[str] = Field(None, description="User content hash")
+    system_content_hash: Optional[str] = Field(None, description="System content hash")
+    updated_at: Optional[datetime] = Field(None, description="User template last update time")
+
+
+class PromptTemplateSyncStatusResponse(BaseModel):
+    """Response model for template sync status list."""
+    total: int
+    managed_only: bool
+    items: List[PromptTemplateSyncStatusItem]
+
+
+class PromptTemplateSyncToDefaultResponse(BaseModel):
+    """Response model for one-click sync-to-default."""
+    template_key: str
+    action: str = Field(..., description="reset_to_system_default|already_system_default")
+    message: str
+    status: PromptTemplateSyncStatusItem

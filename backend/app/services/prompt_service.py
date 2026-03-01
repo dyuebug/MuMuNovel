@@ -2792,8 +2792,30 @@ class PromptService:
         from sqlalchemy import select
         from app.models.prompt_template import PromptTemplate
         from app.logger import get_logger
+        from app.services.prompt_template_sync_service import sync_managed_template_if_legacy
         
         logger = get_logger(__name__)
+
+        # Resolve current system template metadata once and reuse it.
+        template_content = getattr(cls, template_key, None)
+        template_info = cls.get_system_template_info(template_key)
+
+        # Sync managed templates only when user's copy still matches known legacy defaults.
+        try:
+            await sync_managed_template_if_legacy(
+                db=db,
+                user_id=user_id,
+                template_key=template_key,
+                system_template_content=template_content,
+                system_template_info=template_info,
+            )
+        except Exception as sync_error:
+            logger.warning(
+                "Managed template sync failed, fallback to normal flow: user_id=%s, template_key=%s, error=%s",
+                user_id,
+                template_key,
+                sync_error,
+            )
         
         # 1. 尝试从数据库获取用户自定义模板
         result = await db.execute(
@@ -2811,9 +2833,6 @@ class PromptService:
         
         # 2. 降级到系统默认模板
         logger.info(f"⚪ 使用系统默认提示词: user_id={user_id}, template_key={template_key} (未找到自定义模板)")
-        
-        # 直接从类属性获取系统默认模板
-        template_content = getattr(cls, template_key, None)
         
         if template_content is None:
             logger.warning(f"⚠️ 未找到系统默认模板: {template_key}")

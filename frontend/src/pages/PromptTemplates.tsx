@@ -53,6 +53,28 @@ interface CategoryGroup {
   templates: PromptTemplate[];
 }
 
+interface PromptTemplateSyncStatusItem {
+  template_key: string;
+  template_name: string;
+  category?: string;
+  has_custom_template: boolean;
+  is_active: boolean;
+  sync_status: 'system_default' | 'up_to_date' | 'legacy_default' | 'customized' | 'system_template_missing';
+  is_diff_from_system: boolean;
+  is_legacy_default: boolean;
+  can_auto_sync: boolean;
+  can_sync_to_default: boolean;
+  user_content_hash?: string;
+  system_content_hash?: string;
+  updated_at?: string;
+}
+
+interface PromptTemplateSyncStatusResponse {
+  total: number;
+  managed_only: boolean;
+  items: PromptTemplateSyncStatusItem[];
+}
+
 export default function PromptTemplates() {
   const [modal, contextHolder] = Modal.useModal();
   const [categories, setCategories] = useState<CategoryGroup[]>([]);
@@ -60,15 +82,42 @@ export default function PromptTemplates() {
   const [editingTemplate, setEditingTemplate] = useState<PromptTemplate | null>(null);
   const [editorVisible, setEditorVisible] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [syncStatusMap, setSyncStatusMap] = useState<Record<string, PromptTemplateSyncStatusItem>>({});
+  const [syncStatusEnabled, setSyncStatusEnabled] = useState(true);
 
   const isMobile = window.innerWidth <= 768;
 
   // 加载模板数据
+  const loadSyncStatus = async () => {
+    try {
+      const response = await axios.get<PromptTemplateSyncStatusResponse>('/api/prompt-templates/sync-status', {
+        params: { managed_only: true }
+      });
+      const nextMap: Record<string, PromptTemplateSyncStatusItem> = {};
+      response.data.items.forEach((item) => {
+        nextMap[item.template_key] = item;
+      });
+      setSyncStatusMap(nextMap);
+      setSyncStatusEnabled(true);
+    } catch (error: unknown) {
+      const err = error as { response?: { status?: number } };
+      if (err.response?.status === 404) {
+        setSyncStatusEnabled(false);
+        setSyncStatusMap({});
+      } else {
+        setSyncStatusEnabled(false);
+        setSyncStatusMap({});
+        message.warning('同步状态获取失败，已使用基础模式显示');
+      }
+    }
+  };
+
   const loadTemplates = async () => {
     try {
       setLoading(true);
       const response = await axios.get<CategoryGroup[]>('/api/prompt-templates/categories');
       setCategories(response.data);
+      await loadSyncStatus();
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } } };
       message.error(err.response?.data?.detail || '加载失败');
@@ -88,6 +137,35 @@ export default function PromptTemplates() {
       return categories.flatMap(cat => cat.templates);
     }
     return categories[index - 1]?.templates || [];
+  };
+
+  const getSyncStatus = (templateKey: string): PromptTemplateSyncStatusItem | undefined => {
+    return syncStatusMap[templateKey];
+  };
+
+  const getSyncStatusTagConfig = (templateKey: string): { color: string; text: string } | null => {
+    if (!syncStatusEnabled) {
+      return null;
+    }
+    const status = getSyncStatus(templateKey);
+    if (!status) {
+      return null;
+    }
+
+    switch (status.sync_status) {
+      case 'system_default':
+        return { color: 'default', text: '系统默认' };
+      case 'up_to_date':
+        return { color: 'success', text: '已同步' };
+      case 'legacy_default':
+        return { color: 'warning', text: '旧默认，可升级' };
+      case 'customized':
+        return { color: 'processing', text: '已自定义（有差异）' };
+      case 'system_template_missing':
+        return { color: 'error', text: '系统模板缺失' };
+      default:
+        return null;
+    }
   };
 
   // 编辑模板
@@ -113,7 +191,7 @@ export default function PromptTemplates() {
       });
       message.success('保存成功');
       setEditorVisible(false);
-      loadTemplates();
+      await loadTemplates();
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } } };
       message.error(err.response?.data?.detail || '保存失败');
@@ -124,21 +202,45 @@ export default function PromptTemplates() {
 
   // 重置为系统默认
   const handleReset = async (templateKey: string) => {
+    const status = getSyncStatus(templateKey);
+    const canSync = status ? status.can_sync_to_default : true;
+    if (!canSync) {
+      message.info('Already system default');
+      return;
+    }
+
     modal.confirm({
-      title: '确认重置',
-      content: '确定要重置为系统默认模板吗？这将覆盖您的自定义内容。',
-      okText: '确定',
+      title: '确认同步',
+      content: '确定同步到系统默认模板吗？这会覆盖当前自定义内容。',
+      okText: '同步',
       cancelText: '取消',
       centered: true,
       onOk: async () => {
         try {
           setLoading(true);
-          await axios.post(`/api/prompt-templates/${templateKey}/reset`);
-          message.success('已重置为系统默认');
-          loadTemplates();
+          try {
+            const response = await axios.post(`/api/prompt-templates/${templateKey}/sync-to-default`);
+            const latestStatus = response?.data?.status as PromptTemplateSyncStatusItem | undefined;
+            if (latestStatus) {
+              setSyncStatusMap((prev) => ({
+                ...prev,
+                [templateKey]: latestStatus
+              }));
+            }
+            message.success(response?.data?.message || 'Synced to system default');
+          } catch (syncError: unknown) {
+            const syncErr = syncError as { response?: { status?: number } };
+            if (syncErr.response?.status === 404) {
+              await axios.post(`/api/prompt-templates/${templateKey}/reset`);
+              message.success('已重置为系统默认模板');
+            } else {
+              throw syncError;
+            }
+          }
+          await loadTemplates();
         } catch (error: unknown) {
           const err = error as { response?: { data?: { detail?: string } } };
-          message.error(err.response?.data?.detail || '重置失败');
+          message.error(err.response?.data?.detail || '同步失败');
         } finally {
           setLoading(false);
         }
@@ -152,7 +254,7 @@ export default function PromptTemplates() {
       await axios.put(`/api/prompt-templates/${template.template_key}`, {
         is_active: checked
       });
-      loadTemplates();
+      await loadTemplates();
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } } };
       message.error(err.response?.data?.detail || '操作失败');
@@ -237,7 +339,7 @@ export default function PromptTemplates() {
         message.success(successMsg, 5);
       }
       
-      loadTemplates();
+      await loadTemplates();
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } } };
       message.error(err.response?.data?.detail || '导入失败');
@@ -450,6 +552,15 @@ export default function PromptTemplates() {
                             <Tag color={template.is_system_default ? 'default' : 'rgba(255,255,255,0.3)'} style={{ color: template.is_system_default ? 'var(--color-text-secondary)' : '#fff', border: 'none' }}>
                               {template.is_system_default ? '系统默认' : '已自定义'}
                             </Tag>
+                            {(() => {
+                              const syncTag = getSyncStatusTagConfig(template.template_key);
+                              if (!syncTag) return null;
+                              return (
+                                <Tag color={syncTag.color} style={{ border: 'none' }}>
+                                  {syncTag.text}
+                                </Tag>
+                              );
+                            })()}
                           </Space>
                         </Space>
                       </div>
@@ -491,10 +602,11 @@ export default function PromptTemplates() {
                           <Button
                             icon={<ReloadOutlined />}
                             onClick={() => handleReset(template.template_key)}
+                            disabled={!(getSyncStatus(template.template_key)?.can_sync_to_default ?? !template.is_system_default)}
                             size={isMobile ? 'small' : 'middle'}
                             style={{ borderRadius: 6 }}
                           >
-                            重置
+                            {syncStatusEnabled ? '同步默认' : '重置'}
                           </Button>
                         </Space>
                       </div>

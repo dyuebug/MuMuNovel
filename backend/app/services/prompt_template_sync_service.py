@@ -1,0 +1,218 @@
+"""Managed prompt template sync helpers.
+
+This module keeps selected high-impact templates aligned with the latest
+system defaults without overriding real user customizations.
+
+Strategy:
+- Only sync managed template keys.
+- Only sync when user template content hash matches a known legacy default hash.
+- Never sync when content has diverged from both current and known legacy defaults.
+"""
+from __future__ import annotations
+
+import json
+import hashlib
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Set
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.logger import get_logger
+from app.models.prompt_template import PromptTemplate
+
+logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class TemplateSyncRule:
+    """Auto-sync rule for a managed template key."""
+
+    legacy_hashes: Set[str]
+
+
+# Keep this small and explicit. Add entries only when there is a verified need.
+MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
+    # Legacy hash from the historical AI_DENOISING default content.
+    # If users still hold that untouched legacy copy, auto-upgrade to latest.
+    "AI_DENOISING": TemplateSyncRule(
+        legacy_hashes={"c40c0f000310940c"},
+    ),
+}
+
+
+def managed_template_keys() -> list[str]:
+    """Return managed template keys for sync checks."""
+
+    return list(MANAGED_TEMPLATE_SYNC_RULES.keys())
+
+
+def calculate_content_hash(content: str) -> str:
+    """Compute a stable short hash for template content."""
+
+    normalized = (content or "").strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def build_template_sync_status(
+    *,
+    template_key: str,
+    system_template_content: Optional[str],
+    system_template_info: Optional[Dict[str, Any]] = None,
+    user_template: Optional[PromptTemplate] = None,
+) -> Dict[str, Any]:
+    """Build sync status payload for frontend rendering.
+
+    Status values:
+    - system_default: user has no custom template and uses system default.
+    - up_to_date: user custom template exists and matches system default.
+    - legacy_default: user custom template is an old known default copy.
+    - customized: user custom template differs from system and is user-modified.
+    - system_template_missing: template key has no current system default content.
+    """
+
+    template_name = (
+        (system_template_info or {}).get("template_name")
+        or (system_template_info or {}).get("name")
+        or template_key
+    )
+    category = (system_template_info or {}).get("category")
+    system_hash = calculate_content_hash(system_template_content or "")
+
+    if not system_template_content:
+        return {
+            "template_key": template_key,
+            "template_name": template_name,
+            "category": category,
+            "has_custom_template": user_template is not None,
+            "is_active": bool(user_template.is_active) if user_template else True,
+            "sync_status": "system_template_missing",
+            "is_diff_from_system": False,
+            "is_legacy_default": False,
+            "can_auto_sync": False,
+            "can_sync_to_default": user_template is not None,
+            "user_content_hash": calculate_content_hash(user_template.template_content) if user_template else None,
+            "system_content_hash": None,
+            "updated_at": user_template.updated_at if user_template else None,
+        }
+
+    if user_template is None:
+        return {
+            "template_key": template_key,
+            "template_name": template_name,
+            "category": category,
+            "has_custom_template": False,
+            "is_active": True,
+            "sync_status": "system_default",
+            "is_diff_from_system": False,
+            "is_legacy_default": False,
+            "can_auto_sync": False,
+            "can_sync_to_default": False,
+            "user_content_hash": None,
+            "system_content_hash": system_hash,
+            "updated_at": None,
+        }
+
+    user_hash = calculate_content_hash(user_template.template_content or "")
+    is_diff = user_hash != system_hash
+
+    rule = MANAGED_TEMPLATE_SYNC_RULES.get(template_key)
+    is_legacy_default = bool(rule and is_diff and user_hash in rule.legacy_hashes)
+    can_auto_sync = is_legacy_default
+
+    if not is_diff:
+        sync_status = "up_to_date"
+    elif is_legacy_default:
+        sync_status = "legacy_default"
+    else:
+        sync_status = "customized"
+
+    return {
+        "template_key": template_key,
+        "template_name": template_name,
+        "category": category,
+        "has_custom_template": True,
+        "is_active": bool(user_template.is_active),
+        "sync_status": sync_status,
+        "is_diff_from_system": is_diff,
+        "is_legacy_default": is_legacy_default,
+        "can_auto_sync": can_auto_sync,
+        "can_sync_to_default": True,
+        "user_content_hash": user_hash,
+        "system_content_hash": system_hash,
+        "updated_at": user_template.updated_at,
+    }
+
+
+async def sync_managed_template_if_legacy(
+    *,
+    db: AsyncSession,
+    user_id: str,
+    template_key: str,
+    system_template_content: Optional[str],
+    system_template_info: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Sync one managed user template when it still matches legacy default.
+
+    Returns:
+    - True: database row updated and committed
+    - False: no change
+    """
+
+    if not user_id or not template_key:
+        return False
+
+    rule = MANAGED_TEMPLATE_SYNC_RULES.get(template_key)
+    if not rule:
+        return False
+
+    if not system_template_content:
+        return False
+
+    result = await db.execute(
+        select(PromptTemplate).where(
+            PromptTemplate.user_id == user_id,
+            PromptTemplate.template_key == template_key,
+        )
+    )
+    user_template = result.scalar_one_or_none()
+    if not user_template:
+        return False
+
+    current_hash = calculate_content_hash(user_template.template_content or "")
+    if current_hash not in rule.legacy_hashes:
+        return False
+
+    normalized_user = (user_template.template_content or "").strip()
+    normalized_system = system_template_content.strip()
+    if normalized_user == normalized_system:
+        return False
+
+    user_template.template_content = system_template_content
+
+    # Refresh metadata from current system definition when available.
+    if system_template_info:
+        system_name = system_template_info.get("template_name")
+        if system_name:
+            user_template.template_name = system_name
+
+        system_desc = system_template_info.get("description")
+        if system_desc is not None:
+            user_template.description = system_desc
+
+        system_category = system_template_info.get("category")
+        if system_category is not None:
+            user_template.category = system_category
+
+        system_parameters = system_template_info.get("parameters")
+        if system_parameters is not None:
+            user_template.parameters = json.dumps(system_parameters, ensure_ascii=False)
+
+    await db.commit()
+    logger.info(
+        "Synced managed template from legacy default: user_id=%s, template_key=%s, from_hash=%s",
+        user_id,
+        template_key,
+        current_hash,
+    )
+    return True
