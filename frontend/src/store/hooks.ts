@@ -280,7 +280,7 @@ export function useChapterSync() {
     }
   }, [removeChapter]);
 
-  // AI流式生成章节内容（带同步）
+  // AI后台生成章节内容（带同步）
   const generateChapterContentStream = useCallback(async (
     chapterId: string,
     onProgress?: (content: string) => void,
@@ -290,9 +290,12 @@ export function useChapterSync() {
     model?: string,
     narrativePerspective?: string
   ) => {
+    let streamAbortController: AbortController | null = null;
+    let streamPromise: Promise<void> | null = null;
+
     try {
-      // 使用fetch处理流式响应
-      const response = await fetch(`/api/chapters/${chapterId}/generate-stream`, {
+      // 1) 创建后台任务（立即返回 task_id）
+      const response = await fetch(`/api/chapters/${chapterId}/generate-background`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -306,98 +309,172 @@ export function useChapterSync() {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
       }
 
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-
-      if (!reader) {
-        throw new Error('无法获取响应流');
+      const startResult = await response.json();
+      const taskId: string | undefined = startResult.task_id;
+      if (!taskId) {
+        throw new Error('后台任务创建成功但未返回 task_id');
       }
 
-      let buffer = '';
+      if (onProgressUpdate) {
+        onProgressUpdate(startResult.message || '后台任务已创建', 5);
+      }
+
+      // 2) 订阅任务SSE流（实时回显chunk）
       let fullContent = '';
-      let analysisTaskId: string | undefined;
+      let streamFailure: string | null = null;
+      streamAbortController = new AbortController();
 
-      while (true) {
-        const { done, value } = await reader.read();
+      streamPromise = (async () => {
+        try {
+          const streamResponse = await fetch(`/api/chapters/batch-generate/${taskId}/stream`, {
+            method: 'GET',
+            signal: streamAbortController.signal,
+          });
 
-        if (done) {
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-        
-        // 处理缓冲区中的完整消息
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.trim() === '' || line.startsWith(':')) {
-            continue;
+          if (!streamResponse.ok || !streamResponse.body) {
+            return;
           }
 
-          try {
-            const dataMatch = line.match(/^data: (.+)$/m);
-            if (dataMatch) {
-              const message = JSON.parse(dataMatch[1]);
-              
-              if (message.type === 'start') {
-                // 开始生成
-                if (onProgressUpdate) {
-                  onProgressUpdate(message.message || '开始生成...', 0);
-                }
-              } else if (message.type === 'progress') {
-                // 进度更新
-                if (onProgressUpdate) {
+          const reader = streamResponse.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (line.trim() === '' || line.startsWith(':')) continue;
+              const dataMatch = line.match(/^data: (.+)$/m);
+              if (!dataMatch) continue;
+
+              try {
+                const message = JSON.parse(dataMatch[1]);
+
+                if (message.type === 'chunk' && message.content) {
+                  fullContent += message.content;
+                  if (onProgress) {
+                    onProgress(fullContent);
+                  }
+                } else if (message.type === 'progress' && onProgressUpdate) {
+                  onProgressUpdate(message.message || '后台生成中...', message.progress || 0);
+                } else if (message.type === 'chapter_start' && onProgressUpdate) {
                   onProgressUpdate(
-                    message.message || '生成中...',
-                    message.progress || 0
+                    `开始生成第${message.chapter_number || ''}章...`,
+                    message.progress || 15
                   );
+                } else if (message.type === 'analysis_started' && onProgressUpdate) {
+                  onProgressUpdate(message.message || '章节分析中...', message.progress || 85);
+                } else if (message.type === 'error') {
+                  streamFailure = message.error || '后台生成失败';
                 }
-              } else if ((message.type === 'content' || message.type === 'chunk') && message.content) {
-                fullContent += message.content;
-                if (onProgress) {
-                  onProgress(fullContent);
-                }
-              } else if (message.type === 'error') {
-                throw new Error(message.error || '生成失败');
-              } else if (message.type === 'result') {
-                // 结果消息，包含分析任务ID
-                if (message.data?.analysis_task_id) {
-                  analysisTaskId = message.data.analysis_task_id;
-                }
-                if (onProgressUpdate) {
-                  onProgressUpdate('生成完成', 100);
-                }
-              } else if (message.type === 'done') {
-                // 生成完成，刷新章节数据
-                await refreshChapters();
-              } else if (message.type === 'analysis_started') {
-                // 分析已开始
-                analysisTaskId = message.task_id;
-                if (onProgressUpdate) {
-                  onProgressUpdate('章节分析已开始...', 100);
-                }
-              } else if (message.type === 'analysis_queued') {
-                // 分析任务已加入队列
-                analysisTaskId = message.task_id;
+              } catch (parseError) {
+                console.error('解析任务SSE消息失败:', parseError);
               }
             }
-          } catch (error) {
-            console.error('解析SSE消息失败:', error);
           }
+        } catch (streamError) {
+          const err = streamError as Error;
+          // 主动abort时会抛错，忽略
+          if (err.name !== 'AbortError') {
+            console.warn('任务SSE流异常，降级为轮询模式:', err.message);
+          }
+        }
+      })();
+
+      // 3) 轮询后台任务状态（兜底状态源）
+      const maxPollCount = 900; // 最多轮询约30分钟（2秒一次）
+      let pollCount = 0;
+
+      while (pollCount < maxPollCount) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        pollCount += 1;
+
+        if (streamFailure) {
+          throw new Error(streamFailure);
+        }
+
+        const statusResponse = await fetch(`/api/chapters/batch-generate/${taskId}/status`);
+        if (!statusResponse.ok) {
+          throw new Error(`查询任务状态失败: ${statusResponse.status}`);
+        }
+        const taskStatus = await statusResponse.json();
+
+        if (taskStatus.status === 'pending') {
+          if (onProgressUpdate) {
+            onProgressUpdate('后台排队中，可继续其他操作...', 15);
+          }
+          continue;
+        }
+
+        if (taskStatus.status === 'running') {
+          if (onProgressUpdate) {
+            const retrySuffix = taskStatus.current_retry_count ? `（重试${taskStatus.current_retry_count}）` : '';
+            onProgressUpdate(`后台生成中${retrySuffix}，可并行执行其他任务...`, 65);
+          }
+          continue;
+        }
+
+        if (taskStatus.status === 'failed') {
+          throw new Error(taskStatus.error_message || '后台生成失败');
+        }
+
+        if (taskStatus.status === 'cancelled') {
+          throw new Error('后台生成已取消');
+        }
+
+        if (taskStatus.status === 'completed') {
+          if (onProgressUpdate) {
+            onProgressUpdate('后台生成完成，正在同步内容...', 95);
+          }
+
+          // 停止SSE订阅
+          streamAbortController?.abort();
+          if (streamPromise) {
+            await streamPromise;
+          }
+
+          // 4) 刷新列表并回填最新章节内容
+          await refreshChapters();
+          const latestChapter = await chapterApi.getChapter(chapterId);
+          const finalContent = latestChapter.content || '';
+
+          // SSE中可能已实时回显，最终以数据库保存结果为准
+          if (onProgress && finalContent !== fullContent) {
+            onProgress(finalContent);
+          }
+          if (onProgressUpdate) {
+            onProgressUpdate('生成完成', 100);
+          }
+
+          return {
+            content: finalContent,
+            analysis_task_id: undefined,
+            generation_task_id: taskId
+          };
         }
       }
 
-      return {
-        content: fullContent,
-        analysis_task_id: analysisTaskId
-      };
+      throw new Error('后台生成超时，请稍后查看章节内容');
     } catch (error) {
-      console.error('AI流式生成章节内容失败:', error);
+      console.error('AI后台生成章节内容失败:', error);
       throw error;
+    } finally {
+      // 兜底清理，避免异常分支遗留流式连接
+      if (streamAbortController) {
+        streamAbortController.abort();
+      }
+      if (streamPromise) {
+        await streamPromise.catch(() => undefined);
+      }
     }
   }, [refreshChapters]);
 

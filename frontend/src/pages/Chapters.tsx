@@ -779,7 +779,7 @@ export default function Chapters() {
         temporaryNarrativePerspective  // 传递临时人称参数
       );
 
-      message.success('AI创作成功，正在分析章节内容...');
+      message.success('后台创作任务已完成，章节内容已同步');
 
       // 如果返回了分析任务ID，启动轮询
       if (result?.analysis_task_id) {
