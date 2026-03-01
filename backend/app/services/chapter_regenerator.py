@@ -74,12 +74,27 @@ class ChapterRegenerator:
             # 3. 构建系统提示词（注入写作风格）
             system_prompt_with_style = None
             if style_content:
+                extra_guard = ""
+                if "连载感" in style_content:
+                    extra_guard = (
+                        "\n连载优化要求：\n"
+                        "- 情绪推进至少经历“触发→压住/回避→外露”中的两个阶段\n"
+                        "- 对话要区分角色声线，避免全员同一种书面表达\n"
+                        "- 章末保留自然压力点，不要硬反转"
+                    )
+                elif "生活化" in style_content:
+                    extra_guard = (
+                        "\n生活化优化要求：\n"
+                        "- 用动作和反应传达情绪，少写抽象总结\n"
+                        "- 允许少量口语毛边，避免句句工整"
+                    )
+
                 system_prompt_with_style = f"""【🎨 写作风格参考】
 
 {style_content}
 
 请优先贴合上述写作风格进行重写。
-整体语气尽量保持一致，自然表达，不要写成模板腔。"""
+整体语气尽量保持一致，自然表达，不要写成模板腔。{extra_guard}"""
                 logger.info(f"✅ 已将写作风格注入系统提示词（{len(style_content)}字符）")
             
             # 4. 流式生成新内容，同时跟踪进度
