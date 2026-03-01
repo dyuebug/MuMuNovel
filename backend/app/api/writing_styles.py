@@ -16,6 +16,7 @@ from ..schemas.writing_style import (
     SetDefaultStyleRequest
 )
 from ..logger import get_logger
+from ..services.writing_style_sync_service import sync_low_ai_presets
 
 router = APIRouter(prefix="/writing-styles", tags=["writing-styles"])
 logger = get_logger(__name__)
@@ -40,6 +41,9 @@ async def get_preset_styles(db: AsyncSession = Depends(get_db)):
         {"id": 2, "preset_id": "classical", "name": "古典优雅", ...}
     ]
     """
+    # 兜底同步：确保 low_ai 预设文案对存量库立即生效
+    await sync_low_ai_presets(db)
+
     # 从数据库获取全局预设风格（user_id 为 NULL）
     result = await db.execute(
         select(WritingStyle)
@@ -77,6 +81,9 @@ async def create_writing_style(
     """
     # 获取当前用户ID
     user_id = get_current_user_id(request)
+
+    # 兜底同步：基于预设创建前先确保 low_ai 预设是最新内容
+    await sync_low_ai_presets(db)
     
     # 如果基于预设创建，从数据库获取预设内容
     if style_data.preset_id:
@@ -158,6 +165,9 @@ async def get_user_styles(
     """
     # 获取当前用户ID
     user_id = get_current_user_id(request)
+
+    # 兜底同步：确保列表中 low_ai 预设是最新文案
+    await sync_low_ai_presets(db)
     
     # 获取全局预设风格（user_id 为 NULL）
     result = await db.execute(
@@ -213,6 +223,9 @@ async def get_project_styles(
     """
     # 获取当前用户ID
     user_id = get_current_user_id(request)
+
+    # 兜底同步：确保项目可选风格中的 low_ai 预设是最新文案
+    await sync_low_ai_presets(db)
     
     # 验证项目访问权限
     result = await db.execute(

@@ -50,6 +50,7 @@ from app.services.plot_analyzer import PlotAnalyzer
 from app.services.memory_service import memory_service
 from app.services.foreshadow_service import foreshadow_service
 from app.services.chapter_regenerator import ChapterRegenerator
+from app.services.writing_style_sync_service import sync_low_ai_presets
 from app.logger import get_logger
 from app.api.settings import get_user_ai_service
 from app.utils.sse_response import SSEResponse, create_sse_response
@@ -1425,6 +1426,7 @@ async def generate_chapter_content_stream(
                 outline = outline_result.scalar_one_or_none()
                 
                 # 获取写作风格
+                await sync_low_ai_presets(db_session)
                 style_content = ""
                 if style_id:
                     # 使用指定的风格
@@ -2775,6 +2777,7 @@ async def generate_single_chapter_for_batch(
     outline = outline_result.scalar_one_or_none()
     
     # 获取写作风格
+    await sync_low_ai_presets(db_session)
     style_content = ""
     if style_id:
         style_result = await db_session.execute(
@@ -3137,6 +3140,7 @@ async def regenerate_chapter_stream(
             outline = outline_result.scalar_one_or_none()
             
             # 获取写作风格
+            await sync_low_ai_presets(temp_db)
             style_content = ""
             style_id = regenerate_request.style_id
             
@@ -3553,6 +3557,7 @@ async def partial_regenerate_stream(
     project = project_result.scalar_one_or_none()
     
     # 获取写作风格
+    await sync_low_ai_presets(db)
     style_content = ""
     style_id = partial_request.style_id
     
