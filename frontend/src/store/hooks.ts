@@ -280,7 +280,7 @@ export function useChapterSync() {
     }
   }, [removeChapter]);
 
-  // AI后台生成章节内容（带同步）
+  // AI后台生成章节内容（创建任务后立即返回，完成过程在后台异步跟踪）
   const generateChapterContentStream = useCallback(async (
     chapterId: string,
     onProgress?: (content: string) => void,
@@ -290,45 +290,42 @@ export function useChapterSync() {
     model?: string,
     narrativePerspective?: string
   ) => {
-    let streamAbortController: AbortController | null = null;
-    let streamPromise: Promise<void> | null = null;
+    // 1) 创建后台任务（立即返回 task_id）
+    const response = await fetch(`/api/chapters/${chapterId}/generate-background`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        style_id: styleId,
+        target_word_count: targetWordCount,
+        model: model,
+        narrative_perspective: narrativePerspective
+      }),
+    });
 
-    try {
-      // 1) 创建后台任务（立即返回 task_id）
-      const response = await fetch(`/api/chapters/${chapterId}/generate-background`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          style_id: styleId,
-          target_word_count: targetWordCount,
-          model: model,
-          narrative_perspective: narrativePerspective
-        }),
-      });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+    }
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
-      }
+    const startResult = await response.json();
+    const taskId: string | undefined = startResult.task_id;
+    if (!taskId) {
+      throw new Error('后台任务创建成功但未返回 task_id');
+    }
 
-      const startResult = await response.json();
-      const taskId: string | undefined = startResult.task_id;
-      if (!taskId) {
-        throw new Error('后台任务创建成功但未返回 task_id');
-      }
+    if (onProgressUpdate) {
+      onProgressUpdate(startResult.message || '后台任务已创建', 5);
+    }
 
-      if (onProgressUpdate) {
-        onProgressUpdate(startResult.message || '后台任务已创建', 5);
-      }
-
-      // 2) 订阅任务SSE流（实时回显chunk）
+    // 2) 在后台异步跟踪任务，保留实时chunk和轮询兜底
+    const completion = (async () => {
       let fullContent = '';
       let streamFailure: string | null = null;
-      streamAbortController = new AbortController();
+      const streamAbortController = new AbortController();
 
-      streamPromise = (async () => {
+      const streamPromise = (async () => {
         try {
           const streamResponse = await fetch(`/api/chapters/batch-generate/${taskId}/stream`, {
             method: 'GET',
@@ -390,92 +387,87 @@ export function useChapterSync() {
         }
       })();
 
-      // 3) 轮询后台任务状态（兜底状态源）
-      const maxPollCount = 900; // 最多轮询约30分钟（2秒一次）
-      let pollCount = 0;
+      try {
+        const maxPollCount = 900; // 最多轮询约30分钟（2秒一次）
+        let pollCount = 0;
 
-      while (pollCount < maxPollCount) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        pollCount += 1;
+        while (pollCount < maxPollCount) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          pollCount += 1;
 
-        if (streamFailure) {
-          throw new Error(streamFailure);
-        }
-
-        const statusResponse = await fetch(`/api/chapters/batch-generate/${taskId}/status`);
-        if (!statusResponse.ok) {
-          throw new Error(`查询任务状态失败: ${statusResponse.status}`);
-        }
-        const taskStatus = await statusResponse.json();
-
-        if (taskStatus.status === 'pending') {
-          if (onProgressUpdate) {
-            onProgressUpdate('后台排队中，可继续其他操作...', 15);
-          }
-          continue;
-        }
-
-        if (taskStatus.status === 'running') {
-          if (onProgressUpdate) {
-            const retrySuffix = taskStatus.current_retry_count ? `（重试${taskStatus.current_retry_count}）` : '';
-            onProgressUpdate(`后台生成中${retrySuffix}，可并行执行其他任务...`, 65);
-          }
-          continue;
-        }
-
-        if (taskStatus.status === 'failed') {
-          throw new Error(taskStatus.error_message || '后台生成失败');
-        }
-
-        if (taskStatus.status === 'cancelled') {
-          throw new Error('后台生成已取消');
-        }
-
-        if (taskStatus.status === 'completed') {
-          if (onProgressUpdate) {
-            onProgressUpdate('后台生成完成，正在同步内容...', 95);
+          if (streamFailure) {
+            throw new Error(streamFailure);
           }
 
-          // 停止SSE订阅
-          streamAbortController?.abort();
-          if (streamPromise) {
+          const statusResponse = await fetch(`/api/chapters/batch-generate/${taskId}/status`);
+          if (!statusResponse.ok) {
+            throw new Error(`查询任务状态失败: ${statusResponse.status}`);
+          }
+          const taskStatus = await statusResponse.json();
+
+          if (taskStatus.status === 'pending') {
+            if (onProgressUpdate) {
+              onProgressUpdate('后台排队中，可继续其他操作...', 15);
+            }
+            continue;
+          }
+
+          if (taskStatus.status === 'running') {
+            if (onProgressUpdate) {
+              const retrySuffix = taskStatus.current_retry_count ? `（重试${taskStatus.current_retry_count}）` : '';
+              onProgressUpdate(`后台生成中${retrySuffix}，可并行执行其他任务...`, 65);
+            }
+            continue;
+          }
+
+          if (taskStatus.status === 'failed') {
+            throw new Error(taskStatus.error_message || '后台生成失败');
+          }
+
+          if (taskStatus.status === 'cancelled') {
+            throw new Error('后台生成已取消');
+          }
+
+          if (taskStatus.status === 'completed') {
+            if (onProgressUpdate) {
+              onProgressUpdate('后台生成完成，正在同步内容...', 95);
+            }
+
+            streamAbortController.abort();
             await streamPromise;
-          }
 
-          // 4) 刷新列表并回填最新章节内容
-          await refreshChapters();
-          const latestChapter = await chapterApi.getChapter(chapterId);
-          const finalContent = latestChapter.content || '';
+            await refreshChapters();
+            const latestChapter = await chapterApi.getChapter(chapterId);
+            const finalContent = latestChapter.content || '';
 
-          // SSE中可能已实时回显，最终以数据库保存结果为准
-          if (onProgress && finalContent !== fullContent) {
-            onProgress(finalContent);
-          }
-          if (onProgressUpdate) {
-            onProgressUpdate('生成完成', 100);
-          }
+            if (onProgress && finalContent !== fullContent) {
+              onProgress(finalContent);
+            }
+            if (onProgressUpdate) {
+              onProgressUpdate('生成完成', 100);
+            }
 
-          return {
-            content: finalContent,
-            analysis_task_id: undefined,
-            generation_task_id: taskId
-          };
+            return {
+              content: finalContent,
+              analysis_task_id: undefined,
+              generation_task_id: taskId
+            };
+          }
         }
-      }
 
-      throw new Error('后台生成超时，请稍后查看章节内容');
-    } catch (error) {
-      console.error('AI后台生成章节内容失败:', error);
-      throw error;
-    } finally {
-      // 兜底清理，避免异常分支遗留流式连接
-      if (streamAbortController) {
+        throw new Error('后台生成超时，请稍后查看章节内容');
+      } finally {
+        // 兜底清理，避免异常分支遗留流式连接
         streamAbortController.abort();
-      }
-      if (streamPromise) {
         await streamPromise.catch(() => undefined);
       }
-    }
+    })();
+
+    return {
+      generation_task_id: taskId,
+      analysis_task_id: undefined,
+      completion
+    };
   }, [refreshChapters]);
 
   return {

@@ -749,15 +749,17 @@ export default function Chapters() {
 
   const handleGenerate = async () => {
     if (!editingId) return;
+    const chapterId = editingId;
+    const progressMessageKey = `chapter-generate-progress-${chapterId}`;
 
     try {
       setIsContinuing(true);
       setIsGenerating(true);
       setSingleChapterProgress(0);
-      setSingleChapterProgressMessage('准备开始生成...');
+      setSingleChapterProgressMessage('正在创建后台任务...');
 
       const result = await generateChapterContentStream(
-        editingId,
+        chapterId,
         (content) => {
           editorForm.setFieldsValue({ content });
 
@@ -779,33 +781,55 @@ export default function Chapters() {
         temporaryNarrativePerspective  // 传递临时人称参数
       );
 
-      message.success('后台创作任务已完成，章节内容已同步');
+      message.open({
+        key: progressMessageKey,
+        type: 'loading',
+        content: '后台创作进行中，可继续其他操作',
+        duration: 0,
+      });
 
-      // 如果返回了分析任务ID，启动轮询
-      if (result?.analysis_task_id) {
-        const taskId = result.analysis_task_id;
-        setAnalysisTasksMap(prev => ({
-          ...prev,
-          [editingId]: {
-            has_task: true,
-            task_id: taskId,
-            chapter_id: editingId,
-            status: 'pending',
-            progress: 0
+      // 后台继续执行：完成后自动更新文案；失败时提示错误
+      result.completion
+        .then((finalResult) => {
+          message.open({
+            key: progressMessageKey,
+            type: 'success',
+            content: '后台创作任务已完成，章节内容已同步',
+            duration: 2,
+          });
+
+          if (finalResult?.analysis_task_id) {
+            const taskId = finalResult.analysis_task_id;
+            setAnalysisTasksMap(prev => ({
+              ...prev,
+              [chapterId]: {
+                has_task: true,
+                task_id: taskId,
+                chapter_id: chapterId,
+                status: 'pending',
+                progress: 0
+              }
+            }));
+            startPollingTask(chapterId);
           }
-        }));
+        })
+        .catch((error) => {
+          const completionError = error as ApiError;
+          message.open({
+            key: progressMessageKey,
+            type: 'error',
+            content: '后台创作失败：' + (completionError.response?.data?.detail || completionError.message || '未知错误'),
+            duration: 4,
+          });
+        });
 
-        // 启动轮询
-        startPollingTask(editingId);
-      }
+      message.success('后台创作任务已创建，可继续其他操作');
     } catch (error) {
       const apiError = error as ApiError;
       message.error('AI创作失败：' + (apiError.response?.data?.detail || apiError.message || '未知错误'));
     } finally {
       setIsContinuing(false);
       setIsGenerating(false);
-      setSingleChapterProgress(0);
-      setSingleChapterProgressMessage('');
     }
   };
 
