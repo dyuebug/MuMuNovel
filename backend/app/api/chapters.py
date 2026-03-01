@@ -1619,7 +1619,8 @@ async def generate_chapter_content_stream(
 {style_content}
 
 请优先贴合上述写作风格进行创作。
-整章语气尽量保持一致，自然表达，不要写成模板腔。"""
+整章语气尽量保持一致，自然表达，不要写成模板腔。
+句式尽量长短结合，对话口吻像真人交流；网络热梗仅在合适场景点到为止。"""
                     logger.info(f"✅ 已将写作风格注入系统提示词（{len(style_content)}字符）")
                 
                 # 🔢 计算 max_tokens 限制
@@ -2926,7 +2927,8 @@ async def generate_single_chapter_for_batch(
 {style_content}
 
 请优先贴合上述写作风格进行创作。
-整章语气尽量保持一致，自然表达，不要写成模板腔。"""
+整章语气尽量保持一致，自然表达，不要写成模板腔。
+句式尽量长短结合，对话口吻像真人交流；网络热梗仅在合适场景点到为止。"""
         logger.info(f"✅ 批量生成 - 已将写作风格注入系统提示词（{len(style_content)}字符）")
     
     # 🔢 计算 max_tokens 限制（批量生成）

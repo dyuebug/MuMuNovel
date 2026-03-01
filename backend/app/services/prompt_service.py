@@ -19,7 +19,7 @@ class WritingStyleManager:
             组合后的提示词
         """
         # 在基础提示词末尾添加风格要求
-        return f"{base_prompt}\n\n{style_content}\n\n保持中文小说的自然口吻，直接输出章节正文，不要加章节标题和额外说明。"
+        return f"{base_prompt}\n\n{style_content}\n\n用中文母语者的日常表达写作，长短句穿插，读起来顺口自然。对话要像真人在说话，别端着。网络热梗可以按场景点到即止，别硬塞、别堆梗。直接输出章节正文，不要加章节标题和额外说明。"
 
 
 class PromptService:
