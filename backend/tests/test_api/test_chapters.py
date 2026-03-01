@@ -1,6 +1,7 @@
 import json
 from types import SimpleNamespace
 from typing import Any
+from datetime import datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -14,6 +15,7 @@ from app.api import chapters as chapters_api
 from app.database import Base, get_db as app_get_db
 from app.models.batch_generation_task import BatchGenerationTask
 from app.models.chapter import Chapter
+from app.models.generation_history import GenerationHistory
 from app.models.outline import Outline
 from app.models.project import Project
 from app.models.regeneration_task import RegenerationTask
@@ -531,11 +533,75 @@ async def test_should_create_batch_generation_task_and_query_status(
     assert status_body["status"] == "pending"
     assert status_body["total"] == 2
     assert status_body["completed"] == 0
+    assert status_body["latest_quality_metrics"] is None
+    assert status_body["quality_metrics_summary"] is None
 
     async with chapters_session_factory() as session:
         task = await session.get(BatchGenerationTask, batch_id)
         assert task is not None
         assert task.chapter_count == 2
+
+
+async def test_should_return_latest_chapter_quality_metrics(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="评分章节",
+        content="正文内容",
+        status="completed",
+    )
+
+    now = datetime.utcnow()
+    async with chapters_session_factory() as session:
+        session.add(
+            GenerationHistory(
+                project_id=project.id,
+                chapter_id=chapter.id,
+                prompt="旧记录",
+                generated_content="纯文本旧数据",
+                model="default",
+                created_at=now - timedelta(minutes=5),
+            )
+        )
+        session.add(
+            GenerationHistory(
+                project_id=project.id,
+                chapter_id=chapter.id,
+                prompt="新记录",
+                generated_content=json.dumps(
+                    {
+                        "log_type": "chapter_generation_quality_v1",
+                        "quality_metrics": {
+                            "overall_score": 78.5,
+                            "conflict_chain_hit_rate": 70.0,
+                            "rule_grounding_hit_rate": 82.0,
+                            "outline_alignment_rate": 75.0,
+                            "dialogue_naturalness_rate": 68.0,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                model="default",
+                created_at=now - timedelta(minutes=1),
+            )
+        )
+        await session.commit()
+
+    response = await chapters_client.get(f"/api/chapters/{chapter.id}/quality-metrics")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["chapter_id"] == chapter.id
+    assert body["has_metrics"] is True
+    assert body["latest_metrics"]["overall_score"] == 78.5
+    assert body["latest_metrics"]["conflict_chain_hit_rate"] == 70.0
+    assert body["latest_metrics"]["rule_grounding_hit_rate"] == 82.0
+    assert body["generated_at"] is not None
 
 
 async def test_should_create_single_chapter_background_generation_task(

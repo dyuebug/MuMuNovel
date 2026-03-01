@@ -5,6 +5,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 import json
 import asyncio
+import re
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from asyncio import Queue, Lock
@@ -64,6 +65,8 @@ db_write_locks: dict[str, Lock] = {}
 # 后台任务SSE订阅表（task_id -> subscriber queues）
 task_stream_subscribers: dict[str, list[Queue]] = {}
 task_stream_lock = Lock()
+task_quality_metrics_cache: dict[str, Dict[str, Any]] = {}
+task_quality_lock = Lock()
 
 
 async def get_db_write_lock(user_id: str) -> Lock:
@@ -117,6 +120,338 @@ async def publish_task_stream_event(task_id: str, event: Dict[str, Any]):
                     queues.remove(q)
             if not queues and task_id in task_stream_subscribers:
                 del task_stream_subscribers[task_id]
+
+
+def _extract_rule_keywords(world_rules: Optional[str], limit: int = 10) -> List[str]:
+    """从世界规则文本提取关键词。"""
+    if not world_rules:
+        return []
+
+    raw_words = re.findall(r"[\u4e00-\u9fff]{2,}", world_rules)
+    stop_words = {
+        "可以", "必须", "不能", "需要", "出现", "进行", "影响", "通过", "以及", "如果", "然后",
+        "这个", "那个", "没有", "时候", "因为", "所以", "因此", "规则", "系统", "角色", "世界",
+    }
+    keywords: List[str] = []
+    seen: set[str] = set()
+    for word in raw_words:
+        if word in stop_words:
+            continue
+        if word in seen:
+            continue
+        seen.add(word)
+        keywords.append(word)
+        if len(keywords) >= limit:
+            break
+    return keywords
+
+
+def _split_sentences(text: str) -> List[str]:
+    parts = re.split(r"[。！？!?；;\n]+", text)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _calc_conflict_chain_rate(text: str) -> Dict[str, Any]:
+    """计算“目标受阻→选择→代价”链条命中率。"""
+    sentences = _split_sentences(text)
+    if not sentences:
+        return {"hit_rate": 0.0, "hit_count": 0, "expected_count": 1}
+
+    obstacle_words = ["受阻", "拦住", "失败", "危机", "危险", "封锁", "卡住", "失联", "追上", "崩溃", "中断"]
+    choice_words = ["选择", "决定", "只能", "必须", "打算", "转而", "改走", "赌一把", "咬牙", "拍板"]
+    cost_words = ["代价", "损失", "牺牲", "受伤", "暴露", "麻烦", "后果", "风险", "拖慢", "失去"]
+
+    expected_count = max(1, len(text) // 900)
+    hit_count = 0
+
+    for idx in range(max(0, len(sentences) - 2)):
+        s1 = sentences[idx]
+        if not any(word in s1 for word in obstacle_words):
+            continue
+        s2_window = " ".join(sentences[idx + 1: idx + 3])
+        s3_window = " ".join(sentences[idx + 1: idx + 4])
+        if any(word in s2_window for word in choice_words) and any(word in s3_window for word in cost_words):
+            hit_count += 1
+
+    hit_rate = min(1.0, hit_count / max(expected_count, 1))
+    return {
+        "hit_rate": round(hit_rate, 4),
+        "hit_count": hit_count,
+        "expected_count": expected_count
+    }
+
+
+def _calc_rule_grounding_rate(text: str, world_rules: Optional[str]) -> Dict[str, Any]:
+    """计算世界规则落地命中率（规则关键词 + 因果触发）。"""
+    keywords = _extract_rule_keywords(world_rules)
+    if not keywords:
+        return {
+            "hit_rate": 0.0,
+            "hit_count": 0,
+            "expected_count": 1,
+            "matched_keywords": [],
+        }
+
+    causal_words = ["导致", "所以", "因此", "结果", "触发", "引发", "迫使", "只能", "不得不", "于是"]
+    sentences = _split_sentences(text)
+    expected_count = max(1, len(text) // 1100)
+
+    matched_keywords: List[str] = []
+    grounded_events = 0
+    for sentence in sentences:
+        sentence_keywords = [kw for kw in keywords if kw in sentence]
+        if not sentence_keywords:
+            continue
+        for kw in sentence_keywords:
+            if kw not in matched_keywords:
+                matched_keywords.append(kw)
+        if any(causal in sentence for causal in causal_words):
+            grounded_events += 1
+
+    # 综合关键词覆盖和因果触发
+    keyword_coverage = len(matched_keywords) / max(min(4, len(keywords)), 1)
+    event_rate = grounded_events / max(expected_count, 1)
+    hit_rate = min(1.0, 0.5 * keyword_coverage + 0.5 * event_rate)
+
+    return {
+        "hit_rate": round(hit_rate, 4),
+        "hit_count": grounded_events,
+        "expected_count": expected_count,
+        "matched_keywords": matched_keywords[:6],
+    }
+
+
+def _calc_outline_alignment_rate(text: str, chapter_outline: Optional[str]) -> Dict[str, Any]:
+    """计算章节正文对本章大纲锚点的覆盖情况。"""
+    anchors = _extract_outline_anchor_lines(chapter_outline, max_lines=8)
+    if not anchors:
+        return {"hit_rate": 0.0, "hit_count": 0, "expected_count": 1}
+
+    compact_text = text.replace("\n", "")
+    hit_count = 0
+    for anchor in anchors:
+        key_tokens = re.findall(r"[\u4e00-\u9fff]{2,}", anchor)
+        if not key_tokens:
+            continue
+        # 一个锚点命中：至少1个核心词出现在正文
+        if any(token in compact_text for token in key_tokens[:3]):
+            hit_count += 1
+
+    expected_count = max(1, len(anchors))
+    hit_rate = min(1.0, hit_count / expected_count)
+    return {
+        "hit_rate": round(hit_rate, 4),
+        "hit_count": hit_count,
+        "expected_count": expected_count
+    }
+
+
+def _calc_dialogue_naturalness_rate(text: str) -> Dict[str, Any]:
+    """估算对白自然度（短句比例 + 打断/停顿标记）。"""
+    quotes = re.findall(r"[“\"]([^”\"]+)[”\"]", text)
+    if not quotes:
+        return {"hit_rate": 0.0, "total_dialogues": 0, "short_ratio": 0.0}
+
+    total = len(quotes)
+    short_count = sum(1 for q in quotes if len(q.strip()) <= 28)
+    interrupt_count = sum(1 for q in quotes if any(mark in q for mark in ["…", "——", "？", "！", "嗯", "啊"]))
+    short_ratio = short_count / total
+    interrupt_ratio = interrupt_count / total
+    hit_rate = min(1.0, 0.7 * short_ratio + 0.3 * interrupt_ratio)
+    return {
+        "hit_rate": round(hit_rate, 4),
+        "total_dialogues": total,
+        "short_ratio": round(short_ratio, 4),
+    }
+
+
+def compute_story_quality_metrics(
+    content: str,
+    chapter_outline: Optional[str],
+    world_rules: Optional[str]
+) -> Dict[str, Any]:
+    """计算剧情质量评分指标。"""
+    conflict = _calc_conflict_chain_rate(content)
+    rule_grounding = _calc_rule_grounding_rate(content, world_rules)
+    outline_alignment = _calc_outline_alignment_rate(content, chapter_outline)
+    dialogue = _calc_dialogue_naturalness_rate(content)
+
+    overall = (
+        conflict["hit_rate"] * 0.35 +
+        rule_grounding["hit_rate"] * 0.30 +
+        outline_alignment["hit_rate"] * 0.20 +
+        dialogue["hit_rate"] * 0.15
+    )
+
+    return {
+        "overall_score": round(overall * 100, 1),
+        "conflict_chain_hit_rate": round(conflict["hit_rate"] * 100, 1),
+        "rule_grounding_hit_rate": round(rule_grounding["hit_rate"] * 100, 1),
+        "outline_alignment_rate": round(outline_alignment["hit_rate"] * 100, 1),
+        "dialogue_naturalness_rate": round(dialogue["hit_rate"] * 100, 1),
+        "details": {
+            "conflict_chain": conflict,
+            "rule_grounding": rule_grounding,
+            "outline_alignment": outline_alignment,
+            "dialogue": dialogue,
+        }
+    }
+
+
+def _build_generation_history_payload(content: str, metrics: Dict[str, Any]) -> str:
+    """构建生成历史的结构化日志文本。"""
+    payload = {
+        "log_type": "chapter_generation_quality_v1",
+        "preview": content[:500] if len(content) > 500 else content,
+        "quality_metrics": metrics,
+        "generated_at": datetime.now().isoformat()
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+async def _record_task_quality_metrics(task_id: str, metrics_event: Dict[str, Any]):
+    """记录任务级质量指标快照，供状态轮询接口读取。"""
+    async with task_quality_lock:
+        current = task_quality_metrics_cache.get(task_id) or {
+            "latest": None,
+            "history": [],
+            "summary": None,
+        }
+        current["latest"] = metrics_event
+        history = current.get("history") or []
+        history.append(metrics_event)
+        if len(history) > 20:
+            history = history[-20:]
+        current["history"] = history
+
+        overall_list = [item.get("overall_score", 0.0) for item in history]
+        conflict_list = [item.get("conflict_chain_hit_rate", 0.0) for item in history]
+        rule_list = [item.get("rule_grounding_hit_rate", 0.0) for item in history]
+
+        current["summary"] = {
+            "avg_overall_score": round(sum(overall_list) / max(len(overall_list), 1), 1),
+            "avg_conflict_chain_hit_rate": round(sum(conflict_list) / max(len(conflict_list), 1), 1),
+            "avg_rule_grounding_hit_rate": round(sum(rule_list) / max(len(rule_list), 1), 1),
+            "chapter_count": len(history),
+        }
+        task_quality_metrics_cache[task_id] = current
+
+
+async def _get_task_quality_metrics_snapshot(task_id: str) -> Dict[str, Any]:
+    """获取任务级质量指标快照。"""
+    async with task_quality_lock:
+        return task_quality_metrics_cache.get(task_id) or {}
+
+
+def _parse_quality_metrics_from_history(generated_content: Optional[str]) -> Optional[Dict[str, Any]]:
+    """从 generation_history.generated_content 中提取剧情质量评分。"""
+    if not generated_content:
+        return None
+
+    try:
+        payload = json.loads(generated_content)
+        if isinstance(payload, dict):
+            metrics = payload.get("quality_metrics")
+            if isinstance(metrics, dict):
+                return metrics
+    except Exception:
+        # 兼容旧数据：generated_content 为纯文本
+        return None
+    return None
+
+
+def _extract_outline_anchor_lines(chapter_outline: Optional[str], max_lines: int = 10) -> List[str]:
+    """从章节大纲文本中提取剧情锚点，供运行时系统提示词约束使用。"""
+    if not chapter_outline:
+        return []
+
+    keywords = (
+        "章节概要", "剧情摘要", "关键事件", "情节要点", "叙事目标",
+        "冲突", "规则影响", "角色抉择", "代价", "人物转折", "对话钩子", "角色焦点",
+    )
+
+    raw_lines = [line.strip() for line in chapter_outline.splitlines() if line.strip()]
+    anchors: List[str] = []
+    capture_bullet_count = 0
+
+    for line in raw_lines:
+        if line.startswith("【") and line.endswith("】"):
+            section_name = line[1:-1].strip()
+            if any(key in section_name for key in keywords):
+                anchors.append(f"{section_name}：")
+                capture_bullet_count = 2
+            else:
+                capture_bullet_count = 0
+            continue
+
+        if capture_bullet_count > 0:
+            cleaned = line.lstrip("- ").strip()
+            if cleaned:
+                anchors.append(cleaned)
+                capture_bullet_count -= 1
+            continue
+
+        if any(key in line for key in keywords):
+            anchors.append(line.lstrip("- ").strip())
+
+    # 去重并截断，避免系统提示词过长
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for item in anchors:
+        normalized = item.strip()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            deduped.append(normalized[:120])
+        if len(deduped) >= max_lines:
+            break
+
+    return deduped
+
+
+def _build_chapter_runtime_system_prompt(
+    project: Project,
+    style_content: str,
+    chapter_outline: Optional[str],
+    previous_summary: Optional[str] = None
+) -> str:
+    """构建章节生成运行时系统提示词（风格、世界锚点、剧情锚点与护栏）。"""
+    style_block = (
+        f"【🎨 写作风格参考】\n\n{style_content}\n\n"
+        if style_content else ""
+    )
+
+    outline_anchor_lines = _extract_outline_anchor_lines(chapter_outline)
+    outline_anchor_block = (
+        "【🧭 本章剧情锚点（需覆盖）】\n"
+        + "\n".join(f"- {line}" for line in outline_anchor_lines)
+        + "\n\n"
+        if outline_anchor_lines else ""
+    )
+
+    previous_summary_block = (
+        f"【📌 上章回执】\n- {previous_summary[:200]}\n\n"
+        if previous_summary else ""
+    )
+
+    return f"""{style_block}【🌍 世界观锚点】
+- 时间背景：{project.world_time_period or '未设定'}
+- 地理位置：{project.world_location or '未设定'}
+- 氛围基调：{project.world_atmosphere or '未设定'}
+- 世界规则：{project.world_rules or '未设定'}
+
+{outline_anchor_block}{previous_summary_block}【创作护栏】
+- 对话口吻像真人交流，短句优先，可打断、停顿，避免角色轮流讲道理
+- 台词长度控制：单句以6-18字为主，超过28字必须拆句；单次发言尽量不超过2句
+- 若单段出现连续术语，请在三句内用角色互动补一句通俗解释
+- 每段较长对白后补一处动作/表情/环境反应，避免“纯台词墙”
+- 关键情节按“动作→反馈→后果”推进，避免只做概述
+- 至少安排一段双向博弈式对白，体现人物立场差异和临场情绪
+- 至少出现一次“目标受阻→角色选择→代价/新麻烦”的戏剧链条
+- 节奏闸门：每400-600字必须出现一次新阻力或意外变化，禁止长段平推
+- 关键情节点体现世界规则如何影响角色选择、风险或收益
+- 至少让1名核心配角出现一次反预期行为，并在当场补一句动机解释
+- 配角不能只做信息播报器，至少在一处情节里主动改变局面
+"""
 
 
 @router.post("", response_model=ChapterResponse, summary="创建章节")
@@ -234,6 +569,62 @@ async def get_chapter(
     await verify_project_access(chapter.project_id, user_id, db)
     
     return chapter
+
+
+@router.get("/{chapter_id}/quality-metrics", summary="获取章节最新剧情评分")
+async def get_chapter_quality_metrics(
+    chapter_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """获取章节最近一次AI生成的剧情评分指标。"""
+    chapter_result = await db.execute(
+        select(Chapter).where(Chapter.id == chapter_id)
+    )
+    chapter = chapter_result.scalar_one_or_none()
+
+    if not chapter:
+        raise HTTPException(status_code=404, detail="章节不存在")
+
+    user_id = getattr(request.state, 'user_id', None)
+    await verify_project_access(chapter.project_id, user_id, db)
+
+    history_result = await db.execute(
+        select(GenerationHistory)
+        .where(GenerationHistory.chapter_id == chapter_id)
+        .order_by(GenerationHistory.created_at.desc())
+        .limit(20)
+    )
+    histories = history_result.scalars().all()
+
+    latest_metrics: Optional[Dict[str, Any]] = None
+    history_id: Optional[str] = None
+    generated_at: Optional[str] = None
+
+    for history in histories:
+        metrics = _parse_quality_metrics_from_history(history.generated_content)
+        if metrics:
+            latest_metrics = metrics
+            history_id = history.id
+            generated_at = history.created_at.isoformat() if history.created_at else None
+            break
+
+    if not latest_metrics:
+        return {
+            "chapter_id": chapter_id,
+            "has_metrics": False,
+            "latest_metrics": None,
+            "history_id": None,
+            "generated_at": None,
+        }
+
+    return {
+        "chapter_id": chapter_id,
+        "has_metrics": True,
+        "latest_metrics": latest_metrics,
+        "history_id": history_id,
+        "generated_at": generated_at,
+    }
 
 
 @router.get("/{chapter_id}/navigation", summary="获取章节导航信息")
@@ -1679,27 +2070,12 @@ async def generate_chapter_content_stream(
                 logger.info(f"开始AI流式创作章节 {chapter_id}")
                 
                 # 🎨 运行时系统提示词：无论是否选择风格都注入剧情护栏与世界观锚点
-                style_block = (
-                    f"【🎨 写作风格参考】\n\n{style_content}\n\n"
-                    if style_content else ""
+                system_prompt_with_style = _build_chapter_runtime_system_prompt(
+                    project=project,
+                    style_content=style_content,
+                    chapter_outline=chapter_context.chapter_outline,
+                    previous_summary=chapter_context.previous_chapter_summary
                 )
-                system_prompt_with_style = f"""{style_block}【🌍 世界观锚点】
-- 时间背景：{project.world_time_period or '未设定'}
-- 地理位置：{project.world_location or '未设定'}
-- 氛围基调：{project.world_atmosphere or '未设定'}
-- 世界规则：{project.world_rules or '未设定'}
-
-【创作护栏】
-- 对话口吻像真人交流，短句优先，可打断、停顿，避免角色轮流讲道理
-- 台词长度控制：单句以6-18字为主，超过28字必须拆句；单次发言尽量不超过2句
-- 若单段出现连续术语，请在三句内用角色互动补一句通俗解释
-- 关键情节按“动作→反馈→后果”推进，避免只做概述
-- 至少安排一段双向博弈式对白，体现人物立场差异
-- 至少出现一次“目标受阻→角色选择→代价/新麻烦”的戏剧链条
-- 节奏闸门：每400-600字必须出现一次新阻力或意外变化，禁止长段平推
-- 关键情节点体现世界规则如何影响角色选择、风险或收益
-- 至少让1名核心配角出现一次反预期行为，并在当场补一句动机解释
-"""
                 if style_content:
                     logger.info(f"✅ 已将写作风格注入系统提示词（{len(style_content)}字符）")
                 
@@ -1765,13 +2141,25 @@ async def generate_chapter_content_stream(
                 
                 # 更新项目字数
                 project.current_words = project.current_words - old_word_count + new_word_count
+
+                # 计算剧情质量指标并记录日志
+                quality_metrics = compute_story_quality_metrics(
+                    content=full_content,
+                    chapter_outline=chapter_context.chapter_outline,
+                    world_rules=project.world_rules
+                )
+                logger.info(
+                    f"📊 剧情评分 - overall={quality_metrics['overall_score']}, "
+                    f"conflict={quality_metrics['conflict_chain_hit_rate']}, "
+                    f"rule={quality_metrics['rule_grounding_hit_rate']}"
+                )
                 
                 # 记录生成历史
                 history = GenerationHistory(
                     project_id=current_chapter.project_id,
                     chapter_id=current_chapter.id,
                     prompt=f"创作章节: 第{current_chapter.chapter_number}章 {current_chapter.title}",
-                    generated_content=full_content[:500] if len(full_content) > 500 else full_content,
+                    generated_content=_build_generation_history_payload(full_content, quality_metrics),
                     model="default"
                 )
                 db_session.add(history)
@@ -1828,11 +2216,20 @@ async def generate_chapter_content_stream(
                 
                 # === 完成阶段 ===
                 yield await tracker.complete("创作完成！")
+
+                # 推送质量评分事件，便于前端即时展示
+                yield SSEResponse.format_sse({
+                    "type": "quality_metrics",
+                    "chapter_id": current_chapter.id,
+                    "chapter_number": current_chapter.chapter_number,
+                    **quality_metrics
+                })
                 
                 # 发送结果数据
                 yield await tracker.result({
                     'word_count': new_word_count,
-                    'analysis_task_id': task_id
+                    'analysis_task_id': task_id,
+                    'quality_metrics': quality_metrics
                 })
                 
                 # 发送分析开始事件（使用自定义事件）
@@ -2555,6 +2952,8 @@ async def get_batch_generation_status(
     
     if not task:
         raise HTTPException(status_code=404, detail="批量生成任务不存在")
+
+    quality_snapshot = await _get_task_quality_metrics_snapshot(batch_id)
     
     return BatchGenerateStatusResponse(
         batch_id=task.id,
@@ -2569,7 +2968,9 @@ async def get_batch_generation_status(
         created_at=task.created_at.isoformat() if task.created_at else None,
         started_at=task.started_at.isoformat() if task.started_at else None,
         completed_at=task.completed_at.isoformat() if task.completed_at else None,
-        error_message=task.error_message
+        error_message=task.error_message,
+        latest_quality_metrics=quality_snapshot.get("latest"),
+        quality_metrics_summary=quality_snapshot.get("summary")
     )
 
 
@@ -2666,6 +3067,8 @@ async def get_active_batch_generation(
             "has_active_task": False,
             "task": None
         }
+
+    quality_snapshot = await _get_task_quality_metrics_snapshot(task.id)
     
     return {
         "has_active_task": True,
@@ -2676,6 +3079,8 @@ async def get_active_batch_generation(
             "completed": task.completed_chapters,
             "current_chapter_id": task.current_chapter_id,
             "current_chapter_number": task.current_chapter_number,
+            "latest_quality_metrics": quality_snapshot.get("latest"),
+            "quality_metrics_summary": quality_snapshot.get("summary"),
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "started_at": task.started_at.isoformat() if task.started_at else None
         }
@@ -3281,27 +3686,12 @@ async def generate_single_chapter_for_batch(
         prompt = base_prompt
     
     # 🎨 运行时系统提示词（批量生成）：无论是否选择风格都注入剧情护栏与世界观锚点
-    style_block = (
-        f"【🎨 写作风格参考】\n\n{style_content}\n\n"
-        if style_content else ""
+    system_prompt_with_style = _build_chapter_runtime_system_prompt(
+        project=project,
+        style_content=style_content,
+        chapter_outline=chapter_context.chapter_outline,
+        previous_summary=chapter_context.previous_chapter_summary
     )
-    system_prompt_with_style = f"""{style_block}【🌍 世界观锚点】
-- 时间背景：{project.world_time_period or '未设定'}
-- 地理位置：{project.world_location or '未设定'}
-- 氛围基调：{project.world_atmosphere or '未设定'}
-- 世界规则：{project.world_rules or '未设定'}
-
-【创作护栏】
-- 对话口吻像真人交流，短句优先，可打断、停顿，避免角色轮流讲道理
-- 台词长度控制：单句以6-18字为主，超过28字必须拆句；单次发言尽量不超过2句
-- 若单段出现连续术语，请在三句内用角色互动补一句通俗解释
-- 关键情节按“动作→反馈→后果”推进，避免只做概述
-- 至少安排一段双向博弈式对白，体现人物立场差异
-- 至少出现一次“目标受阻→角色选择→代价/新麻烦”的戏剧链条
-- 节奏闸门：每400-600字必须出现一次新阻力或意外变化，禁止长段平推
-- 关键情节点体现世界规则如何影响角色选择、风险或收益
-- 至少让1名核心配角出现一次反预期行为，并在当场补一句动机解释
-"""
     if style_content:
         logger.info(f"✅ 批量生成 - 已将写作风格注入系统提示词（{len(style_content)}字符）")
     
@@ -3347,13 +3737,19 @@ async def generate_single_chapter_for_batch(
         
         # 更新项目字数
         project.current_words = project.current_words - old_word_count + new_word_count
+
+        quality_metrics = compute_story_quality_metrics(
+            content=full_content,
+            chapter_outline=chapter_context.chapter_outline,
+            world_rules=project.world_rules
+        )
         
         # 记录生成历史
         history = GenerationHistory(
             project_id=chapter.project_id,
             chapter_id=chapter.id,
             prompt=f"批量生成: 第{chapter.chapter_number}章 {chapter.title}",
-            generated_content=full_content[:500] if len(full_content) > 500 else full_content,
+            generated_content=_build_generation_history_payload(full_content, quality_metrics),
             model="default"
         )
         db_session.add(history)
@@ -3362,6 +3758,21 @@ async def generate_single_chapter_for_batch(
         await db_session.refresh(chapter)
     
     logger.info(f"✅ 单章节生成完成: 第{chapter.chapter_number}章，共 {new_word_count} 字")
+    logger.info(
+        f"📊 批量章节剧情评分 - overall={quality_metrics['overall_score']}, "
+        f"conflict={quality_metrics['conflict_chain_hit_rate']}, "
+        f"rule={quality_metrics['rule_grounding_hit_rate']}"
+    )
+
+    if stream_task_id:
+        metrics_event = {
+            "type": "quality_metrics",
+            "chapter_id": chapter.id,
+            "chapter_number": chapter.chapter_number,
+            **quality_metrics
+        }
+        await publish_task_stream_event(stream_task_id, metrics_event)
+        await _record_task_quality_metrics(stream_task_id, metrics_event)
     
     # 生成简短摘要返回
     summary_preview = full_content[:300].replace('\n', ' ') if full_content else ""

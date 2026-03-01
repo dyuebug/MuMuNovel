@@ -55,6 +55,100 @@ def _build_characters_info(characters: List[Character]) -> str:
     ])
 
 
+def _pick_outline_field(data: Dict[str, Any], keys: List[str]) -> Any:
+    """按候选字段顺序提取值。"""
+    for key in keys:
+        value = data.get(key)
+        if value:
+            return value
+    return None
+
+
+def _format_outline_value(value: Any, max_items: int = 3) -> str:
+    """将结构化字段转为简短可读文本。"""
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return "；".join(cleaned[:max_items])
+    if isinstance(value, dict):
+        parts = []
+        for key, val in list(value.items())[:max_items]:
+            text = str(val).strip()
+            if text:
+                parts.append(f"{key}:{text}")
+        return "；".join(parts)
+    return str(value).strip()
+
+
+def _build_outline_content_from_item(chapter_data: Dict[str, Any]) -> str:
+    """
+    从大纲结构构建可直接用于章节生成的摘要文本。
+    当 summary 过短或缺失时，用关键剧情字段做兜底拼接，增强可写性。
+    """
+    summary = str(chapter_data.get("summary") or chapter_data.get("content") or "").strip()
+    if summary and len(summary) >= 80:
+        return summary
+
+    segments: List[str] = []
+    if summary:
+        segments.append(summary)
+
+    field_groups = [
+        ("叙事目标", ["goal", "narrative_goal"]),
+        ("冲突主线", ["conflict", "conflict_line", "conflict_type"]),
+        ("角色抉择", ["decision", "dilemma"]),
+        ("代价/风险", ["cost", "stakes"]),
+        ("规则影响", ["rule_impact", "world_rule_trigger"]),
+        ("人物转折", ["character_turns", "character_arc", "twist"]),
+        ("对话钩子", ["dialogue_hook"]),
+        ("关键事件", ["key_events", "key_points"]),
+    ]
+
+    for label, keys in field_groups:
+        value = _pick_outline_field(chapter_data, keys)
+        text = _format_outline_value(value)
+        if text:
+            segments.append(f"{label}：{text}")
+
+    combined = "\n".join(segments).strip()
+    if combined:
+        return combined[:1800]
+
+    return summary or "暂无大纲摘要"
+
+
+def _build_outline_runtime_system_prompt(
+    project: Project,
+    chapter_count: int,
+    is_continuation: bool
+) -> str:
+    """构建大纲生成运行时系统提示词，强化剧情密度与人物立体度。"""
+    phase_text = "续写阶段" if is_continuation else "开局阶段"
+    return f"""【大纲生成阶段】
+- 当前阶段：{phase_text}
+- 本轮目标章节数：{chapter_count}
+
+【世界观锚点】
+- 时间背景：{project.world_time_period or '未设定'}
+- 地理位置：{project.world_location or '未设定'}
+- 氛围基调：{project.world_atmosphere or '未设定'}
+- 世界规则：{project.world_rules or '未设定'}
+
+【剧情质量硬约束】
+- 每章至少包含一次“目标受阻→角色选择→代价/新麻烦”的推进链
+- 每章至少给一个可直接写成对白场景的冲突对话钩子（双方立场有差异）
+- 每章至少让一位核心配角出现反预期行为，并补一句动机说明
+- 世界规则必须作用于事件结果，不能只做名词陈列
+- 若同段出现2个及以上术语，需在三句内补一条通俗解释思路
+- 摘要优先写“发生了什么”，避免空泛总结和模板化衔接词
+
+【输出补充建议】
+- 可在章节对象中补充字段：conflict_line / decision / cost / rule_impact / dialogue_hook / character_turns
+- 新增字段应与 summary 保持一致，不得互相矛盾
+"""
+
+
 @router.post("", response_model=OutlineResponse, summary="创建大纲")
 async def create_outline(
     outline: OutlineCreate,
@@ -916,7 +1010,7 @@ async def _save_outlines(
         
         # 🔧 修复：从structure中提取title和summary/content保存到数据库
         chapter_title = chapter_data.get("title", f"第{order_idx}章")
-        chapter_content = chapter_data.get("summary") or chapter_data.get("content", "")
+        chapter_content = _build_outline_content_from_item(chapter_data)
         
         outline = Outline(
             project_id=project_id,
@@ -939,7 +1033,7 @@ async def _save_outlines(
             try:
                 structure_data = json.loads(outline.structure) if outline.structure else {}
                 chapter_title = structure_data.get("title", f"第{outline.order_index}章")
-                chapter_summary = structure_data.get("summary") or structure_data.get("content", "")
+                chapter_summary = _build_outline_content_from_item(structure_data)
             except json.JSONDecodeError:
                 logger.warning(f"解析大纲 {outline.id} 的structure失败，使用默认值")
                 chapter_title = f"第{outline.order_index}章"
@@ -1024,6 +1118,11 @@ async def new_outline_generator(
             requirements=data.get("requirements") or "",
             mcp_references=""
         )
+        outline_system_prompt = _build_outline_runtime_system_prompt(
+            project=project,
+            chapter_count=chapter_count,
+            is_continuation=False
+        )
         logger.debug(f"NEW提示词: {prompt}")
         # 添加调试日志
         model_param = data.get("model")
@@ -1041,6 +1140,7 @@ async def new_outline_generator(
         
         async for chunk in user_ai_service.generate_text_stream(
             prompt=prompt,
+            system_prompt=outline_system_prompt,
             provider=provider_param,
             model=model_param
         ):
@@ -1101,6 +1201,7 @@ async def new_outline_generator(
                 
                 async for chunk in user_ai_service.generate_text_stream(
                     prompt=retry_prompt,
+                    system_prompt=outline_system_prompt,
                     provider=provider_param,
                     model=model_param
                 ):
@@ -1455,6 +1556,11 @@ async def continue_outline_generator(
                 requirements=data.get("requirements", ""),
                 mcp_references=""
             )
+            outline_system_prompt = _build_outline_runtime_system_prompt(
+                project=project,
+                chapter_count=current_batch_size,
+                is_continuation=True
+            )
             logger.debug(f" 续写提示词: {prompt}")
             # 调用AI生成当前批次
             model_param = data.get("model")
@@ -1469,6 +1575,7 @@ async def continue_outline_generator(
             
             async for chunk in user_ai_service.generate_text_stream(
                 prompt=prompt,
+                system_prompt=outline_system_prompt,
                 provider=provider_param,
                 model=model_param
             ):
@@ -1531,6 +1638,7 @@ async def continue_outline_generator(
                     
                     async for chunk in user_ai_service.generate_text_stream(
                         prompt=retry_prompt,
+                        system_prompt=outline_system_prompt,
                         provider=provider_param,
                         model=model_param
                     ):

@@ -26,6 +26,85 @@ router = APIRouter(prefix="/wizard-stream", tags=["项目创建向导(流式)"])
 logger = get_logger(__name__)
 
 
+def _pick_outline_field(data: Dict[str, Any], keys: list[str]) -> Any:
+    for key in keys:
+        value = data.get(key)
+        if value:
+            return value
+    return None
+
+
+def _format_outline_value(value: Any, max_items: int = 3) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return "；".join(cleaned[:max_items])
+    if isinstance(value, dict):
+        parts = []
+        for key, val in list(value.items())[:max_items]:
+            text = str(val).strip()
+            if text:
+                parts.append(f"{key}:{text}")
+        return "；".join(parts)
+    return str(value).strip()
+
+
+def _build_outline_content_from_item(chapter_data: Dict[str, Any]) -> str:
+    """从大纲对象构建用于存储和后续章节生成的摘要内容。"""
+    summary = str(chapter_data.get("summary") or chapter_data.get("content") or "").strip()
+    if summary and len(summary) >= 80:
+        return summary
+
+    segments = []
+    if summary:
+        segments.append(summary)
+
+    field_groups = [
+        ("叙事目标", ["goal", "narrative_goal"]),
+        ("冲突主线", ["conflict", "conflict_line", "conflict_type"]),
+        ("角色抉择", ["decision", "dilemma"]),
+        ("代价/风险", ["cost", "stakes"]),
+        ("规则影响", ["rule_impact", "world_rule_trigger"]),
+        ("人物转折", ["character_turns", "character_arc", "twist"]),
+        ("对话钩子", ["dialogue_hook"]),
+        ("关键事件", ["key_events", "key_points"]),
+    ]
+
+    for label, keys in field_groups:
+        value = _pick_outline_field(chapter_data, keys)
+        text = _format_outline_value(value)
+        if text:
+            segments.append(f"{label}：{text}")
+
+    combined = "\n".join(segments).strip()
+    if combined:
+        return combined[:1800]
+    return summary or "暂无大纲摘要"
+
+
+def _build_outline_runtime_system_prompt(project: Project, chapter_count: int) -> str:
+    """向导大纲运行时系统提示词，补充剧情与人物约束。"""
+    return f"""【大纲生成阶段】
+- 当前阶段：开局阶段
+- 本轮目标章节数：{chapter_count}
+
+【世界观锚点】
+- 时间背景：{project.world_time_period or '未设定'}
+- 地理位置：{project.world_location or '未设定'}
+- 氛围基调：{project.world_atmosphere or '未设定'}
+- 世界规则：{project.world_rules or '未设定'}
+
+【剧情质量硬约束】
+- 每章至少包含一次“目标受阻→角色选择→代价/新麻烦”的推进链
+- 每章至少给一个可直接写成对白场景的冲突对话钩子（双方立场有差异）
+- 每章至少让一位核心配角出现反预期行为，并补一句动机说明
+- 世界规则必须作用于事件结果，不能只做名词陈列
+- 若同段出现2个及以上术语，需在三句内补一条通俗解释思路
+- 摘要优先写“发生了什么”，避免空泛总结和模板化衔接词
+"""
+
+
 async def world_building_generator(
     data: Dict[str, Any],
     db: AsyncSession,
@@ -1318,6 +1397,10 @@ async def outline_generator(
             mcp_references="",
             requirements=outline_requirements
         )
+        outline_system_prompt = _build_outline_runtime_system_prompt(
+            project=project,
+            chapter_count=outline_count
+        )
         
         # 流式生成大纲
         estimated_total = 1000
@@ -1328,6 +1411,7 @@ async def outline_generator(
         
         async for chunk in user_ai_service.generate_text_stream(
             prompt=outline_prompt,
+            system_prompt=outline_system_prompt,
             provider=provider,
             model=model,
         ):
@@ -1369,7 +1453,7 @@ async def outline_generator(
             outline = Outline(
                 project_id=project_id,
                 title=outline_item.get("title", f"第{index}节"),
-                content=outline_item.get("summary", outline_item.get("content", "")),
+                content=_build_outline_content_from_item(outline_item),
                 structure=json.dumps(outline_item, ensure_ascii=False),
                 order_index=index
             )

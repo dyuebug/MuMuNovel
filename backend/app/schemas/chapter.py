@@ -121,6 +121,8 @@ class BatchGenerateStatusResponse(BaseModel):
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     error_message: Optional[str] = None
+    latest_quality_metrics: Optional[Dict[str, Any]] = None
+    quality_metrics_summary: Optional[Dict[str, Any]] = None
 
 
 class SceneData(BaseModel):

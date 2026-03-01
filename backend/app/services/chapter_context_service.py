@@ -19,6 +19,98 @@ from app.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _to_brief_lines(value: Any, max_items: int = 5) -> List[str]:
+    """将任意结构化值转成简短的文本行列表。"""
+    if value is None:
+        return []
+
+    if isinstance(value, list):
+        lines: List[str] = []
+        for item in value[:max_items]:
+            if isinstance(item, dict):
+                title = str(item.get("title") or item.get("name") or "").strip()
+                desc = str(item.get("summary") or item.get("desc") or item.get("content") or "").strip()
+                if title and desc:
+                    lines.append(f"{title}：{desc}")
+                elif title:
+                    lines.append(title)
+                elif desc:
+                    lines.append(desc)
+            else:
+                text = str(item).strip()
+                if text:
+                    lines.append(text)
+        return lines
+
+    if isinstance(value, dict):
+        lines = []
+        for key, val in list(value.items())[:max_items]:
+            text = str(val).strip()
+            if text:
+                lines.append(f"{key}：{text}")
+        return lines
+
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def _append_section_once(
+    outline_parts: List[str],
+    seen_sections: set[str],
+    title: str,
+    value: Any,
+    max_items: int = 5
+) -> None:
+    """向大纲片段中追加一个去重的小节。"""
+    if title in seen_sections:
+        return
+
+    lines = _to_brief_lines(value=value, max_items=max_items)
+    if not lines:
+        return
+
+    seen_sections.add(title)
+    if len(lines) == 1:
+        outline_parts.append(f"【{title}】\n{lines[0]}")
+    else:
+        block = "\n".join(f"- {line}" for line in lines)
+        outline_parts.append(f"【{title}】\n{block}")
+
+
+def _append_story_axes_from_structure(
+    outline_parts: List[str],
+    seen_sections: set[str],
+    structure: Dict[str, Any]
+) -> None:
+    """从大纲 structure 中提取剧情关键轴，统一注入章节上下文。"""
+    field_mappings = [
+        ("章节概要", ["summary", "content"]),
+        ("场景设定", ["scenes"]),
+        ("情节要点", ["key_points"]),
+        ("叙事目标", ["goal", "narrative_goal"]),
+        ("冲突主线", ["conflict", "conflict_line", "conflict_type"]),
+        ("角色抉择", ["decision", "dilemma"]),
+        ("代价/风险", ["cost", "stakes"]),
+        ("规则影响点", ["rule_impact", "world_rule_trigger"]),
+        ("对话钩子", ["dialogue_hook"]),
+        ("人物转折", ["character_turns", "character_arc", "twist"]),
+        ("情感基调", ["emotion", "emotional_tone"]),
+    ]
+
+    for section_title, field_keys in field_mappings:
+        for key in field_keys:
+            value = structure.get(key)
+            if value:
+                _append_section_once(
+                    outline_parts=outline_parts,
+                    seen_sections=seen_sections,
+                    title=section_title,
+                    value=value,
+                    max_items=5
+                )
+                break
+
+
 @dataclass
 class OneToManyContext:
     """
@@ -285,23 +377,42 @@ class OneToManyContextBuilder:
         outline: Optional[Outline]
     ) -> str:
         """构建1-N模式的章节大纲"""
+        outline_parts: List[str] = []
+        seen_sections: set[str] = set()
+
         # 优先使用 expansion_plan 的详细规划
         if chapter.expansion_plan:
             try:
                 plan = json.loads(chapter.expansion_plan)
-                outline_content = f"""剧情摘要：{plan.get('plot_summary', '无')}
-
-关键事件：
-{chr(10).join(f'- {event}' for event in plan.get('key_events', []))}
-
-角色焦点：{', '.join(plan.get('character_focus', []))}
-情感基调：{plan.get('emotional_tone', '未设定')}
-叙事目标：{plan.get('narrative_goal', '未设定')}
-冲突类型：{plan.get('conflict_type', '未设定')}"""
-                return outline_content
+                _append_section_once(outline_parts, seen_sections, "章节概要", plan.get("plot_summary"))
+                _append_section_once(outline_parts, seen_sections, "关键事件", plan.get("key_events"))
+                _append_section_once(outline_parts, seen_sections, "角色焦点", plan.get("character_focus"))
+                _append_section_once(outline_parts, seen_sections, "情感基调", plan.get("emotional_tone"))
+                _append_section_once(outline_parts, seen_sections, "叙事目标", plan.get("narrative_goal"))
+                _append_section_once(outline_parts, seen_sections, "冲突主线", plan.get("conflict_type"))
+                _append_section_once(outline_parts, seen_sections, "规则影响点", plan.get("world_rule_trigger"))
+                _append_section_once(outline_parts, seen_sections, "角色抉择", plan.get("dilemma"))
+                _append_section_once(outline_parts, seen_sections, "代价/风险", plan.get("stakes"))
+                _append_section_once(outline_parts, seen_sections, "对话钩子", plan.get("dialogue_hook"))
+                _append_section_once(outline_parts, seen_sections, "人物转折", plan.get("character_turns"))
             except json.JSONDecodeError:
                 pass
-        
+
+        # 补充structure中的剧情轴字段，避免大纲信息在章节生成时丢失
+        if outline and outline.structure:
+            try:
+                structure = json.loads(outline.structure)
+                _append_story_axes_from_structure(
+                    outline_parts=outline_parts,
+                    seen_sections=seen_sections,
+                    structure=structure
+                )
+            except json.JSONDecodeError:
+                logger.warning("解析outline.structure失败，跳过结构化剧情轴提取")
+
+        if outline_parts:
+            return "\n\n".join(outline_parts)
+
         # 回退到大纲内容
         return outline.content if outline else chapter.summary or '暂无大纲'
     
@@ -1204,27 +1315,18 @@ class OneToOneContextBuilder:
         if outline and outline.structure:
             try:
                 structure = json.loads(outline.structure)
-                
-                outline_parts = []
-                
-                if structure.get('summary'):
-                    outline_parts.append(f"【章节概要】\n{structure['summary']}")
-                
-                if structure.get('scenes'):
-                    scenes_text = "\n".join([f"- {scene}" for scene in structure['scenes']])
-                    outline_parts.append(f"【场景设定】\n{scenes_text}")
-                
-                if structure.get('key_points'):
-                    points_text = "\n".join([f"- {point}" for point in structure['key_points']])
-                    outline_parts.append(f"【情节要点】\n{points_text}")
-                
-                if structure.get('emotion'):
-                    outline_parts.append(f"【情感基调】\n{structure['emotion']}")
-                
-                if structure.get('goal'):
-                    outline_parts.append(f"【叙事目标】\n{structure['goal']}")
-                
-                return "\n\n".join(outline_parts)
+
+                outline_parts: List[str] = []
+                seen_sections: set[str] = set()
+                _append_story_axes_from_structure(
+                    outline_parts=outline_parts,
+                    seen_sections=seen_sections,
+                    structure=structure
+                )
+
+                if outline_parts:
+                    return "\n\n".join(outline_parts)
+                return outline.content if outline else "暂无大纲"
                 
             except json.JSONDecodeError as e:
                 logger.error(f"  ❌ 解析outline.structure失败: {e}")
