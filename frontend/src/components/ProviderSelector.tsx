@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { Radio, Card, Space, Tag } from 'antd';
 import { CheckCircleOutlined } from '@ant-design/icons';
 
@@ -41,6 +41,12 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     label: '自定义',
     description: '其他 OpenAI 兼容服务',
     features: ['灵活配置', '自定义端点'],
+  },
+  {
+    value: 'sub2api',
+    label: 'Sub2API',
+    description: 'OpenAI 兼容网关（Responses API）',
+    features: ['OpenAI 兼容', 'Responses API'],
   },
 ];
 

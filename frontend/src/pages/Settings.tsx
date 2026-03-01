@@ -12,6 +12,30 @@ const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
 const { TextArea } = Input;
 
+type ModelOption = { value: string; label: string; description: string };
+
+const buildModelSelectOptions = (
+  options: ModelOption[],
+  searchText: string
+): ModelOption[] => {
+  const keyword = searchText.trim();
+  if (!keyword) return options;
+
+  const exists = options.some(
+    (item) => item.value.toLowerCase() === keyword.toLowerCase()
+  );
+  if (exists) return options;
+
+  return [
+    {
+      value: keyword,
+      label: `${keyword} (自定义输入)`,
+      description: '手动输入的模型名称',
+    },
+    ...options,
+  ];
+};
+
 export default function SettingsPage() {
   const screens = useBreakpoint();
   const isMobile = !screens.md; // md断点是768px
@@ -21,7 +45,8 @@ export default function SettingsPage() {
   const [initialLoading, setInitialLoading] = useState(true);
   const [hasSettings, setHasSettings] = useState(false);
   const [isDefaultSettings, setIsDefaultSettings] = useState(false);
-  const [modelOptions, setModelOptions] = useState<Array<{ value: string; label: string; description: string }>>([]);
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  const [modelSearchText, setModelSearchText] = useState('');
   const [fetchingModels, setFetchingModels] = useState(false);
   const [modelsFetched, setModelsFetched] = useState(false);
   const [testingApi, setTestingApi] = useState(false);
@@ -47,7 +72,8 @@ export default function SettingsPage() {
   const [presetForm] = Form.useForm();
   
   // 预设编辑窗口的模型列表状态（独立于当前配置的模型列表）
-  const [presetModelOptions, setPresetModelOptions] = useState<Array<{ value: string; label: string; description: string }>>([]);
+  const [presetModelOptions, setPresetModelOptions] = useState<ModelOption[]>([]);
+  const [presetModelSearchText, setPresetModelSearchText] = useState('');
   const [fetchingPresetModels, setFetchingPresetModels] = useState(false);
   const [presetModelsFetched, setPresetModelsFetched] = useState(false);
 
@@ -320,6 +346,7 @@ export default function SettingsPage() {
       newapi: '',
       azure: '',
       custom: '',
+      sub2api: 'https://ai.qaq.al',
       gemini: 'https://generativelanguage.googleapis.com/v1beta',
     };
     const defaultUrl = providerDefaultUrls[value] || '';
@@ -336,6 +363,7 @@ export default function SettingsPage() {
     form.setFieldValue('provider_type', value);
     // 清空模型列表，需要重新获取
     setModelOptions([]);
+    setModelSearchText('');
     setModelsFetched(false);
   };
 
@@ -454,6 +482,7 @@ export default function SettingsPage() {
   const showPresetModal = (preset?: APIKeyPreset) => {
     // 重置预设模型列表状态
     setPresetModelOptions([]);
+    setPresetModelSearchText('');
     setPresetModelsFetched(false);
     
     if (preset) {
@@ -482,6 +511,7 @@ export default function SettingsPage() {
     presetForm.resetFields();
     // 清除预设模型列表状态
     setPresetModelOptions([]);
+    setPresetModelSearchText('');
     setPresetModelsFetched(false);
   };
 
@@ -535,6 +565,7 @@ export default function SettingsPage() {
   const handlePresetProviderChange = (value: string) => {
     const providerDefaultUrls: Record<string, string> = {
       openai: 'https://api.openai.com/v1',
+      sub2api: 'https://ai.qaq.al',
       gemini: 'https://generativelanguage.googleapis.com/v1beta',
     };
     const defaultUrl = providerDefaultUrls[value];
@@ -544,6 +575,7 @@ export default function SettingsPage() {
     presetForm.setFieldValue('provider_type', value);
     // 清空模型列表，需要重新获取
     setPresetModelOptions([]);
+    setPresetModelSearchText('');
     setPresetModelsFetched(false);
   };
 
@@ -836,12 +868,20 @@ export default function SettingsPage() {
         return 'orange';
       case 'custom':
         return 'purple';
+      case 'sub2api':
+        return 'magenta';
       case 'gemini':
         return 'green';
       default:
         return 'default';
     }
   };
+
+  const mergedModelOptions = buildModelSelectOptions(modelOptions, modelSearchText);
+  const mergedPresetModelOptions = buildModelSelectOptions(
+    presetModelOptions,
+    presetModelSearchText
+  );
 
   // ========== 渲染预设列表 ==========
 
@@ -1210,6 +1250,22 @@ export default function SettingsPage() {
                               optionFilterProp="label"
                               loading={fetchingModels}
                               onFocus={handleModelSelectFocus}
+                              onSearch={(value) => setModelSearchText(value)}
+                              onChange={() => setModelSearchText('')}
+                              onBlur={() => {
+                                const customModel = modelSearchText.trim();
+                                if (customModel) {
+                                  form.setFieldValue('llm_model', customModel);
+                                }
+                              }}
+                              onInputKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  const customModel = modelSearchText.trim();
+                                  if (customModel) {
+                                    form.setFieldValue('llm_model', customModel);
+                                  }
+                                }
+                              }}
                               filterOption={(input, option) =>
                                 (option?.label ?? '').toLowerCase().includes(input.toLowerCase()) ||
                                 (option?.description ?? '').toLowerCase().includes(input.toLowerCase())
@@ -1241,7 +1297,7 @@ export default function SettingsPage() {
                                   </div>
                                 ) : (
                                   <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                    未找到匹配的模型
+                                    未找到匹配的模型，可直接输入后按回车
                                   </div>
                                 )
                               }
@@ -1277,7 +1333,7 @@ export default function SettingsPage() {
                                   </div>
                                 ) : undefined
                               }
-                              options={modelOptions.map(model => ({
+                              options={mergedModelOptions.map(model => ({
                                 value: model.value,
                                 label: model.label,
                                 description: model.description
@@ -1641,13 +1697,14 @@ export default function SettingsPage() {
                   rules={[{ required: true, message: '请选择' }]}
                   style={{ marginBottom: 16 }}
                 >
-                  <Select placeholder="选择提供商" onChange={handlePresetProviderChange}>
-                    <Select.Option value="openai">OpenAI</Select.Option>
-                    <Select.Option value="azure">Azure OpenAI</Select.Option>
-                    <Select.Option value="newapi">NewAPI</Select.Option>
-                    <Select.Option value="custom">自定义</Select.Option>
-                    <Select.Option value="gemini">Google Gemini</Select.Option>
-                  </Select>
+                    <Select placeholder="选择提供商" onChange={handlePresetProviderChange}>
+                      <Select.Option value="openai">OpenAI</Select.Option>
+                      <Select.Option value="azure">Azure OpenAI</Select.Option>
+                      <Select.Option value="newapi">NewAPI</Select.Option>
+                      <Select.Option value="custom">自定义</Select.Option>
+                      <Select.Option value="sub2api">Sub2API</Select.Option>
+                      <Select.Option value="gemini">Google Gemini</Select.Option>
+                    </Select>
                 </Form.Item>
               </Col>
             </Row>
@@ -1707,6 +1764,22 @@ export default function SettingsPage() {
                     optionFilterProp="label"
                     loading={fetchingPresetModels}
                     onFocus={handlePresetModelSelectFocus}
+                    onSearch={(value) => setPresetModelSearchText(value)}
+                    onChange={() => setPresetModelSearchText('')}
+                    onBlur={() => {
+                      const customModel = presetModelSearchText.trim();
+                      if (customModel) {
+                        presetForm.setFieldValue('llm_model', customModel);
+                      }
+                    }}
+                    onInputKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        const customModel = presetModelSearchText.trim();
+                        if (customModel) {
+                          presetForm.setFieldValue('llm_model', customModel);
+                        }
+                      }
+                    }}
                     filterOption={(input, option) =>
                       (option?.label ?? '').toLowerCase().includes(input.toLowerCase()) ||
                       (option?.description ?? '').toLowerCase().includes(input.toLowerCase())
@@ -1738,7 +1811,7 @@ export default function SettingsPage() {
                         </div>
                       ) : (
                         <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: '12px' }}>
-                          未找到匹配的模型
+                          未找到匹配的模型，可直接输入后按回车
                         </div>
                       )
                     }
@@ -1772,7 +1845,7 @@ export default function SettingsPage() {
                         </Button>
                       </div>
                     }
-                    options={presetModelOptions.map(model => ({
+                    options={mergedPresetModelOptions.map(model => ({
                       value: model.value,
                       label: model.label,
                       description: model.description
