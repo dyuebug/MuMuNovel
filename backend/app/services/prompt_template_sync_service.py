@@ -38,6 +38,34 @@ MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
     "AI_DENOISING": TemplateSyncRule(
         legacy_hashes={"c40c0f000310940c"},
     ),
+    # 灵感模式模板：当用户仍是旧版系统默认副本时，自动升级到新版低AI生活化约束。
+    "INSPIRATION_TITLE_SYSTEM": TemplateSyncRule(
+        legacy_hashes={"174116db28ffe2cd"},
+    ),
+    "INSPIRATION_TITLE_USER": TemplateSyncRule(
+        legacy_hashes={"95f56808897a03a1"},
+    ),
+    "INSPIRATION_DESCRIPTION_SYSTEM": TemplateSyncRule(
+        legacy_hashes={"5d3349db809fe56f"},
+    ),
+    "INSPIRATION_DESCRIPTION_USER": TemplateSyncRule(
+        legacy_hashes={"f0af139f8db3e24a"},
+    ),
+    "INSPIRATION_THEME_SYSTEM": TemplateSyncRule(
+        legacy_hashes={"77fcd61b59597687"},
+    ),
+    "INSPIRATION_THEME_USER": TemplateSyncRule(
+        legacy_hashes={"0c691111be925e7a"},
+    ),
+    "INSPIRATION_GENRE_SYSTEM": TemplateSyncRule(
+        legacy_hashes={"d7e550414969ffe2"},
+    ),
+    "INSPIRATION_GENRE_USER": TemplateSyncRule(
+        legacy_hashes={"c3a2ff6230a69e45"},
+    ),
+    "INSPIRATION_QUICK_COMPLETE": TemplateSyncRule(
+        legacy_hashes={"90d7050767ec4423"},
+    ),
 }
 
 

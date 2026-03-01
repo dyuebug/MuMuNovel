@@ -92,6 +92,8 @@ async def test_should_generate_options_when_request_is_valid(test_db, mock_user,
     assert body["prompt"] == ai_payload["prompt"]
     assert get_template_mock.await_count == 2
     assert ai_service.calls[0]["temperature"] == inspiration_api.TEMPERATURE_SETTINGS["title"]
+    assert "风格与可读性要求" in ai_service.calls[0]["system_prompt"]
+    assert "书名专项" in ai_service.calls[0]["system_prompt"]
 
 
 async def test_should_return_error_when_generate_options_step_is_unsupported(
@@ -282,3 +284,27 @@ def test_should_return_valid_when_validate_options_response_input_is_valid():
 
     assert is_valid is True
     assert error_msg == ""
+
+
+def test_should_return_invalid_when_validate_options_response_has_duplicate_options():
+    result = {"options": ["暗潮", "暗潮", "黎明"]}
+
+    is_valid, error_msg = inspiration_api.validate_options_response(result, "title")
+
+    assert is_valid is False
+    assert "重复" in error_msg
+
+
+def test_should_return_invalid_when_description_has_unexplained_jargon():
+    result = {
+        "options": [
+            "主角要找到失踪妹妹，却被门影和回灌困住，城市规则不断重置。",
+            "他在旧城翻案，暗潮和镜像牵出更大阴谋。",
+            "她决定破局，直面家族谎言。"
+        ]
+    }
+
+    is_valid, error_msg = inspiration_api.validate_options_response(result, "description")
+
+    assert is_valid is False
+    assert "术语密度过高" in error_msg

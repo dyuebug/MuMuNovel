@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any
 import json
+import re
 
 from app.database import get_db
 from app.services.ai_service import AIService
@@ -21,6 +22,82 @@ TEMPERATURE_SETTINGS = {
     "theme": 0.55,       # 主题需要更加贴合
     "genre": 0.45        # 类型应该很明确
 }
+
+COMMON_INSPIRATION_STYLE_GUARD = """
+【风格与可读性要求（必须遵守）】
+1. 用中国读者习惯的自然表达，避免公文腔、论文腔、模板腔
+2. 句子长短要有变化，不要全是同长度短句或流水账长句
+3. 可在合适位置少量使用网络语感，但必须克制，不能硬塞梗
+4. 优先写人物目标、阻碍、代价和情绪，不要只堆设定术语
+5. 如出现术语或设定名词，需补一句白话解释（例如“也就是……”）
+6. 避免高频模板开头：这是一个关于、讲述了、故事围绕、在这个世界里
+"""
+
+STEP_EXTRA_STYLE_GUARD = {
+    "title": """
+【书名专项】
+- 风格要拉开差异，避免同构词组批量改写
+- 名称要好记、上口，避免生造复杂词
+""",
+    "description": """
+【简介专项】
+- 每个选项都要体现：主角当下目标 + 关键阻碍/代价（至少命中其一）
+- 冲突要能被读者感知，不要只写抽象观点
+""",
+    "theme": """
+【主题专项】
+- 主题要先给人话结论，再落回冲突现场，避免“高概念空转”
+- 保持情绪温度，别写成教科书总结
+""",
+    "genre": """
+【类型专项】
+- 标签以读者常见认知为主，可组合但不要互相冲突
+- 禁止生造难懂标签
+""",
+}
+
+_TEMPLATEY_PREFIXES = (
+    "这是一个关于",
+    "讲述了",
+    "故事围绕",
+    "在这个世界里",
+    "主角是一个",
+)
+_SETTING_JARGON_WORDS = (
+    "门影",
+    "回灌",
+    "熵值",
+    "锚点",
+    "协议体",
+    "模因",
+    "阵列",
+    "位面",
+    "法则",
+    "神性",
+)
+_EXPLANATION_HINTS = (
+    "也就是",
+    "简单说",
+    "说白了",
+    "换句话说",
+    "直白点",
+)
+
+
+def _build_style_guard(step: str) -> str:
+    extra = STEP_EXTRA_STYLE_GUARD.get(step, "")
+    return f"{COMMON_INSPIRATION_STYLE_GUARD}\n{extra}".strip()
+
+
+def _normalize_text(value: str) -> str:
+    lowered = (value or "").strip().lower()
+    return re.sub(r"[^\w\u4e00-\u9fff]+", "", lowered)
+
+
+def _contains_unexplained_jargon(text: str) -> bool:
+    jargon_hit_count = sum(1 for term in _SETTING_JARGON_WORDS if term in text)
+    has_explanation = any(marker in text for marker in _EXPLANATION_HINTS)
+    return jargon_hit_count >= 2 and not has_explanation
 
 
 def validate_options_response(result: Dict[str, Any], step: str, max_retries: int = 3) -> tuple[bool, str]:
@@ -62,6 +139,23 @@ def validate_options_response(result: Dict[str, Any], step: str, max_retries: in
         for i, option in enumerate(options):
             if len(option) > 10:
                 return False, f"类型标签【{option}】过长，应该在2-10字之间"
+
+    # 选项去重：避免同义改写导致“看起来有6个，实际没区别”
+    normalized_options = [_normalize_text(option) for option in options]
+    if len(set(normalized_options)) != len(normalized_options):
+        return False, "选项存在重复或近似重复，请提升差异度"
+
+    # 简介/主题的生动度与可读性兜底校验
+    if step in {"description", "theme"}:
+        templatey_count = sum(
+            1 for option in options if option.strip().startswith(_TEMPLATEY_PREFIXES)
+        )
+        if templatey_count >= max(3, len(options) - 2):
+            return False, "选项模板腔过重，请改成更自然的口语叙述"
+
+        for i, option in enumerate(options):
+            if _contains_unexplained_jargon(option):
+                return False, f"第{i+1}个选项术语密度过高且缺少白话解释"
     
     return True, ""
 
@@ -138,6 +232,8 @@ async def generate_options(
             # 格式化提示词
             system_prompt = system_template.format(**format_params)
             user_prompt = user_template.format(**format_params)
+            style_guard = _build_style_guard(step)
+            system_prompt = f"{system_prompt}\n\n{style_guard}"
             
             # 如果是重试，在提示词中强调格式要求
             if attempt > 0:
@@ -298,6 +394,8 @@ async def refine_options(
             # 格式化提示词
             system_prompt = system_template.format(**format_params)
             user_prompt = user_template.format(**format_params)
+            style_guard = _build_style_guard(step)
+            system_prompt = f"{system_prompt}\n\n{style_guard}"
             
             # 添加反馈信息到提示词
             feedback_instruction = f"""
@@ -445,7 +543,11 @@ async def quick_generate(
         
         # 格式化提示词
         prompts = {
-            "system": PromptService.format_prompt(system_template, existing=existing_text),
+            "system": (
+                f"{PromptService.format_prompt(system_template, existing=existing_text)}\n\n"
+                f"{COMMON_INSPIRATION_STYLE_GUARD}\n"
+                "【智能补全专项】保证四个字段像同一部小说，人物语气自然，信息前后一致。"
+            ),
             "user": "请在不偏离现有信息的前提下补全缺失字段，只返回JSON。"
         }
         
