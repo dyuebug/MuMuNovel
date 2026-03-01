@@ -130,6 +130,13 @@ def build_prompt(template: str) -> str:
         ),
         target_word_count=1200,
         narrative_perspective="第三人称",
+        world_time_period="近未来雨季常态化时期（2042年）",
+        world_location="临海市三环老居住带与废弃地铁维护区",
+        world_atmosphere="潮湿压抑、停电频发、警报高密度播报",
+        world_rules=(
+            "门影会优先锁定回头者与拥堵路径；镜面门会替换原出口；"
+            "雾层回灌区停留越久失联概率越高；相位锚可短时稳定路径但会衰减。"
+        ),
         characters_info=(
             "林昼：特勤解题员，冷静算路快，但对“抛下人”有心理阴影。\n"
             "许遥：社区分拣员，非战斗人员，护子本能强，关键时刻敢冒险。\n"
@@ -163,19 +170,30 @@ async def generate_once(
     prompt: str,
     model: str,
     system_prompt: str,
+    max_attempts: int = 3,
 ) -> str:
-    chunks: List[str] = []
-    async for chunk in service.generate_text_stream(
-        prompt=prompt,
-        model=model,
-        temperature=0.2,
-        max_tokens=2600,
-        system_prompt=system_prompt,
-        tool_choice="none",
-        auto_mcp=False,
-    ):
-        chunks.append(chunk)
-    return "".join(chunks)
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            chunks: List[str] = []
+            async for chunk in service.generate_text_stream(
+                prompt=prompt,
+                model=model,
+                temperature=0.2,
+                max_tokens=2600,
+                system_prompt=system_prompt,
+                tool_choice="none",
+                auto_mcp=False,
+            ):
+                chunks.append(chunk)
+            return "".join(chunks)
+        except Exception as exc:
+            last_error = exc
+            if attempt >= max_attempts:
+                break
+            await asyncio.sleep(min(2 * attempt, 6))
+    assert last_error is not None
+    raise last_error
 
 
 def calc_metrics(text: str) -> Dict[str, object]:
