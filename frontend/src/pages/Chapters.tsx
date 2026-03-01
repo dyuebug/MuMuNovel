@@ -4,7 +4,7 @@ import { EditOutlined, FileTextOutlined, ThunderboltOutlined, LockOutlined, Down
 import { useStore } from '../store';
 import { useChapterSync } from '../store/hooks';
 import { projectApi, writingStyleApi, chapterApi } from '../services/api';
-import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData } from '../types';
+import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterQualityMetrics } from '../types';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import ChapterAnalysis from '../components/ChapterAnalysis';
 import ExpansionPlanEditor from '../components/ExpansionPlanEditor';
@@ -91,6 +91,9 @@ export default function Chapters() {
   // 单章节生成进度状态
   const [singleChapterProgress, setSingleChapterProgress] = useState(0);
   const [singleChapterProgressMessage, setSingleChapterProgressMessage] = useState('');
+  const [chapterQualityMetrics, setChapterQualityMetrics] = useState<ChapterQualityMetrics | null>(null);
+  const [chapterQualityGeneratedAt, setChapterQualityGeneratedAt] = useState<string | null>(null);
+  const [chapterQualityLoading, setChapterQualityLoading] = useState(false);
 
   // 批量生成相关状态
   const [batchGenerateVisible, setBatchGenerateVisible] = useState(false);
@@ -104,6 +107,17 @@ export default function Chapters() {
     completed: number;
     current_chapter_number: number | null;
     estimated_time_minutes?: number;
+    latest_quality_metrics?: {
+      overall_score?: number;
+      conflict_chain_hit_rate?: number;
+      rule_grounding_hit_rate?: number;
+    };
+    quality_metrics_summary?: {
+      avg_overall_score?: number;
+      avg_conflict_chain_hit_rate?: number;
+      avg_rule_grounding_hit_rate?: number;
+      chapter_count?: number;
+    };
   } | null>(null);
   const batchPollingIntervalRef = useRef<number | null>(null);
 
@@ -502,6 +516,8 @@ export default function Chapters() {
           total: task.total,
           completed: task.completed,
           current_chapter_number: task.current_chapter_number,
+          latest_quality_metrics: task.latest_quality_metrics,
+          quality_metrics_summary: task.quality_metrics_summary,
         });
         setBatchGenerating(true);
         setBatchGenerateVisible(true);
@@ -688,6 +704,26 @@ export default function Chapters() {
     return '';
   };
 
+  const loadChapterQualityMetrics = useCallback(async (chapterId: string) => {
+    setChapterQualityLoading(true);
+    try {
+      const result = await chapterApi.getChapterQualityMetrics(chapterId);
+      if (result.has_metrics && result.latest_metrics) {
+        setChapterQualityMetrics(result.latest_metrics);
+        setChapterQualityGeneratedAt(result.generated_at);
+      } else {
+        setChapterQualityMetrics(null);
+        setChapterQualityGeneratedAt(null);
+      }
+    } catch (error) {
+      console.error('加载章节评分失败:', error);
+      setChapterQualityMetrics(null);
+      setChapterQualityGeneratedAt(null);
+    } finally {
+      setChapterQualityLoading(false);
+    }
+  }, []);
+
   const handleOpenModal = (id: string) => {
     const chapter = chapters.find(c => c.id === id);
     if (chapter) {
@@ -725,8 +761,12 @@ export default function Chapters() {
       setEditingId(id);
       setTemporaryNarrativePerspective(undefined); // 重置人称选择
       setIsEditorOpen(true);
+      setChapterQualityMetrics(null);
+      setChapterQualityGeneratedAt(null);
       // 打开编辑窗口时加载模型列表
       loadAvailableModels();
+      // 同步加载该章节最近一次剧情评分
+      void loadChapterQualityMetrics(chapter.id);
     }
   };
 
@@ -790,7 +830,7 @@ export default function Chapters() {
 
       // 后台继续执行：完成后自动更新文案；失败时提示错误
       result.completion
-        .then((finalResult) => {
+        .then(async (finalResult) => {
           message.open({
             key: progressMessageKey,
             type: 'success',
@@ -812,6 +852,7 @@ export default function Chapters() {
             }));
             startPollingTask(chapterId);
           }
+          await loadChapterQualityMetrics(chapterId);
         })
         .catch((error) => {
           const completionError = error as ApiError;
@@ -1057,6 +1098,8 @@ export default function Chapters() {
         completed: 0,
         current_chapter_number: values.startChapterNumber,
         estimated_time_minutes: result.estimated_time_minutes,
+        latest_quality_metrics: undefined,
+        quality_metrics_summary: undefined,
       });
 
       message.success(`批量生成任务已创建，预计需要 ${result.estimated_time_minutes} 分钟`);
@@ -1096,6 +1139,8 @@ export default function Chapters() {
           total: status.total,
           completed: status.completed,
           current_chapter_number: status.current_chapter_number,
+          latest_quality_metrics: status.latest_quality_metrics,
+          quality_metrics_summary: status.quality_metrics_summary,
         });
 
         // 每次轮询时刷新章节列表和分析状态，实时显示新生成的章节和分析进度
@@ -2351,6 +2396,8 @@ export default function Chapters() {
             message.warning('AI正在创作中，请等待完成后再关闭');
             return;
           }
+          setChapterQualityMetrics(null);
+          setChapterQualityGeneratedAt(null);
           setIsEditorOpen(false);
         }}
         closable={!isGenerating}
@@ -2511,6 +2558,45 @@ export default function Chapters() {
             </Form.Item>
           </div>
 
+          <Card
+            size="small"
+            title="剧情评分（最近一次AI生成）"
+            loading={chapterQualityLoading}
+            style={{ marginBottom: 12 }}
+          >
+            {chapterQualityMetrics ? (
+              <Descriptions column={isMobile ? 1 : 2} size="small">
+                <Descriptions.Item label="综合评分">
+                  <Tag color={chapterQualityMetrics.overall_score >= 75 ? 'green' : chapterQualityMetrics.overall_score >= 60 ? 'gold' : 'red'}>
+                    {chapterQualityMetrics.overall_score}
+                  </Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="冲突链命中率">
+                  <Tag color="blue">{chapterQualityMetrics.conflict_chain_hit_rate}%</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="规则落地命中率">
+                  <Tag color="cyan">{chapterQualityMetrics.rule_grounding_hit_rate}%</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="对白自然度">
+                  <Tag color="purple">{chapterQualityMetrics.dialogue_naturalness_rate}%</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="大纲贴合度">
+                  <Tag color="geekblue">{chapterQualityMetrics.outline_alignment_rate}%</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="评分时间">
+                  {chapterQualityGeneratedAt ? new Date(chapterQualityGeneratedAt).toLocaleString() : '未知'}
+                </Descriptions.Item>
+              </Descriptions>
+            ) : (
+              <Alert
+                type="info"
+                showIcon
+                message="暂无评分数据"
+                description="该章节还没有可用的AI生成评分。完成一次AI生成后会自动显示。"
+              />
+            )}
+          </Card>
+
           <Form.Item label="章节内容" name="content">
             <TextArea
               ref={contentTextAreaRef}
@@ -2540,6 +2626,8 @@ export default function Chapters() {
                       message.warning('AI正在创作中，请等待完成后再关闭');
                       return;
                     }
+                    setChapterQualityMetrics(null);
+                    setChapterQualityGeneratedAt(null);
                     setIsEditorOpen(false);
                   }}
                   block={isMobile}
@@ -2831,6 +2919,13 @@ export default function Chapters() {
                   {batchProgress?.estimated_time_minutes && batchProgress.completed === 0 && (
                     <li>⏱️ 预计耗时：约 {batchProgress.estimated_time_minutes} 分钟</li>
                   )}
+                  {batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined && (
+                    <li>
+                      📊 平均剧情评分：综合 {batchProgress.quality_metrics_summary.avg_overall_score}
+                      （冲突链 {batchProgress.quality_metrics_summary.avg_conflict_chain_hit_rate}% /
+                      规则落地 {batchProgress.quality_metrics_summary.avg_rule_grounding_hit_rate}%）
+                    </li>
+                  )}
                 </ul>
               }
               type="info"
@@ -2873,8 +2968,16 @@ export default function Chapters() {
         progress={batchProgress ? Math.round((batchProgress.completed / batchProgress.total) * 100) : 0}
         message={
           batchProgress?.current_chapter_number
-            ? `正在生成第 ${batchProgress.current_chapter_number} 章... (${batchProgress.completed}/${batchProgress.total})`
-            : `批量生成进行中... (${batchProgress?.completed || 0}/${batchProgress?.total || 0})`
+            ? `正在生成第 ${batchProgress.current_chapter_number} 章... (${batchProgress.completed}/${batchProgress.total})${
+                batchProgress.latest_quality_metrics?.overall_score !== undefined
+                  ? ` ｜评分 ${batchProgress.latest_quality_metrics.overall_score}`
+                  : ''
+              }`
+            : `批量生成进行中... (${batchProgress?.completed || 0}/${batchProgress?.total || 0})${
+                batchProgress?.latest_quality_metrics?.overall_score !== undefined
+                  ? ` ｜评分 ${batchProgress.latest_quality_metrics.overall_score}`
+                  : ''
+              }`
         }
         title="批量生成章节"
         onCancel={() => {

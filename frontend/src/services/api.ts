@@ -571,6 +571,9 @@ export const chapterApi = {
   checkCanGenerate: (chapterId: string) =>
     api.get<unknown, import('../types').ChapterCanGenerateResponse>(`/chapters/${chapterId}/can-generate`),
 
+  getChapterQualityMetrics: (chapterId: string) =>
+    api.get<unknown, import('../types').ChapterQualityMetricsResponse>(`/chapters/${chapterId}/quality-metrics`),
+
   // 章节重新生成相关
   getRegenerationTasks: (chapterId: string, limit?: number) =>
     api.get<unknown, {

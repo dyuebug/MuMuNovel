@@ -290,6 +290,14 @@ export function useChapterSync() {
     model?: string,
     narrativePerspective?: string
   ) => {
+    const formatQualityMessage = (metrics: any): string | null => {
+      if (!metrics || typeof metrics !== 'object') return null;
+      const overall = Number(metrics.overall_score ?? 0).toFixed(1);
+      const conflict = Number(metrics.conflict_chain_hit_rate ?? 0).toFixed(1);
+      const rule = Number(metrics.rule_grounding_hit_rate ?? 0).toFixed(1);
+      return `剧情评分：综合${overall}｜冲突链${conflict}%｜规则落地${rule}%`;
+    };
+
     // 1) 创建后台任务（立即返回 task_id）
     const response = await fetch(`/api/chapters/${chapterId}/generate-background`, {
       method: 'POST',
@@ -370,6 +378,11 @@ export function useChapterSync() {
                   );
                 } else if (message.type === 'analysis_started' && onProgressUpdate) {
                   onProgressUpdate(message.message || '章节分析中...', message.progress || 85);
+                } else if (message.type === 'quality_metrics' && onProgressUpdate) {
+                  const qualityMessage = formatQualityMessage(message);
+                  if (qualityMessage) {
+                    onProgressUpdate(qualityMessage, 92);
+                  }
                 } else if (message.type === 'error') {
                   streamFailure = message.error || '后台生成失败';
                 }
@@ -415,7 +428,12 @@ export function useChapterSync() {
           if (taskStatus.status === 'running') {
             if (onProgressUpdate) {
               const retrySuffix = taskStatus.current_retry_count ? `（重试${taskStatus.current_retry_count}）` : '';
-              onProgressUpdate(`后台生成中${retrySuffix}，可并行执行其他任务...`, 65);
+              const qualityMessage = formatQualityMessage(taskStatus.latest_quality_metrics);
+              if (qualityMessage) {
+                onProgressUpdate(`${qualityMessage}｜后台生成中${retrySuffix}`, 70);
+              } else {
+                onProgressUpdate(`后台生成中${retrySuffix}，可并行执行其他任务...`, 65);
+              }
             }
             continue;
           }

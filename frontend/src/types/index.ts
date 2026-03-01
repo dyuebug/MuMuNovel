@@ -340,6 +340,22 @@ export interface ChapterCanGenerateResponse {
   chapter_number: number;
 }
 
+export interface ChapterQualityMetrics {
+  overall_score: number;
+  conflict_chain_hit_rate: number;
+  rule_grounding_hit_rate: number;
+  outline_alignment_rate: number;
+  dialogue_naturalness_rate: number;
+}
+
+export interface ChapterQualityMetricsResponse {
+  chapter_id: string;
+  has_metrics: boolean;
+  latest_metrics: ChapterQualityMetrics | null;
+  history_id: string | null;
+  generated_at: string | null;
+}
+
 // AI生成请求类型
 export interface GenerateOutlineRequest {
   project_id: string;
