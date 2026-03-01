@@ -1,0 +1,44 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-8.3.4, pluggy-1.6.0 -- E:\Code\SoftWare\Dev\Python312\python.exe
+cachedir: .pytest_cache
+rootdir: E:\Code\ProjectsCode\WorkSpace\Codex\NovelAi\MuMuNovel\backend
+configfile: pytest.ini
+plugins: anyio-4.12.1, asyncio-0.24.0, mock-3.14.0
+asyncio: mode=Mode.AUTO, default_loop_scope=function
+collecting ... collected 33 items
+
+tests/test_api/test_settings.py::test_should_return_401_when_unauthenticated_get_settings PASSED [  3%]
+tests/test_api/test_settings.py::test_should_return_200_when_authenticated_get_settings PASSED [  6%]
+tests/test_api/test_settings.py::test_should_auto_create_settings_on_first_get PASSED [  9%]
+tests/test_api/test_settings.py::test_should_return_existing_settings_when_already_saved PASSED [ 12%]
+tests/test_api/test_settings.py::test_should_create_settings_via_post_with_backup_urls_serialized PASSED [ 15%]
+tests/test_api/test_settings.py::test_should_update_existing_settings_via_post_and_deactivate_changed_active_preset PASSED [ 18%]
+tests/test_api/test_settings.py::test_should_update_settings_via_put PASSED [ 21%]
+tests/test_api/test_settings.py::test_should_return_404_when_put_settings_without_existing PASSED [ 24%]
+tests/test_api/test_settings.py::test_should_delete_settings_successfully PASSED [ 27%]
+tests/test_api/test_settings.py::test_should_return_404_when_delete_settings_without_existing PASSED [ 30%]
+tests/test_api/test_settings.py::test_should_fetch_models_for_openai_compatible_providers[openai] PASSED [ 33%]
+tests/test_api/test_settings.py::test_should_fetch_models_for_openai_compatible_providers[newapi] PASSED [ 36%]
+tests/test_api/test_settings.py::test_should_fetch_models_for_openai_compatible_providers[custom] PASSED [ 39%]
+tests/test_api/test_settings.py::test_should_handle_azure_models_empty_result_with_friendly_message PASSED [ 42%]
+tests/test_api/test_settings.py::test_should_handle_azure_404_with_friendly_message PASSED [ 45%]
+tests/test_api/test_settings.py::test_should_fetch_models_for_anthropic_provider PASSED [ 48%]
+tests/test_api/test_settings.py::test_should_fetch_models_for_gemini_and_filter_generation_capability PASSED [ 51%]
+tests/test_api/test_settings.py::test_should_return_400_when_fetch_models_network_error PASSED [ 54%]
+tests/test_api/test_settings.py::test_should_test_api_connection_successfully PASSED [ 57%]
+tests/test_api/test_settings.py::test_should_return_timeout_error_when_api_test_times_out PASSED [ 60%]
+tests/test_api/test_settings.py::test_should_return_failure_for_common_api_errors[401 unauthorized] PASSED [ 63%]
+tests/test_api/test_settings.py::test_should_return_failure_for_common_api_errors[404 not found] PASSED [ 66%]
+tests/test_api/test_settings.py::test_should_return_failure_for_common_api_errors[429 rate limit] PASSED [ 69%]
+tests/test_api/test_settings.py::test_should_detect_function_calling_support_when_tool_calls_present PASSED [ 72%]
+tests/test_api/test_settings.py::test_should_mark_function_calling_unsupported_when_plain_text PASSED [ 75%]
+tests/test_api/test_settings.py::test_should_return_timeout_for_function_calling_check PASSED [ 78%]
+tests/test_api/test_settings.py::test_should_return_empty_presets_list_when_no_presets PASSED [ 81%]
+tests/test_api/test_settings.py::test_should_create_preset_and_list_it PASSED [ 84%]
+tests/test_api/test_settings.py::test_should_update_existing_preset PASSED [ 87%]
+tests/test_api/test_settings.py::test_should_return_404_when_update_missing_preset PASSED [ 90%]
+tests/test_api/test_settings.py::test_should_delete_preset_successfully PASSED [ 93%]
+tests/test_api/test_settings.py::test_should_not_delete_active_preset PASSED [ 96%]
+tests/test_api/test_settings.py::test_should_activate_preset_and_apply_config_to_main_settings PASSED [100%]
+
+======================= 33 passed, 33 warnings in 0.36s =======================
