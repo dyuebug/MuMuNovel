@@ -1,7 +1,7 @@
 services:
   postgres:
     image: postgres:18-alpine
-    container_name: mumuainovel-postgres
+    container_name: mumuainovel-postgres-new
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-mumuai_novel}
       POSTGRES_USER: ${POSTGRES_USER:-mumuai}
@@ -53,8 +53,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: mumujie/mumuainovel:latest
-    container_name: mumuainovel
+    image: mumuainovel-local:latest
+    container_name: mumuainovel-new
     depends_on:
       postgres:
         condition: service_healthy
