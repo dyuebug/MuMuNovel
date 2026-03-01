@@ -307,9 +307,23 @@ async def get_available_models(
     """
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # OpenAI 兼容接口（包括 openai/azure/newapi/custom）
-            if provider in ["openai", "azure", "newapi", "custom"]:
-                url = f"{api_base_url.rstrip('/')}/models"
+            # OpenAI 兼容接口（包括 openai/azure/newapi/custom/sub2api）
+            openai_compatible_providers = {"openai", "azure", "newapi", "custom", "sub2api"}
+            if provider in openai_compatible_providers:
+                base_url = api_base_url.rstrip("/")
+                candidate_urls = [f"{base_url}/models"]
+                if base_url.endswith("/v1"):
+                    root_base = base_url[:-3].rstrip("/")
+                    if root_base:
+                        candidate_urls.append(f"{root_base}/models")
+                else:
+                    candidate_urls.append(f"{base_url}/v1/models")
+
+                # 去重并保持顺序
+                unique_urls: List[str] = []
+                for candidate in candidate_urls:
+                    if candidate not in unique_urls:
+                        unique_urls.append(candidate)
 
                 # Azure 使用 api-key 头，其他使用 Bearer
                 if provider == "azure":
@@ -323,55 +337,89 @@ async def get_available_models(
                         "Content-Type": "application/json"
                     }
 
-                logger.info(f"正在从 {url} 获取模型列表 (provider: {provider})")
+                logger.info(
+                    f"正在获取模型列表 (provider: {provider}, candidates: {unique_urls})"
+                )
+                last_http_error: Optional[httpx.HTTPStatusError] = None
 
-                try:
-                    response = await client.get(url, headers=headers)
-                    response.raise_for_status()
-
-                    data = response.json()
-                    models = []
-
-                    if "data" in data and isinstance(data["data"], list):
-                        for model in data["data"]:
-                            model_id = model.get("id", "")
-                            if model_id:
-                                models.append({
-                                    "value": model_id,
-                                    "label": model_id,
-                                    "description": model.get("description", "") or f"Created: {model.get('created', 'N/A')}"
-                                })
-
-                    if not models:
-                        # Azure 可能无法获取模型列表，提供友好提示
-                        if provider == "azure":
+                for index, url in enumerate(unique_urls):
+                    try:
+                        response = await client.get(url, headers=headers)
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as e:
+                        last_http_error = e
+                        if provider == "azure" and e.response.status_code in [404, 403]:
+                            # Azure 端点可能不支持 /models，返回友好提示
                             return {
                                 "provider": provider,
                                 "models": [],
                                 "count": 0,
                                 "message": "Azure OpenAI 无法自动获取模型列表，请手动填写部署名称到模型字段"
                             }
-                        raise HTTPException(
-                            status_code=404,
-                            detail="未能从 API 获取到可用的模型列表"
-                        )
+                        if e.response.status_code == 404 and index < len(unique_urls) - 1:
+                            logger.warning(
+                                f"模型列表端点不存在，尝试下一个候选地址: {url}"
+                            )
+                            continue
+                        raise
 
-                    logger.info(f"成功获取 {len(models)} 个模型")
-                    return {
-                        "provider": provider,
-                        "models": models,
-                        "count": len(models)
-                    }
-                except httpx.HTTPStatusError as e:
-                    if provider == "azure" and e.response.status_code in [404, 403]:
-                        # Azure 端点可能不支持 /models，返回友好提示
+                    data = response.json()
+                    models = []
+                    raw_models = data.get("data", []) if isinstance(data, dict) else []
+                    if not raw_models and isinstance(data, dict):
+                        raw_models = data.get("models", [])
+
+                    if isinstance(raw_models, list):
+                        for model in raw_models:
+                            if isinstance(model, str):
+                                model_id = model
+                                model_desc = ""
+                            else:
+                                model_id = (
+                                    model.get("id")
+                                    or model.get("name", "").replace("models/", "")
+                                )
+                                model_desc = (
+                                    model.get("description", "")
+                                    or model.get("display_name", "")
+                                    or f"Created: {model.get('created', 'N/A')}"
+                                )
+                            if model_id:
+                                models.append({
+                                    "value": model_id,
+                                    "label": model_id,
+                                    "description": model_desc
+                                })
+
+                    if models:
+                        logger.info(f"成功获取 {len(models)} 个模型")
                         return {
                             "provider": provider,
-                            "models": [],
-                            "count": 0,
-                            "message": "Azure OpenAI 无法自动获取模型列表，请手动填写部署名称到模型字段"
+                            "models": models,
+                            "count": len(models)
                         }
-                    raise
+
+                    if index < len(unique_urls) - 1:
+                        logger.warning(
+                            f"当前端点未返回模型列表，尝试下一个候选地址: {url}"
+                        )
+                        continue
+
+                if provider == "azure":
+                    return {
+                        "provider": provider,
+                        "models": [],
+                        "count": 0,
+                        "message": "Azure OpenAI 无法自动获取模型列表，请手动填写部署名称到模型字段"
+                    }
+
+                if last_http_error:
+                    raise last_http_error
+
+                raise HTTPException(
+                    status_code=404,
+                    detail="未能从 API 获取到可用的模型列表"
+                )
                 
             elif provider == "anthropic":
                 # Anthropic models API

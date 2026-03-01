@@ -87,7 +87,7 @@ def runtime_service(mocker):
     return service
 
 
-@pytest.mark.parametrize("provider_name", ["openai", "newapi", "azure", "custom"])
+@pytest.mark.parametrize("provider_name", ["openai", "newapi", "azure", "custom", "sub2api"])
 def test_should_initialize_openai_provider_when_provider_is_openai_compatible(
     provider_name,
     fixture_should_mock_ai_dependencies,
@@ -199,6 +199,7 @@ def test_should_initialize_gemini_provider_when_provider_is_gemini(
         ("newapi", "openai"),
         ("Azure", "openai"),
         ("custom", "openai"),
+        ("sub2api", "openai"),
         ("ANTHROPIC", "anthropic"),
         ("Gemini", "gemini"),
         ("thirdParty", "thirdparty"),
@@ -212,7 +213,7 @@ def test_should_normalize_provider_name_when_provider_has_alias(
     assert runtime_service._normalize_provider(raw_provider) == expected
 
 
-@pytest.mark.parametrize("provider_name", ["openai", "newapi", "azure", "custom"])
+@pytest.mark.parametrize("provider_name", ["openai", "newapi", "azure", "custom", "sub2api"])
 def test_should_route_to_openai_provider_when_provider_is_openai_compatible(
     runtime_service,
     provider_name,

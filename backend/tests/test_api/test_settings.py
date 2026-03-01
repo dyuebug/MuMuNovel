@@ -215,7 +215,7 @@ async def test_should_return_404_when_delete_settings_without_existing(async_cli
     assert response.status_code == 404
 
 
-@pytest.mark.parametrize("provider", ["openai", "newapi", "custom"])
+@pytest.mark.parametrize("provider", ["openai", "newapi", "custom", "sub2api"])
 async def test_should_fetch_models_for_openai_compatible_providers(
     async_client,
     monkeypatch,
@@ -258,6 +258,52 @@ async def test_should_fetch_models_for_openai_compatible_providers(
     assert body["count"] == 2
     assert captured["url"].endswith("/models")
     assert captured["headers"]["Authorization"] == "Bearer sk-test"
+
+
+async def test_should_fallback_to_v1_models_when_models_endpoint_is_404(async_client, monkeypatch):
+    captured_urls = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            captured_urls.append(url)
+            if url.endswith("/models") and not url.endswith("/v1/models"):
+                return httpx.Response(
+                    status_code=404,
+                    json={"error": "not found"},
+                    request=httpx.Request("GET", url),
+                )
+            return httpx.Response(
+                status_code=200,
+                json={"data": [{"id": "gpt-5.3-codex"}]},
+                request=httpx.Request("GET", url),
+            )
+
+    monkeypatch.setattr(settings_api.httpx, "AsyncClient", FakeAsyncClient)
+
+    response = await async_client.get(
+        "/api/settings/models",
+        params={
+            "api_key": "sk-test",
+            "api_base_url": "https://ai.qaq.al",
+            "provider": "sub2api",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider"] == "sub2api"
+    assert body["count"] == 1
+    assert body["models"][0]["value"] == "gpt-5.3-codex"
+    assert captured_urls[0] == "https://ai.qaq.al/models"
+    assert captured_urls[1] == "https://ai.qaq.al/v1/models"
 
 
 async def test_should_handle_azure_models_empty_result_with_friendly_message(async_client, monkeypatch):
