@@ -1575,6 +1575,10 @@ async def generate_chapter_content_stream(
                             target_word_count=target_word_count,
                             genre=project.genre or '未设定',
                             narrative_perspective=chapter_perspective,
+                            world_time_period=project.world_time_period or '未设定',
+                            world_location=project.world_location or '未设定',
+                            world_atmosphere=project.world_atmosphere or '未设定',
+                            world_rules=project.world_rules or '未设定',
                             previous_chapter_content=chapter_context.continuation_point,
                             previous_chapter_summary=chapter_context.previous_chapter_summary or '（无上一章摘要）',
                             characters_info=chapter_context.chapter_characters or '暂无角色信息',
@@ -1595,6 +1599,10 @@ async def generate_chapter_content_stream(
                             target_word_count=target_word_count,
                             genre=project.genre or '未设定',
                             narrative_perspective=chapter_perspective,
+                            world_time_period=project.world_time_period or '未设定',
+                            world_location=project.world_location or '未设定',
+                            world_atmosphere=project.world_atmosphere or '未设定',
+                            world_rules=project.world_rules or '未设定',
                             characters_info=chapter_context.chapter_characters or '暂无角色信息',
                             chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                             foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
@@ -1623,6 +1631,10 @@ async def generate_chapter_content_stream(
                             continuation_point=chapter_context.continuation_point,
                             genre=project.genre or '未设定',
                             narrative_perspective=chapter_perspective,
+                            world_time_period=project.world_time_period or '未设定',
+                            world_location=project.world_location or '未设定',
+                            world_atmosphere=project.world_atmosphere or '未设定',
+                            world_rules=project.world_rules or '未设定',
                             characters_info=chapter_context.chapter_characters or '暂无角色信息',
                             chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                             foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
@@ -1644,6 +1656,10 @@ async def generate_chapter_content_stream(
                             target_word_count=target_word_count,
                             genre=project.genre or '未设定',
                             narrative_perspective=chapter_perspective,
+                            world_time_period=project.world_time_period or '未设定',
+                            world_location=project.world_location or '未设定',
+                            world_atmosphere=project.world_atmosphere or '未设定',
+                            world_rules=project.world_rules or '未设定',
                             characters_info=chapter_context.chapter_characters or '暂无角色信息',
                             chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                             foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
@@ -1662,18 +1678,29 @@ async def generate_chapter_content_stream(
                 
                 logger.info(f"开始AI流式创作章节 {chapter_id}")
                 
-                # 🎨 方案一：将写作风格注入到系统提示词（优先参考）
-                system_prompt_with_style = None
+                # 🎨 运行时系统提示词：无论是否选择风格都注入剧情护栏与世界观锚点
+                style_block = (
+                    f"【🎨 写作风格参考】\n\n{style_content}\n\n"
+                    if style_content else ""
+                )
+                system_prompt_with_style = f"""{style_block}【🌍 世界观锚点】
+- 时间背景：{project.world_time_period or '未设定'}
+- 地理位置：{project.world_location or '未设定'}
+- 氛围基调：{project.world_atmosphere or '未设定'}
+- 世界规则：{project.world_rules or '未设定'}
+
+【创作护栏】
+- 对话口吻像真人交流，短句优先，可打断、停顿，避免角色轮流讲道理
+- 台词长度控制：单句以6-18字为主，超过28字必须拆句；单次发言尽量不超过2句
+- 若单段出现连续术语，请在三句内用角色互动补一句通俗解释
+- 关键情节按“动作→反馈→后果”推进，避免只做概述
+- 至少安排一段双向博弈式对白，体现人物立场差异
+- 至少出现一次“目标受阻→角色选择→代价/新麻烦”的戏剧链条
+- 节奏闸门：每400-600字必须出现一次新阻力或意外变化，禁止长段平推
+- 关键情节点体现世界规则如何影响角色选择、风险或收益
+- 至少让1名核心配角出现一次反预期行为，并在当场补一句动机解释
+"""
                 if style_content:
-                    system_prompt_with_style = f"""【🎨 写作风格参考】
-
-{style_content}
-
-请优先贴合上述写作风格进行创作。
-整章语气尽量保持一致，自然表达，不要写成模板腔。
-句式尽量长短结合，对话口吻像真人交流；网络热梗仅在合适场景点到为止。
-若单段出现连续术语，请在三句内用角色对话或互动补一句通俗解释，并用“动作→反馈→后果”推进关键情节。
-至少让1名核心配角出现一次反预期行为，并在当场补一句动机解释。"""
                     logger.info(f"✅ 已将写作风格注入系统提示词（{len(style_content)}字符）")
                 
                 # 🔢 计算 max_tokens 限制
@@ -3159,6 +3186,10 @@ async def generate_single_chapter_for_batch(
                 target_word_count=target_word_count,
                 genre=project.genre or '未设定',
                 narrative_perspective=chapter_perspective,
+                world_time_period=project.world_time_period or '未设定',
+                world_location=project.world_location or '未设定',
+                world_atmosphere=project.world_atmosphere or '未设定',
+                world_rules=project.world_rules or '未设定',
                 previous_chapter_content=chapter_context.continuation_point,
                 characters_info=chapter_context.chapter_characters or '暂无角色信息',
                 chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
@@ -3178,6 +3209,10 @@ async def generate_single_chapter_for_batch(
                 target_word_count=target_word_count,
                 genre=project.genre or '未设定',
                 narrative_perspective=chapter_perspective,
+                world_time_period=project.world_time_period or '未设定',
+                world_location=project.world_location or '未设定',
+                world_atmosphere=project.world_atmosphere or '未设定',
+                world_rules=project.world_rules or '未设定',
                 characters_info=chapter_context.chapter_characters or '暂无角色信息',
                 chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                 foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
@@ -3206,6 +3241,10 @@ async def generate_single_chapter_for_batch(
                 continuation_point=chapter_context.continuation_point,
                 genre=project.genre or '未设定',
                 narrative_perspective=chapter_perspective,
+                world_time_period=project.world_time_period or '未设定',
+                world_location=project.world_location or '未设定',
+                world_atmosphere=project.world_atmosphere or '未设定',
+                world_rules=project.world_rules or '未设定',
                 characters_info=chapter_context.chapter_characters or '暂无角色信息',
                 chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                 foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
@@ -3225,6 +3264,10 @@ async def generate_single_chapter_for_batch(
                 target_word_count=target_word_count,
                 genre=project.genre or '未设定',
                 narrative_perspective=chapter_perspective,
+                world_time_period=project.world_time_period or '未设定',
+                world_location=project.world_location or '未设定',
+                world_atmosphere=project.world_atmosphere or '未设定',
+                world_rules=project.world_rules or '未设定',
                 characters_info=chapter_context.chapter_characters or '暂无角色信息',
                 chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                 foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
@@ -3237,18 +3280,29 @@ async def generate_single_chapter_for_batch(
     else:
         prompt = base_prompt
     
-    # 🎨 方案一：将写作风格注入到系统提示词（批量生成）
-    system_prompt_with_style = None
+    # 🎨 运行时系统提示词（批量生成）：无论是否选择风格都注入剧情护栏与世界观锚点
+    style_block = (
+        f"【🎨 写作风格参考】\n\n{style_content}\n\n"
+        if style_content else ""
+    )
+    system_prompt_with_style = f"""{style_block}【🌍 世界观锚点】
+- 时间背景：{project.world_time_period or '未设定'}
+- 地理位置：{project.world_location or '未设定'}
+- 氛围基调：{project.world_atmosphere or '未设定'}
+- 世界规则：{project.world_rules or '未设定'}
+
+【创作护栏】
+- 对话口吻像真人交流，短句优先，可打断、停顿，避免角色轮流讲道理
+- 台词长度控制：单句以6-18字为主，超过28字必须拆句；单次发言尽量不超过2句
+- 若单段出现连续术语，请在三句内用角色互动补一句通俗解释
+- 关键情节按“动作→反馈→后果”推进，避免只做概述
+- 至少安排一段双向博弈式对白，体现人物立场差异
+- 至少出现一次“目标受阻→角色选择→代价/新麻烦”的戏剧链条
+- 节奏闸门：每400-600字必须出现一次新阻力或意外变化，禁止长段平推
+- 关键情节点体现世界规则如何影响角色选择、风险或收益
+- 至少让1名核心配角出现一次反预期行为，并在当场补一句动机解释
+"""
     if style_content:
-        system_prompt_with_style = f"""【🎨 写作风格参考】
-
-{style_content}
-
-请优先贴合上述写作风格进行创作。
-整章语气尽量保持一致，自然表达，不要写成模板腔。
-句式尽量长短结合，对话口吻像真人交流；网络热梗仅在合适场景点到为止。
-若单段出现连续术语，请在三句内用角色对话或互动补一句通俗解释，并用“动作→反馈→后果”推进关键情节。
-至少让1名核心配角出现一次反预期行为，并在当场补一句动机解释。"""
         logger.info(f"✅ 批量生成 - 已将写作风格注入系统提示词（{len(style_content)}字符）")
     
     # 🔢 计算 max_tokens 限制（批量生成）
