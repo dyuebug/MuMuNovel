@@ -82,7 +82,12 @@ class MemoryService:
         """初始化ChromaDB和Embedding模型"""
         if self._initialized:
             return
-            
+
+        # 默认先进入不可用状态，初始化成功后再切换为可用
+        self.client = None
+        self.embedding_model = None
+        self.available = False
+
         try:
             # 确保数据目录存在
             chroma_dir = "data/chroma_db"
@@ -219,13 +224,16 @@ class MemoryService:
                     raise RuntimeError("无法加载任何Embedding模型")
             
             self._initialized = True
+            self.available = True
             logger.info("✅ MemoryService初始化成功")
             logger.info(f"  - ChromaDB目录: {chroma_dir}")
             logger.info(f"  - Embedding模型: paraphrase-multilingual-MiniLM-L12-v2")
             
         except Exception as e:
             logger.error(f"❌ MemoryService初始化失败: {str(e)}")
-            raise
+            # 初始化失败时降级为不可用模式，避免导入阶段直接崩溃
+            self._initialized = True
+            self.available = False
     
     def get_collection(self, user_id: str, project_id: str):
         """
@@ -252,6 +260,9 @@ class MemoryService:
         user_hash = hashlib.sha256(user_id.encode()).hexdigest()[:8]
         project_hash = hashlib.sha256(project_id.encode()).hexdigest()[:8]
         collection_name = f"u_{user_hash}_p_{project_hash}"
+
+        if self.client is None:
+            raise RuntimeError("MemoryService client unavailable")
         
         try:
             return self.client.get_or_create_collection(

@@ -72,7 +72,11 @@ async def create_project(
         raise
     except Exception as e:
         logger.error(f"创建项目失败: {str(e)}", exc_info=True)
-        raise
+        try:
+            await db.rollback()
+        except Exception as rollback_error:
+            logger.warning(f"创建项目失败后回滚事务异常: {rollback_error}")
+        raise HTTPException(status_code=500, detail="创建项目失败")
 
 
 @router.get("", response_model=ProjectListResponse, summary="获取项目列表")
