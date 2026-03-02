@@ -11,6 +11,7 @@ interface SSEProgressModalProps {
   showIcon?: boolean;
   onCancel?: () => void;
   cancelButtonText?: string;
+  blocking?: boolean;
 }
 
 /**
@@ -26,6 +27,7 @@ export const SSEProgressModal: React.FC<SSEProgressModalProps> = ({
   showIcon = true,
   onCancel,
   cancelButtonText = '取消任务',
+  blocking = true,
 }) => {
   if (!visible) return null;
 
@@ -37,6 +39,7 @@ export const SSEProgressModal: React.FC<SSEProgressModalProps> = ({
       closable={false}
       centered
       width={500}
+      mask={blocking}
       maskClosable={false}
       keyboard={false}
       styles={{
@@ -122,7 +125,7 @@ export const SSEProgressModal: React.FC<SSEProgressModalProps> = ({
           color: 'var(--color-text-tertiary)',
           marginBottom: onCancel ? 16 : 0
         }}>
-          请勿关闭页面，生成过程需要一定时间
+          {blocking ? '请勿关闭页面，生成过程需要一定时间' : '后台处理中，可继续其他操作'}
         </div>
 
         {/* 取消按钮 */}

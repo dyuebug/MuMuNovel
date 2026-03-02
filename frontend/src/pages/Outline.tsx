@@ -1,11 +1,10 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button, List, Modal, Form, Input, message, Empty, Space, Popconfirm, Card, Select, Radio, Tag, InputNumber, Tabs } from 'antd';
 import { EditOutlined, DeleteOutlined, ThunderboltOutlined, BranchesOutlined, AppstoreAddOutlined, CheckCircleOutlined, ExclamationCircleOutlined, PlusOutlined, FileTextOutlined } from '@ant-design/icons';
 import { useStore } from '../store';
 import { useOutlineSync } from '../store/hooks';
-import { SSEPostClient } from '../utils/sseClient';
 import { SSEProgressModal } from '../components/SSEProgressModal';
-import { outlineApi, chapterApi, projectApi, characterApi } from '../services/api';
+import { backgroundTaskApi, outlineApi, chapterApi, projectApi, characterApi } from '../services/api';
 import type { OutlineExpansionResponse, BatchOutlineExpansionResponse, ChapterPlanItem, ApiError, Character } from '../types';
 
 // 大纲生成请求数据类型
@@ -112,6 +111,10 @@ export default function Outline() {
   const [sseProgress, setSSEProgress] = useState(0);
   const [sseMessage, setSSEMessage] = useState('');
   const [sseModalVisible, setSSEModalVisible] = useState(false);
+  const generateTaskPollTimerRef = useRef<number | null>(null);
+  const expandTaskPollTimerRef = useRef<number | null>(null);
+  const generateTaskIdRef = useRef<string | null>(null);
+  const expandTaskIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const handleResize = () => {
@@ -121,6 +124,157 @@ export default function Outline() {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  const stopGenerateTaskPolling = () => {
+    if (generateTaskPollTimerRef.current) {
+      window.clearInterval(generateTaskPollTimerRef.current);
+      generateTaskPollTimerRef.current = null;
+    }
+  };
+
+  const stopExpandTaskPolling = () => {
+    if (expandTaskPollTimerRef.current) {
+      window.clearInterval(expandTaskPollTimerRef.current);
+      expandTaskPollTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      stopGenerateTaskPolling();
+      stopExpandTaskPolling();
+    };
+  }, []);
+
+  const startGenerateTaskPolling = (taskId: string) => {
+    stopGenerateTaskPolling();
+    generateTaskIdRef.current = taskId;
+
+    const poll = async () => {
+      try {
+        const task = await backgroundTaskApi.getTaskStatus(taskId);
+        setSSEProgress(task.progress || 0);
+        setSSEMessage(task.message || '');
+
+        if (task.status === 'completed') {
+          stopGenerateTaskPolling();
+          generateTaskIdRef.current = null;
+          setSSEModalVisible(false);
+          setIsGenerating(false);
+          message.success('大纲生成完成！');
+          void refreshOutlines();
+          return;
+        }
+
+        if (task.status === 'failed') {
+          stopGenerateTaskPolling();
+          generateTaskIdRef.current = null;
+          setSSEModalVisible(false);
+          setIsGenerating(false);
+          message.error(task.error || task.message || '生成失败');
+          return;
+        }
+
+        if (task.status === 'cancelled') {
+          stopGenerateTaskPolling();
+          generateTaskIdRef.current = null;
+          setSSEModalVisible(false);
+          setIsGenerating(false);
+          message.info(task.message || '任务已取消');
+        }
+      } catch (error) {
+        console.error('轮询大纲生成任务失败:', error);
+      }
+    };
+
+    void poll();
+    generateTaskPollTimerRef.current = window.setInterval(() => {
+      void poll();
+    }, 1500);
+  };
+
+  const startExpandTaskPolling = (
+    taskId: string,
+    onCompleted: (result: Record<string, unknown> | null) => void
+  ) => {
+    stopExpandTaskPolling();
+    expandTaskIdRef.current = taskId;
+
+    const poll = async () => {
+      try {
+        const task = await backgroundTaskApi.getTaskStatus(taskId);
+        setSSEProgress(task.progress || 0);
+        setSSEMessage(task.message || '');
+
+        if (task.status === 'completed') {
+          stopExpandTaskPolling();
+          expandTaskIdRef.current = null;
+          setSSEModalVisible(false);
+          setIsExpanding(false);
+          onCompleted((task.result as Record<string, unknown> | null) || null);
+          return;
+        }
+
+        if (task.status === 'failed') {
+          stopExpandTaskPolling();
+          expandTaskIdRef.current = null;
+          setSSEModalVisible(false);
+          setIsExpanding(false);
+          message.error(task.error || task.message || '任务执行失败');
+          return;
+        }
+
+        if (task.status === 'cancelled') {
+          stopExpandTaskPolling();
+          expandTaskIdRef.current = null;
+          setSSEModalVisible(false);
+          setIsExpanding(false);
+          message.info(task.message || '任务已取消');
+        }
+      } catch (error) {
+        console.error('轮询大纲展开任务失败:', error);
+      }
+    };
+
+    void poll();
+    expandTaskPollTimerRef.current = window.setInterval(() => {
+      void poll();
+    }, 1500);
+  };
+
+  const handleCancelGenerateTask = async () => {
+    const taskId = generateTaskIdRef.current;
+    if (!taskId) return;
+    try {
+      await backgroundTaskApi.cancelTask(taskId);
+      message.info('已取消大纲生成任务');
+    } catch (error) {
+      console.error('取消大纲生成任务失败:', error);
+      message.error('取消任务失败');
+    } finally {
+      stopGenerateTaskPolling();
+      generateTaskIdRef.current = null;
+      setSSEModalVisible(false);
+      setIsGenerating(false);
+    }
+  };
+
+  const handleCancelExpandTask = async () => {
+    const taskId = expandTaskIdRef.current;
+    if (!taskId) return;
+    try {
+      await backgroundTaskApi.cancelTask(taskId);
+      message.info('已取消大纲展开任务');
+    } catch (error) {
+      console.error('取消大纲展开任务失败:', error);
+      message.error('取消任务失败');
+    } finally {
+      stopExpandTaskPolling();
+      expandTaskIdRef.current = null;
+      setSSEModalVisible(false);
+      setIsExpanding(false);
+    }
+  };
 
   // 使用同步 hooks
   const {
@@ -477,9 +631,6 @@ export default function Outline() {
       console.log('2. values.model:', values.model);
       console.log('3. values.provider:', values.provider);
 
-      // 关闭生成表单Modal
-      Modal.destroyAll();
-
       // 显示进度Modal
       setSSEProgress(0);
       setSSEMessage('正在连接AI服务...');
@@ -516,37 +667,21 @@ export default function Outline() {
       console.log('6. 最终请求数据:', JSON.stringify(requestData, null, 2));
       console.log('=========================');
 
-      // 使用SSE客户端
-      const apiUrl = `/api/outlines/generate-stream`;
-      const client = new SSEPostClient(apiUrl, requestData, {
-        onProgress: (msg: string, progress: number) => {
-          setSSEMessage(msg);
-          setSSEProgress(progress);
-        },
-        onResult: (data: unknown) => {
-          console.log('生成完成，结果:', data);
-        },
-        onError: (error: string) => {
-          // 现在只处理真正的错误
-          message.error(`生成失败: ${error}`);
-          setSSEModalVisible(false);
-          setIsGenerating(false);
-        },
-        onComplete: () => {
-          message.success('大纲生成完成！');
-          setSSEModalVisible(false);
-          setIsGenerating(false);
-          // 刷新大纲列表
-          refreshOutlines();
-        }
+      const payload: Record<string, unknown> = { ...requestData };
+      delete payload.project_id;
+      const task = await backgroundTaskApi.createTask({
+        task_type: 'outline_generate',
+        project_id: currentProject.id,
+        payload,
       });
-
-      // 开始连接
-      client.connect();
+      message.success('大纲生成任务已转为后台执行，可继续进行其他操作');
+      startGenerateTaskPolling(task.task_id);
 
     } catch (error) {
       console.error('AI生成失败:', error);
       message.error('AI生成失败');
+      stopGenerateTaskPolling();
+      generateTaskIdRef.current = null;
       setSSEModalVisible(false);
       setIsGenerating(false);
     }
@@ -984,9 +1119,6 @@ export default function Outline() {
           try {
             const values = await expansionForm.validateFields();
 
-            // 关闭配置表单
-            Modal.destroyAll();
-
             // 显示SSE进度Modal
             setSSEProgress(0);
             setSSEMessage('正在准备展开大纲...');
@@ -1000,37 +1132,28 @@ export default function Outline() {
               enable_scene_analysis: true
             };
 
-            // 使用SSE客户端调用新的流式端点
-            const apiUrl = `/api/outlines/${outlineId}/expand-stream`;
-            const client = new SSEPostClient(apiUrl, requestData, {
-              onProgress: (msg: string, progress: number) => {
-                setSSEMessage(msg);
-                setSSEProgress(progress);
+            const task = await backgroundTaskApi.createTask({
+              task_type: 'outline_expand',
+              project_id: currentProject.id,
+              payload: {
+                outline_id: outlineId,
+                ...requestData,
               },
-              onResult: (data: OutlineExpansionResponse) => {
-                console.log('展开完成，结果:', data);
-                // 关闭SSE进度Modal
-                setSSEModalVisible(false);
-                // 显示规划预览
-                showExpansionPreview(outlineId, data);
-              },
-              onError: (error: string) => {
-                message.error(`展开失败: ${error}`);
-                setSSEModalVisible(false);
-                setIsExpanding(false);
-              },
-              onComplete: () => {
-                setSSEModalVisible(false);
-                setIsExpanding(false);
-              }
             });
-
-            // 开始连接
-            client.connect();
+            message.success('大纲展开任务已转为后台执行，可继续进行其他操作');
+            startExpandTaskPolling(task.task_id, (result) => {
+              if (!result) {
+                message.error('展开任务完成但未返回规划数据');
+                return;
+              }
+              showExpansionPreview(outlineId, result as unknown as OutlineExpansionResponse);
+            });
 
           } catch (error) {
             console.error('展开失败:', error);
             message.error('展开失败');
+            stopExpandTaskPolling();
+            expandTaskIdRef.current = null;
             setSSEModalVisible(false);
             setIsExpanding(false);
           }
@@ -1530,9 +1653,6 @@ export default function Outline() {
         try {
           const values = await batchExpansionForm.validateFields();
 
-          // 关闭配置表单
-          Modal.destroyAll();
-
           // 显示SSE进度Modal
           setSSEProgress(0);
           setSSEMessage('正在准备批量展开...');
@@ -1546,43 +1666,33 @@ export default function Outline() {
             auto_create_chapters: false // 第一步：仅生成规划
           };
 
-          // 使用SSE客户端
-          const apiUrl = `/api/outlines/batch-expand-stream`;
-          const client = new SSEPostClient(apiUrl, requestData, {
-            onProgress: (msg: string, progress: number) => {
-              setSSEMessage(msg);
-              setSSEProgress(progress);
-            },
-            onResult: (data: BatchOutlineExpansionResponse) => {
-              console.log('批量展开完成，结果:', data);
-              // 缓存AI生成的规划数据
-              setCachedBatchExpansionResponse(data);
-              setBatchPreviewData(data);
-              // 关闭SSE进度Modal
-              setSSEModalVisible(false);
-              // 重置选择状态
-              setSelectedOutlineIdx(0);
-              setSelectedChapterIdx(0);
-              // 显示批量预览Modal
-              setBatchPreviewVisible(true);
-            },
-            onError: (error: string) => {
-              message.error(`批量展开失败: ${error}`);
-              setSSEModalVisible(false);
-              setIsExpanding(false);
-            },
-            onComplete: () => {
-              setSSEModalVisible(false);
-              setIsExpanding(false);
-            }
+          const payload: Record<string, unknown> = { ...requestData };
+          delete payload.project_id;
+          const task = await backgroundTaskApi.createTask({
+            task_type: 'outline_batch_expand',
+            project_id: currentProject.id,
+            payload,
           });
-
-          // 开始连接
-          client.connect();
+          message.success('批量展开任务已转为后台执行，可继续进行其他操作');
+          startExpandTaskPolling(task.task_id, (result) => {
+            if (!result) {
+              message.error('批量展开完成但未返回规划数据');
+              return;
+            }
+            const data = result as unknown as BatchOutlineExpansionResponse;
+            console.log('批量展开完成，结果:', data);
+            setCachedBatchExpansionResponse(data);
+            setBatchPreviewData(data);
+            setSelectedOutlineIdx(0);
+            setSelectedChapterIdx(0);
+            setBatchPreviewVisible(true);
+          });
 
         } catch (error) {
           console.error('批量展开失败:', error);
           message.error('批量展开失败');
+          stopExpandTaskPolling();
+          expandTaskIdRef.current = null;
           setSSEModalVisible(false);
           setIsExpanding(false);
         }
@@ -1871,6 +1981,17 @@ export default function Outline() {
         progress={sseProgress}
         message={sseMessage}
         title="AI生成中..."
+        blocking={false}
+        onCancel={() => {
+          if (isGenerating) {
+            void handleCancelGenerateTask();
+            return;
+          }
+          if (isExpanding) {
+            void handleCancelExpandTask();
+          }
+        }}
+        cancelButtonText="取消后台任务"
       />
 
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -1922,7 +2043,6 @@ export default function Outline() {
                 icon={<AppstoreAddOutlined />}
                 onClick={handleBatchExpandOutlines}
                 loading={isExpanding}
-                disabled={isGenerating}
                 title="将所有大纲展开为多章，实现从大纲到章节的一对多关系"
               >
                 {isMobile ? '批量展开' : '批量展开为多章'}

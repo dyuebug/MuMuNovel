@@ -16,6 +16,8 @@ export interface SSEClientOptions {
   onChunk?: (content: string) => void;
   onResult?: (data: any) => void;
   onError?: (error: string, code?: number) => void;
+  onCancelled?: (message: string) => void;
+  onTaskCreated?: (taskId: string) => void;
   onComplete?: () => void;
   onConnectionError?: (error: Event) => void;
 }

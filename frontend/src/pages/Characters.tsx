@@ -7,8 +7,7 @@ import { characterGridConfig } from '../components/CardStyles';
 import { CharacterCard } from '../components/CharacterCard';
 import { SSELoadingOverlay } from '../components/SSELoadingOverlay';
 import type { Character, ApiError } from '../types';
-import { characterApi } from '../services/api';
-import { SSEPostClient } from '../utils/sseClient';
+import { backgroundTaskApi, characterApi } from '../services/api';
 import api from '../services/api';
 
 const { Title } = Typography;
@@ -96,6 +95,7 @@ interface CharacterUpdateData {
 export default function Characters() {
   const { currentProject, characters } = useStore();
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isCancellingTask, setIsCancellingTask] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
   const [activeTab, setActiveTab] = useState<'all' | 'character' | 'organization'>('all');
@@ -112,6 +112,8 @@ export default function Characters() {
   const [selectedCharacters, setSelectedCharacters] = useState<string[]>([]);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const taskPollTimerRef = useRef<number | null>(null);
+  const currentTaskIdRef = useRef<string | null>(null);
 
   const {
     refreshCharacters,
@@ -126,6 +128,16 @@ export default function Characters() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProject?.id]);
   const [modal, contextHolder] = Modal.useModal();
+
+  useEffect(() => {
+    return () => {
+      if (taskPollTimerRef.current) {
+        window.clearInterval(taskPollTimerRef.current);
+        taskPollTimerRef.current = null;
+      }
+      currentTaskIdRef.current = null;
+    };
+  }, []);
 
   const fetchCareers = async () => {
     if (!currentProject?.id) return;
@@ -151,52 +163,162 @@ export default function Characters() {
     }
   };
 
-  const handleGenerate = async (values: { name?: string; role_type: string; background?: string }) => {
-    try {
-      setIsGenerating(true);
-      setProgress(0);
-      setProgressMessage('准备生成角色...');
+  const stopTaskPolling = () => {
+    if (taskPollTimerRef.current) {
+      window.clearInterval(taskPollTimerRef.current);
+      taskPollTimerRef.current = null;
+    }
+  };
 
-      const client = new SSEPostClient(
-        '/api/characters/generate-stream',
-        {
-          project_id: currentProject.id,
+  const startTaskPolling = (taskId: string, successMessage: string) => {
+    stopTaskPolling();
+    currentTaskIdRef.current = taskId;
+    setIsCancellingTask(false);
+
+    const poll = async () => {
+      try {
+        const task = await backgroundTaskApi.getTaskStatus(taskId);
+        setProgress(task.progress || 0);
+        setProgressMessage(task.message || '');
+
+        if (task.status === 'completed') {
+          stopTaskPolling();
+          currentTaskIdRef.current = null;
+          setIsCancellingTask(false);
+          setIsGenerating(false);
+          message.success(successMessage);
+          await refreshCharacters();
+          return;
+        }
+
+        if (task.status === 'failed') {
+          stopTaskPolling();
+          currentTaskIdRef.current = null;
+          setIsCancellingTask(false);
+          setIsGenerating(false);
+          message.error(task.error || task.message || '生成失败');
+          return;
+        }
+
+        if (task.status === 'cancelled') {
+          stopTaskPolling();
+          currentTaskIdRef.current = null;
+          setIsCancellingTask(false);
+          setIsGenerating(false);
+          message.info(task.message || '后台任务已取消');
+        }
+      } catch (error) {
+        console.error('轮询后台任务状态失败:', error);
+      }
+    };
+
+    void poll();
+    taskPollTimerRef.current = window.setInterval(() => {
+      void poll();
+    }, 1500);
+  };
+
+  const handleGenerateBackground = async (values: { name?: string; role_type: string; background?: string }) => {
+    if (isGenerating) {
+      message.info('已有后台生成任务在运行，请稍后查看结果');
+      return;
+    }
+
+    setIsGenerating(true);
+    setIsCancellingTask(false);
+    setProgress(0);
+    setProgressMessage('正在创建后台任务...');
+
+    try {
+      const task = await backgroundTaskApi.createTask({
+        task_type: 'character_generate',
+        project_id: currentProject.id,
+        payload: {
           name: values.name,
           role_type: values.role_type,
           background: values.background,
-        },
-        {
-          onProgress: (msg, prog) => {
-            setProgress(prog);
-            setProgressMessage(msg);
-          },
-          onResult: (data) => {
-            console.log('角色生成完成:', data);
-          },
-          onError: (error) => {
-            message.error(`生成失败: ${error}`);
-          },
-          onComplete: () => {
-            setProgress(100);
-            setProgressMessage('生成完成！');
-          }
         }
-      );
+      });
 
-      await client.connect();
-      message.success('AI生成角色成功');
-      Modal.destroyAll();
-      await refreshCharacters();
+      message.success('后台角色生成任务已启动，可继续进行其他操作');
+      currentTaskIdRef.current = task.task_id;
+      startTaskPolling(task.task_id, 'AI生成角色成功');
     } catch (error: unknown) {
+      stopTaskPolling();
+      currentTaskIdRef.current = null;
+      setIsCancellingTask(false);
+      setIsGenerating(false);
       const errorMessage = error instanceof Error ? error.message : 'AI生成失败';
       message.error(errorMessage);
-    } finally {
-      setTimeout(() => {
-        setIsGenerating(false);
-        setProgress(0);
-        setProgressMessage('');
-      }, 500);
     }
+  };
+
+  const handleGenerateOrganizationBackground = async (values: {
+    name?: string;
+    organization_type?: string;
+    background?: string;
+    requirements?: string;
+  }) => {
+    if (isGenerating) {
+      message.info('已有后台生成任务在运行，请稍后查看结果');
+      return;
+    }
+
+    setIsGenerating(true);
+    setIsCancellingTask(false);
+    setProgress(0);
+    setProgressMessage('正在创建后台任务...');
+
+    try {
+      const task = await backgroundTaskApi.createTask({
+        task_type: 'organization_generate',
+        project_id: currentProject.id,
+        payload: {
+          name: values.name,
+          organization_type: values.organization_type,
+          background: values.background,
+          requirements: values.requirements,
+        }
+      });
+
+      message.success('后台组织生成任务已启动，可继续进行其他操作');
+      currentTaskIdRef.current = task.task_id;
+      startTaskPolling(task.task_id, 'AI生成组织成功');
+    } catch (error: unknown) {
+      stopTaskPolling();
+      currentTaskIdRef.current = null;
+      setIsCancellingTask(false);
+      setIsGenerating(false);
+      const errorMessage = error instanceof Error ? error.message : 'AI生成失败';
+      message.error(errorMessage);
+    }
+  };
+
+  const handleCancelGeneratingTask = async () => {
+    const taskId = currentTaskIdRef.current;
+    if (!taskId || isCancellingTask) {
+      return;
+    }
+
+    setIsCancellingTask(true);
+    try {
+      await backgroundTaskApi.cancelTask(taskId);
+      message.info('正在取消后台任务...');
+      stopTaskPolling();
+      currentTaskIdRef.current = null;
+      setIsGenerating(false);
+      setProgress(0);
+      setProgressMessage('');
+    } catch (error) {
+      console.error('取消角色/组织生成任务失败:', error);
+      message.error('取消任务失败，请重试');
+    } finally {
+      setIsCancellingTask(false);
+    }
+  };
+
+  const handleGenerate = async (values: { name?: string; role_type: string; background?: string }) => {
+    return handleGenerateBackground(values);
   };
 
   const handleGenerateOrganization = async (values: {
@@ -205,52 +327,7 @@ export default function Characters() {
     background?: string;
     requirements?: string;
   }) => {
-    try {
-      setIsGenerating(true);
-      setProgress(0);
-      setProgressMessage('准备生成组织...');
-
-      const client = new SSEPostClient(
-        '/api/organizations/generate-stream',
-        {
-          project_id: currentProject.id,
-          name: values.name,
-          organization_type: values.organization_type,
-          background: values.background,
-          requirements: values.requirements,
-        },
-        {
-          onProgress: (msg, prog) => {
-            setProgress(prog);
-            setProgressMessage(msg);
-          },
-          onResult: (data) => {
-            console.log('组织生成完成:', data);
-          },
-          onError: (error) => {
-            message.error(`生成失败: ${error}`);
-          },
-          onComplete: () => {
-            setProgress(100);
-            setProgressMessage('生成完成！');
-          }
-        }
-      );
-
-      await client.connect();
-      message.success('AI生成组织成功');
-      Modal.destroyAll();
-      await refreshCharacters();
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : 'AI生成失败';
-      message.error(errorMessage);
-    } finally {
-      setTimeout(() => {
-        setIsGenerating(false);
-        setProgress(0);
-        setProgressMessage('');
-      }, 500);
-    }
+    return handleGenerateOrganizationBackground(values);
   };
 
   const handleCreateCharacter = async (values: CharacterFormValues) => {
@@ -566,7 +643,7 @@ export default function Characters() {
       cancelText: '取消',
       onOk: async () => {
         const values = await generateForm.validateFields();
-        await handleGenerate(values);
+        void handleGenerate(values);
       },
     });
   };
@@ -602,7 +679,7 @@ export default function Characters() {
       cancelText: '取消',
       onOk: async () => {
         const values = await generateOrgForm.validateFields();
-        await handleGenerateOrganization(values);
+        void handleGenerateOrganization(values);
       },
     });
   };
@@ -1558,6 +1635,10 @@ export default function Characters() {
         loading={isGenerating}
         progress={progress}
         message={progressMessage}
+        blocking={false}
+        onCancel={handleCancelGeneratingTask}
+        cancelButtonLoading={isCancellingTask}
+        cancelButtonDisabled={isCancellingTask || !currentTaskIdRef.current}
       />
     </div>
   );

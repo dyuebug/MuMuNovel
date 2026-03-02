@@ -1,9 +1,9 @@
 import { Card, Descriptions, Empty, Typography, Button, Modal, Form, Input, message, Flex, InputNumber, Select } from 'antd';
 import { GlobalOutlined, EditOutlined, SyncOutlined, FormOutlined } from '@ant-design/icons';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { cardStyles } from '../components/CardStyles';
-import { projectApi, wizardStreamApi } from '../services/api';
+import { backgroundTaskApi, projectApi } from '../services/api';
 import { SSELoadingOverlay } from '../components/SSELoadingOverlay';
 
 const { Title, Paragraph } = Typography;
@@ -18,6 +18,7 @@ export default function WorldSetting() {
   const [editProjectForm] = Form.useForm();
   const [isSavingProject, setIsSavingProject] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [isCancellingTask, setIsCancellingTask] = useState(false);
   const [regenerateProgress, setRegenerateProgress] = useState(0);
   const [regenerateMessage, setRegenerateMessage] = useState('');
   const [isPreviewModalVisible, setIsPreviewModalVisible] = useState(false);
@@ -29,10 +30,92 @@ export default function WorldSetting() {
   } | null>(null);
   const [isSavingPreview, setIsSavingPreview] = useState(false);
   const [modal, contextHolder] = Modal.useModal();
+  const taskPollTimerRef = useRef<number | null>(null);
+  const currentTaskIdRef = useRef<string | null>(null);
 
-  // AI重新生成世界观
-  const handleRegenerate = async () => {
+  const stopTaskPolling = () => {
+    if (taskPollTimerRef.current) {
+      window.clearInterval(taskPollTimerRef.current);
+      taskPollTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      stopTaskPolling();
+      currentTaskIdRef.current = null;
+    };
+  }, []);
+
+  const startTaskPolling = (taskId: string) => {
+    stopTaskPolling();
+    currentTaskIdRef.current = taskId;
+    setIsCancellingTask(false);
+
+    const poll = async () => {
+      try {
+        const task = await backgroundTaskApi.getTaskStatus(taskId);
+        setRegenerateProgress(task.progress || 0);
+        setRegenerateMessage(task.message || '');
+
+        if (task.status === 'completed') {
+          stopTaskPolling();
+          currentTaskIdRef.current = null;
+          setIsCancellingTask(false);
+          setIsRegenerating(false);
+          setRegenerateProgress(0);
+          setRegenerateMessage('');
+
+          const result = task.result as Record<string, unknown> | null;
+          if (result) {
+            setNewWorldData({
+              time_period: String(result.time_period || ''),
+              location: String(result.location || ''),
+              atmosphere: String(result.atmosphere || ''),
+              rules: String(result.rules || ''),
+            });
+          }
+          setIsPreviewModalVisible(true);
+          return;
+        }
+
+        if (task.status === 'failed') {
+          stopTaskPolling();
+          currentTaskIdRef.current = null;
+          setIsCancellingTask(false);
+          setIsRegenerating(false);
+          setRegenerateProgress(0);
+          setRegenerateMessage('');
+          message.error(task.error || task.message || '重新生成失败，请重试');
+          return;
+        }
+
+        if (task.status === 'cancelled') {
+          stopTaskPolling();
+          currentTaskIdRef.current = null;
+          setIsCancellingTask(false);
+          setIsRegenerating(false);
+          setRegenerateProgress(0);
+          setRegenerateMessage('');
+          message.info(task.message || '后台任务已取消');
+        }
+      } catch (error) {
+        console.error('轮询世界观任务状态失败:', error);
+      }
+    };
+
+    void poll();
+    taskPollTimerRef.current = window.setInterval(() => {
+      void poll();
+    }, 1500);
+  };
+
+  const handleRegenerateBackground = async () => {
     if (!currentProject) return;
+    if (isRegenerating) {
+      message.info('后台世界观任务正在运行，请稍后查看结果');
+      return;
+    }
 
     modal.confirm({
       title: '确认重新生成',
@@ -42,54 +125,53 @@ export default function WorldSetting() {
       cancelText: '取消',
       onOk: async () => {
         setIsRegenerating(true);
+        setIsCancellingTask(false);
         setRegenerateProgress(0);
-        setRegenerateMessage('准备重新生成世界观...');
+        setRegenerateMessage('正在创建后台任务...');
 
         try {
-          await wizardStreamApi.regenerateWorldBuildingStream(
-            currentProject.id,
-            {},
-            {
-              onProgress: (msg: string, progress: number) => {
-                setRegenerateProgress(progress);
-                setRegenerateMessage(msg);
-              },
-              onChunk: (chunk: string) => {
-                // 可以在这里显示生成的内容片段（可选）
-                console.log('生成片段:', chunk);
-              },
-              onResult: (result: { time_period: string; location: string; atmosphere: string; rules: string }) => {
-                // 保存新生成的数据
-                const newData = {
-                  time_period: result.time_period,
-                  location: result.location,
-                  atmosphere: result.atmosphere,
-                  rules: result.rules,
-                };
-                setNewWorldData(newData);
-              },
-              onError: (errorMsg: string) => {
-                console.error('重新生成失败:', errorMsg);
-                message.error(errorMsg || '重新生成失败，请重试');
-              },
-              onComplete: () => {
-                setIsRegenerating(false);
-                setRegenerateProgress(0);
-                setRegenerateMessage('');
-                // 显示预览对话框
-                setIsPreviewModalVisible(true);
-              }
-            }
-          );
+          const task = await backgroundTaskApi.createTask({
+            task_type: 'world_regenerate',
+            project_id: currentProject.id,
+            payload: {},
+          });
+          message.success('后台世界观生成任务已创建，可继续进行其他操作');
+          currentTaskIdRef.current = task.task_id;
+          startTaskPolling(task.task_id);
         } catch (error) {
-          console.error('重新生成出错:', error);
-          message.error('重新生成出错，请重试');
+          console.error('创建后台任务失败:', error);
+          currentTaskIdRef.current = null;
+          setIsCancellingTask(false);
           setIsRegenerating(false);
           setRegenerateProgress(0);
           setRegenerateMessage('');
+          message.error('重新生成失败，请重试');
         }
       }
     });
+  };
+
+  const handleCancelRegenerateTask = async () => {
+    const taskId = currentTaskIdRef.current;
+    if (!taskId || isCancellingTask) {
+      return;
+    }
+
+    setIsCancellingTask(true);
+    try {
+      await backgroundTaskApi.cancelTask(taskId);
+      message.info('正在取消后台任务...');
+      stopTaskPolling();
+      currentTaskIdRef.current = null;
+      setIsRegenerating(false);
+      setRegenerateProgress(0);
+      setRegenerateMessage('');
+    } catch (error) {
+      console.error('取消世界观重生成任务失败:', error);
+      message.error('取消任务失败，请重试');
+    } finally {
+      setIsCancellingTask(false);
+    }
   };
 
   // 确认保存重新生成的内容
@@ -192,7 +274,7 @@ export default function WorldSetting() {
           <Flex gap={8} wrap="wrap" style={{ flex: '0 1 auto' }}>
             <Button
               icon={<SyncOutlined />}
-              onClick={handleRegenerate}
+              onClick={handleRegenerateBackground}
               disabled={isRegenerating}
               style={{
                 minWidth: 'fit-content',
@@ -599,6 +681,10 @@ export default function WorldSetting() {
         loading={isRegenerating}
         progress={regenerateProgress}
         message={regenerateMessage}
+        blocking={false}
+        onCancel={handleCancelRegenerateTask}
+        cancelButtonLoading={isCancellingTask}
+        cancelButtonDisabled={isCancellingTask || !currentTaskIdRef.current}
       />
 
       {/* 预览重新生成的内容模态框 */}

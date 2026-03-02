@@ -1,63 +1,69 @@
-import React from 'react';
-import { Spin } from 'antd';
-import { LoadingOutlined } from '@ant-design/icons';
+﻿import React from 'react';
+import { Button, Spin } from 'antd';
+import { LoadingOutlined, StopOutlined } from '@ant-design/icons';
 
 interface SSELoadingOverlayProps {
   loading: boolean;
   progress: number;
   message: string;
+  blocking?: boolean;
+  onCancel?: () => void;
+  cancelButtonText?: string;
+  cancelButtonLoading?: boolean;
+  cancelButtonDisabled?: boolean;
 }
 
 export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
   loading,
   progress,
-  message
+  message,
+  blocking = true,
+  onCancel,
+  cancelButtonText = '取消任务',
+  cancelButtonLoading = false,
+  cancelButtonDisabled = false,
 }) => {
   if (!loading) return null;
 
   return (
     <div style={{
       position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      background: 'rgba(0, 0, 0, 0.45)',
+      top: blocking ? 0 : 'auto',
+      left: blocking ? 0 : 'auto',
+      right: blocking ? 0 : 24,
+      bottom: blocking ? 0 : 24,
+      background: blocking ? 'rgba(0, 0, 0, 0.45)' : 'transparent',
       display: 'flex',
       justifyContent: 'center',
       alignItems: 'center',
+      pointerEvents: blocking ? 'auto' : 'none',
       zIndex: 9999
     }}>
       <div style={{
         background: '#fff',
         borderRadius: 12,
-        padding: '40px 60px',
-        minWidth: 400,
+        padding: blocking ? '40px 60px' : '20px 24px',
+        minWidth: blocking ? 400 : 320,
         maxWidth: 600,
-        boxShadow: '0 8px 32px rgba(0,0,0,0.2)'
+        boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+        pointerEvents: 'auto'
       }}>
-        {/* 标题和图标 */}
         <div style={{
           textAlign: 'center',
           marginBottom: 24
         }}>
-          <Spin
-            indicator={<LoadingOutlined style={{ fontSize: 48, color: 'var(--color-primary)' }} spin />}
-          />
+          <Spin indicator={<LoadingOutlined style={{ fontSize: 48, color: 'var(--color-primary)' }} spin />} />
           <div style={{
-            fontSize: 20,
+            fontSize: blocking ? 20 : 16,
             fontWeight: 'bold',
             marginTop: 16,
             color: 'var(--color-text-primary)'
           }}>
-            AI生成中...
+            {blocking ? 'AI 生成中...' : 'AI 后台处理中...'}
           </div>
         </div>
 
-        {/* 进度条 */}
-        <div style={{
-          marginBottom: 16
-        }}>
+        <div style={{ marginBottom: 16 }}>
           <div style={{
             height: 12,
             background: 'var(--color-bg-layout)',
@@ -77,7 +83,6 @@ export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
             }} />
           </div>
 
-          {/* 进度百分比 */}
           <div style={{
             textAlign: 'center',
             fontSize: 32,
@@ -89,7 +94,6 @@ export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
           </div>
         </div>
 
-        {/* 状态消息 */}
         <div style={{
           textAlign: 'center',
           fontSize: 16,
@@ -100,15 +104,29 @@ export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
           {message || '准备生成...'}
         </div>
 
-        {/* 提示文字 */}
         <div style={{
           textAlign: 'center',
           fontSize: 13,
           color: '#8c8c8c',
-          marginTop: 16
+          marginTop: 16,
+          marginBottom: onCancel ? 16 : 0
         }}>
-          请勿关闭页面,生成过程需要一定时间
+          {blocking ? '请勿关闭页面，生成过程需要一定时间' : '后台处理中，可继续其他操作'}
         </div>
+
+        {onCancel && (
+          <div style={{ textAlign: 'center' }}>
+            <Button
+              danger
+              icon={<StopOutlined />}
+              onClick={onCancel}
+              loading={cancelButtonLoading}
+              disabled={cancelButtonDisabled}
+            >
+              {cancelButtonText}
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

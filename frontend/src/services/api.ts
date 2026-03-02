@@ -773,6 +773,47 @@ export const polishApi = {
   polishBatch: (texts: string[]) =>
     api.post<unknown, { polished_texts: string[] }>('/polish/batch', { texts }),
 };
+
+export interface BackgroundTaskStatus {
+  task_id: string;
+  task_type:
+    | 'careers_generate_system'
+    | 'character_generate'
+    | 'organization_generate'
+    | 'world_regenerate'
+    | 'outline_generate'
+    | 'outline_expand'
+    | 'outline_batch_expand'
+    | 'wizard_world_building'
+    | 'wizard_career_system'
+    | 'wizard_characters'
+    | 'wizard_outline';
+  project_id: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  progress: number;
+  message: string;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export const backgroundTaskApi = {
+  createTask: (data: {
+    task_type: BackgroundTaskStatus['task_type'];
+    project_id?: string;
+    payload?: Record<string, unknown>;
+  }) => api.post<unknown, BackgroundTaskStatus>('/background-tasks', data),
+
+  getTaskStatus: (taskId: string) =>
+    api.get<unknown, BackgroundTaskStatus>(`/background-tasks/${taskId}`),
+
+  cancelTask: (taskId: string) =>
+    api.post<unknown, BackgroundTaskStatus>(`/background-tasks/${taskId}/cancel`),
+};
+
 export const inspirationApi = {
   // 生成选项建议
   generateOptions: (data: {
@@ -825,6 +866,78 @@ export const inspirationApi = {
 
 export default api;
 
+const runBackgroundTaskWithPolling = async <T>(
+  taskType: BackgroundTaskStatus['task_type'],
+  projectId: string | undefined,
+  payload: Record<string, unknown>,
+  options?: SSEClientOptions
+): Promise<T> => {
+  const createdTask = await backgroundTaskApi.createTask({
+    task_type: taskType,
+    project_id: projectId,
+    payload,
+  });
+
+  options?.onTaskCreated?.(createdTask.task_id);
+  options?.onProgress?.('后台任务已创建', 0, 'processing');
+
+  return new Promise<T>((resolve, reject) => {
+    let timer: number | null = null;
+
+    const stopPolling = () => {
+      if (timer) {
+        window.clearInterval(timer);
+        timer = null;
+      }
+    };
+
+    const poll = async () => {
+      try {
+        const task = await backgroundTaskApi.getTaskStatus(createdTask.task_id);
+        options?.onProgress?.(task.message || '', task.progress || 0, task.status);
+
+        if (task.status === 'completed') {
+          stopPolling();
+          if (task.result !== undefined && task.result !== null) {
+            options?.onResult?.(task.result);
+          }
+          options?.onComplete?.();
+          resolve((task.result as T) ?? (true as T));
+          return;
+        }
+
+        if (task.status === 'failed') {
+          stopPolling();
+          const errorMsg = task.error || task.message || '后台任务执行失败';
+          options?.onError?.(errorMsg);
+          reject(new Error(errorMsg));
+          return;
+        }
+
+        if (task.status === 'cancelled') {
+          stopPolling();
+          const errorMsg = task.message || '后台任务已取消';
+          options?.onCancelled?.(errorMsg);
+          const cancelledError = new Error(errorMsg) as Error & { code?: string };
+          cancelledError.name = 'TaskCancelledError';
+          cancelledError.code = 'TASK_CANCELLED';
+          reject(cancelledError);
+        }
+      } catch (error) {
+        stopPolling();
+        const errorMsg = error instanceof Error ? error.message : '轮询后台任务失败';
+        options?.onError?.(errorMsg);
+        reject(error);
+      }
+    };
+
+    void poll();
+    timer = window.setInterval(() => {
+      void poll();
+    }, 1500);
+  });
+};
+
 
 export const wizardStreamApi = {
   generateWorldBuildingStream: (
@@ -842,9 +955,10 @@ export const wizardStreamApi = {
       model?: string;
     },
     options?: SSEClientOptions
-  ) => ssePost<WorldBuildingResponse>(
-    '/api/wizard-stream/world-building',
-    data,
+  ) => runBackgroundTaskWithPolling<WorldBuildingResponse>(
+    'wizard_world_building',
+    undefined,
+    data as Record<string, unknown>,
     options
   ),
 
@@ -860,9 +974,10 @@ export const wizardStreamApi = {
       model?: string;
     },
     options?: SSEClientOptions
-  ) => ssePost<GenerateCharactersResponse>(
-    '/api/wizard-stream/characters',
-    data,
+  ) => runBackgroundTaskWithPolling<GenerateCharactersResponse>(
+    'wizard_characters',
+    data.project_id,
+    data as Record<string, unknown>,
     options
   ),
 
@@ -873,15 +988,16 @@ export const wizardStreamApi = {
       model?: string;
     },
     options?: SSEClientOptions
-  ) => ssePost<{
+  ) => runBackgroundTaskWithPolling<{
     project_id: string;
     main_careers_count: number;
     sub_careers_count: number;
     main_careers: string[];
     sub_careers: string[];
   }>(
-    '/api/wizard-stream/career-system',
-    data,
+    'wizard_career_system',
+    data.project_id,
+    data as Record<string, unknown>,
     options
   ),
 
@@ -896,9 +1012,10 @@ export const wizardStreamApi = {
       model?: string;
     },
     options?: SSEClientOptions
-  ) => ssePost<GenerateOutlineResponse>(
-    '/api/wizard-stream/outline',
-    data,
+  ) => runBackgroundTaskWithPolling<GenerateOutlineResponse>(
+    'wizard_outline',
+    data.project_id,
+    data as Record<string, unknown>,
     options
   ),
 

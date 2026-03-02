@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Button, Space, Typography, message, Progress } from 'antd';
 import { CheckCircleOutlined, LoadingOutlined } from '@ant-design/icons';
-import { wizardStreamApi } from '../services/api';
+import { backgroundTaskApi, wizardStreamApi } from '../services/api';
+import type { SSEClientOptions } from '../utils/sseClient';
 import type { ApiError } from '../types';
 
 const { Title, Paragraph, Text } = Typography;
@@ -62,6 +63,8 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
   const [errorDetails, setErrorDetails] = useState<string>('');
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [generationSteps, setGenerationSteps] = useState<GenerationSteps>({
     worldBuilding: 'pending',
     careers: 'pending',
@@ -73,6 +76,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   const [generationData, setGenerationData] = useState<GenerationConfig | null>(null);
   // 保存世界观生成结果，用于后续步骤
   const [worldBuildingResult, setWorldBuildingResult] = useState<WorldBuildingResult | null>(null);
+  const cancelledByUserRef = useRef(false);
 
   // LocalStorage 键名
   const storageKeys = {
@@ -99,6 +103,47 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     localStorage.removeItem(storageKeys.currentStep);
   };
 
+  const isTaskCancelledError = (error: unknown) => {
+    const e = error as { name?: string; code?: string; message?: string };
+    return cancelledByUserRef.current || e?.code === 'TASK_CANCELLED' || e?.name === 'TaskCancelledError' || e?.message?.includes('取消');
+  };
+
+  const buildTaskOptions = (options: SSEClientOptions): SSEClientOptions => ({
+    ...options,
+    onTaskCreated: (taskId: string) => {
+      cancelledByUserRef.current = false;
+      setCurrentTaskId(taskId);
+      options.onTaskCreated?.(taskId);
+    },
+    onCancelled: (cancelMsg: string) => {
+      cancelledByUserRef.current = true;
+      setCurrentTaskId(null);
+      setProgressMessage(cancelMsg || '后台任务已取消');
+      setLoading(false);
+      setIsCancelling(false);
+      options.onCancelled?.(cancelMsg);
+    },
+    onComplete: () => {
+      setCurrentTaskId(null);
+      setIsCancelling(false);
+      options.onComplete?.();
+    },
+  });
+
+  const handleCancelCurrentTask = async () => {
+    if (!currentTaskId || isCancelling) return;
+    setIsCancelling(true);
+    setProgressMessage('正在取消后台任务...');
+    try {
+      await backgroundTaskApi.cancelTask(currentTaskId);
+      message.info('正在取消后台任务...');
+    } catch (error) {
+      console.error('取消后台任务失败:', error);
+      message.error('取消任务失败，请重试');
+      setIsCancelling(false);
+    }
+  };
+
   // 开始自动化生成流程
   useEffect(() => {
     if (config) {
@@ -116,6 +161,9 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   // 恢复未完成项目的生成
   const handleResumeGenerate = async (data: GenerationConfig, projectIdParam: string) => {
     try {
+      cancelledByUserRef.current = false;
+      setCurrentTaskId(null);
+      setIsCancelling(false);
       setLoading(true);
       setProgress(0);
       setProgressMessage('检查项目状态...');
@@ -179,6 +227,13 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         }, 1000);
       }
     } catch (error) {
+      if (isTaskCancelledError(error)) {
+        message.info('后台任务已取消');
+        setLoading(false);
+        setIsCancelling(false);
+        setCurrentTaskId(null);
+        return;
+      }
       const apiError = error as ApiError;
       const errorMsg = apiError.response?.data?.detail || apiError.message || '未知错误';
       console.error('恢复生成失败:', errorMsg);
@@ -204,7 +259,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         character_count: data.character_count,
         outline_mode: data.outline_mode || 'one-to-many',  // 传递大纲模式
       },
-      {
+      buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
           setProgress(prog);
@@ -224,7 +279,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         onComplete: () => {
           console.log('世界观生成完成');
         }
-      }
+      })
     );
 
     await resumeFromCareers(data, worldResult);
@@ -241,7 +296,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       {
         project_id: pid,
       },
-      {
+      buildTaskOptions({
         onProgress: (msg, prog) => {
           setProgress(prog);
           setProgressMessage(msg);
@@ -260,7 +315,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         onComplete: () => {
           console.log('职业体系生成完成');
         }
-      }
+      })
     );
 
     await resumeFromCharacters(data, worldResult);
@@ -287,7 +342,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         theme: data.theme,
         genre: genreString,
       },
-      {
+      buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
           setProgress(prog);
@@ -307,7 +362,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         onComplete: () => {
           console.log('角色生成完成');
         }
-      }
+      })
     );
 
     await resumeFromOutline(data, pid);
@@ -325,7 +380,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         narrative_perspective: data.narrative_perspective,
         target_words: data.target_words,
       },
-      {
+      buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
           setProgress(prog);
@@ -345,7 +400,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         onComplete: () => {
           console.log('大纲生成完成');
         }
-      }
+      })
     );
 
     // 全部完成
@@ -364,6 +419,9 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   // 自动化生成流程
   const handleAutoGenerate = async (data: GenerationConfig) => {
     try {
+      cancelledByUserRef.current = false;
+      setCurrentTaskId(null);
+      setIsCancelling(false);
       setLoading(true);
       setProgress(0);
       setProgressMessage('开始创建项目...');
@@ -389,7 +447,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           character_count: data.character_count,
           outline_mode: data.outline_mode || 'one-to-many',  // 传递大纲模式
         },
-        {
+        buildTaskOptions({
           onProgress: (msg, prog) => {
             // 直接使用后端返回的进度值
             setProgress(prog);
@@ -410,7 +468,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           onComplete: () => {
             console.log('世界观生成完成');
           }
-        }
+        })
       );
 
       if (!worldResult?.project_id) {
@@ -430,7 +488,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         {
           project_id: createdProjectId,
         },
-        {
+        buildTaskOptions({
           onProgress: (msg, prog) => {
             setProgress(prog);
             setProgressMessage(msg);
@@ -449,7 +507,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           onComplete: () => {
             console.log('职业体系生成完成');
           }
-        }
+        })
       );
 
       // 步骤3: 生成角色
@@ -469,7 +527,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           theme: data.theme,
           genre: genreString,
         },
-        {
+        buildTaskOptions({
           onProgress: (msg, prog) => {
             // 直接使用后端返回的进度值
             setProgress(prog);
@@ -489,7 +547,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           onComplete: () => {
             console.log('角色生成完成');
           }
-        }
+        })
       );
 
       // 步骤3: 生成大纲
@@ -503,7 +561,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           narrative_perspective: data.narrative_perspective,
           target_words: data.target_words,
         },
-        {
+        buildTaskOptions({
           onProgress: (msg, prog) => {
             // 直接使用后端返回的进度值
             setProgress(prog);
@@ -523,7 +581,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           onComplete: () => {
             console.log('大纲生成完成');
           }
-        }
+        })
       );
 
       // 全部完成 - 自动跳转到项目详情页
@@ -541,6 +599,13 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       }, 1000);
 
     } catch (error) {
+      if (isTaskCancelledError(error)) {
+        message.info('后台任务已取消');
+        setLoading(false);
+        setIsCancelling(false);
+        setCurrentTaskId(null);
+        return;
+      }
       const apiError = error as ApiError;
       const errorMsg = apiError.response?.data?.detail || apiError.message || '未知错误';
       console.error('创建项目失败:', errorMsg);
@@ -557,6 +622,9 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       return;
     }
 
+    cancelledByUserRef.current = false;
+    setCurrentTaskId(null);
+    setIsCancelling(false);
     setLoading(true);
     setErrorDetails('');
 
@@ -575,6 +643,13 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         await retryFromOutline();
       }
     } catch (error) {
+      if (isTaskCancelledError(error)) {
+        message.info('后台任务已取消');
+        setLoading(false);
+        setIsCancelling(false);
+        setCurrentTaskId(null);
+        return;
+      }
       console.error('智能重试失败:', error);
       const errorMessage = error instanceof Error ? error.message : '未知错误';
       message.error('重试失败：' + errorMessage);
@@ -603,7 +678,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         character_count: generationData.character_count,
         outline_mode: generationData.outline_mode || 'one-to-many',  // 传递大纲模式
       },
-      {
+      buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
           setProgress(prog);
@@ -624,7 +699,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         onComplete: () => {
           console.log('世界观重新生成完成');
         }
-      }
+      })
     );
 
     if (!worldResult?.project_id) {
@@ -656,7 +731,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       {
         project_id: pid,
       },
-      {
+      buildTaskOptions({
         onProgress: (msg, prog) => {
           setProgress(prog);
           setProgressMessage(msg);
@@ -675,7 +750,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         onComplete: () => {
           console.log('职业体系重新生成完成');
         }
-      }
+      })
     );
 
     await continueFromCharacters(worldBuildingResult);
@@ -715,7 +790,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         theme: generationData.theme,
         genre: genreString,
       },
-      {
+      buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
           setProgress(prog);
@@ -735,7 +810,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         onComplete: () => {
           console.log('角色重新生成完成');
         }
-      }
+      })
     );
 
     await continueFromOutline(pid);
@@ -767,7 +842,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         narrative_perspective: generationData.narrative_perspective,
         target_words: generationData.target_words,
       },
-      {
+      buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
           setProgress(prog);
@@ -787,7 +862,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         onComplete: () => {
           console.log('大纲重新生成完成');
         }
-      }
+      })
     );
 
     setProgress(100);
@@ -819,7 +894,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       {
         project_id: pid,
       },
-      {
+      buildTaskOptions({
         onProgress: (msg, prog) => {
           setProgress(prog);
           setProgressMessage(msg);
@@ -838,7 +913,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         onComplete: () => {
           console.log('职业体系生成完成');
         }
-      }
+      })
     );
 
     await continueFromCharacters(worldResult);
@@ -867,7 +942,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         theme: generationData.theme,
         genre: genreString,
       },
-      {
+      buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
           setProgress(prog);
@@ -887,7 +962,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         onComplete: () => {
           console.log('角色生成完成');
         }
-      }
+      })
     );
 
     await continueFromOutline(pid);
@@ -907,7 +982,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         narrative_perspective: generationData.narrative_perspective,
         target_words: generationData.target_words,
       },
-      {
+      buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
           setProgress(prog);
@@ -927,7 +1002,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         onComplete: () => {
           console.log('大纲生成完成');
         }
-      }
+      })
     );
 
     setProgress(100);
@@ -1107,6 +1182,20 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       >
         {hasError ? '生成过程中出现错误，请点击重试按钮重新生成' : '请耐心等待，AI正在为您精心创作...'}
       </Paragraph>
+
+      {!hasError && loading && (
+        <Space style={{ marginTop: 16 }}>
+          <Button
+            danger
+            size="large"
+            onClick={handleCancelCurrentTask}
+            loading={isCancelling}
+            disabled={!currentTaskId || isCancelling}
+          >
+            取消当前任务
+          </Button>
+        </Space>
+      )}
 
       {hasError && (
         <Space style={{ marginTop: 16 }}>

@@ -54,6 +54,9 @@ export default function Chapters() {
   const [isContinuing, setIsContinuing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const editingChapterIdRef = useRef<string | null>(null);
+  const isEditorOpenRef = useRef(false);
+  const [runningSingleChapterTasks, setRunningSingleChapterTasks] = useState<Record<string, string>>({});
   const [form] = Form.useForm();
   const [editorForm] = Form.useForm();
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
@@ -130,10 +133,18 @@ export default function Chapters() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  useEffect(() => {
+    editingChapterIdRef.current = editingId;
+  }, [editingId]);
+
+  useEffect(() => {
+    isEditorOpenRef.current = isEditorOpen;
+  }, [isEditorOpen]);
+
   // 处理文本选中 - 检测选中文本并显示浮动工具栏
   const handleTextSelection = useCallback(() => {
     // 只在编辑器打开时处理选中
-    if (!isEditorOpen || isGenerating) {
+    if (!isEditorOpen) {
       setPartialRegenerateToolbarVisible(false);
       return;
     }
@@ -214,7 +225,7 @@ export default function Chapters() {
       left: Math.min(Math.max(rect.left + 20, toolbarLeft), window.innerWidth - 200),
     });
     setPartialRegenerateToolbarVisible(true);
-  }, [isEditorOpen, isGenerating]);
+  }, [isEditorOpen]);
 
   // 更新工具栏位置的函数（不检测选中，只更新位置）
   const updateToolbarPosition = useCallback(() => {
@@ -790,6 +801,10 @@ export default function Chapters() {
   const handleGenerate = async () => {
     if (!editingId) return;
     const chapterId = editingId;
+    if (runningSingleChapterTasks[chapterId]) {
+      message.info('该章节已有后台生成任务，请稍后查看结果');
+      return;
+    }
     const progressMessageKey = `chapter-generate-progress-${chapterId}`;
 
     try {
@@ -800,16 +815,7 @@ export default function Chapters() {
 
       const result = await generateChapterContentStream(
         chapterId,
-        (content) => {
-          editorForm.setFieldsValue({ content });
-
-          if (contentTextAreaRef.current) {
-            const textArea = contentTextAreaRef.current.resizableTextArea?.textArea;
-            if (textArea) {
-              textArea.scrollTop = textArea.scrollHeight;
-            }
-          }
-        },
+        undefined,
         selectedStyleId,
         targetWordCount,
         (progressMsg, progressValue) => {
@@ -817,9 +823,16 @@ export default function Chapters() {
           setSingleChapterProgress(progressValue);
           setSingleChapterProgressMessage(progressMsg);
         },
-        selectedModel,  // 传递选中的模型
-        temporaryNarrativePerspective  // 传递临时人称参数
+        selectedModel,
+        temporaryNarrativePerspective
       );
+
+      if (result.generation_task_id) {
+        setRunningSingleChapterTasks(prev => ({
+          ...prev,
+          [chapterId]: result.generation_task_id
+        }));
+      }
 
       message.open({
         key: progressMessageKey,
@@ -831,6 +844,15 @@ export default function Chapters() {
       // 后台继续执行：完成后自动更新文案；失败时提示错误
       result.completion
         .then(async (finalResult) => {
+          if (isEditorOpenRef.current && editingChapterIdRef.current === chapterId) {
+            const hasContentTouched = editorForm.isFieldsTouched(['content']);
+            if (!hasContentTouched && finalResult?.content) {
+              editorForm.setFieldsValue({ content: finalResult.content });
+            } else if (hasContentTouched) {
+              message.info('后台生成已完成，检测到你正在编辑当前章节，未自动覆盖文本');
+            }
+          }
+
           message.open({
             key: progressMessageKey,
             type: 'success',
@@ -861,6 +883,14 @@ export default function Chapters() {
             type: 'error',
             content: '后台创作失败：' + (completionError.response?.data?.detail || completionError.message || '未知错误'),
             duration: 4,
+          });
+        })
+        .finally(() => {
+          setRunningSingleChapterTasks(prev => {
+            if (!(chapterId in prev)) return prev;
+            const next = { ...prev };
+            delete next[chapterId];
+            return next;
           });
         });
 
@@ -962,12 +992,6 @@ export default function Chapters() {
             maskClosable: true,
             keyboard: true,
           });
-        }
-      },
-      onCancel: () => {
-        if (isGenerating) {
-          message.warning('AI正在创作中，请等待完成');
-          return false;
         }
       },
     });
@@ -2392,17 +2416,13 @@ export default function Chapters() {
         title="编辑章节内容"
         open={isEditorOpen}
         onCancel={() => {
-          if (isGenerating) {
-            message.warning('AI正在创作中，请等待完成后再关闭');
-            return;
-          }
           setChapterQualityMetrics(null);
           setChapterQualityGeneratedAt(null);
           setIsEditorOpen(false);
         }}
-        closable={!isGenerating}
+        closable
         maskClosable={false}
-        keyboard={!isGenerating}
+        keyboard
         width={isMobile ? 'calc(100vw - 32px)' : '85%'}
         centered
         style={isMobile ? {
@@ -2469,7 +2489,6 @@ export default function Chapters() {
                 placeholder="请选择写作风格"
                 value={selectedStyleId}
                 onChange={setSelectedStyleId}
-                disabled={isGenerating}
                 status={!selectedStyleId ? 'error' : undefined}
               >
                 {writingStyles.map(style => (
@@ -2493,7 +2512,6 @@ export default function Chapters() {
                 value={temporaryNarrativePerspective}
                 onChange={setTemporaryNarrativePerspective}
                 allowClear
-                disabled={isGenerating}
               >
                 <Select.Option value="第一人称">第一人称(我)</Select.Option>
                 <Select.Option value="第三人称">第三人称(他/她)</Select.Option>
@@ -2528,7 +2546,6 @@ export default function Chapters() {
                   setTargetWordCount(newValue);
                   setCachedWordCount(newValue);
                 }}
-                disabled={isGenerating}
                 style={{ width: '100%' }}
                 formatter={(value) => `${value} 字`}
                 parser={(value) => parseInt(value?.replace(' 字', '') || '0', 10) as unknown as 500}
@@ -2545,7 +2562,6 @@ export default function Chapters() {
                 value={selectedModel}
                 onChange={setSelectedModel}
                 allowClear
-                disabled={isGenerating}
                 showSearch
                 optionFilterProp="label"
               >
@@ -2603,14 +2619,13 @@ export default function Chapters() {
               rows={isMobile ? 12 : 20}
               placeholder="开始写作..."
               style={{ fontFamily: 'monospace', fontSize: isMobile ? 12 : 14 }}
-              disabled={isGenerating}
             />
           </Form.Item>
 
           {/* 局部重写浮动工具栏 */}
           <div data-partial-regenerate-toolbar>
             <PartialRegenerateToolbar
-              visible={partialRegenerateToolbarVisible && !isGenerating}
+              visible={partialRegenerateToolbarVisible}
               position={partialRegenerateToolbarPosition}
               selectedText={selectedTextForRegenerate}
               onRegenerate={handleOpenPartialRegenerate}
@@ -2622,16 +2637,11 @@ export default function Chapters() {
               <Space style={{ width: isMobile ? '100%' : 'auto' }}>
                 <Button
                   onClick={() => {
-                    if (isGenerating) {
-                      message.warning('AI正在创作中，请等待完成后再关闭');
-                      return;
-                    }
                     setChapterQualityMetrics(null);
                     setChapterQualityGeneratedAt(null);
                     setIsEditorOpen(false);
                   }}
                   block={isMobile}
-                  disabled={isGenerating}
                 >
                   取消
                 </Button>
@@ -2639,7 +2649,6 @@ export default function Chapters() {
                   type="primary"
                   htmlType="submit"
                   block={isMobile}
-                  disabled={isGenerating}
                 >
                   保存章节
                 </Button>
@@ -2960,6 +2969,7 @@ export default function Chapters() {
         loading={isGenerating}
         progress={singleChapterProgress}
         message={singleChapterProgressMessage}
+        blocking={false}
       />
 
       {/* 批量生成进度显示 - 使用统一的进度组件 */}
@@ -2992,6 +3002,7 @@ export default function Chapters() {
           });
         }}
         cancelButtonText="取消任务"
+        blocking={false}
       />
 
       <FloatButton

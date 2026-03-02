@@ -405,6 +405,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
         progress={progress}
         message={`正在重新生成中... (已生成 ${wordCount} 字)`}
         title="重新生成章节"
+        blocking={false}
       />
       </Modal>
     </>

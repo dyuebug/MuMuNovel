@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Button, Modal, Form, Input, Select, message, Row, Col, Empty, Tabs, Card, Tag, Space, Divider, Typography, InputNumber } from 'antd';
 import { ThunderboltOutlined, PlusOutlined, EditOutlined, DeleteOutlined, TrophyOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
-import api from '../services/api';
+import api, { backgroundTaskApi } from '../services/api';
 import SSEProgressModal from '../components/SSEProgressModal';
 
 const { TextArea } = Input;
@@ -45,6 +45,8 @@ export default function Careers() {
     const [aiGenerating, setAiGenerating] = useState(false);
     const [aiProgress, setAiProgress] = useState(0);
     const [aiMessage, setAiMessage] = useState('');
+    const aiTaskPollTimerRef = useRef<number | null>(null);
+    const aiTaskIdRef = useRef<string | null>(null);
 
     const fetchCareers = useCallback(async () => {
         try {
@@ -66,6 +68,121 @@ export default function Careers() {
             fetchCareers();
         }
     }, [projectId, fetchCareers]);
+
+    const stopAiTaskPolling = useCallback(() => {
+        if (aiTaskPollTimerRef.current) {
+            window.clearInterval(aiTaskPollTimerRef.current);
+            aiTaskPollTimerRef.current = null;
+        }
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            stopAiTaskPolling();
+            aiTaskIdRef.current = null;
+        };
+    }, [stopAiTaskPolling]);
+
+    const startAiTaskPolling = useCallback((taskId: string) => {
+        stopAiTaskPolling();
+        aiTaskIdRef.current = taskId;
+
+        const poll = async () => {
+            try {
+                const task = await backgroundTaskApi.getTaskStatus(taskId);
+                setAiProgress(task.progress || 0);
+                setAiMessage(task.message || '');
+
+                if (task.status === 'completed') {
+                    stopAiTaskPolling();
+                    aiTaskIdRef.current = null;
+                    setAiGenerating(false);
+                    message.success('AI新职业生成完成！');
+                    void fetchCareers();
+                    return;
+                }
+
+                if (task.status === 'failed') {
+                    stopAiTaskPolling();
+                    aiTaskIdRef.current = null;
+                    setAiGenerating(false);
+                    message.error(task.error || task.message || '生成失败');
+                    return;
+                }
+
+                if (task.status === 'cancelled') {
+                    stopAiTaskPolling();
+                    aiTaskIdRef.current = null;
+                    setAiGenerating(false);
+                    message.info(task.message || '后台任务已取消');
+                }
+            } catch (error) {
+                console.error('轮询后台任务状态失败:', error);
+            }
+        };
+
+        void poll();
+        aiTaskPollTimerRef.current = window.setInterval(() => {
+            void poll();
+        }, 1500);
+    }, [fetchCareers, stopAiTaskPolling]);
+
+    const handleAIGenerateBackground = async (values: { main_career_count: number; sub_career_count: number }) => {
+        if (aiGenerating) {
+            message.info('已有后台职业生成任务在运行，请稍后查看结果');
+            return;
+        }
+        if (!projectId) {
+            message.error('缺少项目ID');
+            return;
+        }
+
+        setIsAIModalOpen(false);
+        setAiGenerating(true);
+        setAiProgress(0);
+        setAiMessage('正在创建后台任务...');
+
+        try {
+            const task = await backgroundTaskApi.createTask({
+                task_type: 'careers_generate_system',
+                project_id: projectId,
+                payload: {
+                    main_career_count: values.main_career_count,
+                    sub_career_count: values.sub_career_count,
+                    enable_mcp: false
+                }
+            });
+
+            message.success('后台职业生成任务已创建，可继续进行其他操作');
+            aiTaskIdRef.current = task.task_id;
+            startAiTaskPolling(task.task_id);
+        } catch (err: unknown) {
+            stopAiTaskPolling();
+            aiTaskIdRef.current = null;
+            setAiGenerating(false);
+            const error = err as Error;
+            message.error(error.message || '启动生成失败');
+        }
+    };
+
+    const handleCancelAIGenerate = async () => {
+        const taskId = aiTaskIdRef.current;
+        if (!taskId) {
+            return;
+        }
+
+        try {
+            await backgroundTaskApi.cancelTask(taskId);
+            message.info('正在取消后台任务...');
+        } catch (error) {
+            console.error('取消职业生成任务失败:', error);
+            message.error('取消任务失败，请重试');
+        } finally {
+            stopAiTaskPolling();
+            aiTaskIdRef.current = null;
+            setAiGenerating(false);
+        }
+    };
 
     const handleOpenModal = (career?: Career) => {
         if (career) {
@@ -158,59 +275,8 @@ export default function Careers() {
             }
         });
     };
-
     const handleAIGenerate = async (values: { main_career_count: number; sub_career_count: number }) => {
-        setIsAIModalOpen(false);
-        setAiGenerating(true);
-        setAiProgress(0);
-        setAiMessage('开始生成新职业...');
-
-        try {
-            const eventSource = new EventSource(
-                `/api/careers/generate-system?` +
-                new URLSearchParams({
-                    project_id: projectId || '',
-                    main_career_count: values.main_career_count.toString(),
-                    sub_career_count: values.sub_career_count.toString(),
-                    enable_mcp: 'false'
-                }).toString(),
-                { withCredentials: true }
-            );
-
-            eventSource.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-
-                    if (data.type === 'progress') {
-                        setAiProgress(data.progress || 0);
-                        setAiMessage(data.message || '');
-                    } else if (data.type === 'done') {
-                        eventSource.close();
-                        setTimeout(() => {
-                            setAiGenerating(false);
-                            message.success('AI新职业生成完成！');
-                            fetchCareers();
-                        }, 1000);
-                    } else if (data.type === 'error') {
-                        eventSource.close();
-                        setAiGenerating(false);
-                        message.error(data.message || '生成失败');
-                    }
-                } catch (e) {
-                    console.error('解析SSE数据失败:', e);
-                }
-            };
-
-            eventSource.onerror = () => {
-                eventSource.close();
-                setAiGenerating(false);
-                message.error('连接中断，生成失败');
-            };
-        } catch (err: unknown) {
-            setAiGenerating(false);
-            const error = err as Error;
-            message.error(error.message || '启动生成失败');
-        }
+        return handleAIGenerateBackground(values);
     };
 
     const renderCareerCard = (career: Career) => (
@@ -313,6 +379,7 @@ export default function Careers() {
                                 aiForm.resetFields();
                                 setIsAIModalOpen(true);
                             }}
+                            loading={aiGenerating}
                         >
                             AI生成新职业
                         </Button>
@@ -439,7 +506,8 @@ export default function Careers() {
                 progress={aiProgress}
                 message={aiMessage}
                 title="AI生成新职业中..."
-                onCancel={() => setAiGenerating(false)}
+                blocking={false}
+                onCancel={handleCancelAIGenerate}
             />
             </div>
         </>
