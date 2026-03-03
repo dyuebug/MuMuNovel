@@ -6,7 +6,7 @@
 import { useCallback } from 'react';
 import { message } from 'antd';
 import { useStore } from './index';
-import { projectApi, outlineApi, characterApi, chapterApi } from '../services/api';
+import { projectApi, outlineApi, characterApi, chapterApi, chapterSingleTaskApi } from '../services/api';
 import type {
   PaginationResponse,
   Outline,
@@ -299,25 +299,16 @@ export function useChapterSync() {
     };
 
     // 1) 创建后台任务（立即返回 task_id）
-    const response = await fetch(`/api/chapters/${chapterId}/generate-background`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
+    const startResult = await chapterSingleTaskApi.createSingleGenerateTask(
+      chapterId,
+      {
         style_id: styleId,
         target_word_count: targetWordCount,
         model: model,
         narrative_perspective: narrativePerspective
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
-    }
-
-    const startResult = await response.json();
+      },
+      currentProject?.id
+    );
     const taskId: string | undefined = startResult.task_id;
     if (!taskId) {
       throw new Error('后台任务创建成功但未返回 task_id');
@@ -412,11 +403,7 @@ export function useChapterSync() {
             throw new Error(streamFailure);
           }
 
-          const statusResponse = await fetch(`/api/chapters/batch-generate/${taskId}/status`);
-          if (!statusResponse.ok) {
-            throw new Error(`查询任务状态失败: ${statusResponse.status}`);
-          }
-          const taskStatus = await statusResponse.json();
+          const taskStatus = await chapterSingleTaskApi.getSingleGenerateTaskStatus(taskId, currentProject?.id);
 
           if (taskStatus.status === 'pending') {
             if (onProgressUpdate) {
@@ -486,7 +473,7 @@ export function useChapterSync() {
       analysis_task_id: undefined,
       completion
     };
-  }, [refreshChapters]);
+  }, [refreshChapters, currentProject?.id]);
 
   return {
     refreshChapters,

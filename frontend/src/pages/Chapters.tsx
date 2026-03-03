@@ -3,7 +3,7 @@ import { List, Button, Modal, Form, Input, Select, message, Empty, Space, Badge,
 import { EditOutlined, FileTextOutlined, ThunderboltOutlined, LockOutlined, DownloadOutlined, SettingOutlined, FundOutlined, SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, RocketOutlined, StopOutlined, InfoCircleOutlined, CaretRightOutlined, DeleteOutlined, BookOutlined, FormOutlined, PlusOutlined, ReadOutlined } from '@ant-design/icons';
 import { useStore } from '../store';
 import { useChapterSync } from '../store/hooks';
-import { projectApi, writingStyleApi, chapterApi } from '../services/api';
+import { projectApi, writingStyleApi, chapterApi, chapterBatchTaskApi } from '../services/api';
 import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterQualityMetrics } from '../types';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import ChapterAnalysis from '../components/ChapterAnalysis';
@@ -512,10 +512,7 @@ export default function Chapters() {
     if (!currentProject?.id) return;
 
     try {
-      const response = await fetch(`/api/chapters/project/${currentProject.id}/batch-generate/active`);
-      if (!response.ok) return;
-
-      const data = await response.json();
+      const data = await chapterBatchTaskApi.getActiveBatchGenerateTask(currentProject.id);
 
       if (data.has_active_task && data.task) {
         const task = data.task;
@@ -526,9 +523,18 @@ export default function Chapters() {
           status: task.status,
           total: task.total,
           completed: task.completed,
-          current_chapter_number: task.current_chapter_number,
-          latest_quality_metrics: task.latest_quality_metrics,
-          quality_metrics_summary: task.quality_metrics_summary,
+          current_chapter_number: task.current_chapter_number ?? null,
+          latest_quality_metrics: (task.latest_quality_metrics as {
+            overall_score?: number;
+            conflict_chain_hit_rate?: number;
+            rule_grounding_hit_rate?: number;
+          } | null | undefined) ?? undefined,
+          quality_metrics_summary: (task.quality_metrics_summary as {
+            avg_overall_score?: number;
+            avg_conflict_chain_hit_rate?: number;
+            avg_rule_grounding_hit_rate?: number;
+            chapter_count?: number;
+          } | null | undefined) ?? undefined,
         });
         setBatchGenerating(true);
         setBatchGenerateVisible(true);
@@ -1101,20 +1107,7 @@ export default function Chapters() {
 
       console.log('[批量生成] 完整请求体:', JSON.stringify(requestBody, null, 2));
 
-      const response = await fetch(`/api/chapters/project/${currentProject.id}/batch-generate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || '创建批量生成任务失败');
-      }
-
-      const result = await response.json();
+      const result = await chapterBatchTaskApi.createBatchGenerateTask(currentProject.id, requestBody);
       setBatchTaskId(result.batch_id);
       setBatchProgress({
         status: 'running',
@@ -1154,17 +1147,23 @@ export default function Chapters() {
 
     const poll = async () => {
       try {
-        const response = await fetch(`/api/chapters/batch-generate/${taskId}/status`);
-        if (!response.ok) return;
-
-        const status = await response.json();
+        const status = await chapterBatchTaskApi.getBatchGenerateStatus(taskId, currentProject?.id);
         setBatchProgress({
           status: status.status,
           total: status.total,
           completed: status.completed,
-          current_chapter_number: status.current_chapter_number,
-          latest_quality_metrics: status.latest_quality_metrics,
-          quality_metrics_summary: status.quality_metrics_summary,
+          current_chapter_number: status.current_chapter_number ?? null,
+          latest_quality_metrics: (status.latest_quality_metrics as {
+            overall_score?: number;
+            conflict_chain_hit_rate?: number;
+            rule_grounding_hit_rate?: number;
+          } | null | undefined) ?? undefined,
+          quality_metrics_summary: (status.quality_metrics_summary as {
+            avg_overall_score?: number;
+            avg_conflict_chain_hit_rate?: number;
+            avg_rule_grounding_hit_rate?: number;
+            chapter_count?: number;
+          } | null | undefined) ?? undefined,
         });
 
         // 每次轮询时刷新章节列表和分析状态，实时显示新生成的章节和分析进度
@@ -1244,13 +1243,7 @@ export default function Chapters() {
     if (!batchTaskId) return;
 
     try {
-      const response = await fetch(`/api/chapters/batch-generate/${batchTaskId}/cancel`, {
-        method: 'POST',
-      });
-
-      if (!response.ok) {
-        throw new Error('取消失败');
-      }
+      await chapterBatchTaskApi.cancelBatchGenerateTask(batchTaskId, currentProject?.id);
 
       message.success('批量生成已取消');
 

@@ -2,6 +2,7 @@ import axios from 'axios';
 import { message } from 'antd';
 import { ssePost } from '../utils/sseClient';
 import type { SSEClientOptions } from '../utils/sseClient';
+import { useBackgroundTaskStore } from '../store/backgroundTasks';
 import type {
   User,
   AuthUrlResponse,
@@ -631,6 +632,270 @@ export const chapterApi = {
     }>(`/chapters/${chapterId}/apply-partial-regenerate`, data),
 };
 
+type BatchTaskRuntimeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface ChapterBatchGenerateResponse {
+  batch_id: string;
+  message: string;
+  chapters_to_generate: Array<{ id: string; chapter_number: number; title: string }>;
+  estimated_time_minutes: number;
+}
+
+export interface ChapterBatchGenerateStatusResponse {
+  batch_id: string;
+  status: string;
+  total: number;
+  completed: number;
+  current_chapter_id?: string | null;
+  current_chapter_number?: number | null;
+  current_retry_count?: number | null;
+  max_retries?: number | null;
+  failed_chapters?: Array<Record<string, unknown>>;
+  created_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  error_message?: string | null;
+  latest_quality_metrics?: Record<string, unknown> | null;
+  quality_metrics_summary?: Record<string, unknown> | null;
+}
+
+export interface ChapterBatchActiveTask {
+  batch_id: string;
+  status: string;
+  total: number;
+  completed: number;
+  current_chapter_id?: string | null;
+  current_chapter_number?: number | null;
+  latest_quality_metrics?: Record<string, unknown> | null;
+  quality_metrics_summary?: Record<string, unknown> | null;
+  created_at?: string | null;
+  started_at?: string | null;
+}
+
+export interface ChapterBatchActiveResponse {
+  has_active_task: boolean;
+  task: ChapterBatchActiveTask | null;
+}
+
+export interface ChapterBatchCancelResponse {
+  message: string;
+  batch_id: string;
+  completed_chapters: number;
+  total_chapters: number;
+}
+
+export interface ChapterSingleGenerateResponse {
+  task_id: string;
+  chapter_id: string;
+  status: string;
+  message: string;
+  estimated_time_minutes?: number;
+}
+
+type ChapterGenerationTaskType = 'chapters_batch_generate' | 'chapter_single_generate';
+
+const normalizeBatchTaskStatus = (status: string): BatchTaskRuntimeStatus => {
+  if (status === 'running' || status === 'completed' || status === 'failed' || status === 'cancelled') {
+    return status;
+  }
+  return 'pending';
+};
+
+const buildChapterGenerateTaskMessage = (
+  taskType: ChapterGenerationTaskType,
+  status: BatchTaskRuntimeStatus,
+  total: number,
+  completed: number,
+  currentChapterNumber?: number | null,
+  errorMessage?: string | null
+) => {
+  const taskName = taskType === 'chapter_single_generate' ? '单章生成' : '批量生成';
+  if (status === 'failed') return errorMessage || `${taskName}失败`;
+  if (status === 'cancelled') return `${taskName}已取消`;
+  if (status === 'completed') return `${taskName}完成 (${completed}/${total})`;
+  if (currentChapterNumber) return `${taskName}中：第 ${currentChapterNumber} 章 (${completed}/${total})`;
+  if (status === 'running') return `${taskName}中 (${completed}/${total})`;
+  return `${taskName}排队中 (${completed}/${total})`;
+};
+
+const upsertChapterTaskToStore = (data: {
+  taskType: ChapterGenerationTaskType;
+  taskId: string;
+  status: string;
+  total: number;
+  completed: number;
+  projectId?: string;
+  currentChapterNumber?: number | null;
+  errorMessage?: string | null;
+  createdAt?: string | null;
+  completedAt?: string | null;
+}) => {
+  const normalizedStatus = normalizeBatchTaskStatus(data.status);
+  const progress = data.total > 0 ? Math.round((data.completed / data.total) * 100) : 0;
+  const now = new Date().toISOString();
+  useBackgroundTaskStore.getState().upsertTask({
+    task_id: data.taskId,
+    task_type: data.taskType,
+    project_id: data.projectId,
+    status: normalizedStatus,
+    progress,
+    message: buildChapterGenerateTaskMessage(
+      data.taskType,
+      normalizedStatus,
+      data.total,
+      data.completed,
+      data.currentChapterNumber,
+      data.errorMessage
+    ),
+    error: data.errorMessage ?? null,
+    created_at: data.createdAt ?? now,
+    updated_at: now,
+    completed_at: data.completedAt ?? null,
+  });
+};
+
+export const chapterBatchTaskApi = {
+  createBatchGenerateTask: async (
+    projectId: string,
+    payload: {
+      start_chapter_number: number;
+      count: number;
+      enable_analysis: boolean;
+      style_id: number;
+      target_word_count: number;
+      model?: string;
+    }
+  ) => {
+    const created = await api.post<unknown, ChapterBatchGenerateResponse>(
+      `/chapters/project/${projectId}/batch-generate`,
+      payload
+    );
+    useBackgroundTaskStore.getState().upsertTask({
+      task_id: created.batch_id,
+      task_type: 'chapters_batch_generate',
+      project_id: projectId,
+      status: 'pending',
+      progress: 0,
+      message: created.message || '批量生成任务已创建',
+    });
+    return created;
+  },
+
+  getBatchGenerateStatus: async (batchId: string, projectId?: string) => {
+    const status = await api.get<unknown, ChapterBatchGenerateStatusResponse>(
+      `/chapters/batch-generate/${batchId}/status`
+    );
+    upsertChapterTaskToStore({
+      taskType: 'chapters_batch_generate',
+      taskId: status.batch_id,
+      status: status.status,
+      total: status.total,
+      completed: status.completed,
+      projectId,
+      currentChapterNumber: status.current_chapter_number,
+      errorMessage: status.error_message,
+      createdAt: status.created_at,
+      completedAt: status.completed_at,
+    });
+    return status;
+  },
+
+  getActiveBatchGenerateTask: async (projectId: string) => {
+    const active = await api.get<unknown, ChapterBatchActiveResponse>(
+      `/chapters/project/${projectId}/batch-generate/active`
+    );
+    if (active.has_active_task && active.task) {
+      upsertChapterTaskToStore({
+        taskType: 'chapters_batch_generate',
+        taskId: active.task.batch_id,
+        status: active.task.status,
+        total: active.task.total,
+        completed: active.task.completed,
+        projectId,
+        currentChapterNumber: active.task.current_chapter_number,
+        createdAt: active.task.created_at,
+      });
+    }
+    return active;
+  },
+
+  cancelBatchGenerateTask: async (batchId: string, projectId?: string) => {
+    const cancelled = await api.post<unknown, ChapterBatchCancelResponse>(
+      `/chapters/batch-generate/${batchId}/cancel`
+    );
+    useBackgroundTaskStore.getState().upsertTask({
+      task_id: cancelled.batch_id,
+      task_type: 'chapters_batch_generate',
+      project_id: projectId,
+      status: 'cancelled',
+      progress: 100,
+      message: cancelled.message || '批量生成任务已取消',
+    });
+    return cancelled;
+  },
+};
+
+export const chapterSingleTaskApi = {
+  createSingleGenerateTask: async (
+    chapterId: string,
+    payload: {
+      style_id?: number;
+      target_word_count?: number;
+      model?: string;
+      narrative_perspective?: string;
+    },
+    projectId?: string
+  ) => {
+    const created = await api.post<unknown, ChapterSingleGenerateResponse>(
+      `/chapters/${chapterId}/generate-background`,
+      payload
+    );
+    useBackgroundTaskStore.getState().upsertTask({
+      task_id: created.task_id,
+      task_type: 'chapter_single_generate',
+      project_id: projectId,
+      status: normalizeBatchTaskStatus(created.status),
+      progress: created.status === 'pending' ? 0 : 10,
+      message: created.message || '单章后台任务已创建',
+    });
+    return created;
+  },
+
+  getSingleGenerateTaskStatus: async (taskId: string, projectId?: string) => {
+    const status = await api.get<unknown, ChapterBatchGenerateStatusResponse>(
+      `/chapters/batch-generate/${taskId}/status`
+    );
+    upsertChapterTaskToStore({
+      taskType: 'chapter_single_generate',
+      taskId: status.batch_id,
+      status: status.status,
+      total: status.total,
+      completed: status.completed,
+      projectId,
+      currentChapterNumber: status.current_chapter_number,
+      errorMessage: status.error_message,
+      createdAt: status.created_at,
+      completedAt: status.completed_at,
+    });
+    return status;
+  },
+
+  cancelSingleGenerateTask: async (taskId: string, projectId?: string) => {
+    const cancelled = await api.post<unknown, ChapterBatchCancelResponse>(
+      `/chapters/batch-generate/${taskId}/cancel`
+    );
+    useBackgroundTaskStore.getState().upsertTask({
+      task_id: cancelled.batch_id,
+      task_type: 'chapter_single_generate',
+      project_id: projectId,
+      status: 'cancelled',
+      progress: 100,
+      message: cancelled.message || '单章生成任务已取消',
+    });
+    return cancelled;
+  },
+};
+
 export const writingStyleApi = {
   // 获取预设风格列表
   getPresetStyles: () =>
@@ -801,17 +1066,27 @@ export interface BackgroundTaskStatus {
 }
 
 export const backgroundTaskApi = {
-  createTask: (data: {
+  createTask: async (data: {
     task_type: BackgroundTaskStatus['task_type'];
     project_id?: string;
     payload?: Record<string, unknown>;
-  }) => api.post<unknown, BackgroundTaskStatus>('/background-tasks', data),
+  }) => {
+    const created = await api.post<unknown, BackgroundTaskStatus>('/background-tasks', data);
+    useBackgroundTaskStore.getState().upsertTask(created);
+    return created;
+  },
 
-  getTaskStatus: (taskId: string) =>
-    api.get<unknown, BackgroundTaskStatus>(`/background-tasks/${taskId}`),
+  getTaskStatus: async (taskId: string) => {
+    const status = await api.get<unknown, BackgroundTaskStatus>(`/background-tasks/${taskId}`);
+    useBackgroundTaskStore.getState().upsertTask(status);
+    return status;
+  },
 
-  cancelTask: (taskId: string) =>
-    api.post<unknown, BackgroundTaskStatus>(`/background-tasks/${taskId}/cancel`),
+  cancelTask: async (taskId: string) => {
+    const cancelled = await api.post<unknown, BackgroundTaskStatus>(`/background-tasks/${taskId}/cancel`);
+    useBackgroundTaskStore.getState().upsertTask(cancelled);
+    return cancelled;
+  },
 };
 
 export const inspirationApi = {
