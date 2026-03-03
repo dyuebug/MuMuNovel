@@ -33,38 +33,60 @@ class TemplateSyncRule:
 
 # Keep this small and explicit. Add entries only when there is a verified need.
 MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
-    # Legacy hash from the historical AI_DENOISING default content.
-    # If users still hold that untouched legacy copy, auto-upgrade to latest.
+    # Legacy hashes from previous AI_DENOISING defaults.
+    # If users still hold an untouched legacy copy, auto-upgrade to latest.
     "AI_DENOISING": TemplateSyncRule(
-        legacy_hashes={"c40c0f000310940c"},
+        legacy_hashes={"c40c0f000310940c", "15d418f68d68f7a6"},
+    ),
+    # 第三版融合（主线模板）：当用户副本仍是历史默认内容时，自动升级到最新约束版本。
+    "OUTLINE_CREATE": TemplateSyncRule(
+        legacy_hashes={"3dac3838a8989e40"},
+    ),
+    "OUTLINE_CONTINUE": TemplateSyncRule(
+        legacy_hashes={"32b6f497d1ba1fcb"},
+    ),
+    "CHAPTER_GENERATION_ONE_TO_MANY": TemplateSyncRule(
+        legacy_hashes={"fdfdb8c6b7619804"},
+    ),
+    "CHAPTER_GENERATION_ONE_TO_MANY_NEXT": TemplateSyncRule(
+        legacy_hashes={"9e3c0ccc044ffa31"},
+    ),
+    "CHAPTER_GENERATION_ONE_TO_ONE": TemplateSyncRule(
+        legacy_hashes={"4ccddf983a56e3e9"},
+    ),
+    "CHAPTER_GENERATION_ONE_TO_ONE_NEXT": TemplateSyncRule(
+        legacy_hashes={"cc18fe04ad17ac2b"},
+    ),
+    "PARTIAL_REGENERATE": TemplateSyncRule(
+        legacy_hashes={"d4fc0961075e426e"},
     ),
     # 灵感模式模板：当用户仍是旧版系统默认副本时，自动升级到新版低AI生活化约束。
     "INSPIRATION_TITLE_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"174116db28ffe2cd"},
+        legacy_hashes={"174116db28ffe2cd", "ff42cc2ceac62d6c"},
     ),
     "INSPIRATION_TITLE_USER": TemplateSyncRule(
         legacy_hashes={"95f56808897a03a1"},
     ),
     "INSPIRATION_DESCRIPTION_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"5d3349db809fe56f"},
+        legacy_hashes={"5d3349db809fe56f", "6027777447bb0156"},
     ),
     "INSPIRATION_DESCRIPTION_USER": TemplateSyncRule(
         legacy_hashes={"f0af139f8db3e24a"},
     ),
     "INSPIRATION_THEME_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"77fcd61b59597687"},
+        legacy_hashes={"77fcd61b59597687", "9d784b8ce9a66177"},
     ),
     "INSPIRATION_THEME_USER": TemplateSyncRule(
         legacy_hashes={"0c691111be925e7a"},
     ),
     "INSPIRATION_GENRE_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"d7e550414969ffe2"},
+        legacy_hashes={"d7e550414969ffe2", "9258f1c8c0bfd99d"},
     ),
     "INSPIRATION_GENRE_USER": TemplateSyncRule(
         legacy_hashes={"c3a2ff6230a69e45"},
     ),
     "INSPIRATION_QUICK_COMPLETE": TemplateSyncRule(
-        legacy_hashes={"90d7050767ec4423"},
+        legacy_hashes={"90d7050767ec4423", "859f27b2cd8f694e"},
     ),
 }
 
