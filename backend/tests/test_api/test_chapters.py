@@ -658,6 +658,48 @@ def test_should_append_serial_guard_when_apply_style_to_prompt():
     assert "人物情绪要有层次" in merged_prompt
 
 
+def test_should_detect_workflow_meta_line_in_generated_content():
+    text = "\n".join([
+        "以下是章节正文：",
+        "步骤1：先输出冲突",
+        "他推门而入，雨水沿着衣角滴到地砖上。",
+    ])
+
+    assert chapters_api._contains_chapter_workflow_meta_text(text) is True
+
+
+def test_should_not_misclassify_story_text_with_plan_ab():
+    text = "他把方案A塞进口袋，转头对同伴说先按旧路撤。"
+
+    assert chapters_api._contains_chapter_workflow_meta_text(text) is False
+
+
+def test_should_sanitize_generated_narrative_text_keep_story_lines():
+    raw_text = "\n".join(
+        [
+            "以下是章节正文：",
+            "执行1.1：先描述冲突",
+            "门外的风越刮越急，他还是把灯点亮了。",
+            "调用Agent补全设定",
+            "她没有回答，只把手里的信纸折成更小的一块。",
+        ]
+    )
+
+    cleaned, removed_count = chapters_api._sanitize_generated_narrative_text(raw_text)
+
+    assert removed_count == 3
+    assert "执行1.1" not in cleaned
+    assert "调用Agent" not in cleaned
+    assert "门外的风越刮越急" in cleaned
+    assert "她没有回答" in cleaned
+
+
+def test_should_mark_ai_identity_disclaimer_as_meta_text():
+    text = "作为AI助手，我将先给出执行计划再输出正文。"
+
+    assert chapters_api._contains_chapter_workflow_meta_text(text) is True
+
+
 async def test_should_create_single_chapter_background_generation_task(
     chapters_client,
     chapters_session_factory,

@@ -152,12 +152,12 @@ def _split_sentences(text: str) -> List[str]:
 
 
 _CHAPTER_WORKFLOW_META_PATTERNS = (
-    r"执行\s*\d+(?:\.\d+)*",
+    r"^\s*(?:步骤|step)\s*\d+\b",
+    r"^\s*执行\s*\d+(?:\.\d+)*\b",
     r"调用\s*agent",
-    r"方案\s*[ab](?:\s*[/、-]\s*[ab])?",
-    r"流程(?:说明|日志|总结|复盘|评审)",
-    r"步骤\s*\d+",
-    r"(?:作为|身为)\s*(?:ai|助手|模型)",
+    r"(?:流程|步骤)\s*(?:说明|日志|总结|复盘|评审)",
+    r"(?:方案对比|方案评审|复盘结论|执行计划)",
+    r"^\s*(?:作为|身为)\s*(?:ai|助手|模型)[，,:：]",
 )
 _CHAPTER_META_PREFIXES = {
     "以下是章节正文：",
@@ -167,13 +167,24 @@ _CHAPTER_META_PREFIXES = {
 }
 
 
+def _is_likely_chapter_meta_line(line: str) -> bool:
+    stripped = (line or "").strip()
+    if not stripped:
+        return False
+    if stripped.startswith("```"):
+        return True
+    if stripped in _CHAPTER_META_PREFIXES:
+        return True
+    return any(
+        re.search(pattern, stripped, flags=re.IGNORECASE)
+        for pattern in _CHAPTER_WORKFLOW_META_PATTERNS
+    )
+
+
 def _contains_chapter_workflow_meta_text(text: str) -> bool:
     if not text:
         return False
-    return any(
-        re.search(pattern, text, flags=re.IGNORECASE)
-        for pattern in _CHAPTER_WORKFLOW_META_PATTERNS
-    )
+    return any(_is_likely_chapter_meta_line(line) for line in text.splitlines())
 
 
 def _sanitize_generated_narrative_text(text: str) -> tuple[str, int]:
@@ -191,28 +202,14 @@ def _sanitize_generated_narrative_text(text: str) -> tuple[str, int]:
             kept_lines.append("")
             continue
 
-        if stripped.startswith("```"):
-            removed_line_count += 1
-            continue
-
-        if stripped in _CHAPTER_META_PREFIXES:
-            removed_line_count += 1
-            continue
-
-        if _contains_chapter_workflow_meta_text(stripped):
+        if _is_likely_chapter_meta_line(stripped):
             removed_line_count += 1
             continue
 
         kept_lines.append(raw_line)
 
     cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(kept_lines)).strip()
-    if removed_line_count > 0:
-        # 避免清理过度导致正文断裂：过短时回退到原文，并交给后续强校验处理。
-        min_safe_length = max(40, int(len(original) * 0.55))
-        if len(cleaned) < min_safe_length:
-            return original, 0
-
-    return cleaned or original, removed_line_count
+    return cleaned, removed_line_count
 
 
 def _calc_conflict_chain_rate(text: str) -> Dict[str, Any]:
@@ -2265,6 +2262,8 @@ async def generate_chapter_content_stream(
                     logger.warning(
                         f"⚠️ 章节生成检测到流程化元文本，已清理 {removed_meta_lines} 行: chapter_id={chapter_id}"
                     )
+                if not full_content.strip():
+                    raise ValueError("生成内容为空或仅包含流程化元文本，请重试生成")
                 if _contains_chapter_workflow_meta_text(full_content):
                     raise ValueError("生成内容包含流程化元文本，请重试生成")
 
@@ -3884,6 +3883,8 @@ async def generate_single_chapter_for_batch(
         logger.warning(
             f"⚠️ 批量章节生成检测到流程化元文本，已清理 {removed_meta_lines} 行: chapter={chapter.chapter_number}"
         )
+    if not full_content.strip():
+        raise ValueError(f"第{chapter.chapter_number}章生成内容为空或仅包含流程化元文本")
     if _contains_chapter_workflow_meta_text(full_content):
         raise ValueError(f"第{chapter.chapter_number}章生成结果包含流程化元文本")
     
@@ -4670,6 +4671,8 @@ async def partial_regenerate_stream(
                 logger.warning(
                     f"⚠️ 局部重写检测到流程化元文本，已清理 {removed_meta_lines} 行: chapter_id={chapter_id}"
                 )
+            if not full_content.strip():
+                raise ValueError("重写结果为空或仅包含流程化元文本，请重试")
             if _contains_chapter_workflow_meta_text(full_content):
                 raise ValueError("重写结果包含流程化元文本，请重试")
             
