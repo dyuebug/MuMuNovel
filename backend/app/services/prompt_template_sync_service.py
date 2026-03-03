@@ -60,6 +60,21 @@ MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
     "PARTIAL_REGENERATE": TemplateSyncRule(
         legacy_hashes={"d4fc0961075e426e"},
     ),
+    "PLOT_ANALYSIS": TemplateSyncRule(
+        legacy_hashes={"dee21de2491c9c8b"},
+    ),
+    "OUTLINE_EXPAND_SINGLE": TemplateSyncRule(
+        legacy_hashes={"819bf64ee54d5efe"},
+    ),
+    "OUTLINE_EXPAND_MULTI": TemplateSyncRule(
+        legacy_hashes={"5d90dbf35d2f3910"},
+    ),
+    "AUTO_CHARACTER_ANALYSIS": TemplateSyncRule(
+        legacy_hashes={"5f75f423f3f7effd"},
+    ),
+    "AUTO_ORGANIZATION_ANALYSIS": TemplateSyncRule(
+        legacy_hashes={"b85b57b470de0457"},
+    ),
     # 灵感模式模板：当用户仍是旧版系统默认副本时，自动升级到新版低AI生活化约束。
     "INSPIRATION_TITLE_SYSTEM": TemplateSyncRule(
         legacy_hashes={"174116db28ffe2cd", "ff42cc2ceac62d6c"},
