@@ -31,6 +31,8 @@ COMMON_INSPIRATION_STYLE_GUARD = """
 4. 优先写人物目标、阻碍、代价和情绪，不要只堆设定术语
 5. 如出现术语或设定名词，需补一句白话解释（例如“也就是……”）
 6. 避免高频模板开头：这是一个关于、讲述了、故事围绕、在这个世界里
+7. 只输出当前任务结果，不输出流程说明、调度术语或自我评注
+8. 信息不足时优先保住“目标→阻力→选择→后果”最小冲突链
 """
 
 STEP_EXTRA_STYLE_GUARD = {
@@ -82,6 +84,14 @@ _EXPLANATION_HINTS = (
     "换句话说",
     "直白点",
 )
+_WORKFLOW_META_PATTERNS = (
+    r"执行\s*\d+(?:\.\d+)*",
+    r"调用\s*agent",
+    r"方案\s*[ab](?:\s*[/、-]\s*[ab])?",
+    r"流程(?:说明|总结|复盘)",
+    r"步骤\s*\d+",
+    r"(?:作为|身为)\s*(?:ai|助手|模型)",
+)
 
 
 def _build_style_guard(step: str) -> str:
@@ -100,6 +110,12 @@ def _contains_unexplained_jargon(text: str) -> bool:
     return jargon_hit_count >= 2 and not has_explanation
 
 
+def _contains_workflow_meta_text(text: str) -> bool:
+    if not text:
+        return False
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in _WORKFLOW_META_PATTERNS)
+
+
 def validate_options_response(result: Dict[str, Any], step: str, max_retries: int = 3) -> tuple[bool, str]:
     """
     校验AI返回的选项格式是否正确
@@ -116,6 +132,10 @@ def validate_options_response(result: Dict[str, Any], step: str, max_retries: in
     # 检查options是否为数组
     if not isinstance(options, list):
         return False, "options必须是数组"
+
+    prompt_value = result.get("prompt")
+    if isinstance(prompt_value, str) and _contains_workflow_meta_text(prompt_value):
+        return False, "prompt包含流程化元文本，请改为直接的引导语"
     
     # 检查数组长度
     if len(options) < 3:
@@ -132,6 +152,8 @@ def validate_options_response(result: Dict[str, Any], step: str, max_retries: in
             return False, f"第{i+1}个选项为空"
         if len(option) > 500:
             return False, f"第{i+1}个选项过长（超过500字符）"
+        if _contains_workflow_meta_text(option):
+            return False, f"第{i+1}个选项包含流程化元文本，请直接输出内容结果"
     
     # 根据不同步骤进行特定校验
     if step == "genre":
@@ -546,7 +568,9 @@ async def quick_generate(
             "system": (
                 f"{PromptService.format_prompt(system_template, existing=existing_text)}\n\n"
                 f"{COMMON_INSPIRATION_STYLE_GUARD}\n"
-                "【智能补全专项】保证四个字段像同一部小说，人物语气自然，信息前后一致。"
+                "【智能补全专项】保证四个字段像同一部小说，人物语气自然，信息前后一致；"
+                "仅返回JSON字段值，不输出流程说明或执行步骤；"
+                "信息不足时先补目标→阻力→选择→后果链。"
             ),
             "user": "请在不偏离现有信息的前提下补全缺失字段，只返回JSON。"
         }
