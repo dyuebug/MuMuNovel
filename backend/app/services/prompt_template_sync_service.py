@@ -58,7 +58,7 @@ MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
         legacy_hashes={"cc18fe04ad17ac2b"},
     ),
     "PARTIAL_REGENERATE": TemplateSyncRule(
-        legacy_hashes={"d4fc0961075e426e"},
+        legacy_hashes={"d4fc0961075e426e", "ed4e95fe9b82e4aa"},
     ),
     "PLOT_ANALYSIS": TemplateSyncRule(
         legacy_hashes={"dee21de2491c9c8b"},
@@ -74,6 +74,25 @@ MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
     ),
     "AUTO_ORGANIZATION_ANALYSIS": TemplateSyncRule(
         legacy_hashes={"b85b57b470de0457"},
+    ),
+    # 第三版融合（角色/组织/重写/职业扩展模板）
+    "SINGLE_CHARACTER_GENERATION": TemplateSyncRule(
+        legacy_hashes={"1c8caffaf3e86c1a"},
+    ),
+    "SINGLE_ORGANIZATION_GENERATION": TemplateSyncRule(
+        legacy_hashes={"616ecf71799a153c"},
+    ),
+    "CHAPTER_REGENERATION_SYSTEM": TemplateSyncRule(
+        legacy_hashes={"18cf26ca10811026"},
+    ),
+    "AUTO_CHARACTER_GENERATION": TemplateSyncRule(
+        legacy_hashes={"0a789aa309633332"},
+    ),
+    "AUTO_ORGANIZATION_GENERATION": TemplateSyncRule(
+        legacy_hashes={"da5600e87099ab21"},
+    ),
+    "CAREER_SYSTEM_GENERATION": TemplateSyncRule(
+        legacy_hashes={"d2d1b3971bcb05fc"},
     ),
     # 灵感模式模板：当用户仍是旧版系统默认副本时，自动升级到新版低AI生活化约束。
     "INSPIRATION_TITLE_SYSTEM": TemplateSyncRule(
