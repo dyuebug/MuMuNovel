@@ -19,16 +19,27 @@ class WritingStyleManager:
             组合后的提示词
         """
         style_profile = "default"
-        if "连载感" in style_content:
+        normalized = (style_content or "").lower()
+        if "连载感" in normalized:
             style_profile = "low_ai_serial"
-        elif "生活化" in style_content:
+        elif "生活化" in normalized:
             style_profile = "low_ai_life"
+        elif "都市金融" in normalized or ("金融" in normalized and "商战" in normalized):
+            style_profile = "urban_finance"
+        elif "技术流修仙" in normalized or ("技术流" in normalized and "修仙" in normalized):
+            style_profile = "tech_xianxia"
+        elif "轻松幽默" in normalized or "幽默" in normalized:
+            style_profile = "light_humor"
+        elif "朴实年代" in normalized or "年代风" in normalized:
+            style_profile = "era_plain"
 
         common_guard = (
             "写作执行要点："
+            "你正在写长篇小说中段，不是开书导语，也不是全书终章。"
             "用中文母语者的自然表达写作，长短句穿插，读起来顺口。"
             "对话要像真人交流，少讲道理，多给反应和潜台词。"
             "出现设定术语时，尽量在场景中补一句通俗解释。"
+            "结尾禁止总结型/预告型/感悟型收束，优先停在动作、对话或突发事件上。"
             "直接输出章节正文，不要加章节标题和额外说明。"
         )
 
@@ -45,11 +56,43 @@ class WritingStyleManager:
             "允许少量口语毛边，避免句句工整。"
         )
 
+        urban_finance_guard = (
+            "都市金融强化要点："
+            "专业术语要落地到利益得失，避免术语堆砌。"
+            "谈判和博弈要体现信息差与筹码变化，突出人物选择代价。"
+        )
+
+        tech_xianxia_guard = (
+            "技术流修仙强化要点："
+            "规则推演要清楚，但每段都要有行动反馈，避免连续讲义化解释。"
+            "术法/阵法/功法术语出现后，尽量用角色互动补一句人话解释。"
+        )
+
+        light_humor_guard = (
+            "轻松幽默强化要点："
+            "笑点要服务剧情推进，不做连续段子堆叠。"
+            "人物互怼要有立场差异，避免全员同口吻抖机灵。"
+        )
+
+        era_plain_guard = (
+            "朴实年代强化要点："
+            "时代细节要自然入戏，优先写可见的生活动作与人际压力。"
+            "语言克制朴素，避免现代网络梗和悬浮金句。"
+        )
+
         profile_guard = ""
         if style_profile == "low_ai_serial":
             profile_guard = serial_guard
         elif style_profile == "low_ai_life":
             profile_guard = life_guard
+        elif style_profile == "urban_finance":
+            profile_guard = urban_finance_guard
+        elif style_profile == "tech_xianxia":
+            profile_guard = tech_xianxia_guard
+        elif style_profile == "light_humor":
+            profile_guard = light_humor_guard
+        elif style_profile == "era_plain":
+            profile_guard = era_plain_guard
 
         # 在基础提示词末尾追加风格要求与执行护栏
         return f"{base_prompt}\n\n{style_content}\n\n{common_guard}\n{profile_guard}".strip()
@@ -604,6 +647,7 @@ class PromptService:
     # 章节生成 - 1-N模式（第1章）
     CHAPTER_GENERATION_ONE_TO_MANY = """<system>
 你正在创作《{project_title}》，请按{genre}网文读者习惯写作，语言自然、利落、有画面。
+你写的是长篇小说的中段内容，必须承前启后，禁止写成导语或终章总结。
 </system>
 
 <task>
@@ -699,6 +743,8 @@ class PromptService:
 ❌ 输出章节标题、序号等元信息
 ❌ 避免使用“总之”“综上所述”等总结腔
 ❌ 在结尾处使用开放式反问
+❌ 用“他明白了/他意识到/命运将会”等感悟或预告句收尾
+❌ 用全知视角总结人物命运或下章走向
 ❌ 添加作者注释或创作说明
 ❌ 角色行为超出其职业阶段的能力范围
 ❌ 堆叠“与此同时、值得注意的是、在这个过程中”等模板连接词
@@ -725,6 +771,7 @@ class PromptService:
     # 章节生成 - 1-1模式（第1章）
     CHAPTER_GENERATION_ONE_TO_ONE = """<system>
 你正在创作《{project_title}》，请按{genre}网文读者习惯写作，语言自然、利落、有画面。
+你写的是长篇小说的中段内容，必须承前启后，禁止写成导语或终章总结。
 </system>
 
 <task priority="P0">
@@ -812,6 +859,8 @@ class PromptService:
 【禁止事项】
 ❌ 输出章节标题、序号等元信息
 ❌ 避免使用“总之”“综上所述”等总结腔
+❌ 用“他明白了/他意识到/命运将会”等感悟或预告句收尾
+❌ 用全知视角总结人物命运或下章走向
 ❌ 添加作者注释或创作说明
 ❌ 不要明显超出目标字数
 ❌ 堆叠“与此同时、值得注意的是、在这个过程中”等模板连接词
@@ -838,6 +887,7 @@ class PromptService:
     # 章节生成 - 1-1模式（第2章及以后）
     CHAPTER_GENERATION_ONE_TO_ONE_NEXT = """<system>
 你正在创作《{project_title}》，请按{genre}网文读者习惯写作，语言自然、利落、有画面。
+你写的是长篇小说的中段内容，必须承前启后，禁止写成导语或终章总结。
 </system>
 
 <task priority="P0">
@@ -937,6 +987,8 @@ class PromptService:
 ❌ 输出章节标题、序号等元信息
 ❌ 避免使用“总之”“综上所述”等总结腔
 ❌ 在结尾处使用开放式反问
+❌ 用“他明白了/他意识到/命运将会”等感悟或预告句收尾
+❌ 用全知视角总结人物命运或下章走向
 ❌ 添加作者注释或创作说明
 ❌ 重复上一章已发生的事件
 ❌ 不要明显超出目标字数
@@ -964,6 +1016,7 @@ class PromptService:
     # 章节生成 - 1-N模式（第2章及以后）
     CHAPTER_GENERATION_ONE_TO_MANY_NEXT = """<system>
 你正在创作《{project_title}》，请按{genre}网文读者习惯写作，语言自然、利落、有画面。
+你写的是长篇小说的中段内容，必须承前启后，禁止写成导语或终章总结。
 </system>
 
 <task>
@@ -1085,6 +1138,8 @@ class PromptService:
 ❌ 输出章节标题、序号等元信息
 ❌ 避免使用“总之”“综上所述”等总结腔
 ❌ 在结尾处使用开放式反问
+❌ 用“他明白了/他意识到/命运将会”等感悟或预告句收尾
+❌ 用全知视角总结人物命运或下章走向
 ❌ 添加作者注释或创作说明
 ❌ 重复叙述上一章已发生的事件（包括环境描写、心理活动）
 ❌ 在开篇使用"接上回"、"书接上文"等套话
@@ -1661,6 +1716,163 @@ class PromptService:
 ❌ 所有章节都打7-8分的"安全分"
 ❌ 高分章节给大量建议，或低分章节不给建议
 ❌ 输出“执行X.X”“调用Agent”“方案A/方案B”“复盘结论”等流程文本
+</constraints>"""
+
+    # 正文质量检查提示词（第三版融合）
+    CHAPTER_TEXT_CHECKER = """<system>
+你是小说正文质量检查专家，负责找出可导致阅读体验下降的关键问题，并给出可执行修正建议。
+</system>
+
+<task>
+【检查任务】
+对第{chapter_number}章《{chapter_title}》进行结构化质检。
+
+【检查重点】
+1. 设定一致性：世界规则、角色能力边界、关系逻辑是否冲突
+2. 连贯性：上下文衔接是否自然，是否有重复叙述或断裂
+3. 叙事有效性：是否存在大段解释腔、模板腔、空泛总结
+4. 对话质量：人物声线是否区分，是否出现轮流讲设定
+5. 结尾质量：是否出现感悟式/预告式/全知式收束
+6. 可读性：术语密度过高是否缺乏人话解释
+</task>
+
+<context priority="P0">
+【章节正文】
+{chapter_content}
+</context>
+
+<anchors priority="P1">
+【本章大纲锚点】
+{chapter_outline}
+
+【角色信息】
+{characters_info}
+
+【世界规则】
+{world_rules}
+</anchors>
+
+<fusion_contract priority="P0">
+【第三版融合约束（正文检查）】
+- 只输出JSON，不输出执行步骤、调度术语、自我评注
+- 信息冲突时按优先级：章节正文 > 大纲锚点 > 角色信息 > 世界规则
+- 证据不足时保持保守：不要杜撰问题，不要强行判错
+</fusion_contract>
+
+<output>
+【输出格式】
+返回纯JSON对象（无markdown）：
+
+{{
+  "overall_assessment": "优秀|良好|一般|较差|存在严重问题",
+  "severity_counts": {{
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  }},
+  "issues": [
+    {{
+      "severity": "critical|major|minor",
+      "category": "设定冲突|逻辑连贯|角色失真|文风表达|对话质量|结尾处理|术语可读性",
+      "location": "位置描述（段落/片段）",
+      "evidence": "原文证据（可截断）",
+      "impact": "问题影响",
+      "suggestion": "可直接执行的修正建议"
+    }}
+  ],
+  "priority_actions": [
+    "优先修改项1",
+    "优先修改项2"
+  ],
+  "revision_suggestions": [
+    "建议1",
+    "建议2"
+  ]
+}}
+</output>
+
+<constraints>
+【必须遵守】
+✅ issues最多输出8条，按严重度降序排列
+✅ revision_suggestions最多输出8条，必须是可执行建议
+✅ severity_counts必须与issues中的严重度统计一致
+✅ location必须可定位，避免“某处/部分地方”这类模糊描述
+✅ suggestion必须能直接用于改写，避免空话
+✅ 模板追踪标签：rule_v3_fusion_20260303
+
+【禁止事项】
+❌ 输出markdown、代码块、流程日志
+❌ 输出“执行X.X/调用Agent/方案A-B/复盘”等调度文本
+❌ 没有证据时硬判错误
+❌ 输出与正文无关的泛化建议
+</constraints>"""
+
+    # 正文自动修订提示词（第三版融合，生成修订草案，不直接落库正文）
+    CHAPTER_TEXT_REVISER = """<system>
+你是小说正文修订专家。请根据质检报告优先修复严重问题，保持原文风格与剧情主线不变。
+</system>
+
+<task>
+【修订任务】
+对第{chapter_number}章《{chapter_title}》生成一版“可直接替换”的修订草案。
+
+【修订原则】
+1. 先修复所有严重问题（critical），再酌情修复中等问题
+2. 最小改动优先：能改一句不改一段，避免剧情跑偏
+3. 不新增片段外重大事件，不改角色核心关系和能力边界
+4. 维持原文风格、人称和叙事节奏
+5. 严禁流程化元文本与说明腔
+</task>
+
+<context priority="P0">
+【原章节正文】
+{chapter_content}
+
+【严重问题清单（优先修复）】
+{critical_issues_text}
+</context>
+
+<checker priority="P1">
+【完整质检结果（JSON）】
+{checker_result_json}
+</checker>
+
+<fusion_contract priority="P0">
+【第三版融合约束（正文修订）】
+- 只输出JSON结果，不输出执行步骤、调度术语、自我评注
+- 信息冲突时按优先级：原章节正文 > 严重问题清单 > 完整质检结果
+- 若某问题证据不足，标记为未解决，不强行改写
+</fusion_contract>
+
+<output>
+【输出格式】
+返回纯JSON对象（无markdown）：
+
+{{
+  "revised_text": "修订后的完整正文",
+  "applied_issues": [
+    "已修复问题1",
+    "已修复问题2"
+  ],
+  "unresolved_issues": [
+    "未解决问题及原因"
+  ],
+  "change_summary": "一句话说明本次修订重点"
+}}
+</output>
+
+<constraints>
+【必须遵守】
+✅ revised_text必须是完整正文，不得夹带说明文字
+✅ applied_issues/unresolved_issues 均为字符串数组，最多各8条
+✅ unresolved_issues 只记录无法安全修复的问题，不得空泛
+✅ 模板追踪标签：rule_v3_fusion_20260303
+
+【禁止事项】
+❌ 输出markdown、代码块、流程日志
+❌ 输出“执行X.X/调用Agent/方案A-B/复盘”等调度文本
+❌ 改写为导语、总结、预告式文案
+❌ 新增原文不存在的重大剧情转折
 </constraints>"""
 
     # 大纲单批次展开提示词 V2（RTCO框架）
@@ -3307,6 +3519,18 @@ class PromptService:
                 "category": "情节分析",
                 "description": "深度分析章节的剧情、钩子、伏笔等",
                 "parameters": ["chapter_number", "title", "content", "word_count"]
+            },
+            "CHAPTER_TEXT_CHECKER": {
+                "name": "正文质量检查",
+                "category": "情节分析",
+                "description": "对章节正文进行结构化质量检查并输出可执行修订建议",
+                "parameters": ["chapter_number", "chapter_title", "chapter_content", "chapter_outline", "characters_info", "world_rules"]
+            },
+            "CHAPTER_TEXT_REVISER": {
+                "name": "正文自动修订",
+                "category": "章节重写",
+                "description": "根据质检结果自动生成修订草案（优先修复严重问题）",
+                "parameters": ["chapter_number", "chapter_title", "chapter_content", "critical_issues_text", "checker_result_json"]
             },
             "OUTLINE_EXPAND_SINGLE": {
                 "name": "大纲单批次展开",
