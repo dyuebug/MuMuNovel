@@ -64,7 +64,7 @@ const Inspiration: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
     {
       type: 'ai',
-      content: '你好！我是你的AI创作助手。让我们一起创作一部精彩的小说吧！\n\n请告诉我，你想写一本什么样的小说？',
+      content: '你好！我是你的AI创作助手。\n\n告诉我你的核心灵感吧，最好带上这三点：主角是谁、眼前冲突是什么、失败代价是什么。',
     }
   ]);
   const [inputValue, setInputValue] = useState('');
@@ -330,7 +330,7 @@ const Inspiration: React.FC = () => {
       // 添加新的AI消息
       const aiMessage: Message = {
         type: 'ai',
-        content: response.prompt || `根据您的反馈，我重新生成了一些${step === 'title' ? '书名' : step === 'description' ? '简介' : step === 'theme' ? '主题' : '类型'}选项：`,
+        content: response.prompt || `根据你的反馈，我重做了这批${step === 'title' ? '书名' : step === 'description' ? '简介' : step === 'theme' ? '主题' : '类型'}选项，冲突和句式会更拉开：`,
         options: response.options || [],
         isMultiSelect: step === 'genre',
         canRefine: true,
@@ -397,7 +397,7 @@ const Inspiration: React.FC = () => {
 
         const aiMessage: Message = {
           type: 'ai',
-          content: response.prompt || '请选择一个书名，或者输入你自己的：',
+          content: response.prompt || '请选择一个更有记忆点的书名，或者输入你自己的：',
           options: response.options,
           canRefine: true,
           step: 'title'
@@ -722,7 +722,7 @@ const Inspiration: React.FC = () => {
 
       const aiMessage: Message = {
         type: 'ai',
-        content: response.prompt || '请选择一个简介，或者输入你自己的：',
+        content: response.prompt || '请选择一个冲突更强、开场更快的简介，或者输入你自己的：',
         options: response.options,
         canRefine: true,
         step: 'description'
@@ -757,7 +757,7 @@ const Inspiration: React.FC = () => {
 
       const aiMessage: Message = {
         type: 'ai',
-        content: response.prompt || '请选择一个主题，或者输入你自己的：',
+        content: response.prompt || '请选择一个价值冲突最清晰的主题，或者输入你自己的：',
         options: response.options,
         canRefine: true,
         step: 'theme'
@@ -814,7 +814,7 @@ const Inspiration: React.FC = () => {
     setMessages([
       {
         type: 'ai',
-        content: '好的，让我们重新开始！\n\n请告诉我，你想写一本什么样的小说？',
+        content: '好的，我们重新开始。\n\n请告诉我你的灵感：主角身份、第一冲突、最怕失去的东西。',
       }
     ]);
     setWizardData({});
@@ -953,7 +953,7 @@ const Inspiration: React.FC = () => {
                             <TextArea
                               value={feedbackValue}
                               onChange={(e) => setFeedbackValue(e.target.value)}
-                              placeholder="例如：我想要更悲剧的主题、能不能更简短一些、偏向古风..."
+                              placeholder="例如：冲突再狠一点、开场更快、少讲设定多动作、结尾留更强钩子"
                               autoSize={{ minRows: 2, maxRows: 3 }}
                               disabled={refining}
                               onPressEnter={(e) => {
@@ -1027,7 +1027,7 @@ const Inspiration: React.FC = () => {
             onChange={(e) => setInputValue(e.target.value)}
             placeholder={
               currentStep === 'idea'
-                ? '例如：我想写一本关于时间旅行的科幻小说...'
+                ? '例如：女法医穿回案发前一天，必须在24小时内洗清自己杀人嫌疑...'
                 : '输入自定义内容，或点击上方选项卡片...'
             }
             autoSize={{ minRows: 2, maxRows: 4 }}

@@ -109,7 +109,7 @@ export default function ProjectWizardNew() {
         创建新项目
       </Title>
       <Paragraph type="secondary" style={{ marginBottom: 32 }}>
-        填写基本信息后，AI将自动为您生成世界观、角色和大纲节点（大纲可在项目内手动展开为章节）
+        填写基本信息后，AI将自动生成世界观、角色和开局大纲。建议简介写清“目标→阻力→代价”，主题写成“价值冲突”。
       </Paragraph>
 
       <Form
@@ -130,7 +130,7 @@ export default function ProjectWizardNew() {
           name="title"
           rules={[{ required: true, message: '请输入书名' }]}
         >
-          <Input placeholder="输入你的小说标题" size="large" />
+          <Input placeholder="例如：离婚当天，我继承了仇家的公司" size="large" />
         </Form.Item>
 
         <Form.Item
@@ -140,7 +140,7 @@ export default function ProjectWizardNew() {
         >
           <TextArea
             rows={3}
-            placeholder="用一段话介绍你的小说..."
+            placeholder="建议2-4句：主角要做什么、眼前卡在哪里、失败会失去什么"
             showCount
             maxLength={300}
           />
@@ -153,7 +153,7 @@ export default function ProjectWizardNew() {
         >
           <TextArea
             rows={4}
-            placeholder="描述你的小说主题..."
+            placeholder="例如：真相 vs 体面、生存 vs 尊严（写出核心价值冲突）"
             showCount
             maxLength={500}
           />
@@ -166,7 +166,7 @@ export default function ProjectWizardNew() {
         >
           <Select
             mode="tags"
-            placeholder="选择或输入类型标签（如：玄幻、都市、修仙）"
+            placeholder="选择主赛道+气质标签（如：都市、规则怪谈、权谋）"
             size="large"
             tokenSeparators={[',']}
             maxTagCount={5}
