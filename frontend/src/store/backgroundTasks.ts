@@ -11,6 +11,10 @@ export interface TrackedBackgroundTask {
   progress: number;
   message: string;
   error?: string | null;
+  stageCode?: string;
+  executionMode?: 'interactive' | 'auto';
+  workflowScope?: string;
+  checkpoint?: Record<string, unknown> | null;
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
@@ -24,6 +28,10 @@ interface UpsertTaskPayload {
   progress?: number;
   message?: string;
   error?: string | null;
+  stage_code?: string | null;
+  execution_mode?: 'interactive' | 'auto' | null;
+  workflow_scope?: string | null;
+  checkpoint?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
   completed_at?: string | null;
@@ -84,6 +92,10 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
           progress: normalizeProgress(task.progress ?? existing?.progress),
           message: task.message ?? existing?.message ?? '',
           error: task.error ?? existing?.error ?? null,
+          stageCode: task.stage_code ?? existing?.stageCode,
+          executionMode: task.execution_mode ?? existing?.executionMode ?? 'interactive',
+          workflowScope: task.workflow_scope ?? existing?.workflowScope,
+          checkpoint: task.checkpoint ?? existing?.checkpoint ?? null,
           createdAt,
           updatedAt,
           completedAt,

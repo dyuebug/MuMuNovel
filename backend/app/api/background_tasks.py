@@ -5,9 +5,9 @@ import asyncio
 import json
 import uuid
 from types import SimpleNamespace
-from typing import Any, Dict, Literal
+from typing import Any, Dict, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -38,12 +38,42 @@ TaskType = Literal[
     "wizard_characters",
     "wizard_outline",
 ]
+ExecutionMode = Literal["interactive", "auto"]
+
+TASK_STATUSES = {"pending", "running", "completed", "failed", "cancelled"}
+EXECUTION_MODES = {"interactive", "auto"}
+TASK_STAGE_DEFAULTS: Dict[str, str] = {
+    "wizard_world_building": "0.creative",
+    "wizard_characters": "1.outline",
+    "wizard_outline": "1.outline",
+    "wizard_career_system": "1.outline",
+    "world_regenerate": "0.creative",
+    "outline_generate": "1.outline",
+    "outline_expand": "4.group",
+    "outline_batch_expand": "4.group",
+    "careers_generate_system": "1.outline",
+    "character_generate": "1.outline",
+    "organization_generate": "1.outline",
+}
 
 
 class BackgroundTaskCreateRequest(BaseModel):
     task_type: TaskType
     project_id: str | None = None
     payload: Dict[str, Any] = Field(default_factory=dict)
+    stage_code: str | None = Field(default=None, description="当前工作流阶段编码，如 1.outline")
+    execution_mode: ExecutionMode = Field(default="interactive", description="执行模式：interactive/auto")
+    workflow_scope: str | None = Field(default=None, description="可选的执行范围说明")
+    checkpoint: Dict[str, Any] | None = Field(default=None, description="可选的阶段检查点快照")
+
+
+class BackgroundTaskWorkflowStateUpdateRequest(BaseModel):
+    stage_code: str | None = None
+    execution_mode: ExecutionMode | None = None
+    workflow_scope: str | None = None
+    checkpoint: Dict[str, Any] | None = None
+    message: str | None = None
+    progress: int | None = Field(default=None, ge=0, le=100)
 
 
 def _as_bool(value: Any, default: bool) -> bool:
@@ -52,6 +82,19 @@ def _as_bool(value: Any, default: bool) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return default
+
+
+def _extract_workflow_payload(
+    payload: Dict[str, Any],
+) -> tuple[Dict[str, Any], Optional[str], Optional[str], Optional[Dict[str, Any]]]:
+    """Extract workflow-only metadata from payload and return cleaned business payload."""
+    clean_payload = dict(payload or {})
+    stage_code = clean_payload.pop("__stage_code", None)
+    workflow_scope = clean_payload.pop("__workflow_scope", None)
+    checkpoint = clean_payload.pop("__checkpoint", None)
+    if checkpoint is not None and not isinstance(checkpoint, dict):
+        checkpoint = None
+    return clean_payload, stage_code, workflow_scope, checkpoint
 
 
 async def _build_user_ai_service(user_id: str, db: AsyncSession) -> AIService:
@@ -328,6 +371,14 @@ async def create_background_task(
             raise HTTPException(status_code=400, detail="project_id is required for this task type")
         await verify_project_access(data.project_id, user_id, db)
 
+    clean_payload, payload_stage_code, payload_scope, payload_checkpoint = _extract_workflow_payload(data.payload)
+    stage_code = (data.stage_code or payload_stage_code or TASK_STAGE_DEFAULTS.get(data.task_type))
+    execution_mode = (data.execution_mode or "interactive").lower()
+    if execution_mode not in EXECUTION_MODES:
+        raise HTTPException(status_code=400, detail="非法执行模式")
+    workflow_scope = data.workflow_scope or payload_scope
+    checkpoint = data.checkpoint if isinstance(data.checkpoint, dict) else payload_checkpoint
+
     task_id = str(uuid.uuid4())
     task_project_id = data.project_id or ""
     record = await background_task_manager.create_task(
@@ -336,6 +387,10 @@ async def create_background_task(
         user_id=user_id,
         project_id=task_project_id,
         message="后台任务已创建",
+        stage_code=stage_code,
+        execution_mode=execution_mode,
+        workflow_scope=workflow_scope,
+        checkpoint=checkpoint,
     )
 
     job = _run_generation_task(
@@ -343,13 +398,51 @@ async def create_background_task(
         user_id=user_id,
         task_type=data.task_type,
         project_id=task_project_id,
-        payload=data.payload,
+        payload=clean_payload,
     )
     runner_task = asyncio.create_task(background_task_manager.run_job(task_id, job))
     await background_task_manager.attach_runner(task_id, runner_task)
 
     logger.info(f"Created background task: user={user_id}, task={task_id}, type={data.task_type}")
     return record.to_dict()
+
+
+@router.get("", summary="查询后台任务列表")
+async def list_background_tasks(
+    request: Request,
+    project_id: str | None = Query(default=None, description="按项目ID过滤"),
+    statuses: str | None = Query(default=None, description="按状态过滤，逗号分隔"),
+    active_only: bool = Query(default=False, description="仅返回进行中任务"),
+    limit: int = Query(default=20, ge=1, le=100, description="返回数量上限"),
+):
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    status_filters: set[str] = set()
+    if statuses:
+        raw_statuses = [item.strip().lower() for item in statuses.split(",")]
+        status_filters.update(item for item in raw_statuses if item)
+        invalid = sorted(item for item in status_filters if item not in TASK_STATUSES)
+        if invalid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"非法任务状态: {', '.join(invalid)}",
+            )
+    if active_only:
+        status_filters = status_filters.intersection({"pending", "running"}) if status_filters else {"pending", "running"}
+
+    records = await background_task_manager.list_tasks(
+        user_id=user_id,
+        project_id=project_id,
+        statuses=status_filters or None,
+        limit=limit,
+    )
+    items = [record.to_dict() for record in records]
+    return {
+        "total": len(items),
+        "items": items,
+    }
 
 
 @router.get("/{task_id}", summary="查询后台任务状态")
@@ -375,4 +468,29 @@ async def cancel_background_task(task_id: str, request: Request):
     if not record:
         raise HTTPException(status_code=404, detail="任务不存在")
 
+    return record.to_dict()
+
+
+@router.patch("/{task_id}/workflow-state", summary="更新后台任务工作流状态")
+async def update_background_task_workflow_state(
+    task_id: str,
+    data: BackgroundTaskWorkflowStateUpdateRequest,
+    request: Request,
+):
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    record = await background_task_manager.update_workflow_state(
+        task_id=task_id,
+        user_id=user_id,
+        stage_code=data.stage_code,
+        execution_mode=data.execution_mode,
+        workflow_scope=data.workflow_scope,
+        checkpoint=data.checkpoint,
+        message=data.message,
+        progress=data.progress,
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="任务不存在")
     return record.to_dict()

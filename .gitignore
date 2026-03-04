@@ -87,6 +87,7 @@ backend/data/admins.json
 .temp/
 temp/
 tmp/
+backend/tests/test_services/.runtime/
 
 # Coverage
 .coverage
