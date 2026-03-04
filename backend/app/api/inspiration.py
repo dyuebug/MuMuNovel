@@ -35,6 +35,8 @@ COMMON_INSPIRATION_STYLE_GUARD = """
 8. 信息不足时优先保住“目标→阻力→选择→后果”最小冲突链
 9. 六个选项必须有明显区分，至少覆盖不同切入角，不得只换同义词
 10. 叙述要带具体场景感或动作感，避免只给抽象大词
+11. 避免“鸡汤式收尾”和“下章预告式空话”，优先保留具体冲突钩子
+12. 优先给可传播记忆点：反常识信息、极端选择、倒计时压力三者至少命中其一
 """
 
 STEP_EXTRA_STYLE_GUARD = {
@@ -49,12 +51,16 @@ STEP_EXTRA_STYLE_GUARD = {
 - 每个选项都要体现：主角当下目标 + 关键阻碍/代价（至少命中其一）
 - 冲突要能被读者感知，不要只写抽象观点
 - 6个选项开场方式要有明显变化（动作切入/对白切入/结果倒叙/困境切入等）
+- 开头前30字尽量出现冲突触发、异常变化或高压任务，不要慢热
+- 至少2个选项使用“短句爆点开场”，至少2个选项出现“却/偏偏/结果/直到”等反转连接
 """,
     "theme": """
 【主题专项】
 - 主题要先给人话结论，再落回冲突现场，避免“高概念空转”
 - 保持情绪温度，别写成教科书总结
 - 每个主题都要包含一个“价值冲突对撞点”，避免全是正确废话
+- 每个主题尽量采用“命题句→冲突现场→情绪余震”三拍结构
+- 至少1个主题包含“反常识但合理”的价值碰撞点
 """,
     "genre": """
 【类型专项】
@@ -90,6 +96,15 @@ _EXPLANATION_HINTS = (
     "换句话说",
     "直白点",
 )
+_TEMPLATEY_ENDING_HINTS = (
+    "他终于明白了",
+    "命运将会",
+    "故事才刚刚开始",
+    "一切都变了",
+    "总之",
+    "综上所述",
+    "值得注意的是",
+)
 _WORKFLOW_META_PATTERNS = (
     r"执行\s*\d+(?:\.\d+)*",
     r"调用\s*agent",
@@ -97,6 +112,31 @@ _WORKFLOW_META_PATTERNS = (
     r"流程(?:说明|总结|复盘)",
     r"步骤\s*\d+",
     r"(?:作为|身为)\s*(?:ai|助手|模型)",
+)
+_CONFLICT_CONNECTOR_WORDS = (
+    "却",
+    "偏偏",
+    "但",
+    "结果",
+    "直到",
+    "否则",
+    "代价",
+)
+_ACTION_HINT_WORDS = (
+    "冲",
+    "闯",
+    "推开",
+    "拦住",
+    "追",
+    "逃",
+    "砸",
+    "开口",
+    "签",
+    "掏出",
+    "扣下",
+    "按下",
+    "谈判",
+    "对峙",
 )
 _ABSTRACT_THEME_WORDS = (
     "命运",
@@ -178,6 +218,27 @@ def _is_overly_abstract_text(option: str, step: str) -> bool:
     return abstract_hits >= 3 and scene_hits == 0
 
 
+def _has_templatey_ending(text: str) -> bool:
+    compact = re.sub(r"\s+", "", (text or "").strip())
+    if not compact:
+        return False
+    return any(compact.endswith(marker) for marker in _TEMPLATEY_ENDING_HINTS)
+
+
+def _lacks_conflict_connector(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    return not any(word in normalized for word in _CONFLICT_CONNECTOR_WORDS)
+
+
+def _lacks_action_signal(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return False
+    return not any(word in normalized for word in _ACTION_HINT_WORDS)
+
+
 def validate_options_response(result: Dict[str, Any], step: str, max_retries: int = 3) -> tuple[bool, str]:
     """
     校验AI返回的选项格式是否正确
@@ -244,6 +305,24 @@ def validate_options_response(result: Dict[str, Any], step: str, max_retries: in
         )
         if templatey_count >= max(3, len(options) - 2):
             return False, "选项模板腔过重，请改成更自然的口语叙述"
+
+        templatey_ending_count = sum(
+            1 for option in options if _has_templatey_ending(option)
+        )
+        if templatey_ending_count >= max(3, len(options) - 2):
+            return False, "选项结尾过于鸡汤或预告化，请收束到具体冲突钩子"
+
+        weak_conflict_count = sum(
+            1 for option in options if _lacks_conflict_connector(option)
+        )
+        if weak_conflict_count >= max(4, len(options) - 1):
+            return False, "选项冲突连接词明显不足，请强化转折与代价表达"
+
+        weak_action_count = sum(
+            1 for option in options if _lacks_action_signal(option)
+        )
+        if weak_action_count >= max(4, len(options) - 1):
+            return False, "选项动作推进不足，请补充可感知行动和现场变化"
 
         for i, option in enumerate(options):
             if _contains_unexplained_jargon(option):

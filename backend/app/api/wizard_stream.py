@@ -102,6 +102,11 @@ def _build_outline_runtime_system_prompt(project: Project, chapter_count: int) -
 - 世界规则必须作用于事件结果，不能只做名词陈列
 - 若同段出现2个及以上术语，需在三句内补一条通俗解释思路
 - 摘要优先写“发生了什么”，避免空泛总结和模板化衔接词
+- 若本轮覆盖第1-3章，按黄金三章分工：第1章钩子与处境，第2章升级与信息，第3章小高潮与章尾钩子
+- 每章至少包含一个“小爽点”（反转/收获/打脸/突破其一），并写出反馈结果
+- 每章结尾保留动作指向或风险升级钩子，禁止感悟式收束
+- 同批大纲的开场句式要有变化，至少覆盖两种切入方式（动作/对白/异常/结果倒叙）
+- 前10万字阶段避免连续背景直给，设定信息要跟随冲突逐步释放
 """
 
 
@@ -1376,8 +1381,10 @@ async def outline_generator(
         outline_requirements += "1. 引入主要角色和世界观设定\n"
         outline_requirements += "2. 建立主线冲突和故事钩子\n"
         outline_requirements += "3. 展开初期情节，为后续发展埋下伏笔\n"
-        outline_requirements += "4. 不要试图完结故事，这只是开始部分\n"
-        outline_requirements += "5. 不要在JSON字符串值中使用中文引号（""''），请使用【】或《》标记\n"
+        outline_requirements += "4. 若包含第1-3章，尽量体现黄金三章节奏（钩子→升级→小高潮）\n"
+        outline_requirements += "5. 每章至少一个小爽点与一个章尾钩子，避免平推\n"
+        outline_requirements += "6. 不要试图完结故事，这只是开始部分\n"
+        outline_requirements += "7. 不要在JSON字符串值中使用中文引号（\"\"''），请使用【】或《》标记\n"
         
         # 获取自定义提示词模板
         template = await PromptService.get_template("OUTLINE_CREATE", user_id, db)
