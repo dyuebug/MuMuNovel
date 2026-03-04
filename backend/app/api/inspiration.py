@@ -17,10 +17,10 @@ logger = get_logger(__name__)
 
 # 不同阶段的temperature设置（递减以保持一致性）
 TEMPERATURE_SETTINGS = {
-    "title": 0.8,        # 书名阶段可以更有创意
-    "description": 0.65, # 简介需要贴合书名和原始想法
-    "theme": 0.55,       # 主题需要更加贴合
-    "genre": 0.45        # 类型应该很明确
+    "title": 0.9,        # 书名阶段鼓励更强创意跳跃
+    "description": 0.78, # 简介阶段兼顾画面感与一致性
+    "theme": 0.72,       # 主题阶段保持角度分化
+    "genre": 0.62        # 类型标签仍需清晰，但不做过度收窄
 }
 
 COMMON_INSPIRATION_STYLE_GUARD = """
@@ -33,6 +33,8 @@ COMMON_INSPIRATION_STYLE_GUARD = """
 6. 避免高频模板开头：这是一个关于、讲述了、故事围绕、在这个世界里
 7. 只输出当前任务结果，不输出流程说明、调度术语或自我评注
 8. 信息不足时优先保住“目标→阻力→选择→后果”最小冲突链
+9. 六个选项必须有明显区分，至少覆盖不同切入角，不得只换同义词
+10. 叙述要带具体场景感或动作感，避免只给抽象大词
 """
 
 STEP_EXTRA_STYLE_GUARD = {
@@ -40,21 +42,25 @@ STEP_EXTRA_STYLE_GUARD = {
 【书名专项】
 - 风格要拉开差异，避免同构词组批量改写
 - 名称要好记、上口，避免生造复杂词
+- 至少覆盖六种命名策略中的四种：身份反差、强事件、关系张力、情绪钩子、世界异化、命运抉择
 """,
     "description": """
 【简介专项】
 - 每个选项都要体现：主角当下目标 + 关键阻碍/代价（至少命中其一）
 - 冲突要能被读者感知，不要只写抽象观点
+- 6个选项开场方式要有明显变化（动作切入/对白切入/结果倒叙/困境切入等）
 """,
     "theme": """
 【主题专项】
 - 主题要先给人话结论，再落回冲突现场，避免“高概念空转”
 - 保持情绪温度，别写成教科书总结
+- 每个主题都要包含一个“价值冲突对撞点”，避免全是正确废话
 """,
     "genre": """
 【类型专项】
 - 标签以读者常见认知为主，可组合但不要互相冲突
 - 禁止生造难懂标签
+- 至少体现“主赛道 + 冲突气质”两个维度
 """,
 }
 
@@ -92,6 +98,35 @@ _WORKFLOW_META_PATTERNS = (
     r"步骤\s*\d+",
     r"(?:作为|身为)\s*(?:ai|助手|模型)",
 )
+_ABSTRACT_THEME_WORDS = (
+    "命运",
+    "成长",
+    "人性",
+    "真相",
+    "救赎",
+    "信念",
+    "希望",
+    "黑暗",
+    "善恶",
+    "宿命",
+)
+_SCENE_HINT_WORDS = (
+    "雨",
+    "夜",
+    "街",
+    "门",
+    "车",
+    "血",
+    "电话",
+    "病房",
+    "法庭",
+    "会议室",
+    "厂房",
+    "码头",
+    "天台",
+    "巷子",
+    "教室",
+)
 
 
 def _build_style_guard(step: str) -> str:
@@ -114,6 +149,33 @@ def _contains_workflow_meta_text(text: str) -> bool:
     if not text:
         return False
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in _WORKFLOW_META_PATTERNS)
+
+
+def _opening_fingerprint(text: str) -> str:
+    compact = re.sub(r"\s+", "", (text or "").strip())
+    compact = re.sub(r"[，。！？、,.!?;；:：\"'“”‘’（）()【】\[\]<>《》\-—]", "", compact)
+    return compact[:8].lower()
+
+
+def _has_low_opening_diversity(options: list[str]) -> bool:
+    if len(options) <= 1:
+        return False
+    fingerprints = [_opening_fingerprint(option) for option in options if option.strip()]
+    unique_count = len(set(fp for fp in fingerprints if fp))
+    # 至少保证大部分选项的开头结构是不同的
+    return unique_count < max(3, len(options) - 2)
+
+
+def _is_overly_abstract_text(option: str, step: str) -> bool:
+    if step not in {"description", "theme"}:
+        return False
+    text = (option or "").strip()
+    if not text:
+        return False
+    abstract_hits = sum(1 for w in _ABSTRACT_THEME_WORDS if w in text)
+    scene_hits = sum(1 for w in _SCENE_HINT_WORDS if w in text)
+    # 抽象词明显偏多且几乎没有场景词，判定为偏空泛
+    return abstract_hits >= 3 and scene_hits == 0
 
 
 def validate_options_response(result: Dict[str, Any], step: str, max_retries: int = 3) -> tuple[bool, str]:
@@ -167,8 +229,16 @@ def validate_options_response(result: Dict[str, Any], step: str, max_retries: in
     if len(set(normalized_options)) != len(normalized_options):
         return False, "选项存在重复或近似重复，请提升差异度"
 
+    if _has_low_opening_diversity(options):
+        return False, "选项开头结构过于雷同，请明显拉开表达方式"
+
     # 简介/主题的生动度与可读性兜底校验
     if step in {"description", "theme"}:
+        min_len = 50 if step == "description" else 35
+        for i, option in enumerate(options):
+            if len(option.strip()) < min_len:
+                return False, f"第{i+1}个选项过短，信息密度不足"
+
         templatey_count = sum(
             1 for option in options if option.strip().startswith(_TEMPLATEY_PREFIXES)
         )
@@ -178,6 +248,8 @@ def validate_options_response(result: Dict[str, Any], step: str, max_retries: in
         for i, option in enumerate(options):
             if _contains_unexplained_jargon(option):
                 return False, f"第{i+1}个选项术语密度过高且缺少白话解释"
+            if _is_overly_abstract_text(option, step):
+                return False, f"第{i+1}个选项过于抽象，请补足可感知场景或动作"
     
     return True, ""
 
@@ -434,6 +506,7 @@ async def refine_options(
 2. 新选项要体现用户提出的偏好变化
 3. 与已有上下文保持一致，不跑题
 4. 返回6个有效选项
+5. 至少2个选项必须明显跳出上一轮表达结构，不能只做同义改写
 """
             
             system_prompt += feedback_instruction
@@ -580,7 +653,7 @@ async def quick_generate(
         async for chunk in ai_service.generate_text_stream(
             prompt=prompts["user"],
             system_prompt=prompts["system"],
-            temperature=0.7
+            temperature=0.78
         ):
             accumulated_text += chunk
         
