@@ -318,11 +318,13 @@ def validate_options_response(result: Dict[str, Any], step: str, max_retries: in
         if weak_conflict_count >= max(4, len(options) - 1):
             return False, "选项冲突连接词明显不足，请强化转折与代价表达"
 
-        weak_action_count = sum(
-            1 for option in options if _lacks_action_signal(option)
-        )
-        if weak_action_count >= max(4, len(options) - 1):
-            return False, "选项动作推进不足，请补充可感知行动和现场变化"
+        # 仅对简介做动作推进兜底，主题文本允许更高抽象度表达
+        if step == "description":
+            weak_action_count = sum(
+                1 for option in options if _lacks_action_signal(option)
+            )
+            if weak_action_count >= max(4, len(options) - 1):
+                return False, "选项动作推进不足，请补充可感知行动和现场变化"
 
         for i, option in enumerate(options):
             if _contains_unexplained_jargon(option):
