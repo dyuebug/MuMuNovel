@@ -390,15 +390,12 @@ export default function Chapters() {
       // 只查询有内容的章节
       if (chapter.content && chapter.content.trim() !== '') {
         try {
-          const response = await fetch(`/api/chapters/${chapter.id}/analysis/status`);
-          if (response.ok) {
-            const task: AnalysisTask = await response.json();
-            tasksMap[chapter.id] = task;
+          const task = await chapterApi.getChapterAnalysisStatus(chapter.id, currentProject?.id);
+          tasksMap[chapter.id] = task;
 
-            // 如果任务正在运行，启动轮询
-            if (task.status === 'pending' || task.status === 'running') {
-              startPollingTask(chapter.id);
-            }
+          // 如果任务正在运行，启动轮询
+          if (task.status === 'pending' || task.status === 'running') {
+            startPollingTask(chapter.id);
           }
         } catch {
           // 404或其他错误表示没有分析任务，忽略
@@ -419,10 +416,7 @@ export default function Chapters() {
 
     const interval = window.setInterval(async () => {
       try {
-        const response = await fetch(`/api/chapters/${chapterId}/analysis/status`);
-        if (!response.ok) return;
-
-        const task: AnalysisTask = await response.json();
+        const task = await chapterApi.getChapterAnalysisStatus(chapterId, currentProject?.id);
 
         setAnalysisTasksMap(prev => ({
           ...prev,
@@ -454,6 +448,18 @@ export default function Chapters() {
         delete pollingIntervalsRef.current[chapterId];
       }
     }, 300000);
+  };
+
+  const refreshChapterAnalysisTask = async (chapterId: string) => {
+    const task = await chapterApi.getChapterAnalysisStatus(chapterId, currentProject?.id);
+    setAnalysisTasksMap(prev => ({
+      ...prev,
+      [chapterId]: task
+    }));
+
+    if (task.status === 'pending' || task.status === 'running') {
+      startPollingTask(chapterId);
+    }
   };
 
   const loadWritingStyles = async () => {
@@ -868,16 +874,18 @@ export default function Chapters() {
 
           if (finalResult?.analysis_task_id) {
             const taskId = finalResult.analysis_task_id;
+            const pendingTask: AnalysisTask = {
+              has_task: true,
+              task_id: taskId,
+              chapter_id: chapterId,
+              status: 'pending',
+              progress: 0
+            };
             setAnalysisTasksMap(prev => ({
               ...prev,
-              [chapterId]: {
-                has_task: true,
-                task_id: taskId,
-                chapter_id: chapterId,
-                status: 'pending',
-                progress: 0
-              }
+              [chapterId]: pendingTask
             }));
+            chapterApi.upsertChapterAnalysisTaskToStore(pendingTask, currentProject?.id, '章节分析任务已创建');
             startPollingTask(chapterId);
           }
           await loadChapterQualityMetrics(chapterId);
@@ -2677,41 +2685,12 @@ export default function Chapters() {
               const chapterIdToRefresh = analysisChapterId;
 
               setTimeout(() => {
-                fetch(`/api/chapters/${chapterIdToRefresh}/analysis/status`)
-                  .then(response => {
-                    if (response.ok) {
-                      return response.json();
-                    }
-                    throw new Error('获取状态失败');
-                  })
-                  .then((task: AnalysisTask) => {
-                    setAnalysisTasksMap(prev => ({
-                      ...prev,
-                      [chapterIdToRefresh]: task
-                    }));
-
-                    // 如果任务正在运行，启动轮询
-                    if (task.status === 'pending' || task.status === 'running') {
-                      startPollingTask(chapterIdToRefresh);
-                    }
-                  })
+                refreshChapterAnalysisTask(chapterIdToRefresh)
                   .catch(error => {
                     console.error('刷新分析状态失败:', error);
                     // 如果查询失败，再延迟尝试一次
                     setTimeout(() => {
-                      fetch(`/api/chapters/${chapterIdToRefresh}/analysis/status`)
-                        .then(response => response.ok ? response.json() : null)
-                        .then((task: AnalysisTask | null) => {
-                          if (task) {
-                            setAnalysisTasksMap(prev => ({
-                              ...prev,
-                              [chapterIdToRefresh]: task
-                            }));
-                            if (task.status === 'pending' || task.status === 'running') {
-                              startPollingTask(chapterIdToRefresh);
-                            }
-                          }
-                        })
+                      refreshChapterAnalysisTask(chapterIdToRefresh)
                         .catch(err => console.error('第二次刷新失败:', err));
                     }, 1000);
                   });

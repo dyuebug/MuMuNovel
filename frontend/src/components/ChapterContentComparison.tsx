@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { Modal, Button, Card, Statistic, Row, Col, message } from 'antd';
 import { CheckOutlined, CloseOutlined, SwapOutlined } from '@ant-design/icons';
 import ReactDiffViewer from 'react-diff-viewer-continued';
+import { chapterApi } from '../services/api';
 
 interface ChapterContentComparisonProps {
   visible: boolean;
   onClose: () => void;
   chapterId: string;
+  projectId?: string;
   chapterTitle: string;
   originalContent: string;
   newContent: string;
@@ -19,6 +21,7 @@ const ChapterContentComparison: React.FC<ChapterContentComparisonProps> = ({
   visible,
   onClose,
   chapterId,
+  projectId,
   chapterTitle,
   originalContent,
   newContent,
@@ -59,18 +62,8 @@ const ChapterContentComparison: React.FC<ChapterContentComparisonProps> = ({
       // 延迟触发章节分析，给父组件时间刷新
       setTimeout(async () => {
         try {
-          const analysisResponse = await fetch(`/api/chapters/${chapterId}/analyze`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            }
-          });
-
-          if (analysisResponse.ok) {
-            message.success('章节分析已开始，请稍后查看结果');
-          } else {
-            message.warning('章节分析触发失败，您可以手动触发分析');
-          }
+          await chapterApi.triggerChapterAnalysis(chapterId, projectId);
+          message.success('章节分析已开始，请稍后查看结果');
         } catch (analysisError) {
           console.error('触发分析失败:', analysisError);
           message.warning('章节分析触发失败，您可以手动触发分析');

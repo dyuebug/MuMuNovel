@@ -10,12 +10,13 @@ import {
   LeftOutlined,
   RightOutlined,
 } from '@ant-design/icons';
-import api from '../services/api';
+import api, { chapterApi } from '../services/api';
 import AnnotatedText, { type MemoryAnnotation } from '../components/AnnotatedText';
 import MemorySidebar from '../components/MemorySidebar';
 
 interface ChapterData {
   id: string;
+  project_id?: string;
   chapter_number: number;
   title: string;
   content: string;
@@ -172,13 +173,13 @@ const ChapterReader: React.FC = () => {
       message.loading({ content: '开始分析章节...', key: 'analyze', duration: 0 });
 
       // 触发分析
-      await api.post(`/chapters/${chapterId}/analyze`);
+      await chapterApi.triggerChapterAnalysis(chapterId, chapter?.project_id);
 
       // 轮询分析状态
       const pollInterval = setInterval(async () => {
         try {
-          const statusRes = await api.get(`/chapters/${chapterId}/analysis/status`);
-          const { status, progress, error_message } = statusRes.data;
+          const statusRes = await chapterApi.getChapterAnalysisStatus(chapterId, chapter?.project_id);
+          const { status, progress, error_message } = statusRes;
 
           setAnalysisProgress(progress || 0);
 
@@ -188,8 +189,8 @@ const ChapterReader: React.FC = () => {
             message.success({ content: '分析完成！', key: 'analyze' });
             
             // 重新加载标注数据
-            const annotationsRes = await api.get(`/chapters/${chapterId}/annotations`);
-            setAnnotationsData(annotationsRes.data);
+            const annotationsRes = await api.get<unknown, AnnotationsData>(`/chapters/${chapterId}/annotations`);
+            setAnnotationsData(annotationsRes);
           } else if (status === 'failed') {
             clearInterval(pollInterval);
             setAnalyzing(false);

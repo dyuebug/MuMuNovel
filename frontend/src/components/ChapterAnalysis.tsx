@@ -14,6 +14,7 @@ import {
   EditOutlined
 } from '@ant-design/icons';
 import type { AnalysisTask, ChapterAnalysisResponse } from '../types';
+import { chapterApi } from '../services/api';
 import ChapterRegenerationModal from './ChapterRegenerationModal';
 import ChapterContentComparison from './ChapterContentComparison';
 
@@ -34,7 +35,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
   const [isMobile, setIsMobile] = useState(isMobileDevice());
   const [regenerationModalVisible, setRegenerationModalVisible] = useState(false);
   const [comparisonModalVisible, setComparisonModalVisible] = useState(false);
-  const [chapterInfo, setChapterInfo] = useState<{ title: string; chapter_number: number; content: string } | null>(null);
+  const [chapterInfo, setChapterInfo] = useState<{ title: string; chapter_number: number; content: string; project_id?: string } | null>(null);
   const [newGeneratedContent, setNewGeneratedContent] = useState('');
   const [newContentWordCount, setNewContentWordCount] = useState(0);
 
@@ -61,18 +62,17 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
   // 🔧 新增：独立的章节信息加载函数
   const loadChapterInfo = async () => {
     try {
-      const chapterResponse = await fetch(`/api/chapters/${chapterId}`);
-      if (chapterResponse.ok) {
-        const chapterData = await chapterResponse.json();
-        setChapterInfo({
-          title: chapterData.title,
-          chapter_number: chapterData.chapter_number,
-          content: chapterData.content || ''
-        });
-        console.log('✅ 已刷新章节内容，字数:', chapterData.content?.length || 0);
-      }
+      const chapterData = await chapterApi.getChapter(chapterId);
+      setChapterInfo({
+        title: chapterData.title,
+        chapter_number: chapterData.chapter_number,
+        content: chapterData.content || '',
+        project_id: chapterData.project_id,
+      });
+      return chapterData;
     } catch (error) {
       console.error('❌ 加载章节信息失败:', error);
+      return null;
     }
   };
 
@@ -81,22 +81,11 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       setLoading(true);
       setError(null);
 
-      // 🔧 使用独立的章节加载函数
-      await loadChapterInfo();
-
-      const response = await fetch(`/api/chapters/${chapterId}/analysis/status`);
-
-      if (response.status === 404) {
-        setTask(null);
-        setError('该章节还未进行分析');
-        return;
-      }
-
-      if (!response.ok) {
-        throw new Error('获取分析状态失败');
-      }
-
-      const taskData: AnalysisTask = await response.json();
+      const chapterData = await loadChapterInfo();
+      const taskData: AnalysisTask = await chapterApi.getChapterAnalysisStatus(
+        chapterId,
+        chapterData?.project_id || chapterInfo?.project_id
+      );
 
       // 如果状态为 none（无任务），设置 task 为 null，让前端显示"开始分析"按钮
       if (taskData.status === 'none' || !taskData.has_task) {
@@ -122,11 +111,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
 
   const fetchAnalysisResult = async () => {
     try {
-      const response = await fetch(`/api/chapters/${chapterId}/analysis`);
-      if (!response.ok) {
-        throw new Error('获取分析结果失败');
-      }
-      const data: ChapterAnalysisResponse = await response.json();
+      const data: ChapterAnalysisResponse = await chapterApi.getChapterAnalysis(chapterId, false);
       setAnalysis(data);
     } catch (err) {
       setError((err as Error).message);
@@ -136,10 +121,11 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
   const startPolling = () => {
     const pollInterval = setInterval(async () => {
       try {
-        const response = await fetch(`/api/chapters/${chapterId}/analysis/status`);
-        if (!response.ok) return;
-
-        const taskData: AnalysisTask = await response.json();
+        const taskData: AnalysisTask = await chapterApi.getChapterAnalysisStatus(
+          chapterId,
+          chapterInfo?.project_id
+        );
+        if (taskData.status === 'none' || !taskData.has_task) return;
         setTask(taskData);
 
         if (taskData.status === 'completed') {
@@ -165,17 +151,11 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       setLoading(true);
       setError(null);
 
-      // 🔧 触发分析前先刷新章节内容，确保分析的是最新内容
-      await loadChapterInfo();
-
-      const response = await fetch(`/api/chapters/${chapterId}/analyze`, {
-        method: 'POST'
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || '触发分析失败');
-      }
+      const chapterData = await loadChapterInfo();
+      await chapterApi.triggerChapterAnalysis(
+        chapterId,
+        chapterData?.project_id || chapterInfo?.project_id
+      );
 
       // 触发成功后立即关闭Modal，让父组件的状态管理接管
       onClose();
@@ -740,6 +720,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
           visible={comparisonModalVisible}
           onClose={() => setComparisonModalVisible(false)}
           chapterId={chapterId}
+          projectId={chapterInfo.project_id}
           chapterTitle={chapterInfo.title}
           originalContent={chapterInfo.content}
           newContent={newGeneratedContent}
@@ -750,19 +731,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
             setAnalysis(null);
 
             // 重新加载章节内容
-            try {
-              const chapterResponse = await fetch(`/api/chapters/${chapterId}`);
-              if (chapterResponse.ok) {
-                const chapterData = await chapterResponse.json();
-                setChapterInfo({
-                  title: chapterData.title,
-                  chapter_number: chapterData.chapter_number,
-                  content: chapterData.content || ''
-                });
-              }
-            } catch (error) {
-              console.error('重新加载章节失败:', error);
-            }
+            await loadChapterInfo();
 
             // 刷新分析状态
             await fetchAnalysisStatus();
