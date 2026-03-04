@@ -36,29 +36,29 @@ MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
     # Legacy hashes from previous AI_DENOISING defaults.
     # If users still hold an untouched legacy copy, auto-upgrade to latest.
     "AI_DENOISING": TemplateSyncRule(
-        legacy_hashes={"c40c0f000310940c", "15d418f68d68f7a6"},
+        legacy_hashes={"c40c0f000310940c", "15d418f68d68f7a6", "bec75d1005770577"},
     ),
     # 第三版融合（主线模板）：当用户副本仍是历史默认内容时，自动升级到最新约束版本。
     "OUTLINE_CREATE": TemplateSyncRule(
-        legacy_hashes={"3dac3838a8989e40"},
+        legacy_hashes={"3dac3838a8989e40", "8403d46239ac21f9"},
     ),
     "OUTLINE_CONTINUE": TemplateSyncRule(
-        legacy_hashes={"32b6f497d1ba1fcb"},
+        legacy_hashes={"32b6f497d1ba1fcb", "fbf485bc5ca6c990"},
     ),
     "CHAPTER_GENERATION_ONE_TO_MANY": TemplateSyncRule(
-        legacy_hashes={"fdfdb8c6b7619804"},
+        legacy_hashes={"fdfdb8c6b7619804", "f305d7120838aecd"},
     ),
     "CHAPTER_GENERATION_ONE_TO_MANY_NEXT": TemplateSyncRule(
-        legacy_hashes={"9e3c0ccc044ffa31"},
+        legacy_hashes={"9e3c0ccc044ffa31", "f0d0bb2c56983aed"},
     ),
     "CHAPTER_GENERATION_ONE_TO_ONE": TemplateSyncRule(
-        legacy_hashes={"4ccddf983a56e3e9"},
+        legacy_hashes={"4ccddf983a56e3e9", "31a22bb8610a4cf1"},
     ),
     "CHAPTER_GENERATION_ONE_TO_ONE_NEXT": TemplateSyncRule(
-        legacy_hashes={"cc18fe04ad17ac2b"},
+        legacy_hashes={"cc18fe04ad17ac2b", "93979c953dcb6e64"},
     ),
     "PARTIAL_REGENERATE": TemplateSyncRule(
-        legacy_hashes={"d4fc0961075e426e", "ed4e95fe9b82e4aa"},
+        legacy_hashes={"d4fc0961075e426e", "ed4e95fe9b82e4aa", "9da113b6496d8c12"},
     ),
     "PLOT_ANALYSIS": TemplateSyncRule(
         legacy_hashes={"dee21de2491c9c8b"},
@@ -83,7 +83,7 @@ MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
         legacy_hashes={"616ecf71799a153c"},
     ),
     "CHAPTER_REGENERATION_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"18cf26ca10811026"},
+        legacy_hashes={"18cf26ca10811026", "7cf4aad2f74199ab"},
     ),
     "AUTO_CHARACTER_GENERATION": TemplateSyncRule(
         legacy_hashes={"0a789aa309633332"},
@@ -96,31 +96,31 @@ MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
     ),
     # 灵感模式模板：当用户仍是旧版系统默认副本时，自动升级到新版低AI生活化约束。
     "INSPIRATION_TITLE_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"174116db28ffe2cd", "ff42cc2ceac62d6c", "dd4dcec1cc7a4a89"},
+        legacy_hashes={"174116db28ffe2cd", "ff42cc2ceac62d6c", "dd4dcec1cc7a4a89", "46d0630fcc38b042"},
     ),
     "INSPIRATION_TITLE_USER": TemplateSyncRule(
-        legacy_hashes={"95f56808897a03a1"},
+        legacy_hashes={"95f56808897a03a1", "17f7f36eed5bbf7f"},
     ),
     "INSPIRATION_DESCRIPTION_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"5d3349db809fe56f", "6027777447bb0156", "261b325cf3577e5f"},
+        legacy_hashes={"5d3349db809fe56f", "6027777447bb0156", "261b325cf3577e5f", "b4d06bf965dda8a6"},
     ),
     "INSPIRATION_DESCRIPTION_USER": TemplateSyncRule(
-        legacy_hashes={"f0af139f8db3e24a"},
+        legacy_hashes={"f0af139f8db3e24a", "0363da89559d6cb2"},
     ),
     "INSPIRATION_THEME_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"77fcd61b59597687", "9d784b8ce9a66177", "b83916e2eeab0f6d"},
+        legacy_hashes={"77fcd61b59597687", "9d784b8ce9a66177", "b83916e2eeab0f6d", "044b05ddb80e4729"},
     ),
     "INSPIRATION_THEME_USER": TemplateSyncRule(
-        legacy_hashes={"0c691111be925e7a"},
+        legacy_hashes={"0c691111be925e7a", "6c2b5a57b8319894"},
     ),
     "INSPIRATION_GENRE_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"d7e550414969ffe2", "9258f1c8c0bfd99d", "8099dc8af8705f9b"},
+        legacy_hashes={"d7e550414969ffe2", "9258f1c8c0bfd99d", "8099dc8af8705f9b", "48e61aac5ed73b34"},
     ),
     "INSPIRATION_GENRE_USER": TemplateSyncRule(
-        legacy_hashes={"c3a2ff6230a69e45"},
+        legacy_hashes={"c3a2ff6230a69e45", "e082b217449e54dd"},
     ),
     "INSPIRATION_QUICK_COMPLETE": TemplateSyncRule(
-        legacy_hashes={"90d7050767ec4423", "859f27b2cd8f694e", "88892302ac1e0715"},
+        legacy_hashes={"90d7050767ec4423", "859f27b2cd8f694e", "88892302ac1e0715", "b533c5afae9272ba"},
     ),
 }
 
