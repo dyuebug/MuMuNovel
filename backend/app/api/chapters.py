@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 import json
 import asyncio
 import re
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 from asyncio import Queue, Lock
 
@@ -474,6 +474,359 @@ def _build_generation_history_payload(content: str, metrics: Dict[str, Any]) -> 
     return json.dumps(payload, ensure_ascii=False)
 
 
+def _normalize_checker_result(raw: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """规范化正文质检结果，确保字段稳定。"""
+    if not isinstance(raw, dict):
+        return None
+
+    severity_allow = {"critical", "major", "minor"}
+    normalized_issues: List[Dict[str, str]] = []
+
+    for item in (raw.get("issues") or []):
+        if not isinstance(item, dict):
+            continue
+        severity = str(item.get("severity") or "minor").strip().lower()
+        if severity not in severity_allow:
+            severity = "minor"
+        issue = {
+            "severity": severity,
+            "category": str(item.get("category") or "文风表达").strip()[:40],
+            "location": str(item.get("location") or "未明确位置").strip()[:120],
+            "evidence": str(item.get("evidence") or "").strip()[:240],
+            "impact": str(item.get("impact") or "").strip()[:240],
+            "suggestion": str(item.get("suggestion") or "").strip()[:240],
+        }
+        if issue["suggestion"]:
+            normalized_issues.append(issue)
+        if len(normalized_issues) >= 8:
+            break
+
+    severity_counts = {
+        "critical": sum(1 for i in normalized_issues if i["severity"] == "critical"),
+        "major": sum(1 for i in normalized_issues if i["severity"] == "major"),
+        "minor": sum(1 for i in normalized_issues if i["severity"] == "minor"),
+    }
+
+    overall = str(raw.get("overall_assessment") or "").strip()
+    if not overall:
+        if severity_counts["critical"] > 0:
+            overall = "存在严重问题"
+        elif severity_counts["major"] >= 4:
+            overall = "较差"
+        elif severity_counts["major"] >= 2:
+            overall = "一般"
+        elif severity_counts["major"] >= 1 or severity_counts["minor"] >= 3:
+            overall = "良好"
+        else:
+            overall = "优秀"
+
+    priority_actions: List[str] = []
+    for action in (raw.get("priority_actions") or []):
+        if isinstance(action, str) and action.strip():
+            priority_actions.append(action.strip()[:220])
+        if len(priority_actions) >= 5:
+            break
+    if not priority_actions:
+        priority_actions = [i["suggestion"] for i in normalized_issues[:3] if i["suggestion"]]
+
+    revision_suggestions: List[str] = []
+    seen: set[str] = set()
+    for suggestion in (raw.get("revision_suggestions") or []):
+        if not isinstance(suggestion, str):
+            continue
+        text = suggestion.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        revision_suggestions.append(text[:220])
+        if len(revision_suggestions) >= 8:
+            break
+    for issue in normalized_issues:
+        text = issue["suggestion"]
+        if text and text not in seen:
+            seen.add(text)
+            revision_suggestions.append(text[:220])
+        if len(revision_suggestions) >= 8:
+            break
+
+    return {
+        "overall_assessment": overall,
+        "severity_counts": severity_counts,
+        "issues": normalized_issues,
+        "priority_actions": priority_actions,
+        "revision_suggestions": revision_suggestions,
+    }
+
+
+def _build_checker_report_text(checker_result: Optional[Dict[str, Any]]) -> str:
+    """将结构化质检结果转为可读摘要文本。"""
+    if not checker_result:
+        return ""
+
+    counts = checker_result.get("severity_counts") or {}
+    lines = [
+        "【第三版正文质检】",
+        f"- 总评：{checker_result.get('overall_assessment', '未给出')}",
+        f"- 问题统计：严重{counts.get('critical', 0)} / 中等{counts.get('major', 0)} / 轻微{counts.get('minor', 0)}",
+    ]
+    actions = checker_result.get("priority_actions") or []
+    if actions:
+        lines.append("- 优先修复：")
+        for idx, action in enumerate(actions[:3], start=1):
+            lines.append(f"  {idx}. {action}")
+    return "\n".join(lines)
+
+
+def _merge_checker_suggestions(
+    analysis_suggestions: Optional[List[Any]],
+    checker_result: Optional[Dict[str, Any]],
+) -> List[str]:
+    """合并分析建议和质检建议，去重后输出。"""
+    merged: List[str] = []
+    seen: set[str] = set()
+
+    for item in (analysis_suggestions or []):
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if text and text not in seen:
+            seen.add(text)
+            merged.append(text[:220])
+
+    if not checker_result:
+        return merged[:14]
+
+    counts = checker_result.get("severity_counts") or {}
+    if counts.get("critical", 0) > 0:
+        top_line = "【质检优先级】先修复所有严重问题，再处理中等问题。"
+        merged.insert(0, top_line)
+        seen.add(top_line)
+
+    for issue in (checker_result.get("issues") or []):
+        if not isinstance(issue, dict):
+            continue
+        severity = issue.get("severity", "minor")
+        if severity == "critical":
+            prefix = "【质检-严重】"
+        elif severity == "major":
+            prefix = "【质检-中等】"
+        else:
+            prefix = "【质检-轻微】"
+        category = str(issue.get("category") or "").strip()
+        suggestion = str(issue.get("suggestion") or "").strip()
+        text = f"{prefix}{category}：{suggestion}" if suggestion else ""
+        if text and text not in seen:
+            seen.add(text)
+            merged.append(text[:220])
+        if len(merged) >= 12:
+            break
+
+    for suggestion in (checker_result.get("revision_suggestions") or []):
+        if not isinstance(suggestion, str):
+            continue
+        text = suggestion.strip()
+        line = f"【质检建议】{text[:200]}"
+        if text and line not in seen:
+            seen.add(line)
+            merged.append(line)
+        if len(merged) >= 14:
+            break
+
+    return merged[:14]
+
+
+def _build_checker_history_payload(checker_result: Dict[str, Any]) -> str:
+    payload = {
+        "log_type": "chapter_text_checker_v1",
+        "checker_result": checker_result,
+        "checked_at": datetime.now().isoformat(),
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _build_critical_issues_text(checker_result: Optional[Dict[str, Any]]) -> str:
+    """提取严重问题文本，作为自动修订输入。"""
+    if not checker_result:
+        return "（无严重问题）"
+
+    critical = [
+        i for i in (checker_result.get("issues") or [])
+        if isinstance(i, dict) and i.get("severity") == "critical"
+    ]
+    if not critical:
+        return "（无严重问题）"
+
+    lines: List[str] = []
+    for idx, issue in enumerate(critical[:8], start=1):
+        category = str(issue.get("category") or "未分类")
+        location = str(issue.get("location") or "未定位")
+        impact = str(issue.get("impact") or "").strip()
+        suggestion = str(issue.get("suggestion") or "").strip()
+        lines.append(f"{idx}. [{category}] 位置: {location}")
+        if impact:
+            lines.append(f"   影响: {impact}")
+        if suggestion:
+            lines.append(f"   建议: {suggestion}")
+    return "\n".join(lines)
+
+
+def _build_reviser_history_payload(reviser_result: Dict[str, Any]) -> str:
+    payload = {
+        "log_type": "chapter_text_reviser_v1",
+        "reviser_result": reviser_result,
+        "revised_at": datetime.now().isoformat(),
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+async def _run_chapter_text_checker(
+    *,
+    ai_service: AIService,
+    db_session: AsyncSession,
+    user_id: str,
+    chapter_number: int,
+    chapter_title: str,
+    chapter_content: str,
+    chapter_outline: str,
+    characters_info: str,
+    world_rules: str,
+) -> Optional[Dict[str, Any]]:
+    """运行第三版正文质检。失败时返回None，不阻断主流程。"""
+    try:
+        template = await PromptService.get_template("CHAPTER_TEXT_CHECKER", user_id, db_session)
+        if not template:
+            template = PromptService.CHAPTER_TEXT_CHECKER
+
+        prompt = PromptService.format_prompt(
+            template,
+            chapter_number=chapter_number,
+            chapter_title=chapter_title or f"第{chapter_number}章",
+            chapter_content=(chapter_content or "")[:12000],
+            chapter_outline=(chapter_outline or "（无大纲信息）")[:3000],
+            characters_info=(characters_info or "（无角色信息）")[:4000],
+            world_rules=(world_rules or "（无世界规则）")[:1500],
+        )
+
+        result = await ai_service.call_with_json_retry(
+            prompt=prompt,
+            max_retries=2,
+            temperature=0.2,
+            max_tokens=2200,
+            expected_type="object",
+            auto_mcp=False,
+        )
+        normalized = _normalize_checker_result(result)
+        if not normalized:
+            return None
+
+        counts = normalized.get("severity_counts") or {}
+        logger.info(
+            "✅ 第三版正文质检完成: critical=%s, major=%s, minor=%s",
+            counts.get("critical", 0),
+            counts.get("major", 0),
+            counts.get("minor", 0),
+        )
+        return normalized
+    except Exception as checker_error:
+        logger.warning(f"⚠️ 第三版正文质检失败，已跳过: {checker_error}")
+        return None
+
+
+async def _run_chapter_text_reviser(
+    *,
+    ai_service: AIService,
+    db_session: AsyncSession,
+    user_id: str,
+    chapter_number: int,
+    chapter_title: str,
+    chapter_content: str,
+    checker_result: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """根据质检结果生成自动修订草稿，仅建议，不覆盖正文。"""
+    counts = (checker_result or {}).get("severity_counts") or {}
+    critical_count = int(counts.get("critical") or 0)
+    if critical_count <= 0:
+        return None
+
+    try:
+        template = await PromptService.get_template("CHAPTER_TEXT_REVISER", user_id, db_session)
+        if not template:
+            template = PromptService.CHAPTER_TEXT_REVISER
+
+        checker_json = json.dumps(checker_result, ensure_ascii=False)
+        prompt = PromptService.format_prompt(
+            template,
+            chapter_number=chapter_number,
+            chapter_title=chapter_title or f"第{chapter_number}章",
+            chapter_content=(chapter_content or "")[:12000],
+            critical_issues_text=_build_critical_issues_text(checker_result),
+            checker_result_json=checker_json[:12000],
+        )
+
+        result = await ai_service.call_with_json_retry(
+            prompt=prompt,
+            max_retries=2,
+            temperature=0.22,
+            max_tokens=4200,
+            expected_type="object",
+            auto_mcp=False,
+        )
+        if not isinstance(result, dict):
+            return None
+
+        revised_text_raw = str(result.get("revised_text") or "").strip()
+        revised_text, removed_meta_lines = _sanitize_generated_narrative_text(revised_text_raw)
+        if not revised_text:
+            return None
+        if _contains_chapter_workflow_meta_text(revised_text):
+            logger.warning("⚠️ 自动修订草稿包含流程化元文本，已丢弃")
+            return None
+
+        applied_issues: List[str] = []
+        for item in (result.get("applied_issues") or []):
+            if isinstance(item, str) and item.strip():
+                applied_issues.append(item.strip()[:220])
+            if len(applied_issues) >= 8:
+                break
+        if not applied_issues:
+            applied_issues = [
+                i.get("suggestion", "")
+                for i in (checker_result.get("issues") or [])
+                if isinstance(i, dict) and i.get("severity") == "critical" and i.get("suggestion")
+            ][:3]
+
+        unresolved_issues: List[str] = []
+        for item in (result.get("unresolved_issues") or []):
+            if isinstance(item, str) and item.strip():
+                unresolved_issues.append(item.strip()[:220])
+            if len(unresolved_issues) >= 8:
+                break
+
+        reviser_result = {
+            "critical_count": critical_count,
+            "applied_critical_count": len(applied_issues),
+            "applied_issues": applied_issues,
+            "unresolved_issues": unresolved_issues,
+            "change_summary": str(
+                result.get("change_summary") or "已按严重问题生成自动修订草稿"
+            ).strip()[:220],
+            "revised_word_count": len(revised_text),
+            "meta_lines_removed": removed_meta_lines,
+            "revised_text": revised_text,
+            "revised_text_preview": revised_text[:500],
+        }
+        logger.info(
+            "✅ 自动修订草稿完成: critical=%s, applied=%s, unresolved=%s",
+            critical_count,
+            reviser_result["applied_critical_count"],
+            len(unresolved_issues),
+        )
+        return reviser_result
+    except Exception as reviser_error:
+        logger.warning(f"⚠️ 自动修订草稿生成失败，已跳过: {reviser_error}")
+        return None
+
+
 async def _record_task_quality_metrics(task_id: str, metrics_event: Dict[str, Any]):
     """记录任务级质量指标快照，供状态轮询接口读取。"""
     async with task_quality_lock:
@@ -575,6 +928,140 @@ def _parse_quality_metrics_from_history(generated_content: Optional[str]) -> Opt
     except Exception:
         # 兼容旧数据：generated_content 为纯文本
         return None
+    return None
+
+
+def _parse_checker_result_from_history(generated_content: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not generated_content:
+        return None
+    try:
+        payload = json.loads(generated_content)
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("log_type") != "chapter_text_checker_v1":
+            return None
+        checker_result = payload.get("checker_result")
+        if isinstance(checker_result, dict):
+            return checker_result
+    except Exception:
+        return None
+    return None
+
+
+def _parse_reviser_result_from_history(generated_content: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not generated_content:
+        return None
+    try:
+        payload = json.loads(generated_content)
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("log_type") != "chapter_text_reviser_v1":
+            return None
+        reviser_result = payload.get("reviser_result")
+        if isinstance(reviser_result, dict):
+            return reviser_result
+    except Exception:
+        return None
+    return None
+
+
+def _is_reviser_draft_stale(
+    chapter_updated_at: Optional[datetime],
+    draft_created_at: Optional[datetime],
+) -> bool:
+    if not chapter_updated_at or not draft_created_at:
+        return False
+    return chapter_updated_at > draft_created_at
+
+
+def _build_auto_revision_draft_payload(
+    *,
+    reviser_result: Dict[str, Any],
+    history_id: Optional[str],
+    created_at: Optional[datetime],
+    chapter_updated_at: Optional[datetime],
+    include_full_text: bool = False,
+) -> Dict[str, Any]:
+    revised_text = str(reviser_result.get("revised_text") or "")
+    revised_text_preview = str(reviser_result.get("revised_text_preview") or "").strip()
+    if not revised_text_preview and revised_text:
+        revised_text_preview = revised_text[:500]
+
+    payload: Dict[str, Any] = {
+        "history_id": history_id,
+        "critical_count": reviser_result.get("critical_count", 0),
+        "applied_critical_count": reviser_result.get("applied_critical_count", 0),
+        "change_summary": reviser_result.get("change_summary"),
+        "revised_word_count": reviser_result.get("revised_word_count", len(revised_text)),
+        "unresolved_issues": reviser_result.get("unresolved_issues", []),
+        "revised_text_preview": revised_text_preview,
+        "has_full_text": bool(revised_text),
+        "is_stale": _is_reviser_draft_stale(chapter_updated_at, created_at),
+        "created_at": created_at.isoformat() if created_at else None,
+    }
+    if include_full_text:
+        payload["revised_text"] = revised_text
+    return payload
+
+
+def _build_reviser_apply_history_payload(
+    *,
+    source_history_id: str,
+    source_created_at: Optional[datetime],
+    critical_count: int,
+    applied_critical_count: int,
+    old_word_count: int,
+    new_word_count: int,
+    stale_applied: bool,
+    allow_stale: bool,
+) -> str:
+    payload = {
+        "log_type": "chapter_text_reviser_apply_v1",
+        "source_history_id": source_history_id,
+        "source_created_at": source_created_at.isoformat() if source_created_at else None,
+        "critical_count": critical_count,
+        "applied_critical_count": applied_critical_count,
+        "old_word_count": old_word_count,
+        "new_word_count": new_word_count,
+        "stale_applied": stale_applied,
+        "allow_stale": allow_stale,
+        "applied_at": datetime.now().isoformat(),
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+async def _load_latest_reviser_history(
+    db: AsyncSession,
+    chapter_id: str,
+    history_id: Optional[str] = None,
+    scan_limit: int = 60,
+) -> Optional[Tuple[GenerationHistory, Dict[str, Any]]]:
+    if history_id:
+        result = await db.execute(
+            select(GenerationHistory).where(
+                GenerationHistory.id == history_id,
+                GenerationHistory.chapter_id == chapter_id,
+            )
+        )
+        history = result.scalar_one_or_none()
+        if not history:
+            return None
+        parsed = _parse_reviser_result_from_history(history.generated_content)
+        if not parsed:
+            return None
+        return history, parsed
+
+    result = await db.execute(
+        select(GenerationHistory)
+        .where(GenerationHistory.chapter_id == chapter_id)
+        .order_by(GenerationHistory.created_at.desc())
+        .limit(scan_limit)
+    )
+    histories = result.scalars().all()
+    for history in histories:
+        parsed = _parse_reviser_result_from_history(history.generated_content)
+        if parsed:
+            return history, parsed
     return None
 
 
@@ -1573,6 +2060,29 @@ async def analyze_chapter_background(
             await db_session.commit()
         
         # 获取已埋入的伏笔列表（用于回收匹配，传入当前章节号以启用智能标记）
+        project_result = await db_session.execute(
+            select(Project).where(Project.id == project_id)
+        )
+        project = project_result.scalar_one_or_none()
+        if not project:
+            async with write_lock:
+                task.status = 'failed'
+                task.error_message = '项目不存在'
+                task.completed_at = datetime.now()
+                await db_session.commit()
+            logger.error(f"❌ 项目不存在: {project_id}")
+            return False
+
+        chapter_outline_record = None
+        chapter_outline_text = ""
+        if chapter.outline_id:
+            outline_result = await db_session.execute(
+                select(Outline).where(Outline.id == chapter.outline_id)
+            )
+            chapter_outline_record = outline_result.scalar_one_or_none()
+            if chapter_outline_record:
+                chapter_outline_text = (chapter_outline_record.content or chapter_outline_record.title or "").strip()
+
         existing_foreshadows = await foreshadow_service.get_planted_foreshadows_for_analysis(
             db=db_session,
             project_id=project_id,
@@ -1595,21 +2105,16 @@ async def analyze_chapter_background(
                 pass
         
         # 1-1模式：从outline.structure中提取characters
-        if not filter_character_names and chapter.outline_id:
+        if not filter_character_names and chapter_outline_record and chapter_outline_record.structure:
             try:
-                outline_result = await db_session.execute(
-                    select(Outline).where(Outline.id == chapter.outline_id)
-                )
-                chapter_outline = outline_result.scalar_one_or_none()
-                if chapter_outline and chapter_outline.structure:
-                    structure = json.loads(chapter_outline.structure)
-                    raw_characters = structure.get('characters', [])
-                    if raw_characters:
-                        filter_character_names = [
-                            c['name'] if isinstance(c, dict) else c
-                            for c in raw_characters
-                        ]
-                        logger.info(f"📋 从outline.structure提取角色: {filter_character_names}")
+                structure = json.loads(chapter_outline_record.structure)
+                raw_characters = structure.get('characters', [])
+                if raw_characters:
+                    filter_character_names = [
+                        c['name'] if isinstance(c, dict) else c
+                        for c in raw_characters
+                    ]
+                    logger.info(f"📋 从outline.structure提取角色: {filter_character_names}")
             except (json.JSONDecodeError, Exception):
                 pass
         
@@ -1679,6 +2184,53 @@ async def analyze_chapter_background(
             logger.error(f"❌ AI分析失败: {chapter_id}")
             return False
         
+        checker_result = await _run_chapter_text_checker(
+            ai_service=ai_service,
+            db_session=db_session,
+            user_id=user_id,
+            chapter_number=chapter.chapter_number,
+            chapter_title=chapter.title or "",
+            chapter_content=chapter.content or "",
+            chapter_outline=chapter_outline_text,
+            characters_info=characters_info,
+            world_rules=project.world_rules or "",
+        )
+        reviser_result = await _run_chapter_text_reviser(
+            ai_service=ai_service,
+            db_session=db_session,
+            user_id=user_id,
+            chapter_number=chapter.chapter_number,
+            chapter_title=chapter.title or "",
+            chapter_content=chapter.content or "",
+            checker_result=checker_result or {},
+        )
+
+        analysis_report_text = analyzer.generate_analysis_summary(analysis_result)
+        checker_report_text = _build_checker_report_text(checker_result)
+        if checker_report_text:
+            analysis_report_text = f"{analysis_report_text}\n\n{checker_report_text}"
+        if reviser_result:
+            reviser_summary_lines = [
+                "【第三版自动修订草稿】",
+                f"- 严重问题数：{reviser_result.get('critical_count', 0)}",
+                f"- 已修复建议数：{reviser_result.get('applied_critical_count', 0)}",
+                f"- 草稿字数：{reviser_result.get('revised_word_count', 0)}",
+                f"- 说明：{reviser_result.get('change_summary', '已生成草稿')}",
+            ]
+            analysis_report_text = f"{analysis_report_text}\n\n" + "\n".join(reviser_summary_lines)
+
+        merged_suggestions = _merge_checker_suggestions(
+            analysis_suggestions=analysis_result.get('suggestions', []),
+            checker_result=checker_result,
+        )
+        if reviser_result:
+            for unresolved in (reviser_result.get("unresolved_issues") or []):
+                if isinstance(unresolved, str) and unresolved.strip():
+                    merged_suggestions.append(f"【修订未完成】{unresolved.strip()[:200]}")
+                if len(merged_suggestions) >= 16:
+                    break
+            merged_suggestions = merged_suggestions[:16]
+
         async with write_lock:
             task.progress = 60
             await db_session.commit()
@@ -1712,8 +2264,8 @@ async def analyze_chapter_background(
                 existing_analysis.pacing_score = analysis_result.get('scores', {}).get('pacing', 0)
                 existing_analysis.engagement_score = analysis_result.get('scores', {}).get('engagement', 0)
                 existing_analysis.coherence_score = analysis_result.get('scores', {}).get('coherence', 0)
-                existing_analysis.analysis_report = analyzer.generate_analysis_summary(analysis_result)
-                existing_analysis.suggestions = analysis_result.get('suggestions', [])
+                existing_analysis.analysis_report = analysis_report_text
+                existing_analysis.suggestions = merged_suggestions
                 existing_analysis.dialogue_ratio = analysis_result.get('dialogue_ratio', 0)
                 existing_analysis.description_ratio = analysis_result.get('description_ratio', 0)
             else:
@@ -1741,12 +2293,31 @@ async def analyze_chapter_background(
                     pacing_score=analysis_result.get('scores', {}).get('pacing', 0),
                     engagement_score=analysis_result.get('scores', {}).get('engagement', 0),
                     coherence_score=analysis_result.get('scores', {}).get('coherence', 0),
-                    analysis_report=analyzer.generate_analysis_summary(analysis_result),
-                    suggestions=analysis_result.get('suggestions', []),
+                    analysis_report=analysis_report_text,
+                    suggestions=merged_suggestions,
                     dialogue_ratio=analysis_result.get('dialogue_ratio', 0),
                     description_ratio=analysis_result.get('description_ratio', 0)
                 )
                 db_session.add(plot_analysis)
+
+            if checker_result:
+                checker_history = GenerationHistory(
+                    project_id=project_id,
+                    chapter_id=chapter_id,
+                    prompt=f"章节质检: 第{chapter.chapter_number}章 {chapter.title or ''}",
+                    generated_content=_build_checker_history_payload(checker_result),
+                    model="chapter_text_checker_v1",
+                )
+                db_session.add(checker_history)
+            if reviser_result:
+                reviser_history = GenerationHistory(
+                    project_id=project_id,
+                    chapter_id=chapter_id,
+                    prompt=f"自动修订草稿: 第{chapter.chapter_number}章 {chapter.title or ''}",
+                    generated_content=_build_reviser_history_payload(reviser_result),
+                    model="chapter_text_reviser_v1",
+                )
+                db_session.add(reviser_history)
             
             await db_session.commit()
             
@@ -2819,6 +3390,7 @@ async def get_analysis_task_status(
 async def get_chapter_analysis(
     chapter_id: str,
     request: Request,
+    include_full_draft: bool = Query(False, description="是否包含自动修订草稿全文"),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -2830,17 +3402,16 @@ async def get_chapter_analysis(
     - memories: 提取的记忆列表
     - created_at: 分析时间
     """
-    # 先获取章节以验证权限
     chapter_result_check = await db.execute(
         select(Chapter).where(Chapter.id == chapter_id)
     )
     chapter_check = chapter_result_check.scalar_one_or_none()
-    if chapter_check:
-        # 验证用户权限
-        user_id = getattr(request.state, 'user_id', None)
-        await verify_project_access(chapter_check.project_id, user_id, db)
-    
-    # 获取分析结果
+    if not chapter_check:
+        raise HTTPException(status_code=404, detail="章节不存在")
+
+    user_id = getattr(request.state, 'user_id', None)
+    await verify_project_access(chapter_check.project_id, user_id, db)
+
     analysis_result = await db.execute(
         select(PlotAnalysis)
         .where(PlotAnalysis.chapter_id == chapter_id)
@@ -2848,21 +3419,58 @@ async def get_chapter_analysis(
         .limit(1)
     )
     analysis = analysis_result.scalar_one_or_none()
-    
     if not analysis:
         raise HTTPException(status_code=404, detail="该章节暂无分析结果")
-    
-    # 获取相关记忆
+
     memories_result = await db.execute(
         select(StoryMemory)
         .where(StoryMemory.chapter_id == chapter_id)
         .order_by(StoryMemory.importance_score.desc())
     )
     memories = memories_result.scalars().all()
-    
+
+    history_result = await db.execute(
+        select(GenerationHistory)
+        .where(GenerationHistory.chapter_id == chapter_id)
+        .order_by(GenerationHistory.created_at.desc())
+        .limit(30)
+    )
+    histories = history_result.scalars().all()
+
+    latest_checker_result: Optional[Dict[str, Any]] = None
+    latest_reviser_result: Optional[Dict[str, Any]] = None
+    checker_created_at: Optional[str] = None
+    latest_reviser_created_at: Optional[datetime] = None
+    latest_reviser_history_id: Optional[str] = None
+
+    for history in histories:
+        if latest_checker_result is None:
+            parsed_checker = _parse_checker_result_from_history(history.generated_content)
+            if parsed_checker:
+                latest_checker_result = parsed_checker
+                checker_created_at = history.created_at.isoformat() if history.created_at else None
+        if latest_reviser_result is None:
+            parsed_reviser = _parse_reviser_result_from_history(history.generated_content)
+            if parsed_reviser:
+                latest_reviser_result = parsed_reviser
+                latest_reviser_created_at = history.created_at
+                latest_reviser_history_id = history.id
+        if latest_checker_result is not None and latest_reviser_result is not None:
+            break
+
+    auto_revision_draft = None
+    if latest_reviser_result:
+        auto_revision_draft = _build_auto_revision_draft_payload(
+            reviser_result=latest_reviser_result,
+            history_id=latest_reviser_history_id,
+            created_at=latest_reviser_created_at,
+            chapter_updated_at=chapter_check.updated_at,
+            include_full_text=include_full_draft,
+        )
+
     return {
         "chapter_id": chapter_id,
-        "analysis": analysis.to_dict(),  # 使用to_dict()方法
+        "analysis": analysis.to_dict(),
         "memories": [
             {
                 "id": mem.id,
@@ -2877,7 +3485,165 @@ async def get_chapter_analysis(
             }
             for mem in memories
         ],
+        "checker_result": latest_checker_result,
+        "checker_created_at": checker_created_at,
+        "auto_revision_draft": auto_revision_draft,
         "created_at": analysis.created_at.isoformat() if analysis.created_at else None
+    }
+
+
+@router.get("/{chapter_id}/analysis/auto-revision-draft", summary="获取自动修订草稿详情")
+async def get_auto_revision_draft(
+    chapter_id: str,
+    request: Request,
+    history_id: Optional[str] = Query(None, description="指定修订草稿历史ID"),
+    db: AsyncSession = Depends(get_db)
+):
+    """获取自动修订草稿全文。"""
+    user_id = getattr(request.state, 'user_id', None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    chapter_result = await db.execute(
+        select(Chapter).where(Chapter.id == chapter_id)
+    )
+    chapter = chapter_result.scalar_one_or_none()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="章节不存在")
+
+    await verify_project_access(chapter.project_id, user_id, db)
+
+    reviser_loaded = await _load_latest_reviser_history(
+        db=db,
+        chapter_id=chapter_id,
+        history_id=history_id,
+    )
+    if not reviser_loaded:
+        raise HTTPException(status_code=404, detail="该章节暂无自动修订草稿")
+
+    reviser_history, reviser_result = reviser_loaded
+    auto_revision_draft = _build_auto_revision_draft_payload(
+        reviser_result=reviser_result,
+        history_id=reviser_history.id,
+        created_at=reviser_history.created_at,
+        chapter_updated_at=chapter.updated_at,
+        include_full_text=True,
+    )
+    return {
+        "chapter_id": chapter_id,
+        "auto_revision_draft": auto_revision_draft,
+    }
+
+
+@router.post("/{chapter_id}/analysis/auto-revision-draft/apply", summary="应用自动修订草稿")
+async def apply_auto_revision_draft(
+    chapter_id: str,
+    request: Request,
+    apply_request: Optional[Dict[str, Any]] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """将自动修订草稿写回章节正文。"""
+    user_id = getattr(request.state, 'user_id', None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    chapter_result = await db.execute(
+        select(Chapter).where(Chapter.id == chapter_id)
+    )
+    chapter = chapter_result.scalar_one_or_none()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="章节不存在")
+
+    await verify_project_access(chapter.project_id, user_id, db)
+
+    payload = apply_request or {}
+    history_id_raw = payload.get("history_id")
+    history_id = str(history_id_raw).strip() if history_id_raw is not None else ""
+    history_id = history_id or None
+
+    allow_stale_raw = payload.get("allow_stale", False)
+    if isinstance(allow_stale_raw, bool):
+        allow_stale = allow_stale_raw
+    elif isinstance(allow_stale_raw, str):
+        allow_stale = allow_stale_raw.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        allow_stale = bool(allow_stale_raw)
+
+    reviser_loaded = await _load_latest_reviser_history(
+        db=db,
+        chapter_id=chapter_id,
+        history_id=history_id,
+    )
+    if not reviser_loaded:
+        if history_id:
+            raise HTTPException(status_code=404, detail="指定的自动修订草稿不存在或不可用")
+        raise HTTPException(status_code=404, detail="该章节暂无可应用的自动修订草稿")
+
+    reviser_history, reviser_result = reviser_loaded
+    revised_text_raw = str(reviser_result.get("revised_text") or "").strip()
+    revised_text, _ = _sanitize_generated_narrative_text(revised_text_raw)
+    if not revised_text.strip():
+        raise HTTPException(status_code=400, detail="自动修订草稿内容为空，无法应用")
+    if _contains_chapter_workflow_meta_text(revised_text):
+        raise HTTPException(status_code=400, detail="自动修订草稿包含流程化元文本，无法应用")
+
+    stale = _is_reviser_draft_stale(chapter.updated_at, reviser_history.created_at)
+    if stale and not allow_stale:
+        raise HTTPException(
+            status_code=409,
+            detail="自动修订草稿已过期，请获取最新草稿或在请求中设置 allow_stale=true",
+        )
+
+    old_word_count = chapter.word_count or len(chapter.content or "")
+    chapter.content = revised_text
+    new_word_count = len(revised_text)
+    chapter.word_count = new_word_count
+
+    project_result = await db.execute(
+        select(Project).where(Project.id == chapter.project_id)
+    )
+    project = project_result.scalar_one_or_none()
+    if project:
+        current_words = project.current_words or 0
+        project.current_words = max(0, current_words - old_word_count + new_word_count)
+
+    apply_history = GenerationHistory(
+        project_id=chapter.project_id,
+        chapter_id=chapter_id,
+        prompt=f"应用自动修订草稿: 第{chapter.chapter_number}章 {chapter.title or ''}",
+        generated_content=_build_reviser_apply_history_payload(
+            source_history_id=reviser_history.id,
+            source_created_at=reviser_history.created_at,
+            critical_count=int(reviser_result.get("critical_count") or 0),
+            applied_critical_count=int(reviser_result.get("applied_critical_count") or 0),
+            old_word_count=old_word_count,
+            new_word_count=new_word_count,
+            stale_applied=stale,
+            allow_stale=allow_stale,
+        ),
+        model="chapter_text_reviser_apply_v1",
+    )
+    db.add(apply_history)
+
+    await db.commit()
+    await db.refresh(chapter)
+
+    logger.info(
+        "✅ 已应用自动修订草稿: chapter_id=%s, old=%s, new=%s, stale=%s",
+        chapter_id,
+        old_word_count,
+        new_word_count,
+        stale,
+    )
+    return {
+        "success": True,
+        "chapter_id": chapter_id,
+        "word_count": new_word_count,
+        "old_word_count": old_word_count,
+        "draft_history_id": reviser_history.id,
+        "draft_created_at": reviser_history.created_at.isoformat() if reviser_history.created_at else None,
+        "stale_applied": stale,
+        "message": "自动修订草稿已应用",
     }
 
 
@@ -5148,4 +5914,3 @@ async def apply_partial_regenerate(
         "old_word_count": old_word_count,
         "message": "局部重写已应用"
     }
-
