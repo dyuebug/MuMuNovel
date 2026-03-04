@@ -644,12 +644,15 @@ export interface ChapterBatchGenerateResponse {
 export interface ChapterBatchGenerateStatusResponse {
   batch_id: string;
   status: string;
+  stage_code?: string | null;
+  execution_mode?: 'interactive' | 'auto' | null;
   total: number;
   completed: number;
   current_chapter_id?: string | null;
   current_chapter_number?: number | null;
   current_retry_count?: number | null;
   max_retries?: number | null;
+  checkpoint?: Record<string, unknown> | null;
   failed_chapters?: Array<Record<string, unknown>>;
   created_at?: string | null;
   started_at?: string | null;
@@ -662,10 +665,13 @@ export interface ChapterBatchGenerateStatusResponse {
 export interface ChapterBatchActiveTask {
   batch_id: string;
   status: string;
+  stage_code?: string | null;
+  execution_mode?: 'interactive' | 'auto' | null;
   total: number;
   completed: number;
   current_chapter_id?: string | null;
   current_chapter_number?: number | null;
+  checkpoint?: Record<string, unknown> | null;
   latest_quality_metrics?: Record<string, unknown> | null;
   quality_metrics_summary?: Record<string, unknown> | null;
   created_at?: string | null;
@@ -682,6 +688,21 @@ export interface ChapterBatchCancelResponse {
   batch_id: string;
   completed_chapters: number;
   total_chapters: number;
+}
+
+export interface ChapterBatchResumeResponse {
+  message: string;
+  batch_id: string;
+  project_id?: string;
+  task_type?: ChapterGenerationTaskType;
+  status: string;
+  stage_code?: string | null;
+  execution_mode?: 'interactive' | 'auto' | null;
+  checkpoint?: Record<string, unknown> | null;
+  resumed_from_batch_id?: string;
+  total_chapters: number;
+  completed_chapters: number;
+  created_at?: string | null;
 }
 
 export interface ChapterSingleGenerateResponse {
@@ -727,6 +748,9 @@ const upsertChapterTaskToStore = (data: {
   projectId?: string;
   currentChapterNumber?: number | null;
   errorMessage?: string | null;
+  stageCode?: string | null;
+  executionMode?: 'interactive' | 'auto' | null;
+  checkpoint?: Record<string, unknown> | null;
   createdAt?: string | null;
   completedAt?: string | null;
 }) => {
@@ -748,6 +772,9 @@ const upsertChapterTaskToStore = (data: {
       data.errorMessage
     ),
     error: data.errorMessage ?? null,
+    stage_code: data.stageCode ?? undefined,
+    execution_mode: data.executionMode ?? undefined,
+    checkpoint: data.checkpoint ?? undefined,
     created_at: data.createdAt ?? now,
     updated_at: now,
     completed_at: data.completedAt ?? null,
@@ -776,6 +803,8 @@ export const chapterBatchTaskApi = {
       project_id: projectId,
       status: 'pending',
       progress: 0,
+      stage_code: '6.writing',
+      execution_mode: 'interactive',
       message: created.message || '批量生成任务已创建',
     });
     return created;
@@ -794,6 +823,9 @@ export const chapterBatchTaskApi = {
       projectId,
       currentChapterNumber: status.current_chapter_number,
       errorMessage: status.error_message,
+      stageCode: status.stage_code ?? '6.writing',
+      executionMode: status.execution_mode ?? 'interactive',
+      checkpoint: status.checkpoint ?? undefined,
       createdAt: status.created_at,
       completedAt: status.completed_at,
     });
@@ -813,10 +845,58 @@ export const chapterBatchTaskApi = {
         completed: active.task.completed,
         projectId,
         currentChapterNumber: active.task.current_chapter_number,
+        stageCode: active.task.stage_code ?? '6.writing',
+        executionMode: active.task.execution_mode ?? 'interactive',
+        checkpoint: active.task.checkpoint ?? undefined,
         createdAt: active.task.created_at,
       });
     }
     return active;
+  },
+
+  listActiveTasks: async (limit = 20) => {
+    const response = await api.get<
+      unknown,
+      {
+        total: number;
+        items: Array<{
+          task_type: ChapterGenerationTaskType;
+          stage_code?: string | null;
+          execution_mode?: 'interactive' | 'auto' | null;
+          project_id: string;
+          batch_id: string;
+          status: string;
+          total: number;
+          completed: number;
+          current_chapter_number?: number | null;
+          checkpoint?: Record<string, unknown> | null;
+          error_message?: string | null;
+          created_at?: string | null;
+          completed_at?: string | null;
+        }>;
+      }
+    >('/chapters/batch-generate/active-tasks', {
+      params: { limit },
+    });
+
+    for (const task of response.items || []) {
+      upsertChapterTaskToStore({
+        taskType: task.task_type,
+        taskId: task.batch_id,
+        status: task.status,
+        total: task.total,
+        completed: task.completed,
+        projectId: task.project_id,
+        currentChapterNumber: task.current_chapter_number ?? null,
+        errorMessage: task.error_message ?? null,
+        stageCode: task.stage_code ?? '6.writing',
+        executionMode: task.execution_mode ?? 'interactive',
+        checkpoint: task.checkpoint ?? undefined,
+        createdAt: task.created_at,
+        completedAt: task.completed_at,
+      });
+    }
+    return response;
   },
 
   cancelBatchGenerateTask: async (batchId: string, projectId?: string) => {
@@ -832,6 +912,25 @@ export const chapterBatchTaskApi = {
       message: cancelled.message || '批量生成任务已取消',
     });
     return cancelled;
+  },
+
+  resumeBatchGenerateTask: async (batchId: string, projectId?: string) => {
+    const resumed = await api.post<unknown, ChapterBatchResumeResponse>(
+      `/chapters/batch-generate/${batchId}/resume`
+    );
+    upsertChapterTaskToStore({
+      taskType: resumed.task_type ?? 'chapters_batch_generate',
+      taskId: resumed.batch_id,
+      status: resumed.status,
+      total: resumed.total_chapters,
+      completed: resumed.completed_chapters,
+      projectId: resumed.project_id ?? projectId,
+      stageCode: resumed.stage_code ?? '6.writing.loading',
+      executionMode: resumed.execution_mode ?? 'interactive',
+      checkpoint: resumed.checkpoint ?? undefined,
+      createdAt: resumed.created_at,
+    });
+    return resumed;
   },
 };
 
@@ -856,6 +955,8 @@ export const chapterSingleTaskApi = {
       project_id: projectId,
       status: normalizeBatchTaskStatus(created.status),
       progress: created.status === 'pending' ? 0 : 10,
+      stage_code: '6.writing',
+      execution_mode: 'interactive',
       message: created.message || '单章后台任务已创建',
     });
     return created;
@@ -874,6 +975,9 @@ export const chapterSingleTaskApi = {
       projectId,
       currentChapterNumber: status.current_chapter_number,
       errorMessage: status.error_message,
+      stageCode: status.stage_code ?? '6.writing',
+      executionMode: status.execution_mode ?? 'interactive',
+      checkpoint: status.checkpoint ?? undefined,
       createdAt: status.created_at,
       completedAt: status.completed_at,
     });
@@ -893,6 +997,25 @@ export const chapterSingleTaskApi = {
       message: cancelled.message || '单章生成任务已取消',
     });
     return cancelled;
+  },
+
+  resumeSingleGenerateTask: async (taskId: string, projectId?: string) => {
+    const resumed = await api.post<unknown, ChapterBatchResumeResponse>(
+      `/chapters/batch-generate/${taskId}/resume`
+    );
+    upsertChapterTaskToStore({
+      taskType: 'chapter_single_generate',
+      taskId: resumed.batch_id,
+      status: resumed.status,
+      total: resumed.total_chapters,
+      completed: resumed.completed_chapters,
+      projectId: resumed.project_id ?? projectId,
+      stageCode: resumed.stage_code ?? '6.writing.loading',
+      executionMode: resumed.execution_mode ?? 'interactive',
+      checkpoint: resumed.checkpoint ?? undefined,
+      createdAt: resumed.created_at,
+    });
+    return resumed;
   },
 };
 
@@ -1059,10 +1182,19 @@ export interface BackgroundTaskStatus {
   message: string;
   result?: Record<string, unknown> | null;
   error?: string | null;
+  stage_code?: string | null;
+  execution_mode?: 'interactive' | 'auto' | null;
+  workflow_scope?: string | null;
+  checkpoint?: Record<string, unknown> | null;
   created_at?: string | null;
   updated_at?: string | null;
   started_at?: string | null;
   completed_at?: string | null;
+}
+
+export interface BackgroundTaskListResponse {
+  total: number;
+  items: BackgroundTaskStatus[];
 }
 
 export const backgroundTaskApi = {
@@ -1070,6 +1202,10 @@ export const backgroundTaskApi = {
     task_type: BackgroundTaskStatus['task_type'];
     project_id?: string;
     payload?: Record<string, unknown>;
+    stage_code?: string;
+    execution_mode?: 'interactive' | 'auto';
+    workflow_scope?: string;
+    checkpoint?: Record<string, unknown>;
   }) => {
     const created = await api.post<unknown, BackgroundTaskStatus>('/background-tasks', data);
     useBackgroundTaskStore.getState().upsertTask(created);
@@ -1078,6 +1214,35 @@ export const backgroundTaskApi = {
 
   getTaskStatus: async (taskId: string) => {
     const status = await api.get<unknown, BackgroundTaskStatus>(`/background-tasks/${taskId}`);
+    useBackgroundTaskStore.getState().upsertTask(status);
+    return status;
+  },
+
+  listTasks: async (params?: {
+    project_id?: string;
+    statuses?: string;
+    active_only?: boolean;
+    limit?: number;
+  }) => {
+    const data = await api.get<unknown, BackgroundTaskListResponse>('/background-tasks', { params });
+    for (const item of data.items || []) {
+      useBackgroundTaskStore.getState().upsertTask(item);
+    }
+    return data;
+  },
+
+  updateWorkflowState: async (
+    taskId: string,
+    payload: {
+      stage_code?: string;
+      execution_mode?: 'interactive' | 'auto';
+      workflow_scope?: string;
+      checkpoint?: Record<string, unknown>;
+      message?: string;
+      progress?: number;
+    }
+  ) => {
+    const status = await api.patch<unknown, BackgroundTaskStatus>(`/background-tasks/${taskId}/workflow-state`, payload);
     useBackgroundTaskStore.getState().upsertTask(status);
     return status;
   },

@@ -533,6 +533,9 @@ async def test_should_create_batch_generation_task_and_query_status(
     assert status_body["status"] == "pending"
     assert status_body["total"] == 2
     assert status_body["completed"] == 0
+    assert status_body["stage_code"] == "6.writing"
+    assert status_body["execution_mode"] == "interactive"
+    assert status_body["checkpoint"]["current_chapter_number"] is None
     assert status_body["latest_quality_metrics"] is None
     assert status_body["quality_metrics_summary"] is None
 
@@ -540,6 +543,246 @@ async def test_should_create_batch_generation_task_and_query_status(
         task = await session.get(BatchGenerationTask, batch_id)
         assert task is not None
         assert task.chapter_count == 2
+
+
+async def test_should_expose_runtime_workflow_phase_in_batch_status(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+
+    async with chapters_session_factory() as session:
+        task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=1,
+            chapter_count=1,
+            chapter_ids=["chapter-1"],
+            status="running",
+            total_chapters=1,
+            completed_chapters=0,
+            current_chapter_id="chapter-1",
+            current_chapter_number=1,
+            current_retry_count=0,
+            max_retries=3,
+        )
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+
+    async with chapters_api.task_workflow_lock:
+        chapters_api.task_workflow_state_cache.pop(task.id, None)
+
+    await chapters_api.publish_task_stream_event(
+        task.id,
+        {
+            "type": "analysis_started",
+            "chapter_id": "chapter-1",
+            "chapter_number": 1,
+            "message": "analysis started",
+            "progress": 85,
+            "phase": "parsing",
+        },
+    )
+
+    response = await chapters_client.get(f"/api/chapters/batch-generate/{task.id}/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stage_code"] == "6.writing.parsing"
+    assert body["checkpoint"]["progress_phase"] == "parsing"
+    assert body["checkpoint"]["last_event"] == "analysis_started"
+    assert body["checkpoint"]["current_chapter_number"] == 1
+
+
+async def test_should_resume_failed_batch_task_from_current_chapter(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="chapter-1",
+        content="ready",
+        status="completed",
+    )
+    chapter_2 = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title="chapter-2",
+        content=None,
+    )
+    chapter_3 = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=3,
+        title="chapter-3",
+        content=None,
+    )
+
+    async with chapters_session_factory() as session:
+        source_task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=2,
+            chapter_count=2,
+            chapter_ids=[chapter_2.id, chapter_3.id],
+            status="failed",
+            total_chapters=2,
+            completed_chapters=0,
+            current_chapter_id=chapter_2.id,
+            current_chapter_number=2,
+            current_retry_count=1,
+            max_retries=2,
+            error_message="mock failed",
+        )
+        session.add(source_task)
+        await session.commit()
+        await session.refresh(source_task)
+        source_task_id = source_task.id
+
+    response = await chapters_client.post(f"/api/chapters/batch-generate/{source_task_id}/resume")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resumed_from_batch_id"] == source_task_id
+    assert body["status"] == "pending"
+    assert body["stage_code"] == "6.writing.loading"
+    resumed_task_id = body["batch_id"]
+    assert resumed_task_id != source_task_id
+
+    async with chapters_session_factory() as session:
+        resumed_task = await session.get(BatchGenerationTask, resumed_task_id)
+        assert resumed_task is not None
+        assert resumed_task.status == "pending"
+        assert resumed_task.start_chapter_number == 2
+        assert resumed_task.chapter_ids == [chapter_2.id, chapter_3.id]
+        assert resumed_task.total_chapters == 2
+        assert resumed_task.completed_chapters == 0
+
+    async with chapters_api.task_workflow_lock:
+        runtime = dict(chapters_api.task_workflow_state_cache.get(resumed_task_id) or {})
+    assert runtime.get("phase") == "loading"
+    assert runtime.get("resume_from_batch_id") == source_task_id
+
+
+async def test_should_resume_cancelled_task_from_completed_checkpoint_when_current_missing(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="chapter-1",
+        content="ready-1",
+        status="completed",
+    )
+    chapter_2 = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title="chapter-2",
+        content="ready-2",
+        status="completed",
+    )
+    chapter_3 = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=3,
+        title="chapter-3",
+        content=None,
+    )
+    chapter_4 = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=4,
+        title="chapter-4",
+        content=None,
+    )
+
+    async with chapters_session_factory() as session:
+        source_task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=2,
+            chapter_count=3,
+            chapter_ids=[chapter_2.id, chapter_3.id, chapter_4.id],
+            status="cancelled",
+            total_chapters=3,
+            completed_chapters=1,
+            current_chapter_id="missing-chapter-id",
+            current_chapter_number=3,
+            current_retry_count=0,
+            max_retries=3,
+        )
+        session.add(source_task)
+        await session.commit()
+        await session.refresh(source_task)
+        source_task_id = source_task.id
+
+    response = await chapters_client.post(f"/api/chapters/batch-generate/{source_task_id}/resume")
+    assert response.status_code == 200
+    body = response.json()
+    resumed_task_id = body["batch_id"]
+    assert body["resumed_from_batch_id"] == source_task_id
+    assert body["task_type"] == "chapters_batch_generate"
+    assert body["checkpoint"]["current_chapter_number"] == 3
+
+    async with chapters_session_factory() as session:
+        resumed_task = await session.get(BatchGenerationTask, resumed_task_id)
+        assert resumed_task is not None
+        assert resumed_task.chapter_ids == [chapter_3.id, chapter_4.id]
+        assert resumed_task.start_chapter_number == 3
+        assert resumed_task.total_chapters == 2
+
+
+async def test_should_reject_resume_when_batch_task_not_terminal(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="chapter-1",
+        content="ready",
+        status="completed",
+    )
+    chapter_2 = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title="chapter-2",
+        content=None,
+    )
+
+    async with chapters_session_factory() as session:
+        source_task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=2,
+            chapter_count=1,
+            chapter_ids=[chapter_2.id],
+            status="running",
+            total_chapters=1,
+            completed_chapters=0,
+        )
+        session.add(source_task)
+        await session.commit()
+        await session.refresh(source_task)
+        source_task_id = source_task.id
+
+    response = await chapters_client.post(f"/api/chapters/batch-generate/{source_task_id}/resume")
+    assert response.status_code == 400
+    assert "Only failed or cancelled tasks can be resumed" in response.json()["detail"]
 
 
 async def test_should_return_latest_chapter_quality_metrics(
@@ -776,6 +1019,85 @@ async def test_should_reuse_active_background_task_for_same_chapter(
     second_body = second.json()
     assert second_body["task_id"] == first_task_id
     assert "已有后台生成任务" in second_body["message"]
+
+
+async def test_should_list_active_batch_generation_tasks_for_current_user(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    other_project = await create_project(chapters_session_factory, user_id="other-user", title="其他项目")
+
+    async with chapters_session_factory() as session:
+        user_single_task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=1,
+            chapter_count=1,
+            chapter_ids=["chapter-1"],
+            status="pending",
+            total_chapters=1,
+            completed_chapters=0,
+        )
+        user_batch_task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=2,
+            chapter_count=3,
+            chapter_ids=["chapter-2", "chapter-3", "chapter-4"],
+            status="running",
+            total_chapters=3,
+            completed_chapters=1,
+        )
+        user_completed_task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=5,
+            chapter_count=2,
+            chapter_ids=["chapter-5", "chapter-6"],
+            status="completed",
+            total_chapters=2,
+            completed_chapters=2,
+        )
+        other_user_task = BatchGenerationTask(
+            project_id=other_project.id,
+            user_id="other-user",
+            start_chapter_number=1,
+            chapter_count=2,
+            chapter_ids=["x-1", "x-2"],
+            status="running",
+            total_chapters=2,
+            completed_chapters=0,
+        )
+        session.add_all([user_single_task, user_batch_task, user_completed_task, other_user_task])
+        await session.commit()
+        await session.refresh(user_single_task)
+        await session.refresh(user_batch_task)
+
+    response = await chapters_client.get("/api/chapters/batch-generate/active-tasks?limit=10")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+
+    items_by_id = {item["batch_id"]: item for item in body["items"]}
+    assert set(items_by_id.keys()) == {user_single_task.id, user_batch_task.id}
+    assert items_by_id[user_single_task.id]["task_type"] == "chapter_single_generate"
+    assert items_by_id[user_batch_task.id]["task_type"] == "chapters_batch_generate"
+    assert items_by_id[user_batch_task.id]["stage_code"] == "6.writing.loading"
+    assert items_by_id[user_batch_task.id]["execution_mode"] == "interactive"
+    assert items_by_id[user_batch_task.id]["checkpoint"]["current_chapter_number"] is None
+    assert items_by_id[user_batch_task.id]["project_id"] == project.id
+
+
+async def test_should_require_login_when_listing_active_batch_generation_tasks(
+    chapters_client,
+):
+    response = await chapters_client.get(
+        "/api/chapters/batch-generate/active-tasks",
+        headers={"x-test-user-id": "__none__"},
+    )
+    assert response.status_code == 401
 
 
 async def test_should_reject_stream_subscription_from_other_user(

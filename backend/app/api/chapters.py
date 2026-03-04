@@ -67,6 +67,8 @@ task_stream_subscribers: dict[str, list[Queue]] = {}
 task_stream_lock = Lock()
 task_quality_metrics_cache: dict[str, Dict[str, Any]] = {}
 task_quality_lock = Lock()
+task_workflow_state_cache: dict[str, Dict[str, Any]] = {}
+task_workflow_lock = Lock()
 
 
 async def get_db_write_lock(user_id: str) -> Lock:
@@ -95,8 +97,110 @@ async def unsubscribe_task_stream(task_id: str, queue: Queue):
             del task_stream_subscribers[task_id]
 
 
+def _infer_batch_progress_phase(
+    *,
+    event_type: str,
+    progress: Optional[int],
+    message: Optional[str],
+) -> Optional[str]:
+    """Infer chapter task workflow phase from runtime events."""
+    normalized_event = (event_type or "").strip().lower()
+    text = (message or "").strip().lower()
+
+    if normalized_event == "error":
+        return "failed"
+    if normalized_event == "done":
+        return "complete"
+    if normalized_event in {"chunk", "chapter_start"}:
+        return "generating"
+    if normalized_event == "analysis_started":
+        return "parsing"
+
+    if "取消" in text or "cancel" in text:
+        return "cancelled"
+    if "完成" in text or "complete" in text or "done" in text:
+        return "complete"
+    if "保存" in text or "save" in text:
+        return "saving"
+    if "分析" in text or "analysis" in text or "解析" in text or "parse" in text:
+        return "parsing"
+    if "重试" in text or "retry" in text:
+        return "generating"
+    if "生成" in text or "创作" in text or "generate" in text:
+        return "generating"
+    if "准备" in text or "prepare" in text:
+        return "preparing"
+    if "加载" in text or "load" in text:
+        return "loading"
+
+    if progress is None:
+        return None
+    if progress >= 100:
+        return "complete"
+    if progress >= 93:
+        return "saving"
+    if progress >= 85:
+        return "parsing"
+    if progress >= 20:
+        return "generating"
+    if progress >= 10:
+        return "preparing"
+    if progress > 0:
+        return "loading"
+    return "init"
+
+
+async def _update_task_workflow_runtime_state(task_id: str, event: Dict[str, Any]):
+    """Track latest chapter task workflow stage for status polling endpoints."""
+    event_type = str(event.get("type") or "").strip().lower()
+    progress_raw = event.get("progress")
+    progress = progress_raw if isinstance(progress_raw, int) else None
+    message = str(event.get("message")) if event.get("message") is not None else None
+
+    async with task_workflow_lock:
+        current = task_workflow_state_cache.get(task_id) or {}
+        explicit_phase = event.get("phase")
+        if isinstance(explicit_phase, str) and explicit_phase.strip():
+            phase = explicit_phase.strip().lower()
+        else:
+            phase = _infer_batch_progress_phase(
+                event_type=event_type,
+                progress=progress,
+                message=message,
+            )
+        previous_phase = str(current.get("phase") or "").strip().lower()
+        if event_type == "done" and previous_phase in {"failed", "cancelled"} and not explicit_phase:
+            phase = previous_phase
+
+        snapshot = dict(current)
+        snapshot["updated_at"] = datetime.now().isoformat()
+
+        if event_type:
+            snapshot["last_event"] = event_type
+        if message is not None:
+            snapshot["last_message"] = message
+        if progress is not None:
+            snapshot["progress"] = max(0, min(progress, 100))
+        if isinstance(event.get("status"), str):
+            snapshot["status"] = str(event.get("status"))
+        if event.get("chapter_id") is not None:
+            snapshot["current_chapter_id"] = event.get("chapter_id")
+        if event.get("chapter_number") is not None:
+            snapshot["current_chapter_number"] = event.get("chapter_number")
+        if event.get("current_retry_count") is not None:
+            snapshot["current_retry_count"] = event.get("current_retry_count")
+        if event.get("max_retries") is not None:
+            snapshot["max_retries"] = event.get("max_retries")
+        if phase:
+            snapshot["phase"] = phase
+
+        task_workflow_state_cache[task_id] = snapshot
+
+
 async def publish_task_stream_event(task_id: str, event: Dict[str, Any]):
     """向任务流订阅者广播事件（不阻塞主流程）"""
+    await _update_task_workflow_runtime_state(task_id, event)
+
     async with task_stream_lock:
         subscribers = list(task_stream_subscribers.get(task_id, []))
     if not subscribers:
@@ -402,6 +506,59 @@ async def _get_task_quality_metrics_snapshot(task_id: str) -> Dict[str, Any]:
     """获取任务级质量指标快照。"""
     async with task_quality_lock:
         return task_quality_metrics_cache.get(task_id) or {}
+
+
+def _default_batch_progress_phase(task: BatchGenerationTask) -> str:
+    """Fallback phase when runtime stream metadata is unavailable."""
+    if task.status == "pending":
+        return "init"
+    if task.status == "completed":
+        return "complete"
+    if task.status == "failed":
+        return "failed"
+    if task.status == "cancelled":
+        return "cancelled"
+    if task.current_retry_count and task.current_retry_count > 0:
+        return "generating"
+    if task.current_chapter_number is not None:
+        return "generating"
+    return "loading"
+
+
+def _compose_batch_stage_code(base: str, phase: Optional[str]) -> str:
+    if not phase or phase == "init":
+        return base
+    return f"{base}.{phase}"
+
+
+async def _build_batch_task_workflow_snapshot(task: BatchGenerationTask) -> Dict[str, Any]:
+    """Build stage/execution/checkpoint payload for chapter batch task APIs."""
+    async with task_workflow_lock:
+        runtime = dict(task_workflow_state_cache.get(task.id) or {})
+
+    phase = str(runtime.get("phase") or "").strip().lower() or _default_batch_progress_phase(task)
+    stage_code = _compose_batch_stage_code("6.writing", phase)
+    progress_value = runtime.get("progress")
+    if not isinstance(progress_value, int):
+        completed = max(int(task.completed_chapters or 0), 0)
+        total = max(int(task.total_chapters or 0), 1)
+        progress_value = 100 if task.status == "completed" else int((completed / total) * 100)
+
+    checkpoint = {
+        "current_chapter_id": task.current_chapter_id,
+        "current_chapter_number": task.current_chapter_number,
+        "current_retry_count": task.current_retry_count,
+        "max_retries": task.max_retries,
+        "progress_phase": phase,
+        "progress": max(0, min(progress_value, 100)),
+        "last_event": runtime.get("last_event"),
+        "last_message": runtime.get("last_message"),
+    }
+    return {
+        "stage_code": stage_code,
+        "execution_mode": "interactive",
+        "checkpoint": checkpoint,
+    }
 
 
 def _parse_quality_metrics_from_history(generated_content: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -3092,16 +3249,20 @@ async def get_batch_generation_status(
         raise HTTPException(status_code=404, detail="批量生成任务不存在")
 
     quality_snapshot = await _get_task_quality_metrics_snapshot(batch_id)
+    workflow_snapshot = await _build_batch_task_workflow_snapshot(task)
     
     return BatchGenerateStatusResponse(
         batch_id=task.id,
         status=task.status,
+        stage_code=workflow_snapshot["stage_code"],
+        execution_mode=workflow_snapshot["execution_mode"],
         total=task.total_chapters,
         completed=task.completed_chapters,
         current_chapter_id=task.current_chapter_id,
         current_chapter_number=task.current_chapter_number,
         current_retry_count=task.current_retry_count,
         max_retries=task.max_retries,
+        checkpoint=workflow_snapshot["checkpoint"],
         failed_chapters=task.failed_chapters or [],
         created_at=task.created_at.isoformat() if task.created_at else None,
         started_at=task.started_at.isoformat() if task.started_at else None,
@@ -3207,21 +3368,85 @@ async def get_active_batch_generation(
         }
 
     quality_snapshot = await _get_task_quality_metrics_snapshot(task.id)
+    workflow_snapshot = await _build_batch_task_workflow_snapshot(task)
     
     return {
         "has_active_task": True,
         "task": {
             "batch_id": task.id,
             "status": task.status,
+            "stage_code": workflow_snapshot["stage_code"],
+            "execution_mode": workflow_snapshot["execution_mode"],
             "total": task.total_chapters,
             "completed": task.completed_chapters,
             "current_chapter_id": task.current_chapter_id,
             "current_chapter_number": task.current_chapter_number,
+            "checkpoint": workflow_snapshot["checkpoint"],
             "latest_quality_metrics": quality_snapshot.get("latest"),
             "quality_metrics_summary": quality_snapshot.get("summary"),
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "started_at": task.started_at.isoformat() if task.started_at else None
         }
+    }
+
+
+@router.get("/batch-generate/active-tasks", summary="获取当前用户的活跃章节生成任务")
+async def list_active_batch_generation_tasks(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    """
+    获取当前用户的活跃章节生成任务列表（跨项目）。
+    用于跨页面恢复任务中心的进度展示。
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    result = await db.execute(
+        select(BatchGenerationTask)
+        .where(BatchGenerationTask.user_id == user_id)
+        .where(BatchGenerationTask.status.in_(["pending", "running"]))
+        .order_by(BatchGenerationTask.created_at.desc())
+        .limit(limit)
+    )
+    tasks = result.scalars().all()
+
+    items = []
+    for task in tasks:
+        quality_snapshot = await _get_task_quality_metrics_snapshot(task.id)
+        workflow_snapshot = await _build_batch_task_workflow_snapshot(task)
+        task_type = (
+            "chapter_single_generate"
+            if task.chapter_count == 1 and len(task.chapter_ids or []) == 1
+            else "chapters_batch_generate"
+        )
+        items.append(
+            {
+                "task_type": task_type,
+                "stage_code": workflow_snapshot["stage_code"],
+                "execution_mode": workflow_snapshot["execution_mode"],
+                "project_id": task.project_id,
+                "batch_id": task.id,
+                "status": task.status,
+                "total": task.total_chapters,
+                "completed": task.completed_chapters,
+                "current_chapter_id": task.current_chapter_id,
+                "current_chapter_number": task.current_chapter_number,
+                "checkpoint": workflow_snapshot["checkpoint"],
+                "latest_quality_metrics": quality_snapshot.get("latest"),
+                "quality_metrics_summary": quality_snapshot.get("summary"),
+                "created_at": task.created_at.isoformat() if task.created_at else None,
+                "started_at": task.started_at.isoformat() if task.started_at else None,
+                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+                "error_message": task.error_message,
+            }
+        )
+
+    return {
+        "total": len(items),
+        "items": items,
     }
 
 
@@ -3253,6 +3478,137 @@ async def cancel_batch_generation(
         "batch_id": batch_id,
         "completed_chapters": task.completed_chapters,
         "total_chapters": task.total_chapters
+    }
+
+
+@router.post("/batch-generate/{batch_id}/resume", summary="继续批量生成任务")
+async def resume_batch_generation(
+    batch_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user_ai_service: AIService = Depends(get_user_ai_service),
+):
+    """Clone a failed/cancelled chapter generation task and resume remaining chapters."""
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not logged in")
+
+    result = await db.execute(
+        select(BatchGenerationTask).where(BatchGenerationTask.id == batch_id)
+    )
+    source_task = result.scalar_one_or_none()
+    if not source_task:
+        raise HTTPException(status_code=404, detail="Batch generation task not found")
+    if source_task.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Batch generation task not found")
+    if source_task.status not in {"failed", "cancelled"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Only failed or cancelled tasks can be resumed",
+        )
+
+    chapter_ids = list(source_task.chapter_ids or [])
+    if not chapter_ids:
+        raise HTTPException(status_code=400, detail="No resumable chapters found")
+
+    if source_task.current_chapter_id and source_task.current_chapter_id in chapter_ids:
+        resume_start_index = chapter_ids.index(source_task.current_chapter_id)
+    else:
+        resume_start_index = max(int(source_task.completed_chapters or 0), 0)
+
+    if resume_start_index >= len(chapter_ids):
+        raise HTTPException(status_code=400, detail="No chapters left to resume")
+
+    remaining_chapter_ids = chapter_ids[resume_start_index:]
+
+    chapter_result = await db.execute(
+        select(Chapter)
+        .where(Chapter.project_id == source_task.project_id)
+        .where(Chapter.id.in_(remaining_chapter_ids))
+    )
+    chapters = chapter_result.scalars().all()
+    chapter_map = {chapter.id: chapter for chapter in chapters}
+    missing_ids = [chapter_id for chapter_id in remaining_chapter_ids if chapter_id not in chapter_map]
+    if missing_ids:
+        raise HTTPException(status_code=400, detail="Some chapters no longer exist")
+
+    remaining_chapters = [chapter_map[chapter_id] for chapter_id in remaining_chapter_ids]
+    first_chapter = remaining_chapters[0]
+    can_generate, error_msg, _ = await check_prerequisites(db, first_chapter)
+    if not can_generate:
+        raise HTTPException(status_code=400, detail=f"Resume blocked by prerequisites: {error_msg}")
+
+    resumed_task = BatchGenerationTask(
+        project_id=source_task.project_id,
+        user_id=user_id,
+        start_chapter_number=first_chapter.chapter_number,
+        chapter_count=len(remaining_chapter_ids),
+        chapter_ids=remaining_chapter_ids,
+        style_id=source_task.style_id,
+        target_word_count=source_task.target_word_count,
+        enable_analysis=bool(source_task.enable_analysis),
+        max_retries=source_task.max_retries or 3,
+        status="pending",
+        total_chapters=len(remaining_chapter_ids),
+        completed_chapters=0,
+        failed_chapters=[],
+        current_retry_count=0,
+    )
+    db.add(resumed_task)
+    await db.commit()
+    await db.refresh(resumed_task)
+
+    async with task_workflow_lock:
+        task_workflow_state_cache[resumed_task.id] = {
+            "phase": "loading",
+            "last_event": "resume",
+            "last_message": "Task resumed and queued",
+            "progress": 0,
+            "status": "pending",
+            "current_chapter_id": remaining_chapter_ids[0],
+            "current_chapter_number": first_chapter.chapter_number,
+            "current_retry_count": 0,
+            "max_retries": resumed_task.max_retries,
+            "resume_from_batch_id": source_task.id,
+            "updated_at": datetime.now().isoformat(),
+        }
+
+    background_tasks.add_task(
+        execute_batch_generation_in_order,
+        batch_id=resumed_task.id,
+        user_id=user_id,
+        ai_service=user_ai_service,
+    )
+
+    task_type = (
+        "chapter_single_generate"
+        if resumed_task.chapter_count == 1 and len(resumed_task.chapter_ids or []) == 1
+        else "chapters_batch_generate"
+    )
+    checkpoint = {
+        "current_chapter_id": remaining_chapter_ids[0],
+        "current_chapter_number": first_chapter.chapter_number,
+        "current_retry_count": 0,
+        "max_retries": resumed_task.max_retries,
+        "progress_phase": "loading",
+        "progress": 0,
+        "resume_from_batch_id": source_task.id,
+    }
+
+    return {
+        "message": "Task resumed and queued",
+        "batch_id": resumed_task.id,
+        "project_id": resumed_task.project_id,
+        "task_type": task_type,
+        "status": resumed_task.status,
+        "stage_code": "6.writing.loading",
+        "execution_mode": "interactive",
+        "checkpoint": checkpoint,
+        "resumed_from_batch_id": source_task.id,
+        "total_chapters": resumed_task.total_chapters,
+        "completed_chapters": resumed_task.completed_chapters,
+        "created_at": resumed_task.created_at.isoformat() if resumed_task.created_at else None,
     }
 
 
@@ -3306,7 +3662,8 @@ async def execute_batch_generation_in_order(
             "type": "progress",
             "message": "任务开始执行",
             "progress": 5,
-            "status": "running"
+            "status": "running",
+            "phase": "loading",
         })
 
         # 维护上一章的摘要，用于传递给下一章（防重复上下文）
@@ -3322,7 +3679,8 @@ async def execute_batch_generation_in_order(
                 await publish_task_stream_event(batch_id, {
                     "type": "error",
                     "error": "任务已取消",
-                    "code": 400
+                    "code": 400,
+                    "phase": "cancelled",
                 })
                 await publish_task_stream_event(batch_id, {"type": "done"})
                 return
@@ -3365,7 +3723,10 @@ async def execute_batch_generation_in_order(
                             "chapter_id": chapter_id,
                             "chapter_number": chapter.chapter_number,
                             "title": chapter.title,
-                            "progress": 15
+                            "progress": 15,
+                            "phase": "preparing",
+                            "current_retry_count": retry_count,
+                            "max_retries": task.max_retries,
                         })
                     
                     # 检查前置条件（每次都检查，确保顺序性）
@@ -3400,7 +3761,10 @@ async def execute_batch_generation_in_order(
                         "type": "progress",
                         "message": f"章节生成完成：第{chapter.chapter_number}章",
                         "progress": 80 if not task.enable_analysis else 70,
-                        "status": "running"
+                        "status": "running",
+                        "phase": "saving" if not task.enable_analysis else "generating",
+                        "current_retry_count": retry_count,
+                        "max_retries": task.max_retries,
                     })
                     
                     # 如果启用同步分析
@@ -3411,7 +3775,10 @@ async def execute_batch_generation_in_order(
                             "chapter_id": chapter_id,
                             "chapter_number": chapter.chapter_number,
                             "message": "章节分析开始",
-                            "progress": 85
+                            "progress": 85,
+                            "phase": "parsing",
+                            "current_retry_count": retry_count,
+                            "max_retries": task.max_retries,
                         })
                         
                         # 分析重试机制（最多3次）
@@ -3493,7 +3860,8 @@ async def execute_batch_generation_in_order(
                                     await publish_task_stream_event(batch_id, {
                                         "type": "error",
                                         "error": task.error_message or "章节分析失败",
-                                        "code": 500
+                                        "code": 500,
+                                        "phase": "failed",
                                     })
                                     await publish_task_stream_event(batch_id, {"type": "done"})
                                     return  # 立即终止整个批量生成任务
@@ -3513,7 +3881,10 @@ async def execute_batch_generation_in_order(
                         "type": "progress",
                         "message": f"任务进度：{task.completed_chapters}/{task.total_chapters}",
                         "progress": 15 + int(completed_ratio * 80),
-                        "status": "running"
+                        "status": "running",
+                        "phase": "loading" if task.completed_chapters < task.total_chapters else "saving",
+                        "current_retry_count": 0,
+                        "max_retries": task.max_retries,
                     })
                     
                 except Exception as e:
@@ -3561,7 +3932,8 @@ async def execute_batch_generation_in_order(
                         await publish_task_stream_event(batch_id, {
                             "type": "error",
                             "error": task.error_message or last_error,
-                            "code": 500
+                            "code": 500,
+                            "phase": "failed",
                         })
                         await publish_task_stream_event(batch_id, {"type": "done"})
 
@@ -3580,7 +3952,8 @@ async def execute_batch_generation_in_order(
             "type": "progress",
             "message": "任务已完成",
             "progress": 100,
-            "status": "success"
+            "status": "success",
+            "phase": "complete",
         })
         await publish_task_stream_event(batch_id, {"type": "done"})
         
@@ -3596,7 +3969,8 @@ async def execute_batch_generation_in_order(
                 await publish_task_stream_event(batch_id, {
                     "type": "error",
                     "error": task.error_message or str(e),
-                    "code": 500
+                    "code": 500,
+                    "phase": "failed",
                 })
                 await publish_task_stream_event(batch_id, {"type": "done"})
             except Exception as commit_error:

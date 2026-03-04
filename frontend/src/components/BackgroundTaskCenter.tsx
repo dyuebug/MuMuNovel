@@ -1,13 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Badge, Button, Drawer, FloatButton, Grid, List, Progress, Space, Tag, Typography, message, notification } from 'antd';
-import { CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, StopOutlined, UnorderedListOutlined } from '@ant-design/icons';
+import {
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  LoadingOutlined,
+  RedoOutlined,
+  StopOutlined,
+  UnorderedListOutlined,
+} from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { backgroundTaskApi, chapterBatchTaskApi, chapterSingleTaskApi } from '../services/api';
 import {
   getTaskTypeLabel,
   isActiveBackgroundTask,
   useBackgroundTaskStore,
-  type TrackedBackgroundTask
+  type TrackedBackgroundTask,
 } from '../store/backgroundTasks';
 
 const { Text } = Typography;
@@ -81,6 +88,9 @@ export default function BackgroundTaskCenter() {
   const isMobile = !screens.md;
   const [open, setOpen] = useState(false);
   const [cancellingTaskIds, setCancellingTaskIds] = useState<Record<string, boolean>>({});
+  const [resumingTaskIds, setResumingTaskIds] = useState<Record<string, boolean>>({});
+
+  const hiddenByRoute = location.pathname === '/login' || location.pathname.startsWith('/auth/callback');
 
   const tasksMap = useBackgroundTaskStore((state) => state.tasks);
   const removeTask = useBackgroundTaskStore((state) => state.removeTask);
@@ -107,6 +117,31 @@ export default function BackgroundTaskCenter() {
   const statusSnapshotReadyRef = useRef(false);
 
   useEffect(() => {
+    if (hiddenByRoute) return;
+
+    let stopped = false;
+
+    const syncRecoverableTasks = async () => {
+      if (stopped) return;
+      await Promise.allSettled([
+        backgroundTaskApi.listTasks({ active_only: true, limit: 50 }),
+        chapterBatchTaskApi.listActiveTasks(50),
+      ]);
+    };
+
+    void syncRecoverableTasks();
+    const timer = window.setInterval(() => {
+      void syncRecoverableTasks();
+    }, 8000);
+
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [hiddenByRoute]);
+
+  useEffect(() => {
+    if (hiddenByRoute) return;
     if (activeTasks.length === 0) return;
 
     let stopped = false;
@@ -134,7 +169,7 @@ export default function BackgroundTaskCenter() {
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [activeTaskPollKey]);
+  }, [activeTaskPollKey, activeTasks, hiddenByRoute]);
 
   useEffect(() => {
     const currentSnapshot = Object.fromEntries(tasks.map((task) => [task.taskId, task.status]));
@@ -178,9 +213,6 @@ export default function BackgroundTaskCenter() {
     statusSnapshotRef.current = currentSnapshot;
   }, [tasks, navigate]);
 
-  const hiddenByRoute =
-    location.pathname === '/login' || location.pathname.startsWith('/auth/callback');
-
   if (hiddenByRoute || tasks.length === 0) {
     return null;
   }
@@ -211,6 +243,35 @@ export default function BackgroundTaskCenter() {
     }
   };
 
+  const canResumeTask = (task: TrackedBackgroundTask) =>
+    (task.taskType === 'chapters_batch_generate' || task.taskType === 'chapter_single_generate') &&
+    (task.status === 'failed' || task.status === 'cancelled');
+
+  const resumeTask = async (task: TrackedBackgroundTask) => {
+    const taskId = task.taskId;
+    if (resumingTaskIds[taskId]) return;
+    if (!canResumeTask(task)) return;
+
+    setResumingTaskIds((prev) => ({ ...prev, [taskId]: true }));
+    try {
+      if (task.taskType === 'chapters_batch_generate') {
+        await chapterBatchTaskApi.resumeBatchGenerateTask(taskId, task.projectId);
+      } else {
+        await chapterSingleTaskApi.resumeSingleGenerateTask(taskId, task.projectId);
+      }
+      message.success('已创建继续任务，正在排队执行');
+    } catch (error) {
+      const err = error as Error;
+      message.error(err.message || '继续任务失败');
+    } finally {
+      setResumingTaskIds((prev) => {
+        const next = { ...prev };
+        delete next[taskId];
+        return next;
+      });
+    }
+  };
+
   return (
     <>
       <Badge count={activeTasks.length} size="small" offset={[-2, 8]}>
@@ -222,7 +283,7 @@ export default function BackgroundTaskCenter() {
           style={{
             right: 24,
             bottom: 24,
-            zIndex: 10001
+            zIndex: 10001,
           }}
         />
       </Badge>
@@ -247,6 +308,7 @@ export default function BackgroundTaskCenter() {
             const active = isActiveBackgroundTask(task);
             const status = statusMeta[task.status];
             const hasError = task.status === 'failed' && task.error;
+
             return (
               <List.Item
                 style={{
@@ -254,13 +316,17 @@ export default function BackgroundTaskCenter() {
                   border: '1px solid var(--color-border-secondary)',
                   borderRadius: 8,
                   padding: 12,
-                  display: 'block'
+                  display: 'block',
                 }}
               >
                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                   <Space style={{ width: '100%', justifyContent: 'space-between' }}>
                     <Text strong>{getTaskTypeLabel(task.taskType)}</Text>
-                    <Tag color={status.color}>{status.label}</Tag>
+                    <Space size={6}>
+                      {task.executionMode === 'auto' ? <Tag color="geekblue">全自动</Tag> : <Tag>交互</Tag>}
+                      {task.stageCode ? <Tag color="purple">{task.stageCode}</Tag> : null}
+                      <Tag color={status.color}>{status.label}</Tag>
+                    </Space>
                   </Space>
 
                   <Progress
@@ -279,11 +345,23 @@ export default function BackgroundTaskCenter() {
                     {task.message || '任务执行中...'}
                   </Text>
 
-                  {hasError && (
+                  {task.workflowScope ? (
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      范围：{task.workflowScope}
+                    </Text>
+                  ) : null}
+
+                  {typeof task.checkpoint?.current_chapter_number === 'number' ? (
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      检查点：当前第 {task.checkpoint.current_chapter_number} 章
+                    </Text>
+                  ) : null}
+
+                  {hasError ? (
                     <Text type="danger" style={{ fontSize: 12 }}>
                       {task.error}
                     </Text>
-                  )}
+                  ) : null}
 
                   <Space size={8}>
                     {active ? (
@@ -297,13 +375,26 @@ export default function BackgroundTaskCenter() {
                         取消
                       </Button>
                     ) : (
-                      <Button
-                        size="small"
-                        icon={task.status === 'completed' ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
-                        onClick={() => removeTask(task.taskId)}
-                      >
-                        移除
-                      </Button>
+                      <>
+                        {canResumeTask(task) ? (
+                          <Button
+                            size="small"
+                            type="primary"
+                            icon={resumingTaskIds[task.taskId] ? <LoadingOutlined /> : <RedoOutlined />}
+                            loading={Boolean(resumingTaskIds[task.taskId])}
+                            onClick={() => void resumeTask(task)}
+                          >
+                            继续
+                          </Button>
+                        ) : null}
+                        <Button
+                          size="small"
+                          icon={task.status === 'completed' ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
+                          onClick={() => removeTask(task.taskId)}
+                        >
+                          移除
+                        </Button>
+                      </>
                     )}
                   </Space>
                 </Space>

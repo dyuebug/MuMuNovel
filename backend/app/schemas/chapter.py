@@ -121,6 +121,9 @@ class BatchGenerateStatusResponse(BaseModel):
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     error_message: Optional[str] = None
+    stage_code: Optional[str] = None
+    execution_mode: Optional[str] = None
+    checkpoint: Optional[Dict[str, Any]] = None
     latest_quality_metrics: Optional[Dict[str, Any]] = None
     quality_metrics_summary: Optional[Dict[str, Any]] = None
 
