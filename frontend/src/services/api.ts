@@ -58,6 +58,38 @@ interface MCPPluginSimpleCreate {
   enabled: boolean;
 }
 
+interface RequestConfigWithToastControl {
+  suppressErrorToast?: boolean;
+  params?: Record<string, unknown>;
+}
+
+const ERROR_TOAST_THROTTLE_MS = 3000;
+const ERROR_TOAST_CACHE_RETENTION_MS = 120000;
+const errorToastTimestamps = new Map<string, number>();
+
+const pruneErrorToastCache = (now: number) => {
+  for (const [messageText, timestamp] of errorToastTimestamps.entries()) {
+    if (now - timestamp > ERROR_TOAST_CACHE_RETENTION_MS) {
+      errorToastTimestamps.delete(messageText);
+    }
+  }
+};
+
+const showErrorToastWithThrottle = (errorMessage: string) => {
+  const now = Date.now();
+  const lastTimestamp = errorToastTimestamps.get(errorMessage);
+  if (lastTimestamp && now - lastTimestamp < ERROR_TOAST_THROTTLE_MS) {
+    return;
+  }
+
+  errorToastTimestamps.set(errorMessage, now);
+  pruneErrorToastCache(now);
+  message.error(errorMessage);
+};
+
+const silentRequestConfig = <T extends RequestConfigWithToastControl>(config?: T): T =>
+  ({ ...(config || {}), suppressErrorToast: true } as T);
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 120000,
@@ -81,6 +113,8 @@ api.interceptors.response.use(
     return response.data;
   },
   (error) => {
+    const requestConfig = (error?.config || {}) as RequestConfigWithToastControl;
+    const suppressErrorToast = Boolean(requestConfig.suppressErrorToast);
     let errorMessage = '请求失败';
 
     if (error.response) {
@@ -124,7 +158,9 @@ api.interceptors.response.use(
       errorMessage = error.message || '请求失败';
     }
 
-    message.error(errorMessage);
+    if (!suppressErrorToast) {
+      showErrorToastWithThrottle(errorMessage);
+    }
     console.error('API Error:', errorMessage, error);
 
     return Promise.reject(error);
@@ -616,7 +652,10 @@ export const chapterApi = {
     ),
 
   getChapterAnalysisStatus: async (chapterId: string, projectId?: string) => {
-    const status = await api.get<unknown, import('../types').AnalysisTask>(`/chapters/${chapterId}/analysis/status`);
+    const status = await api.get<unknown, import('../types').AnalysisTask>(
+      `/chapters/${chapterId}/analysis/status`,
+      silentRequestConfig()
+    );
     chapterApi.upsertChapterAnalysisTaskToStore(status, projectId);
     return status;
   },
@@ -891,7 +930,8 @@ export const chapterBatchTaskApi = {
 
   getBatchGenerateStatus: async (batchId: string, projectId?: string) => {
     const status = await api.get<unknown, ChapterBatchGenerateStatusResponse>(
-      `/chapters/batch-generate/${batchId}/status`
+      `/chapters/batch-generate/${batchId}/status`,
+      silentRequestConfig()
     );
     upsertChapterTaskToStore({
       taskType: 'chapters_batch_generate',
@@ -1043,7 +1083,8 @@ export const chapterSingleTaskApi = {
 
   getSingleGenerateTaskStatus: async (taskId: string, projectId?: string) => {
     const status = await api.get<unknown, ChapterBatchGenerateStatusResponse>(
-      `/chapters/batch-generate/${taskId}/status`
+      `/chapters/batch-generate/${taskId}/status`,
+      silentRequestConfig()
     );
     upsertChapterTaskToStore({
       taskType: 'chapter_single_generate',
@@ -1292,7 +1333,10 @@ export const backgroundTaskApi = {
   },
 
   getTaskStatus: async (taskId: string) => {
-    const status = await api.get<unknown, BackgroundTaskStatus>(`/background-tasks/${taskId}`);
+    const status = await api.get<unknown, BackgroundTaskStatus>(
+      `/background-tasks/${taskId}`,
+      silentRequestConfig()
+    );
     useBackgroundTaskStore.getState().upsertTask(status);
     return status;
   },
@@ -1303,7 +1347,10 @@ export const backgroundTaskApi = {
     active_only?: boolean;
     limit?: number;
   }) => {
-    const data = await api.get<unknown, BackgroundTaskListResponse>('/background-tasks', { params });
+    const data = await api.get<unknown, BackgroundTaskListResponse>(
+      '/background-tasks',
+      silentRequestConfig({ params })
+    );
     for (const item of data.items || []) {
       useBackgroundTaskStore.getState().upsertTask(item);
     }

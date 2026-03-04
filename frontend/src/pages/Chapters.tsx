@@ -123,6 +123,11 @@ export default function Chapters() {
     };
   } | null>(null);
   const batchPollingIntervalRef = useRef<number | null>(null);
+  const batchTaskMetaRef = useRef<Record<string, {
+    startChapterNumber: number;
+    count: number;
+    autoAnalyze: boolean;
+  }>>({});
 
   useEffect(() => {
     const handleResize = () => {
@@ -462,6 +467,80 @@ export default function Chapters() {
     }
   };
 
+  const triggerDeferredBatchAnalysis = async (
+    startChapterNumber: number,
+    count: number,
+    latestChapters: Chapter[]
+  ) => {
+    if (!currentProject?.id || count <= 0) return;
+
+    const targetChapterNumbers = new Set(
+      Array.from({ length: count }, (_, index) => startChapterNumber + index)
+    );
+
+    const candidateChapters = latestChapters.filter(ch =>
+      targetChapterNumbers.has(ch.chapter_number) &&
+      Boolean(ch.content && ch.content.trim() !== '')
+    );
+
+    if (candidateChapters.length === 0) return;
+
+    let queuedCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+
+    const ensureAnalysisTask = async (chapter: Chapter) => {
+      const localTask = analysisTasksMap[chapter.id];
+      if (localTask?.has_task && ['pending', 'running', 'completed'].includes(localTask.status)) {
+        skippedCount += 1;
+        if (localTask.status === 'pending' || localTask.status === 'running') {
+          startPollingTask(chapter.id);
+        }
+        return;
+      }
+
+      try {
+        const remoteTask = await chapterApi.getChapterAnalysisStatus(chapter.id, currentProject.id);
+        if (remoteTask.has_task && ['pending', 'running', 'completed'].includes(remoteTask.status)) {
+          skippedCount += 1;
+          if (remoteTask.status === 'pending' || remoteTask.status === 'running') {
+            startPollingTask(chapter.id);
+          }
+          return;
+        }
+      } catch {
+        // 章节暂无分析任务时会继续触发创建
+      }
+
+      try {
+        await chapterApi.triggerChapterAnalysis(chapter.id, currentProject.id);
+        queuedCount += 1;
+        startPollingTask(chapter.id);
+      } catch (error) {
+        failedCount += 1;
+        console.error(`触发第${chapter.chapter_number}章分析失败:`, error);
+      }
+    };
+
+    const chunkSize = 3;
+    for (let index = 0; index < candidateChapters.length; index += chunkSize) {
+      const chunk = candidateChapters.slice(index, index + chunkSize);
+      await Promise.all(chunk.map(ensureAnalysisTask));
+    }
+
+    if (queuedCount > 0) {
+      message.info(`正文生成完成，已在后台启动 ${queuedCount} 个章节分析任务`);
+    } else if (skippedCount > 0 && failedCount === 0) {
+      message.info('正文生成完成，相关章节分析任务已在后台执行或已完成');
+    }
+
+    if (failedCount > 0) {
+      message.warning(`有 ${failedCount} 个章节分析任务启动失败，可稍后手动触发`);
+    }
+
+    await loadAnalysisTasks(latestChapters);
+  };
+
   const loadWritingStyles = async () => {
     if (!currentProject?.id) return;
 
@@ -543,7 +622,7 @@ export default function Chapters() {
           } | null | undefined) ?? undefined,
         });
         setBatchGenerating(true);
-        setBatchGenerateVisible(true);
+        setBatchGenerateVisible(false);
 
         // 启动轮询
         startBatchPolling(task.batch_id);
@@ -657,22 +736,7 @@ export default function Chapters() {
 
     // 检查所有前置章节是否有内容
     const allHaveContent = previousChapters.every(c => c.content && c.content.trim() !== '');
-    if (!allHaveContent) {
-      return false;
-    }
-
-    // 检查所有前置章节是否分析成功
-    const allAnalyzed = previousChapters.every(c => {
-      const task = analysisTasksMap[c.id];
-      // 如果没有分析任务或分析失败，则不允许生成
-      if (!task || !task.has_task) {
-        return false;
-      }
-      // 只有completed状态才算分析成功
-      return task.status === 'completed';
-    });
-
-    return allAnalyzed;
+    return allHaveContent;
   };
 
   const getGenerateDisabledReason = (chapter: Chapter): string => {
@@ -694,40 +758,10 @@ export default function Chapters() {
       return `需要先完成前置章节：第 ${numbers} 章`;
     }
 
-    // 检查是否有未分析或分析失败的章节
-    const unanalyzedChapters = previousChapters.filter(c => {
-      const task = analysisTasksMap[c.id];
-      if (!task || !task.has_task) {
-        return true; // 没有分析任务
-      }
-      return task.status !== 'completed'; // 分析未完成或失败
-    });
-
-    if (unanalyzedChapters.length > 0) {
-      const numbers = unanalyzedChapters.map(c => c.chapter_number).join('、');
-      const reasons = unanalyzedChapters.map(c => {
-        const task = analysisTasksMap[c.id];
-        if (!task || !task.has_task) {
-          return '未分析';
-        }
-        if (task.status === 'pending') {
-          return '等待分析';
-        }
-        if (task.status === 'running') {
-          return '分析中';
-        }
-        if (task.status === 'failed') {
-          return '分析失败';
-        }
-        return '状态未知';
-      });
-      return `需要先分析前置章节：第 ${numbers} 章 (${reasons.join('、')})`;
-    }
-
     return '';
   };
 
-  const loadChapterQualityMetrics = useCallback(async (chapterId: string) => {
+  const loadChapterQualityMetrics = async (chapterId: string) => {
     setChapterQualityLoading(true);
     try {
       const result = await chapterApi.getChapterQualityMetrics(chapterId);
@@ -745,7 +779,7 @@ export default function Chapters() {
     } finally {
       setChapterQualityLoading(false);
     }
-  }, []);
+  };
 
   const handleOpenModal = (id: string) => {
     const chapter = chapters.find(c => c.id === id);
@@ -1100,7 +1134,7 @@ export default function Chapters() {
       } = {
         start_chapter_number: values.startChapterNumber,
         count: values.count,
-        enable_analysis: true,
+        enable_analysis: false,
         style_id: styleId,
         target_word_count: wordCount,
       };
@@ -1117,6 +1151,11 @@ export default function Chapters() {
 
       const result = await chapterBatchTaskApi.createBatchGenerateTask(currentProject.id, requestBody);
       setBatchTaskId(result.batch_id);
+      batchTaskMetaRef.current[result.batch_id] = {
+        startChapterNumber: values.startChapterNumber,
+        count: values.count,
+        autoAnalyze: values.enableAnalysis,
+      };
       setBatchProgress({
         status: 'running',
         total: result.chapters_to_generate.length,
@@ -1195,6 +1234,7 @@ export default function Chapters() {
           }
 
           setBatchGenerating(false);
+          const taskMeta = batchTaskMetaRef.current[taskId];
 
           // 立即刷新章节列表和分析任务状态（在显示消息前）
           // 使用 refreshChapters 返回的最新章节列表传递给 loadAnalysisTasks
@@ -1215,6 +1255,10 @@ export default function Chapters() {
               `《${currentProject?.title || '项目'}》成功生成 ${status.completed} 章节`,
               'success'
             );
+
+            if (taskMeta?.autoAnalyze) {
+              void triggerDeferredBatchAnalysis(taskMeta.startChapterNumber, taskMeta.count, finalChapters);
+            }
           } else if (status.status === 'failed') {
             message.error(`批量生成失败：${status.error_message || '未知错误'}`);
             // 🔔 触发浏览器通知
@@ -1226,6 +1270,8 @@ export default function Chapters() {
           } else if (status.status === 'cancelled') {
             message.warning('批量生成已取消');
           }
+
+          delete batchTaskMetaRef.current[taskId];
 
           // 延迟关闭对话框，让用户看到最终状态
           setTimeout(() => {
@@ -1252,6 +1298,7 @@ export default function Chapters() {
 
     try {
       await chapterBatchTaskApi.cancelBatchGenerateTask(batchTaskId, currentProject?.id);
+      delete batchTaskMetaRef.current[batchTaskId];
 
       message.success('批量生成已取消');
 
@@ -1272,6 +1319,11 @@ export default function Chapters() {
 
   // 打开批量生成对话框
   const handleOpenBatchGenerate = async () => {
+    if (batchGenerating) {
+      message.info('批量生成进行中，可在右下角进度弹窗查看任务状态');
+      return;
+    }
+
     // 找到第一个未生成的章节
     const firstIncompleteChapter = sortedChapters.find(
       ch => !ch.content || ch.content.trim() === ''
@@ -1302,7 +1354,7 @@ export default function Chapters() {
     batchForm.setFieldsValue({
       startChapterNumber: firstIncompleteChapter.chapter_number,
       count: 5,
-      enableAnalysis: false,
+      enableAnalysis: true,
       styleId: selectedStyleId,
       targetWordCount: getCachedWordCount(),
     });
@@ -2711,23 +2763,7 @@ export default function Chapters() {
           </Space>
         }
         open={batchGenerateVisible}
-        onCancel={() => {
-          if (batchGenerating) {
-            modal.confirm({
-              title: '确认取消',
-              content: '批量生成正在进行中，确定要取消吗？',
-              okText: '确定取消',
-              cancelText: '继续生成',
-              centered: true,
-              onOk: () => {
-                handleCancelBatchGenerate();
-                setBatchGenerateVisible(false);
-              },
-            });
-          } else {
-            setBatchGenerateVisible(false);
-          }
-        }}
+        onCancel={() => setBatchGenerateVisible(false)}
         footer={!batchGenerating ? (
           <Space style={{ width: '100%', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
             <Button onClick={() => setBatchGenerateVisible(false)}>
@@ -2740,8 +2776,8 @@ export default function Chapters() {
         ) : null}
         width={isMobile ? 'calc(100vw - 32px)' : 700}
         centered
-        closable={!batchGenerating}
-        maskClosable={!batchGenerating}
+        closable
+        maskClosable
         style={isMobile ? {
           maxWidth: 'calc(100vw - 32px)',
           margin: '0 auto',
@@ -2851,7 +2887,7 @@ export default function Chapters() {
               </Form.Item>
             </div>
 
-            {/* 第三行：AI模型 + 同步分析 */}
+            {/* 第三行：AI模型 + 后台分析 */}
             <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 0 : 16 }}>
               <Form.Item
                 label="AI模型"
@@ -2875,14 +2911,17 @@ export default function Chapters() {
               </Form.Item>
 
               <Form.Item
-                label="同步分析"
+                label="后台分析"
                 name="enableAnalysis"
-                tooltip="必须开启，确保剧情连贯"
+                tooltip="正文完成后再后台分析，不阻塞章节生成"
                 style={{ marginBottom: 12 }}
               >
-                <Radio.Group disabled>
+                <Radio.Group>
                   <Radio value={true}>
-                    <span style={{ fontSize: 12, color: '#52c41a' }}>✓ 自动更新角色状态</span>
+                    <span style={{ fontSize: 12, color: '#52c41a' }}>✓ 生成完成后自动后台分析</span>
+                  </Radio>
+                  <Radio value={false}>
+                    <span style={{ fontSize: 12, color: '#8c8c8c' }}>仅生成正文（稍后手动分析）</span>
                   </Radio>
                 </Radio.Group>
               </Form.Item>
