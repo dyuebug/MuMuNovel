@@ -9,7 +9,7 @@ import {
   UnorderedListOutlined,
 } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { backgroundTaskApi, chapterBatchTaskApi, chapterSingleTaskApi } from '../services/api';
+import { backgroundTaskApi, chapterApi, chapterBatchTaskApi, chapterSingleTaskApi } from '../services/api';
 import {
   getTaskTypeLabel,
   isActiveBackgroundTask,
@@ -55,6 +55,7 @@ const getTaskDestination = (task: TrackedBackgroundTask): string | null => {
       return `/project/${task.projectId}/outline`;
     case 'chapters_batch_generate':
     case 'chapter_single_generate':
+    case 'chapter_analysis':
       return `/project/${task.projectId}/chapters`;
     default:
       return `/project/${task.projectId}`;
@@ -155,6 +156,13 @@ export default function BackgroundTaskCenter() {
           if (task.taskType === 'chapter_single_generate') {
             return chapterSingleTaskApi.getSingleGenerateTaskStatus(task.taskId, task.projectId);
           }
+          if (task.taskType === 'chapter_analysis') {
+            const chapterId = typeof task.checkpoint?.chapter_id === 'string'
+              ? task.checkpoint.chapter_id
+              : undefined;
+            if (!chapterId) return Promise.resolve(null);
+            return chapterApi.getChapterAnalysisStatus(chapterId, task.projectId);
+          }
           return backgroundTaskApi.getTaskStatus(task.taskId);
         })
       );
@@ -246,6 +254,9 @@ export default function BackgroundTaskCenter() {
   const canResumeTask = (task: TrackedBackgroundTask) =>
     (task.taskType === 'chapters_batch_generate' || task.taskType === 'chapter_single_generate') &&
     (task.status === 'failed' || task.status === 'cancelled');
+
+  const canCancelTask = (task: TrackedBackgroundTask) =>
+    task.taskType !== 'chapter_analysis';
 
   const resumeTask = async (task: TrackedBackgroundTask) => {
     const taskId = task.taskId;
@@ -365,15 +376,25 @@ export default function BackgroundTaskCenter() {
 
                   <Space size={8}>
                     {active ? (
-                      <Button
-                        size="small"
-                        danger
-                        icon={cancellingTaskIds[task.taskId] ? <LoadingOutlined /> : <StopOutlined />}
-                        loading={Boolean(cancellingTaskIds[task.taskId])}
-                        onClick={() => void cancelTask(task)}
-                      >
-                        取消
-                      </Button>
+                      canCancelTask(task) ? (
+                        <Button
+                          size="small"
+                          danger
+                          icon={cancellingTaskIds[task.taskId] ? <LoadingOutlined /> : <StopOutlined />}
+                          loading={Boolean(cancellingTaskIds[task.taskId])}
+                          onClick={() => void cancelTask(task)}
+                        >
+                          取消
+                        </Button>
+                      ) : (
+                        <Button
+                          size="small"
+                          icon={<CloseCircleOutlined />}
+                          onClick={() => removeTask(task.taskId)}
+                        >
+                          移除
+                        </Button>
+                      )
                     ) : (
                       <>
                         {canResumeTask(task) ? (

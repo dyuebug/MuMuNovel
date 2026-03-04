@@ -557,6 +557,40 @@ export const characterApi = {
 };
 
 export const chapterApi = {
+  upsertChapterAnalysisTaskToStore: (
+    task: import('../types').AnalysisTask,
+    projectId?: string,
+    messageOverride?: string
+  ) => {
+    if (!task?.has_task || !task.task_id || task.status === 'none') return;
+    const status = task.status === 'running' || task.status === 'completed' || task.status === 'failed'
+      ? task.status
+      : 'pending';
+    const messageText =
+      messageOverride ??
+      (status === 'completed'
+        ? '章节分析已完成'
+        : status === 'failed'
+          ? (task.error_message || '章节分析失败')
+          : `章节分析进行中 (${task.progress ?? 0}%)`);
+
+    useBackgroundTaskStore.getState().upsertTask({
+      task_id: task.task_id,
+      task_type: 'chapter_analysis',
+      project_id: projectId,
+      status,
+      progress: task.progress ?? 0,
+      message: messageText,
+      error: task.error_message ?? null,
+      stage_code: 'analysis',
+      execution_mode: 'interactive',
+      checkpoint: { chapter_id: task.chapter_id },
+      created_at: task.created_at ?? undefined,
+      updated_at: new Date().toISOString(),
+      completed_at: task.completed_at ?? undefined,
+    });
+  },
+
   getChapters: (projectId: string) =>
     api.get<unknown, { total: number; items: Chapter[] }>(`/chapters/project/${projectId}`).then(res => res.items),
 
@@ -574,6 +608,51 @@ export const chapterApi = {
 
   getChapterQualityMetrics: (chapterId: string) =>
     api.get<unknown, import('../types').ChapterQualityMetricsResponse>(`/chapters/${chapterId}/quality-metrics`),
+
+  getChapterAnalysis: (chapterId: string, includeFullDraft = false) =>
+    api.get<unknown, import('../types').ChapterAnalysisResponse>(
+      `/chapters/${chapterId}/analysis`,
+      { params: { include_full_draft: includeFullDraft } }
+    ),
+
+  getChapterAnalysisStatus: async (chapterId: string, projectId?: string) => {
+    const status = await api.get<unknown, import('../types').AnalysisTask>(`/chapters/${chapterId}/analysis/status`);
+    chapterApi.upsertChapterAnalysisTaskToStore(status, projectId);
+    return status;
+  },
+
+  triggerChapterAnalysis: async (chapterId: string, projectId?: string) => {
+    const created = await api.post<unknown, import('../types').TriggerAnalysisResponse>(`/chapters/${chapterId}/analyze`);
+    useBackgroundTaskStore.getState().upsertTask({
+      task_id: created.task_id,
+      task_type: 'chapter_analysis',
+      project_id: projectId,
+      status: 'pending',
+      progress: 0,
+      message: created.message || '章节分析任务已创建',
+      stage_code: 'analysis',
+      execution_mode: 'interactive',
+      checkpoint: { chapter_id: chapterId },
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    return created;
+  },
+
+  getAutoRevisionDraft: (chapterId: string, historyId?: string) =>
+    api.get<unknown, import('../types').ChapterAutoRevisionDraftResponse>(
+      `/chapters/${chapterId}/analysis/auto-revision-draft`,
+      { params: { history_id: historyId } }
+    ),
+
+  applyAutoRevisionDraft: (
+    chapterId: string,
+    data: import('../types').ApplyAutoRevisionDraftRequest = {}
+  ) =>
+    api.post<unknown, import('../types').ApplyAutoRevisionDraftResponse>(
+      `/chapters/${chapterId}/analysis/auto-revision-draft/apply`,
+      data
+    ),
 
   // 章节重新生成相关
   getRegenerationTasks: (chapterId: string, limit?: number) =>

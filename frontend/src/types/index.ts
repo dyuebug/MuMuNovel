@@ -678,14 +678,73 @@ export interface StoryMemory {
 }
 
 // 章节分析结果响应 - 匹配后端API返回
+export interface ChapterTextCheckerIssue {
+  severity: 'critical' | 'major' | 'minor';
+  category: string;
+  location: string;
+  evidence: string;
+  impact: string;
+  suggestion: string;
+}
+
+export interface ChapterTextCheckerResult {
+  overall_assessment: string;
+  severity_counts: {
+    critical: number;
+    major: number;
+    minor: number;
+  };
+  issues: ChapterTextCheckerIssue[];
+  priority_actions: string[];
+  revision_suggestions: string[];
+}
+
+export interface ChapterAutoRevisionDraft {
+  history_id: string | null;
+  critical_count: number;
+  applied_critical_count: number;
+  change_summary: string | null;
+  revised_word_count: number;
+  unresolved_issues: string[];
+  revised_text_preview: string;
+  has_full_text: boolean;
+  revised_text?: string;
+  is_stale: boolean;
+  created_at: string | null;
+}
+
 export interface ChapterAnalysisResponse {
   chapter_id: string;
   analysis: AnalysisData;  // 注意：后端返回的是analysis而不是analysis_data
   memories: StoryMemory[];
+  checker_result?: ChapterTextCheckerResult | null;
+  checker_created_at?: string | null;
+  auto_revision_draft?: ChapterAutoRevisionDraft | null;
   created_at: string;
 }
 
 // 手动触发分析响应
+export interface ChapterAutoRevisionDraftResponse {
+  chapter_id: string;
+  auto_revision_draft: ChapterAutoRevisionDraft;
+}
+
+export interface ApplyAutoRevisionDraftRequest {
+  history_id?: string;
+  allow_stale?: boolean;
+}
+
+export interface ApplyAutoRevisionDraftResponse {
+  success: boolean;
+  chapter_id: string;
+  word_count: number;
+  old_word_count: number;
+  draft_history_id: string;
+  draft_created_at: string | null;
+  stale_applied: boolean;
+  message: string;
+}
+
 export interface TriggerAnalysisResponse {
   task_id: string;
   chapter_id: string;

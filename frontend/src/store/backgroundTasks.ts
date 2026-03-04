@@ -138,6 +138,7 @@ export const getTaskTypeLabel = (taskType: string): string => {
   const labels: Record<string, string> = {
     chapters_batch_generate: '批量章节生成',
     chapter_single_generate: '单章生成',
+    chapter_analysis: '章节分析',
     careers_generate_system: '职业生成',
     character_generate: '角色生成',
     organization_generate: '组织生成',
