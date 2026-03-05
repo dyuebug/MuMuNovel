@@ -19,6 +19,7 @@ const { TextArea } = Input;
 
 // localStorage 缓存键名
 const WORD_COUNT_CACHE_KEY = 'chapter_default_word_count';
+const BATCH_TASK_META_STORAGE_KEY = 'chapter_batch_task_meta_map_v1';
 const DEFAULT_WORD_COUNT = 3000;
 
 // 从 localStorage 读取缓存的字数
@@ -44,6 +45,89 @@ const setCachedWordCount = (value: number): void => {
   } catch (error) {
     console.warn('保存字数缓存失败:', error);
   }
+};
+
+type BatchTaskMeta = {
+  startChapterNumber: number;
+  count: number;
+  autoAnalyze: boolean;
+  projectId?: string;
+};
+
+const isValidBatchTaskMeta = (value: unknown): value is BatchTaskMeta => {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const meta = value as Record<string, unknown>;
+  return (
+    typeof meta.startChapterNumber === 'number' &&
+    typeof meta.count === 'number' &&
+    typeof meta.autoAnalyze === 'boolean'
+  );
+};
+
+const readPersistedBatchTaskMetaMap = (): Record<string, BatchTaskMeta> => {
+  try {
+    const raw = localStorage.getItem(BATCH_TASK_META_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') {
+      return {};
+    }
+
+    const normalized: Record<string, BatchTaskMeta> = {};
+    Object.entries(parsed).forEach(([taskId, value]) => {
+      if (isValidBatchTaskMeta(value)) {
+        normalized[taskId] = value;
+      }
+    });
+    return normalized;
+  } catch (error) {
+    console.warn('读取批量任务元数据缓存失败:', error);
+    return {};
+  }
+};
+
+const writePersistedBatchTaskMetaMap = (map: Record<string, BatchTaskMeta>): void => {
+  try {
+    localStorage.setItem(BATCH_TASK_META_STORAGE_KEY, JSON.stringify(map));
+  } catch (error) {
+    console.warn('保存批量任务元数据缓存失败:', error);
+  }
+};
+
+const persistBatchTaskMeta = (taskId: string, meta: BatchTaskMeta): void => {
+  const map = readPersistedBatchTaskMetaMap();
+  map[taskId] = meta;
+  writePersistedBatchTaskMetaMap(map);
+};
+
+const getPersistedBatchTaskMeta = (taskId: string, projectId?: string): BatchTaskMeta | undefined => {
+  const map = readPersistedBatchTaskMetaMap();
+  const meta = map[taskId];
+  if (!meta) {
+    return undefined;
+  }
+
+  if (projectId && meta.projectId && meta.projectId !== projectId) {
+    return undefined;
+  }
+
+  return meta;
+};
+
+const removePersistedBatchTaskMeta = (taskId: string): void => {
+  const map = readPersistedBatchTaskMetaMap();
+  if (!(taskId in map)) {
+    return;
+  }
+
+  delete map[taskId];
+  writePersistedBatchTaskMetaMap(map);
 };
 
 export default function Chapters() {
@@ -123,11 +207,7 @@ export default function Chapters() {
     };
   } | null>(null);
   const batchPollingIntervalRef = useRef<number | null>(null);
-  const batchTaskMetaRef = useRef<Record<string, {
-    startChapterNumber: number;
-    count: number;
-    autoAnalyze: boolean;
-  }>>({});
+  const batchTaskMetaRef = useRef<Record<string, BatchTaskMeta>>({});
 
   useEffect(() => {
     const handleResize = () => {
@@ -601,6 +681,10 @@ export default function Chapters() {
 
       if (data.has_active_task && data.task) {
         const task = data.task;
+        const persistedTaskMeta = getPersistedBatchTaskMeta(task.batch_id, currentProject.id);
+        if (persistedTaskMeta) {
+          batchTaskMetaRef.current[task.batch_id] = persistedTaskMeta;
+        }
 
         // 恢复任务状态
         setBatchTaskId(task.batch_id);
@@ -1155,7 +1239,9 @@ export default function Chapters() {
         startChapterNumber: values.startChapterNumber,
         count: values.count,
         autoAnalyze: values.enableAnalysis,
+        projectId: currentProject.id,
       };
+      persistBatchTaskMeta(result.batch_id, batchTaskMetaRef.current[result.batch_id]);
       setBatchProgress({
         status: 'running',
         total: result.chapters_to_generate.length,
@@ -1234,7 +1320,7 @@ export default function Chapters() {
           }
 
           setBatchGenerating(false);
-          const taskMeta = batchTaskMetaRef.current[taskId];
+          const taskMeta = batchTaskMetaRef.current[taskId] ?? getPersistedBatchTaskMeta(taskId, currentProject?.id);
 
           // 立即刷新章节列表和分析任务状态（在显示消息前）
           // 使用 refreshChapters 返回的最新章节列表传递给 loadAnalysisTasks
@@ -1272,6 +1358,7 @@ export default function Chapters() {
           }
 
           delete batchTaskMetaRef.current[taskId];
+          removePersistedBatchTaskMeta(taskId);
 
           // 延迟关闭对话框，让用户看到最终状态
           setTimeout(() => {
@@ -1299,6 +1386,7 @@ export default function Chapters() {
     try {
       await chapterBatchTaskApi.cancelBatchGenerateTask(batchTaskId, currentProject?.id);
       delete batchTaskMetaRef.current[batchTaskId];
+      removePersistedBatchTaskMeta(batchTaskId);
 
       message.success('批量生成已取消');
 

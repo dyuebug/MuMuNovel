@@ -83,6 +83,38 @@ def _build_outline_content_from_item(chapter_data: Dict[str, Any]) -> str:
     return summary or "暂无大纲摘要"
 
 
+def _normalize_outline_items(raw_data: Any) -> list[Dict[str, Any]]:
+    """将模型输出归一化为大纲项列表，避免保存阶段因类型异常失败。"""
+    if isinstance(raw_data, dict):
+        chapters = raw_data.get("chapters")
+        if isinstance(chapters, list) and chapters:
+            candidates: list[Any] = chapters
+        else:
+            candidates = [raw_data]
+    elif isinstance(raw_data, list):
+        candidates = raw_data
+    else:
+        candidates = [raw_data]
+
+    normalized: list[Dict[str, Any]] = []
+    for index, item in enumerate(candidates, 1):
+        if isinstance(item, dict):
+            normalized.append(item)
+            continue
+
+        text = str(item).strip()
+        if not text:
+            continue
+
+        normalized.append({
+            "title": f"第{index}节",
+            "summary": text,
+            "content": text,
+        })
+
+    return normalized
+
+
 def _build_outline_runtime_system_prompt(project: Project, chapter_count: int) -> str:
     """向导大纲运行时系统提示词，补充剧情与人物约束。"""
     return f"""【大纲生成阶段】
@@ -1343,9 +1375,15 @@ async def outline_generator(
         
         project_id = data.get("project_id")
         # 向导固定生成3个大纲节点（不展开）
-        outline_count = data.get("chapter_count", 3)
+        try:
+            outline_count = int(data.get("chapter_count", 3) or 3)
+        except (TypeError, ValueError):
+            outline_count = 3
         narrative_perspective = data.get("narrative_perspective")
-        target_words = data.get("target_words", 100000)
+        try:
+            target_words = int(data.get("target_words", 100000) or 100000)
+        except (TypeError, ValueError):
+            target_words = 100000
         requirements = data.get("requirements", "")
         provider = data.get("provider")
         model = data.get("model")
@@ -1443,13 +1481,28 @@ async def outline_generator(
         # 解析大纲结果 - 使用统一的JSON清洗方法
         yield await tracker.parsing("解析大纲数据...")
         
+        outline_data = []
         try:
             cleaned_text = user_ai_service._clean_json_response(accumulated_text)
-            outline_data = json.loads(cleaned_text)
-            if not isinstance(outline_data, list):
-                outline_data = [outline_data]
-        except json.JSONDecodeError as e:
-            logger.error(f"大纲JSON解析失败: {e}")
+            outline_data = _normalize_outline_items(json.loads(cleaned_text))
+        except json.JSONDecodeError as parse_error:
+            logger.warning(f"大纲JSON解析失败，准备自动重试: {parse_error}")
+            try:
+                yield await tracker.retry(1, 2, "JSON解析失败，正在自动重试")
+                retry_data = await user_ai_service.call_with_json_retry(
+                    prompt=outline_prompt,
+                    system_prompt=outline_system_prompt,
+                    max_retries=2,
+                    provider=provider,
+                    model=model,
+                    auto_mcp=enable_mcp,
+                )
+                outline_data = _normalize_outline_items(retry_data)
+                yield await tracker.parsing("已自动修复返回格式，继续保存...", 0.8)
+            except Exception as retry_error:
+                logger.error(f"大纲自动重试失败: {retry_error}", exc_info=True)
+
+        if not outline_data:
             yield await tracker.error("大纲生成失败，请重试")
             return
         
