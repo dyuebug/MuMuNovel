@@ -2617,6 +2617,7 @@ async def generate_chapter_content_stream(
     """
     style_id = generate_request.style_id
     target_word_count = generate_request.target_word_count or 3000
+    enable_analysis = bool(getattr(generate_request, 'enable_analysis', False))
     custom_model = generate_request.model if hasattr(generate_request, 'model') else None
     temp_narrative_perspective = generate_request.narrative_perspective if hasattr(generate_request, 'narrative_perspective') else None
     # 预先验证章节存在性（使用临时会话）
@@ -2939,7 +2940,8 @@ async def generate_chapter_content_stream(
                 generate_kwargs = {
                     "prompt": prompt,
                     "system_prompt": system_prompt_with_style,
-                    "tool_choice": "required",
+                    "tool_choice": "auto",
+                    "auto_mcp": generate_request.enable_mcp,
                     "max_tokens": calculated_max_tokens,  # 添加 max_tokens 限制
                     "temperature": _resolve_generation_temperature(
                         _detect_style_profile(
@@ -3050,33 +3052,37 @@ async def generate_chapter_content_stream(
                 except Exception as plant_error:
                     logger.warning(f"⚠️ 自动标记伏笔埋入失败: {str(plant_error)}")
                 
-                # 创建分析任务
-                analysis_task = AnalysisTask(
-                    chapter_id=chapter_id,
-                    user_id=current_user_id,
-                    project_id=project.id,
-                    status='pending',
-                    progress=0
-                )
-                db_session.add(analysis_task)
-                await db_session.commit()
-                await db_session.refresh(analysis_task)
-                
-                task_id = analysis_task.id
-                logger.info(f"📋 已创建分析任务: {task_id}")
-                
-                # 短暂延迟确保SQLite WAL完成写入
-                await asyncio.sleep(0.05)
-                
-                # 直接启动后台分析（并发执行）
-                background_tasks.add_task(
-                    analyze_chapter_background,
-                    chapter_id=chapter_id,
-                    user_id=current_user_id,
-                    project_id=project.id,
-                    task_id=task_id,
-                    ai_service=user_ai_service
-                )
+                task_id = None
+                if enable_analysis:
+                    # 创建分析任务
+                    analysis_task = AnalysisTask(
+                        chapter_id=chapter_id,
+                        user_id=current_user_id,
+                        project_id=project.id,
+                        status='pending',
+                        progress=0
+                    )
+                    db_session.add(analysis_task)
+                    await db_session.commit()
+                    await db_session.refresh(analysis_task)
+                    
+                    task_id = analysis_task.id
+                    logger.info(f"📋 已创建分析任务: {task_id}")
+                    
+                    # 短暂延迟确保SQLite WAL完成写入
+                    await asyncio.sleep(0.05)
+                    
+                    # 直接启动后台分析（并发执行）
+                    background_tasks.add_task(
+                        analyze_chapter_background,
+                        chapter_id=chapter_id,
+                        user_id=current_user_id,
+                        project_id=project.id,
+                        task_id=task_id,
+                        ai_service=user_ai_service
+                    )
+                else:
+                    logger.info("⏭️ 已关闭自动分析，跳过分析任务创建")
                 
                 yield await tracker.saving("章节保存完成", 0.8)
                 
@@ -3099,13 +3105,14 @@ async def generate_chapter_content_stream(
                 })
                 
                 # 发送分析开始事件（使用自定义事件）
-                yield await SSEResponse.send_event(
-                    event='analysis_started',
-                    data={
-                        'task_id': task_id,
-                        'message': '章节分析已开始'
-                    }
-                )
+                if task_id:
+                    yield await SSEResponse.send_event(
+                        event='analysis_started',
+                        data={
+                            'task_id': task_id,
+                            'message': '章节分析已开始'
+                        }
+                    )
                 
                 # 发送完成信号
                 yield await tracker.done()
@@ -3216,6 +3223,7 @@ async def generate_chapter_content_background(
 
     style_id = generate_request.style_id
     target_word_count = generate_request.target_word_count or 3000
+    enable_analysis = bool(getattr(generate_request, 'enable_analysis', False))
     custom_model = generate_request.model if hasattr(generate_request, 'model') else None
     temp_narrative_perspective = (
         generate_request.narrative_perspective
@@ -3223,7 +3231,7 @@ async def generate_chapter_content_background(
         else None
     )
 
-    # 单章节后台任务默认开启分析，保持与原单章生成体验一致
+    # 单章节后台任务默认关闭同步分析，优先保证生成速度
     task = BatchGenerationTask(
         project_id=chapter.project_id,
         user_id=user_id,
@@ -3232,7 +3240,7 @@ async def generate_chapter_content_background(
         chapter_ids=[chapter_id],
         style_id=style_id,
         target_word_count=target_word_count,
-        enable_analysis=True,
+        enable_analysis=enable_analysis,
         max_retries=3,
         status='pending',
         total_chapters=1,
@@ -3257,7 +3265,7 @@ async def generate_chapter_content_background(
     estimated_time = calculate_estimated_time(
         chapter_count=1,
         target_word_count=target_word_count,
-        enable_analysis=True
+        enable_analysis=enable_analysis
     )
     logger.info(
         f"🚀 创建单章后台生成任务: task={task.id}, chapter={chapter.chapter_number}, "
@@ -4992,7 +5000,7 @@ async def generate_single_chapter_for_batch(
     generate_kwargs = {
         "prompt": prompt,
         "system_prompt": system_prompt_with_style,
-        "tool_choice": "required",
+        "tool_choice": "auto",
         "max_tokens": calculated_max_tokens,  # 添加 max_tokens 限制
         "temperature": _resolve_generation_temperature(
             _detect_style_profile(
