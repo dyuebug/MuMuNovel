@@ -76,7 +76,7 @@ class ChapterGenerateRequest(BaseModel):
         ge=500,   # 最小500字
         le=10000  # 最大10000字
     )
-    enable_analysis: bool = Field(False, description="是否启用同步分析")
+    enable_analysis: bool = Field(True, description="是否启用同步分析")
     enable_mcp: bool = Field(True, description="是否启用MCP工具增强（搜索参考资料）")
     model: Optional[str] = Field(None, description="指定使用的AI模型，不提供则使用用户默认模型")
     narrative_perspective: Optional[str] = Field(None, description="临时人称视角：first_person/third_person/omniscient，不提供则使用项目默认")

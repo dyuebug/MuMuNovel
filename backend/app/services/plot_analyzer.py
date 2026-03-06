@@ -26,7 +26,12 @@ class PlotAnalyzer:
             ai_service: AI服务实例
         """
         self.ai_service = ai_service
+        self.last_error_message: Optional[str] = None
         logger.info("✅ PlotAnalyzer初始化成功")
+
+    def _set_last_error(self, message: str) -> str:
+        self.last_error_message = message
+        return message
     
     async def analyze_chapter(
         self,
@@ -89,6 +94,7 @@ class PlotAnalyzer:
             characters_info=characters_info if characters_info else "（暂无角色信息）"
         )
         
+        self.last_error_message = None
         last_error = None
         logger.debug(f"章节分析提示词{prompt}")
         for attempt in range(1, max_retries + 1):
@@ -108,7 +114,7 @@ class PlotAnalyzer:
                     logger.warning(f"⚠️ 流式响应被中断(GeneratorExit)，已累积 {len(accumulated_text)} 字符")
                     # 如果已经累积了足够内容，继续尝试解析
                     if len(accumulated_text) < 100:
-                        raise Exception("流式响应中断，内容不足")
+                        raise Exception(self._set_last_error("AI流式响应中断，返回内容不足"))
                 except Exception as stream_error:
                     logger.error(f"❌ 流式生成出错: {str(stream_error)}")
                     raise
@@ -116,7 +122,7 @@ class PlotAnalyzer:
                 # 检查响应是否为空
                 if not accumulated_text or len(accumulated_text.strip()) < 10:
                     logger.warning(f"⚠️ AI响应为空或过短(长度: {len(accumulated_text)}), 尝试 {attempt}/{max_retries}")
-                    last_error = "AI响应为空或过短"
+                    last_error = self._set_last_error("AI响应为空或过短")
                     if attempt < max_retries:
                         wait_time = min(2 ** attempt, 10)
                         logger.info(f"  ⏳ 等待 {wait_time} 秒后重试...")
@@ -149,7 +155,7 @@ class PlotAnalyzer:
                 else:
                     # JSON解析失败，重试
                     logger.warning(f"⚠️ JSON解析失败, 尝试 {attempt}/{max_retries}")
-                    last_error = "JSON解析失败"
+                    last_error = self._set_last_error("AI返回格式异常，章节分析JSON解析失败")
                     if attempt < max_retries:
                         wait_time = min(2 ** attempt, 10)
                         logger.info(f"  ⏳ 等待 {wait_time} 秒后重试...")
@@ -166,7 +172,7 @@ class PlotAnalyzer:
                         return None
                     
             except Exception as e:
-                last_error = str(e)
+                last_error = self._set_last_error(str(e))
                 logger.error(f"❌ 章节分析异常(尝试 {attempt}/{max_retries}): {last_error}")
                 
                 if attempt < max_retries:
@@ -185,6 +191,7 @@ class PlotAnalyzer:
                     return None
         
         # 不应该到达这里，但作为安全措施
+        self._set_last_error(last_error or "章节分析失败，未获取到有效结果")
         logger.error(f"❌ 第{chapter_number}章分析失败: {last_error}")
         return None
     
@@ -290,10 +297,12 @@ class PlotAnalyzer:
             return result
             
         except json.JSONDecodeError as e:
+            self._set_last_error("AI返回格式异常，章节分析JSON解析失败")
             logger.error(f"❌ JSON解析失败: {str(e)}")
             logger.error(f"  原始响应(前500字): {response[:500]}")
             return None
         except Exception as e:
+            self._set_last_error(f"章节分析结果解析异常: {str(e)}")
             logger.error(f"❌ 解析异常: {str(e)}")
             return None
     

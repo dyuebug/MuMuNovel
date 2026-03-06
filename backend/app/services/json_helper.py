@@ -7,6 +7,51 @@ from app.logger import get_logger
 logger = get_logger(__name__)
 
 
+_CONTROL_CHAR_ESCAPES = {
+    "\b": "\\b",
+    "\f": "\\f",
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+}
+
+
+def _escape_invalid_string_chars(text: str) -> str:
+    result: List[str] = []
+    in_string = False
+    escaped = False
+
+    for char in text:
+        if in_string:
+            if escaped:
+                result.append(char)
+                escaped = False
+                continue
+
+            if char == "\\":
+                result.append(char)
+                escaped = True
+                continue
+
+            if char == '"':
+                result.append(char)
+                in_string = False
+                continue
+
+            if ord(char) < 0x20:
+                result.append(_CONTROL_CHAR_ESCAPES.get(char, f"\\u{ord(char):04x}"))
+                continue
+
+            result.append(char)
+            continue
+
+        result.append(char)
+        if char == '"':
+            in_string = True
+
+    return "".join(result)
+
+
 def clean_json_response(text: str) -> str:
     """清洗 AI 返回的 JSON（改进版 - 流式安全）"""
     try:
@@ -129,6 +174,11 @@ def clean_json_response(text: str) -> str:
             logger.warning(f"⚠️ 未找到JSON结束位置，返回全部内容（长度: {len(result)}）")
             logger.debug(f"   栈状态: {stack}")
         
+        repaired_result = _escape_invalid_string_chars(result)
+        if repaired_result != result:
+            logger.warning("⚠️ 检测到字符串中的非法控制字符，已自动转义")
+            result = repaired_result
+
         # 验证清洗后的结果
         try:
             json.loads(result)

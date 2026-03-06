@@ -430,6 +430,90 @@ def _calc_dialogue_naturalness_rate(text: str) -> Dict[str, Any]:
     }
 
 
+def _calc_opening_hook_rate(text: str) -> Dict[str, Any]:
+    """估算开场钩子命中率（前300字内的异常/冲突/任务压力）。"""
+    opening = (text or "")[:300]
+    if not opening.strip():
+        return {"hit_rate": 0.0, "matched_markers": [], "window_length": 0}
+
+    markers = {
+        "异常": ["忽然", "突然", "竟然", "不对劲", "异样", "反常", "通缉", "失控", "闯进"],
+        "危险": ["危险", "杀", "追", "爆炸", "血", "死", "失火", "崩塌", "袭来", "警报"],
+        "任务": ["必须", "限时", "任务", "deadline", "命令", "抓紧", "今晚", "立刻", "马上"],
+        "冲突": ["吵", "质问", "拦住", "对峙", "打断", "撕破脸", "冲突", "反驳", "拍桌", "开战"],
+    }
+
+    matched: List[str] = []
+    for label, words in markers.items():
+        if any(word in opening for word in words):
+            matched.append(label)
+
+    hit_rate = min(1.0, len(matched) / 2) if matched else 0.0
+    return {
+        "hit_rate": round(hit_rate, 4),
+        "matched_markers": matched,
+        "window_length": len(opening),
+    }
+
+
+def _calc_payoff_chain_rate(text: str) -> Dict[str, Any]:
+    """估算“小爽点链条”命中率（铺垫→爆发→反馈）。"""
+    sentences = _split_sentences(text)
+    if not sentences:
+        return {"hit_rate": 0.0, "hit_count": 0, "expected_count": 1}
+
+    setup_words = ["原本", "本来", "一直", "眼看", "刚要", "正要", "谁知", "没想到", "偏偏"]
+    burst_words = ["突然", "当场", "直接", "瞬间", "反手", "竟然", "立刻", "翻盘", "突破", "赢了", "拿下"]
+    feedback_words = ["愣住", "哗然", "脸色变", "看傻", "松了口气", "发麻", "欢呼", "安静下来", "炸开了锅"]
+
+    expected_count = max(1, len(text) // 1800)
+    hit_count = 0
+
+    for idx in range(max(0, len(sentences) - 2)):
+        s1 = sentences[idx]
+        s2_window = " ".join(sentences[idx: idx + 3])
+        s3_window = " ".join(sentences[idx: idx + 4])
+        if any(word in s1 for word in setup_words) and any(word in s2_window for word in burst_words) and any(word in s3_window for word in feedback_words):
+            hit_count += 1
+
+    hit_rate = min(1.0, hit_count / max(expected_count, 1))
+    return {
+        "hit_rate": round(hit_rate, 4),
+        "hit_count": hit_count,
+        "expected_count": expected_count,
+    }
+
+
+def _calc_cliffhanger_rate(text: str) -> Dict[str, Any]:
+    """估算章尾钩子命中率（结尾信息缺口/危险临门/反转/选择未决）。"""
+    ending = (text or "")[-220:]
+    if not ending.strip():
+        return {"hit_rate": 0.0, "matched_markers": [], "window_length": 0}
+
+    markers = {
+        "信息缺口": ["怎么会", "原来", "却发现", "门后", "那个人", "竟是", "真相", "秘密"],
+        "危险临门": ["脚步声", "逼近", "枪口", "刀", "下一秒", "扑来", "追上", "要出事"],
+        "身份反转": ["竟然是你", "身份", "卧底", "叛徒", "冒名", "伪装", "认出来"],
+        "选择未决": ["该不该", "要不要", "只能", "必须选", "下一步", "还没决定", "伸向", "停在半空"],
+    }
+    weak_endings = ["总之", "他明白了", "命运将会", "一切都会好起来", "故事还在继续"]
+
+    matched: List[str] = []
+    for label, words in markers.items():
+        if any(word in ending for word in words):
+            matched.append(label)
+
+    if any(word in ending for word in weak_endings):
+        return {"hit_rate": 0.0, "matched_markers": [], "window_length": len(ending)}
+
+    hit_rate = min(1.0, len(matched) / 2) if matched else 0.0
+    return {
+        "hit_rate": round(hit_rate, 4),
+        "matched_markers": matched,
+        "window_length": len(ending),
+    }
+
+
 def compute_story_quality_metrics(
     content: str,
     chapter_outline: Optional[str],
@@ -440,12 +524,18 @@ def compute_story_quality_metrics(
     rule_grounding = _calc_rule_grounding_rate(content, world_rules)
     outline_alignment = _calc_outline_alignment_rate(content, chapter_outline)
     dialogue = _calc_dialogue_naturalness_rate(content)
+    opening_hook = _calc_opening_hook_rate(content)
+    payoff_chain = _calc_payoff_chain_rate(content)
+    cliffhanger = _calc_cliffhanger_rate(content)
 
     overall = (
-        conflict["hit_rate"] * 0.35 +
-        rule_grounding["hit_rate"] * 0.30 +
-        outline_alignment["hit_rate"] * 0.20 +
-        dialogue["hit_rate"] * 0.15
+        conflict["hit_rate"] * 0.26 +
+        rule_grounding["hit_rate"] * 0.22 +
+        outline_alignment["hit_rate"] * 0.18 +
+        dialogue["hit_rate"] * 0.12 +
+        opening_hook["hit_rate"] * 0.10 +
+        payoff_chain["hit_rate"] * 0.07 +
+        cliffhanger["hit_rate"] * 0.05
     )
 
     return {
@@ -454,11 +544,17 @@ def compute_story_quality_metrics(
         "rule_grounding_hit_rate": round(rule_grounding["hit_rate"] * 100, 1),
         "outline_alignment_rate": round(outline_alignment["hit_rate"] * 100, 1),
         "dialogue_naturalness_rate": round(dialogue["hit_rate"] * 100, 1),
+        "opening_hook_rate": round(opening_hook["hit_rate"] * 100, 1),
+        "payoff_chain_rate": round(payoff_chain["hit_rate"] * 100, 1),
+        "cliffhanger_rate": round(cliffhanger["hit_rate"] * 100, 1),
         "details": {
             "conflict_chain": conflict,
             "rule_grounding": rule_grounding,
             "outline_alignment": outline_alignment,
             "dialogue": dialogue,
+            "opening_hook": opening_hook,
+            "payoff_chain": payoff_chain,
+            "cliffhanger": cliffhanger,
         }
     }
 
@@ -845,11 +941,17 @@ async def _record_task_quality_metrics(task_id: str, metrics_event: Dict[str, An
         overall_list = [item.get("overall_score", 0.0) for item in history]
         conflict_list = [item.get("conflict_chain_hit_rate", 0.0) for item in history]
         rule_list = [item.get("rule_grounding_hit_rate", 0.0) for item in history]
+        opening_list = [item.get("opening_hook_rate", 0.0) for item in history]
+        payoff_list = [item.get("payoff_chain_rate", 0.0) for item in history]
+        cliffhanger_list = [item.get("cliffhanger_rate", 0.0) for item in history]
 
         current["summary"] = {
             "avg_overall_score": round(sum(overall_list) / max(len(overall_list), 1), 1),
             "avg_conflict_chain_hit_rate": round(sum(conflict_list) / max(len(conflict_list), 1), 1),
             "avg_rule_grounding_hit_rate": round(sum(rule_list) / max(len(rule_list), 1), 1),
+            "avg_opening_hook_rate": round(sum(opening_list) / max(len(opening_list), 1), 1),
+            "avg_payoff_chain_rate": round(sum(payoff_list) / max(len(payoff_list), 1), 1),
+            "avg_cliffhanger_rate": round(sum(cliffhanger_list) / max(len(cliffhanger_list), 1), 1),
             "chapter_count": len(history),
         }
         task_quality_metrics_cache[task_id] = current
@@ -929,6 +1031,27 @@ def _parse_quality_metrics_from_history(generated_content: Optional[str]) -> Opt
         # 兼容旧数据：generated_content 为纯文本
         return None
     return None
+
+
+def _classify_analysis_error_code(error_message: Optional[str]) -> Optional[str]:
+    if not error_message:
+        return None
+
+    if '正在重试(' in error_message:
+        return 'retrying'
+    if 'JSON解析失败' in error_message or 'AI返回格式异常' in error_message:
+        return 'json_parse_failed'
+    if 'AI响应为空或过短' in error_message:
+        return 'ai_empty'
+    if '流式响应中断' in error_message or '流式生成出错' in error_message:
+        return 'stream_interrupted'
+    if '任务超时' in error_message or '启动超时' in error_message:
+        return 'timeout'
+    if '章节不存在或内容为空' in error_message:
+        return 'chapter_empty'
+    if '项目不存在' in error_message:
+        return 'project_missing'
+    return 'unknown'
 
 
 def _parse_checker_result_from_history(generated_content: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -2176,12 +2299,13 @@ async def analyze_chapter_background(
         )
         
         if not analysis_result:
+            analysis_error_message = analyzer.last_error_message or '章节分析失败，请稍后重试'
             async with write_lock:
                 task.status = 'failed'
-                task.error_message = 'AI分析失败，请检查日志'
+                task.error_message = analysis_error_message[:500]
                 task.completed_at = datetime.now()
                 await db_session.commit()
-            logger.error(f"❌ AI分析失败: {chapter_id}")
+            logger.error(f"❌ AI分析失败: {chapter_id}, 原因: {analysis_error_message}")
             return False
         
         checker_result = await _run_chapter_text_checker(
@@ -3387,6 +3511,7 @@ async def get_analysis_task_status(
         "status": task.status,
         "progress": task.progress,
         "error_message": task.error_message,
+        "error_code": _classify_analysis_error_code(task.error_message),
         "auto_recovered": auto_recovered,
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "started_at": task.started_at.isoformat() if task.started_at else None,

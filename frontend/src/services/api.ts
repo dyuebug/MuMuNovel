@@ -90,6 +90,61 @@ const showErrorToastWithThrottle = (errorMessage: string) => {
 const silentRequestConfig = <T extends RequestConfigWithToastControl>(config?: T): T =>
   ({ ...(config || {}), suppressErrorToast: true } as T);
 
+const formatChapterAnalysisError = (
+  errorCode?: import('../types').AnalysisTask['error_code'],
+  errorMessage?: string | null
+): string | null => {
+  if (!errorCode && !errorMessage) {
+    return null;
+  }
+
+  if (errorCode === 'json_parse_failed') {
+    return '章节分析失败：AI 返回结果格式异常，系统已自动重试；如果仍失败，请再次重试分析';
+  }
+
+  if (errorCode === 'ai_empty') {
+    return '章节分析失败：AI 返回内容不足，未能生成有效分析结果，请稍后重试';
+  }
+
+  if (errorCode === 'stream_interrupted') {
+    return '章节分析失败：AI 流式响应中断，可能是模型服务波动或代理中断，请稍后重试';
+  }
+
+  if (errorCode === 'timeout') {
+    return '章节分析超时：后台长时间未完成分析，请稍后刷新后重试';
+  }
+
+  if (errorCode === 'chapter_empty') {
+    return '章节分析失败：当前章节内容为空，无法进行分析';
+  }
+
+  if (errorCode === 'project_missing') {
+    return '章节分析失败：关联项目不存在，请刷新页面后重试';
+  }
+
+  if (errorCode === 'retrying') {
+    return errorMessage;
+  }
+
+  if (errorMessage?.includes('JSON解析失败') || errorMessage?.includes('AI返回格式异常')) {
+    return '章节分析失败：AI 返回结果格式异常，系统已自动重试；如果仍失败，请再次重试分析';
+  }
+
+  if (errorMessage?.includes('AI响应为空或过短')) {
+    return '章节分析失败：AI 返回内容不足，未能生成有效分析结果，请稍后重试';
+  }
+
+  if (errorMessage?.includes('流式响应中断') || errorMessage?.includes('流式生成出错')) {
+    return '章节分析失败：AI 流式响应中断，可能是模型服务波动或代理中断，请稍后重试';
+  }
+
+  if (errorMessage?.includes('任务超时')) {
+    return '章节分析超时：后台长时间未完成分析，请稍后刷新后重试';
+  }
+
+  return errorMessage;
+};
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 120000,
@@ -153,9 +208,24 @@ api.interceptors.response.use(
           errorMessage = data?.detail || data?.message || `请求失败 (${status})`;
       }
     } else if (error.request) {
-      errorMessage = '网络错误，请检查网络连接';
+      const errorCode = typeof error.code === 'string' ? error.code : '';
+      const rawMessage = typeof error.message === 'string' ? error.message : '';
+      const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
+      const isTimeout = errorCode === 'ECONNABORTED' || /timeout/i.test(rawMessage);
+
+      if (isOffline) {
+        errorMessage = '网络连接已断开，请检查当前网络';
+      } else if (isTimeout) {
+        errorMessage = '请求超时，服务响应较慢，请稍后重试';
+      } else {
+        errorMessage = '服务暂时无响应，可能是网络波动、后端异常或代理中断，请稍后重试';
+      }
     } else {
       errorMessage = error.message || '请求失败';
+    }
+
+    if (typeof error === 'object' && error !== null) {
+      error.message = errorMessage;
     }
 
     if (!suppressErrorToast) {
@@ -656,6 +726,7 @@ export const chapterApi = {
       `/chapters/${chapterId}/analysis/status`,
       silentRequestConfig()
     );
+    status.error_message = formatChapterAnalysisError(status.error_code, status.error_message);
     chapterApi.upsertChapterAnalysisTaskToStore(status, projectId);
     return status;
   },

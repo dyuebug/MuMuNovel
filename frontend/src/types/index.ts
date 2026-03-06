@@ -346,6 +346,9 @@ export interface ChapterQualityMetrics {
   rule_grounding_hit_rate: number;
   outline_alignment_rate: number;
   dialogue_naturalness_rate: number;
+  opening_hook_rate: number;
+  payoff_chain_rate: number;
+  cliffhanger_rate: number;
 }
 
 export interface ChapterQualityMetricsResponse {
@@ -563,6 +566,7 @@ export interface AnalysisTask {
   status: 'pending' | 'running' | 'completed' | 'failed' | 'none';
   progress: number;
   error_message?: string | null;
+  error_code?: 'retrying' | 'json_parse_failed' | 'ai_empty' | 'stream_interrupted' | 'timeout' | 'chapter_empty' | 'project_missing' | 'unknown' | null;
   auto_recovered?: boolean;
   created_at?: string | null;
   started_at?: string | null;

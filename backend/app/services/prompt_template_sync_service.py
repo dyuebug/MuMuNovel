@@ -36,91 +36,91 @@ MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
     # Legacy hashes from previous AI_DENOISING defaults.
     # If users still hold an untouched legacy copy, auto-upgrade to latest.
     "AI_DENOISING": TemplateSyncRule(
-        legacy_hashes={"c40c0f000310940c", "15d418f68d68f7a6", "bec75d1005770577"},
+        legacy_hashes={"c40c0f000310940c", "15d418f68d68f7a6", "bec75d1005770577", "ec48a8f6a4c5797f"},
     ),
     # 第三版融合（主线模板）：当用户副本仍是历史默认内容时，自动升级到最新约束版本。
     "OUTLINE_CREATE": TemplateSyncRule(
-        legacy_hashes={"3dac3838a8989e40", "8403d46239ac21f9"},
+        legacy_hashes={"3dac3838a8989e40", "8403d46239ac21f9", "0df51e236ddb2cf6"},
     ),
     "OUTLINE_CONTINUE": TemplateSyncRule(
-        legacy_hashes={"32b6f497d1ba1fcb", "fbf485bc5ca6c990"},
+        legacy_hashes={"32b6f497d1ba1fcb", "fbf485bc5ca6c990", "30348222dfec7056"},
     ),
     "CHAPTER_GENERATION_ONE_TO_MANY": TemplateSyncRule(
-        legacy_hashes={"fdfdb8c6b7619804", "f305d7120838aecd"},
+        legacy_hashes={"fdfdb8c6b7619804", "f305d7120838aecd", "2a96431c1531b106"},
     ),
     "CHAPTER_GENERATION_ONE_TO_MANY_NEXT": TemplateSyncRule(
-        legacy_hashes={"9e3c0ccc044ffa31", "f0d0bb2c56983aed"},
+        legacy_hashes={"9e3c0ccc044ffa31", "f0d0bb2c56983aed", "67a9162db2ebc58d"},
     ),
     "CHAPTER_GENERATION_ONE_TO_ONE": TemplateSyncRule(
-        legacy_hashes={"4ccddf983a56e3e9", "31a22bb8610a4cf1"},
+        legacy_hashes={"4ccddf983a56e3e9", "31a22bb8610a4cf1", "47f61ef943be70f0"},
     ),
     "CHAPTER_GENERATION_ONE_TO_ONE_NEXT": TemplateSyncRule(
-        legacy_hashes={"cc18fe04ad17ac2b", "93979c953dcb6e64"},
+        legacy_hashes={"cc18fe04ad17ac2b", "93979c953dcb6e64", "81d34cc949d6cbb5"},
     ),
     "PARTIAL_REGENERATE": TemplateSyncRule(
-        legacy_hashes={"d4fc0961075e426e", "ed4e95fe9b82e4aa", "9da113b6496d8c12"},
+        legacy_hashes={"d4fc0961075e426e", "ed4e95fe9b82e4aa", "9da113b6496d8c12", "e67146339ab8be86"},
     ),
     "PLOT_ANALYSIS": TemplateSyncRule(
-        legacy_hashes={"dee21de2491c9c8b"},
+        legacy_hashes={"dee21de2491c9c8b", "6048e506dedf3507"},
     ),
     "OUTLINE_EXPAND_SINGLE": TemplateSyncRule(
-        legacy_hashes={"819bf64ee54d5efe"},
+        legacy_hashes={"819bf64ee54d5efe", "5bf412df5065cdb7"},
     ),
     "OUTLINE_EXPAND_MULTI": TemplateSyncRule(
-        legacy_hashes={"5d90dbf35d2f3910"},
+        legacy_hashes={"5d90dbf35d2f3910", "731e6cef36332699"},
     ),
     "AUTO_CHARACTER_ANALYSIS": TemplateSyncRule(
-        legacy_hashes={"5f75f423f3f7effd"},
+        legacy_hashes={"5f75f423f3f7effd", "fc86886d86feff26"},
     ),
     "AUTO_ORGANIZATION_ANALYSIS": TemplateSyncRule(
-        legacy_hashes={"b85b57b470de0457"},
+        legacy_hashes={"b85b57b470de0457", "f4d2e73b6dde0acd"},
     ),
     # 第三版融合（角色/组织/重写/职业扩展模板）
     "SINGLE_CHARACTER_GENERATION": TemplateSyncRule(
-        legacy_hashes={"1c8caffaf3e86c1a"},
+        legacy_hashes={"1c8caffaf3e86c1a", "472e253bfcaf0bb3"},
     ),
     "SINGLE_ORGANIZATION_GENERATION": TemplateSyncRule(
-        legacy_hashes={"616ecf71799a153c"},
+        legacy_hashes={"616ecf71799a153c", "d13588f0a44b4bb7"},
     ),
     "CHAPTER_REGENERATION_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"18cf26ca10811026", "7cf4aad2f74199ab"},
+        legacy_hashes={"18cf26ca10811026", "7cf4aad2f74199ab", "bd65d4128fbeac8e"},
     ),
     "AUTO_CHARACTER_GENERATION": TemplateSyncRule(
-        legacy_hashes={"0a789aa309633332"},
+        legacy_hashes={"0a789aa309633332", "4c34ae66825d3a36"},
     ),
     "AUTO_ORGANIZATION_GENERATION": TemplateSyncRule(
-        legacy_hashes={"da5600e87099ab21"},
+        legacy_hashes={"da5600e87099ab21", "58ffce61242e00f1"},
     ),
     "CAREER_SYSTEM_GENERATION": TemplateSyncRule(
-        legacy_hashes={"d2d1b3971bcb05fc"},
+        legacy_hashes={"d2d1b3971bcb05fc", "4a147e0226b82a66"},
     ),
     # 灵感模式模板：当用户仍是旧版系统默认副本时，自动升级到新版低AI生活化约束。
     "INSPIRATION_TITLE_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"174116db28ffe2cd", "ff42cc2ceac62d6c", "dd4dcec1cc7a4a89", "46d0630fcc38b042"},
+        legacy_hashes={"174116db28ffe2cd", "ff42cc2ceac62d6c", "dd4dcec1cc7a4a89", "46d0630fcc38b042", "c6c6015d47c2ced6"},
     ),
     "INSPIRATION_TITLE_USER": TemplateSyncRule(
         legacy_hashes={"95f56808897a03a1", "17f7f36eed5bbf7f"},
     ),
     "INSPIRATION_DESCRIPTION_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"5d3349db809fe56f", "6027777447bb0156", "261b325cf3577e5f", "b4d06bf965dda8a6"},
+        legacy_hashes={"5d3349db809fe56f", "6027777447bb0156", "261b325cf3577e5f", "b4d06bf965dda8a6", "f4771e281767a9c6"},
     ),
     "INSPIRATION_DESCRIPTION_USER": TemplateSyncRule(
         legacy_hashes={"f0af139f8db3e24a", "0363da89559d6cb2"},
     ),
     "INSPIRATION_THEME_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"77fcd61b59597687", "9d784b8ce9a66177", "b83916e2eeab0f6d", "044b05ddb80e4729"},
+        legacy_hashes={"77fcd61b59597687", "9d784b8ce9a66177", "b83916e2eeab0f6d", "044b05ddb80e4729", "5e06f60ed7d63038"},
     ),
     "INSPIRATION_THEME_USER": TemplateSyncRule(
         legacy_hashes={"0c691111be925e7a", "6c2b5a57b8319894"},
     ),
     "INSPIRATION_GENRE_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"d7e550414969ffe2", "9258f1c8c0bfd99d", "8099dc8af8705f9b", "48e61aac5ed73b34"},
+        legacy_hashes={"d7e550414969ffe2", "9258f1c8c0bfd99d", "8099dc8af8705f9b", "48e61aac5ed73b34", "cc08044e29ce7810"},
     ),
     "INSPIRATION_GENRE_USER": TemplateSyncRule(
         legacy_hashes={"c3a2ff6230a69e45", "e082b217449e54dd"},
     ),
     "INSPIRATION_QUICK_COMPLETE": TemplateSyncRule(
-        legacy_hashes={"90d7050767ec4423", "859f27b2cd8f694e", "88892302ac1e0715", "b533c5afae9272ba"},
+        legacy_hashes={"90d7050767ec4423", "859f27b2cd8f694e", "88892302ac1e0715", "b533c5afae9272ba", "527956ae06b2ae95"},
     ),
 }
 

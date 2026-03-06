@@ -983,6 +983,40 @@ async def test_should_create_single_chapter_background_generation_task(
         assert task.enable_analysis is True
 
 
+async def test_should_allow_disabling_analysis_for_single_chapter_background_generation(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    outline = await create_outline(
+        chapters_session_factory,
+        project_id=project.id,
+        order_index=1,
+        title="单章关闭分析大纲",
+    )
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="待关闭分析章节",
+        content=None,
+        outline_id=outline.id,
+    )
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/generate-background",
+        json={"target_word_count": 1200, "enable_analysis": False},
+    )
+    assert response.status_code == 200
+    body = response.json()
+
+    async with chapters_session_factory() as session:
+        task = await session.get(BatchGenerationTask, body["task_id"])
+        assert task is not None
+        assert task.enable_analysis is False
+
+
 async def test_should_reuse_active_background_task_for_same_chapter(
     chapters_client,
     chapters_session_factory,

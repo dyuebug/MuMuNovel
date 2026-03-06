@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { List, Button, Modal, Form, Input, Select, message, Empty, Space, Badge, Tag, Card, InputNumber, Alert, Radio, Descriptions, Collapse, Popconfirm, FloatButton } from 'antd';
+import { List, Button, Modal, Form, Input, Select, message, Empty, Space, Badge, Tag, Card, InputNumber, Alert, Radio, Descriptions, Collapse, Popconfirm, FloatButton, Tooltip, Progress } from 'antd';
 import { EditOutlined, FileTextOutlined, ThunderboltOutlined, LockOutlined, DownloadOutlined, SettingOutlined, FundOutlined, SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, RocketOutlined, StopOutlined, InfoCircleOutlined, CaretRightOutlined, DeleteOutlined, BookOutlined, FormOutlined, PlusOutlined, ReadOutlined } from '@ant-design/icons';
 import { useStore } from '../store';
 import { useChapterSync } from '../store/hooks';
@@ -21,6 +21,71 @@ const { TextArea } = Input;
 const WORD_COUNT_CACHE_KEY = 'chapter_default_word_count';
 const BATCH_TASK_META_STORAGE_KEY = 'chapter_batch_task_meta_map_v1';
 const DEFAULT_WORD_COUNT = 3000;
+
+const getOverallScoreColor = (score?: number): string => {
+  if ((score ?? 0) >= 75) return 'green';
+  if ((score ?? 0) >= 60) return 'gold';
+  return 'red';
+};
+
+const getMetricRateColor = (rate?: number): string => {
+  if ((rate ?? 0) >= 70) return 'green';
+  if ((rate ?? 0) >= 45) return 'gold';
+  return 'red';
+};
+
+const getMetricStrokeColor = (rate?: number): string => {
+  if ((rate ?? 0) >= 70) return '#52c41a';
+  if ((rate ?? 0) >= 45) return '#faad14';
+  return '#ff4d4f';
+};
+
+const QUALITY_METRIC_TIPS: Record<string, string> = {
+  conflict: '是否写出了“目标受阻→角色选择→代价/后果”的有效冲突链。',
+  rule: '世界规则是否真的作用到事件结果，而不只是名词陈列。',
+  opening: '前300字内是否快速进入异常、危险、任务或正面冲突。',
+  payoff: '本章是否形成“铺垫→爆发→反馈”的最小爽点闭环。',
+  cliffhanger: '章尾是否留下追读牵引，如信息缺口、危险临门、身份反转或选择未决。',
+  dialogue: '对白是否自然，是否有停顿、打断、人物声线差异。',
+  outline: '正文是否覆盖了本章大纲的关键锚点。',
+};
+
+const getWeakestQualityMetric = (metrics: ChapterQualityMetrics): { label: string; value: number } => {
+  const items = [
+    { label: '冲突链', value: metrics.conflict_chain_hit_rate },
+    { label: '规则落地', value: metrics.rule_grounding_hit_rate },
+    { label: '开场钩子', value: metrics.opening_hook_rate },
+    { label: '爽点链', value: metrics.payoff_chain_rate },
+    { label: '章尾钩子', value: metrics.cliffhanger_rate },
+    { label: '对白自然度', value: metrics.dialogue_naturalness_rate },
+    { label: '大纲贴合度', value: metrics.outline_alignment_rate },
+  ];
+  return items.reduce((min, item) => (item.value < min.value ? item : min), items[0]);
+};
+
+const getQualityMetricItems = (metrics: ChapterQualityMetrics) => [
+  { key: 'conflict', label: '冲突链', value: metrics.conflict_chain_hit_rate, tip: QUALITY_METRIC_TIPS.conflict },
+  { key: 'rule', label: '规则落地', value: metrics.rule_grounding_hit_rate, tip: QUALITY_METRIC_TIPS.rule },
+  { key: 'opening', label: '开场钩子', value: metrics.opening_hook_rate, tip: QUALITY_METRIC_TIPS.opening },
+  { key: 'payoff', label: '爽点链', value: metrics.payoff_chain_rate, tip: QUALITY_METRIC_TIPS.payoff },
+  { key: 'cliffhanger', label: '章尾钩子', value: metrics.cliffhanger_rate, tip: QUALITY_METRIC_TIPS.cliffhanger },
+  { key: 'dialogue', label: '对白自然度', value: metrics.dialogue_naturalness_rate, tip: QUALITY_METRIC_TIPS.dialogue },
+  { key: 'outline', label: '大纲贴合度', value: metrics.outline_alignment_rate, tip: QUALITY_METRIC_TIPS.outline },
+];
+
+const getBatchSummaryMetricItems = (summary?: {
+  avg_conflict_chain_hit_rate?: number;
+  avg_rule_grounding_hit_rate?: number;
+  avg_opening_hook_rate?: number;
+  avg_payoff_chain_rate?: number;
+  avg_cliffhanger_rate?: number;
+}) => [
+  { key: 'conflict', label: '冲突链', value: summary?.avg_conflict_chain_hit_rate ?? 0, tip: QUALITY_METRIC_TIPS.conflict },
+  { key: 'rule', label: '规则落地', value: summary?.avg_rule_grounding_hit_rate ?? 0, tip: QUALITY_METRIC_TIPS.rule },
+  { key: 'opening', label: '开场钩子', value: summary?.avg_opening_hook_rate ?? 0, tip: QUALITY_METRIC_TIPS.opening },
+  { key: 'payoff', label: '爽点链', value: summary?.avg_payoff_chain_rate ?? 0, tip: QUALITY_METRIC_TIPS.payoff },
+  { key: 'cliffhanger', label: '章尾钩子', value: summary?.avg_cliffhanger_rate ?? 0, tip: QUALITY_METRIC_TIPS.cliffhanger },
+];
 
 // 从 localStorage 读取缓存的字数
 const getCachedWordCount = (): number => {
@@ -198,11 +263,17 @@ export default function Chapters() {
       overall_score?: number;
       conflict_chain_hit_rate?: number;
       rule_grounding_hit_rate?: number;
+      opening_hook_rate?: number;
+      payoff_chain_rate?: number;
+      cliffhanger_rate?: number;
     };
     quality_metrics_summary?: {
       avg_overall_score?: number;
       avg_conflict_chain_hit_rate?: number;
       avg_rule_grounding_hit_rate?: number;
+      avg_opening_hook_rate?: number;
+      avg_payoff_chain_rate?: number;
+      avg_cliffhanger_rate?: number;
       chapter_count?: number;
     };
   } | null>(null);
@@ -697,11 +768,17 @@ export default function Chapters() {
             overall_score?: number;
             conflict_chain_hit_rate?: number;
             rule_grounding_hit_rate?: number;
+            opening_hook_rate?: number;
+            payoff_chain_rate?: number;
+            cliffhanger_rate?: number;
           } | null | undefined) ?? undefined,
           quality_metrics_summary: (task.quality_metrics_summary as {
             avg_overall_score?: number;
             avg_conflict_chain_hit_rate?: number;
             avg_rule_grounding_hit_rate?: number;
+            avg_opening_hook_rate?: number;
+            avg_payoff_chain_rate?: number;
+            avg_cliffhanger_rate?: number;
             chapter_count?: number;
           } | null | undefined) ?? undefined,
         });
@@ -1290,11 +1367,17 @@ export default function Chapters() {
             overall_score?: number;
             conflict_chain_hit_rate?: number;
             rule_grounding_hit_rate?: number;
+            opening_hook_rate?: number;
+            payoff_chain_rate?: number;
+            cliffhanger_rate?: number;
           } | null | undefined) ?? undefined,
           quality_metrics_summary: (status.quality_metrics_summary as {
             avg_overall_score?: number;
             avg_conflict_chain_hit_rate?: number;
             avg_rule_grounding_hit_rate?: number;
+            avg_opening_hook_rate?: number;
+            avg_payoff_chain_rate?: number;
+            avg_cliffhanger_rate?: number;
             chapter_count?: number;
           } | null | undefined) ?? undefined,
         });
@@ -1650,7 +1733,7 @@ export default function Chapters() {
         );
       case 'running': {
         // 检查是否正在重试（后端会在error_message中包含"重试"信息）
-        const isRetrying = task.error_message && task.error_message.includes('重试');
+const isRetrying = task.error_code === 'retrying' || (task.error_message && task.error_message.includes('重试'));
         return (
           <Tag
             icon={<SyncOutlined spin />}
@@ -2722,28 +2805,64 @@ export default function Chapters() {
             style={{ marginBottom: 12 }}
           >
             {chapterQualityMetrics ? (
-              <Descriptions column={isMobile ? 1 : 2} size="small">
-                <Descriptions.Item label="综合评分">
-                  <Tag color={chapterQualityMetrics.overall_score >= 75 ? 'green' : chapterQualityMetrics.overall_score >= 60 ? 'gold' : 'red'}>
-                    {chapterQualityMetrics.overall_score}
-                  </Tag>
-                </Descriptions.Item>
-                <Descriptions.Item label="冲突链命中率">
-                  <Tag color="blue">{chapterQualityMetrics.conflict_chain_hit_rate}%</Tag>
-                </Descriptions.Item>
-                <Descriptions.Item label="规则落地命中率">
-                  <Tag color="cyan">{chapterQualityMetrics.rule_grounding_hit_rate}%</Tag>
-                </Descriptions.Item>
-                <Descriptions.Item label="对白自然度">
-                  <Tag color="purple">{chapterQualityMetrics.dialogue_naturalness_rate}%</Tag>
-                </Descriptions.Item>
-                <Descriptions.Item label="大纲贴合度">
-                  <Tag color="geekblue">{chapterQualityMetrics.outline_alignment_rate}%</Tag>
-                </Descriptions.Item>
-                <Descriptions.Item label="评分时间">
-                  {chapterQualityGeneratedAt ? new Date(chapterQualityGeneratedAt).toLocaleString() : '未知'}
-                </Descriptions.Item>
-              </Descriptions>
+              <>
+                <Descriptions column={isMobile ? 1 : 2} size="small">
+                  <Descriptions.Item label="综合评分">
+                    <Tag color={getOverallScoreColor(chapterQualityMetrics.overall_score)}>
+                      {chapterQualityMetrics.overall_score}
+                    </Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label={<Space size={4}>冲突链命中率<Tooltip title={QUALITY_METRIC_TIPS.conflict}><InfoCircleOutlined /></Tooltip></Space>}>
+                    <Tag color={getMetricRateColor(chapterQualityMetrics.conflict_chain_hit_rate)}>{chapterQualityMetrics.conflict_chain_hit_rate}%</Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label={<Space size={4}>规则落地命中率<Tooltip title={QUALITY_METRIC_TIPS.rule}><InfoCircleOutlined /></Tooltip></Space>}>
+                    <Tag color={getMetricRateColor(chapterQualityMetrics.rule_grounding_hit_rate)}>{chapterQualityMetrics.rule_grounding_hit_rate}%</Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label={<Space size={4}>开场钩子命中率<Tooltip title={QUALITY_METRIC_TIPS.opening}><InfoCircleOutlined /></Tooltip></Space>}>
+                    <Tag color={getMetricRateColor(chapterQualityMetrics.opening_hook_rate)}>{chapterQualityMetrics.opening_hook_rate}%</Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label={<Space size={4}>爽点链命中率<Tooltip title={QUALITY_METRIC_TIPS.payoff}><InfoCircleOutlined /></Tooltip></Space>}>
+                    <Tag color={getMetricRateColor(chapterQualityMetrics.payoff_chain_rate)}>{chapterQualityMetrics.payoff_chain_rate}%</Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label={<Space size={4}>章尾钩子命中率<Tooltip title={QUALITY_METRIC_TIPS.cliffhanger}><InfoCircleOutlined /></Tooltip></Space>}>
+                    <Tag color={getMetricRateColor(chapterQualityMetrics.cliffhanger_rate)}>{chapterQualityMetrics.cliffhanger_rate}%</Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label={<Space size={4}>对白自然度<Tooltip title={QUALITY_METRIC_TIPS.dialogue}><InfoCircleOutlined /></Tooltip></Space>}>
+                    <Tag color={getMetricRateColor(chapterQualityMetrics.dialogue_naturalness_rate)}>{chapterQualityMetrics.dialogue_naturalness_rate}%</Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label={<Space size={4}>大纲贴合度<Tooltip title={QUALITY_METRIC_TIPS.outline}><InfoCircleOutlined /></Tooltip></Space>}>
+                    <Tag color={getMetricRateColor(chapterQualityMetrics.outline_alignment_rate)}>{chapterQualityMetrics.outline_alignment_rate}%</Tag>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="评分时间">
+                    {chapterQualityGeneratedAt ? new Date(chapterQualityGeneratedAt).toLocaleString() : '未知'}
+                  </Descriptions.Item>
+                </Descriptions>
+                <Alert
+                  type={getWeakestQualityMetric(chapterQualityMetrics).value >= 60 ? 'info' : 'warning'}
+                  showIcon
+                  style={{ marginTop: 12 }}
+                  message={`当前短板：${getWeakestQualityMetric(chapterQualityMetrics).label} ${getWeakestQualityMetric(chapterQualityMetrics).value}%`}
+                  description="优先补最低项，通常比继续堆字数更能提升追更感。"
+                />
+                <Card size="small" title="质量结构" style={{ marginTop: 12 }}>
+                  <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                    {getQualityMetricItems(chapterQualityMetrics).map((item) => (
+                      <div key={item.key}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, gap: 12 }}>
+                          <Space size={4}>
+                            <span>{item.label}</span>
+                            <Tooltip title={item.tip}>
+                              <InfoCircleOutlined style={{ color: '#8c8c8c' }} />
+                            </Tooltip>
+                          </Space>
+                          <span style={{ color: '#595959' }}>{item.value}%</span>
+                        </div>
+                        <Progress percent={item.value} showInfo={false} size="small" strokeColor={getMetricStrokeColor(item.value)} />
+                      </div>
+                    ))}
+                  </Space>
+                </Card>
+              </>
             ) : (
               <Alert
                 type="info"
@@ -3031,7 +3150,10 @@ export default function Chapters() {
                     <li>
                       📊 平均剧情评分：综合 {batchProgress.quality_metrics_summary.avg_overall_score}
                       （冲突链 {batchProgress.quality_metrics_summary.avg_conflict_chain_hit_rate}% /
-                      规则落地 {batchProgress.quality_metrics_summary.avg_rule_grounding_hit_rate}%）
+                      规则落地 {batchProgress.quality_metrics_summary.avg_rule_grounding_hit_rate}% /
+                      开场钩子 {batchProgress.quality_metrics_summary.avg_opening_hook_rate ?? 0}% /
+                      爽点链 {batchProgress.quality_metrics_summary.avg_payoff_chain_rate ?? 0}% /
+                      章尾钩子 {batchProgress.quality_metrics_summary.avg_cliffhanger_rate ?? 0}%）
                     </li>
                   )}
                 </ul>
@@ -3040,6 +3162,27 @@ export default function Chapters() {
               showIcon
               style={{ marginBottom: 16 }}
             />
+
+            {batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined && (
+              <Card size="small" title="批量质量摘要" style={{ marginBottom: 16 }}>
+                <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                  {getBatchSummaryMetricItems(batchProgress.quality_metrics_summary).map((item) => (
+                    <div key={item.key}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, gap: 12 }}>
+                        <Space size={4}>
+                          <span>{item.label}</span>
+                          <Tooltip title={item.tip}>
+                            <InfoCircleOutlined style={{ color: '#8c8c8c' }} />
+                          </Tooltip>
+                        </Space>
+                        <span style={{ color: '#595959' }}>{item.value}%</span>
+                      </div>
+                      <Progress percent={item.value} showInfo={false} size="small" strokeColor={getMetricStrokeColor(item.value)} />
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            )}
 
             <div style={{ textAlign: 'center' }}>
               <Button
