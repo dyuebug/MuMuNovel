@@ -16,6 +16,58 @@ _CONTROL_CHAR_ESCAPES = {
 }
 
 
+def _extract_balanced_json(text: str, start: int) -> str:
+    stack = []
+    i = start
+    end = -1
+    in_string = False
+
+    while i < len(text):
+        c = text[i]
+
+        if c == '"':
+            if not in_string:
+                in_string = True
+            else:
+                num_backslashes = 0
+                j = i - 1
+                while j >= start and text[j] == '\\':
+                    num_backslashes += 1
+                    j -= 1
+
+                if num_backslashes % 2 == 0:
+                    in_string = False
+
+            i += 1
+            continue
+
+        if in_string:
+            i += 1
+            continue
+
+        if c in ('{', '['):
+            stack.append(c)
+        elif c == '}':
+            if stack and stack[-1] == '{':
+                stack.pop()
+                if not stack:
+                    end = i + 1
+                    break
+        elif c == ']':
+            if stack and stack[-1] == '[':
+                stack.pop()
+                if not stack:
+                    end = i + 1
+                    break
+
+        i += 1
+
+    if end > 0:
+        return text[start:end]
+
+    return text[start:]
+
+
 def _escape_invalid_string_chars(text: str) -> str:
     result: List[str] = []
     in_string = False
@@ -79,100 +131,46 @@ def clean_json_response(text: str) -> str:
         except:
             pass
         
-        # 找到第一个 { 或 [
-        start = -1
-        for i, c in enumerate(text):
-            if c in ('{', '['):
-                start = i
-                break
-        
-        if start == -1:
+        candidate_starts = [index for index, char in enumerate(text) if char in ('{', '[')]
+
+        if not candidate_starts:
             logger.warning(f"⚠️ 未找到JSON起始符号 {{ 或 [")
             logger.debug(f"   文本预览: {text[:200]}")
             return text
-        
-        if start > 0:
-            logger.debug(f"   跳过前{start}个字符")
-            text = text[start:]
-        
-        # 改进的括号匹配算法（更严格的字符串处理）
-        stack = []
-        i = 0
-        end = -1
-        in_string = False
-        
-        while i < len(text):
-            c = text[i]
-            
-            # 处理字符串状态
-            if c == '"':
-                if not in_string:
-                    # 进入字符串
-                    in_string = True
-                else:
-                    # 检查是否是转义的引号
-                    num_backslashes = 0
-                    j = i - 1
-                    while j >= 0 and text[j] == '\\':
-                        num_backslashes += 1
-                        j -= 1
-                    
-                    # 偶数个反斜杠表示引号未被转义，字符串结束
-                    if num_backslashes % 2 == 0:
-                        in_string = False
-                
-                i += 1
+
+        result = text
+        best_valid_candidate = ""
+        for start in candidate_starts:
+            if start > 0:
+                logger.debug(f"   尝试从第{start}个字符提取JSON")
+
+            candidate = _extract_balanced_json(text, start)
+            repaired_candidate = _escape_invalid_string_chars(candidate)
+            if repaired_candidate != candidate:
+                logger.warning("⚠️ 检测到字符串中的非法控制字符，已自动转义")
+                candidate = repaired_candidate
+
+            try:
+                json.loads(candidate)
+                if len(candidate) > len(best_valid_candidate):
+                    best_valid_candidate = candidate
                 continue
-            
-            # 在字符串内部，跳过所有字符
-            if in_string:
-                i += 1
+            except json.JSONDecodeError:
                 continue
-            
-            # 处理括号（只有在字符串外部才有效）
-            if c == '{' or c == '[':
-                stack.append(c)
-            elif c == '}':
-                if len(stack) > 0 and stack[-1] == '{':
-                    stack.pop()
-                    if len(stack) == 0:
-                        end = i + 1
-                        logger.debug(f"✅ 找到JSON结束位置: {end}")
-                        break
-                elif len(stack) > 0:
-                    # 括号不匹配，可能是损坏的JSON，尝试继续
-                    logger.warning(f"⚠️ 括号不匹配：遇到 }} 但栈顶是 {stack[-1]}")
-                else:
-                    # 栈为空遇到 }，忽略多余的闭合括号
-                    logger.warning(f"⚠️ 遇到多余的 }}，忽略")
-            elif c == ']':
-                if len(stack) > 0 and stack[-1] == '[':
-                    stack.pop()
-                    if len(stack) == 0:
-                        end = i + 1
-                        logger.debug(f"✅ 找到JSON结束位置: {end}")
-                        break
-                elif len(stack) > 0:
-                    # 括号不匹配，可能是损坏的JSON，尝试继续
-                    logger.warning(f"⚠️ 括号不匹配：遇到 ] 但栈顶是 {stack[-1]}")
-                else:
-                    # 栈为空遇到 ]，忽略多余的闭合括号
-                    logger.warning(f"⚠️ 遇到多余的 ]，忽略")
-            
-            i += 1
-        
-        # 检查未闭合的字符串
-        if in_string:
-            logger.warning(f"⚠️ 字符串未闭合，JSON可能不完整")
-        
-        # 提取结果
-        if end > 0:
-            result = text[:end]
+
+        if best_valid_candidate:
+            result = best_valid_candidate
             logger.debug(f"✅ JSON清洗完成，结果长度: {len(result)}")
         else:
-            result = text
-            logger.warning(f"⚠️ 未找到JSON结束位置，返回全部内容（长度: {len(result)}）")
-            logger.debug(f"   栈状态: {stack}")
+            start = candidate_starts[0]
+            if start > 0:
+                logger.debug(f"   跳过前{start}个字符")
+            result = _extract_balanced_json(text, start)
+            repaired_result = _escape_invalid_string_chars(result)
+            if repaired_result != result:
+                logger.warning("⚠️ 检测到字符串中的非法控制字符，已自动转义")
+                result = repaired_result
+            logger.warning(f"⚠️ 未找到可直接解析的JSON片段，返回首个候选（长度: {len(result)}）")
         
         repaired_result = _escape_invalid_string_chars(result)
         if repaired_result != result:
@@ -199,6 +197,7 @@ def clean_json_response(text: str) -> str:
 
 def parse_json(text: str) -> Union[Dict, List]:
     """解析 JSON"""
+    cleaned = ""
     try:
         cleaned = clean_json_response(text)
         return json.loads(cleaned)

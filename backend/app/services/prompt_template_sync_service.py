@@ -6,13 +6,15 @@ system defaults without overriding real user customizations.
 Strategy:
 - Only sync managed template keys.
 - Only sync when user template content hash matches a known legacy default hash.
+- Known current hashes are tracked explicitly so latest managed defaults never get
+  mistaken for legacy copies.
 - Never sync when content has diverged from both current and known legacy defaults.
 """
 from __future__ import annotations
 
 import json
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Set
 
 from sqlalchemy import select
@@ -29,6 +31,23 @@ class TemplateSyncRule:
     """Auto-sync rule for a managed template key."""
 
     legacy_hashes: Set[str]
+    current_hashes: Set[str] = field(default_factory=set)
+
+    def is_legacy_hash(self, content_hash: str) -> bool:
+        return bool(content_hash) and content_hash in self.legacy_hashes and content_hash not in self.current_hashes
+
+
+NOVEL_QUALITY_SYSTEM_PHASE1_TEMPLATE_KEYS: tuple[str, ...] = (
+    "CHAPTER_GENERATION_ONE_TO_MANY",
+    "CHAPTER_GENERATION_ONE_TO_MANY_NEXT",
+    "CHAPTER_GENERATION_ONE_TO_ONE",
+    "CHAPTER_GENERATION_ONE_TO_ONE_NEXT",
+    "CHAPTER_REGENERATION_SYSTEM",
+    "PARTIAL_REGENERATE",
+    "PLOT_ANALYSIS",
+    "CHAPTER_TEXT_CHECKER",
+    "CHAPTER_TEXT_REVISER",
+)
 
 
 # Keep this small and explicit. Add entries only when there is a verified need.
@@ -45,23 +64,39 @@ MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
     "OUTLINE_CONTINUE": TemplateSyncRule(
         legacy_hashes={"32b6f497d1ba1fcb", "fbf485bc5ca6c990", "30348222dfec7056"},
     ),
+    # novel-quality-system 一期：章节生成 / 再生成 / 分析 / checker / reviser
+    # 旧 current hash 进入 legacy_hashes，确保仍持有上一版系统副本的用户可继续自动升级。
     "CHAPTER_GENERATION_ONE_TO_MANY": TemplateSyncRule(
-        legacy_hashes={"fdfdb8c6b7619804", "f305d7120838aecd", "2a96431c1531b106"},
+        legacy_hashes={"fdfdb8c6b7619804", "f305d7120838aecd", "2a96431c1531b106", "13c9d99619a23a1c"},
+        current_hashes={"d2bbe814848e5f9f"},
     ),
     "CHAPTER_GENERATION_ONE_TO_MANY_NEXT": TemplateSyncRule(
-        legacy_hashes={"9e3c0ccc044ffa31", "f0d0bb2c56983aed", "67a9162db2ebc58d"},
+        legacy_hashes={"9e3c0ccc044ffa31", "f0d0bb2c56983aed", "67a9162db2ebc58d", "432774bf3dce35bd"},
+        current_hashes={"b2be5d86131f2ecb"},
     ),
     "CHAPTER_GENERATION_ONE_TO_ONE": TemplateSyncRule(
-        legacy_hashes={"4ccddf983a56e3e9", "31a22bb8610a4cf1", "47f61ef943be70f0"},
+        legacy_hashes={"4ccddf983a56e3e9", "31a22bb8610a4cf1", "47f61ef943be70f0", "7f142c0d96b09f46"},
+        current_hashes={"b6d8b5e856fd31b2"},
     ),
     "CHAPTER_GENERATION_ONE_TO_ONE_NEXT": TemplateSyncRule(
-        legacy_hashes={"cc18fe04ad17ac2b", "93979c953dcb6e64", "81d34cc949d6cbb5"},
+        legacy_hashes={"cc18fe04ad17ac2b", "93979c953dcb6e64", "81d34cc949d6cbb5", "84052e4bffec16b5"},
+        current_hashes={"b0e14d751b144ae4"},
     ),
     "PARTIAL_REGENERATE": TemplateSyncRule(
-        legacy_hashes={"d4fc0961075e426e", "ed4e95fe9b82e4aa", "9da113b6496d8c12", "e67146339ab8be86"},
+        legacy_hashes={"d4fc0961075e426e", "ed4e95fe9b82e4aa", "9da113b6496d8c12", "a68a83eac483fac3", "e67146339ab8be86"},
+        current_hashes={"ef62c3f7a00746df"},
     ),
     "PLOT_ANALYSIS": TemplateSyncRule(
-        legacy_hashes={"dee21de2491c9c8b", "6048e506dedf3507"},
+        legacy_hashes={"dee21de2491c9c8b", "6048e506dedf3507", "a9535bf99e031fce"},
+        current_hashes={"d2ca69f9780cad1c"},
+    ),
+    "CHAPTER_TEXT_CHECKER": TemplateSyncRule(
+        legacy_hashes={"a001c74bdb617ddd", "2a45fbfc19da1bad"},
+        current_hashes={"dcd2871dd7d5c7ad"},
+    ),
+    "CHAPTER_TEXT_REVISER": TemplateSyncRule(
+        legacy_hashes={"5dcb73fff31d9af8"},
+        current_hashes={"2de875f700923c91"},
     ),
     "OUTLINE_EXPAND_SINGLE": TemplateSyncRule(
         legacy_hashes={"819bf64ee54d5efe", "5bf412df5065cdb7"},
@@ -83,7 +118,8 @@ MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
         legacy_hashes={"616ecf71799a153c", "d13588f0a44b4bb7"},
     ),
     "CHAPTER_REGENERATION_SYSTEM": TemplateSyncRule(
-        legacy_hashes={"18cf26ca10811026", "7cf4aad2f74199ab", "bd65d4128fbeac8e"},
+        legacy_hashes={"18cf26ca10811026", "7cf4aad2f74199ab", "bd65d4128fbeac8e", "0404450893fe057a"},
+        current_hashes={"9602e895b5922da3"},
     ),
     "AUTO_CHARACTER_GENERATION": TemplateSyncRule(
         legacy_hashes={"0a789aa309633332", "4c34ae66825d3a36"},
@@ -201,7 +237,7 @@ def build_template_sync_status(
     is_diff = user_hash != system_hash
 
     rule = MANAGED_TEMPLATE_SYNC_RULES.get(template_key)
-    is_legacy_default = bool(rule and is_diff and user_hash in rule.legacy_hashes)
+    is_legacy_default = bool(rule and is_diff and rule.is_legacy_hash(user_hash))
     can_auto_sync = is_legacy_default
 
     if not is_diff:
@@ -264,7 +300,7 @@ async def sync_managed_template_if_legacy(
         return False
 
     current_hash = calculate_content_hash(user_template.template_content or "")
-    if current_hash not in rule.legacy_hashes:
+    if not rule.is_legacy_hash(current_hash):
         return False
 
     normalized_user = (user_template.template_content or "").strip()

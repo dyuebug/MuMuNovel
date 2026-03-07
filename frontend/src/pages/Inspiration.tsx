@@ -418,7 +418,8 @@ const Inspiration: React.FC = () => {
     }
   };
 
-  const handleSelectOption = async (option: string) => {
+  const handleSelectOption = async (option: string, optionStep?: Step, messageIndex?: number) => {
+    const activeStep = optionStep ?? currentStep;
     if (option === '重新生成' && lastFailedRequest) {
       await handleRetry();
       return;
@@ -430,7 +431,7 @@ const Inspiration: React.FC = () => {
     }
 
     // 对于多选类型，不立即禁用选项
-    if (currentStep === 'genre') {
+    if (activeStep === 'genre') {
       const newSelected = selectedOptions.includes(option)
         ? selectedOptions.filter(o => o !== option)
         : [...selectedOptions, option];
@@ -441,17 +442,19 @@ const Inspiration: React.FC = () => {
     // 立即禁用当前消息的选项（单选场景）
     setMessages(prev => {
       const newMessages = [...prev];
-      const lastAiMessageIndex = newMessages.map((m, i) => m.type === 'ai' && m.options ? i : -1).filter(i => i >= 0).pop();
-      if (lastAiMessageIndex !== undefined && lastAiMessageIndex >= 0) {
-        newMessages[lastAiMessageIndex] = {
-          ...newMessages[lastAiMessageIndex],
+      const targetMessageIndex = typeof messageIndex === 'number'
+        ? messageIndex
+        : newMessages.map((m, i) => m.type === 'ai' && m.options ? i : -1).filter(i => i >= 0).pop();
+      if (targetMessageIndex !== undefined && targetMessageIndex >= 0) {
+        newMessages[targetMessageIndex] = {
+          ...newMessages[targetMessageIndex],
           optionsDisabled: true
         };
       }
       return newMessages;
     });
 
-    if (currentStep === 'perspective') {
+    if (activeStep === 'perspective') {
       const userMessage: Message = {
         type: 'user',
         content: option,
@@ -478,7 +481,7 @@ const Inspiration: React.FC = () => {
       return;
     }
 
-    if (currentStep === 'outline_mode') {
+    if (activeStep === 'outline_mode') {
       const userMessage: Message = {
         type: 'user',
         content: option,
@@ -521,7 +524,7 @@ const Inspiration: React.FC = () => {
       return;
     }
 
-    if (currentStep === 'confirm') {
+    if (activeStep === 'confirm') {
       if (option === '✅ 确认创建') {
         const userMessage: Message = {
           type: 'user',
@@ -569,40 +572,46 @@ const Inspiration: React.FC = () => {
 
     try {
       const updatedData = { ...wizardData };
-      if (currentStep === 'title') {
+      if (activeStep === 'title') {
         updatedData.title = option;
-      } else if (currentStep === 'description') {
+      } else if (activeStep === 'description') {
         updatedData.description = option;
-      } else if (currentStep === 'theme') {
+      } else if (activeStep === 'theme') {
         updatedData.theme = option;
       }
       setWizardData(updatedData);
 
-      await generateNextStep(updatedData);
+      await generateNextStep(activeStep, updatedData);
     } catch (error: unknown) {
       console.error('选择选项失败:', error);
       const errMsg = error instanceof Error ? error.message : '生成失败，请重试';
       const axiosError = error as { response?: { data?: { detail?: string } } };
-      message.error(axiosError.response?.data?.detail || errMsg);
+      const detail = axiosError.response?.data?.detail || errMsg;
+      message.error(detail);
+      setMessages(prev => [...prev, {
+        type: 'ai',
+        content: `继续生成下一步时出错：${detail}\n\n你可以直接输入，或点击“重新开始”后重试。`
+      }]);
     } finally {
       setLoading(false);
     }
   };
 
   const handleCustomInput = async (input: string) => {
+    const activeStep = currentStep;
     setLoading(true);
     try {
       const updatedData = { ...wizardData };
 
-      if (currentStep === 'title') {
+      if (activeStep === 'title') {
         updatedData.title = input;
-      } else if (currentStep === 'description') {
+      } else if (activeStep === 'description') {
         updatedData.description = input;
-      } else if (currentStep === 'theme') {
+      } else if (activeStep === 'theme') {
         updatedData.theme = input;
-      } else if (currentStep === 'genre') {
+      } else if (activeStep === 'genre') {
         updatedData.genre = [input];
-      } else if (currentStep === 'perspective') {
+      } else if (activeStep === 'perspective') {
         updatedData.narrative_perspective = input;
         setWizardData(updatedData);
         
@@ -622,7 +631,7 @@ const Inspiration: React.FC = () => {
         setCurrentStep('outline_mode');
         setLoading(false);
         return;
-      } else if (currentStep === 'outline_mode') {
+      } else if (activeStep === 'outline_mode') {
         // 大纲模式不支持自定义输入
         message.warning('请从选项中选择一个大纲模式');
         setLoading(false);
@@ -630,12 +639,17 @@ const Inspiration: React.FC = () => {
       }
 
       setWizardData(updatedData);
-      await generateNextStep(updatedData);
+      await generateNextStep(activeStep, updatedData);
     } catch (error: unknown) {
       console.error('处理自定义输入失败:', error);
       const errMsg = error instanceof Error ? error.message : '处理失败，请重试';
       const axiosError = error as { response?: { data?: { detail?: string } } };
-      message.error(axiosError.response?.data?.detail || errMsg);
+      const detail = axiosError.response?.data?.detail || errMsg;
+      message.error(detail);
+      setMessages(prev => [...prev, {
+        type: 'ai',
+        content: `继续生成下一步时出错：${detail}\n\n你可以修改输入后再试，或重新开始当前灵感流程。`
+      }]);
     } finally {
       setLoading(false);
     }
@@ -684,8 +698,8 @@ const Inspiration: React.FC = () => {
     }
   };
 
-  const generateNextStep = async (data: Partial<WizardData>) => {
-    const currentIndex = stepOrder.indexOf(currentStep);
+  const generateNextStep = async (fromStep: Step, data: Partial<WizardData>) => {
+    const currentIndex = stepOrder.indexOf(fromStep);
     const nextStep = stepOrder[currentIndex + 1];
 
     if (nextStep === 'perspective') {
@@ -900,7 +914,7 @@ const Inspiration: React.FC = () => {
                         key={optIndex}
                         hoverable={!msg.optionsDisabled}
                         size="small"
-                        onClick={() => !msg.optionsDisabled && handleSelectOption(option)}
+                        onClick={() => !msg.optionsDisabled && handleSelectOption(option, msg.step, index)}
                         style={{
                           cursor: msg.optionsDisabled ? 'not-allowed' : 'pointer',
                           border: msg.isMultiSelect && selectedOptions.includes(option)

@@ -51,6 +51,7 @@ from app.services.plot_analyzer import PlotAnalyzer
 from app.services.memory_service import memory_service
 from app.services.foreshadow_service import foreshadow_service
 from app.services.chapter_regenerator import ChapterRegenerator
+from app.services.mcp_tools_loader import mcp_tools_loader
 from app.services.writing_style_sync_service import sync_low_ai_presets
 from app.logger import get_logger
 from app.api.settings import get_user_ai_service
@@ -77,6 +78,158 @@ async def get_db_write_lock(user_id: str) -> Lock:
         db_write_locks[user_id] = Lock()
         logger.debug(f"🔒 为用户 {user_id} 创建数据库写入锁")
     return db_write_locks[user_id]
+
+
+def _build_prompt_quality_kwargs(profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """提取可直接传给 PromptService.format_prompt 的统一质量画像参数。"""
+    source = profile or {}
+    external_assets = source.get("external_assets") or ()
+    reference_assets = source.get("reference_assets") or external_assets or ()
+    return {
+        "genre": source.get("genre") or "未设定",
+        "style_name": source.get("style_name") or "",
+        "style_preset_id": source.get("style_preset_id") or "",
+        "style_content": source.get("style_content") or "",
+        "external_assets": external_assets,
+        "reference_assets": reference_assets,
+        "mcp_guard": source.get("mcp_guard") or "",
+        "mcp_references": source.get("mcp_references") or "",
+    }
+
+
+def _build_analysis_quality_kwargs(profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """提取可直接传给 PlotAnalyzer.analyze_chapter 的统一质量画像参数。"""
+    source = profile or {}
+    external_assets = source.get("external_assets") or ()
+    reference_assets = source.get("reference_assets") or external_assets or ()
+    return {
+        "genre": source.get("genre") or "未设定",
+        "style_name": source.get("style_name") or "",
+        "style_preset_id": source.get("style_preset_id") or "",
+        "style_content": source.get("style_content") or "",
+        "external_assets": external_assets,
+        "reference_assets": reference_assets,
+        "mcp_references": source.get("mcp_references") or "",
+    }
+
+
+async def _resolve_project_default_style_id(
+    db_session: AsyncSession,
+    project_id: str,
+) -> Optional[int]:
+    """解析项目默认写作风格ID。"""
+    from app.models.project_default_style import ProjectDefaultStyle
+
+    result = await db_session.execute(
+        select(ProjectDefaultStyle.style_id)
+        .where(ProjectDefaultStyle.project_id == project_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _resolve_effective_style_context(
+    *,
+    db_session: AsyncSession,
+    user_id: str,
+    project_id: str,
+    style_id: Optional[int],
+    prefer_project_default_style: bool = False,
+    log_prefix: str = "章节",
+) -> Dict[str, Any]:
+    """统一解析章节链路可用的写作风格上下文。"""
+    await sync_low_ai_presets(db_session)
+
+    resolved_style_id = style_id
+    if prefer_project_default_style and not resolved_style_id:
+        resolved_style_id = await _resolve_project_default_style_id(db_session, project_id)
+        if resolved_style_id:
+            logger.info(f"📝 {log_prefix} - 使用项目默认写作风格: {resolved_style_id}")
+
+    context = {
+        "resolved_style_id": resolved_style_id,
+        "style_name": "",
+        "style_preset_id": "",
+        "style_content": "",
+    }
+    if not resolved_style_id:
+        return context
+
+    style_result = await db_session.execute(
+        select(WritingStyle).where(WritingStyle.id == resolved_style_id)
+    )
+    style = style_result.scalar_one_or_none()
+    if not style:
+        logger.warning(f"⚠️ {log_prefix} - 未找到风格 {resolved_style_id}")
+        return context
+
+    if style.user_id is not None and style.user_id != user_id:
+        logger.warning(f"⚠️ {log_prefix} - 风格 {resolved_style_id} 不属于当前用户，跳过")
+        return context
+
+    context.update(
+        {
+            "resolved_style_id": resolved_style_id,
+            "style_name": style.name or "",
+            "style_preset_id": style.preset_id or "",
+            "style_content": style.prompt_content or "",
+        }
+    )
+    style_type = "全局预设" if style.user_id is None else "用户自定义"
+    logger.info(f"✅ {log_prefix} - 使用写作风格: {style.name} ({style_type})")
+    return context
+
+
+async def _resolve_chapter_quality_profile(
+    *,
+    db_session: AsyncSession,
+    user_id: str,
+    project: Optional[Project],
+    style_id: Optional[int],
+    enable_mcp: bool,
+    prefer_project_default_style: bool = False,
+    external_assets: Optional[List[Dict[str, Any]]] = None,
+    reference_assets: Optional[List[Dict[str, Any]]] = None,
+    log_prefix: str = "章节",
+) -> Dict[str, Any]:
+    """统一解析章节链路使用的质量画像来源。"""
+    normalized_external_assets = tuple(external_assets or ())
+    normalized_reference_assets = tuple(reference_assets or normalized_external_assets or ())
+    profile: Dict[str, Any] = {
+        "genre": (project.genre if project else None) or "",
+        "resolved_style_id": style_id,
+        "style_name": "",
+        "style_preset_id": "",
+        "style_content": "",
+        "external_assets": normalized_external_assets,
+        "reference_assets": normalized_reference_assets,
+        "mcp_guard": "",
+        "mcp_references": "",
+    }
+
+    if project:
+        profile.update(
+            await _resolve_effective_style_context(
+                db_session=db_session,
+                user_id=user_id,
+                project_id=project.id,
+                style_id=style_id,
+                prefer_project_default_style=prefer_project_default_style,
+                log_prefix=log_prefix,
+            )
+        )
+
+    if enable_mcp and user_id:
+        try:
+            prompt_blocks = await mcp_tools_loader.get_prompt_reference_blocks(
+                user_id=user_id,
+                db_session=db_session,
+            )
+            profile["mcp_guard"] = prompt_blocks.get("mcp_guard") or ""
+            profile["mcp_references"] = prompt_blocks.get("mcp_references") or ""
+        except Exception as mcp_error:
+            logger.warning(f"⚠️ {log_prefix} - 获取MCP参考块失败，已回退为空: {mcp_error}")
+
+    return profile
 
 
 async def subscribe_task_stream(task_id: str) -> Queue:
@@ -786,6 +939,7 @@ async def _run_chapter_text_checker(
     chapter_outline: str,
     characters_info: str,
     world_rules: str,
+    quality_profile: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """运行第三版正文质检。失败时返回None，不阻断主流程。"""
     try:
@@ -801,6 +955,8 @@ async def _run_chapter_text_checker(
             chapter_outline=(chapter_outline or "（无大纲信息）")[:3000],
             characters_info=(characters_info or "（无角色信息）")[:4000],
             world_rules=(world_rules or "（无世界规则）")[:1500],
+            _template_key="CHAPTER_TEXT_CHECKER",
+            **_build_prompt_quality_kwargs(quality_profile),
         )
 
         result = await ai_service.call_with_json_retry(
@@ -837,6 +993,7 @@ async def _run_chapter_text_reviser(
     chapter_title: str,
     chapter_content: str,
     checker_result: Dict[str, Any],
+    quality_profile: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """根据质检结果生成自动修订草稿，仅建议，不覆盖正文。"""
     counts = (checker_result or {}).get("severity_counts") or {}
@@ -857,6 +1014,8 @@ async def _run_chapter_text_reviser(
             chapter_content=(chapter_content or "")[:12000],
             critical_issues_text=_build_critical_issues_text(checker_result),
             checker_result_json=checker_json[:12000],
+            _template_key="CHAPTER_TEXT_REVISER",
+            **_build_prompt_quality_kwargs(quality_profile),
         )
 
         result = await ai_service.call_with_json_retry(
@@ -2114,7 +2273,8 @@ async def analyze_chapter_background(
     user_id: str,
     project_id: str,
     task_id: str,
-    ai_service: AIService
+    ai_service: AIService,
+    quality_profile: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """
     后台异步分析章节（支持并发，使用锁保护数据库写入）
@@ -2181,7 +2341,7 @@ async def analyze_chapter_background(
         async with write_lock:
             task.progress = 20
             await db_session.commit()
-        
+
         # 获取已埋入的伏笔列表（用于回收匹配，传入当前章节号以启用智能标记）
         project_result = await db_session.execute(
             select(Project).where(Project.id == project_id)
@@ -2264,7 +2424,28 @@ async def analyze_chapter_background(
             filter_character_names=filter_character_names
         )
         logger.info(f"📋 后台分析 - 已获取{len(project_characters)}个角色信息用于分析")
-        
+
+        if task.style_id is not None:
+            analysis_quality_profile = quality_profile or await _resolve_chapter_quality_profile(
+                db_session=db_session,
+                user_id=user_id,
+                project=project,
+                style_id=task.style_id,
+                enable_mcp=True,
+                prefer_project_default_style=not bool(task.style_id),
+                log_prefix="批量分析",
+            )
+        else:
+            analysis_quality_profile = quality_profile or await _resolve_chapter_quality_profile(
+                db_session=db_session,
+                user_id=user_id,
+                project=project,
+                style_id=None,
+                enable_mcp=True,
+                prefer_project_default_style=True,
+                log_prefix="章节分析",
+            )
+
         # 定义重试回调函数，用于在重试时更新任务状态
         async def on_retry_callback(attempt: int, max_retries: int, wait_time: int, error_reason: str):
             """重试时更新任务状态，让前端能感知到重试进度"""
@@ -2295,7 +2476,8 @@ async def analyze_chapter_background(
             word_count=chapter.word_count or len(chapter.content),
             existing_foreshadows=existing_foreshadows,
             on_retry=on_retry_callback,
-            characters_info=characters_info
+            characters_info=characters_info,
+            **_build_analysis_quality_kwargs(analysis_quality_profile),
         )
         
         if not analysis_result:
@@ -2318,6 +2500,7 @@ async def analyze_chapter_background(
             chapter_outline=chapter_outline_text,
             characters_info=characters_info,
             world_rules=project.world_rules or "",
+            quality_profile=analysis_quality_profile,
         )
         reviser_result = await _run_chapter_text_reviser(
             ai_service=ai_service,
@@ -2327,6 +2510,7 @@ async def analyze_chapter_background(
             chapter_title=chapter.title or "",
             chapter_content=chapter.content or "",
             checker_result=checker_result or {},
+            quality_profile=analysis_quality_profile,
         )
 
         analysis_report_text = analyzer.generate_analysis_summary(analysis_result)
@@ -2832,33 +3016,23 @@ async def generate_chapter_content_stream(
                         .execution_options(populate_existing=True)
                     )
                 outline = outline_result.scalar_one_or_none()
-                
-                # 获取写作风格
-                await sync_low_ai_presets(db_session)
-                style_content = ""
-                style_name = ""
-                style_preset_id = ""
-                if style_id:
-                    # 使用指定的风格
-                    style_result = await db_session.execute(
-                        select(WritingStyle).where(WritingStyle.id == style_id)
-                    )
-                    style = style_result.scalar_one_or_none()
-                    if style:
-                        # 验证风格是否可用：全局预设风格（user_id为NULL）或者当前用户的自定义风格
-                        if style.user_id is None or style.user_id == current_user_id:
-                            style_content = style.prompt_content or ""
-                            style_name = style.name or ""
-                            style_preset_id = style.preset_id or ""
-                            style_type = "全局预设" if style.user_id is None else "用户自定义"
-                            logger.info(f"使用指定风格: {style.name} ({style_type})")
-                        else:
-                            logger.warning(f"风格 {style_id} 不属于当前项目，无法使用")
-                    else:
-                        logger.warning(f"未找到风格 {style_id}")
-                else:
-                    logger.info("未指定写作风格，使用原始提示词")
-                
+
+                quality_profile = await _resolve_chapter_quality_profile(
+                    db_session=db_session,
+                    user_id=current_user_id,
+                    project=project,
+                    style_id=style_id,
+                    enable_mcp=bool(generate_request.enable_mcp),
+                    prefer_project_default_style=not bool(style_id),
+                    log_prefix="单章生成",
+                )
+                prompt_quality_kwargs = _build_prompt_quality_kwargs(quality_profile)
+                analysis_quality_kwargs = _build_analysis_quality_kwargs(quality_profile)
+                style_id = quality_profile.get("resolved_style_id")
+                style_content = quality_profile.get("style_content") or ""
+                style_name = quality_profile.get("style_name") or ""
+                style_preset_id = quality_profile.get("style_preset_id") or ""
+
                 # 🚀 根据大纲模式选择独立的上下文构建器
                 if outline_mode == 'one-to-one':
                     # ========== 1-1模式：使用独立的简化构建器 ==========
@@ -2947,7 +3121,8 @@ async def generate_chapter_content_stream(
                             characters_info=chapter_context.chapter_characters or '暂无角色信息',
                             chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                             foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
-                            relevant_memories=chapter_context.relevant_memories or '暂无相关记忆'
+                            relevant_memories=chapter_context.relevant_memories or '暂无相关记忆',
+                            **prompt_quality_kwargs,
                         )
                         logger.debug(f"创建第{current_chapter.chapter_number}章提示词: {base_prompt}")
                     else:
@@ -2969,7 +3144,8 @@ async def generate_chapter_content_stream(
                             characters_info=chapter_context.chapter_characters or '暂无角色信息',
                             chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                             foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
-                            relevant_memories=chapter_context.relevant_memories or '暂无相关记忆'
+                            relevant_memories=chapter_context.relevant_memories or '暂无相关记忆',
+                            **prompt_quality_kwargs,
                         )
                         logger.debug(f"创建第一章提示词: {base_prompt}")
                 else:
@@ -3003,7 +3179,8 @@ async def generate_chapter_content_stream(
                             foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
                             previous_chapter_summary=previous_summary,
                             recent_chapters_context=chapter_context.recent_chapters_context or '',
-                            relevant_memories=chapter_context.relevant_memories or ''
+                            relevant_memories=chapter_context.relevant_memories or '',
+                            **prompt_quality_kwargs,
                         )
                         logger.debug(f"创建第{current_chapter.chapter_number}章提示词: {base_prompt}")
                     else:
@@ -3026,7 +3203,8 @@ async def generate_chapter_content_stream(
                             characters_info=chapter_context.chapter_characters or '暂无角色信息',
                             chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                             foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
-                            relevant_memories=chapter_context.relevant_memories or '暂无相关记忆'
+                            relevant_memories=chapter_context.relevant_memories or '暂无相关记忆',
+                            **prompt_quality_kwargs,
                         )
                         logger.debug(f"创建第一章提示词: {base_prompt}")
                 
@@ -3189,13 +3367,13 @@ async def generate_chapter_content_stream(
                     db_session.add(analysis_task)
                     await db_session.commit()
                     await db_session.refresh(analysis_task)
-                    
+
                     task_id = analysis_task.id
                     logger.info(f"📋 已创建分析任务: {task_id}")
-                    
+
                     # 短暂延迟确保SQLite WAL完成写入
                     await asyncio.sleep(0.05)
-                    
+
                     # 直接启动后台分析（并发执行）
                     background_tasks.add_task(
                         analyze_chapter_background,
@@ -3203,7 +3381,8 @@ async def generate_chapter_content_stream(
                         user_id=current_user_id,
                         project_id=project.id,
                         task_id=task_id,
-                        ai_service=user_ai_service
+                        ai_service=user_ai_service,
+                        quality_profile=quality_profile,
                     )
                 else:
                     logger.info("⏭️ 已关闭自动分析，跳过分析任务创建")
@@ -3355,6 +3534,17 @@ async def generate_chapter_content_background(
         else None
     )
 
+    single_task_quality_profile = await _resolve_chapter_quality_profile(
+        db_session=db,
+        user_id=user_id,
+        project=project,
+        style_id=style_id,
+        enable_mcp=True,
+        prefer_project_default_style=not bool(style_id),
+        log_prefix="单章后台生成",
+    )
+    resolved_style_id = single_task_quality_profile.get("resolved_style_id")
+
     # 单章节后台任务默认关闭同步分析，优先保证生成速度
     task = BatchGenerationTask(
         project_id=chapter.project_id,
@@ -3362,7 +3552,7 @@ async def generate_chapter_content_background(
         start_chapter_number=chapter.chapter_number,
         chapter_count=1,
         chapter_ids=[chapter_id],
-        style_id=style_id,
+        style_id=resolved_style_id,
         target_word_count=target_word_count,
         enable_analysis=enable_analysis,
         max_retries=3,
@@ -3963,6 +4153,16 @@ async def trigger_chapter_analysis(
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
     
+    analysis_quality_profile = await _resolve_chapter_quality_profile(
+        db_session=db,
+        user_id=user_id,
+        project=project,
+        style_id=None,
+        enable_mcp=True,
+        prefer_project_default_style=True,
+        log_prefix="手动分析",
+    )
+
     # 创建分析任务
     analysis_task = AnalysisTask(
         chapter_id=chapter_id,
@@ -3990,7 +4190,8 @@ async def trigger_chapter_analysis(
         user_id=user_id,
         project_id=project.id,
         task_id=task_id,
-        ai_service=user_ai_service
+        ai_service=user_ai_service,
+        quality_profile=analysis_quality_profile,
     )
     
     return {
@@ -4077,6 +4278,16 @@ async def batch_generate_chapters_in_order(
     if not can_generate:
         raise HTTPException(status_code=400, detail=f"起始章节无法生成：{error_msg}")
     
+    batch_quality_profile = await _resolve_chapter_quality_profile(
+        db_session=db,
+        user_id=user_id,
+        project=project,
+        style_id=batch_request.style_id,
+        enable_mcp=True,
+        prefer_project_default_style=not bool(batch_request.style_id),
+        log_prefix="批量生成",
+    )
+
     # 创建批量生成任务
     batch_task = BatchGenerationTask(
         project_id=project_id,
@@ -4084,7 +4295,7 @@ async def batch_generate_chapters_in_order(
         start_chapter_number=start_number,
         chapter_count=len(chapters_to_generate),
         chapter_ids=[ch.id for ch in chapters_to_generate],
-        style_id=batch_request.style_id,
+        style_id=batch_quality_profile.get("resolved_style_id"),
         target_word_count=batch_request.target_word_count,
         enable_analysis=batch_request.enable_analysis,
         max_retries=batch_request.max_retries,
@@ -4632,7 +4843,19 @@ async def execute_batch_generation_in_order(
                     can_generate, error_msg, _ = await check_prerequisites(db_session, chapter)
                     if not can_generate:
                         raise Exception(f"前置条件不满足: {error_msg}")
-                    
+
+                    analysis_quality_kwargs = None
+                    if task.enable_analysis:
+                        analysis_quality_kwargs = await _resolve_chapter_quality_profile(
+                            db_session=db_session,
+                            user_id=user_id,
+                            project=project,
+                            style_id=task.style_id,
+                            enable_mcp=True,
+                            prefer_project_default_style=not bool(task.style_id),
+                            log_prefix="批量分析",
+                        )
+
                     # 生成章节内容（复用现有流式生成逻辑的核心部分），传递model参数
                     # 并获取生成后的摘要（如果生成函数支持返回）
                     generated_summary = await generate_single_chapter_for_batch(
@@ -4708,7 +4931,8 @@ async def execute_batch_generation_in_order(
                                     user_id=user_id,
                                     project_id=task.project_id,
                                     task_id=analysis_task.id,
-                                    ai_service=ai_service
+                                    ai_service=ai_service,
+                                    quality_profile=analysis_quality_kwargs,
                                 )
                                 
                                 # 直接根据返回值判断
@@ -4926,21 +5150,22 @@ async def generate_single_chapter_for_batch(
         )
     outline = outline_result.scalar_one_or_none()
     
-    # 获取写作风格
-    await sync_low_ai_presets(db_session)
-    style_content = ""
-    style_name = ""
-    style_preset_id = ""
-    if style_id:
-        style_result = await db_session.execute(
-            select(WritingStyle).where(WritingStyle.id == style_id)
-        )
-        style = style_result.scalar_one_or_none()
-        if style:
-            if style.user_id is None or style.user_id == user_id:
-                style_content = style.prompt_content or ""
-                style_name = style.name or ""
-                style_preset_id = style.preset_id or ""
+    # 获取写作风格与统一质量画像
+    quality_profile = await _resolve_chapter_quality_profile(
+        db_session=db_session,
+        user_id=user_id,
+        project=project,
+        style_id=style_id,
+        enable_mcp=True,
+        prefer_project_default_style=not bool(style_id),
+        log_prefix="批量单章生成",
+    )
+    prompt_quality_kwargs = _build_prompt_quality_kwargs(quality_profile)
+    analysis_quality_kwargs = _build_analysis_quality_kwargs(quality_profile)
+    style_id = quality_profile.get("resolved_style_id")
+    style_content = quality_profile.get("style_content") or ""
+    style_name = quality_profile.get("style_name") or ""
+    style_preset_id = quality_profile.get("style_preset_id") or ""
     
     # 临时人称 > 项目默认 > 系统默认
     chapter_perspective = (
@@ -5015,7 +5240,8 @@ async def generate_single_chapter_for_batch(
                 chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                 foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
                 relevant_memories=chapter_context.relevant_memories or '暂无相关记忆',
-                previous_chapter_summary=chapter_context.previous_chapter_summary or ''
+                previous_chapter_summary=chapter_context.previous_chapter_summary or '',
+                **prompt_quality_kwargs,
             )
         else:
             # 第一章
@@ -5036,7 +5262,8 @@ async def generate_single_chapter_for_batch(
                 characters_info=chapter_context.chapter_characters or '暂无角色信息',
                 chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                 foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
-                relevant_memories=chapter_context.relevant_memories or '暂无相关记忆'
+                relevant_memories=chapter_context.relevant_memories or '暂无相关记忆',
+                **prompt_quality_kwargs,
             )
     else:
         # 1-n模式：使用 context_builder 构建的结果，与单章生成保持一致
@@ -5070,7 +5297,8 @@ async def generate_single_chapter_for_batch(
                 foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
                 previous_chapter_summary=final_prev_summary,
                 recent_chapters_context=chapter_context.recent_chapters_context or '',
-                relevant_memories=chapter_context.relevant_memories or ''
+                relevant_memories=chapter_context.relevant_memories or '',
+                **prompt_quality_kwargs,
             )
         else:
             # 第一章，使用无前置内容模板
@@ -5091,7 +5319,8 @@ async def generate_single_chapter_for_batch(
                 characters_info=chapter_context.chapter_characters or '暂无角色信息',
                 chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
                 foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
-                relevant_memories=chapter_context.relevant_memories or '暂无相关记忆'
+                relevant_memories=chapter_context.relevant_memories or '暂无相关记忆',
+                **prompt_quality_kwargs,
             )
     
     # 应用写作风格
@@ -5362,42 +5591,23 @@ async def regenerate_chapter_stream(
                 )
             outline = outline_result.scalar_one_or_none()
             
-            # 获取写作风格
-            await sync_low_ai_presets(temp_db)
-            style_content = ""
-            style_id = regenerate_request.style_id
-            
-            # 如果没有指定风格，尝试使用项目的默认风格
-            if not style_id:
-                from app.models.project_default_style import ProjectDefaultStyle
-                default_style_result = await temp_db.execute(
-                    select(ProjectDefaultStyle.style_id)
-                    .where(ProjectDefaultStyle.project_id == chapter.project_id)
-                )
-                default_style_id = default_style_result.scalar_one_or_none()
-                if default_style_id:
-                    style_id = default_style_id
-                    logger.info(f"📝 使用项目默认写作风格: {style_id}")
-            
-            # 获取风格内容
+            # 获取统一质量画像与写作风格
+            quality_profile = await _resolve_chapter_quality_profile(
+                db_session=temp_db,
+                user_id=user_id,
+                project=project,
+                style_id=regenerate_request.style_id,
+                enable_mcp=True,
+                prefer_project_default_style=not bool(regenerate_request.style_id),
+                log_prefix="章节重生成",
+            )
+            style_content = quality_profile.get("style_content") or ""
+            style_id = quality_profile.get("resolved_style_id")
             if style_id:
-                style_result = await temp_db.execute(
-                    select(WritingStyle).where(WritingStyle.id == style_id)
-                )
-                style = style_result.scalar_one_or_none()
-                if style:
-                    # 验证风格是否可用：全局预设风格（user_id为NULL）或者当前用户的自定义风格
-                    if style.user_id is None or style.user_id == user_id:
-                        style_content = style.prompt_content or ""
-                        style_type = "全局预设" if style.user_id is None else "用户自定义"
-                        logger.info(f"✅ 使用写作风格: {style.name} ({style_type})")
-                    else:
-                        logger.warning(f"⚠️ 风格 {style_id} 不属于当前项目，跳过")
-                else:
-                    logger.warning(f"⚠️ 未找到风格 {style_id}")
+                logger.info(f"✅ 使用写作风格ID: {style_id}")
             else:
                 logger.info("ℹ️ 未指定写作风格，使用默认提示词")
-            
+
             # 构建项目上下文
             project_context = {
                 'project_title': project.title if project else '未知',
@@ -5441,7 +5651,7 @@ async def regenerate_chapter_stream(
                     original_suggestions=analysis.suggestions if analysis else None,
                     selected_suggestion_indices=regenerate_request.selected_suggestion_indices,
                     custom_instructions=regenerate_request.custom_instructions,
-                    style_id=regenerate_request.style_id,
+                    style_id=style_id,
                     target_word_count=regenerate_request.target_word_count,
                     focus_areas=regenerate_request.focus_areas,
                     preserve_elements=regenerate_request.preserve_elements.model_dump() if regenerate_request.preserve_elements else None,

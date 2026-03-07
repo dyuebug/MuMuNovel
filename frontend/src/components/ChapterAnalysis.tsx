@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Modal, Spin, Alert, Tabs, Card, Tag, List, Empty, Statistic, Row, Col, Button } from 'antd';
+import { Modal, Spin, Alert, Tabs, Card, Tag, List, Empty, Statistic, Row, Col, Button, message } from 'antd';
 import {
   ThunderboltOutlined,
   BulbOutlined,
@@ -35,7 +35,11 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
   const [isMobile, setIsMobile] = useState(isMobileDevice());
   const [regenerationModalVisible, setRegenerationModalVisible] = useState(false);
   const [comparisonModalVisible, setComparisonModalVisible] = useState(false);
+  const [draftPreviewVisible, setDraftPreviewVisible] = useState(false);
+  const [draftPreviewLoading, setDraftPreviewLoading] = useState(false);
+  const [applyingDraft, setApplyingDraft] = useState(false);
   const [chapterInfo, setChapterInfo] = useState<{ title: string; chapter_number: number; content: string; project_id?: string } | null>(null);
+  const [draftContent, setDraftContent] = useState('');
   const [newGeneratedContent, setNewGeneratedContent] = useState('');
   const [newContentWordCount, setNewContentWordCount] = useState(0);
 
@@ -309,10 +313,128 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
     }));
   };
 
+  const checkerResult = analysis?.checker_result;
+  const draftResult = analysis?.auto_revision_draft;
+  const checkerIssues = checkerResult?.issues || [];
+  const checkerPriorityActions = checkerResult?.priority_actions || [];
+  const checkerSeverityCounts = checkerResult?.severity_counts;
+  const checkerCriticalCount = checkerSeverityCounts?.critical || 0;
+  const checkerMajorCount = checkerSeverityCounts?.major || 0;
+  const checkerMinorCount = checkerSeverityCounts?.minor || 0;
+  const checkerIssueTotal = checkerIssues.length;
+  const draftUnresolvedIssues = draftResult?.unresolved_issues || [];
+
+  const getSeverityTagColor = (severity?: string) => {
+    switch ((severity || '').toLowerCase()) {
+      case 'critical':
+        return 'red';
+      case 'major':
+      case 'warning':
+        return 'orange';
+      case 'minor':
+      case 'info':
+        return 'blue';
+      default:
+        return 'default';
+    }
+  };
+
+  const getSeverityLabel = (severity?: string) => {
+    switch ((severity || '').toLowerCase()) {
+      case 'critical':
+        return '严重';
+      case 'major':
+        return '重要';
+      case 'warning':
+        return '警告';
+      case 'minor':
+        return '一般';
+      case 'info':
+        return '提示';
+      default:
+        return severity || '未知';
+    }
+  };
+
+  const resetDraftPreviewState = () => {
+    setDraftPreviewVisible(false);
+    setDraftPreviewLoading(false);
+    setDraftContent('');
+  };
+
+  const openDraftPreview = async () => {
+    if (!draftResult?.history_id) {
+      message.warning('当前草稿缺少历史记录标识，无法查看全文');
+      return;
+    }
+
+    try {
+      setDraftPreviewLoading(true);
+      setDraftPreviewVisible(true);
+      const response = await chapterApi.getAutoRevisionDraft(chapterId, draftResult.history_id);
+      setDraftContent(response.auto_revision_draft.revised_text || response.auto_revision_draft.revised_text_preview || '');
+    } catch (err) {
+      message.error((err as Error).message || '加载自动修订草稿失败');
+      setDraftPreviewVisible(false);
+    } finally {
+      setDraftPreviewLoading(false);
+    }
+  };
+
+  const refreshAfterDraftApplied = async () => {
+    setAnalysis(null);
+    setTask(null);
+    await loadChapterInfo();
+    await fetchAnalysisStatus();
+  };
+
+  const applyDraft = async (allowStale = false) => {
+    if (!draftResult?.history_id) {
+      message.warning('当前草稿缺少历史记录标识，无法应用');
+      return;
+    }
+
+    try {
+      setApplyingDraft(true);
+      await chapterApi.applyAutoRevisionDraft(chapterId, {
+        history_id: draftResult.history_id,
+        allow_stale: allowStale,
+      });
+      message.success('自动修订草稿已应用到章节正文');
+      resetDraftPreviewState();
+      await refreshAfterDraftApplied();
+    } catch (err) {
+      const error = err as Error & { response?: { status?: number; data?: { detail?: string } } };
+      const status = error.response?.status;
+      const detail = error.response?.data?.detail || error.message;
+
+      if (status === 409 && !allowStale) {
+        Modal.confirm({
+          title: '草稿已过期',
+          content: detail || '自动修订草稿已过期，是否仍要强制应用？',
+          okText: '仍要应用',
+          cancelText: '取消',
+          centered: true,
+          onOk: async () => {
+            await applyDraft(true);
+          },
+        });
+        return;
+      }
+
+      message.error(detail || '应用自动修订草稿失败');
+    } finally {
+      setApplyingDraft(false);
+    }
+  };
+
   const renderAnalysisResult = () => {
     if (!analysis) return null;
 
     const { analysis: analysis_data, memories } = analysis;
+    const hasSuggestions = !!(analysis_data.suggestions && analysis_data.suggestions.length > 0);
+    const hasCheckerResult = !!checkerResult;
+    const hasDraftResult = !!draftResult;
 
     return (
       <Tabs
@@ -326,7 +448,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
             children: (
               <div style={{ height: isMobile ? 'calc(80vh - 180px)' : 'calc(90vh - 220px)', overflowY: 'auto', paddingRight: '8px' }}>
                 {/* 根据建议重新生成按钮 */}
-                {analysis_data.suggestions && analysis_data.suggestions.length > 0 && (
+                {hasSuggestions && (
                   <Alert
                     message="发现改进建议"
                     description={
@@ -346,6 +468,133 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                     showIcon
                     style={{ marginBottom: 16 }}
                   />
+                )}
+
+                {hasDraftResult && (
+                  <Alert
+                    message="发现自动修订草稿"
+                    description={
+                      <div>
+                        <p style={{ marginBottom: 8 }}>
+                          {draftResult.change_summary || '系统已根据严重问题生成一份自动修订草稿，您可以先预览，再决定是否应用。'}
+                        </p>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: draftUnresolvedIssues.length > 0 ? 12 : 0 }}>
+                          <Tag color="red">严重问题 {draftResult.critical_count}</Tag>
+                          <Tag color="green">已处理 {draftResult.applied_critical_count}</Tag>
+                          <Tag color="blue">草稿字数 {draftResult.revised_word_count}</Tag>
+                          {draftResult.is_stale && <Tag color="orange">草稿已过期</Tag>}
+                        </div>
+                        {draftUnresolvedIssues.length > 0 && (
+                          <div style={{ marginBottom: 12 }}>
+                            <div style={{ fontWeight: 500, marginBottom: 4 }}>仍待处理</div>
+                            <ul style={{ margin: 0, paddingLeft: 20 }}>
+                              {draftUnresolvedIssues.map((issue, index) => (
+                                <li key={`${issue}-${index}`}>{issue}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                          <Button
+                            onClick={openDraftPreview}
+                            loading={draftPreviewLoading}
+                            size={isMobile ? 'small' : 'middle'}
+                          >
+                            查看修订草稿
+                          </Button>
+                          <Button
+                            type="primary"
+                            onClick={() => applyDraft(false)}
+                            loading={applyingDraft}
+                            size={isMobile ? 'small' : 'middle'}
+                          >
+                            应用自动修订草稿
+                          </Button>
+                          {hasSuggestions && (
+                            <Button
+                              icon={<EditOutlined />}
+                              onClick={() => setRegenerationModalVisible(true)}
+                              size={isMobile ? 'small' : 'middle'}
+                            >
+                              根据建议重新生成
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    }
+                    type={draftResult.is_stale ? 'warning' : 'success'}
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                  />
+                )}
+
+                {hasCheckerResult && (
+                  <Card title="文本质检结果" style={{ marginBottom: 16 }} size={isMobile ? 'small' : 'default'}>
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontWeight: 500, marginBottom: 8 }}>{checkerResult.overall_assessment || '已完成文本质检'}</div>
+                      <Row gutter={isMobile ? 8 : 16}>
+                        <Col span={isMobile ? 8 : 6}>
+                          <Statistic title="严重" value={checkerCriticalCount} valueStyle={{ color: 'var(--color-error)' }} />
+                        </Col>
+                        <Col span={isMobile ? 8 : 6}>
+                          <Statistic title="重要" value={checkerMajorCount} valueStyle={{ color: 'var(--color-warning)' }} />
+                        </Col>
+                        <Col span={isMobile ? 8 : 6}>
+                          <Statistic title="一般" value={checkerMinorCount} valueStyle={{ color: 'var(--color-primary)' }} />
+                        </Col>
+                        <Col span={isMobile ? 24 : 6}>
+                          <Statistic title="问题总数" value={checkerIssueTotal} />
+                        </Col>
+                      </Row>
+                    </div>
+
+                    {checkerPriorityActions.length > 0 && (
+                      <Card type="inner" title="优先修复项" size="small" style={{ marginBottom: 16 }}>
+                        <List
+                          dataSource={checkerPriorityActions}
+                          renderItem={(item, index) => (
+                            <List.Item>
+                              <span>{index + 1}. {item}</span>
+                            </List.Item>
+                          )}
+                        />
+                      </Card>
+                    )}
+
+                    <Card type="inner" title={`问题列表 (${checkerIssueTotal})`} size="small">
+                      {checkerIssueTotal > 0 ? (
+                        <List
+                          dataSource={checkerIssues}
+                          renderItem={(issue, index) => {
+                            const issueTitle = (issue as { title?: string }).title || issue.category || `问题 ${index + 1}`;
+                            const issueLocation = issue.location || (issue as { impact?: string }).impact || '';
+                            return (
+                              <List.Item>
+                                <List.Item.Meta
+                                  title={
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                                      <Tag color={getSeverityTagColor(issue.severity)}>{getSeverityLabel(issue.severity)}</Tag>
+                                      <span>{issueTitle}</span>
+                                      {issueLocation && <Tag>{issueLocation}</Tag>}
+                                    </div>
+                                  }
+                                  description={
+                                    <div>
+                                      {issue.evidence && <p style={{ marginBottom: 8 }}><strong>证据：</strong>{issue.evidence}</p>}
+                                      {issue.impact && <p style={{ marginBottom: 8 }}><strong>影响：</strong>{issue.impact}</p>}
+                                      {issue.suggestion && <p style={{ marginBottom: 0 }}><strong>建议：</strong>{issue.suggestion}</p>}
+                                    </div>
+                                  }
+                                />
+                              </List.Item>
+                            );
+                          }}
+                        />
+                      ) : (
+                        <Empty description="未发现需要修复的问题" />
+                      )}
+                    </Card>
+                  </Card>
                 )}
 
                 <Card title="整体评分" style={{ marginBottom: 16 }} size={isMobile ? 'small' : 'default'}>
@@ -390,7 +639,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                   </Card>
                 )}
 
-                {analysis_data.suggestions && analysis_data.suggestions.length > 0 && (
+                {hasSuggestions && (
                   <Card title={<><BulbOutlined /> 改进建议</>} size={isMobile ? 'small' : 'default'}>
                     <List
                       dataSource={analysis_data.suggestions}
@@ -691,6 +940,64 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
 
       {task && task.status !== 'completed' && renderProgress()}
       {task && task.status === 'completed' && analysis && renderAnalysisResult()}
+
+      {/* 自动修订草稿预览 */}
+      <Modal
+        title="自动修订草稿预览"
+        open={draftPreviewVisible}
+        onCancel={resetDraftPreviewState}
+        width={isMobile ? 'calc(100vw - 32px)' : '80%'}
+        centered
+        style={{ maxWidth: '1200px' }}
+        footer={[
+          <Button key="close-draft-preview" onClick={resetDraftPreviewState} disabled={applyingDraft}>
+            关闭
+          </Button>,
+          <Button
+            key="apply-draft"
+            type="primary"
+            loading={applyingDraft}
+            onClick={() => applyDraft(false)}
+          >
+            应用自动修订草稿
+          </Button>
+        ]}
+      >
+        {draftPreviewLoading ? (
+          <div style={{ textAlign: 'center', padding: '48px 0' }}>
+            <Spin size="large" />
+            <p style={{ marginTop: 16 }}>正在加载修订草稿...</p>
+          </div>
+        ) : (
+          <div>
+            {draftResult && (
+              <Card size="small" style={{ marginBottom: 16 }}>
+                <Row gutter={16}>
+                  <Col span={8}>
+                    <Statistic title="严重问题" value={draftResult.critical_count} valueStyle={{ color: 'var(--color-error)' }} />
+                  </Col>
+                  <Col span={8}>
+                    <Statistic title="已处理" value={draftResult.applied_critical_count} valueStyle={{ color: 'var(--color-success)' }} />
+                  </Col>
+                  <Col span={8}>
+                    <Statistic title="草稿字数" value={draftResult.revised_word_count} />
+                  </Col>
+                </Row>
+                {draftResult.change_summary && (
+                  <div style={{ marginTop: 16 }}>
+                    <strong>修订摘要：</strong>{draftResult.change_summary}
+                  </div>
+                )}
+              </Card>
+            )}
+            <Card size="small" title="修订正文">
+              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: isMobile ? 13 : 14, margin: 0 }}>
+                {draftContent || draftResult?.revised_text_preview || '暂无可预览内容'}
+              </pre>
+            </Card>
+          </div>
+        )}
+      </Modal>
 
       {/* 重新生成Modal */}
       {chapterInfo && (

@@ -123,7 +123,7 @@ const formatChapterAnalysisError = (
   }
 
   if (errorCode === 'retrying') {
-    return errorMessage;
+    return errorMessage ?? null;
   }
 
   if (errorMessage?.includes('JSON解析失败') || errorMessage?.includes('AI返回格式异常')) {
@@ -142,7 +142,7 @@ const formatChapterAnalysisError = (
     return '章节分析超时：后台长时间未完成分析，请稍后刷新后重试';
   }
 
-  return errorMessage;
+  return errorMessage ?? null;
 };
 
 const api = axios.create({
@@ -847,8 +847,9 @@ export interface ChapterBatchGenerateStatusResponse {
   started_at?: string | null;
   completed_at?: string | null;
   error_message?: string | null;
-  latest_quality_metrics?: Record<string, unknown> | null;
-  quality_metrics_summary?: Record<string, unknown> | null;
+  latest_quality_metrics?: import('../types').ChapterLatestQualityMetrics | null;
+  quality_metrics_summary?: import('../types').ChapterQualityMetricsSummary | null;
+  quality_profile_summary?: import('../types').ChapterQualityProfileSummary | null;
 }
 
 export interface ChapterBatchActiveTask {
@@ -861,8 +862,9 @@ export interface ChapterBatchActiveTask {
   current_chapter_id?: string | null;
   current_chapter_number?: number | null;
   checkpoint?: Record<string, unknown> | null;
-  latest_quality_metrics?: Record<string, unknown> | null;
-  quality_metrics_summary?: Record<string, unknown> | null;
+  latest_quality_metrics?: import('../types').ChapterLatestQualityMetrics | null;
+  quality_metrics_summary?: import('../types').ChapterQualityMetricsSummary | null;
+  quality_profile_summary?: import('../types').ChapterQualityProfileSummary | null;
   created_at?: string | null;
   started_at?: string | null;
 }

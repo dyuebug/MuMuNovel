@@ -82,6 +82,26 @@ const getCompletionNotice = (task: TrackedBackgroundTask): { title: string; desc
   };
 };
 
+const getTaskDisplayMessage = (task: TrackedBackgroundTask): string => {
+  if (task.taskType !== 'chapter_analysis') {
+    return task.message || '任务执行中...';
+  }
+
+  if (task.status === 'completed') {
+    return '章节分析已完成';
+  }
+
+  if (task.status === 'failed') {
+    return task.error || '章节分析失败';
+  }
+
+  if (task.status === 'cancelled') {
+    return '章节分析已取消';
+  }
+
+  return `章节分析进行中 (${task.progress}%)`;
+};
+
 export default function BackgroundTaskCenter() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -353,7 +373,7 @@ export default function BackgroundTaskCenter() {
                   />
 
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    {task.message || '任务执行中...'}
+                    {getTaskDisplayMessage(task)}
                   </Text>
 
                   {task.workflowScope ? (

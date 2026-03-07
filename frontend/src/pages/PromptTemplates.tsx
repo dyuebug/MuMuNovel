@@ -168,6 +168,16 @@ export default function PromptTemplates() {
     }
   };
 
+  const isSystemManagedTemplate = (template: PromptTemplate): boolean => {
+    const status = getSyncStatus(template.template_key);
+    return template.is_system_default || status?.sync_status === 'system_default';
+  };
+
+  const canSyncTemplateToDefault = (template: PromptTemplate): boolean => {
+    const status = getSyncStatus(template.template_key);
+    return status?.can_sync_to_default ?? !template.is_system_default;
+  };
+
   // 编辑模板
   const handleEdit = (template: PromptTemplate) => {
     setEditingTemplate({ ...template });
@@ -514,7 +524,12 @@ export default function PromptTemplates() {
               </Card>
             ) : (
               <Row gutter={[16, 16]}>
-                {currentTemplates.map(template => (
+                {currentTemplates.map(template => {
+                  const syncTag = getSyncStatusTagConfig(template.template_key);
+                  const isSystemManaged = isSystemManagedTemplate(template);
+                  const canSyncToDefault = canSyncTemplateToDefault(template);
+
+                  return (
                   <Col {...gridConfig} key={template.id}>
                     <Card
                       hoverable
@@ -525,7 +540,7 @@ export default function PromptTemplates() {
                     >
                       {/* 头部 */}
                       <div style={{
-                        background: template.is_system_default
+                        background: isSystemManaged
                           ? 'var(--color-bg-layout)'
                           : 'var(--color-primary)',
                         padding: isMobile ? '16px' : '20px',
@@ -533,10 +548,10 @@ export default function PromptTemplates() {
                       }}>
                         <Space direction="vertical" size={8} style={{ width: '100%' }}>
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <Title level={isMobile ? 5 : 4} style={{ margin: 0, color: template.is_system_default ? 'var(--color-text-primary)' : '#fff', flex: 1 }} ellipsis>
+                            <Title level={isMobile ? 5 : 4} style={{ margin: 0, color: isSystemManaged ? 'var(--color-text-primary)' : '#fff', flex: 1 }} ellipsis>
                               {template.template_name}
                             </Title>
-                            {!template.is_system_default && (
+                            {!isSystemManaged && (
                               <Switch
                                 checked={template.is_active}
                                 onChange={(checked) => handleToggleActive(template, checked)}
@@ -546,21 +561,17 @@ export default function PromptTemplates() {
                             )}
                           </div>
                           <Space wrap>
-                            <Tag color={template.is_system_default ? 'default' : 'rgba(255,255,255,0.3)'} style={{ color: template.is_system_default ? 'var(--color-text-secondary)' : '#fff', border: 'none' }}>
+                            <Tag color={isSystemManaged ? 'default' : 'rgba(255,255,255,0.3)'} style={{ color: isSystemManaged ? 'var(--color-text-secondary)' : '#fff', border: 'none' }}>
                               {template.category}
                             </Tag>
-                            <Tag color={template.is_system_default ? 'default' : 'rgba(255,255,255,0.3)'} style={{ color: template.is_system_default ? 'var(--color-text-secondary)' : '#fff', border: 'none' }}>
-                              {template.is_system_default ? '系统默认' : '已自定义'}
+                            <Tag color={isSystemManaged ? 'default' : 'rgba(255,255,255,0.3)'} style={{ color: isSystemManaged ? 'var(--color-text-secondary)' : '#fff', border: 'none' }}>
+                              {isSystemManaged ? '系统默认' : '已自定义'}
                             </Tag>
-                            {(() => {
-                              const syncTag = getSyncStatusTagConfig(template.template_key);
-                              if (!syncTag) return null;
-                              return (
-                                <Tag color={syncTag.color} style={{ border: 'none' }}>
-                                  {syncTag.text}
-                                </Tag>
-                              );
-                            })()}
+                            {syncTag && (
+                              <Tag color={syncTag.color} style={{ border: 'none' }}>
+                                {syncTag.text}
+                              </Tag>
+                            )}
                           </Space>
                         </Space>
                       </div>
@@ -578,9 +589,9 @@ export default function PromptTemplates() {
                         <Space wrap style={{ marginBottom: 16 }}>
                           <Tag
                             icon={<CheckCircleOutlined />}
-                            color={template.is_system_default || template.is_active ? 'success' : 'default'}
+                            color={isSystemManaged || template.is_active ? 'success' : 'default'}
                           >
-                            {template.is_system_default ? '始终启用' : (template.is_active ? '已启用' : '已禁用')}
+                            {isSystemManaged ? '始终启用' : (template.is_active ? '已启用' : '已禁用')}
                           </Tag>
                         </Space>
 
@@ -602,7 +613,7 @@ export default function PromptTemplates() {
                           <Button
                             icon={<ReloadOutlined />}
                             onClick={() => handleReset(template.template_key)}
-                            disabled={!(getSyncStatus(template.template_key)?.can_sync_to_default ?? !template.is_system_default)}
+                            disabled={!canSyncToDefault}
                             size={isMobile ? 'small' : 'middle'}
                             style={{ borderRadius: 6 }}
                           >
@@ -612,7 +623,8 @@ export default function PromptTemplates() {
                       </div>
                     </Card>
                   </Col>
-                ))}
+                  );
+                })}
               </Row>
             )}
           </Spin>

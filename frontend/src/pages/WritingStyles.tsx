@@ -281,12 +281,17 @@ export default function WritingStyles() {
                       <Paragraph
                         type="secondary"
                         style={{ fontSize: 13, marginBottom: 12 }}
-                        ellipsis={{ rows: 2, tooltip: style.description }}
+                        ellipsis={{
+                          rows: 2,
+                          expandable: 'collapsible',
+                          symbol: (expanded) => (expanded ? '收起' : '展开'),
+                          tooltip: style.description,
+                        }}
                       >
                         {style.description}
                       </Paragraph>
                     )}
-                    
+
                     <Paragraph
                       type="secondary"
                       style={{
@@ -297,8 +302,14 @@ export default function WritingStyles() {
                         borderRadius: 4,
                         flex: 1,
                         minHeight: 60,
+                        whiteSpace: 'pre-wrap',
                       }}
-                      ellipsis={{ rows: 3, tooltip: style.prompt_content }}
+                      ellipsis={{
+                        rows: 3,
+                        expandable: 'collapsible',
+                        symbol: (expanded) => (expanded ? '收起' : '展开'),
+                        tooltip: style.prompt_content,
+                      }}
                     >
                       {style.prompt_content}
                     </Paragraph>

@@ -4,7 +4,7 @@ import { EditOutlined, FileTextOutlined, ThunderboltOutlined, LockOutlined, Down
 import { useStore } from '../store';
 import { useChapterSync } from '../store/hooks';
 import { projectApi, writingStyleApi, chapterApi, chapterBatchTaskApi } from '../services/api';
-import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterQualityMetrics } from '../types';
+import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterQualityMetrics, ChapterQualityProfileSummary } from '../types';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import ChapterAnalysis from '../components/ChapterAnalysis';
 import ExpansionPlanEditor from '../components/ExpansionPlanEditor';
@@ -86,6 +86,60 @@ const getBatchSummaryMetricItems = (summary?: {
   { key: 'payoff', label: '爽点链', value: summary?.avg_payoff_chain_rate ?? 0, tip: QUALITY_METRIC_TIPS.payoff },
   { key: 'cliffhanger', label: '章尾钩子', value: summary?.avg_cliffhanger_rate ?? 0, tip: QUALITY_METRIC_TIPS.cliffhanger },
 ];
+
+const QUALITY_PROFILE_BLOCK_ORDER: Array<keyof Pick<ChapterQualityProfileSummary, 'generation' | 'checker' | 'reviser' | 'mcp_guard' | 'external_assets_block'>> = [
+  'generation',
+  'checker',
+  'reviser',
+  'mcp_guard',
+  'external_assets_block',
+];
+
+const QUALITY_PROFILE_BLOCK_LABELS: Record<typeof QUALITY_PROFILE_BLOCK_ORDER[number], string> = {
+  generation: '生成约束',
+  checker: '分析校验',
+  reviser: '修订回路',
+  mcp_guard: 'MCP 守护',
+  external_assets_block: '外部素材约束',
+};
+
+const getQualityProfileDisplayItems = (summary?: ChapterQualityProfileSummary | null) => {
+  if (!summary) {
+    return [];
+  }
+
+  const items: Array<{ key: string; label: string; description: string }> = [];
+
+  if (summary.baseline_id) {
+    items.push({ key: 'baseline', label: '质量基线', description: summary.baseline_id });
+  }
+  if (summary.version) {
+    items.push({ key: 'version', label: '画像版本', description: summary.version });
+  }
+  if (summary.style_profile) {
+    items.push({ key: 'style', label: '风格画像', description: summary.style_profile });
+  }
+  if (summary.genre_profiles?.length) {
+    items.push({ key: 'genres', label: '题材适配', description: summary.genre_profiles.join(' / ') });
+  }
+  if (summary.quality_dimensions?.length) {
+    items.push({ key: 'dimensions', label: '关注维度', description: summary.quality_dimensions.join(' / ') });
+  }
+
+  QUALITY_PROFILE_BLOCK_ORDER.forEach((blockKey) => {
+    const block = summary[blockKey];
+    const description = block?.summary || block?.title || block?.lines?.[0] || block?.prompt_blocks?.[0];
+    if (description) {
+      items.push({
+        key: blockKey,
+        label: QUALITY_PROFILE_BLOCK_LABELS[blockKey],
+        description,
+      });
+    }
+  });
+
+  return items;
+};
 
 // 从 localStorage 读取缓存的字数
 const getCachedWordCount = (): number => {
@@ -244,6 +298,7 @@ export default function Chapters() {
   const [singleChapterProgress, setSingleChapterProgress] = useState(0);
   const [singleChapterProgressMessage, setSingleChapterProgressMessage] = useState('');
   const [chapterQualityMetrics, setChapterQualityMetrics] = useState<ChapterQualityMetrics | null>(null);
+  const [chapterQualityProfileSummary, setChapterQualityProfileSummary] = useState<ChapterQualityProfileSummary | null>(null);
   const [chapterQualityGeneratedAt, setChapterQualityGeneratedAt] = useState<string | null>(null);
   const [chapterQualityLoading, setChapterQualityLoading] = useState(false);
 
@@ -276,6 +331,7 @@ export default function Chapters() {
       avg_cliffhanger_rate?: number;
       chapter_count?: number;
     };
+    quality_profile_summary?: ChapterQualityProfileSummary | null;
   } | null>(null);
   const batchPollingIntervalRef = useRef<number | null>(null);
   const batchTaskMetaRef = useRef<Record<string, BatchTaskMeta>>({});
@@ -781,6 +837,7 @@ export default function Chapters() {
             avg_cliffhanger_rate?: number;
             chapter_count?: number;
           } | null | undefined) ?? undefined,
+          quality_profile_summary: task.quality_profile_summary ?? null,
         });
         setBatchGenerating(true);
         setBatchGenerateVisible(false);
@@ -928,14 +985,17 @@ export default function Chapters() {
       const result = await chapterApi.getChapterQualityMetrics(chapterId);
       if (result.has_metrics && result.latest_metrics) {
         setChapterQualityMetrics(result.latest_metrics);
+        setChapterQualityProfileSummary(result.quality_profile_summary ?? null);
         setChapterQualityGeneratedAt(result.generated_at);
       } else {
         setChapterQualityMetrics(null);
+        setChapterQualityProfileSummary(result.quality_profile_summary ?? null);
         setChapterQualityGeneratedAt(null);
       }
     } catch (error) {
       console.error('加载章节评分失败:', error);
       setChapterQualityMetrics(null);
+      setChapterQualityProfileSummary(null);
       setChapterQualityGeneratedAt(null);
     } finally {
       setChapterQualityLoading(false);
@@ -980,6 +1040,7 @@ export default function Chapters() {
       setTemporaryNarrativePerspective(undefined); // 重置人称选择
       setIsEditorOpen(true);
       setChapterQualityMetrics(null);
+      setChapterQualityProfileSummary(null);
       setChapterQualityGeneratedAt(null);
       // 打开编辑窗口时加载模型列表
       loadAvailableModels();
@@ -1327,6 +1388,7 @@ export default function Chapters() {
         estimated_time_minutes: result.estimated_time_minutes,
         latest_quality_metrics: undefined,
         quality_metrics_summary: undefined,
+        quality_profile_summary: null,
       });
 
       message.success(`批量生成任务已创建，预计需要 ${result.estimated_time_minutes} 分钟`);
@@ -1380,6 +1442,7 @@ export default function Chapters() {
             avg_cliffhanger_rate?: number;
             chapter_count?: number;
           } | null | undefined) ?? undefined,
+          quality_profile_summary: status.quality_profile_summary ?? null,
         });
 
         // 每次轮询时刷新章节列表和分析状态，实时显示新生成的章节和分析进度
@@ -2800,6 +2863,38 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
           <Card
             size="small"
+            title="质量链说明"
+            style={{ marginBottom: 12 }}
+          >
+            {getQualityProfileDisplayItems(chapterQualityProfileSummary).length > 0 ? (
+              <>
+                <Alert
+                  type="success"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message="当前章节已接入统一质量画像"
+                  description="以下摘要仅用于说明本次生成/分析所使用的质量链，不在章节页提供编辑入口。"
+                />
+                <Descriptions column={1} size="small">
+                  {getQualityProfileDisplayItems(chapterQualityProfileSummary).map((item) => (
+                    <Descriptions.Item key={item.key} label={item.label}>
+                      {item.description}
+                    </Descriptions.Item>
+                  ))}
+                </Descriptions>
+              </>
+            ) : (
+              <Alert
+                type="info"
+                showIcon
+                message="当前章节尚未返回质量链摘要"
+                description="不影响单章生成、风格选择与 deferred analysis 主流程；待后端返回摘要后，此处会自动展示。"
+              />
+            )}
+          </Card>
+
+          <Card
+            size="small"
             title="剧情评分（最近一次AI生成）"
             loading={chapterQualityLoading}
             style={{ marginBottom: 12 }}
@@ -2898,6 +2993,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
                 <Button
                   onClick={() => {
                     setChapterQualityMetrics(null);
+                    setChapterQualityProfileSummary(null);
                     setChapterQualityGeneratedAt(null);
                     setIsEditorOpen(false);
                   }}
@@ -3162,6 +3258,25 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
               showIcon
               style={{ marginBottom: 16 }}
             />
+
+            {batchProgress?.quality_profile_summary && getQualityProfileDisplayItems(batchProgress.quality_profile_summary).length > 0 && (
+              <Card size="small" title="质量链已生效" style={{ marginBottom: 16 }}>
+                <Alert
+                  type="success"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message="本批次已应用统一质量画像"
+                  description="这里只展示后端返回的摘要说明，不改变批量生成、风格选择与 deferred analysis 编排。"
+                />
+                <Descriptions column={1} size="small">
+                  {getQualityProfileDisplayItems(batchProgress.quality_profile_summary).map((item) => (
+                    <Descriptions.Item key={item.key} label={item.label}>
+                      {item.description}
+                    </Descriptions.Item>
+                  ))}
+                </Descriptions>
+              </Card>
+            )}
 
             {batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined && (
               <Card size="small" title="批量质量摘要" style={{ marginBottom: 16 }}>

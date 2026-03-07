@@ -351,12 +351,66 @@ export interface ChapterQualityMetrics {
   cliffhanger_rate: number;
 }
 
+export interface ChapterLatestQualityMetrics {
+  overall_score?: number;
+  conflict_chain_hit_rate?: number;
+  rule_grounding_hit_rate?: number;
+  outline_alignment_rate?: number;
+  dialogue_naturalness_rate?: number;
+  opening_hook_rate?: number;
+  payoff_chain_rate?: number;
+  cliffhanger_rate?: number;
+  chapter_id?: string;
+  history_id?: string | null;
+  generated_at?: string | null;
+}
+
+export interface ChapterQualityMetricsSummary {
+  avg_overall_score?: number;
+  avg_conflict_chain_hit_rate?: number;
+  avg_rule_grounding_hit_rate?: number;
+  avg_outline_alignment_rate?: number;
+  avg_dialogue_naturalness_rate?: number;
+  avg_opening_hook_rate?: number;
+  avg_payoff_chain_rate?: number;
+  avg_cliffhanger_rate?: number;
+  total_chapters?: number;
+  analyzed_chapters?: number;
+  last_generated_at?: string | null;
+}
+
+export interface ChapterQualityProfileBlockSummary {
+  title?: string;
+  summary?: string;
+  lines?: string[];
+  prompt_blocks?: string[];
+}
+
+export interface ChapterQualityProfileSummary {
+  version?: string;
+  baseline_id?: string;
+  genre_profiles?: string[];
+  style_profile?: string;
+  quality_dimensions?: string[];
+  prompt_blocks?: string[];
+  generation?: ChapterQualityProfileBlockSummary | null;
+  checker?: ChapterQualityProfileBlockSummary | null;
+  reviser?: ChapterQualityProfileBlockSummary | null;
+  mcp_guard?: ChapterQualityProfileBlockSummary | null;
+  external_assets_block?: ChapterQualityProfileBlockSummary | null;
+  policy?: Record<string, unknown> | null;
+  blocks?: Record<string, ChapterQualityProfileBlockSummary> | null;
+}
+
 export interface ChapterQualityMetricsResponse {
   chapter_id: string;
   has_metrics: boolean;
   latest_metrics: ChapterQualityMetrics | null;
   history_id: string | null;
   generated_at: string | null;
+  latest_quality_metrics?: ChapterLatestQualityMetrics | null;
+  quality_metrics_summary?: ChapterQualityMetricsSummary | null;
+  quality_profile_summary?: ChapterQualityProfileSummary | null;
 }
 
 // AI生成请求类型
@@ -571,6 +625,9 @@ export interface AnalysisTask {
   created_at?: string | null;
   started_at?: string | null;
   completed_at?: string | null;
+  latest_quality_metrics?: ChapterLatestQualityMetrics | null;
+  quality_metrics_summary?: ChapterQualityMetricsSummary | null;
+  quality_profile_summary?: ChapterQualityProfileSummary | null;
 }
 
 // 分析结果 - 钩子
@@ -701,6 +758,7 @@ export interface ChapterTextCheckerResult {
   issues: ChapterTextCheckerIssue[];
   priority_actions: string[];
   revision_suggestions: string[];
+  quality_profile_summary?: ChapterQualityProfileSummary | null;
 }
 
 export interface ChapterAutoRevisionDraft {
@@ -715,6 +773,7 @@ export interface ChapterAutoRevisionDraft {
   revised_text?: string;
   is_stale: boolean;
   created_at: string | null;
+  quality_profile_summary?: ChapterQualityProfileSummary | null;
 }
 
 export interface ChapterAnalysisResponse {
@@ -724,6 +783,9 @@ export interface ChapterAnalysisResponse {
   checker_result?: ChapterTextCheckerResult | null;
   checker_created_at?: string | null;
   auto_revision_draft?: ChapterAutoRevisionDraft | null;
+  quality_metrics?: ChapterLatestQualityMetrics | null;
+  quality_metrics_summary?: ChapterQualityMetricsSummary | null;
+  quality_profile_summary?: ChapterQualityProfileSummary | null;
   created_at: string;
 }
 

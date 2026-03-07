@@ -3,6 +3,7 @@ from typing import Dict, Any, List, Optional, Callable, Awaitable
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.ai_service import AIService
 from app.services.prompt_service import prompt_service, PromptService
+from app.services.novel_quality_profile_service import novel_quality_profile_service
 from app.logger import get_logger
 import json
 import re
@@ -13,6 +14,38 @@ logger = get_logger(__name__)
 # 重试回调类型定义
 OnRetryCallback = Callable[[int, int, int, str], Awaitable[None]]
 # 参数: (当前重试次数, 最大重试次数, 等待时间秒数, 错误原因)
+
+
+def build_chapter_quality_prompt_context(
+    *,
+    genre: Optional[str] = None,
+    style_name: Optional[str] = None,
+    style_preset_id: Optional[str] = None,
+    style_content: str = "",
+    external_assets: Optional[List[Dict[str, Any]]] = None,
+    reference_assets: Optional[List[Dict[str, Any]]] = None,
+    mcp_references: str = "",
+) -> Dict[str, Any]:
+    """构建分析、质检、修订共用的质量画像上下文。"""
+    resolved_assets = external_assets or reference_assets or ()
+    payload = {
+        "genre": genre,
+        "style_name": style_name,
+        "style_preset_id": style_preset_id,
+        "style_content": style_content,
+        "external_assets": resolved_assets,
+    }
+    profile = novel_quality_profile_service.build_profile_dict(payload)
+    return {
+        "genre": genre,
+        "style_name": style_name,
+        "style_preset_id": style_preset_id,
+        "style_content": style_content,
+        "external_assets": resolved_assets,
+        "reference_assets": resolved_assets,
+        "mcp_references": mcp_references or "",
+        "quality_profile": profile,
+    }
 
 
 class PlotAnalyzer:
@@ -44,7 +77,14 @@ class PlotAnalyzer:
         max_retries: int = 3,
         existing_foreshadows: Optional[List[Dict[str, Any]]] = None,
         on_retry: Optional[OnRetryCallback] = None,
-        characters_info: str = ""
+        characters_info: str = "",
+        genre: Optional[str] = None,
+        style_name: Optional[str] = None,
+        style_preset_id: Optional[str] = None,
+        style_content: str = "",
+        external_assets: Optional[List[Dict[str, Any]]] = None,
+        reference_assets: Optional[List[Dict[str, Any]]] = None,
+        mcp_references: str = "",
     ) -> Optional[Dict[str, Any]]:
         """
         分析单章内容（带重试机制）
@@ -60,6 +100,13 @@ class PlotAnalyzer:
             existing_foreshadows: 已埋入的伏笔列表（用于回收匹配）
             on_retry: 重试时的回调函数，参数为 (当前重试次数, 最大重试次数, 等待秒数, 错误原因)
             characters_info: 项目角色信息文本（用于角色名称匹配）
+            genre: 小说题材（用于统一质量画像）
+            style_name: 写作风格名称（用于统一质量画像）
+            style_preset_id: 写作风格预设ID（用于统一质量画像）
+            style_content: 写作风格正文（用于统一质量画像）
+            external_assets: 外部摘要资产（用于统一质量画像）
+            reference_assets: 外部参考摘要资产别名（用于统一质量画像）
+            mcp_references: MCP能力摘要文本（用于 prompt 层参考，不暴露来源）
         
         Returns:
             分析结果字典,失败返回None
@@ -84,6 +131,15 @@ class PlotAnalyzer:
         foreshadows_text = self._format_existing_foreshadows(existing_foreshadows)
         
         # 格式化提示词
+        quality_context = build_chapter_quality_prompt_context(
+            genre=genre,
+            style_name=style_name,
+            style_preset_id=style_preset_id,
+            style_content=style_content,
+            external_assets=external_assets,
+            reference_assets=reference_assets,
+            mcp_references=mcp_references,
+        )
         prompt = PromptService.format_prompt(
             template,
             chapter_number=chapter_number,
@@ -91,7 +147,9 @@ class PlotAnalyzer:
             word_count=word_count,
             content=analysis_content,
             existing_foreshadows=foreshadows_text,
-            characters_info=characters_info if characters_info else "（暂无角色信息）"
+            characters_info=characters_info if characters_info else "（暂无角色信息）",
+            _template_key="PLOT_ANALYSIS",
+            **quality_context,
         )
         
         self.last_error_message = None
@@ -106,7 +164,7 @@ class PlotAnalyzer:
                 try:
                     async for chunk in self.ai_service.generate_text_stream(
                         prompt=prompt,
-                        temperature=0.3  # 降低温度以获得更稳定的JSON输出
+                        temperature=0.3,  # 降低温度以获得更稳定的JSON输出
                     ):
                         accumulated_text += chunk
                 except GeneratorExit:

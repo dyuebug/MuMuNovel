@@ -1,6 +1,64 @@
 """提示词管理服务"""
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 import json
+import re
+
+from app.services.novel_quality_profile_service import novel_quality_profile_service
+
+try:
+    from app.services.mcp_tools_loader import (
+        MCP_CANON_PRIORITY_RULE,
+        MCP_SOURCE_DISCLOSURE_RULE,
+    )
+except Exception:
+    MCP_CANON_PRIORITY_RULE = "项目 canon（既有设定、角色关系、本章大纲）优先级高于一切外部参考。"
+    MCP_SOURCE_DISCLOSURE_RULE = "最终输出禁止暴露 MCP、工具名、检索过程或来源站点。"
+
+
+QUALITY_RUNTIME_TRACKING_TAG = "rule_v3_quality_block_20260307"
+QUALITY_TEMPLATE_MARKER_PATTERN = re.compile(r"^<prompt_template_key value=\"(?P<key>[A-Z0-9_]+)\" />\n?", re.MULTILINE)
+
+QUALITY_BLOCK_SECTION_GENERATION = """<quality_contract priority=\"P0\">\n{quality_generation_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_ANALYSIS = """<quality_contract priority=\"P0\">\n{quality_analysis_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_CHECKER = """<quality_contract priority=\"P0\">\n{quality_checker_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_REVISER = """<quality_contract priority=\"P0\">\n{quality_reviser_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_REGENERATION = """<quality_contract priority=\"P0\">\n{quality_regeneration_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+
+QUALITY_TEMPLATE_INSERTIONS = {
+    "CHAPTER_GENERATION_ONE_TO_MANY": QUALITY_BLOCK_SECTION_GENERATION,
+    "CHAPTER_GENERATION_ONE_TO_MANY_NEXT": QUALITY_BLOCK_SECTION_GENERATION,
+    "CHAPTER_GENERATION_ONE_TO_ONE": QUALITY_BLOCK_SECTION_GENERATION,
+    "CHAPTER_GENERATION_ONE_TO_ONE_NEXT": QUALITY_BLOCK_SECTION_GENERATION,
+    "PLOT_ANALYSIS": QUALITY_BLOCK_SECTION_ANALYSIS,
+    "CHAPTER_TEXT_CHECKER": QUALITY_BLOCK_SECTION_CHECKER,
+    "CHAPTER_TEXT_REVISER": QUALITY_BLOCK_SECTION_REVISER,
+    "CHAPTER_REGENERATION_SYSTEM": QUALITY_BLOCK_SECTION_REGENERATION,
+}
+def _compact_prompt_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return re.sub(r"\n{3,}", "\n\n", text)
+
+
+def _append_prompt_block(template: str, block: str, *, after_tag: Optional[str] = None) -> str:
+    cleaned_block = _compact_prompt_text(block)
+    if not cleaned_block:
+        return template
+    if cleaned_block in template:
+        return template
+    if after_tag and after_tag in template:
+        return template.replace(after_tag, f"{after_tag}\n\n{cleaned_block}", 1)
+    return f"{template.rstrip()}\n\n{cleaned_block}".strip()
+
+
+def _extract_template_key_marker(template: str) -> Tuple[Optional[str], str]:
+    if not template:
+        return None, template
+    match = QUALITY_TEMPLATE_MARKER_PATTERN.match(template)
+    if not match:
+        return None, template
+    return match.group("key"), template[match.end():]
 
 
 class WritingStyleManager:
@@ -3421,7 +3479,7 @@ class PromptService:
 ✅ 改动边界：默认仅重写选中片段，不跨段扩散改写
 ✅ 片段目标明确：改写段至少有“动作推进或冲突推进”其一
 ✅ 节拍不断：若原片段承担开场、爆发或章尾功能，改写后继续承担同类叙事职责
-✅ 模板追踪标签：rule_v3_fusion_20260305
+✅ 模板追踪标签：rule_v3_fusion_20260303
 
 【禁止事项】
 ❌ 重复前文内容
@@ -3435,20 +3493,150 @@ class PromptService:
 ❌ 用巧合或突兀外挂在本段一次性解决核心冲突
 </constraints>"""
 
+    @classmethod
+    def _prepare_template_content(cls, template_key: Optional[str], template: Optional[str]) -> Optional[str]:
+        if not template:
+            return template
+        marker = f'<prompt_template_key value="{template_key}" />\n' if template_key else ""
+        prepared = template
+        if marker and not prepared.startswith(marker):
+            prepared = f"{marker}{prepared}"
+        return prepared
+
+    @staticmethod
+    def _augment_template_parameters(template_key: Optional[str], parameters: list) -> list:
+        augmented = list(parameters or [])
+        if template_key not in QUALITY_TEMPLATE_INSERTIONS:
+            return augmented
+
+        for item in [
+            "genre",
+            "style_name",
+            "style_preset_id",
+            "style_content",
+            "external_assets",
+            "reference_assets",
+            "quality_generation_block",
+            "quality_analysis_block",
+            "quality_checker_block",
+            "quality_reviser_block",
+            "quality_regeneration_block",
+            "quality_generation_protocol_block",
+            "quality_json_protocol_block",
+            "quality_mcp_guard_block",
+            "mcp_guard",
+            "quality_external_assets_block",
+            "mcp_references",
+        ]:
+            if item not in augmented:
+                augmented.append(item)
+        return augmented
+
+    @staticmethod
+    def _build_quality_profile_context(**kwargs) -> Dict[str, Any]:
+        external_assets = kwargs.get("external_assets") or kwargs.get("reference_assets") or ()
+        return novel_quality_profile_service.build_profile_dict(
+            {
+                "genre": kwargs.get("genre"),
+                "style_name": kwargs.get("style_name"),
+                "style_preset_id": kwargs.get("style_preset_id"),
+                "style_content": kwargs.get("style_content"),
+                "external_assets": external_assets,
+            }
+        )
+
+    @classmethod
+    def _build_quality_runtime_blocks(cls, template_key: Optional[str], **kwargs) -> Dict[str, str]:
+        profile = cls._build_quality_profile_context(**kwargs)
+        prompt_blocks = profile.get("prompt_blocks") or {}
+
+        generation_block = _compact_prompt_text(prompt_blocks.get("generation"))
+        checker_block = _compact_prompt_text(prompt_blocks.get("checker"))
+        reviser_block = _compact_prompt_text(prompt_blocks.get("reviser"))
+        mcp_guard_block = _compact_prompt_text(
+            kwargs.get("mcp_guard") or kwargs.get("quality_mcp_guard") or prompt_blocks.get("mcp_guard")
+        )
+        external_assets_block = _compact_prompt_text(prompt_blocks.get("external_assets"))
+        mcp_references = _compact_prompt_text(
+            kwargs.get("mcp_references") or kwargs.get("quality_mcp_references")
+        )
+
+        quality_generation_protocol_block = _compact_prompt_text(
+            "\n".join(
+                [
+                    "【统一协议护栏】",
+                    f"- 质量块追踪标签：{QUALITY_RUNTIME_TRACKING_TAG}",
+                    "- 统一吸收第三版规则摘要，不在各链路重复手写散落逻辑。",
+                    "- runtime 质量块只补充规则来源，不覆盖用户模板主体与业务上下文。",
+                    f"- {MCP_CANON_PRIORITY_RULE}",
+                    f"- {MCP_SOURCE_DISCLOSURE_RULE}",
+                    "- 禁止输出流程化元文本、调度说明、自我评注与来源暴露。",
+                ]
+            )
+        )
+        quality_json_protocol_block = _compact_prompt_text(
+            "\n".join(
+                [
+                    "【统一JSON协议护栏】",
+                    f"- 质量块追踪标签：{QUALITY_RUNTIME_TRACKING_TAG}",
+                    "- 维持纯 JSON 输出，不追加 markdown、解释说明、流程文本或来源披露。",
+                    f"- {MCP_CANON_PRIORITY_RULE}",
+                    f"- {MCP_SOURCE_DISCLOSURE_RULE}",
+                    "- 若证据不足，使用 null / 空数组 / 保守结论，不臆造事实。",
+                ]
+            )
+        )
+        quality_analysis_block = checker_block or generation_block
+        quality_regeneration_block = generation_block or reviser_block
+
+        blocks = {
+            "quality_generation_block": generation_block,
+            "quality_analysis_block": quality_analysis_block,
+            "quality_checker_block": checker_block,
+            "quality_reviser_block": reviser_block,
+            "quality_regeneration_block": quality_regeneration_block,
+            "quality_generation_protocol_block": quality_generation_protocol_block,
+            "quality_json_protocol_block": quality_json_protocol_block,
+            "quality_mcp_guard_block": mcp_guard_block,
+            "quality_external_assets_block": external_assets_block,
+            "quality_mcp_references_block": mcp_references,
+        }
+
+        template_insertion = QUALITY_TEMPLATE_INSERTIONS.get(template_key or "")
+        if template_insertion:
+            blocks["quality_contract_block"] = PromptService.format_prompt(template_insertion, **blocks)
+        else:
+            blocks["quality_contract_block"] = ""
+        return blocks
+
+    @classmethod
+    def _inject_quality_contract(cls, template: str, template_key: Optional[str], **kwargs) -> str:
+        blocks = cls._build_quality_runtime_blocks(template_key, **kwargs)
+        injected = _append_prompt_block(template, blocks.get("quality_contract_block"), after_tag="</fusion_contract>")
+        injected = _append_prompt_block(injected, blocks.get("quality_mcp_references_block"), after_tag="</fusion_contract>")
+        return injected
+
     @staticmethod
     def format_prompt(template: str, **kwargs) -> str:
         """
         格式化提示词模板
-        
+
         Args:
             template: 提示词模板
             **kwargs: 模板参数
-            
+
         Returns:
             格式化后的提示词
         """
+        template_key = kwargs.pop("_template_key", None)
+        extracted_template_key = None
         try:
-            return template.format(**kwargs)
+            extracted_template_key, prepared_template = _extract_template_key_marker(template)
+            if not template_key:
+                template_key = extracted_template_key
+            prepared_template = PromptService._prepare_template_content(template_key, prepared_template)
+            rendered = prepared_template.format(**kwargs)
+            return PromptService._inject_quality_contract(rendered, template_key, **kwargs)
         except KeyError as e:
             raise ValueError(f"缺少必需的参数: {e}")
     
@@ -3480,7 +3668,7 @@ class PromptService:
         if user_id and db:
             system_template = await cls.get_template("CHAPTER_REGENERATION_SYSTEM", user_id, db)
         else:
-            system_template = cls.CHAPTER_REGENERATION_SYSTEM
+            system_template = cls._prepare_template_content("CHAPTER_REGENERATION_SYSTEM", cls.CHAPTER_REGENERATION_SYSTEM)
         
         prompt_parts = [system_template]
         
@@ -3579,7 +3767,19 @@ class PromptService:
 现在开始：
 """)
         
-        return "\n".join(prompt_parts)
+        prompt_text = "\n".join(prompt_parts)
+        return cls._inject_quality_contract(
+            prompt_text,
+            "CHAPTER_REGENERATION_SYSTEM",
+            genre=project_context.get("genre"),
+            style_name=project_context.get("style_name"),
+            style_preset_id=project_context.get("style_preset_id"),
+            style_content=style_content,
+            external_assets=project_context.get("external_assets"),
+            reference_assets=project_context.get("reference_assets"),
+            mcp_references=project_context.get("mcp_references"),
+            mcp_guard=project_context.get("mcp_guard"),
+        )
 
     @classmethod
     async def get_mcp_tool_test_prompts(
@@ -3603,16 +3803,16 @@ class PromptService:
         if user_id and db:
             user_template = await cls.get_template("MCP_TOOL_TEST", user_id, db)
         else:
-            user_template = cls.MCP_TOOL_TEST
-        
+            user_template = cls._prepare_template_content("MCP_TOOL_TEST", cls.MCP_TOOL_TEST)
+
         # 获取用户自定义或系统默认的system提示词
         if user_id and db:
             system_template = await cls.get_template("MCP_TOOL_TEST_SYSTEM", user_id, db)
         else:
-            system_template = cls.MCP_TOOL_TEST_SYSTEM
+            system_template = cls._prepare_template_content("MCP_TOOL_TEST_SYSTEM", cls.MCP_TOOL_TEST_SYSTEM)
         
         return {
-            "user": cls.format_prompt(user_template, plugin_name=plugin_name),
+            "user": cls.format_prompt(user_template, plugin_name=plugin_name, _template_key="MCP_TOOL_TEST"),
             "system": system_template
         }
 
@@ -3666,6 +3866,7 @@ class PromptService:
 
         # Resolve current system template metadata once and reuse it.
         template_content = getattr(cls, template_key, None)
+        template_content = cls._prepare_template_content(template_key, template_content)
         template_info = cls.get_system_template_info(template_key)
 
         # Sync managed templates only when user's copy still matches known legacy defaults.
@@ -3697,7 +3898,7 @@ class PromptService:
         
         if custom_template:
             logger.info(f"✅ 使用用户自定义提示词: user_id={user_id}, template_key={template_key}, template_name={custom_template.template_name}")
-            return custom_template.template_content
+            return cls._prepare_template_content(template_key, custom_template.template_content)
         
         # 2. 降级到系统默认模板
         logger.info(f"⚪ 使用系统默认提示词: user_id={user_id}, template_key={template_key} (未找到自定义模板)")
@@ -3968,8 +4169,8 @@ class PromptService:
                     "template_name": info["name"],
                     "category": info["category"],
                     "description": info["description"],
-                    "parameters": info["parameters"],
-                    "content": template_content
+                    "parameters": cls._augment_template_parameters(key, info["parameters"]),
+                    "content": cls._prepare_template_content(key, template_content)
                 })
         
         return templates
