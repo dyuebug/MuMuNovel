@@ -59,6 +59,8 @@ services:
       postgres:
         condition: service_healthy
     ports:
+      # 端口映射格式：宿主机端口:容器内端口
+      # 例如 .env 中 APP_PORT=8003 时，实际访问 http://localhost:8003，容器内应用仍监听 8000
       - "${APP_PORT:-8000}:8000"
     volumes:
       - ./logs:/app/logs
@@ -68,6 +70,7 @@ services:
       - APP_NAME=${APP_NAME:-MuMuAINovel}
       - APP_VERSION=${APP_VERSION:-1.0.0}
       - APP_HOST=${APP_HOST:-0.0.0.0}
+      # 容器内应用固定监听 8000；不要和宿主机 APP_PORT（如 8003）混淆
       - APP_PORT=8000
       - DEBUG=${DEBUG:-false}
       
@@ -121,6 +124,7 @@ services:
       - SESSION_REFRESH_THRESHOLD_MINUTES=${SESSION_REFRESH_THRESHOLD_MINUTES:-30}
     restart: unless-stopped
     healthcheck:
+      # 这里运行在容器内部，因此检查的是容器内 localhost:8000，而不是宿主机的 8003
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 10s
