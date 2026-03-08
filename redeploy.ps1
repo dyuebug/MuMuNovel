@@ -4,6 +4,7 @@ param(
     [switch]$SkipRecreate,
     [switch]$NoCache,
     [switch]$SkipAssetVerification,
+    [switch]$FullRestart,
     [int]$HealthTimeoutSec = 180,
     [string]$HealthUrl
 )
@@ -96,8 +97,13 @@ if ([string]::IsNullOrWhiteSpace($HealthUrl)) {
     $HealthUrl = "http://localhost:$appPort/health"
 }
 
-Write-Step "Stopping existing containers"
-docker compose down
+if ($FullRestart) {
+    Write-Step "Stopping full stack"
+    docker compose down
+}
+else {
+    Write-Step "Keeping dependent services running; only app container will be recreated"
+}
 
 $buildArgs = @("compose", "build")
 if ($NoCache) {
@@ -116,7 +122,7 @@ if (-not $SkipRecreate) {
 }
 $upArgs += $AppService
 
-Write-Step "Starting services"
+Write-Step "Starting application service"
 docker @upArgs
 
 Write-Step "Container status"
