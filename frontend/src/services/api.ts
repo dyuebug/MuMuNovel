@@ -1,4 +1,4 @@
-import axios from 'axios';
+﻿import axios from 'axios';
 import { message } from 'antd';
 import { ssePost } from '../utils/sseClient';
 import type { SSEClientOptions } from '../utils/sseClient';
@@ -51,6 +51,11 @@ import type {
   PresetUpdateRequest,
   PresetListResponse,
   ChapterPlanItem,
+  BookImportTask,
+  BookImportPreview,
+  BookImportApplyPayload,
+  BookImportResult,
+  BookImportRetryResult,
 } from '../types';
 
 interface MCPPluginSimpleCreate {
@@ -469,6 +474,51 @@ export const projectApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
+};
+
+export const bookImportApi = {
+  createTask: (params: { file: File }) => {
+    const formData = new FormData();
+    formData.append('file', params.file);
+
+    return api.post<unknown, { task_id: string; status: BookImportTask['status'] }>(
+      '/book-import/tasks',
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    );
+  },
+
+  getTaskStatus: (taskId: string) =>
+    api.get<unknown, BookImportTask>(`/book-import/tasks/${taskId}`),
+
+  getPreview: (taskId: string) =>
+    api.get<unknown, BookImportPreview>(`/book-import/tasks/${taskId}/preview`),
+
+  applyImport: (taskId: string, payload: BookImportApplyPayload) =>
+    api.post<unknown, BookImportResult>(`/book-import/tasks/${taskId}/apply`, payload),
+
+  applyImportStream: (
+    taskId: string,
+    payload: BookImportApplyPayload,
+    options?: SSEClientOptions,
+  ) => ssePost<BookImportResult>(
+    `/api/book-import/tasks/${taskId}/apply-stream`,
+    payload,
+    options,
+  ),
+
+  retryFailedStepsStream: (
+    taskId: string,
+    steps: string[],
+    options?: SSEClientOptions,
+  ) => ssePost<BookImportRetryResult>(
+    `/api/book-import/tasks/${taskId}/retry-stream`,
+    { steps },
+    options,
+  ),
+
+  cancelTask: (taskId: string) =>
+    api.delete<unknown, { success: boolean; message: string }>(`/book-import/tasks/${taskId}`),
 };
 
 export const outlineApi = {

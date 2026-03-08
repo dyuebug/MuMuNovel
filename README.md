@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.3.5-blue.svg)
+![Version](https://img.shields.io/badge/version-1.3.8-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109.0-green.svg)
 ![React](https://img.shields.io/badge/react-18.3.1-blue.svg)
@@ -11,6 +11,18 @@
 **基于 AI 的智能小说创作助手**
 
 [特性](#-特性) • [快速开始](#-快速开始) • [配置说明](#%EF%B8%8F-配置说明) • [项目结构](#-项目结构)
+
+</div>
+
+---
+
+<div align="center">
+
+## 💬 加入交流群
+
+欢迎扫码加入 QQ 交流群，一起交流 AI 小说创作心得、反馈问题、获取最新动态！
+
+<img src="frontend/public/qq.jpg" alt="QQ交流群二维码" width="300" />
 
 </div>
 
@@ -70,14 +82,22 @@
 ### 登录界面
 ![登录界面](images/1.png)
 
+![登录界面](images/1-1.png)
+
 ### 主界面
 ![主界面](images/2.png)
+
+![主界面（暗色）](images/2-1.png)
 
 ### 项目管理
 ![项目管理](images/3.png)
 
+![项目管理](images/3-1.png)
+
 ### 赞助我 💖
 ![赞助我](images/4.png)
+
+![赞助我](images/4-1.png)
 
 </div>
 
@@ -99,6 +119,7 @@
 - [x] **角色/组织卡片导入导出** - 单独导出角色和组织卡片，支持跨项目数据共享
 - [x] **伏笔管理** - 智能追踪剧情伏笔，提醒未回收线索，可视化伏笔时间线
 - [x] **提示词工坊** - 社区驱动的 Prompt 模板分享平台，一键导入优质提示词
+- [x] **拆书功能** - 目前呼声比较高的功能，一键拆书，给当年的ta一个圆满的结局
 
 ### 📝 规划中功能
 

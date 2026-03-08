@@ -81,7 +81,7 @@ async def _build_relationships_summary(character_id: str, project_id: str, db: A
 
 
 async def _build_org_members_summary(character_id: str, db: AsyncSession) -> str:
-    """从 organization_members 表构建组织成员摘要文本"""
+    """从 organization_members 表构建组织成员JSON字符串（与schema契约保持一致）"""
     # 先查找该角色对应的 Organization 记录
     org_result = await db.execute(
         select(Organization).where(Organization.character_id == character_id)
@@ -89,30 +89,32 @@ async def _build_org_members_summary(character_id: str, db: AsyncSession) -> str
     org = org_result.scalar_one_or_none()
     if not org:
         return ""
-    
-    # 查询该组织的所有成员
+
+    # 查询该组织的所有成员（按职级倒序，保证展示顺序稳定）
     members_result = await db.execute(
-        select(OrganizationMember).where(OrganizationMember.organization_id == org.id)
+        select(OrganizationMember)
+        .where(OrganizationMember.organization_id == org.id)
+        .order_by(OrganizationMember.rank.desc(), OrganizationMember.created_at)
     )
     members = members_result.scalars().all()
     if not members:
         return ""
-    
+
     # 批量查询成员角色名称
     member_char_ids = [m.character_id for m in members]
     chars_result = await db.execute(
         select(Character.id, Character.name).where(Character.id.in_(member_char_ids))
     )
     name_map = {row.id: row.name for row in chars_result}
-    
-    # 构建摘要
-    parts = []
+
+    # 返回 JSON 字符串数组，避免前端 JSON.parse 报错
+    member_items = []
     for m in members:
         name = name_map.get(m.character_id, "未知")
         position = m.position or "成员"
-        parts.append(f"{name}（{position}）")
-    
-    return "、".join(parts)
+        member_items.append(f"{name}（{position}）")
+
+    return json.dumps(member_items, ensure_ascii=False)
 
 
 @router.get("", response_model=CharacterListResponse, summary="获取角色列表")

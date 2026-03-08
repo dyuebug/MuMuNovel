@@ -449,6 +449,11 @@ async def get_available_models(
             
     except httpx.HTTPStatusError as e:
         logger.error(f"获取模型列表失败 (HTTP {e.response.status_code}): {e.response.text}")
+        if e.response.status_code == 404:
+            raise HTTPException(
+                status_code=400,
+                detail=f"该 API 提供商不支持模型列表查询接口 (/models 返回 404)，请手动输入模型名称。当前请求地址: {api_base_url.rstrip('/')}/models"
+            )
         raise HTTPException(
             status_code=400,
             detail=f"无法从 API 获取模型列表 (HTTP {e.response.status_code})"
@@ -1100,6 +1105,7 @@ async def activate_preset(
     settings.llm_model = config['llm_model']
     settings.temperature = config['temperature']
     settings.max_tokens = config['max_tokens']
+    settings.system_prompt = config.get('system_prompt')
     
     # 更新所有预设的is_active状态
     for preset in presets:
@@ -1181,7 +1187,8 @@ async def create_preset_from_current(
         api_base_url=settings.api_base_url,
         llm_model=settings.llm_model,
         temperature=settings.temperature,
-        max_tokens=settings.max_tokens
+        max_tokens=settings.max_tokens,
+        system_prompt=settings.system_prompt
     )
     
     # 创建预设

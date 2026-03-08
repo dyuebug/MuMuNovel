@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Modal, Button, Card, Statistic, Row, Col, message } from 'antd';
+import { Modal, Button, Card, Statistic, Row, Col, message, theme } from 'antd';
 import { CheckOutlined, CloseOutlined, SwapOutlined } from '@ant-design/icons';
 import ReactDiffViewer from 'react-diff-viewer-continued';
 import { chapterApi } from '../services/api';
@@ -29,6 +29,7 @@ const ChapterContentComparison: React.FC<ChapterContentComparisonProps> = ({
   onApply,
   onDiscard
 }) => {
+  const { token } = theme.useToken();
   const [applying, setApplying] = useState(false);
   const [viewMode, setViewMode] = useState<'split' | 'unified'>('split');
   const [modal, contextHolder] = Modal.useModal();
@@ -188,7 +189,7 @@ const ChapterContentComparison: React.FC<ChapterContentComparisonProps> = ({
           styles={{
             variables: {
               light: {
-                diffViewerBackground: '#fff', // Keep white for diff viewer readability
+                diffViewerBackground: token.colorBgContainer,
                 addedBackground: 'var(--color-success-bg)',
                 addedColor: 'var(--color-text-primary)',
                 removedBackground: 'var(--color-error-bg)',

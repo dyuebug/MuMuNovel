@@ -35,9 +35,10 @@ class OutlineResponse(BaseModel):
     content: str
     structure: Optional[str] = None
     order_index: int
+    has_chapters: Optional[bool] = None
     created_at: datetime
     updated_at: datetime
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 

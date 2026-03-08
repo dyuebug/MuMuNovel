@@ -67,6 +67,49 @@ class ChapterListResponse(BaseModel):
     items: list[ChapterResponse]
 
 
+class AnalysisTaskStatusResponse(BaseModel):
+    """单章节分析任务状态响应"""
+    has_task: bool
+    task_id: Optional[str] = None
+    chapter_id: str
+    status: str
+    progress: int = 0
+    error_message: Optional[str] = None
+    error_code: Optional[str] = None
+    auto_recovered: bool = False
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class BatchAnalysisStatusRequest(BaseModel):
+    """批量查询分析状态请求"""
+    chapter_ids: Optional[List[str]] = Field(None, description="待查询章节ID列表；为空时查询项目下全部章节")
+
+
+class BatchAnalysisStatusResponse(BaseModel):
+    """批量查询分析状态响应"""
+    project_id: str
+    total: int
+    items: Dict[str, AnalysisTaskStatusResponse]
+
+
+class BatchAnalyzeUnanalyzedRequest(BaseModel):
+    """一键分析未分析章节请求"""
+    chapter_ids: Optional[List[str]] = Field(None, description="可选：限定待分析章节ID列表；为空则自动识别项目内全部未分析章节")
+
+
+class BatchAnalyzeUnanalyzedResponse(BaseModel):
+    """一键分析未分析章节响应"""
+    project_id: str
+    total_candidates: int = Field(0, description="候选章节总数（有内容章节）")
+    total_started: int = Field(0, description="本次已启动分析任务数")
+    total_skipped_no_content: int = Field(0, description="跳过：无内容章节数")
+    total_skipped_running: int = Field(0, description="跳过：已在分析中的章节数")
+    total_already_completed: int = Field(0, description="跳过：已完成分析章节数")
+    started_tasks: Dict[str, AnalysisTaskStatusResponse] = Field(default_factory=dict, description="本次启动的分析任务状态映射")
+
+
 class ChapterGenerateRequest(BaseModel):
     """AI生成章节内容的请求模型"""
     style_id: Optional[int] = Field(None, description="写作风格ID，不提供则不使用任何风格")

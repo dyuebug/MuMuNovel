@@ -1,6 +1,4 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ConfigProvider } from 'antd';
-import zhCN from 'antd/locale/zh_CN';
 import ProjectList from './pages/ProjectList';
 import ProjectWizardNew from './pages/ProjectWizardNew';
 import Inspiration from './pages/Inspiration';
@@ -10,6 +8,7 @@ import Outline from './pages/Outline';
 import Characters from './pages/Characters';
 import Careers from './pages/Careers';
 import Relationships from './pages/Relationships';
+import RelationshipGraph from './pages/RelationshipGraph';
 import Organizations from './pages/Organizations';
 import Chapters from './pages/Chapters';
 import ChapterReader from './pages/ChapterReader';
@@ -33,7 +32,7 @@ import './App.css';
 
 function App() {
   return (
-    <ConfigProvider locale={zhCN}>
+    <>
       {/* 🧧 春节喜庆装饰 */}
       <SpringFestival />
       <BrowserRouter
@@ -62,6 +61,7 @@ function App() {
             <Route path="outline" element={<Outline />} />
             <Route path="characters" element={<Characters />} />
             <Route path="relationships" element={<Relationships />} />
+            <Route path="relationships-graph" element={<RelationshipGraph />} />
             <Route path="organizations" element={<Organizations />} />
             <Route path="chapters" element={<Chapters />} />
             <Route path="chapter-analysis" element={<ChapterAnalysis />} />
@@ -74,7 +74,7 @@ function App() {
         </Routes>
         <BackgroundTaskCenter />
       </BrowserRouter>
-    </ConfigProvider>
+    </>
   );
 }
 

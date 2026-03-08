@@ -190,6 +190,7 @@ export interface Outline {
   content: string;
   structure?: string;
   order_index: number;
+  has_chapters?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -630,6 +631,26 @@ export interface AnalysisTask {
   quality_profile_summary?: ChapterQualityProfileSummary | null;
 }
 
+export interface BatchAnalysisStatusResponse {
+  project_id: string;
+  total: number;
+  items: Record<string, AnalysisTask>;
+}
+
+export interface BatchAnalyzeUnanalyzedRequest {
+  chapter_ids?: string[];
+}
+
+export interface BatchAnalyzeUnanalyzedResponse {
+  project_id: string;
+  total_candidates: number;
+  total_started: number;
+  total_skipped_no_content: number;
+  total_skipped_running: number;
+  total_already_completed: number;
+  started_tasks: Record<string, AnalysisTask>;
+}
+
 // 分析结果 - 钩子
 export interface AnalysisHook {
   type: string;
@@ -1040,6 +1061,93 @@ export interface ForeshadowContextResponse {
   pending_resolve: Foreshadow[];
   overdue: Foreshadow[];
   recently_planted: Foreshadow[];
+}
+
+// ==================== 拆书导入类型定义 ====================
+
+export type BookImportTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type BookImportWarningLevel = 'info' | 'warning' | 'error';
+
+export interface BookImportWarning {
+  code: string;
+  message: string;
+  level: BookImportWarningLevel;
+}
+
+export interface BookImportProjectSuggestion {
+  title: string;
+  description?: string;
+  theme?: string;
+  genre?: string;
+  narrative_perspective: string;
+  target_words: number;
+}
+
+export interface BookImportChapter {
+  title: string;
+  content: string;
+  summary?: string;
+  chapter_number: number;
+  outline_title?: string;
+}
+
+export interface BookImportOutline {
+  title: string;
+  content?: string;
+  order_index: number;
+  structure?: Record<string, unknown>;
+}
+
+export interface BookImportTask {
+  task_id: string;
+  status: BookImportTaskStatus;
+  progress: number;
+  message?: string;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BookImportPreview {
+  task_id: string;
+  project_suggestion: BookImportProjectSuggestion;
+  chapters: BookImportChapter[];
+  outlines: BookImportOutline[];
+  warnings: BookImportWarning[];
+}
+
+export interface BookImportApplyPayload {
+  project_suggestion: BookImportProjectSuggestion;
+  chapters: BookImportChapter[];
+  outlines: BookImportOutline[];
+  import_mode?: 'append' | 'overwrite';
+}
+
+export interface BookImportResult {
+  success: boolean;
+  project_id: string;
+  statistics: {
+    chapters: number;
+    outlines: number;
+    generated_careers?: number;
+    generated_entities?: number;
+    generated_world_building?: number;
+  };
+  warnings: BookImportWarning[];
+}
+
+export interface BookImportStepFailure {
+  step_name: string;       // world_building / career_system / characters
+  step_label: string;      // 中文名
+  error: string;           // 错误详情
+  retry_count?: number;    // 已重试次数
+}
+
+export interface BookImportRetryResult {
+  success: boolean;
+  project_id: string;
+  retry_results: Record<string, number>;
+  still_failed: BookImportStepFailure[];
 }
 
 // ==================== 提示词工坊类型定义 ====================

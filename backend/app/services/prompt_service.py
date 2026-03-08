@@ -1,4 +1,4 @@
-"""提示词管理服务"""
+﻿"""提示词管理服务"""
 from typing import Dict, Any, Optional, Tuple
 import json
 import re
@@ -570,6 +570,70 @@ class PromptService:
 ❌ 章节只有信息介绍，没有目标冲突和决策后果
 ❌ 使用调度器口吻（如“执行1.1/调用Agent/方案对比”）
 ❌ 把输出写成流程文档或复盘报告
+</constraints>"""
+
+    # 拆书导入-反向项目提炼
+    BOOK_IMPORT_REVERSE_PROJECT_SUGGESTION = """<system>
+你是资深网文策划编辑，擅长从小说正文中反向提炼项目立项信息。
+</system>
+
+<task>
+基于给定正文片段，提炼项目建议信息。
+
+输出必须是 JSON 对象，且仅包含以下字段：
+- title: 书名
+- description: 项目简介
+- theme: 核心主题
+- genre: 小说类型
+- narrative_perspective: 叙事视角（第一人称 / 第三人称 / 全知视角）
+- target_words: 目标总字数（整数）
+</task>
+
+<input>
+书名：{title}
+正文片段：
+{sampled_text}
+</input>
+
+<constraints>
+- 仅输出 JSON
+- 不要输出 markdown 或解释
+- 信息必须尽量基于正文，不要无依据扩写
+</constraints>"""
+
+    # 拆书导入-反向章节大纲
+    BOOK_IMPORT_REVERSE_OUTLINES = """<system>
+你是资深网文总编与剧情策划，擅长基于已完成章节反向提炼标准化章节大纲。
+</system>
+
+<task>
+根据给定章节正文，输出与系统章节大纲结构兼容的 JSON 数组。
+
+每个元素必须包含：
+- chapter_number
+- title
+- summary
+- scenes
+- characters
+- key_points
+- emotion
+- goal
+</task>
+
+<input>
+书名：{title}
+类型：{genre}
+主题：{theme}
+叙事视角：{narrative_perspective}
+章节范围：第{start_chapter}章 - 第{end_chapter}章
+正文：
+{chapters_text}
+</input>
+
+<constraints>
+- 仅输出 JSON 数组
+- 数组长度必须等于 {expected_count}
+- 不要输出 markdown 或解释
 </constraints>"""
     
     # 大纲续写提示词 V2（RTCO框架 - 简化版）
@@ -3987,6 +4051,21 @@ class PromptService:
                 "description": "根据项目信息生成完整的章节大纲",
                 "parameters": ["title", "theme", "genre", "chapter_count", "narrative_perspective", "target_words", 
                              "time_period", "location", "atmosphere", "rules", "characters_info", "requirements", "mcp_references"]
+            },
+            "BOOK_IMPORT_REVERSE_PROJECT_SUGGESTION": {
+                "name": "拆书导入-反向项目提炼",
+                "category": "拆书导入",
+                "description": "基于正文片段反向提炼项目简介、主题、类型、视角与目标字数",
+                "parameters": ["title", "sampled_text"]
+            },
+            "BOOK_IMPORT_REVERSE_OUTLINES": {
+                "name": "拆书导入-反向章节大纲",
+                "category": "拆书导入",
+                "description": "基于章节正文反向提炼章节大纲结构",
+                "parameters": [
+                    "title", "genre", "theme", "narrative_perspective",
+                    "start_chapter", "end_chapter", "expected_count", "chapters_text"
+                ]
             },
             "OUTLINE_CONTINUE": {
                 "name": "大纲续写",

@@ -73,6 +73,7 @@ class APIKeyPresetConfig(BaseModel):
     llm_model: str = Field(..., description="模型名称")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="温度参数")
     max_tokens: int = Field(default=2000, ge=1, description="最大token数")
+    system_prompt: Optional[str] = Field(default=None, description="系统级别提示词")
 
 
 class APIKeyPreset(BaseModel):
