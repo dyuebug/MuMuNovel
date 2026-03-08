@@ -66,6 +66,20 @@ class PlotAnalyzer:
         self.last_error_message = message
         return message
     
+    @staticmethod
+    def _build_retry_prompt(prompt: str, last_error: str, attempt: int) -> str:
+        """? JSON ?????????????"""
+        retry_reason = (last_error or "??????????? JSON")[:200]
+        return (
+            f"{prompt}\n\n"
+            f"?? ?{attempt}???????????{retry_reason}\n"
+            "???????????????? JSON ???\n"
+            "- ?? markdown ???\n"
+            "- ??????\n"
+            "- ????????????\n"
+            "- ?????????????"
+        )
+
     async def analyze_chapter(
         self,
         chapter_number: int,
@@ -154,30 +168,22 @@ class PlotAnalyzer:
         
         self.last_error_message = None
         last_error = None
-        logger.debug(f"章节分析提示词{prompt}")
+        analysis_max_tokens = max(4000, min(max(word_count or 0, len(analysis_content)) + 1000, 8000))
+        logger.debug(f"???????{prompt}")
+        logger.info(f"?? ?????? max_tokens: {analysis_max_tokens}")
         for attempt in range(1, max_retries + 1):
             try:
-                # 调用AI进行分析
-                logger.info(f"  📡 调用AI分析(内容长度: {len(analysis_content)}字, 尝试 {attempt}/{max_retries})...")
-                accumulated_text = ""
-                
-                try:
-                    async for chunk in self.ai_service.generate_text_stream(
-                        prompt=prompt,
-                        temperature=0.3,  # 降低温度以获得更稳定的JSON输出
-                    ):
-                        accumulated_text += chunk
-                except GeneratorExit:
-                    # 流式响应被中断
-                    logger.warning(f"⚠️ 流式响应被中断(GeneratorExit)，已累积 {len(accumulated_text)} 字符")
-                    # 如果已经累积了足够内容，继续尝试解析
-                    if len(accumulated_text) < 100:
-                        raise Exception(self._set_last_error("AI流式响应中断，返回内容不足"))
-                except Exception as stream_error:
-                    logger.error(f"❌ 流式生成出错: {str(stream_error)}")
-                    raise
-                
-                # 检查响应是否为空
+                # ??AI????
+                current_prompt = prompt if attempt == 1 else self._build_retry_prompt(prompt, last_error or "", attempt)
+                logger.info(f"  ?? ??AI??(????: {len(analysis_content)}?, ?? {attempt}/{max_retries})...")
+                response = await self.ai_service.generate_text(
+                    prompt=current_prompt,
+                    temperature=0.2,
+                    max_tokens=analysis_max_tokens,
+                    auto_mcp=False,
+                    handle_tool_calls=False,
+                )
+                accumulated_text = response.get("content", "") or ""
                 if not accumulated_text or len(accumulated_text.strip()) < 10:
                     logger.warning(f"⚠️ AI响应为空或过短(长度: {len(accumulated_text)}), 尝试 {attempt}/{max_retries}")
                     last_error = self._set_last_error("AI响应为空或过短")

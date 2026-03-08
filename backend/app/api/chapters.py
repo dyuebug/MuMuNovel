@@ -2425,26 +2425,15 @@ async def analyze_chapter_background(
         )
         logger.info(f"📋 后台分析 - 已获取{len(project_characters)}个角色信息用于分析")
 
-        if task.style_id is not None:
-            analysis_quality_profile = quality_profile or await _resolve_chapter_quality_profile(
-                db_session=db_session,
-                user_id=user_id,
-                project=project,
-                style_id=task.style_id,
-                enable_mcp=True,
-                prefer_project_default_style=not bool(task.style_id),
-                log_prefix="批量分析",
-            )
-        else:
-            analysis_quality_profile = quality_profile or await _resolve_chapter_quality_profile(
-                db_session=db_session,
-                user_id=user_id,
-                project=project,
-                style_id=None,
-                enable_mcp=True,
-                prefer_project_default_style=True,
-                log_prefix="章节分析",
-            )
+        analysis_quality_profile = quality_profile or await _resolve_chapter_quality_profile(
+            db_session=db_session,
+            user_id=user_id,
+            project=project,
+            style_id=None,
+            enable_mcp=True,
+            prefer_project_default_style=True,
+            log_prefix="章节分析",
+        )
 
         # 定义重试回调函数，用于在重试时更新任务状态
         async def on_retry_callback(attempt: int, max_retries: int, wait_time: int, error_reason: str):
@@ -3028,7 +3017,7 @@ async def generate_chapter_content_stream(
                 )
                 prompt_quality_kwargs = _build_prompt_quality_kwargs(quality_profile)
                 analysis_quality_kwargs = _build_analysis_quality_kwargs(quality_profile)
-                style_id = quality_profile.get("resolved_style_id")
+                resolved_style_id = quality_profile.get("resolved_style_id")
                 style_content = quality_profile.get("style_content") or ""
                 style_name = quality_profile.get("style_name") or ""
                 style_preset_id = quality_profile.get("style_preset_id") or ""
@@ -3110,7 +3099,6 @@ async def generate_chapter_content_stream(
                             chapter_title=current_chapter.title,
                             chapter_outline=chapter_context.chapter_outline,
                             target_word_count=target_word_count,
-                            genre=project.genre or '未设定',
                             narrative_perspective=chapter_perspective,
                             world_time_period=project.world_time_period or '未设定',
                             world_location=project.world_location or '未设定',
@@ -3135,7 +3123,6 @@ async def generate_chapter_content_stream(
                             chapter_title=current_chapter.title,
                             chapter_outline=chapter_context.chapter_outline,
                             target_word_count=target_word_count,
-                            genre=project.genre or '未设定',
                             narrative_perspective=chapter_perspective,
                             world_time_period=project.world_time_period or '未设定',
                             world_location=project.world_location or '未设定',
@@ -3168,7 +3155,6 @@ async def generate_chapter_content_stream(
                             chapter_outline=chapter_context.chapter_outline,
                             target_word_count=target_word_count,
                             continuation_point=chapter_context.continuation_point,
-                            genre=project.genre or '未设定',
                             narrative_perspective=chapter_perspective,
                             world_time_period=project.world_time_period or '未设定',
                             world_location=project.world_location or '未设定',
@@ -3194,7 +3180,6 @@ async def generate_chapter_content_stream(
                             chapter_title=current_chapter.title,
                             chapter_outline=chapter_context.chapter_outline,
                             target_word_count=target_word_count,
-                            genre=project.genre or '未设定',
                             narrative_perspective=chapter_perspective,
                             world_time_period=project.world_time_period or '未设定',
                             world_location=project.world_location or '未设定',
@@ -4817,6 +4802,14 @@ async def execute_batch_generation_in_order(
                     
                     if not chapter:
                         raise Exception(f"章节 {chapter_id} 不存在")
+                    project_result = await db_session.execute(
+                        select(Project).where(Project.id == chapter.project_id)
+                    )
+                    project = project_result.scalar_one_or_none()
+                    
+                    if not project:
+                        raise Exception(f"Project {chapter.project_id} not found")
+                    
                     
                     # 更新当前章节序号和重试次数
                     async with write_lock:
@@ -5229,7 +5222,6 @@ async def generate_single_chapter_for_batch(
                 chapter_title=chapter.title,
                 chapter_outline=chapter_context.chapter_outline,
                 target_word_count=target_word_count,
-                genre=project.genre or '未设定',
                 narrative_perspective=chapter_perspective,
                 world_time_period=project.world_time_period or '未设定',
                 world_location=project.world_location or '未设定',
@@ -5253,7 +5245,6 @@ async def generate_single_chapter_for_batch(
                 chapter_title=chapter.title,
                 chapter_outline=chapter_context.chapter_outline,
                 target_word_count=target_word_count,
-                genre=project.genre or '未设定',
                 narrative_perspective=chapter_perspective,
                 world_time_period=project.world_time_period or '未设定',
                 world_location=project.world_location or '未设定',
@@ -5286,7 +5277,6 @@ async def generate_single_chapter_for_batch(
                 chapter_outline=chapter_context.chapter_outline,
                 target_word_count=target_word_count,
                 continuation_point=chapter_context.continuation_point,
-                genre=project.genre or '未设定',
                 narrative_perspective=chapter_perspective,
                 world_time_period=project.world_time_period or '未设定',
                 world_location=project.world_location or '未设定',
@@ -5310,7 +5300,6 @@ async def generate_single_chapter_for_batch(
                 chapter_title=chapter.title,
                 chapter_outline=chapter_context.chapter_outline,
                 target_word_count=target_word_count,
-                genre=project.genre or '未设定',
                 narrative_perspective=chapter_perspective,
                 world_time_period=project.world_time_period or '未设定',
                 world_location=project.world_location or '未设定',

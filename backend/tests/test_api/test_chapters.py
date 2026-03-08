@@ -391,13 +391,6 @@ async def test_should_build_context_with_expected_builder_during_generate_stream
     assert response.status_code == 200
 
     events = parse_sse_data(response.text)
-    if any(
-        event.get("type") == "error"
-        and "style_id" in str(event.get("error") or event.get("message") or "")
-        for event in events
-    ):
-        pytest.xfail("generate-stream 当前存在 style_id 局部变量回归，待接口修复后恢复严格断言")
-
     assert any(event.get("type") == "chunk" for event in events)
     assert any(event.get("type") == "result" for event in events)
 
