@@ -423,6 +423,15 @@ _CHAPTER_META_PREFIXES = {
     "正文：",
 }
 
+_LIGHT_TEMPLATE_SENTENCE_LEADS = (
+    "下一秒",
+    "那一瞬",
+)
+
+_LIGHT_TEMPLATE_SIMILE_PATTERN = re.compile(
+    "像(?P<body>[^，。！？；\n]{1,18})一样"
+)
+
 
 def _is_likely_chapter_meta_line(line: str) -> bool:
     stripped = (line or "").strip()
@@ -442,6 +451,60 @@ def _contains_chapter_workflow_meta_text(text: str) -> bool:
     if not text:
         return False
     return any(_is_likely_chapter_meta_line(line) for line in text.splitlines())
+
+
+def _lightly_polish_template_phrases(text: str) -> str:
+    """??????????????? AI ????"""
+    cleaned = text
+
+    sentence_boundary_pattern = r"""(^|[。！？!?；;\n])([“"'‘「『（(]*)"""
+    sentence_lead_suffix_pattern = r"""(?:[，、,]\s*)?"""
+    leading_punctuation_pattern = re.compile(
+        r"""(^|[。！？!?；;\n])([“"'‘「『（(]*)[，、,]\s*""",
+        flags=re.MULTILINE,
+    )
+
+    for sentence_lead in _LIGHT_TEMPLATE_SENTENCE_LEADS:
+        pattern = re.compile(
+            sentence_boundary_pattern
+            + re.escape(sentence_lead)
+            + sentence_lead_suffix_pattern,
+            flags=re.MULTILINE,
+        )
+        seen_count = 0
+
+        def _replace_sentence_lead(match: re.Match[str]) -> str:
+            nonlocal seen_count
+            seen_count += 1
+            if seen_count <= 1:
+                return match.group(0)
+            return f"{match.group(1)}{match.group(2)}"
+
+        cleaned = pattern.sub(_replace_sentence_lead, cleaned)
+
+    simile_seen_count = 0
+
+    def _replace_simile(match: re.Match[str]) -> str:
+        nonlocal simile_seen_count
+        simile_seen_count += 1
+        if simile_seen_count <= 2:
+            return match.group(0)
+
+        body = (match.group("body") or "").strip()
+        if not body:
+            return match.group(0)
+        return f"像{body}那样"
+
+    cleaned = _LIGHT_TEMPLATE_SIMILE_PATTERN.sub(_replace_simile, cleaned)
+    cleaned = re.sub("像是有什么", "像有", cleaned)
+    cleaned = re.sub("像有什么", "像有", cleaned)
+    cleaned = leading_punctuation_pattern.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}",
+        cleaned,
+    )
+    return cleaned
+
+
 
 
 def _sanitize_generated_narrative_text(text: str) -> tuple[str, int]:
@@ -466,6 +529,8 @@ def _sanitize_generated_narrative_text(text: str) -> tuple[str, int]:
         kept_lines.append(raw_line)
 
     cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(kept_lines)).strip()
+    cleaned = _lightly_polish_template_phrases(cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned, removed_line_count
 
 
@@ -893,30 +958,46 @@ def _build_checker_history_payload(checker_result: Dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def _build_critical_issues_text(checker_result: Optional[Dict[str, Any]]) -> str:
-    """提取严重问题文本，作为自动修订输入。"""
+def _collect_reviser_priority_issues(
+    checker_result: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     if not checker_result:
-        return "（无严重问题）"
+        return []
 
-    critical = [
-        i for i in (checker_result.get("issues") or [])
-        if isinstance(i, dict) and i.get("severity") == "critical"
-    ]
-    if not critical:
-        return "（无严重问题）"
+    priority_issues: List[Dict[str, Any]] = []
+    for severity in ("critical", "major"):
+        for issue in (checker_result.get("issues") or []):
+            if isinstance(issue, dict) and issue.get("severity") == severity:
+                priority_issues.append(issue)
+    return priority_issues
+
+
+def _build_reviser_priority_issues_text(checker_result: Optional[Dict[str, Any]]) -> str:
+    """提取自动修订高优先问题文本，作为自动修订输入。"""
+    priority_issues = _collect_reviser_priority_issues(checker_result)
+    if not priority_issues:
+        return "（无高优先问题）"
 
     lines: List[str] = []
-    for idx, issue in enumerate(critical[:8], start=1):
+    for idx, issue in enumerate(priority_issues[:8], start=1):
+        severity = str(issue.get("severity") or "major").lower()
+        severity_label = "严重" if severity == "critical" else "中等"
         category = str(issue.get("category") or "未分类")
         location = str(issue.get("location") or "未定位")
         impact = str(issue.get("impact") or "").strip()
         suggestion = str(issue.get("suggestion") or "").strip()
-        lines.append(f"{idx}. [{category}] 位置: {location}")
+        lines.append(f"{idx}. [{severity_label}][{category}] 位置: {location}")
         if impact:
             lines.append(f"   影响: {impact}")
         if suggestion:
             lines.append(f"   建议: {suggestion}")
     return "\n".join(lines)
+
+
+
+def _build_critical_issues_text(checker_result: Optional[Dict[str, Any]]) -> str:
+    """兼容旧调用，内部已扩展为提取 critical + major。"""
+    return _build_reviser_priority_issues_text(checker_result)
 
 
 def _build_reviser_history_payload(reviser_result: Dict[str, Any]) -> str:
@@ -998,7 +1079,9 @@ async def _run_chapter_text_reviser(
     """根据质检结果生成自动修订草稿，仅建议，不覆盖正文。"""
     counts = (checker_result or {}).get("severity_counts") or {}
     critical_count = int(counts.get("critical") or 0)
-    if critical_count <= 0:
+    major_count = int(counts.get("major") or 0)
+    priority_issue_count = critical_count + major_count
+    if priority_issue_count <= 0:
         return None
 
     try:
@@ -1012,7 +1095,7 @@ async def _run_chapter_text_reviser(
             chapter_number=chapter_number,
             chapter_title=chapter_title or f"第{chapter_number}章",
             chapter_content=(chapter_content or "")[:12000],
-            critical_issues_text=_build_critical_issues_text(checker_result),
+            critical_issues_text=_build_reviser_priority_issues_text(checker_result),
             checker_result_json=checker_json[:12000],
             _template_key="CHAPTER_TEXT_REVISER",
             **_build_prompt_quality_kwargs(quality_profile),
@@ -1047,7 +1130,7 @@ async def _run_chapter_text_reviser(
             applied_issues = [
                 i.get("suggestion", "")
                 for i in (checker_result.get("issues") or [])
-                if isinstance(i, dict) and i.get("severity") == "critical" and i.get("suggestion")
+                if isinstance(i, dict) and i.get("severity") in {"critical", "major"} and i.get("suggestion")
             ][:3]
 
         unresolved_issues: List[str] = []
@@ -1059,11 +1142,14 @@ async def _run_chapter_text_reviser(
 
         reviser_result = {
             "critical_count": critical_count,
+            "major_count": major_count,
+            "priority_issue_count": priority_issue_count,
             "applied_critical_count": len(applied_issues),
+            "applied_issue_count": len(applied_issues),
             "applied_issues": applied_issues,
             "unresolved_issues": unresolved_issues,
             "change_summary": str(
-                result.get("change_summary") or "已按严重问题生成自动修订草稿"
+                result.get("change_summary") or "已根据高优先问题生成自动修订草稿"
             ).strip()[:220],
             "revised_word_count": len(revised_text),
             "meta_lines_removed": removed_meta_lines,
@@ -1071,9 +1157,11 @@ async def _run_chapter_text_reviser(
             "revised_text_preview": revised_text[:500],
         }
         logger.info(
-            "✅ 自动修订草稿完成: critical=%s, applied=%s, unresolved=%s",
+            "自动修订草稿已生成: priority=%s, critical=%s, major=%s, applied=%s, unresolved=%s",
+            priority_issue_count,
             critical_count,
-            reviser_result["applied_critical_count"],
+            major_count,
+            reviser_result["applied_issue_count"],
             len(unresolved_issues),
         )
         return reviser_result
@@ -1269,10 +1357,26 @@ def _build_auto_revision_draft_payload(
     if not revised_text_preview and revised_text:
         revised_text_preview = revised_text[:500]
 
+    critical_count = int(reviser_result.get("critical_count") or 0)
+    major_count = int(reviser_result.get("major_count") or 0)
+    priority_issue_count = int(
+        reviser_result.get("priority_issue_count") or (critical_count + major_count)
+    )
+    applied_issue_count = int(
+        reviser_result.get("applied_issue_count")
+        or reviser_result.get("applied_critical_count")
+        or 0
+    )
+
     payload: Dict[str, Any] = {
         "history_id": history_id,
-        "critical_count": reviser_result.get("critical_count", 0),
-        "applied_critical_count": reviser_result.get("applied_critical_count", 0),
+        "critical_count": critical_count,
+        "major_count": major_count,
+        "priority_issue_count": priority_issue_count,
+        "applied_critical_count": int(
+            reviser_result.get("applied_critical_count") or applied_issue_count
+        ),
+        "applied_issue_count": applied_issue_count,
         "change_summary": reviser_result.get("change_summary"),
         "revised_word_count": reviser_result.get("revised_word_count", len(revised_text)),
         "unresolved_issues": reviser_result.get("unresolved_issues", []),
@@ -1291,7 +1395,10 @@ def _build_reviser_apply_history_payload(
     source_history_id: str,
     source_created_at: Optional[datetime],
     critical_count: int,
+    major_count: int,
+    priority_issue_count: int,
     applied_critical_count: int,
+    applied_issue_count: int,
     old_word_count: int,
     new_word_count: int,
     stale_applied: bool,
@@ -1302,7 +1409,10 @@ def _build_reviser_apply_history_payload(
         "source_history_id": source_history_id,
         "source_created_at": source_created_at.isoformat() if source_created_at else None,
         "critical_count": critical_count,
+        "major_count": major_count,
+        "priority_issue_count": priority_issue_count,
         "applied_critical_count": applied_critical_count,
+        "applied_issue_count": applied_issue_count,
         "old_word_count": old_word_count,
         "new_word_count": new_word_count,
         "stale_applied": stale_applied,
@@ -1463,6 +1573,10 @@ def _build_chapter_runtime_system_prompt(
         "- 情绪要有层次：至少体现“触发→压住/回避→外露”中的两个阶段，避免一步到位喊口号",
         "- 遇到设定术语时，用角色追问、吐槽或误解补一句人话解释，不要硬塞定义",
         "- 关键桥段尽量写成“动作→反馈→余波/代价”，避免整段概述",
+        "- 同一自然段尽量只保留1个有效比喻；慎用“像……/仿佛/像……一样”，能直写动作结果就别先比喻",
+        "- 少用“下一秒/那一瞬/忽然/不是……而是……”等固定推进句式，连续出现会削弱真人感",
+        "- 疼痛、惊惧和异常优先写身体反应、动作受阻、物件变化和现场声响，不要每次都靠抽象意象撑气氛",
+        "- 允许出现朴素、直接、略笨的过渡句，不要把每一句都写成有设计感的“好句子”",
         "- 保留少量口语颗粒和不完美句，不要把每句都修成工整书面句",
         "- 避免模板化开头和总结腔，如“总之/综上/值得注意的是/在这个过程中”",
         "- 禁止出现“执行X.X/调用Agent/方案A-B/复盘”这类流程文本",
@@ -2507,10 +2621,22 @@ async def analyze_chapter_background(
         if checker_report_text:
             analysis_report_text = f"{analysis_report_text}\n\n{checker_report_text}"
         if reviser_result:
+            draft_priority_issue_count = int(
+                reviser_result.get("priority_issue_count")
+                or (
+                    int(reviser_result.get("critical_count") or 0)
+                    + int(reviser_result.get("major_count") or 0)
+                )
+            )
+            draft_applied_issue_count = int(
+                reviser_result.get("applied_issue_count")
+                or reviser_result.get("applied_critical_count")
+                or 0
+            )
             reviser_summary_lines = [
                 "【第三版自动修订草稿】",
-                f"- 严重问题数：{reviser_result.get('critical_count', 0)}",
-                f"- 已修复建议数：{reviser_result.get('applied_critical_count', 0)}",
+                f"- 高优先问题数：{draft_priority_issue_count}（严重{reviser_result.get('critical_count', 0)} / 中等{reviser_result.get('major_count', 0)}）",
+                f"- 已处理问题数：{draft_applied_issue_count}",
                 f"- 草稿字数：{reviser_result.get('revised_word_count', 0)}",
                 f"- 说明：{reviser_result.get('change_summary', '已生成草稿')}",
             ]
@@ -3647,14 +3773,15 @@ async def get_analysis_task_status(
     auto_recovered = False
     current_time = datetime.now()
     
-    # 自动恢复卡住的任务
-    # 注意：后端分析有3次重试机制，每次重试会重置 started_at
-    # 所以超时时间需要足够长以支持完整的重试周期（约5分钟）
+    # ?????????
+    # ???running ?????????? progress=20??? PlotAnalyzer ??? AI ?????
+    # ??/????????????????????????
     if task.status == 'running':
-        # 检查是否正在重试（error_message 包含"重试"信息）
-        is_retrying = task.error_message and '重试' in task.error_message
-        # 如果正在重试，给予更长的超时时间（5分钟），否则3分钟
-        timeout_minutes = 5 if is_retrying else 3
+        # ?????????error_message ??"??"???
+        is_retrying = task.error_message and '??' in task.error_message
+        # running ????????????????? AI ??? 3 ?????
+        # ?????????????????????????
+        timeout_minutes = 15 if is_retrying else 10
         
         # 如果任务在running状态超过超时时间，标记为失败
         if task.started_at and (current_time - task.started_at) > timedelta(minutes=timeout_minutes):
@@ -3923,7 +4050,20 @@ async def apply_auto_revision_draft(
             source_history_id=reviser_history.id,
             source_created_at=reviser_history.created_at,
             critical_count=int(reviser_result.get("critical_count") or 0),
+            major_count=int(reviser_result.get("major_count") or 0),
+            priority_issue_count=int(
+                reviser_result.get("priority_issue_count")
+                or (
+                    int(reviser_result.get("critical_count") or 0)
+                    + int(reviser_result.get("major_count") or 0)
+                )
+            ),
             applied_critical_count=int(reviser_result.get("applied_critical_count") or 0),
+            applied_issue_count=int(
+                reviser_result.get("applied_issue_count")
+                or reviser_result.get("applied_critical_count")
+                or 0
+            ),
             old_word_count=old_word_count,
             new_word_count=new_word_count,
             stale_applied=stale,
@@ -5720,6 +5860,16 @@ async def regenerate_chapter_stream(
                 yield await tracker.saving("保存重新生成的内容...", 0.5)
                 
                 # 更新任务状态
+                full_content, removed_meta_lines = _sanitize_generated_narrative_text(full_content)
+                if removed_meta_lines > 0:
+                    logger.warning(
+                        f"????????? {removed_meta_lines} ?????????? chapter_id={chapter_id}"
+                    )
+                if not full_content.strip():
+                    raise ValueError("?????????????????")
+                if _contains_chapter_workflow_meta_text(full_content):
+                    raise ValueError("???????????????????")
+
                 regen_task.status = 'completed'
                 regen_task.regenerated_content = full_content
                 regen_task.regenerated_word_count = len(full_content)
@@ -6205,12 +6355,19 @@ async def apply_partial_regenerate(
     await verify_project_access(chapter.project_id, user_id, db)
     
     # 获取参数
-    new_text = apply_request.get('new_text', '')
+    new_text_raw = str(apply_request.get('new_text', '') or '')
     start_position = apply_request.get('start_position', 0)
     end_position = apply_request.get('end_position', 0)
-    
+
+    new_text, removed_meta_lines = _sanitize_generated_narrative_text(new_text_raw)
+    if removed_meta_lines > 0:
+        logger.warning(
+            f"??????????? {removed_meta_lines} ?????????? chapter_id={chapter_id}"
+        )
     if not new_text:
-        raise HTTPException(status_code=400, detail="新内容不能为空")
+        raise HTTPException(status_code=400, detail="??????")
+    if _contains_chapter_workflow_meta_text(new_text):
+        raise HTTPException(status_code=400, detail="????????????")
     
     # 验证位置有效性
     content_length = len(chapter.content)

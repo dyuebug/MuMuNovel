@@ -451,6 +451,46 @@ async def test_should_stream_partial_regenerate_with_mock_ai_response(
     assert fake_ai_service.calls[-1]["max_tokens"] == 500
 
 
+
+async def test_should_sanitize_partial_regenerate_text_before_apply(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="\u5c40\u90e8\u6539\u5199\u6e05\u6d17\u6d4b\u8bd5",
+        content="ABCDEFG",
+        status="completed",
+    )
+
+    new_text = (
+        "\u4e0b\u4e00\u79d2\uff0c\u95e8\u5916\u6709\u4eba\u6572\u4e86\u4e24\u4e0b\u73bb\u7483\u3002\n"
+        "\u4e0b\u4e00\u79d2\uff0c\u6536\u94f6\u53f0\u4e0b\u7684\u706f\u706d\u4e86\u3002"
+    )
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/apply-partial-regenerate",
+        json={
+            "new_text": new_text,
+            "start_position": 1,
+            "end_position": 4,
+        },
+    )
+    assert response.status_code == 200
+
+    async with chapters_session_factory() as session:
+        saved_chapter = await session.get(Chapter, chapter.id)
+        assert saved_chapter is not None
+        assert saved_chapter.content == (
+            "A"
+            "\u4e0b\u4e00\u79d2\uff0c\u95e8\u5916\u6709\u4eba\u6572\u4e86\u4e24\u4e0b\u73bb\u7483\u3002\n"
+            "\u6536\u94f6\u53f0\u4e0b\u7684\u706f\u706d\u4e86\u3002"
+            "EFG"
+        )
 async def test_should_return_400_when_partial_regenerate_position_invalid(
     chapters_client,
     chapters_session_factory,
@@ -868,6 +908,8 @@ def test_should_build_runtime_prompt_with_serial_style_guard():
 
     assert "连载感优先" in runtime_prompt
     assert "情绪要有层次" in runtime_prompt
+    assert "慎用“像……/仿佛/像……一样”" in runtime_prompt
+    assert "少用“下一秒/那一瞬/忽然/不是……而是……”" in runtime_prompt
     assert "台词长度控制：单句以6-18字为主" not in runtime_prompt
 
 
@@ -901,6 +943,8 @@ def test_should_append_serial_guard_when_apply_style_to_prompt():
 
     assert "连载强化要点" in merged_prompt
     assert "人物情绪要有层次" in merged_prompt
+    assert "比喻要克制" in merged_prompt
+    assert "慎用高频定式句法" in merged_prompt
 
 
 def test_should_detect_workflow_meta_line_in_generated_content():
@@ -937,6 +981,45 @@ def test_should_sanitize_generated_narrative_text_keep_story_lines():
     assert "调用Agent" not in cleaned
     assert "门外的风越刮越急" in cleaned
     assert "她没有回答" in cleaned
+
+
+def test_should_lightly_polish_high_frequency_template_phrases():
+    first_next = "下一秒，门外有人敲了两下玻璃。"
+    second_next = "下一秒，收银台下的灯灭了。"
+    first_moment = "那一瞬，他听见冰柜里咯地一声。"
+    second_moment = "那一瞬，她已经把刀收回袖口。"
+    first_simile = "雨丝像细针一样扎在玻璃上。"
+    second_simile = "风声像砂纸一样刮过卷帘门。"
+    third_simile = "裂纹像旧瓷一样往手背上爬。"
+    vague_simile = "地上的水痕像有什么东西拖过去。"
+
+    raw_text = "\n".join(
+        [
+            first_next,
+            second_next,
+            first_moment,
+            second_moment,
+            first_simile,
+            second_simile,
+            third_simile,
+            vague_simile,
+        ]
+    )
+
+    cleaned, removed_count = chapters_api._sanitize_generated_narrative_text(raw_text)
+
+    assert removed_count == 0
+    assert first_next in cleaned
+    assert second_next not in cleaned
+    assert "收银台下的灯灭了。" in cleaned
+    assert first_moment in cleaned
+    assert second_moment not in cleaned
+    assert "她已经把刀收回袖口。" in cleaned
+    assert first_simile in cleaned
+    assert second_simile in cleaned
+    assert "裂纹像旧瓷那样往手背上爬。" in cleaned
+    assert "像有什么东西" not in cleaned
+    assert "像有东西拖过去。" in cleaned
 
 
 def test_should_mark_ai_identity_disclaimer_as_meta_text():
@@ -1233,6 +1316,70 @@ async def test_should_regenerate_chapter_stream_and_persist_regeneration_task(
         assert task.regenerated_content == "新内容"
 
 
+
+async def test_should_sanitize_regenerated_content_before_persisting_task(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="\u6574\u7ae0\u91cd\u5199\u6e05\u6d17\u6d4b\u8bd5",
+        content="\u539f\u6587",
+        status="completed",
+    )
+
+    class FakeRegenerator:
+        def __init__(self, ai_service):
+            self.ai_service = ai_service
+
+        async def regenerate_with_feedback(self, **kwargs):
+            yield {
+                "type": "chunk",
+                "content": "\u4e0b\u4e00\u79d2\uff0c\u95e8\u5916\u6709\u4eba\u6572\u4e86\u4e24\u4e0b\u73bb\u7483\u3002\n",
+            }
+            yield {
+                "type": "chunk",
+                "content": "\u4e0b\u4e00\u79d2\uff0c\u6536\u94f6\u53f0\u4e0b\u7684\u706f\u706d\u4e86\u3002\n",
+            }
+            yield {
+                "type": "chunk",
+                "content": "\u5730\u4e0a\u7684\u6c34\u75d5\u50cf\u6709\u4ec0\u4e48\u4e1c\u897f\u62d6\u8fc7\u53bb\u3002",
+            }
+
+        def calculate_content_diff(self, original_content, new_content):
+            return {"similarity": 10.0, "difference": 90.0}
+
+    monkeypatch.setattr(chapters_api, "ChapterRegenerator", FakeRegenerator)
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/regenerate-stream",
+        json={
+            "modification_source": "custom",
+            "custom_instructions": "\u4f18\u5316\u8282\u594f",
+            "target_word_count": 500,
+            "focus_areas": ["pacing"],
+            "auto_apply": False,
+        },
+    )
+    assert response.status_code == 200
+
+    events = parse_sse_data(response.text)
+    result_event = next(event for event in events if event.get("type") == "result")
+    task_id = result_event["data"]["task_id"]
+
+    async with chapters_session_factory() as session:
+        task = await session.get(RegenerationTask, task_id)
+        assert task is not None
+        assert task.regenerated_content == (
+            "\u4e0b\u4e00\u79d2\uff0c\u95e8\u5916\u6709\u4eba\u6572\u4e86\u4e24\u4e0b\u73bb\u7483\u3002\n"
+            "\u6536\u94f6\u53f0\u4e0b\u7684\u706f\u706d\u4e86\u3002\n"
+            "\u5730\u4e0a\u7684\u6c34\u75d5\u50cf\u6709\u4e1c\u897f\u62d6\u8fc7\u53bb\u3002"
+        )
 async def test_should_return_400_when_regenerate_chapter_content_is_empty(
     chapters_client,
     chapters_session_factory,
@@ -1318,7 +1465,10 @@ async def test_should_return_analysis_checker_and_auto_revision_payloads(
     }
     reviser_result = {
         "critical_count": 1,
+        "major_count": 0,
+        "priority_issue_count": 1,
         "applied_critical_count": 1,
+        "applied_issue_count": 1,
         "change_summary": "补足心理与动作承接",
         "revised_text": "修订后正文，门后异响逼近，他终于承认自己在害怕。",
         "revised_text_preview": "修订后正文，门后异响逼近",
@@ -1376,6 +1526,9 @@ async def test_should_return_analysis_checker_and_auto_revision_payloads(
     assert body["memories"][0]["title"] == "结尾悬念"
     assert body["checker_result"]["severity_counts"]["critical"] == 1
     assert body["auto_revision_draft"]["critical_count"] == 1
+    assert body["auto_revision_draft"]["major_count"] == 0
+    assert body["auto_revision_draft"]["priority_issue_count"] == 1
+    assert body["auto_revision_draft"]["applied_issue_count"] == 1
     assert body["auto_revision_draft"]["is_stale"] is True
     assert body["auto_revision_draft"].get("revised_text") is None
 
@@ -1404,7 +1557,10 @@ async def test_should_get_and_apply_auto_revision_draft(
 
     reviser_result = {
         "critical_count": 2,
+        "major_count": 1,
+        "priority_issue_count": 3,
         "applied_critical_count": 2,
+        "applied_issue_count": 3,
         "change_summary": "修复关键断裂",
         "revised_text": "新正文已经覆盖旧正文，并补足了承接。",
         "revised_text_preview": "新正文已经覆盖旧正文",
@@ -1431,6 +1587,9 @@ async def test_should_get_and_apply_auto_revision_draft(
     assert draft_response.status_code == 200
     draft = draft_response.json()["auto_revision_draft"]
     assert draft["history_id"] == history_id
+    assert draft["priority_issue_count"] == 3
+    assert draft["major_count"] == 1
+    assert draft["applied_issue_count"] == 3
     assert draft["revised_text"] == reviser_result["revised_text"]
     assert draft["is_stale"] is False
 
@@ -1458,34 +1617,140 @@ async def test_should_get_and_apply_auto_revision_draft(
         assert any(history.model == "chapter_text_reviser_apply_v1" for history in histories)
 
 
+async def test_should_generate_auto_revision_draft_when_only_major_issues_exist(
+    chapters_session_factory,
+    monkeypatch,
+):
+    captured_prompt: dict[str, str] = {}
+
+    class StubAIService:
+        async def call_with_json_retry(self, **kwargs):
+            captured_prompt["prompt"] = kwargs["prompt"]
+            return {
+                "revised_text": "她把门把手握得更紧，呼吸也跟着停了一拍。门外没有再响，可那份迟疑终于落在了动作上。",
+                "applied_issues": ["补足人物迟疑过程", "把异响的即时反应落到动作里"],
+                "unresolved_issues": ["结尾悬念还能再收紧一点"],
+                "change_summary": "已补足 major 级承接与动作反应",
+            }
+
+    async def fake_get_template(*args, **kwargs):
+        return chapters_api.PromptService.CHAPTER_TEXT_REVISER
+
+    monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
+
+    checker_result = {
+        "severity_counts": {"critical": 0, "major": 2, "minor": 1},
+        "issues": [
+            {
+                "severity": "major",
+                "category": "衔接",
+                "location": "开头第2段",
+                "impact": "人物从听见异响到决定开门缺少迟疑过程",
+                "suggestion": "补足人物迟疑过程",
+            },
+            {
+                "severity": "major",
+                "category": "表现",
+                "location": "结尾第1段",
+                "impact": "异响出现后缺少即时动作反馈",
+                "suggestion": "把异响的即时反应落到动作里",
+            },
+            {
+                "severity": "minor",
+                "category": "文风",
+                "location": "结尾句",
+                "impact": "个别表达偏模板化",
+                "suggestion": "压缩套句",
+            },
+        ],
+    }
+
+    async with chapters_session_factory() as session:
+        reviser_result = await chapters_api._run_chapter_text_reviser(
+            ai_service=StubAIService(),
+            db_session=session,
+            user_id="test-user",
+            chapter_number=1,
+            chapter_title="凌晨三点半的多余顾客",
+            chapter_content="门外的异响又响了一次，她把手从门把上挪开，又按了回去。",
+            checker_result=checker_result,
+        )
+
+    assert reviser_result is not None
+    assert reviser_result["critical_count"] == 0
+    assert reviser_result["major_count"] == 2
+    assert reviser_result["priority_issue_count"] == 2
+    assert reviser_result["applied_issue_count"] == 2
+    assert "高优先问题清单" in captured_prompt["prompt"]
+    assert "补足人物迟疑过程" in captured_prompt["prompt"]
+    assert "把异响的即时反应落到动作里" in captured_prompt["prompt"]
+
+
 async def test_should_auto_recover_stale_analysis_status_and_keep_none_compatible(
     chapters_client,
     chapters_session_factory,
     mock_user,
 ):
     project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
-    chapter = await create_chapter(
+    chapter_none = await create_chapter(
         chapters_session_factory,
         project_id=project.id,
         chapter_number=1,
-        title="分析状态章节",
-        content="正文",
+        title="?????????",
+        content="??",
+        status="completed",
+    )
+    chapter_active = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title="????????",
+        content="??",
+        status="completed",
+    )
+    chapter_stale_running = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=3,
+        title="??????????",
+        content="??",
+        status="completed",
+    )
+    chapter_stale_pending = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=4,
+        title="???????????",
+        content="??",
         status="completed",
     )
 
-    none_response = await chapters_client.get(f"/api/chapters/{chapter.id}/analysis/status")
+    none_response = await chapters_client.get(f"/api/chapters/{chapter_none.id}/analysis/status")
     assert none_response.status_code == 200
     none_body = none_response.json()
     assert none_body["has_task"] is False
     assert none_body["status"] == "none"
     assert none_body["task_id"] is None
 
-    stale_running_time = datetime.now() - timedelta(minutes=4)
+    active_running_time = datetime.now() - timedelta(minutes=4)
+    stale_running_time = datetime.now() - timedelta(minutes=11)
     stale_pending_time = datetime.now() - timedelta(minutes=4)
+
     async with chapters_session_factory() as session:
         session.add(
             AnalysisTask(
-                chapter_id=chapter.id,
+                chapter_id=chapter_active.id,
+                user_id=mock_user.user_id,
+                project_id=project.id,
+                status="running",
+                progress=20,
+                started_at=active_running_time,
+                created_at=active_running_time,
+            )
+        )
+        session.add(
+            AnalysisTask(
+                chapter_id=chapter_stale_running.id,
                 user_id=mock_user.user_id,
                 project_id=project.id,
                 status="running",
@@ -1494,21 +1759,9 @@ async def test_should_auto_recover_stale_analysis_status_and_keep_none_compatibl
                 created_at=stale_running_time,
             )
         )
-        await session.commit()
-
-    recovered_running = await chapters_client.get(f"/api/chapters/{chapter.id}/analysis/status")
-    assert recovered_running.status_code == 200
-    running_body = recovered_running.json()
-    assert running_body["has_task"] is True
-    assert running_body["status"] == "failed"
-    assert running_body["auto_recovered"] is True
-    assert running_body["error_code"] == "timeout"
-    assert "自动恢复" in (running_body["error_message"] or "")
-
-    async with chapters_session_factory() as session:
         session.add(
             AnalysisTask(
-                chapter_id=chapter.id,
+                chapter_id=chapter_stale_pending.id,
                 user_id=mock_user.user_id,
                 project_id=project.id,
                 status="pending",
@@ -1518,7 +1771,24 @@ async def test_should_auto_recover_stale_analysis_status_and_keep_none_compatibl
         )
         await session.commit()
 
-    recovered_pending = await chapters_client.get(f"/api/chapters/{chapter.id}/analysis/status")
+    active_running = await chapters_client.get(f"/api/chapters/{chapter_active.id}/analysis/status")
+    assert active_running.status_code == 200
+    active_running_body = active_running.json()
+    assert active_running_body["has_task"] is True
+    assert active_running_body["status"] == "running"
+    assert active_running_body["auto_recovered"] is False
+    assert active_running_body["progress"] == 20
+
+    recovered_running = await chapters_client.get(f"/api/chapters/{chapter_stale_running.id}/analysis/status")
+    assert recovered_running.status_code == 200
+    running_body = recovered_running.json()
+    assert running_body["has_task"] is True
+    assert running_body["status"] == "failed"
+    assert running_body["auto_recovered"] is True
+    assert running_body["error_code"] == "timeout"
+    assert "自动恢复" in (running_body["error_message"] or "")
+
+    recovered_pending = await chapters_client.get(f"/api/chapters/{chapter_stale_pending.id}/analysis/status")
     assert recovered_pending.status_code == 200
     pending_body = recovered_pending.json()
     assert pending_body["status"] == "failed"

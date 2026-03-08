@@ -85,3 +85,16 @@ def test_should_cover_v3_templates_in_sync_rules():
 
     missing = sorted(required_sync_keys - sync_keys)
     assert not missing, f"同步规则缺少第三版关键模板: {missing}"
+
+
+def test_should_keep_anti_ai_guards_in_chapter_templates_and_checker():
+    source = PROMPT_SERVICE_PATH.read_text(encoding="utf-8")
+
+    chapter_block = _extract_template_block(source, "CHAPTER_GENERATION_ONE_TO_ONE")
+    checker_block = _extract_template_block(source, "CHAPTER_TEXT_CHECKER")
+
+    assert "比喻要省着用" in chapter_block
+    assert "句法去模板" in chapter_block
+    assert "高密度重复“像……/仿佛/像……一样”比喻" in chapter_block
+    assert "模板腔与AI味" in checker_block
+    assert "模板腔AI味" in checker_block

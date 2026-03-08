@@ -67,20 +67,20 @@ MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
     # novel-quality-system 一期：章节生成 / 再生成 / 分析 / checker / reviser
     # 旧 current hash 进入 legacy_hashes，确保仍持有上一版系统副本的用户可继续自动升级。
     "CHAPTER_GENERATION_ONE_TO_MANY": TemplateSyncRule(
-        legacy_hashes={"fdfdb8c6b7619804", "f305d7120838aecd", "2a96431c1531b106", "13c9d99619a23a1c"},
-        current_hashes={"d2bbe814848e5f9f"},
+        legacy_hashes={"fdfdb8c6b7619804", "f305d7120838aecd", "2a96431c1531b106", "13c9d99619a23a1c", "d2bbe814848e5f9f"},
+        current_hashes={"3368513cbfa3caf6"},
     ),
     "CHAPTER_GENERATION_ONE_TO_MANY_NEXT": TemplateSyncRule(
-        legacy_hashes={"9e3c0ccc044ffa31", "f0d0bb2c56983aed", "67a9162db2ebc58d", "432774bf3dce35bd"},
-        current_hashes={"b2be5d86131f2ecb"},
+        legacy_hashes={"9e3c0ccc044ffa31", "f0d0bb2c56983aed", "67a9162db2ebc58d", "432774bf3dce35bd", "b2be5d86131f2ecb"},
+        current_hashes={"c99bc9980fe6db34"},
     ),
     "CHAPTER_GENERATION_ONE_TO_ONE": TemplateSyncRule(
-        legacy_hashes={"4ccddf983a56e3e9", "31a22bb8610a4cf1", "47f61ef943be70f0", "7f142c0d96b09f46"},
-        current_hashes={"b6d8b5e856fd31b2"},
+        legacy_hashes={"4ccddf983a56e3e9", "31a22bb8610a4cf1", "47f61ef943be70f0", "7f142c0d96b09f46", "b6d8b5e856fd31b2"},
+        current_hashes={"7df471339fedfc28"},
     ),
     "CHAPTER_GENERATION_ONE_TO_ONE_NEXT": TemplateSyncRule(
-        legacy_hashes={"cc18fe04ad17ac2b", "93979c953dcb6e64", "81d34cc949d6cbb5", "84052e4bffec16b5"},
-        current_hashes={"b0e14d751b144ae4"},
+        legacy_hashes={"cc18fe04ad17ac2b", "93979c953dcb6e64", "81d34cc949d6cbb5", "84052e4bffec16b5", "b0e14d751b144ae4"},
+        current_hashes={"1d0d1fff45d60901"},
     ),
     "PARTIAL_REGENERATE": TemplateSyncRule(
         legacy_hashes={"d4fc0961075e426e", "ed4e95fe9b82e4aa", "9da113b6496d8c12", "a68a83eac483fac3", "e67146339ab8be86"},
@@ -91,12 +91,12 @@ MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
         current_hashes={"d2ca69f9780cad1c"},
     ),
     "CHAPTER_TEXT_CHECKER": TemplateSyncRule(
-        legacy_hashes={"a001c74bdb617ddd", "2a45fbfc19da1bad"},
-        current_hashes={"dcd2871dd7d5c7ad"},
+        legacy_hashes={"a001c74bdb617ddd", "2a45fbfc19da1bad", "dcd2871dd7d5c7ad"},
+        current_hashes={"e06b2fb025f23bc2"},
     ),
     "CHAPTER_TEXT_REVISER": TemplateSyncRule(
-        legacy_hashes={"5dcb73fff31d9af8"},
-        current_hashes={"2de875f700923c91"},
+        legacy_hashes={"5dcb73fff31d9af8", "2de875f700923c91"},
+        current_hashes={"8475f864975444b4"},
     ),
     "OUTLINE_EXPAND_SINGLE": TemplateSyncRule(
         legacy_hashes={"819bf64ee54d5efe", "5bf412df5065cdb7"},
