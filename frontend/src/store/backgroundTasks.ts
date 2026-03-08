@@ -42,9 +42,13 @@ interface BackgroundTaskState {
   upsertTask: (task: UpsertTaskPayload) => void;
   removeTask: (taskId: string) => void;
   clearTerminalTasks: () => void;
+  pruneExpiredTerminalTasks: () => void;
 }
 
 const TERMINAL_STATUSES: BackgroundTaskRuntimeStatus[] = ['completed', 'failed', 'cancelled'];
+const TERMINAL_TASK_RETENTION_MS = 1000 * 60 * 60 * 12;
+const MAX_PERSISTED_TASKS = 30;
+const MAX_TERMINAL_TASKS = 12;
 
 const toTimestamp = (value?: string | null): number | undefined => {
   if (!value) return undefined;
@@ -57,6 +61,27 @@ const normalizeProgress = (progress?: number): number => {
   if (progress < 0) return 0;
   if (progress > 100) return 100;
   return Math.round(progress);
+};
+
+const compactTasks = (tasks: Record<string, TrackedBackgroundTask>): Record<string, TrackedBackgroundTask> => {
+  const now = Date.now();
+  const allTasks = Object.values(tasks).sort((a, b) => b.updatedAt - a.updatedAt);
+
+  const activeTasks = allTasks.filter((task) => !TERMINAL_STATUSES.includes(task.status));
+  const recentTerminalTasks = allTasks
+    .filter((task) => TERMINAL_STATUSES.includes(task.status))
+    .filter((task) => now - (task.completedAt ?? task.updatedAt) <= TERMINAL_TASK_RETENTION_MS)
+    .slice(0, MAX_TERMINAL_TASKS);
+
+  const keep = new Set(
+    [...activeTasks, ...recentTerminalTasks]
+      .slice(0, MAX_PERSISTED_TASKS)
+      .map((item) => item.taskId)
+  );
+
+  return Object.fromEntries(
+    Object.entries(tasks).filter(([taskId]) => keep.has(taskId))
+  );
 };
 
 export const useBackgroundTaskStore = create<BackgroundTaskState>()(
@@ -102,15 +127,7 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
         };
 
         const nextTasks = { ...get().tasks, [task.task_id]: merged };
-
-        // 控制本地缓存规模，避免历史任务无限累积。
-        const allTasks = Object.values(nextTasks).sort((a, b) => b.updatedAt - a.updatedAt);
-        const keep = new Set(allTasks.slice(0, 30).map((item) => item.taskId));
-        const compacted = Object.fromEntries(
-          Object.entries(nextTasks).filter(([taskId]) => keep.has(taskId))
-        );
-
-        set({ tasks: compacted });
+        set({ tasks: compactTasks(nextTasks) });
       },
       removeTask: (taskId) => {
         const next = { ...get().tasks };
@@ -123,10 +140,16 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
         );
         set({ tasks: active });
       },
+      pruneExpiredTerminalTasks: () => {
+        set({ tasks: compactTasks(get().tasks) });
+      },
     }),
     {
       name: 'background-task-store',
       partialize: (state) => ({ tasks: state.tasks }),
+      onRehydrateStorage: () => (state) => {
+        state?.pruneExpiredTerminalTasks();
+      },
     }
   )
 );

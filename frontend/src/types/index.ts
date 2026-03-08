@@ -764,7 +764,10 @@ export interface ChapterTextCheckerResult {
 export interface ChapterAutoRevisionDraft {
   history_id: string | null;
   critical_count: number;
+  major_count: number;
+  priority_issue_count: number;
   applied_critical_count: number;
+  applied_issue_count: number;
   change_summary: string | null;
   revised_word_count: number;
   unresolved_issues: string[];

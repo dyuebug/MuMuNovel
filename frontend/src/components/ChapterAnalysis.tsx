@@ -323,6 +323,10 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
   const checkerMinorCount = checkerSeverityCounts?.minor || 0;
   const checkerIssueTotal = checkerIssues.length;
   const draftUnresolvedIssues = draftResult?.unresolved_issues || [];
+  const draftCriticalCount = draftResult?.critical_count ?? 0;
+  const draftMajorCount = draftResult?.major_count ?? 0;
+  const draftPriorityIssueCount = draftResult?.priority_issue_count ?? (draftCriticalCount + draftMajorCount);
+  const draftAppliedIssueCount = draftResult?.applied_issue_count ?? draftResult?.applied_critical_count ?? 0;
 
   const getSeverityTagColor = (severity?: string) => {
     switch ((severity || '').toLowerCase()) {
@@ -476,11 +480,12 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                     description={
                       <div>
                         <p style={{ marginBottom: 8 }}>
-                          {draftResult.change_summary || '系统已根据严重问题生成一份自动修订草稿，您可以先预览，再决定是否应用。'}
+                          {draftResult.change_summary || '系统已根据高优先问题生成一份自动修订草稿，您可以先预览，再决定是否应用。'}
                         </p>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: draftUnresolvedIssues.length > 0 ? 12 : 0 }}>
-                          <Tag color="red">严重问题 {draftResult.critical_count}</Tag>
-                          <Tag color="green">已处理 {draftResult.applied_critical_count}</Tag>
+                          <Tag color="red">高优先问题 {draftPriorityIssueCount}</Tag>
+                          {draftMajorCount > 0 && <Tag color="orange">中等问题 {draftMajorCount}</Tag>}
+                          <Tag color="green">已处理 {draftAppliedIssueCount}</Tag>
                           <Tag color="blue">草稿字数 {draftResult.revised_word_count}</Tag>
                           {draftResult.is_stale && <Tag color="orange">草稿已过期</Tag>}
                         </div>
@@ -974,10 +979,10 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
               <Card size="small" style={{ marginBottom: 16 }}>
                 <Row gutter={16}>
                   <Col span={8}>
-                    <Statistic title="严重问题" value={draftResult.critical_count} valueStyle={{ color: 'var(--color-error)' }} />
+                    <Statistic title="高优先问题" value={draftPriorityIssueCount} valueStyle={{ color: 'var(--color-error)' }} />
                   </Col>
                   <Col span={8}>
-                    <Statistic title="已处理" value={draftResult.applied_critical_count} valueStyle={{ color: 'var(--color-success)' }} />
+                    <Statistic title="已处理" value={draftAppliedIssueCount} valueStyle={{ color: 'var(--color-success)' }} />
                   </Col>
                   <Col span={8}>
                     <Statistic title="草稿字数" value={draftResult.revised_word_count} />
