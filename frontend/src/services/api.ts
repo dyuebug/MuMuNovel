@@ -23,9 +23,14 @@ import type {
   Chapter,
   ChapterCreate,
   ChapterUpdate,
+  CreativeMode,
+  PlotStage,
+  StoryFocus,
   GenerateOutlineRequest,
   GenerateCharacterRequest,
+  PolishBatchRequest,
   PolishTextRequest,
+  PolishTextResponse,
   GenerateCharactersResponse,
   GenerateOutlineResponse,
   Settings,
@@ -65,6 +70,7 @@ interface MCPPluginSimpleCreate {
 
 interface RequestConfigWithToastControl {
   suppressErrorToast?: boolean;
+  suppressErrorLog?: boolean;
   params?: Record<string, unknown>;
 }
 
@@ -93,7 +99,7 @@ const showErrorToastWithThrottle = (errorMessage: string) => {
 };
 
 const silentRequestConfig = <T extends RequestConfigWithToastControl>(config?: T): T =>
-  ({ ...(config || {}), suppressErrorToast: true } as T);
+  ({ ...(config || {}), suppressErrorToast: true, suppressErrorLog: true } as T);
 
 const formatChapterAnalysisError = (
   errorCode?: import('../types').AnalysisTask['error_code'],
@@ -175,6 +181,7 @@ api.interceptors.response.use(
   (error) => {
     const requestConfig = (error?.config || {}) as RequestConfigWithToastControl;
     const suppressErrorToast = Boolean(requestConfig.suppressErrorToast);
+    const suppressErrorLog = Boolean(requestConfig.suppressErrorLog);
     let errorMessage = '请求失败';
 
     if (error.response) {
@@ -236,7 +243,9 @@ api.interceptors.response.use(
     if (!suppressErrorToast) {
       showErrorToastWithThrottle(errorMessage);
     }
-    console.error('API Error:', errorMessage, error);
+    if (!suppressErrorLog) {
+      console.error('API Error:', errorMessage, error);
+    }
 
     return Promise.reject(error);
   }
@@ -980,6 +989,9 @@ const buildChapterGenerateTaskMessage = (
   return `${taskName}排队中 (${completed}/${total})`;
 };
 
+let chapterActiveTasksEndpointSupported = true;
+let backgroundTasksEndpointSupported = true;
+
 const upsertChapterTaskToStore = (data: {
   taskType: ChapterGenerationTaskType;
   taskId: string;
@@ -1032,6 +1044,13 @@ export const chapterBatchTaskApi = {
       style_id: number;
       target_word_count: number;
       model?: string;
+      creative_mode?: CreativeMode;
+      story_focus?: StoryFocus;
+      plot_stage?: PlotStage;
+      story_creation_brief?: string;
+      story_repair_summary?: string;
+      story_repair_targets?: string[];
+      story_preserve_strengths?: string[];
     }
   ) => {
     const created = await api.post<unknown, ChapterBatchGenerateResponse>(
@@ -1097,7 +1116,13 @@ export const chapterBatchTaskApi = {
   },
 
   listActiveTasks: async (limit = 20) => {
-    const response = await api.get<
+    if (!chapterActiveTasksEndpointSupported) {
+      return { total: 0, items: [] };
+    }
+
+    let response;
+    try {
+      response = await api.get<
       unknown,
       {
         total: number;
@@ -1117,9 +1142,16 @@ export const chapterBatchTaskApi = {
           completed_at?: string | null;
         }>;
       }
-    >('/chapters/batch-generate/active-tasks', {
+    >('/chapters/batch-generate/active-tasks', silentRequestConfig({
       params: { limit },
-    });
+    }));
+    } catch (error: any) {
+      if (error?.response?.status === 404) {
+        chapterActiveTasksEndpointSupported = false;
+        return { total: 0, items: [] };
+      }
+      throw error;
+    }
 
     for (const task of response.items || []) {
       upsertChapterTaskToStore({
@@ -1184,6 +1216,13 @@ export const chapterSingleTaskApi = {
       target_word_count?: number;
       model?: string;
       narrative_perspective?: string;
+      creative_mode?: CreativeMode;
+      story_focus?: StoryFocus;
+      plot_stage?: PlotStage;
+      story_creation_brief?: string;
+      story_repair_summary?: string;
+      story_repair_targets?: string[];
+      story_preserve_strengths?: string[];
     },
     projectId?: string
   ) => {
@@ -1399,10 +1438,19 @@ export const promptWorkshopApi = {
 
 export const polishApi = {
   polishText: (data: PolishTextRequest) =>
-    api.post<unknown, { polished_text: string }>('/polish', data),
+    api.post<unknown, PolishTextResponse>('/polish', data),
 
-  polishBatch: (texts: string[]) =>
-    api.post<unknown, { polished_texts: string[] }>('/polish/batch', { texts }),
+  polishBatch: (data: PolishBatchRequest | string[]) =>
+    api.post<unknown, {
+      total: number;
+      results: Array<{
+        index: number;
+        original: string;
+        polished: string;
+        word_count_before: number;
+        word_count_after: number;
+      }>;
+    }>('/polish/batch', Array.isArray(data) ? { texts: data } : data),
 };
 
 export interface BackgroundTaskStatus {
@@ -1470,10 +1518,23 @@ export const backgroundTaskApi = {
     active_only?: boolean;
     limit?: number;
   }) => {
-    const data = await api.get<unknown, BackgroundTaskListResponse>(
-      '/background-tasks',
-      silentRequestConfig({ params })
-    );
+    if (!backgroundTasksEndpointSupported) {
+      return { total: 0, items: [] } as BackgroundTaskListResponse;
+    }
+
+    let data: BackgroundTaskListResponse;
+    try {
+      data = await api.get<unknown, BackgroundTaskListResponse>(
+        '/background-tasks',
+        silentRequestConfig({ params })
+      );
+    } catch (error: any) {
+      if (error?.response?.status === 404) {
+        backgroundTasksEndpointSupported = false;
+        return { total: 0, items: [] } as BackgroundTaskListResponse;
+      }
+      throw error;
+    }
     for (const item of data.items || []) {
       useBackgroundTaskStore.getState().upsertTask(item);
     }
@@ -1543,6 +1604,7 @@ export const inspirationApi = {
     description?: string;
     theme?: string;
     genre?: string | string[];
+    narrative_perspective?: string;
   }) =>
     api.post<unknown, {
       title: string;
@@ -1550,6 +1612,7 @@ export const inspirationApi = {
       theme: string;
       genre: string[];
       narrative_perspective: string;
+      error?: string;
     }>('/inspiration/quick-generate', data),
 };
 
@@ -1699,6 +1762,8 @@ export const wizardStreamApi = {
       requirements?: string;
       provider?: string;
       model?: string;
+      creative_mode?: CreativeMode;
+      story_focus?: StoryFocus;
     },
     options?: SSEClientOptions
   ) => runBackgroundTaskWithPolling<GenerateOutlineResponse>(

@@ -1,17 +1,28 @@
-import { useState, useEffect, useRef } from 'react';
+﻿import { Suspense, lazy, memo, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Button, Modal, Form, Input, Select, message, Row, Col, Empty, Tabs, Divider, Typography, Space, InputNumber, Checkbox, theme } from 'antd';
 import { ThunderboltOutlined, UserOutlined, TeamOutlined, PlusOutlined, ExportOutlined, ImportOutlined, DownloadOutlined } from '@ant-design/icons';
 import { useStore } from '../store';
 import { useCharacterSync } from '../store/hooks';
 import { charactersPageGridConfig } from '../components/CardStyles';
 import { CharacterCard } from '../components/CharacterCard';
-import { SSELoadingOverlay } from '../components/SSELoadingOverlay';
+import type { CSSProperties } from 'react';
 import type { Character, ApiError } from '../types';
 import { backgroundTaskApi, characterApi } from '../services/api';
-import api from '../services/api';
+import { getCachedProjectCareers, loadProjectCareers } from '../services/projectCareers';
+
+
 
 const { Title } = Typography;
 const { TextArea } = Input;
+
+
+
+const LazySSELoadingOverlay = lazy(async () => {
+  const module = await import('../components/SSELoadingOverlay');
+  return { default: module.SSELoadingOverlay };
+});
+
+
 
 interface Career {
   id: string;
@@ -20,11 +31,64 @@ interface Career {
   max_stage: number;
 }
 
+
+
 // 副职业数据类型
 interface SubCareerData {
   career_id: string;
   stage: number;
 }
+
+
+
+interface SelectableCharacterCardProps {
+  item: Character;
+  selected: boolean;
+  cardColStyle: CSSProperties;
+  onToggle: (id: string) => void;
+  onEdit: (character: Character) => void;
+  onDelete: (id: string) => void;
+  onExport: (id: string) => void;
+}
+
+
+
+const SelectableCharacterCard = memo(function SelectableCharacterCard({
+  item,
+  selected,
+  cardColStyle,
+  onToggle,
+  onEdit,
+  onDelete,
+  onExport,
+}: SelectableCharacterCardProps) {
+  return (
+    <Col
+      xs={24}
+      sm={charactersPageGridConfig.sm}
+      md={charactersPageGridConfig.md}
+      lg={charactersPageGridConfig.lg}
+      xl={charactersPageGridConfig.xl}
+      style={cardColStyle}
+    >
+      <div style={{ position: 'relative' }}>
+        <Checkbox
+          checked={selected}
+          onChange={() => onToggle(item.id)}
+          style={{ position: 'absolute', top: 8, left: 8, zIndex: 1 }}
+        />
+        <CharacterCard
+          character={item}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onExport={() => onExport(item.id)}
+        />
+      </div>
+    </Col>
+  );
+});
+
+
 
 // 角色创建表单值类型
 interface CharacterFormValues {
@@ -47,6 +111,8 @@ interface CharacterFormValues {
   motto?: string;
   color?: string;
 }
+
+
 
 // 角色创建数据类型
 interface CharacterCreateData {
@@ -71,6 +137,8 @@ interface CharacterCreateData {
   color?: string;
 }
 
+
+
 // 角色更新数据类型
 interface CharacterUpdateData {
   name?: string;
@@ -92,9 +160,15 @@ interface CharacterUpdateData {
   color?: string;
 }
 
+
+
+
+const INITIAL_CHARACTER_RENDER_COUNT = 8;
+
 export default function Characters() {
   const { token } = theme.useToken();
-  const { currentProject, characters } = useStore();
+  const currentProject = useStore((state) => state.currentProject);
+  const storeCharacters = useStore((state) => state.characters);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isCancellingTask, setIsCancellingTask] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -116,19 +190,81 @@ export default function Characters() {
   const taskPollTimerRef = useRef<number | null>(null);
   const currentTaskIdRef = useRef<string | null>(null);
 
+
+
   const {
     refreshCharacters,
     deleteCharacter
   } = useCharacterSync();
 
-  useEffect(() => {
-    if (currentProject?.id) {
-      refreshCharacters();
-      fetchCareers();
+
+
+  const characters = useMemo(() => {
+    if (!currentProject?.id) {
+      return [];
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+
+
+    return storeCharacters.filter((character) => character.project_id === currentProject.id);
+  }, [currentProject?.id, storeCharacters]);
+
+
+
+  const fetchCareers = useCallback(async (projectId = currentProject?.id) => {
+    if (!projectId) return;
+
+
+
+    try {
+      const nextCareers = await loadProjectCareers(projectId);
+      setMainCareers(nextCareers.mainCareers);
+      setSubCareers(nextCareers.subCareers);
+    } catch (error) {
+      console.error('load careers failed:', error);
+    }
   }, [currentProject?.id]);
+
+
+
+  const ensureCareersLoaded = useCallback((projectId = currentProject?.id) => {
+    if (!projectId) return;
+
+
+
+    const cachedCareers = getCachedProjectCareers(projectId);
+    if (cachedCareers) {
+      setMainCareers(cachedCareers.mainCareers);
+      setSubCareers(cachedCareers.subCareers);
+      return;
+    }
+
+
+
+    void fetchCareers(projectId);
+  }, [currentProject?.id, fetchCareers]);
+
+
+
+  useEffect(() => {
+    if (!currentProject?.id) return;
+
+    const projectId = currentProject.id;
+    const cachedCareers = getCachedProjectCareers(projectId);
+    const hasProjectCharacters = useStore.getState().characters.some((character) => character.project_id === projectId);
+
+    if (!hasProjectCharacters) {
+      void refreshCharacters(projectId);
+    }
+
+    if (cachedCareers) {
+      setMainCareers(cachedCareers.mainCareers);
+      setSubCareers(cachedCareers.subCareers);
+    }
+  }, [currentProject?.id, refreshCharacters]);
   const [modal, contextHolder] = Modal.useModal();
+
+
 
   useEffect(() => {
     return () => {
@@ -140,29 +276,18 @@ export default function Characters() {
     };
   }, []);
 
-  const fetchCareers = async () => {
-    if (!currentProject?.id) return;
-    try {
-      const response = await api.get<unknown, { main_careers: Career[]; sub_careers: Career[] }>('/careers', {
-        params: { project_id: currentProject.id }
-      });
-      setMainCareers(response.main_careers || []);
-      setSubCareers(response.sub_careers || []);
-    } catch (error) {
-      console.error('获取职业列表失败:', error);
-    }
-  };
 
-  if (!currentProject) return null;
 
-  const handleDeleteCharacter = async (id: string) => {
+  const handleDeleteCharacter = useCallback(async (id: string) => {
     try {
       await deleteCharacter(id);
-      message.success('删除成功');
+      message.success('\u5220\u9664\u6210\u529f');
     } catch {
-      message.error('删除失败');
+      message.error('\u5220\u9664\u5931\u8d25');
     }
-  };
+  }, [deleteCharacter]);
+
+
 
   const stopTaskPolling = () => {
     if (taskPollTimerRef.current) {
@@ -171,16 +296,22 @@ export default function Characters() {
     }
   };
 
+
+
   const startTaskPolling = (taskId: string, successMessage: string) => {
     stopTaskPolling();
     currentTaskIdRef.current = taskId;
     setIsCancellingTask(false);
+
+
 
     const poll = async () => {
       try {
         const task = await backgroundTaskApi.getTaskStatus(taskId);
         setProgress(task.progress || 0);
         setProgressMessage(task.message || '');
+
+
 
         if (task.status === 'completed') {
           stopTaskPolling();
@@ -192,6 +323,8 @@ export default function Characters() {
           return;
         }
 
+
+
         if (task.status === 'failed') {
           stopTaskPolling();
           currentTaskIdRef.current = null;
@@ -200,6 +333,8 @@ export default function Characters() {
           message.error(task.error || task.message || '生成失败');
           return;
         }
+
+
 
         if (task.status === 'cancelled') {
           stopTaskPolling();
@@ -213,11 +348,15 @@ export default function Characters() {
       }
     };
 
+
+
     void poll();
     taskPollTimerRef.current = window.setInterval(() => {
       void poll();
     }, 1500);
   };
+
+
 
   const handleGenerateBackground = async (values: { name?: string; role_type: string; background?: string }) => {
     if (isGenerating) {
@@ -225,21 +364,27 @@ export default function Characters() {
       return;
     }
 
+
+
     setIsGenerating(true);
     setIsCancellingTask(false);
     setProgress(0);
     setProgressMessage('正在创建后台任务...');
 
+
+
     try {
       const task = await backgroundTaskApi.createTask({
         task_type: 'character_generate',
-        project_id: currentProject.id,
+        project_id: currentProject!.id,
         payload: {
           name: values.name,
           role_type: values.role_type,
           background: values.background,
         }
       });
+
+
 
       message.success('后台角色生成任务已启动，可继续进行其他操作');
       currentTaskIdRef.current = task.task_id;
@@ -254,6 +399,8 @@ export default function Characters() {
     }
   };
 
+
+
   const handleGenerateOrganizationBackground = async (values: {
     name?: string;
     organization_type?: string;
@@ -265,15 +412,19 @@ export default function Characters() {
       return;
     }
 
+
+
     setIsGenerating(true);
     setIsCancellingTask(false);
     setProgress(0);
     setProgressMessage('正在创建后台任务...');
 
+
+
     try {
       const task = await backgroundTaskApi.createTask({
         task_type: 'organization_generate',
-        project_id: currentProject.id,
+        project_id: currentProject!.id,
         payload: {
           name: values.name,
           organization_type: values.organization_type,
@@ -281,6 +432,8 @@ export default function Characters() {
           requirements: values.requirements,
         }
       });
+
+
 
       message.success('后台组织生成任务已启动，可继续进行其他操作');
       currentTaskIdRef.current = task.task_id;
@@ -295,11 +448,15 @@ export default function Characters() {
     }
   };
 
+
+
   const handleCancelGeneratingTask = async () => {
     const taskId = currentTaskIdRef.current;
     if (!taskId || isCancellingTask) {
       return;
     }
+
+
 
     setIsCancellingTask(true);
     try {
@@ -318,9 +475,13 @@ export default function Characters() {
     }
   };
 
+
+
   const handleGenerate = async (values: { name?: string; role_type: string; background?: string }) => {
     return handleGenerateBackground(values);
   };
+
+
 
   const handleGenerateOrganization = async (values: {
     name?: string;
@@ -331,13 +492,17 @@ export default function Characters() {
     return handleGenerateOrganizationBackground(values);
   };
 
+
+
   const handleCreateCharacter = async (values: CharacterFormValues) => {
     try {
       const createData: CharacterCreateData = {
-        project_id: currentProject.id,
+        project_id: currentProject!.id,
         name: values.name,
         is_organization: createType === 'organization',
       };
+
+
 
       if (createType === 'character') {
         // 角色字段
@@ -370,6 +535,8 @@ export default function Characters() {
         createData.role_type = 'supporting'; // 组织默认为配角
       }
 
+
+
       await characterApi.createCharacter(createData);
       message.success(`${createType === 'character' ? '角色' : '组织'}创建成功`);
       setIsCreateModalOpen(false);
@@ -380,29 +547,51 @@ export default function Characters() {
     }
   };
 
-  const handleEditCharacter = (character: Character) => {
+
+
+  const handleEditCharacter = useCallback((character: Character) => {
     setEditingCharacter(character);
 
-    // 提取副职业数据（包含职业ID和阶段）
+
+
     const subCareerData: SubCareerData[] = character.sub_careers?.map((sc) => ({
       career_id: sc.career_id,
       stage: sc.stage || 1
     })) || [];
 
+
+
     editForm.setFieldsValue({
       ...character,
       sub_career_data: subCareerData
     });
+
+
+
+    if (!character.is_organization) {
+      ensureCareersLoaded(character.project_id);
+    }
+
+
+
     setIsEditModalOpen(true);
-  };
+  }, [editForm, ensureCareersLoaded]);
+
+
+
+
 
   const handleUpdateCharacter = async (values: CharacterFormValues) => {
     if (!editingCharacter) return;
+
+
 
     try {
       // 提取副职业数据，剩余的作为更新数据
       const { sub_career_data: subCareerData, ...restValues } = values;
       const updateData: CharacterUpdateData = { ...restValues };
+
+
 
       // 转换为sub_careers格式
       if (subCareerData && Array.isArray(subCareerData) && subCareerData.length > 0) {
@@ -410,6 +599,8 @@ export default function Characters() {
       } else {
         updateData.sub_careers = JSON.stringify([]);
       }
+
+
 
       await characterApi.updateCharacter(editingCharacter.id, updateData);
       message.success('更新成功');
@@ -423,9 +614,13 @@ export default function Characters() {
     }
   };
 
-  const handleDeleteCharacterWrapper = (id: string) => {
-    handleDeleteCharacter(id);
-  };
+
+
+  const handleDeleteCharacterWrapper = useCallback((id: string) => {
+    void handleDeleteCharacter(id);
+  }, [handleDeleteCharacter]);
+
+
 
   // 导出选中的角色/组织
   const handleExportSelected = async () => {
@@ -433,6 +628,8 @@ export default function Characters() {
       message.warning('请至少选择一个角色或组织');
       return;
     }
+
+
 
     try {
       await characterApi.exportCharacters(selectedCharacters);
@@ -444,16 +641,20 @@ export default function Characters() {
     }
   };
 
+
+
   // 导出单个角色/组织
-  const handleExportSingle = async (characterId: string) => {
+  const handleExportSingle = useCallback(async (characterId: string) => {
     try {
       await characterApi.exportCharacters([characterId]);
-      message.success('导出成功');
+      message.success('\u5bfc\u51fa\u6210\u529f');
     } catch (error) {
-      message.error('导出失败');
-      console.error('导出错误:', error);
+      message.error('\u5bfc\u51fa\u5931\u8d25');
+      console.error('export failed:', error);
     }
-  };
+  }, []);
+
+
 
   // 处理文件选择
   const handleFileSelect = async (file: File) => {
@@ -475,6 +676,8 @@ export default function Characters() {
         });
         return;
       }
+
+
 
       // 显示预览对话框
       modal.confirm({
@@ -507,7 +710,7 @@ export default function Characters() {
         cancelText: '取消',
         onOk: async () => {
           try {
-            const result = await characterApi.importCharacters(currentProject.id, file);
+            const result = await characterApi.importCharacters(currentProject!.id, file);
             
             if (result.success) {
               // 显示导入结果
@@ -595,12 +798,16 @@ export default function Characters() {
     }
   };
 
+
+
   // 切换选择
-  const toggleSelectCharacter = (id: string) => {
+  const toggleSelectCharacter = useCallback((id: string) => {
     setSelectedCharacters(prev =>
       prev.includes(id) ? prev.filter(cid => cid !== id) : [...prev, id]
     );
-  };
+  }, []);
+
+
 
   // 全选/取消全选
   const toggleSelectAll = () => {
@@ -610,6 +817,8 @@ export default function Characters() {
       setSelectedCharacters(displayList.map(c => c.id));
     }
   };
+
+
 
   const showGenerateModal = () => {
     modal.confirm({
@@ -649,6 +858,8 @@ export default function Characters() {
     });
   };
 
+
+
   const showGenerateOrgModal = () => {
     modal.confirm({
       title: 'AI生成组织',
@@ -685,18 +896,173 @@ export default function Characters() {
     });
   };
 
-  const characterList = characters.filter(c => !c.is_organization);
-  const organizationList = characters.filter(c => c.is_organization);
 
-  const getDisplayList = () => {
+
+  const { characterList, organizationList } = useMemo(() => {
+    const nextCharacterList: Character[] = [];
+    const nextOrganizationList: Character[] = [];
+
+    for (const character of characters) {
+      if (character.is_organization) {
+        nextOrganizationList.push(character);
+      } else {
+        nextCharacterList.push(character);
+      }
+    }
+
+    return { characterList: nextCharacterList, organizationList: nextOrganizationList };
+  }, [characters]);
+
+
+
+  const displayList = useMemo(() => {
     if (activeTab === 'character') return characterList;
     if (activeTab === 'organization') return organizationList;
     return characters;
-  };
+  }, [activeTab, characterList, organizationList, characters]);
 
-  const displayList = getDisplayList();
+
+
+  const selectedCharacterIds = useMemo(() => new Set(selectedCharacters), [selectedCharacters]);
+
+
+
+  const [visibleCharacterCount, setVisibleCharacterCount] = useState(INITIAL_CHARACTER_RENDER_COUNT);
+  const [visibleOrganizationCount, setVisibleOrganizationCount] = useState(INITIAL_CHARACTER_RENDER_COUNT);
+
+
+
+  useEffect(() => {
+    const windowWithIdleCallback = window as Window & typeof globalThis & {
+      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    let cancelled = false;
+    let characterIdleHandle: number | null = null;
+    let organizationIdleHandle: number | null = null;
+    let characterTimer: number | null = null;
+    let organizationTimer: number | null = null;
+
+    const scheduleVisibleCount = (
+      totalCount: number,
+      setCount: (value: number) => void,
+      target: 'character' | 'organization',
+    ) => {
+      const initialCount = Math.min(totalCount, INITIAL_CHARACTER_RENDER_COUNT);
+      setCount(initialCount);
+
+      if (totalCount <= initialCount) {
+        return;
+      }
+
+      const flush = () => {
+        if (!cancelled) {
+          setCount(totalCount);
+        }
+      };
+
+      if (typeof windowWithIdleCallback.requestIdleCallback === 'function') {
+        const handle = windowWithIdleCallback.requestIdleCallback(() => flush(), { timeout: 400 });
+        if (target === 'character') {
+          characterIdleHandle = handle;
+        } else {
+          organizationIdleHandle = handle;
+        }
+        return;
+      }
+
+      const timer = window.setTimeout(flush, 80);
+      if (target === 'character') {
+        characterTimer = timer;
+      } else {
+        organizationTimer = timer;
+      }
+    };
+
+    if (activeTab === 'all' || activeTab === 'character') {
+      scheduleVisibleCount(characterList.length, setVisibleCharacterCount, 'character');
+    } else {
+      setVisibleCharacterCount(0);
+    }
+
+    if (activeTab === 'all' || activeTab === 'organization') {
+      scheduleVisibleCount(organizationList.length, setVisibleOrganizationCount, 'organization');
+    } else {
+      setVisibleOrganizationCount(0);
+    }
+
+    return () => {
+      cancelled = true;
+      if (characterIdleHandle !== null && typeof windowWithIdleCallback.cancelIdleCallback === 'function') {
+        windowWithIdleCallback.cancelIdleCallback(characterIdleHandle);
+      }
+      if (organizationIdleHandle !== null && typeof windowWithIdleCallback.cancelIdleCallback === 'function') {
+        windowWithIdleCallback.cancelIdleCallback(organizationIdleHandle);
+      }
+      if (characterTimer !== null) {
+        window.clearTimeout(characterTimer);
+      }
+      if (organizationTimer !== null) {
+        window.clearTimeout(organizationTimer);
+      }
+    };
+  }, [activeTab, characterList.length, organizationList.length]);
+
+
+
+  const visibleCharacterList = useMemo(
+    () => characterList.slice(0, visibleCharacterCount),
+    [characterList, visibleCharacterCount]
+  );
+
+
+
+  const visibleOrganizationList = useMemo(
+    () => organizationList.slice(0, visibleOrganizationCount),
+    [organizationList, visibleOrganizationCount]
+  );
+
+
+
+  const visibleDisplayList = useMemo(() => {
+    if (activeTab === 'character') return visibleCharacterList;
+    if (activeTab === 'organization') return visibleOrganizationList;
+    return characters;
+  }, [activeTab, visibleCharacterList, visibleOrganizationList, characters]);
+
+
+
+  const isProgressiveRenderPending = useMemo(() => {
+    if (activeTab === 'all') {
+      return visibleCharacterList.length < characterList.length || visibleOrganizationList.length < organizationList.length;
+    }
+    return visibleDisplayList.length < displayList.length;
+  }, [
+    activeTab,
+    characterList.length,
+    organizationList.length,
+    visibleCharacterList.length,
+    visibleOrganizationList.length,
+    visibleDisplayList.length,
+    displayList.length,
+  ]);
+
+
 
   const isMobile = window.innerWidth <= 768;
+
+
+
+  const cardColStyle = useMemo(() => ({
+    padding: isMobile ? '4px' : '8px',
+    contentVisibility: 'auto' as const,
+    containIntrinsicSize: isMobile ? '420px' : '360px',
+  }), [isMobile]);
+
+  if (!currentProject) return null;
+
+
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -725,6 +1091,7 @@ export default function Characters() {
             icon={<PlusOutlined />}
             onClick={() => {
               setCreateType('character');
+              ensureCareersLoaded();
               setIsCreateModalOpen(true);
             }}
             size={isMobile ? 'small' : 'middle'}
@@ -779,6 +1146,8 @@ export default function Characters() {
         </Space>
       </div>
 
+
+
       {characters.length > 0 && (
         <div style={{
           position: 'sticky',
@@ -817,6 +1186,8 @@ export default function Characters() {
         </div>
       )}
 
+
+
       {/* 批量选择工具栏 */}
       {characters.length > 0 && (
         <div style={{
@@ -850,6 +1221,8 @@ export default function Characters() {
         </div>
       )}
 
+
+
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {characters.length === 0 ? (
           <Empty description="还没有角色或组织，开始创建吧！" />
@@ -868,33 +1241,22 @@ export default function Characters() {
                           </Title>
                         </Divider>
                       </Col>
-                      {characterList.map((character) => (
-                        <Col
-                          xs={24}
-                          sm={charactersPageGridConfig.sm}
-                          md={charactersPageGridConfig.md}
-                          lg={charactersPageGridConfig.lg}
-                          xl={charactersPageGridConfig.xl}
+                      {visibleCharacterList.map((character) => (
+                        <SelectableCharacterCard
                           key={character.id}
-                          style={{ padding: isMobile ? '4px' : '8px' }}
-                        >
-                          <div style={{ position: 'relative' }}>
-                            <Checkbox
-                              checked={selectedCharacters.includes(character.id)}
-                              onChange={() => toggleSelectCharacter(character.id)}
-                              style={{ position: 'absolute', top: 8, left: 8, zIndex: 1 }}
-                            />
-                            <CharacterCard
-                              character={character}
-                              onEdit={handleEditCharacter}
-                              onDelete={handleDeleteCharacterWrapper}
-                              onExport={() => handleExportSingle(character.id)}
-                            />
-                          </div>
-                        </Col>
+                          item={character}
+                          selected={selectedCharacterIds.has(character.id)}
+                          cardColStyle={cardColStyle}
+                          onToggle={toggleSelectCharacter}
+                          onEdit={handleEditCharacter}
+                          onDelete={handleDeleteCharacterWrapper}
+                          onExport={handleExportSingle}
+                        />
                       ))}
                     </>
                   )}
+
+
 
                   {organizationList.length > 0 && (
                     <>
@@ -906,88 +1268,63 @@ export default function Characters() {
                           </Title>
                         </Divider>
                       </Col>
-                      {organizationList.map((org) => (
-                        <Col
-                          xs={24}
-                          sm={charactersPageGridConfig.sm}
-                          md={charactersPageGridConfig.md}
-                          lg={charactersPageGridConfig.lg}
-                          xl={charactersPageGridConfig.xl}
+                      {visibleOrganizationList.map((org) => (
+                        <SelectableCharacterCard
                           key={org.id}
-                          style={{ padding: isMobile ? '4px' : '8px' }}
-                        >
-                          <div style={{ position: 'relative' }}>
-                            <Checkbox
-                              checked={selectedCharacters.includes(org.id)}
-                              onChange={() => toggleSelectCharacter(org.id)}
-                              style={{ position: 'absolute', top: 8, left: 8, zIndex: 1 }}
-                            />
-                            <CharacterCard
-                              character={org}
-                              onEdit={handleEditCharacter}
-                              onDelete={handleDeleteCharacterWrapper}
-                              onExport={() => handleExportSingle(org.id)}
-                            />
-                          </div>
-                        </Col>
+                          item={org}
+                          selected={selectedCharacterIds.has(org.id)}
+                          cardColStyle={cardColStyle}
+                          onToggle={toggleSelectCharacter}
+                          onEdit={handleEditCharacter}
+                          onDelete={handleDeleteCharacterWrapper}
+                          onExport={handleExportSingle}
+                        />
                       ))}
                     </>
                   )}
                 </>
               )}
 
-              {activeTab === 'character' && characterList.map((character) => (
-                <Col
-                  xs={24}
-                  sm={charactersPageGridConfig.sm}
-                  md={charactersPageGridConfig.md}
-                  lg={charactersPageGridConfig.lg}
-                  xl={charactersPageGridConfig.xl}
+
+
+              {activeTab === 'character' && visibleCharacterList.map((character) => (
+                <SelectableCharacterCard
                   key={character.id}
-                  style={{ padding: isMobile ? '4px' : '8px' }}
-                >
-                  <div style={{ position: 'relative' }}>
-                    <Checkbox
-                      checked={selectedCharacters.includes(character.id)}
-                      onChange={() => toggleSelectCharacter(character.id)}
-                      style={{ position: 'absolute', top: 8, left: 8, zIndex: 1 }}
-                    />
-                    <CharacterCard
-                      character={character}
-                      onEdit={handleEditCharacter}
-                      onDelete={handleDeleteCharacterWrapper}
-                      onExport={() => handleExportSingle(character.id)}
-                    />
-                  </div>
-                </Col>
+                  item={character}
+                  selected={selectedCharacterIds.has(character.id)}
+                  cardColStyle={cardColStyle}
+                  onToggle={toggleSelectCharacter}
+                  onEdit={handleEditCharacter}
+                  onDelete={handleDeleteCharacterWrapper}
+                  onExport={handleExportSingle}
+                />
               ))}
 
-              {activeTab === 'organization' && organizationList.map((org) => (
-                <Col
-                  xs={24}
-                  sm={charactersPageGridConfig.sm}
-                  md={charactersPageGridConfig.md}
-                  lg={charactersPageGridConfig.lg}
-                  xl={charactersPageGridConfig.xl}
+
+
+              {activeTab === 'organization' && visibleOrganizationList.map((org) => (
+                <SelectableCharacterCard
                   key={org.id}
-                  style={{ padding: isMobile ? '4px' : '8px' }}
-                >
-                  <div style={{ position: 'relative' }}>
-                    <Checkbox
-                      checked={selectedCharacters.includes(org.id)}
-                      onChange={() => toggleSelectCharacter(org.id)}
-                      style={{ position: 'absolute', top: 8, left: 8, zIndex: 1 }}
-                    />
-                    <CharacterCard
-                      character={org}
-                      onEdit={handleEditCharacter}
-                      onDelete={handleDeleteCharacterWrapper}
-                      onExport={() => handleExportSingle(org.id)}
-                    />
-                  </div>
-                </Col>
+                  item={org}
+                  selected={selectedCharacterIds.has(org.id)}
+                  cardColStyle={cardColStyle}
+                  onToggle={toggleSelectCharacter}
+                  onEdit={handleEditCharacter}
+                  onDelete={handleDeleteCharacterWrapper}
+                  onExport={handleExportSingle}
+                />
               ))}
             </Row>
+
+
+
+            {isProgressiveRenderPending && (
+              <div style={{ textAlign: 'center', padding: '12px 0', color: 'var(--color-text-tertiary)' }}>
+                {'\u6b63\u5728\u52a0\u8f7d\u5176\u4f59\u89d2\u8272\u4e0e\u7ec4\u7ec7...'}
+              </div>
+            )}
+
+
 
             {displayList.length === 0 && (
               <Empty
@@ -1004,6 +1341,9 @@ export default function Characters() {
         )}
       </div>
 
+
+
+      {isEditModalOpen ? (
       <Modal
         title={editingCharacter?.is_organization ? '编辑组织' : '编辑角色'}
         open={isEditModalOpen}
@@ -1077,6 +1417,8 @@ export default function Characters() {
                 </Col>
               </Row>
 
+
+
               {/* 第二行：性格特点、外貌描写 */}
               <Row gutter={12}>
                 <Col span={12}>
@@ -1091,6 +1433,8 @@ export default function Characters() {
                 </Col>
               </Row>
 
+
+
               {/* 人际关系（只读，由关系管理页面维护） */}
               {editingCharacter?.relationships && (
                 <Form.Item label="人际关系（由关系管理维护）" style={{ marginBottom: 12 }}>
@@ -1103,10 +1447,14 @@ export default function Characters() {
                 </Form.Item>
               )}
 
+
+
               {/* 第四行：角色背景 */}
               <Form.Item label="角色背景" name="background" style={{ marginBottom: 12 }}>
                 <TextArea rows={2} placeholder="描述角色的背景故事..." />
               </Form.Item>
+
+
 
               {/* 职业信息 */}
               {(mainCareers.length > 0 || subCareers.length > 0) && (
@@ -1252,6 +1600,8 @@ export default function Characters() {
                 </Col>
               </Row>
 
+
+
               {/* 第二行：组织目的 */}
               <Form.Item
                 label="组织目的"
@@ -1261,6 +1611,8 @@ export default function Characters() {
               >
                 <Input placeholder="描述组织的宗旨和目标..." />
               </Form.Item>
+
+
 
               {/* 第三行：主要成员（只读展示） */}
               <Form.Item
@@ -1280,6 +1632,8 @@ export default function Characters() {
                 💡 请前往「组织管理」页面添加或管理组织成员
               </div>
 
+
+
               {/* 第四行：所在地、代表颜色 */}
               <Row gutter={12}>
                 <Col span={12}>
@@ -1294,10 +1648,14 @@ export default function Characters() {
                 </Col>
               </Row>
 
+
+
               {/* 第四行：格言/口号 */}
               <Form.Item label="格言/口号" name="motto" style={{ marginBottom: 12 }}>
                 <Input placeholder="组织的宗旨、格言或口号" />
               </Form.Item>
+
+
 
               {/* 第五行：组织背景 */}
               <Form.Item label="组织背景" name="background" style={{ marginBottom: 12 }}>
@@ -1307,8 +1665,12 @@ export default function Characters() {
           )}
         </Form>
       </Modal>
+      ) : null}
+
+
 
       {/* 手动创建角色/组织模态框 */}
+      {isCreateModalOpen ? (
       <Modal
         title={createType === 'character' ? '创建角色' : '创建组织'}
         open={isCreateModalOpen}
@@ -1368,6 +1730,8 @@ export default function Characters() {
                 </Col>
               </Row>
 
+
+
               {/* 第二行：性格特点、外貌描写 */}
               <Row gutter={12}>
                 <Col span={12}>
@@ -1382,10 +1746,14 @@ export default function Characters() {
                 </Col>
               </Row>
 
+
+
               {/* 第三行：角色背景 */}
               <Form.Item label="角色背景" name="background" style={{ marginBottom: 12 }}>
                 <TextArea rows={2} placeholder="描述角色的背景故事..." />
               </Form.Item>
+
+
 
               {/* 职业信息 - 折叠区域 */}
               {(mainCareers.length > 0 || subCareers.length > 0) && (
@@ -1532,6 +1900,8 @@ export default function Characters() {
                 </Col>
               </Row>
 
+
+
               {/* 第二行：组织目的 */}
               <Form.Item
                 label="组织目的"
@@ -1541,6 +1911,8 @@ export default function Characters() {
               >
                 <Input placeholder="描述组织的宗旨和目标..." />
               </Form.Item>
+
+
 
               {/* 第三行：所在地、代表颜色 */}
               <Row gutter={12}>
@@ -1556,10 +1928,14 @@ export default function Characters() {
                 </Col>
               </Row>
 
+
+
               {/* 第四行：格言/口号 */}
               <Form.Item label="格言/口号" name="motto" style={{ marginBottom: 12 }}>
                 <Input placeholder="组织的宗旨、格言或口号" />
               </Form.Item>
+
+
 
               {/* 第五行：组织背景 */}
               <Form.Item label="组织背景" name="background" style={{ marginBottom: 12 }}>
@@ -1567,6 +1943,8 @@ export default function Characters() {
               </Form.Item>
             </>
           )}
+
+
 
           <Form.Item style={{ marginBottom: 0, marginTop: 16 }}>
             <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
@@ -1583,8 +1961,12 @@ export default function Characters() {
           </Form.Item>
         </Form>
       </Modal>
+      ) : null}
+
+
 
       {/* 导入对话框 */}
+      {isImportModalOpen ? (
       <Modal
         title="导入角色/组织"
         open={isImportModalOpen}
@@ -1630,17 +2012,25 @@ export default function Characters() {
           </div>
         </div>
       </Modal>
+      ) : null}
+
+
 
       {/* SSE进度显示 */}
-      <SSELoadingOverlay
-        loading={isGenerating}
-        progress={progress}
-        message={progressMessage}
-        blocking={false}
-        onCancel={handleCancelGeneratingTask}
-        cancelButtonLoading={isCancellingTask}
-        cancelButtonDisabled={isCancellingTask || !currentTaskIdRef.current}
-      />
+      {isGenerating ? (
+        <Suspense fallback={null}>
+          <LazySSELoadingOverlay
+            loading={isGenerating}
+            progress={progress}
+            message={progressMessage}
+            blocking={false}
+            onCancel={handleCancelGeneratingTask}
+            cancelButtonLoading={isCancellingTask}
+            cancelButtonDisabled={isCancellingTask || !currentTaskIdRef.current}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }
+

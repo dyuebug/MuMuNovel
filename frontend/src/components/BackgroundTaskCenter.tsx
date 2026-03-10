@@ -77,6 +77,10 @@ type FailureReasonTag = {
   color: string;
 };
 
+let backgroundTasksApiSupported = true;
+let chapterActiveTasksApiSupported = true;
+let recoverableTasksSyncPromise: Promise<void> | null = null;
+
 const getTaskDestination = (task: TrackedBackgroundTask): string | null => {
   if (!task.projectId) {
     if (task.taskType.startsWith('wizard_')) return '/wizard';
@@ -492,6 +496,7 @@ export default function BackgroundTaskCenter() {
 
   const statusSnapshotRef = useRef<Record<string, TrackedBackgroundTask['status']>>({});
   const statusSnapshotReadyRef = useRef(false);
+  const recoverableTasksInitializedRef = useRef(false);
 
   useEffect(() => {
     const handleOpenTaskCenter = () => setOpen(true);
@@ -509,13 +514,75 @@ export default function BackgroundTaskCenter() {
 
     const syncRecoverableTasks = async () => {
       if (stopped) return;
-      await Promise.allSettled([
-        backgroundTaskApi.listTasks({ active_only: true, limit: 50 }),
-        chapterBatchTaskApi.listActiveTasks(50),
-      ]);
+      if (recoverableTasksSyncPromise) {
+        await recoverableTasksSyncPromise;
+        return;
+      }
+
+      const requests: Promise<unknown>[] = [];
+
+      if (backgroundTasksApiSupported) {
+        requests.push(
+          backgroundTaskApi.listTasks({ active_only: true, limit: 50 }).catch((error: any) => {
+            if (error?.response?.status === 404) {
+              backgroundTasksApiSupported = false;
+            }
+            return null;
+          })
+        );
+      }
+
+      if (chapterActiveTasksApiSupported) {
+        requests.push(
+          chapterBatchTaskApi.listActiveTasks(50).catch((error: any) => {
+            if (error?.response?.status === 404) {
+              chapterActiveTasksApiSupported = false;
+            }
+            return null;
+          })
+        );
+      }
+
+      if (requests.length === 0) {
+        return;
+      }
+
+      recoverableTasksSyncPromise = (async () => {
+        await Promise.allSettled(requests);
+      })();
+
+      try {
+        await recoverableTasksSyncPromise;
+      } finally {
+        recoverableTasksSyncPromise = null;
+      }
     };
 
-    void syncRecoverableTasks();
+    let initialSyncTimer: number | null = null;
+
+    if (!recoverableTasksInitializedRef.current || open) {
+      recoverableTasksInitializedRef.current = true;
+
+      if (!open && activeTasks.length === 0) {
+        initialSyncTimer = window.setTimeout(() => {
+          if (!stopped) {
+            void syncRecoverableTasks();
+          }
+        }, 2500);
+      } else {
+        void syncRecoverableTasks();
+      }
+    }
+
+    if (!open) {
+      return () => {
+        stopped = true;
+        if (initialSyncTimer !== null) {
+          window.clearTimeout(initialSyncTimer);
+        }
+      };
+    }
+
     const timer = window.setInterval(() => {
       void syncRecoverableTasks();
     }, 8000);
@@ -524,7 +591,7 @@ export default function BackgroundTaskCenter() {
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [hiddenByRoute]);
+  }, [activeTasks.length, hiddenByRoute, open]);
 
   useEffect(() => {
     if (hiddenByRoute) return;

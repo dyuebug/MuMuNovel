@@ -151,7 +151,14 @@ async def test_should_retry_and_return_fallback_when_generate_options_json_inval
 
 
 async def test_should_refine_options_when_feedback_is_provided(test_db, mock_user, mocker):
-    ai_payload = {"options": ["命运岔路", "暗潮将至", "心火未熄"], "prompt": "选择更贴合反馈的主题"}
+    ai_payload = {
+        "options": [
+            "她越想救回家人，命运越逼她亲手选一个人失去，连最珍惜的那段亲情都开始变成交换筹码。",
+            "真相每靠近一步，她都得先割舍一段最舍不得的关系，到最后连活下去都像是在替别人还债。",
+            "这不是谁被拯救的问题，而是谁先承认自己也在伤人，谁又愿意为迟来的清醒付出真正代价。",
+        ],
+        "prompt": "选择更贴合反馈的主题",
+    }
     ai_service = FakeAIService([json.dumps(ai_payload, ensure_ascii=False)])
 
     async def fake_get_template(template_key: str, user_id: str, db: AsyncSession) -> str:
@@ -202,6 +209,7 @@ async def test_should_quick_generate_and_keep_user_fields_priority(test_db, mock
         "description": "AI补全简介",
         "theme": "AI补全主题",
         "genre": ["悬疑", "都市"],
+        "narrative_perspective": "第一人称",
     }
     ai_service = FakeAIService([json.dumps(ai_payload, ensure_ascii=False)])
 
@@ -224,8 +232,46 @@ async def test_should_quick_generate_and_keep_user_fields_priority(test_db, mock
     assert body["description"] == "AI补全简介"
     assert body["theme"] == "AI补全主题"
     assert body["genre"] == ["悬疑", "都市"]
-    assert ai_service.calls[0]["temperature"] == 0.7
+    assert body["narrative_perspective"] == "第一人称"
+    assert ai_service.calls[0]["temperature"] == pytest.approx(0.78)
     assert "用户已输入标题" in ai_service.calls[0]["system_prompt"]
+
+
+async def test_should_normalize_quick_generate_genre_and_keep_user_perspective(
+    test_db,
+    mock_user,
+    mocker,
+):
+    ai_payload = {
+        "title": "雨夜追凶",
+        "description": "她本想查一桩旧案，却被新的命案拖进更深的局。",
+        "theme": "真相从来不是最先该付出的代价。",
+        "genre": "悬疑,都市,女性成长",
+        "narrative_perspective": "omniscient",
+    }
+    ai_service = FakeAIService([json.dumps(ai_payload, ensure_ascii=False)])
+
+    mocker.patch.object(
+        inspiration_api.PromptService,
+        "get_template",
+        new=mocker.AsyncMock(return_value="请补全以下内容：{existing}"),
+    )
+
+    async with _build_client(test_db, ai_service) as client:
+        response = await client.post(
+            "/api/inspiration/quick-generate",
+            headers=_auth_headers(mock_user.user_id),
+            json={
+                "description": "她回到旧城查妹妹失踪案。",
+                "genre": "悬疑, 都市 / 女性成长",
+                "narrative_perspective": "第三人称",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["genre"] == ["悬疑", "都市", "女性成长"]
+    assert body["narrative_perspective"] == "第三人称"
 
 
 async def test_should_return_error_when_quick_generate_response_is_not_json(
@@ -298,9 +344,9 @@ def test_should_return_invalid_when_validate_options_response_has_duplicate_opti
 def test_should_return_invalid_when_description_has_unexplained_jargon():
     result = {
         "options": [
-            "主角要找到失踪妹妹，却被门影和回灌困住，城市规则不断重置。",
-            "他在旧城翻案，暗潮和镜像牵出更大阴谋。",
-            "她决定破局，直面家族谎言。"
+            "主角要找到失踪妹妹，却被门影、回灌和锚点困住，城市规则不断重置，所有线索都在倒着追人，连每次求助都像触发另一套陌生协议。",
+            "他在旧城翻案，镜像协议和阵列回响牵出更大阴谋，却没人愿意用人话解释这些术语到底意味着什么，所有人都默认你懂这些黑话。",
+            "她决定破局，直面家族谎言，却发现位面裂隙和法则回潮正在把整座城拖进失控边缘，甚至连最普通的街道都像被重写过一次。"
         ]
     }
 

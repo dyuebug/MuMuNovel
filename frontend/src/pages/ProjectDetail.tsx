@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, Outlet, Link, useLocation } from 'react-router-dom';
 import { Layout, Menu, Spin, Button, Drawer, theme } from 'antd';
 import {
@@ -21,8 +21,11 @@ import {
   MoonOutlined,
 } from '@ant-design/icons';
 import { useStore } from '../store';
-import { useCharacterSync, useOutlineSync, useChapterSync } from '../store/hooks';
+import { useCharacterSync, useOutlineSync, useChapterSync, loadProjectCharacters, loadProjectOutlines } from '../store/hooks';
+import { preloadProjectNavigationPages, preloadProjectPage } from '../routes/projectPageLoaders';
+import type { ProjectNavigationPageKey } from '../routes/projectPageLoaders';
 import { projectApi } from '../services/api';
+import { preloadProjectCareers } from '../services/projectCareers';
 import ThemeSwitch from '../components/ThemeSwitch';
 import { useThemeMode } from '../theme/useThemeMode';
 import { getStoredSidebarCollapsed, setStoredSidebarCollapsed } from '../utils/sidebarState';
@@ -32,6 +35,22 @@ const { Header, Sider, Content } = Layout;
 // 判断是否为移动端
 const isMobile = () => window.innerWidth <= 768;
 
+const projectLoadPromises = new Map<string, Promise<void>>();
+const PROJECT_COLLECTION_HYDRATION_DELAY_MS = 1000;
+const PROJECT_NAVIGATION_PRELOAD_DELAY_MS = 600;
+const PROJECT_OUTLINE_PRELOAD_DELAY_MS = 120;
+
+const shouldHydrateProjectCollectionsForPath = (pathname: string) => {
+  return !(
+    pathname.includes('/outline')
+    || pathname.includes('/characters')
+    || pathname.includes('/chapters')
+    || pathname.includes('/organizations')
+    || pathname.includes('/careers')
+    || pathname.includes('/relationships')
+  );
+};
+
 export default function ProjectDetail() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -39,6 +58,12 @@ export default function ProjectDetail() {
   const [collapsed, setCollapsed] = useState<boolean>(() => getStoredSidebarCollapsed());
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [mobile, setMobile] = useState(isMobile());
+  const [projectReady, setProjectReady] = useState(false);
+  const [isProjectDataHydrating, setIsProjectDataHydrating] = useState(false);
+  const shouldHydrateCollectionsRef = useRef(shouldHydrateProjectCollectionsForPath(location.pathname));
+  const hydrateTimerRef = useRef<number | null>(null);
+  const idleHydrationHandleRef = useRef<number | null>(null);
+  const prefetchedNavigationTargetsRef = useRef<Set<string>>(new Set());
   const { token } = theme.useToken();
   const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
   const { mode, resolvedMode, setMode } = useThemeMode();
@@ -47,6 +72,21 @@ export default function ProjectDetail() {
     setMode(nextMode);
   };
   const collapsedThemeIcon = mode === 'light' ? <BulbOutlined /> : mode === 'dark' ? <MoonOutlined /> : <CloudOutlined />;
+  const cancelScheduledProjectHydration = useCallback(() => {
+    const windowWithIdleCallback = window as Window & typeof globalThis & {
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    if (idleHydrationHandleRef.current !== null && typeof windowWithIdleCallback.cancelIdleCallback === 'function') {
+      windowWithIdleCallback.cancelIdleCallback(idleHydrationHandleRef.current);
+    }
+    idleHydrationHandleRef.current = null;
+
+    if (hydrateTimerRef.current !== null) {
+      window.clearTimeout(hydrateTimerRef.current);
+    }
+    hydrateTimerRef.current = null;
+  }, []);
 
   // 监听窗口大小变化
   useEffect(() => {
@@ -63,16 +103,121 @@ export default function ProjectDetail() {
   useEffect(() => {
     setStoredSidebarCollapsed(collapsed);
   }, [collapsed]);
-  const {
-    currentProject,
-    setCurrentProject,
-    clearProjectData,
-    loading,
-    setLoading,
-    outlines,
-    characters,
-    chapters,
-  } = useStore();
+  useEffect(() => {
+    shouldHydrateCollectionsRef.current = shouldHydrateProjectCollectionsForPath(location.pathname);
+    if (!shouldHydrateCollectionsRef.current) {
+      cancelScheduledProjectHydration();
+      setIsProjectDataHydrating(false);
+    }
+  }, [location.pathname, cancelScheduledProjectHydration]);
+
+  const prefetchProjectNavigationTarget = useCallback((
+    pageKey?: ProjectNavigationPageKey,
+    path?: string,
+  ) => {
+    const targetKey = pageKey ?? path;
+    if (!targetKey) {
+      return;
+    }
+
+    const chunkPrefetchKey = `chunk:${projectId ?? 'unknown-project'}:${targetKey}`;
+    const dataPrefetchKey = `data:${projectId ?? 'unknown-project'}:${targetKey}`;
+
+    if (pageKey && !prefetchedNavigationTargetsRef.current.has(chunkPrefetchKey)) {
+      prefetchedNavigationTargetsRef.current.add(chunkPrefetchKey);
+      void preloadProjectPage(pageKey);
+    }
+
+    if (!projectId || prefetchedNavigationTargetsRef.current.has(dataPrefetchKey)) {
+      return;
+    }
+
+    prefetchedNavigationTargetsRef.current.add(dataPrefetchKey);
+
+    if (pageKey === 'outline') {
+      void loadProjectOutlines(projectId, { silent: true });
+      return;
+    }
+
+    if (pageKey === 'characters' || pageKey === 'organizations' || pageKey === 'relationships') {
+      void loadProjectCharacters(projectId, { silent: true });
+      return;
+    }
+
+    if (pageKey === 'careers') {
+      void preloadProjectCareers(projectId);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) {
+      return;
+    }
+
+    const outlinePath = `/project/${projectId}/outline`;
+    if (location.pathname === outlinePath) {
+      return;
+    }
+
+    const outlinePreloadTimer = window.setTimeout(() => {
+      prefetchProjectNavigationTarget('outline', outlinePath);
+    }, PROJECT_OUTLINE_PRELOAD_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(outlinePreloadTimer);
+    };
+  }, [location.pathname, prefetchProjectNavigationTarget, projectId]);
+
+  useEffect(() => {
+    const navigationPreloadTimer = window.setTimeout(() => {
+      const isProjectLandingPage = Boolean(projectId) && (
+        location.pathname === `/project/${projectId}` || location.pathname.endsWith('/sponsor')
+      );
+      if (!isProjectLandingPage) {
+        return;
+      }
+
+      void preloadProjectNavigationPages();
+    }, PROJECT_NAVIGATION_PRELOAD_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(navigationPreloadTimer);
+    };
+  }, [location.pathname, projectId]);
+  const currentProject = useStore((state) => state.currentProject);
+  const setCurrentProject = useStore((state) => state.setCurrentProject);
+  const clearProjectData = useStore((state) => state.clearProjectData);
+  const outlineCount = useStore((state) => state.outlines.length);
+  const characterCount = useStore((state) => state.characters.length);
+  const chapterCount = useStore((state) => state.chapters.length);
+
+  const createMenuLink = useCallback((
+    path: string,
+    label: string,
+    pageKey?: ProjectNavigationPageKey,
+  ) => {
+    const handleIntentPrefetch = () => {
+      prefetchProjectNavigationTarget(pageKey, path);
+    };
+
+    const handleNavigate = () => {
+      if (!shouldHydrateProjectCollectionsForPath(path)) {
+        cancelScheduledProjectHydration();
+      }
+    };
+
+    return (
+      <Link
+        to={path}
+        onFocus={handleIntentPrefetch}
+        onPointerDown={handleIntentPrefetch}
+        onTouchStart={handleIntentPrefetch}
+        onClick={handleNavigate}
+      >
+        {label}
+      </Link>
+    );
+  }, [cancelScheduledProjectHydration, prefetchProjectNavigationTarget]);
 
   // 使用同步 hooks
   const { refreshCharacters } = useCharacterSync();
@@ -80,39 +225,137 @@ export default function ProjectDetail() {
   const { refreshChapters } = useChapterSync();
 
   useEffect(() => {
-    const loadProjectData = async (id: string) => {
-      try {
-        setLoading(true);
-        // 加载项目基本信息
-        const project = await projectApi.getProject(id);
-        setCurrentProject(project);
+    let cancelled = false;
+    const windowWithIdleCallback = window as Window & typeof globalThis & {
+      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+    };
 
-        // 并行加载其他数据
+    const hydrateProjectCollections = async (id: string) => {
+      if (cancelled || !shouldHydrateCollectionsRef.current) {
+        return;
+      }
+
+      setIsProjectDataHydrating(true);
+      try {
         await Promise.all([
           refreshOutlines(id),
           refreshCharacters(id),
           refreshChapters(id),
         ]);
       } catch (error) {
-        console.error('加载项目数据失败:', error);
+        console.error('Background project detail hydration failed:', error);
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setIsProjectDataHydrating(false);
+        }
       }
     };
 
+    const scheduleProjectCollectionHydration = (id: string) => {
+      cancelScheduledProjectHydration();
+      hydrateTimerRef.current = window.setTimeout(() => {
+        hydrateTimerRef.current = null;
+
+        if (!shouldHydrateCollectionsRef.current) {
+          return;
+        }
+
+        if (typeof windowWithIdleCallback.requestIdleCallback === 'function') {
+          idleHydrationHandleRef.current = windowWithIdleCallback.requestIdleCallback(() => {
+            idleHydrationHandleRef.current = null;
+            if (!shouldHydrateCollectionsRef.current) {
+              return;
+            }
+            void hydrateProjectCollections(id);
+          }, { timeout: 1500 });
+          return;
+        }
+
+        void hydrateProjectCollections(id);
+      }, PROJECT_COLLECTION_HYDRATION_DELAY_MS);
+    };
+
+    const loadProjectData = async (id: string) => {
+      const existingLoad = projectLoadPromises.get(id);
+      if (existingLoad) {
+        await existingLoad;
+        if (!cancelled && useStore.getState().currentProject?.id === id) {
+          setProjectReady(true);
+        }
+        return;
+      }
+
+      cancelScheduledProjectHydration();
+      setProjectReady(false);
+      setIsProjectDataHydrating(false);
+
+      const loadPromise = (async () => {
+        try {
+          const project = await projectApi.getProject(id);
+          if (cancelled) {
+            return;
+          }
+
+          setCurrentProject(project);
+          setProjectReady(true);
+          scheduleProjectCollectionHydration(id);
+        } catch (error) {
+          console.error('加载项目数据失败:', error);
+        } finally {
+          projectLoadPromises.delete(id);
+        }
+      })();
+
+      projectLoadPromises.set(id, loadPromise);
+      await loadPromise;
+    };
+
     if (projectId) {
-      loadProjectData(projectId);
+      void loadProjectData(projectId);
     }
 
     return () => {
+      cancelled = true;
+      cancelScheduledProjectHydration();
+      setProjectReady(false);
+      setIsProjectDataHydrating(false);
       clearProjectData();
     };
-  }, [projectId, clearProjectData, setLoading, setCurrentProject, refreshOutlines, refreshCharacters, refreshChapters]);
+  }, [projectId, clearProjectData, setCurrentProject, refreshOutlines, refreshCharacters, refreshChapters, cancelScheduledProjectHydration]);
 
   // 移除事件监听，避免无限循环
   // Hook 内部已经更新了 store，不需要再次刷新
 
-  const menuItems = [
+  const projectStats = useMemo(() => {
+    if (!currentProject) {
+      return [];
+    }
+
+    return [
+      {
+        label: '大纲',
+        value: isProjectDataHydrating && outlineCount === 0 ? '—' : outlineCount,
+        unit: '条',
+      },
+      {
+        label: '角色',
+        value: characterCount > 0 ? characterCount : (currentProject.character_count ?? (isProjectDataHydrating ? '—' : 0)),
+        unit: '个',
+      },
+      {
+        label: '章节',
+        value: chapterCount > 0 ? chapterCount : (currentProject.chapter_count ?? (isProjectDataHydrating ? '—' : 0)),
+        unit: '章',
+      },
+      {
+        label: '已写',
+        value: currentProject.current_words,
+        unit: '字',
+      },
+    ];
+  }, [currentProject, isProjectDataHydrating, outlineCount, characterCount, chapterCount]);
+
+  const menuItems = useMemo(() => [
     {
       key: 'sponsor',
       icon: <HeartOutlined />,
@@ -130,32 +373,32 @@ export default function ProjectDetail() {
         {
           key: 'characters',
           icon: <TeamOutlined />,
-          label: <Link to={`/project/${projectId}/characters`}>角色管理</Link>,
+          label: createMenuLink(`/project/${projectId}/characters`, '角色管理', 'characters'),
         },
         {
           key: 'organizations',
           icon: <BankOutlined />,
-          label: <Link to={`/project/${projectId}/organizations`}>组织管理</Link>,
+          label: createMenuLink(`/project/${projectId}/organizations`, '组织管理', 'organizations'),
         },
         {
           key: 'careers',
           icon: <TrophyOutlined />,
-          label: <Link to={`/project/${projectId}/careers`}>职业管理</Link>,
+          label: createMenuLink(`/project/${projectId}/careers`, '职业管理', 'careers'),
         },
         {
           key: 'relationships',
           icon: <ApartmentOutlined />,
-          label: <Link to={`/project/${projectId}/relationships`}>关系管理</Link>,
+          label: createMenuLink(`/project/${projectId}/relationships`, '关系管理', 'relationships'),
         },
         {
           key: 'outline',
           icon: <FileTextOutlined />,
-          label: <Link to={`/project/${projectId}/outline`}>大纲管理</Link>,
+          label: createMenuLink(`/project/${projectId}/outline`, '大纲管理', 'outline'),
         },
         {
           key: 'chapters',
           icon: <BookOutlined />,
-          label: <Link to={`/project/${projectId}/chapters`}>章节管理</Link>,
+          label: createMenuLink(`/project/${projectId}/chapters`, '章节管理', 'chapters'),
         },
         {
           key: 'chapter-analysis',
@@ -185,9 +428,9 @@ export default function ProjectDetail() {
         },
       ],
     },
-  ];
+  ], [projectId, createMenuLink]);
 
-  const menuItemsCollapsed = [
+  const menuItemsCollapsed = useMemo(() => [
     {
       key: 'sponsor',
       icon: <HeartOutlined />,
@@ -201,32 +444,32 @@ export default function ProjectDetail() {
     {
       key: 'careers',
       icon: <TrophyOutlined />,
-      label: <Link to={`/project/${projectId}/careers`}>职业管理</Link>,
+      label: createMenuLink(`/project/${projectId}/careers`, '职业管理', 'careers'),
     },
     {
       key: 'characters',
       icon: <TeamOutlined />,
-      label: <Link to={`/project/${projectId}/characters`}>角色管理</Link>,
+      label: createMenuLink(`/project/${projectId}/characters`, '角色管理', 'characters'),
     },
     {
       key: 'relationships',
       icon: <ApartmentOutlined />,
-      label: <Link to={`/project/${projectId}/relationships`}>关系管理</Link>,
+      label: createMenuLink(`/project/${projectId}/relationships`, '关系管理', 'relationships'),
     },
     {
       key: 'organizations',
       icon: <BankOutlined />,
-      label: <Link to={`/project/${projectId}/organizations`}>组织管理</Link>,
+      label: createMenuLink(`/project/${projectId}/organizations`, '组织管理', 'organizations'),
     },
     {
       key: 'outline',
       icon: <FileTextOutlined />,
-      label: <Link to={`/project/${projectId}/outline`}>大纲管理</Link>,
+      label: createMenuLink(`/project/${projectId}/outline`, '大纲管理', 'outline'),
     },
     {
       key: 'chapters',
       icon: <BookOutlined />,
-      label: <Link to={`/project/${projectId}/chapters`}>章节管理</Link>,
+      label: createMenuLink(`/project/${projectId}/chapters`, '章节管理', 'chapters'),
     },
     {
       key: 'chapter-analysis',
@@ -248,7 +491,7 @@ export default function ProjectDetail() {
       icon: <CloudOutlined />,
       label: <Link to={`/project/${projectId}/prompt-workshop`}>提示词工坊</Link>,
     },
-  ];
+  ], [projectId, createMenuLink]);
 
   // 根据当前路径动态确定选中的菜单项
   const selectedKey = useMemo(() => {
@@ -269,7 +512,7 @@ export default function ProjectDetail() {
     return 'sponsor'; // 默认选中赞助支持
   }, [location.pathname]);
 
-  if (loading || !currentProject) {
+  if (!projectReady || !currentProject || currentProject.id !== projectId) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
         <Spin size="large" />
@@ -372,12 +615,7 @@ export default function ProjectDetail() {
         {!mobile && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', zIndex: 1 }}>
             <div style={{ display: 'flex', gap: '16px' }}>
-              {[
-                { label: '大纲', value: outlines.length, unit: '条' },
-                { label: '角色', value: characters.length, unit: '个' },
-                { label: '章节', value: chapters.length, unit: '章' },
-                { label: '已写', value: currentProject.current_words, unit: '字' },
-              ].map((item, index) => (
+              {projectStats.map((item, index) => (
                 <div
                   key={index}
                   style={{
@@ -419,7 +657,7 @@ export default function ProjectDetail() {
                     lineHeight: 1,
                     fontFamily: 'Monaco, monospace'
                   }}>
-                    {item.value > 10000 ? (item.value / 10000).toFixed(1) + 'w' : item.value}
+                    {typeof item.value === 'number' && item.value > 10000 ? (item.value / 10000).toFixed(1) + 'w' : item.value}
                     <span style={{ fontSize: '10px', marginLeft: '2px', opacity: 0.8 }}>{item.unit}</span>
                   </span>
                 </div>

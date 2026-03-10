@@ -1,3 +1,4 @@
+import ast
 import re
 from pathlib import Path
 
@@ -9,20 +10,31 @@ V3_TAG = "rule_v3_fusion_20260303"
 
 
 def _extract_template_block(source: str, template_key: str) -> str:
-    triple_pattern = re.compile(
-        rf"^\s*{re.escape(template_key)}\s*=\s*\"\"\"(.*?)\"\"\"",
-        re.S | re.M,
-    )
-    single_pattern = re.compile(
-        rf"^\s*{re.escape(template_key)}\s*=\s*\"([^\n]*)\"",
-        re.M,
-    )
-    triple_match = triple_pattern.search(source)
-    if triple_match:
-        return triple_match.group(1)
-    single_match = single_pattern.search(source)
-    if single_match:
-        return single_match.group(1)
+    module = ast.parse(source)
+    namespace: dict[str, str] = {}
+
+    for node in module.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in {
+                    "CREATIVE_STORY_ENGINE_GUIDE",
+                    "CREATIVE_LOW_AI_GUARD",
+                }:
+                    exec(  # noqa: S102 - test-only evaluation of constant assignments
+                        compile(ast.Module(body=[node], type_ignores=[]), str(PROMPT_SERVICE_PATH), "exec"),
+                        namespace,
+                        namespace,
+                    )
+        if isinstance(node, ast.ClassDef) and node.name == "PromptService":
+            for item in node.body:
+                if isinstance(item, ast.Assign):
+                    for target in item.targets:
+                        if isinstance(target, ast.Name) and target.id == template_key:
+                            return eval(  # noqa: S307 - test-only evaluation of template constants
+                                compile(ast.Expression(body=item.value), str(PROMPT_SERVICE_PATH), "eval"),
+                                namespace,
+                                namespace,
+                            )
     raise AssertionError(f"模板未找到: {template_key}")
 
 
@@ -31,7 +43,7 @@ def _extract_sync_rule_keys(source: str) -> set[str]:
 
 
 def test_should_keep_v3_tag_in_key_templates():
-    source = PROMPT_SERVICE_PATH.read_text(encoding="utf-8")
+    source = PROMPT_SERVICE_PATH.read_text(encoding="utf-8-sig")
     required_templates = [
         "OUTLINE_CREATE",
         "OUTLINE_CONTINUE",
@@ -88,7 +100,7 @@ def test_should_cover_v3_templates_in_sync_rules():
 
 
 def test_should_keep_anti_ai_guards_in_chapter_templates_and_checker():
-    source = PROMPT_SERVICE_PATH.read_text(encoding="utf-8")
+    source = PROMPT_SERVICE_PATH.read_text(encoding="utf-8-sig")
 
     chapter_block = _extract_template_block(source, "CHAPTER_GENERATION_ONE_TO_ONE")
     checker_block = _extract_template_block(source, "CHAPTER_TEXT_CHECKER")

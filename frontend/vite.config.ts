@@ -26,7 +26,7 @@ export default defineConfig({
         // 手动分割代码块,将大型依赖库分离
         manualChunks: {
           // React 核心库
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-react': ['react', 'react-dom', 'react-router-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime'],
           // Ant Design UI库（最大的依赖）
           'vendor-antd': ['antd', '@ant-design/icons'],
           // 其他工具库

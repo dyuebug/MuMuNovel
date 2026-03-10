@@ -123,6 +123,22 @@ class ChapterGenerateRequest(BaseModel):
     enable_mcp: bool = Field(True, description="是否启用MCP工具增强（搜索参考资料）")
     model: Optional[str] = Field(None, description="指定使用的AI模型，不提供则使用用户默认模型")
     narrative_perspective: Optional[str] = Field(None, description="临时人称视角：first_person/third_person/omniscient，不提供则使用项目默认")
+    creative_mode: Optional[str] = Field(
+        None,
+        description="创作模式：balanced/hook/emotion/suspense/relationship/payoff，可选",
+    )
+    story_focus: Optional[str] = Field(
+        None,
+        description="结构侧重点：advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff，可选",
+    )
+    plot_stage: Optional[str] = Field(
+        None,
+        description="情节阶段：development/climax/ending，可选",
+    )
+    story_creation_brief: Optional[str] = Field(None, description="创作总控摘要，可选")
+    story_repair_summary: Optional[str] = Field(None, description="后验评分提炼出的修复摘要，可选")
+    story_repair_targets: Optional[list[str]] = Field(None, description="后验评分提炼出的修复动作列表，可选")
+    story_preserve_strengths: Optional[list[str]] = Field(None, description="生成时需保留的已有优势列表，可选")
 
 
 class BatchGenerateRequest(BaseModel):
@@ -140,6 +156,24 @@ class BatchGenerateRequest(BaseModel):
     enable_mcp: bool = Field(True, description="是否启用MCP工具增强（搜索参考资料）")
     max_retries: int = Field(3, description="每个章节的最大重试次数", ge=0, le=5)
     model: Optional[str] = Field(None, description="指定使用的AI模型，不提供则使用用户默认模型")
+
+
+    creative_mode: Optional[str] = Field(
+        None,
+        description="创作模式：balanced/hook/emotion/suspense/relationship/payoff，可选",
+    )
+    story_focus: Optional[str] = Field(
+        None,
+        description="结构侧重点：advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff，可选",
+    )
+    plot_stage: Optional[str] = Field(
+        None,
+        description="情节阶段：development/climax/ending，可选",
+    )
+    story_creation_brief: Optional[str] = Field(None, description="创作总控摘要，可选")
+    story_repair_summary: Optional[str] = Field(None, description="后验评分提炼出的修复摘要，可选")
+    story_repair_targets: Optional[list[str]] = Field(None, description="后验评分提炼出的修复动作列表，可选")
+    story_preserve_strengths: Optional[list[str]] = Field(None, description="生成时需保留的已有优势列表，可选")
 
 
 class BatchGenerateResponse(BaseModel):

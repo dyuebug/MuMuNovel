@@ -68,16 +68,16 @@ class PlotAnalyzer:
     
     @staticmethod
     def _build_retry_prompt(prompt: str, last_error: str, attempt: int) -> str:
-        """? JSON ?????????????"""
-        retry_reason = (last_error or "??????????? JSON")[:200]
+        """为 JSON 解析失败构造更严格的重试提示词。"""
+        retry_reason = (last_error or "上一轮返回内容无法解析为 JSON")[:200]
         return (
             f"{prompt}\n\n"
-            f"?? ?{attempt}???????????{retry_reason}\n"
-            "???????????????? JSON ???\n"
-            "- ?? markdown ???\n"
-            "- ??????\n"
-            "- ????????????\n"
-            "- ?????????????"
+            f"第 {attempt} 次尝试失败，原因：{retry_reason}\n"
+            "请严格只返回合法的 JSON 对象。\n"
+            "- 不要使用 markdown 代码块\n"
+            "- 不要附加解释\n"
+            "- 不要输出任何额外文本\n"
+            "- 字段名必须与要求完全一致"
         )
 
     async def analyze_chapter(
@@ -169,13 +169,13 @@ class PlotAnalyzer:
         self.last_error_message = None
         last_error = None
         analysis_max_tokens = max(4000, min(max(word_count or 0, len(analysis_content)) + 1000, 8000))
-        logger.debug(f"???????{prompt}")
-        logger.info(f"?? ?????? max_tokens: {analysis_max_tokens}")
+        logger.debug(f"章节分析提示词: {prompt}")
+        logger.info(f"章节分析 max_tokens: {analysis_max_tokens}")
         for attempt in range(1, max_retries + 1):
             try:
-                # ??AI????
+                # 调用 AI 进行分析
                 current_prompt = prompt if attempt == 1 else self._build_retry_prompt(prompt, last_error or "", attempt)
-                logger.info(f"  ?? ??AI??(????: {len(analysis_content)}?, ?? {attempt}/{max_retries})...")
+                logger.info(f"  调用AI分析(内容长度: {len(analysis_content)}字, 尝试 {attempt}/{max_retries})...")
                 response = await self.ai_service.generate_text(
                     prompt=current_prompt,
                     temperature=0.2,

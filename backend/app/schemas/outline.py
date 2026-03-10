@@ -62,6 +62,14 @@ class OutlineGenerateRequest(BaseModel):
     plot_stage: str = Field("development", description="情节阶段: development(发展), climax(高潮), ending(结局)")
     keep_existing: bool = Field(False, description="是否保留现有大纲(续写时)")
     enable_mcp: bool = Field(True, description="是否启用MCP工具增强（搜索情节设计参考）")
+    creative_mode: Optional[str] = Field(
+        None,
+        description="创作模式：balanced/hook/emotion/suspense/relationship/payoff，可选",
+    )
+    story_focus: Optional[str] = Field(
+        None,
+        description="结构侧重点：advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff，可选",
+    )
 
 
 class ChapterOutlineGenerateRequest(BaseModel):

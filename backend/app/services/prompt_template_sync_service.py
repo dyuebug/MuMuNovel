@@ -56,6 +56,7 @@ MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
     # If users still hold an untouched legacy copy, auto-upgrade to latest.
     "AI_DENOISING": TemplateSyncRule(
         legacy_hashes={"c40c0f000310940c", "15d418f68d68f7a6", "bec75d1005770577", "ec48a8f6a4c5797f"},
+        current_hashes={"3a1e6bc81b55d4bf"},
     ),
     # 第三版融合（主线模板）：当用户副本仍是历史默认内容时，自动升级到最新约束版本。
     "OUTLINE_CREATE": TemplateSyncRule(
@@ -156,7 +157,8 @@ MANAGED_TEMPLATE_SYNC_RULES: Dict[str, TemplateSyncRule] = {
         legacy_hashes={"c3a2ff6230a69e45", "e082b217449e54dd"},
     ),
     "INSPIRATION_QUICK_COMPLETE": TemplateSyncRule(
-        legacy_hashes={"90d7050767ec4423", "859f27b2cd8f694e", "88892302ac1e0715", "b533c5afae9272ba", "527956ae06b2ae95"},
+        legacy_hashes={"90d7050767ec4423", "859f27b2cd8f694e", "88892302ac1e0715", "b533c5afae9272ba", "527956ae06b2ae95", "36e9df58250185b5"},
+        current_hashes={"56900517da8977ff"},
     ),
 }
 

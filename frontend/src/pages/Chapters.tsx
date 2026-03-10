@@ -1,300 +1,1543 @@
-﻿import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { Suspense, lazy, useState, useEffect, useRef, useMemo, useCallback } from 'react';
+
 import { List, Button, Modal, Form, Input, Select, message, Empty, Space, Badge, Tag, Card, InputNumber, Alert, Radio, Descriptions, Collapse, Popconfirm, FloatButton, Tooltip, Progress } from 'antd';
+
 import { EditOutlined, FileTextOutlined, ThunderboltOutlined, LockOutlined, DownloadOutlined, SettingOutlined, FundOutlined, SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, RocketOutlined, StopOutlined, InfoCircleOutlined, CaretRightOutlined, DeleteOutlined, BookOutlined, FormOutlined, PlusOutlined, ReadOutlined } from '@ant-design/icons';
+
 import { useStore } from '../store';
 import { useChapterSync } from '../store/hooks';
 import { projectApi, writingStyleApi, chapterApi, chapterBatchTaskApi } from '../services/api';
-import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterQualityMetrics, ChapterQualityProfileSummary } from '../types';
+import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterLatestQualityMetrics, ChapterQualityMetrics, ChapterQualityMetricsSummary, ChapterQualityProfileSummary, CreativeMode, PlotStage, StoryFocus } from '../types';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
-import ChapterAnalysis from '../components/ChapterAnalysis';
+
 import ExpansionPlanEditor from '../components/ExpansionPlanEditor';
-import { SSELoadingOverlay } from '../components/SSELoadingOverlay';
-import { SSEProgressModal } from '../components/SSEProgressModal';
+
 import FloatingIndexPanel from '../components/FloatingIndexPanel';
 import ChapterReader from '../components/ChapterReader';
 import PartialRegenerateToolbar from '../components/PartialRegenerateToolbar';
 import PartialRegenerateModal from '../components/PartialRegenerateModal';
+import {
+  buildCreationBlueprint,
+  buildBatchScoreDrivenRecommendationCard,
+  buildBatchStoryAfterScorecard,
+  buildBatchStoryCreationControlCard,
+  buildBatchStoryRepairTargetCard,
+  buildCreationPresetRecommendation,
+  buildScoreDrivenRecommendationCard,
+  buildStoryAfterScorecard,
+  buildStoryCreationControlCard,
+  buildStoryRepairPromptPayload,
+  buildStoryRepairTargetCard,
+  buildStoryExecutionChecklist,
+  buildStoryObjectiveCard,
+  buildStoryRepetitionRiskCard,
+  buildStoryResultCard,
+  buildStoryAcceptanceCard,
+  buildStoryCharacterArcCard,
+  buildVolumePacingPlan,
+  CREATION_PLOT_STAGE_OPTIONS,
+  CREATION_PRESETS,
+  getCreationPresetById,
+  getCreationPresetByModes,
+  inferCreationPlotStage,
+  type CreationPresetId,
+} from '../utils/creationPresets';
+
 
 const { TextArea } = Input;
 
-// localStorage 缓存键名
+interface StoryBeatPlannerDraft {
+  openingHook: string;
+  chapterGoal: string;
+  conflictPressure: string;
+  turningPoint: string;
+  endingHook: string;
+}
+
+interface StorySceneOutlineDraft {
+  setupScene: string;
+  confrontationScene: string;
+  reversalScene: string;
+  payoffScene: string;
+}
+
+const EMPTY_STORY_BEAT_PLANNER_DRAFT: StoryBeatPlannerDraft = {
+  openingHook: '',
+  chapterGoal: '',
+  conflictPressure: '',
+  turningPoint: '',
+  endingHook: '',
+};
+
+const EMPTY_STORY_SCENE_OUTLINE_DRAFT: StorySceneOutlineDraft = {
+  setupScene: '',
+  confrontationScene: '',
+  reversalScene: '',
+  payoffScene: '',
+};
+
+const STORY_BEAT_PLANNER_FIELDS: Array<{
+  key: keyof StoryBeatPlannerDraft;
+  label: string;
+  placeholder: string;
+}> = [
+  {
+    key: 'openingHook',
+    label: '閻庢鍠掗崑鎾绘煕閿旀儳鍔嬪┑顔煎楠?',
+    placeholder: '闁哄鏅滈悷銈囩博鐎靛摜鍗氶柣妯挎珪娴犳﹢鏌涜箛鎾跺濠殿喖绻樺畷娆撴惞鐟欏嫮鏆犻悗娈垮枛閸婃悂鎮ラ崼鏇炍ュù锝夋敱瀹曟煡鏌涢弬鍛閸嬫挻鎷呯粙璺ㄣ偒闂傚倸瀚ч弲婊堝垂閵娾晛绠氶柛娑卞灠瀹曟洟鏌熺紒銏犲闁?',
+  },
+  {
+    key: 'chapterGoal',
+    label: '闂佸搫鐗滈崜娑㈡偟閻戣姤鍎庢い鏃傛櫕閸?',
+    placeholder: '闁荤喐鐟︾敮鐔哥珶婵犲啯浜ゆ繛鍡楁捣椤忚京绱掗弮鍌毿㈢紒鐑╁亾婵＄偑鍊楃划顖滄暜鐟欏嫭浜ゆ繛鎴炵懃閻忔鏌熷畡鎵虎闁糕晛鏈粋鎺楀焵椤掍胶鈻?',
+  },
+  {
+    key: 'conflictPressure',
+    label: '闂佸憡鍔樼亸娆撴偘婵犲洤绀夐柣妯诲絻缁?',
+    placeholder: '闂佸搫鐗滈崜娑㈡偟闁垮鈻旈柡鍕禋濞诧綁姊婚崘顓у殭濠殿喖绻樻俊瀛樻媴缁涘娈╅梺鍛婂竾閸婃垿鍩€椤戞寧顦烽柛鐑嗗墯缁傛帡鏌ㄧ€ｎ亞浠愭繝銏ｅ煐閻楃娀宕曢幘顔煎偍閻庯綆鍘借ぐ銉╂煛婢跺牆鍔ラ柛銈嗙矒瀹曨偊顢旈崼婵囶仦',
+  },
+  {
+    key: 'turningPoint',
+    label: '婵炴垶鎼╅崢浠嬵敊鐏炵偓濮滄い鎺嶇椤?',
+    placeholder: '婵炴垶鎼╅崢浠嬵敊瀹€鍕煑闁瑰濮甸弲绋棵归悩顐壕婵炴垶鏌ㄩ悧鍡氥亹婢舵劕绀岄柡宥囨暩缁€澶愭偣娴ｅ弶娅呴柣顏嶅墴瀹曟繈宕归鑲╋紦缂備胶瀚忔担鎻掍壕濞达絿顭堥崘鈧柡澶屽剱閸撴岸宕归妸鈺佹辈闁圭虎鍠楅懟鐔兼煟椤忓棗鏋旀繛?',
+  },
+  {
+    key: 'endingHook',
+    label: '缂傚倷鐒﹂幐鎼佹偄椤掑嫭鐓㈤柍杞拌兌閹?',
+    placeholder: '缂備焦姊绘慨鎾偄椤掑嫭鍋╂繛鍡楁捣閻熸挸霉閻橆偄浜炬繛鎴炴煥閻楀﹪宕戦幘鍦杸闁绘劕鍘滈崑鎾存媴妞嬪海鈻忓┑鐐差槶閸ㄦ椽宕归妸锔锯枖閻庯絺鏅濋杈╃磼閺冨倸鈻堥柍鐟扮Ч瀹曟繈濡搁妷銉綕',
+  },
+];
+
+const STORY_SCENE_OUTLINE_FIELDS: Array<{
+  key: keyof StorySceneOutlineDraft;
+  label: string;
+  placeholder: string;
+}> = [
+  {
+    key: 'setupScene',
+    label: '闂侀潻濡囬崕銈呪枍?1闂佹寧绋掓穱娲箲閿濆绀夐柛顭戝枟缁?',
+    placeholder: '闁哄鏅滈悷銈囩博閹绢喖鎹堕柛婵嗗鐢儵鏌熺捄鐚撮練闁汇劍绻堥獮鎺楀Ω閵堝洨鎲梺鍛婄懆閸╁洭鍩€椤戣法鍔嶅┑顔肩箻瀹曟瑦娼幍顔剧劶婵炴垶鏌ㄩ悧鍡欐閹捐埖鏆滈柛娑橈工閻忔霉閻樹警鍤欏┑?',
+  },
+  {
+    key: 'confrontationScene',
+    label: '闂侀潻濡囬崕銈呪枍?2闂佹寧绋掗懝楣冾敋椤曗偓楠炲骸螖閳ь剙鈹冮埀?',
+    placeholder: '闂佸憡鍔樼亸娆撴偘婵犲啩绻嗛柛灞剧懅缁夊潡鏌涘Δ鈧ú銊︻殽閸ヮ剚鏅€光偓閸愮偓鍋ラ梺鑹邦潐瑜板啫锕㈤鍫濅紶妞ゅ繐鐗嗗▍锟犳煕濞嗘劦娈旈悽顖氭喘楠炲寮介鈶跨喖姊?',
+  },
+  {
+    key: 'reversalScene',
+    label: '闂侀潻濡囬崕銈呪枍?3闂佹寧绋掓穱鍝劽归崱娑樼婵☆垳鍎ょ花?',
+    placeholder: '闁诲繒鍋愰崑鎾绘煕閺冣偓鐎笛囧焵椤掆偓鐎涒晠鎮ч柆宥呯煑鐎广儱鐗婄粊顕€鏌曢崱鏇犲妽婵絾宀稿Λ浣轰沪閸屾浜惧ù锝囩摂閸ゆ牠鎮楅棃娑樻倯闁搞劊鍔戝畷锝呂熼崹顔剧崺',
+  },
+  {
+    key: 'payoffScene',
+    label: '闂侀潻濡囬崕銈呪枍?4闂佹寧绋掔喊宥夊极瑜版帒绾ч柣鏃堟敱缁?',
+    placeholder: '闁哄鏅滈悷銈囩博鐎靛摜鍗氶柣妯烘▕濞层倕霉閿濆棙绀冮柡浣告贡娴滄悂骞橀崨顖滎槷濡ょ姷鍋犻崺鏍ㄤ繆閸濄儲瀚氶柡鍕箚閸嬫捇宕ㄩ鑹板悅闂佸憡纰嶉崹宕囩箔閸涱喚鈻旈柍褜鍓涚划?',
+  },
+];
+
+const normalizeStoryBeatPlannerDraft = (
+  draft?: Partial<StoryBeatPlannerDraft> | null,
+): StoryBeatPlannerDraft => ({
+  openingHook: draft?.openingHook?.trim() ?? '',
+  chapterGoal: draft?.chapterGoal?.trim() ?? '',
+  conflictPressure: draft?.conflictPressure?.trim() ?? '',
+  turningPoint: draft?.turningPoint?.trim() ?? '',
+  endingHook: draft?.endingHook?.trim() ?? '',
+});
+
+const normalizeStorySceneOutlineDraft = (
+  draft?: Partial<StorySceneOutlineDraft> | null,
+): StorySceneOutlineDraft => ({
+  setupScene: draft?.setupScene?.trim() ?? '',
+  confrontationScene: draft?.confrontationScene?.trim() ?? '',
+  reversalScene: draft?.reversalScene?.trim() ?? '',
+  payoffScene: draft?.payoffScene?.trim() ?? '',
+});
+
+const isStoryBeatPlannerDraftEmpty = (
+  draft?: Partial<StoryBeatPlannerDraft> | null,
+): boolean => {
+  const normalizedDraft = normalizeStoryBeatPlannerDraft(draft);
+  return Object.values(normalizedDraft).every((value) => !value);
+};
+
+const isStorySceneOutlineDraftEmpty = (
+  draft?: Partial<StorySceneOutlineDraft> | null,
+): boolean => {
+  const normalizedDraft = normalizeStorySceneOutlineDraft(draft);
+  return Object.values(normalizedDraft).every((value) => !value);
+};
+
+const areStoryBeatPlannerDraftsEqual = (
+  left?: Partial<StoryBeatPlannerDraft> | null,
+  right?: Partial<StoryBeatPlannerDraft> | null,
+): boolean => {
+  const leftDraft = normalizeStoryBeatPlannerDraft(left);
+  const rightDraft = normalizeStoryBeatPlannerDraft(right);
+
+  return STORY_BEAT_PLANNER_FIELDS.every((field) => leftDraft[field.key] === rightDraft[field.key]);
+};
+
+const areStorySceneOutlineDraftsEqual = (
+  left?: Partial<StorySceneOutlineDraft> | null,
+  right?: Partial<StorySceneOutlineDraft> | null,
+): boolean => {
+  const leftDraft = normalizeStorySceneOutlineDraft(left);
+  const rightDraft = normalizeStorySceneOutlineDraft(right);
+
+  return STORY_SCENE_OUTLINE_FIELDS.every((field) => leftDraft[field.key] === rightDraft[field.key]);
+};
+
+const buildJoinedInstruction = (...parts: Array<string | undefined>): string => {
+  const normalizedParts = parts.map((item) => item?.trim()).filter((item): item is string => Boolean(item));
+  return normalizedParts.join('闂?)';
+};
+
+const buildStoryBeatPlannerPrompt = (
+  draft?: Partial<StoryBeatPlannerDraft> | null,
+  scope: 'single' | 'batch' = 'single',
+): string | undefined => {
+  const normalizedDraft = normalizeStoryBeatPlannerDraft(draft);
+  const entries = STORY_BEAT_PLANNER_FIELDS
+    .map((field) => ({ label: field.label, value: normalizedDraft[field.key] }))
+    .filter((item) => item.value);
+
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  const title = scope === 'batch' ? '闂佸搫鐗滈崜婵嬫偪閸℃瑧鍗氶柣妯烘惈铻＄紓鍌氭储閸婃鍒掗妸鈺佸嚑闁告洦鍋勯褔鏌熺紒妯哄缂? : '闂佸搫鐗滈崜娑㈡偟妞嬪海纾奸柟鎯ь嚟閳ь剦鍨跺畷鐘诲冀閵娿儳鍊掔紓?;
+
+  return [title, ...entries.map((item) => `- ${item.label}闂?{item.value}`)].join('\n');
+};
+
+const buildStorySceneOutlineSuggestion = (options: {
+  beatPlanner?: Partial<StoryBeatPlannerDraft> | null;
+  objective?: {
+    obstacle?: string;
+    turn?: string;
+  } | null;
+  result?: {
+    reveal?: string;
+    fallout?: string;
+    relationship?: string;
+  } | null;
+  acceptance?: {
+    missionCheck?: string;
+  } | null;
+}): StorySceneOutlineDraft => {
+  const beatPlanner = normalizeStoryBeatPlannerDraft(options.beatPlanner);
+
+  return {
+    setupScene: buildJoinedInstruction(beatPlanner.openingHook, beatPlanner.chapterGoal),
+    confrontationScene: buildJoinedInstruction(beatPlanner.conflictPressure, options.objective?.obstacle),
+    reversalScene: buildJoinedInstruction(beatPlanner.turningPoint, options.result?.reveal, options.result?.relationship),
+    payoffScene: buildJoinedInstruction(beatPlanner.endingHook, options.result?.fallout, options.acceptance?.missionCheck),
+  };
+};
+
+const buildStorySceneOutlinePrompt = (
+  draft?: Partial<StorySceneOutlineDraft> | null,
+  scope: 'single' | 'batch' = 'single',
+): string | undefined => {
+  const normalizedDraft = normalizeStorySceneOutlineDraft(draft);
+  const entries = STORY_SCENE_OUTLINE_FIELDS
+    .map((field, index) => ({ index: index + 1, label: field.label, value: normalizedDraft[field.key] }))
+    .filter((item) => item.value);
+
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  const title = scope === 'batch' ? '闂佸搫鐗滈崜婵嬫偪閸℃瑧鍗氶柣妯烘惈铻＄紓鍌氭储閸婃洖鈹冮埀顒勬煛閸滀礁鐏＄紒鏂款煼瀹? : '闂佸搫鐗滈崜娑㈡偟閻戣棄鎹堕柣鎴炆戦悵顖涚箾閹捐櫕鍣圭€?;
+
+  return [title, ...entries.map((item) => `${item.index}. ${item.label}闂?{item.value}`)].join('\n');
+};
+
+const mergeStoryCreationInstructions = (...parts: Array<string | undefined>): string | undefined => {
+  const normalizedParts = parts
+    .map((item) => item?.trim())
+    .filter((item): item is string => Boolean(item));
+
+  return normalizedParts.length > 0 ? normalizedParts.join('\n\n') : undefined;
+};
+
+const STORY_CREATION_PROMPT_WARN_THRESHOLD = 1000;
+
+const buildStoryCreationPromptLayerLabels = (parts: {
+  summary?: string;
+  beat?: string;
+  scene?: string;
+}): string[] => [
+  parts.summary?.trim() ? '闂佽鍓涚划顖滄暜閸洖绠烘俊顖涱儥濞? : ''',
+  parts.beat?.trim() ? '闂佺厧鎼崐瑙勫垔閸ф绠甸柟閭﹀枤閸? : ''',
+  parts.scene?.trim() ? '闂侀潻濡囬崕銈呪枍濞嗗繈鈧帡宕ㄩ鐐殿槹' : '',
+].filter(Boolean);
+
+
+
+// localStorage 缂傚倸鍊归幐鎼佹偤閵娾晜鐓ユい鏂垮悑閸?
+
 const WORD_COUNT_CACHE_KEY = 'chapter_default_word_count';
+
 const BATCH_TASK_META_STORAGE_KEY = 'chapter_batch_task_meta_map_v1';
+
+const STORY_CREATION_DRAFT_STORAGE_KEY = 'chapter_story_creation_draft_v1';
+
+const STORY_CREATION_SNAPSHOT_STORAGE_KEY = 'chapter_story_creation_snapshot_v1';
+
+const STORY_CREATION_SNAPSHOT_LIMIT = 12;
+
+const STORY_CREATION_SNAPSHOT_PREVIEW_LIMIT = 5;
+
 const DEFAULT_WORD_COUNT = 3000;
 
+const writingStylesLoadPromises = new Map<string, Promise<void>>();
+
+const batchTaskRestorePromises = new Map<string, Promise<void>>();
+
+
+
+const LazyChapterAnalysis = lazy(() => import('../components/ChapterAnalysis'));
+
+
+
+const LazySSELoadingOverlay = lazy(async () => {
+
+  const module = await import('../components/SSELoadingOverlay');
+
+  return { default: module.SSELoadingOverlay };
+
+});
+
+
+
+const LazySSEProgressModal = lazy(async () => {
+
+  const module = await import('../components/SSEProgressModal');
+
+  return { default: module.SSEProgressModal };
+
+});
+
+const writingStylesCache = new Map<string, { styles: WritingStyle[]; defaultStyleId?: number }>();
+
+const chapterAnalysisTasksCache = new Map<string, Record<string, AnalysisTask>>();
+
+
+
 const getOverallScoreColor = (score?: number): string => {
+
   if ((score ?? 0) >= 75) return 'green';
+
   if ((score ?? 0) >= 60) return 'gold';
+
   return 'red';
+
 };
+
+
 
 const getMetricRateColor = (rate?: number): string => {
+
   if ((rate ?? 0) >= 70) return 'green';
+
   if ((rate ?? 0) >= 45) return 'gold';
+
   return 'red';
+
 };
+
+
 
 const getMetricStrokeColor = (rate?: number): string => {
+
   if ((rate ?? 0) >= 70) return '#52c41a';
+
   if ((rate ?? 0) >= 45) return '#faad14';
+
   return '#ff4d4f';
+
 };
+
+
 
 const QUALITY_METRIC_TIPS: Record<string, string> = {
-  conflict: '是否写出了“目标受阻→角色选择→代价/后果”的有效冲突链。',
-  rule: '世界规则是否真的作用到事件结果，而不只是名词陈列。',
-  opening: '前300字内是否快速进入异常、危险、任务或正面冲突。',
-  payoff: '本章是否形成“铺垫→爆发→反馈”的最小爽点闭环。',
-  cliffhanger: '章尾是否留下追读牵引，如信息缺口、危险临门、身份反转或选择未决。',
-  dialogue: '对白是否自然，是否有停顿、打断、人物声线差异。',
-  outline: '正文是否覆盖了本章大纲的关键锚点。',
+  conflict: '闂佸搫瀚烽崹浼村箚娓氣偓瀹曟ê鈻庤箛鎾寸様婵炲瓨绮屽Λ宀勫焵椤掍胶鐭屾繛韫嵆瀵粙宕惰缂嶁偓闂傚倸鍟伴崕鐢稿疮鐎ｎ剚鍠嗛柟鐑樻礀椤ュ繘姊洪銏╂Ч閻庢哎鍔戦崺鍡涘箳瀹ュ懏鏆曟繛?闂佸憡鑹剧€涒晠鎮樻径鎰伋婵犻潧鐗婇悾閬嶆煛閸繍妲归柡鍛劦瀹曟﹢鎳犻鍌氱９闂備礁褰為崟姗€鍩€?',
+
+  rule: '婵炴垶鎸婚悧婊堝疾椤愩倖鍠嗛柛鏇ㄥ亜閻忕喖鏌￠崟闈涚仩闁诡垯绶氶幆鍥偄閻戞鏆犳繛杈剧稻缁酣寮妶澶婄濡鑳堕惃鎴澝归悩鎻掝暢缂侇喓鍔戝绋款煥閹邦喚顦梺鍏兼緲婵傛梻绮径鎰煑妞ゅ繐鎳忕瑧闂佸憡鑹剧粔鐑芥儊濠靛鈷旈柛顐ｇ箓閻忔瑩鏌?',
+
+  opening: '闂?00闁诲孩绋掗〃鍛村船閹绢喖鍙婃い鏍ㄧ閸庡﹪鐓崶璺轰喊闁逞屽墰閸犳洜鎹㈠鈧畷妤呭Ψ閵壯咃紳闁汇埄鍨遍幃鍫曞焵椤戣法顦︾€规挸瀚板浠嬪煘鎼存挸浜惧ù锝夋敱瀹曟煡鏌涢弬鍝勫⒉闁搞劊鍔岄～銏ゆ晲婢跺銆冮梺鍛婂姌鐏忔瑩鎮版繝鍥?',
+
+  payoff: '闂佸搫鐗滈崜娑㈡偟閻戣棄鍙婃い鏍ㄧ閸庡﹦鎲搁懜顒€鐏柛銊﹀哺閸ㄦ儳顭ㄩ崼鐔稿殘闂佸壊鐓堥崑鈧柛鐔奉儔閹儵宕卞Δ鈧徊娲煃椤愶絽绗掔€殿喛濮ら敍鍐醇濮橈絽浜炬繝闈涚墛閻ｉ亶鏌￠崼姘壕闁诲繐绻愮换鎺楀春閵夆晜鍊风憸鐗堝笚閿涙棃鏌ｅ搴＄仜闁?',
+
+  cliffhanger: '缂備焦姊绘慨鎾偄椤掑嫬鍙婃い鏍ㄧ閸庡﹪鏌ｉ敐鍡欐噥缂佹鎳忓濠氬磹閻曚礁娈洪梺缁橆殜濞佳呮閳哄懏鏅悘鐐电摂濞层倕菐閸ワ絽澧插ù鐓庢噽缁辨捇宕崟顐ょ▔闂侀潧妫旂粈浣哥暤閸曨垱鈷旈柍琛″亾濠㈣泛绉瑰濠氬Ω閿濆倸浜惧ù锝勭矙閻撯晛霉閻樼儤顥夌€殿喛濮ゅ顏堫敆娴ｅ摜浠愰梻渚囧亜椤︽壆鈧哎鍔戝鐢割敂閸曨偅鐎梺?',
+
+  dialogue: '闁诲酣娼у﹢鍗炩枍瑜斿浼搭敍濮橆厼鍓ㄩ梺鐓庮殠娴滅偤宕濊閺佸秶浠﹂悙顑箓鏌涘楣冩婵犫偓娓氣偓瀹曟垵顭ㄩ崼娑掑亾閹达箑违濞达絿鎳撻埅鐢告煛閸屻倕骞戦柍褜鍏涘鎺懶ф径鎰亱闁宠桨绶ょ槐锝囩磼閹呬虎婵☆垰锕ら锝夊磼濡嘲浜?',
+
+  outline: '濠殿喗绻愮徊楣冨几閸愵喖鍙婃い鏍ㄧ閸庡﹪鎮烽弴鐐搭棤婵炴彃锕ョ粋宥夊幢濡粯瀚崇紓浣规⒒婵挳濡甸崶鈺冩／闁肩⒈鍓氶悾閬嶆煕韫囨柨鈻曢柡渚囧弮閺屻劌顫濋崡鐐板寲闂?',
 };
+
+const CREATIVE_MODE_OPTIONS: Array<{ value: CreativeMode; label: string; description: string }> = [
+  { value: 'balanced', label: '闂佺鍐╃┛闁靛棌鍋撻梺瑙勪航閸斿繒鎹?, description: '闂佺绻愰妶鎼佸Υ閹扮増鍤嶉柛灞惧嚬濞堁囨煏閸℃洜鍔嶉柛搴＄箳缁辨帡顢旈崒妤€浜惧〒姘ｅ亾闁瑰壊鍓涢埀顒佺⊕閸旀帞绮畝鍕倞闁绘劖娼欒闂? },
+  { value: 'hook', label: '闂備浇袙閺呮盯鎮哄▎鎰嚤婵☆垰鎼敮?, description: '闂佸搫娲﹀娆忣啅鏉堚晜瀚柛鎰╁妿绾惧鏌涢敃鈧幖顐ゆ閹捐埖鏆滈柟鑲╁亹閸嬫挻鎷呴搹鐟板▏闁诲繐绻戝畷姗€骞忔搴㈠珰闁煎鍊曢ˉ鎺斺偓娈垮枟濞插繘鍩€? },
+  { value: 'emotion', label: '闂佽鍨伴幊鎰板础鎼粹檧鏌﹀璺侯儓缁?, description: '闂佸搫娲﹀娆忣啅鏉堚晜瀚柛鎰ㄦ櫅閸撴壆绱撴笟鍥︾凹閻忓繑绻堝畷婵嬪Ω閿濆倸浜惧ù锝囶焾閸愨偓闁圭厧鐡ㄩ弻褏绮仦鐐婵炲棙鎸荤紓姘舵煏? },
+  { value: 'suspense', label: '闂佽鍣崜娆愭償閻戣棄绀夐柣妯诲絻缁?, description: '闂佸搫娲﹀娆忣啅鏉堚晜瀚柛鎰屽倻绠氶梺璇″弾閸ㄥ啿顔忛柆宥呯煑闁挎繂鍟犻崑鎾存媴缁嬭法銈梻鍌氬閺呯娀鍩€椤掑啫顥嶇紒璇插缁嬪鎯斿┑鍫㈡喒缂佺虎鍙庨崰鏍偩妤ｅ啫违? },
+  { value: 'relationship', label: '闂佺绻愮壕顓㈡焾閹绢喖绠抽柕濞垮妿缁?, description: '闂佸搫娲﹀娆忣啅鏉堚晜瀚柛鎰屽嫮婧勯梺缁樸仜閺呮粍鍒婂ú顏勭妞ゆ牗菤閸嬫挻鎷呯粙鍨稑缂備緡鍨甸褑銇愭径鎰闁哄诞鍕伅婵炲瓨绮嶇敮鎺撴叏閳哄懏鍊舵い鎰╁劚灏忛梺? },
+  { value: 'payoff', label: '闂佺粯鐗滈弲顐﹀磻閿濆鐐婇柣鎰摠閺?, description: '闂佸搫娲﹀娆忣啅鏉堚晜瀚柛鎰靛枟閹虫瑩鏌涢…鎴濅簻闁告﹩鍓熼幃鎶芥嚋椤戣棄浜惧ù锝呮惈閻庡鏌涘▎鎰仴鐎殿喛濮ら敍鍐醇濠婂懐鎲跨紓浣规⒒婵挳宕幘顔解拻妞ゆ挾濮寸粻姘舵煏? },
+];
+
+const STORY_FOCUS_OPTIONS: Array<{ value: StoryFocus; label: string; description: string }> = [
+  { value: 'advance_plot', label: '婵炴垶鎹佸畷鐢稿吹鎼淬劌绠抽柕濞垮妿缁?, description: '闂佸搫鐗滈崜娑㈡偟闁垮顕辨俊顖氭惈鐢儵鏌熼幁鎺戝濠殿喒鏅濇禒锕傚焵椤掑嫬绀夐柛顭戝枟鐎氭彃霉閻樹警鍤欏┑顔惧枎椤曘儵鍩€椤掑嫬绀堢€广儱鐗愬▔鏌ユ煏? },
+  { value: 'deepen_character', label: '婵炲瓨绮忓▍锝嗘櫠閹稿海绠欓柟瀛樼箚閸?, description: '闂佸搫鐗滈崜娑㈡偟闁垮顕辨俊顖氭惈鐢儵鏌涢幇顓犳噥婵懓顦甸幃褔鍩￠崨顏勪壕濠㈣泛顑呴銉╂煏閸℃洜顦﹂柟顑惧劦閹瑩鏌呭☉姘辨喛闂佺懓鐡ㄩ崝娆撳汲鏉堛劎顩烽柨婵嗗楠炲棝鏌? },
+  { value: 'escalate_conflict', label: '闂佸憡鍔樼亸娆撴偘婵犲洤纭€闁搞儮鏅犻悰?, description: '闂佸搫鐗滈崜娑㈡偟闁垮顕辨俊顖氭惈鐢儵鏌熸０婵嗗⒋闁绘繍鍣ｅ鑲╂嫚閹绘帩娼濋梺闈涙濡炴帡宕浣侯浄闁炬艾鍊婚悷銏ゆ倵闂堟稒璐￠柣婵囩☉椤曪綁宕崟顐敽闂? },
+  { value: 'reveal_mystery', label: '闁荤姴顑嗙划灞矫洪悢鐓庣妞ゆ挾濮版禒?, description: '闂佸搫鐗滈崜娑㈡偟闁垮顕辨俊顖氭惈鐢儵鏌熼幁鎺戝缂佺粯锕㈤幆鍥偄閻戞銈查梺闈涙閼冲爼宕垫惔锝嗩潟妞ゎ偒鍘鹃悷銏ゆ偣娴ｉ潧鈧鎮￠敓鐘茬煑婵☆垰鎼褔鏌? },
+  { value: 'relationship_shift', label: '闂佺绻愮壕顓㈡焾鐎涙ɑ濮滄い鎺嶇椤?, description: '闂佸搫鐗滈崜娑㈡偟闁垮顕辨俊顖氭惈鐢儵鏌熼幁鎺戝濠殿喒鏅滅粋宥夋惞閻熸壋鎸呴梺绋跨箰绾绢參鏌堥幘顔筋棃闁绘娅ｇ粻顕€鏌曢崱鏇″厡闁绘鍓涢幉妤呭磼濞戞浠愰梻浣瑰絻缁夌數鏁幘璇参? },
+  { value: 'foreshadow_payoff', label: '婵炲鍘х换鎺楁偡椤忓牆鐐婇柣鎰摠閺?, description: '闂佸搫鐗滈崜娑㈡偟闁垮顕辨俊顖氭惈鐢儵鏌涜箛鏂跨仼妤犵偛娲畷婊冾吋閸℃鈧噣鏌熸担鍐ㄥ姷妞ゆ洦鍨舵俊瀛樻媴閾忓湱鐓勯梺鐓庢惈閸婂綊宕归妸鈺佹槬閻庯綆鍙庨崯搴ㄦ煏? },
+];
+
 
 const getWeakestQualityMetric = (metrics: ChapterQualityMetrics): { label: string; value: number } => {
+
   const items = [
-    { label: '冲突链', value: metrics.conflict_chain_hit_rate },
-    { label: '规则落地', value: metrics.rule_grounding_hit_rate },
-    { label: '开场钩子', value: metrics.opening_hook_rate },
-    { label: '爽点链', value: metrics.payoff_chain_rate },
-    { label: '章尾钩子', value: metrics.cliffhanger_rate },
-    { label: '对白自然度', value: metrics.dialogue_naturalness_rate },
-    { label: '大纲贴合度', value: metrics.outline_alignment_rate },
+
+    { label: '闂佸憡鍔樼亸娆撴偘婵犲洦鐓?, value: metrics.conflict_chain_hit_rate }',
+
+    { label: '闁荤喐鐟ョ€氼剟宕归鐐村闁芥ê顦伴崟?, value: metrics.rule_grounding_hit_rate }',
+
+    { label: '閻庢鍠掗崑鎾绘煕閿旇姤銇濋柟鍓插墰閳?, value: metrics.opening_hook_rate }',
+
+    { label: '闂佺粯鐗滈弲顐﹀磻閿濆鐓?, value: metrics.payoff_chain_rate }',
+
+    { label: '缂備焦姊绘慨鎾偄椤掑嫭鐓㈤柍杞拌兌閹?, value: metrics.cliffhanger_rate }',
+
+    { label: '闁诲酣娼у﹢鍗炩枍瑜旈幊娑㈩敂閸℃衼闁?, value: metrics.dialogue_naturalness_rate }',
+
+    { label: '婵犮垹鐖㈤崨顖氱墯闁荤姵鍔栧娆撳箖鎼淬垺鍎?, value: metrics.outline_alignment_rate }',
+
   ];
+
   return items.reduce((min, item) => (item.value < min.value ? item : min), items[0]);
+
 };
+
+
 
 const getQualityMetricItems = (metrics: ChapterQualityMetrics) => [
-  { key: 'conflict', label: '冲突链', value: metrics.conflict_chain_hit_rate, tip: QUALITY_METRIC_TIPS.conflict },
-  { key: 'rule', label: '规则落地', value: metrics.rule_grounding_hit_rate, tip: QUALITY_METRIC_TIPS.rule },
-  { key: 'opening', label: '开场钩子', value: metrics.opening_hook_rate, tip: QUALITY_METRIC_TIPS.opening },
-  { key: 'payoff', label: '爽点链', value: metrics.payoff_chain_rate, tip: QUALITY_METRIC_TIPS.payoff },
-  { key: 'cliffhanger', label: '章尾钩子', value: metrics.cliffhanger_rate, tip: QUALITY_METRIC_TIPS.cliffhanger },
-  { key: 'dialogue', label: '对白自然度', value: metrics.dialogue_naturalness_rate, tip: QUALITY_METRIC_TIPS.dialogue },
-  { key: 'outline', label: '大纲贴合度', value: metrics.outline_alignment_rate, tip: QUALITY_METRIC_TIPS.outline },
+
+  { key: 'conflict', label: '闂佸憡鍔樼亸娆撴偘婵犲洦鐓?, value: metrics.conflict_chain_hit_rate, tip: QUALITY_METRIC_TIPS.conflict }',
+
+  { key: 'rule', label: '闁荤喐鐟ョ€氼剟宕归鐐村闁芥ê顦伴崟?, value: metrics.rule_grounding_hit_rate, tip: QUALITY_METRIC_TIPS.rule }',
+
+  { key: 'opening', label: '閻庢鍠掗崑鎾绘煕閿旇姤銇濋柟鍓插墰閳?, value: metrics.opening_hook_rate, tip: QUALITY_METRIC_TIPS.opening }',
+
+  { key: 'payoff', label: '闂佺粯鐗滈弲顐﹀磻閿濆鐓?, value: metrics.payoff_chain_rate, tip: QUALITY_METRIC_TIPS.payoff }',
+
+  { key: 'cliffhanger', label: '缂備焦姊绘慨鎾偄椤掑嫭鐓㈤柍杞拌兌閹?, value: metrics.cliffhanger_rate, tip: QUALITY_METRIC_TIPS.cliffhanger }',
+
+  { key: 'dialogue', label: '闁诲酣娼у﹢鍗炩枍瑜旈幊娑㈩敂閸℃衼闁?, value: metrics.dialogue_naturalness_rate, tip: QUALITY_METRIC_TIPS.dialogue }',
+
+  { key: 'outline', label: '婵犮垹鐖㈤崨顖氱墯闁荤姵鍔栧娆撳箖鎼淬垺鍎?, value: metrics.outline_alignment_rate, tip: QUALITY_METRIC_TIPS.outline }',
+
 ];
+
+
 
 const getBatchSummaryMetricItems = (summary?: {
+
   avg_conflict_chain_hit_rate?: number;
+
   avg_rule_grounding_hit_rate?: number;
+
   avg_opening_hook_rate?: number;
+
   avg_payoff_chain_rate?: number;
+
   avg_cliffhanger_rate?: number;
+
 }) => [
-  { key: 'conflict', label: '冲突链', value: summary?.avg_conflict_chain_hit_rate ?? 0, tip: QUALITY_METRIC_TIPS.conflict },
-  { key: 'rule', label: '规则落地', value: summary?.avg_rule_grounding_hit_rate ?? 0, tip: QUALITY_METRIC_TIPS.rule },
-  { key: 'opening', label: '开场钩子', value: summary?.avg_opening_hook_rate ?? 0, tip: QUALITY_METRIC_TIPS.opening },
-  { key: 'payoff', label: '爽点链', value: summary?.avg_payoff_chain_rate ?? 0, tip: QUALITY_METRIC_TIPS.payoff },
-  { key: 'cliffhanger', label: '章尾钩子', value: summary?.avg_cliffhanger_rate ?? 0, tip: QUALITY_METRIC_TIPS.cliffhanger },
+
+  { key: 'conflict', label: '闂佸憡鍔樼亸娆撴偘婵犲洦鐓?, value: summary?.avg_conflict_chain_hit_rate ?? 0, tip: QUALITY_METRIC_TIPS.conflict }',
+
+  { key: 'rule', label: '闁荤喐鐟ョ€氼剟宕归鐐村闁芥ê顦伴崟?, value: summary?.avg_rule_grounding_hit_rate ?? 0, tip: QUALITY_METRIC_TIPS.rule }',
+
+  { key: 'opening', label: '閻庢鍠掗崑鎾绘煕閿旇姤銇濋柟鍓插墰閳?, value: summary?.avg_opening_hook_rate ?? 0, tip: QUALITY_METRIC_TIPS.opening }',
+
+  { key: 'payoff', label: '闂佺粯鐗滈弲顐﹀磻閿濆鐓?, value: summary?.avg_payoff_chain_rate ?? 0, tip: QUALITY_METRIC_TIPS.payoff }',
+
+  { key: 'cliffhanger', label: '缂備焦姊绘慨鎾偄椤掑嫭鐓㈤柍杞拌兌閹?, value: summary?.avg_cliffhanger_rate ?? 0, tip: QUALITY_METRIC_TIPS.cliffhanger }',
+
 ];
+
+
 
 const QUALITY_PROFILE_BLOCK_ORDER: Array<keyof Pick<ChapterQualityProfileSummary, 'generation' | 'checker' | 'reviser' | 'mcp_guard' | 'external_assets_block'>> = [
+
   'generation',
+
   'checker',
+
   'reviser',
+
   'mcp_guard',
+
   'external_assets_block',
+
 ];
 
+
+
 const QUALITY_PROFILE_BLOCK_LABELS: Record<typeof QUALITY_PROFILE_BLOCK_ORDER[number], string> = {
-  generation: '生成约束',
-  checker: '分析校验',
-  reviser: '修订回路',
-  mcp_guard: 'MCP 守护',
-  external_assets_block: '外部素材约束',
+
+  generation: '闂佹眹鍨婚崰鎰板垂濮樿京妫柨鏃囧Г鐏?',
+
+  checker: '闂佸憡甯掑Λ娆撴倵娴犲鍐€闁跨喓濮峰畷?',
+
+  reviser: '婵烇絽娴傞崰娑㈩敇瑜版帒鐐婇柣鎰閻?',
+
+  mcp_guard: 'MCP 闁诲海鎳撻悧濠冩叏?',
+
+  external_assets_block: '婵犮垼鍩栭悧鐘诲磿鐎靛憡顫曢柣妯挎珪缂嶅繒绱掗幘鍛存婵?',
+
 };
 
+
+
 const getQualityProfileDisplayItems = (summary?: ChapterQualityProfileSummary | null) => {
+
   if (!summary) {
+
     return [];
+
   }
+
+
 
   const items: Array<{ key: string; label: string; description: string }> = [];
 
+
+
   if (summary.baseline_id) {
-    items.push({ key: 'baseline', label: '质量基线', description: summary.baseline_id });
+
+    items.push({ key: 'baseline', label: '闁荤姵鍔戦崝鎴﹀闯濞差亜鏄ラ柧蹇曟嚀濞?, description: summary.baseline_id })';
+
   }
+
   if (summary.version) {
-    items.push({ key: 'version', label: '画像版本', description: summary.version });
+
+    items.push({ key: 'version', label: '闂佹眹鍨奸褔宕曞鑸靛亱闁割偆鍠愰幏?, description: summary.version })';
+
   }
+
   if (summary.style_profile) {
-    items.push({ key: 'style', label: '风格画像', description: summary.style_profile });
+
+    items.push({ key: 'style', label: '婵＄偛顑呯€涒晠鎮ч幖浣瑰仺閻犲洦褰冮崜?, description: summary.style_profile })';
+
   }
+
   if (summary.genre_profiles?.length) {
-    items.push({ key: 'genres', label: '题材适配', description: summary.genre_profiles.join(' / ') });
+
+    items.push({ key: 'genres', label: '婵☆偆澧楄摫婵炲吋顨婇弻鍛村磼閻愭彃璧?, description: summary.genre_profiles.join(' / ') })';
+
   }
+
   if (summary.quality_dimensions?.length) {
-    items.push({ key: 'dimensions', label: '关注维度', description: summary.quality_dimensions.join(' / ') });
+
+    items.push({ key: 'dimensions', label: '闂佺绻楀▍鏇㈠极閻愮數纾奸柡澶嬪灥椤?, description: summary.quality_dimensions.join(' / ') })';
+
   }
+
+
 
   QUALITY_PROFILE_BLOCK_ORDER.forEach((blockKey) => {
+
     const block = summary[blockKey];
+
     const description = block?.summary || block?.title || block?.lines?.[0] || block?.prompt_blocks?.[0];
+
     if (description) {
+
       items.push({
+
         key: blockKey,
+
         label: QUALITY_PROFILE_BLOCK_LABELS[blockKey],
+
         description,
+
       });
+
     }
+
   });
 
+
+
   return items;
+
 };
 
-// 从 localStorage 读取缓存的字数
+
+
+// 婵?localStorage 闁荤姴娲╅褑銇愰崶鈺冪＝闁规儳纾幗鐘绘煟閵娿儱顏╅柣鈯欏洤鏋?
+
 const getCachedWordCount = (): number => {
+
   try {
+
     const cached = localStorage.getItem(WORD_COUNT_CACHE_KEY);
+
     if (cached) {
+
       const value = parseInt(cached, 10);
+
       if (!isNaN(value) && value >= 500 && value <= 10000) {
+
         return value;
+
       }
+
     }
+
   } catch (error) {
-    console.warn('读取字数缓存失败:', error);
+
+    console.warn('闁荤姴娲╅褑銇愰崶鈹惧亾濞戞瑯娈曢柡鍡欏枔缁辨捇骞樺畷鍥ㄦ喖婵犮垺鍎肩划鍓ф喆?', error);
+
   }
+
   return DEFAULT_WORD_COUNT;
+
 };
 
-// 保存字数到 localStorage
+
+
+// 婵烇絽娲︾换鍌炴偤閵娧€鍋撳☉娆樻畷闁哄棛鍠栧畷?localStorage
+
 const setCachedWordCount = (value: number): void => {
+
   try {
+
     localStorage.setItem(WORD_COUNT_CACHE_KEY, String(value));
+
   } catch (error) {
-    console.warn('保存字数缓存失败:', error);
+
+    console.warn('婵烇絽娲︾换鍌炴偤閵娧€鍋撳☉娆樻畷闁哄棛鍠撶槐鎾诲箻瀹曞洦鎲兼繝銏″劶缁墽鎲?', error);
+
   }
+
 };
 
-type BatchTaskMeta = {
-  startChapterNumber: number;
-  count: number;
-  autoAnalyze: boolean;
-  projectId?: string;
+
+
+type PersistedStoryCreationDraft = {
+  creativeMode?: CreativeMode;
+  storyFocus?: StoryFocus;
+  plotStage?: PlotStage;
+  narrativePerspective?: string;
+  storyCreationBriefDraft?: string;
+  beatPlannerDraft?: StoryBeatPlannerDraft;
+  sceneOutlineDraft?: StorySceneOutlineDraft;
+  isBriefCustomized?: boolean;
+  isBeatPlannerCustomized?: boolean;
+  isSceneOutlineCustomized?: boolean;
+  updatedAt?: string;
 };
 
-const isValidBatchTaskMeta = (value: unknown): value is BatchTaskMeta => {
+type StoryCreationSnapshotReason = 'manual' | 'generate';
+
+type StoryCreationSnapshotScope = 'single' | 'batch';
+
+type StoryCreationSnapshot = PersistedStoryCreationDraft & {
+  id: string;
+  scope: StoryCreationSnapshotScope;
+  createdAt: string;
+  reason: StoryCreationSnapshotReason;
+  label: string;
+  prompt?: string;
+  promptLayerLabels?: string[];
+  promptCharCount?: number;
+};
+
+const MANUAL_STORY_CREATION_BRIEF_SENTINEL = '__manual_story_creation_brief__';
+
+const normalizePersistedStoryCreationDraft = (value: unknown): PersistedStoryCreationDraft | null => {
   if (!value || typeof value !== 'object') {
-    return false;
+    return null;
   }
 
-  const meta = value as Record<string, unknown>;
-  return (
-    typeof meta.startChapterNumber === 'number' &&
-    typeof meta.count === 'number' &&
-    typeof meta.autoAnalyze === 'boolean'
-  );
+  const draft = value as Record<string, unknown>;
+
+  return {
+    creativeMode: typeof draft.creativeMode === 'string' ? draft.creativeMode as CreativeMode : undefined,
+    storyFocus: typeof draft.storyFocus === 'string' ? draft.storyFocus as StoryFocus : undefined,
+    plotStage: typeof draft.plotStage === 'string' ? draft.plotStage as PlotStage : undefined,
+    narrativePerspective: typeof draft.narrativePerspective === 'string' ? draft.narrativePerspective : undefined,
+    storyCreationBriefDraft: typeof draft.storyCreationBriefDraft === 'string' ? draft.storyCreationBriefDraft : undefined,
+    beatPlannerDraft: normalizeStoryBeatPlannerDraft(draft.beatPlannerDraft as Partial<StoryBeatPlannerDraft> | null),
+    sceneOutlineDraft: normalizeStorySceneOutlineDraft(draft.sceneOutlineDraft as Partial<StorySceneOutlineDraft> | null),
+    isBriefCustomized: draft.isBriefCustomized === true,
+    isBeatPlannerCustomized: draft.isBeatPlannerCustomized === true,
+    isSceneOutlineCustomized: draft.isSceneOutlineCustomized === true,
+    updatedAt: typeof draft.updatedAt === 'string' ? draft.updatedAt : undefined,
+  };
 };
 
-const readPersistedBatchTaskMetaMap = (): Record<string, BatchTaskMeta> => {
+const readPersistedStoryCreationDraftMap = (): Record<string, PersistedStoryCreationDraft> => {
   try {
-    const raw = localStorage.getItem(BATCH_TASK_META_STORAGE_KEY);
+    const raw = localStorage.getItem(STORY_CREATION_DRAFT_STORAGE_KEY);
+
     if (!raw) {
       return {};
     }
 
     const parsed = JSON.parse(raw) as Record<string, unknown>;
+
     if (!parsed || typeof parsed !== 'object') {
       return {};
     }
 
-    const normalized: Record<string, BatchTaskMeta> = {};
-    Object.entries(parsed).forEach(([taskId, value]) => {
-      if (isValidBatchTaskMeta(value)) {
-        normalized[taskId] = value;
+    const normalized: Record<string, PersistedStoryCreationDraft> = {};
+
+    Object.entries(parsed).forEach(([storageKey, value]) => {
+      const normalizedDraft = normalizePersistedStoryCreationDraft(value);
+
+      if (normalizedDraft) {
+        normalized[storageKey] = normalizedDraft;
       }
     });
+
     return normalized;
   } catch (error) {
-    console.warn('读取批量任务元数据缓存失败:', error);
+    console.warn('闁荤姴娲╅褑銇愰崶顒€绀嗘繛鎴烆殘缁嬪﹤顪冭ぐ鎺旂暫闁宠甯￠幊婊勬綇椤愩垻锛樼紓浣割儓濞夋洜妲愰敂閿亾濞戞顏堝Φ閹寸姵瀚?', error);
     return {};
   }
 };
 
-const writePersistedBatchTaskMetaMap = (map: Record<string, BatchTaskMeta>): void => {
+const writePersistedStoryCreationDraftMap = (map: Record<string, PersistedStoryCreationDraft>): void => {
   try {
-    localStorage.setItem(BATCH_TASK_META_STORAGE_KEY, JSON.stringify(map));
+    localStorage.setItem(STORY_CREATION_DRAFT_STORAGE_KEY, JSON.stringify(map));
   } catch (error) {
-    console.warn('保存批量任务元数据缓存失败:', error);
+    console.warn('婵烇絽娲︾换鍌炴偤閵娾晛绀嗘繛鎴烆殘缁嬪﹤顪冭ぐ鎺旂暫闁宠甯￠幊婊勬綇椤愩垻锛樼紓浣割儓濞夋洜妲愰敂閿亾濞戞顏堝Φ閹寸姵瀚?', error);
   }
 };
+
+const persistStoryCreationDraft = (storageKey: string, draft: PersistedStoryCreationDraft): void => {
+  const map = readPersistedStoryCreationDraftMap();
+  map[storageKey] = draft;
+  writePersistedStoryCreationDraftMap(map);
+};
+
+const getPersistedStoryCreationDraft = (storageKey: string): PersistedStoryCreationDraft | undefined => {
+  const map = readPersistedStoryCreationDraftMap();
+  return map[storageKey];
+};
+
+const normalizeStoryCreationSnapshot = (value: unknown): StoryCreationSnapshot | null => {
+  const normalizedDraft = normalizePersistedStoryCreationDraft(value);
+
+  if (!normalizedDraft || !value || typeof value !== 'object') {
+    return null;
+  }
+
+  const snapshot = value as Record<string, unknown>;
+  const scope = snapshot.scope === 'single' || snapshot.scope === 'batch'
+    ? snapshot.scope as StoryCreationSnapshotScope
+    : null;
+  const reason = snapshot.reason === 'manual' || snapshot.reason === 'generate'
+    ? snapshot.reason as StoryCreationSnapshotReason
+    : null;
+
+  if (!scope || !reason || typeof snapshot.id !== 'string' || !snapshot.id.trim()) {
+    return null;
+  }
+
+  const normalizedPrompt = typeof snapshot.prompt === 'string' ? snapshot.prompt.trim() : '';
+  const normalizedBeatPrompt = buildStoryBeatPlannerPrompt(normalizedDraft.beatPlannerDraft, scope);
+  const normalizedScenePrompt = buildStorySceneOutlinePrompt(normalizedDraft.sceneOutlineDraft, scope);
+  const normalizedLayerLabels = Array.isArray(snapshot.promptLayerLabels)
+    ? snapshot.promptLayerLabels
+      .filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+      .map((item) => item.trim())
+    : buildStoryCreationPromptLayerLabels({
+      summary: normalizedDraft.storyCreationBriefDraft,
+      beat: normalizedBeatPrompt,
+      scene: normalizedScenePrompt,
+    });
+  const createdAt = typeof snapshot.createdAt === 'string' && snapshot.createdAt.trim()
+    ? snapshot.createdAt
+    : normalizedDraft.updatedAt ?? new Date(0).toISOString();
+  const normalizedPromptCharCount = typeof snapshot.promptCharCount === 'number' && Number.isFinite(snapshot.promptCharCount)
+    ? Math.max(0, Math.round(snapshot.promptCharCount))
+    : normalizedPrompt.length;
+
+  return {
+    ...normalizedDraft,
+    id: snapshot.id.trim(),
+    scope,
+    createdAt,
+    reason,
+    label: typeof snapshot.label === 'string' && snapshot.label.trim()
+      ? snapshot.label.trim()
+      : reason === 'generate'
+        ? '閻㈢喐鍨氶崜宥囨殌濡?'
+        : '閹靛濮╄箛顐ゅ弾',
+    prompt: normalizedPrompt || undefined,
+    promptLayerLabels: normalizedLayerLabels,
+    promptCharCount: normalizedPromptCharCount,
+  };
+};
+
+const resolveStoryCreationSnapshotTimestamp = (value?: string): number => {
+  const timestamp = value ? new Date(value).getTime() : Number.NaN;
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const readPersistedStoryCreationSnapshotMap = (): Record<string, StoryCreationSnapshot[]> => {
+  try {
+    const raw = localStorage.getItem(STORY_CREATION_SNAPSHOT_STORAGE_KEY);
+
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+    if (!parsed || typeof parsed !== 'object') {
+      return {};
+    }
+
+    const normalized: Record<string, StoryCreationSnapshot[]> = {};
+
+    Object.entries(parsed).forEach(([storageKey, value]) => {
+      if (!Array.isArray(value)) {
+        return;
+      }
+
+      const snapshots = value
+        .map((item) => normalizeStoryCreationSnapshot(item))
+        .filter((item): item is StoryCreationSnapshot => Boolean(item))
+        .sort((left, right) => (
+          resolveStoryCreationSnapshotTimestamp(right.createdAt)
+          - resolveStoryCreationSnapshotTimestamp(left.createdAt)
+        ))
+        .slice(0, STORY_CREATION_SNAPSHOT_LIMIT);
+
+      if (snapshots.length > 0) {
+        normalized[storageKey] = snapshots;
+      }
+    });
+
+    return normalized;
+  } catch (error) {
+    console.warn('鐠囪褰囬崚娑楃稊韫囶偆鍙庣紓鎾崇摠婢惰精瑙?', error);
+    return {};
+  }
+};
+
+const writePersistedStoryCreationSnapshotMap = (map: Record<string, StoryCreationSnapshot[]>): void => {
+  try {
+    localStorage.setItem(STORY_CREATION_SNAPSHOT_STORAGE_KEY, JSON.stringify(map));
+  } catch (error) {
+    console.warn('娣囨繂鐡ㄩ崚娑楃稊韫囶偆鍙庣紓鎾崇摠婢惰精瑙?', error);
+  }
+};
+
+const getPersistedStoryCreationSnapshots = (storageKey: string): StoryCreationSnapshot[] => {
+  const map = readPersistedStoryCreationSnapshotMap();
+  return map[storageKey] ?? [];
+};
+
+const persistStoryCreationSnapshot = (storageKey: string, snapshot: StoryCreationSnapshot): StoryCreationSnapshot[] => {
+  const map = readPersistedStoryCreationSnapshotMap();
+  const nextSnapshots = [
+    snapshot,
+    ...(map[storageKey] ?? []).filter((item) => item.id !== snapshot.id),
+  ]
+    .sort((left, right) => (
+      resolveStoryCreationSnapshotTimestamp(right.createdAt)
+      - resolveStoryCreationSnapshotTimestamp(left.createdAt)
+    ))
+    .slice(0, STORY_CREATION_SNAPSHOT_LIMIT);
+
+  map[storageKey] = nextSnapshots;
+  writePersistedStoryCreationSnapshotMap(map);
+  return nextSnapshots;
+};
+
+const removePersistedStoryCreationSnapshot = (storageKey: string, snapshotId: string): StoryCreationSnapshot[] => {
+  const map = readPersistedStoryCreationSnapshotMap();
+  const nextSnapshots = (map[storageKey] ?? []).filter((item) => item.id !== snapshotId);
+
+  if (nextSnapshots.length > 0) {
+    map[storageKey] = nextSnapshots;
+  } else {
+    delete map[storageKey];
+  }
+
+  writePersistedStoryCreationSnapshotMap(map);
+  return nextSnapshots;
+};
+
+const buildStoryCreationSnapshotId = (): string => {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `snapshot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+};
+
+const normalizeOptionalText = (value?: string | null): string => value?.trim() ?? '';
+
+const areStoryCreationDraftMetaFieldsEqual = (
+  left?: Partial<PersistedStoryCreationDraft> | null,
+  right?: Partial<PersistedStoryCreationDraft> | null,
+  options?: { includeNarrativePerspective?: boolean },
+): boolean => {
+  const includeNarrativePerspective = options?.includeNarrativePerspective === true;
+
+  return (left?.creativeMode ?? undefined) === (right?.creativeMode ?? undefined)
+    && (left?.storyFocus ?? undefined) === (right?.storyFocus ?? undefined)
+    && (left?.plotStage ?? undefined) === (right?.plotStage ?? undefined)
+    && (!includeNarrativePerspective || normalizeOptionalText(left?.narrativePerspective) === normalizeOptionalText(right?.narrativePerspective));
+};
+
+const areStoryCreationDraftContentsEqual = (
+  left?: Partial<PersistedStoryCreationDraft> | null,
+  right?: Partial<PersistedStoryCreationDraft> | null,
+  options?: { includeNarrativePerspective?: boolean },
+): boolean => (
+  areStoryCreationDraftMetaFieldsEqual(left, right, options)
+  && normalizeOptionalText(left?.storyCreationBriefDraft) === normalizeOptionalText(right?.storyCreationBriefDraft)
+  && areStoryBeatPlannerDraftsEqual(left?.beatPlannerDraft, right?.beatPlannerDraft)
+  && areStorySceneOutlineDraftsEqual(left?.sceneOutlineDraft, right?.sceneOutlineDraft)
+);
+
+const hasMeaningfulStoryCreationDraft = (
+  draft?: Partial<PersistedStoryCreationDraft> | null,
+): boolean => Boolean(
+  draft
+  && (
+    draft.creativeMode
+    || draft.storyFocus
+    || draft.plotStage
+    || normalizeOptionalText(draft.narrativePerspective)
+    || normalizeOptionalText(draft.storyCreationBriefDraft)
+    || !isStoryBeatPlannerDraftEmpty(draft.beatPlannerDraft)
+    || !isStorySceneOutlineDraftEmpty(draft.sceneOutlineDraft)
+  )
+);
+
+const buildStoryCreationSnapshotDiffLabels = (
+  snapshot?: Partial<PersistedStoryCreationDraft> | null,
+  currentDraft?: Partial<PersistedStoryCreationDraft> | null,
+  includeNarrativePerspective = false,
+): string[] => {
+  if (!snapshot || !currentDraft) {
+    return [];
+  }
+
+  const labels: string[] = [];
+
+  if (normalizeOptionalText(snapshot.storyCreationBriefDraft) !== normalizeOptionalText(currentDraft.storyCreationBriefDraft)) {
+    labels.push('閹芥顩﹀鎻掑綁閸?)';
+  }
+
+  if (!areStoryBeatPlannerDraftsEqual(snapshot.beatPlannerDraft, currentDraft.beatPlannerDraft)) {
+    labels.push('閼哄倹濯垮鎻掑綁閸?)';
+  }
+
+  if (!areStorySceneOutlineDraftsEqual(snapshot.sceneOutlineDraft, currentDraft.sceneOutlineDraft)) {
+    labels.push('閸︾儤娅欏鎻掑綁閸?)';
+  }
+
+  if (!areStoryCreationDraftMetaFieldsEqual(snapshot, currentDraft, { includeNarrativePerspective })) {
+    labels.push('閸欏倹鏆熷鎻掑綁閸?)';
+  }
+
+  return labels;
+};
+
+const buildSingleStoryCreationDraftStorageKey = (projectId: string, chapterId: string): string => (
+  `${projectId}::single::${chapterId}`
+);
+
+const buildBatchStoryCreationDraftStorageKey = (projectId: string): string => (
+  `${projectId}::batch`
+);
+
+type StoryCreationSnapshotPanelProps = {
+  scopeLabel: '鍗曠珷' | '鎵归噺';
+  description: string;
+  emptyText: string;
+  snapshots: StoryCreationSnapshot[];
+  currentDraft: PersistedStoryCreationDraft;
+  canSave: boolean;
+  onSave: () => void;
+  onApply: (snapshot: StoryCreationSnapshot) => void;
+  onDelete: (snapshotId: string) => void;
+  onCopy: (content: string | undefined, scopeLabel: '鍗曠珷' | '鎵归噺') => Promise<void>;
+  includeNarrativePerspective?: boolean;
+};
+
+const StoryCreationSnapshotPanel = ({
+  scopeLabel,
+  description,
+  emptyText,
+  snapshots,
+  currentDraft,
+  canSave,
+  onSave,
+  onApply,
+  onDelete,
+  onCopy,
+  includeNarrativePerspective = false,
+}: StoryCreationSnapshotPanelProps) => {
+  const recentSnapshots = snapshots.slice(0, STORY_CREATION_SNAPSHOT_PREVIEW_LIMIT);
+
+  return (
+    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
+        <div>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>{'鍒涗綔蹇収'}</div>
+          <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>{description}</div>
+        </div>
+        <Space size={[8, 8]} wrap>
+          {snapshots.length > 0 && <Tag color="purple">{`鏈€杩?${snapshots.length} 鏉}</Tag>}
+          <Button size="small" onClick={onSave} disabled={!canSave}>
+            淇濆瓨褰撳墠鐗堟湰
+          </Button>
+        </Space>
+      </div>
+      {recentSnapshots.length > 0 ? (
+        <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+          {recentSnapshots.map((snapshot) => {
+            const diffLabels = buildStoryCreationSnapshotDiffLabels(snapshot, currentDraft, includeNarrativePerspective);
+
+            return (
+              <div
+                key={snapshot.id}
+                style={{
+                  padding: '10px 12px',
+                  border: '1px solid #f0f0f0',
+                  borderRadius: 8,
+                  background: '#fafafa',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{snapshot.label}</div>
+                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
+                      {new Date(snapshot.createdAt).toLocaleString()}
+                    </div>
+                  </div>
+                  <Space wrap size={[6, 6]}>
+                    <Tag color={snapshot.reason === 'manual' ? 'green' : 'purple'}>
+                      {snapshot.reason === 'manual' ? '鎵嬪姩淇濆瓨' : '鐢熸垚鍓嶇暀妗?'}
+                    </Tag>
+                    <Tag color={(snapshot.promptCharCount ?? 0) >= STORY_CREATION_PROMPT_WARN_THRESHOLD ? 'gold' : 'blue'}>
+                      {`绾?${snapshot.promptCharCount ?? 0} 瀛梎}
+                    </Tag>
+                  </Space>
+                </div>
+                {snapshot.promptLayerLabels?.length ? (
+                  <Space wrap size={[6, 6]} style={{ marginBottom: 8 }}>
+                    {snapshot.promptLayerLabels.map((item) => (
+                      <Tag key={`${snapshot.id}-${item}`} color="processing">{item}</Tag>
+                    ))}
+                  </Space>
+                ) : null}
+                {diffLabels.length > 0 && (
+                  <Space wrap size={[6, 6]} style={{ marginBottom: 8 }}>
+                    {diffLabels.map((item) => (
+                      <Tag key={`${snapshot.id}-${item}`} color="orange">{item}</Tag>
+                    ))}
+                  </Space>
+                )}
+                <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginBottom: 8 }}>
+                  {snapshot.prompt
+                    ? '璇ュ揩鐓у凡璁板綍褰撴椂鐨勬渶缁堟敞鍏ラ瑙堬紝鍙殢鏃舵仮澶嶅埌褰撳墠椹鹃┒鑸辩户缁墦纾ㄣ€?'
+                    : '璇ュ揩鐓т富瑕佽褰曚簡鍒涗綔鍙傛暟涓庝汉宸ユ敼鍐欏唴瀹癸紝閫傚悎淇濈暀缁撴瀯鏂规銆?'}
+                </div>
+                <Space wrap size={[8, 8]}>
+                  <Button size="small" onClick={() => onApply(snapshot)}>
+                    鎭㈠鍒板綋鍓?                  </Button>
+                  <Button
+                    size="small"
+                    type="link"
+                    disabled={!snapshot.prompt}
+                    onClick={() => void onCopy(snapshot.prompt, scopeLabel)}
+                  >
+                    澶嶅埗蹇収
+                  </Button>
+                  <Popconfirm
+                    title="鍒犻櫎杩欎釜蹇収锛?"
+                    okText="鍒犻櫎"
+                    cancelText="鍙栨秷"
+                    onConfirm={() => onDelete(snapshot.id)}
+                  >
+                    <Button size="small" type="link" danger>
+                      鍒犻櫎
+                    </Button>
+                  </Popconfirm>
+                </Space>
+              </div>
+            );
+          })}
+        </Space>
+      ) : (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} />
+      )}
+    </div>
+  );
+};
+
+type BatchTaskMeta = {
+
+  startChapterNumber: number;
+
+  count: number;
+
+  autoAnalyze: boolean;
+
+  projectId?: string;
+
+};
+
+
+
+const isValidBatchTaskMeta = (value: unknown): value is BatchTaskMeta => {
+
+  if (!value || typeof value !== 'object') {
+
+    return false;
+
+  }
+
+
+
+  const meta = value as Record<string, unknown>;
+
+  return (
+
+    typeof meta.startChapterNumber === 'number' &&
+
+    typeof meta.count === 'number' &&
+
+    typeof meta.autoAnalyze === 'boolean'
+
+  );
+
+};
+
+
+
+const readPersistedBatchTaskMetaMap = (): Record<string, BatchTaskMeta> => {
+
+  try {
+
+    const raw = localStorage.getItem(BATCH_TASK_META_STORAGE_KEY);
+
+    if (!raw) {
+
+      return {};
+
+    }
+
+
+
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+    if (!parsed || typeof parsed !== 'object') {
+
+      return {};
+
+    }
+
+
+
+    const normalized: Record<string, BatchTaskMeta> = {};
+
+    Object.entries(parsed).forEach(([taskId, value]) => {
+
+      if (isValidBatchTaskMeta(value)) {
+
+        normalized[taskId] = value;
+
+      }
+
+    });
+
+    return normalized;
+
+  } catch (error) {
+
+    console.warn('闁荤姴娲╅褑銇愰崶顒€绠ョ憸鐗堝笒濞呫倕霉閻樹警鍤欏┑顔惧枛瀹曟宕橀埡鍌涱啀闂佺顕栭崰姘辨閿旈敮鍋撳☉娅亪濡甸幋鐘冲?', error);
+
+    return {};
+
+  }
+
+};
+
+
+
+const writePersistedBatchTaskMetaMap = (map: Record<string, BatchTaskMeta>): void => {
+
+  try {
+
+    localStorage.setItem(BATCH_TASK_META_STORAGE_KEY, JSON.stringify(map));
+
+  } catch (error) {
+
+    console.warn('婵烇絽娲︾换鍌炴偤閵娾晛绠ョ憸鐗堝笒濞呫倕霉閻樹警鍤欏┑顔惧枛瀹曟宕橀埡鍌涱啀闂佺顕栭崰姘辨閿旈敮鍋撳☉娅亪濡甸幋鐘冲?', error);
+
+  }
+
+};
+
+
 
 const persistBatchTaskMeta = (taskId: string, meta: BatchTaskMeta): void => {
+
   const map = readPersistedBatchTaskMetaMap();
+
   map[taskId] = meta;
+
   writePersistedBatchTaskMetaMap(map);
+
 };
+
+
 
 const getPersistedBatchTaskMeta = (taskId: string, projectId?: string): BatchTaskMeta | undefined => {
+
   const map = readPersistedBatchTaskMetaMap();
+
   const meta = map[taskId];
+
   if (!meta) {
+
     return undefined;
+
   }
+
+
 
   if (projectId && meta.projectId && meta.projectId !== projectId) {
+
     return undefined;
+
   }
+
+
 
   return meta;
+
 };
+
+
 
 const removePersistedBatchTaskMeta = (taskId: string): void => {
+
   const map = readPersistedBatchTaskMetaMap();
+
   if (!(taskId in map)) {
+
     return;
+
   }
 
+
+
   delete map[taskId];
+
   writePersistedBatchTaskMetaMap(map);
+
 };
 
+
+
 export default function Chapters() {
-  const { currentProject, chapters, outlines, setCurrentChapter, setCurrentProject } = useStore();
+
+  const currentProject = useStore((state) => state.currentProject);
+
+  const chapters = useStore((state) => state.chapters);
+
+  const outlines = useStore((state) => state.outlines);
+
+  const setCurrentChapter = useStore((state) => state.setCurrentChapter);
+
+  const setCurrentProject = useStore((state) => state.setCurrentProject);
+
   const [modal, contextHolder] = Modal.useModal();
+
   const [isModalOpen, setIsModalOpen] = useState(false);
+
   const [isEditorOpen, setIsEditorOpen] = useState(false);
+
   const [isContinuing, setIsContinuing] = useState(false);
+
   const [isGenerating, setIsGenerating] = useState(false);
+
   const [editingId, setEditingId] = useState<string | null>(null);
+
   const editingChapterIdRef = useRef<string | null>(null);
+
   const isEditorOpenRef = useRef(false);
+
   const [runningSingleChapterTasks, setRunningSingleChapterTasks] = useState<Record<string, string>>({});
+
   const [form] = Form.useForm();
+
   const [editorForm] = Form.useForm();
+
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+
   const contentTextAreaRef = useRef<TextAreaRef>(null);
+
   const [writingStyles, setWritingStyles] = useState<WritingStyle[]>([]);
+
   const [selectedStyleId, setSelectedStyleId] = useState<number | undefined>();
+
   const [targetWordCount, setTargetWordCount] = useState<number>(getCachedWordCount);
+
   const [availableModels, setAvailableModels] = useState<Array<{ value: string, label: string }>>([]);
   const [selectedModel, setSelectedModel] = useState<string | undefined>();
-  const [batchSelectedModel, setBatchSelectedModel] = useState<string | undefined>(); // 批量生成的模型选择
-  const [temporaryNarrativePerspective, setTemporaryNarrativePerspective] = useState<string | undefined>(); // 临时人称选择
+  const [batchSelectedModel, setBatchSelectedModel] = useState<string | undefined>(); // 闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭鏌ｉ妸銉ヮ仾閼垛晠鏌涢妸銉剶闁逞屽墮椤︽壆鈧?
+  const [temporaryNarrativePerspective, setTemporaryNarrativePerspective] = useState<string | undefined>(); // 婵炴垶鎸搁悺銊ヮ渻閸屾稓顩查柧蹇撳ⅲ閻愮儤鐒诲璺侯儏椤?
+  const [selectedCreativeMode, setSelectedCreativeMode] = useState<CreativeMode | undefined>();
+  const [batchSelectedCreativeMode, setBatchSelectedCreativeMode] = useState<CreativeMode | undefined>();
+  const [selectedStoryFocus, setSelectedStoryFocus] = useState<StoryFocus | undefined>();
+  const [batchSelectedStoryFocus, setBatchSelectedStoryFocus] = useState<StoryFocus | undefined>();
+  const [selectedPlotStage, setSelectedPlotStage] = useState<PlotStage | undefined>();
+  const [batchSelectedPlotStage, setBatchSelectedPlotStage] = useState<PlotStage | undefined>();
+  const [singleStoryCreationBriefDraft, setSingleStoryCreationBriefDraft] = useState('');
+  const [batchStoryCreationBriefDraft, setBatchStoryCreationBriefDraft] = useState('');
+  const [singleStoryBeatPlannerDraft, setSingleStoryBeatPlannerDraft] = useState<StoryBeatPlannerDraft>(EMPTY_STORY_BEAT_PLANNER_DRAFT);
+  const [batchStoryBeatPlannerDraft, setBatchStoryBeatPlannerDraft] = useState<StoryBeatPlannerDraft>(EMPTY_STORY_BEAT_PLANNER_DRAFT);
+  const [singleStorySceneOutlineDraft, setSingleStorySceneOutlineDraft] = useState<StorySceneOutlineDraft>(EMPTY_STORY_SCENE_OUTLINE_DRAFT);
+  const [batchStorySceneOutlineDraft, setBatchStorySceneOutlineDraft] = useState<StorySceneOutlineDraft>(EMPTY_STORY_SCENE_OUTLINE_DRAFT);
+  const [singleStoryCreationSnapshots, setSingleStoryCreationSnapshots] = useState<StoryCreationSnapshot[]>([]);
+  const [batchStoryCreationSnapshots, setBatchStoryCreationSnapshots] = useState<StoryCreationSnapshot[]>([]);
   const [analysisVisible, setAnalysisVisible] = useState(false);
+  const singleStoryCreationAutoBriefRef = useRef('');
+  const batchStoryCreationAutoBriefRef = useRef('');
+  const singleStoryBeatPlannerAutoRef = useRef<StoryBeatPlannerDraft>(EMPTY_STORY_BEAT_PLANNER_DRAFT);
+  const batchStoryBeatPlannerAutoRef = useRef<StoryBeatPlannerDraft>(EMPTY_STORY_BEAT_PLANNER_DRAFT);
+  const singleStorySceneOutlineAutoRef = useRef<StorySceneOutlineDraft>(EMPTY_STORY_SCENE_OUTLINE_DRAFT);
+  const batchStorySceneOutlineAutoRef = useRef<StorySceneOutlineDraft>(EMPTY_STORY_SCENE_OUTLINE_DRAFT);
+
+  const activeSingleCreationPreset = useMemo(
+    () => getCreationPresetByModes(selectedCreativeMode, selectedStoryFocus),
+    [selectedCreativeMode, selectedStoryFocus],
+  );
+
+  const activeBatchCreationPreset = useMemo(
+    () => getCreationPresetByModes(batchSelectedCreativeMode, batchSelectedStoryFocus),
+    [batchSelectedCreativeMode, batchSelectedStoryFocus],
+  );
+
+  const singleCreationBlueprint = useMemo(
+    () => buildCreationBlueprint(selectedCreativeMode, selectedStoryFocus, {
+      scene: 'chapter',
+      plotStage: selectedPlotStage,
+    }),
+    [selectedCreativeMode, selectedStoryFocus, selectedPlotStage],
+  );
+
+  const batchCreationBlueprint = useMemo(
+    () => buildCreationBlueprint(batchSelectedCreativeMode, batchSelectedStoryFocus, {
+      scene: 'chapter',
+      plotStage: batchSelectedPlotStage,
+    }),
+    [batchSelectedCreativeMode, batchSelectedStoryFocus, batchSelectedPlotStage],
+  );
+
+  const singleStoryObjectiveCard = useMemo(
+    () => buildStoryObjectiveCard(selectedCreativeMode, selectedStoryFocus, {
+      scene: 'chapter',
+      plotStage: selectedPlotStage,
+    }),
+    [selectedCreativeMode, selectedStoryFocus, selectedPlotStage],
+  );
+
+  const batchStoryObjectiveCard = useMemo(
+    () => buildStoryObjectiveCard(batchSelectedCreativeMode, batchSelectedStoryFocus, {
+      scene: 'chapter',
+      plotStage: batchSelectedPlotStage,
+    }),
+    [batchSelectedCreativeMode, batchSelectedStoryFocus, batchSelectedPlotStage],
+  );
+
+  const singleStoryResultCard = useMemo(
+    () => buildStoryResultCard(selectedCreativeMode, selectedStoryFocus, {
+      scene: 'chapter',
+      plotStage: selectedPlotStage,
+    }),
+    [selectedCreativeMode, selectedStoryFocus, selectedPlotStage],
+  );
+
+  const batchStoryResultCard = useMemo(
+    () => buildStoryResultCard(batchSelectedCreativeMode, batchSelectedStoryFocus, {
+      scene: 'chapter',
+      plotStage: batchSelectedPlotStage,
+    }),
+    [batchSelectedCreativeMode, batchSelectedStoryFocus, batchSelectedPlotStage],
+  );
+
+  const singleStoryExecutionChecklist = useMemo(
+    () => buildStoryExecutionChecklist(selectedCreativeMode, selectedStoryFocus, {
+      scene: 'chapter',
+      plotStage: selectedPlotStage,
+    }),
+    [selectedCreativeMode, selectedStoryFocus, selectedPlotStage],
+  );
+
+  const batchStoryExecutionChecklist = useMemo(
+    () => buildStoryExecutionChecklist(batchSelectedCreativeMode, batchSelectedStoryFocus, {
+      scene: 'chapter',
+      plotStage: batchSelectedPlotStage,
+    }),
+    [batchSelectedCreativeMode, batchSelectedStoryFocus, batchSelectedPlotStage],
+  );
+
+  const singleStoryRepetitionRiskCard = useMemo(
+    () => buildStoryRepetitionRiskCard(selectedCreativeMode, selectedStoryFocus, {
+      scene: 'chapter',
+      plotStage: selectedPlotStage,
+    }),
+    [selectedCreativeMode, selectedStoryFocus, selectedPlotStage],
+  );
+
+  const batchStoryRepetitionRiskCard = useMemo(
+    () => buildStoryRepetitionRiskCard(batchSelectedCreativeMode, batchSelectedStoryFocus, {
+      scene: 'chapter',
+      plotStage: batchSelectedPlotStage,
+    }),
+    [batchSelectedCreativeMode, batchSelectedStoryFocus, batchSelectedPlotStage],
+  );
+
+  const singleStoryAcceptanceCard = useMemo(
+    () => buildStoryAcceptanceCard(selectedCreativeMode, selectedStoryFocus, {
+      scene: 'chapter',
+      plotStage: selectedPlotStage,
+    }),
+    [selectedCreativeMode, selectedStoryFocus, selectedPlotStage],
+  );
+
+  const batchStoryAcceptanceCard = useMemo(
+    () => buildStoryAcceptanceCard(batchSelectedCreativeMode, batchSelectedStoryFocus, {
+      scene: 'chapter',
+      plotStage: batchSelectedPlotStage,
+    }),
+    [batchSelectedCreativeMode, batchSelectedStoryFocus, batchSelectedPlotStage],
+  );
+
+  const singleStoryCharacterArcCard = useMemo(
+    () => buildStoryCharacterArcCard(selectedCreativeMode, selectedStoryFocus, {
+      scene: 'chapter',
+      plotStage: selectedPlotStage,
+    }),
+    [selectedCreativeMode, selectedStoryFocus, selectedPlotStage],
+  );
+
+  const batchStoryCharacterArcCard = useMemo(
+    () => buildStoryCharacterArcCard(batchSelectedCreativeMode, batchSelectedStoryFocus, {
+      scene: 'chapter',
+      plotStage: batchSelectedPlotStage,
+    }),
+    [batchSelectedCreativeMode, batchSelectedStoryFocus, batchSelectedPlotStage],
+  );
+
+  const applySingleCreationPreset = useCallback((presetId: CreationPresetId) => {
+    const preset = getCreationPresetById(presetId);
+    if (!preset) return;
+    setSelectedCreativeMode(preset.creativeMode);
+    setSelectedStoryFocus(preset.storyFocus);
+  }, []);
+
+  const applyBatchCreationPreset = useCallback((presetId: CreationPresetId) => {
+    const preset = getCreationPresetById(presetId);
+    if (!preset) return;
+    setBatchSelectedCreativeMode(preset.creativeMode);
+    setBatchSelectedStoryFocus(preset.storyFocus);
+  }, []);
   const [analysisChapterId, setAnalysisChapterId] = useState<string | null>(null);
-  // 分析任务状态管理
+
+  // 闂佸憡甯掑Λ娆撴倵閼恒儳顩烽悹鍥ㄥ絻椤倝鏌ｅΟ鍨厫闁逞屽厸閼冲爼顢橀幖浣瑰仩?
+
   const [analysisTasksMap, setAnalysisTasksMap] = useState<Record<string, AnalysisTask>>({});
+
   const pollingIntervalsRef = useRef<Record<string, number>>({});
+
+  const updateAnalysisTasksMap = useCallback((
+
+    updater: Record<string, AnalysisTask> | ((prev: Record<string, AnalysisTask>) => Record<string, AnalysisTask>)
+
+  ) => {
+
+    setAnalysisTasksMap((prev) => {
+
+      const next = typeof updater === 'function'
+
+        ? (updater as (prev: Record<string, AnalysisTask>) => Record<string, AnalysisTask>)(prev)
+
+        : updater;
+
+
+
+      if (currentProject?.id) {
+
+        chapterAnalysisTasksCache.set(currentProject.id, next);
+
+      }
+
+
+
+      return next;
+
+    });
+
+  }, [currentProject?.id]);
+
   const [isIndexPanelVisible, setIsIndexPanelVisible] = useState(false);
 
-  // 阅读器状态
+
+
+  // 闂傚倸鍟幊鎾活敋娴兼潙闂柕濞у唭锕傛煙?
+
   const [readerVisible, setReaderVisible] = useState(false);
+
   const [readingChapter, setReadingChapter] = useState<Chapter | null>(null);
 
-  // 规划编辑状态
+
+
+  // 闁荤喐鐟ョ€氼剟宕瑰┑鍫㈢＝闁哄稁鍓涚敮鍡涙煟濡灝鐓愰柍?
+
   const [planEditorVisible, setPlanEditorVisible] = useState(false);
+
   const [editingPlanChapter, setEditingPlanChapter] = useState<Chapter | null>(null);
 
-  // 局部重写状态
+
+
+  // 闁诲繒鍋愰崑鎾绘⒑椤斿搫濮傞柛锝嗘倐瀹曟ê鈻庨幋婢箓鏌?
+
   const [partialRegenerateToolbarVisible, setPartialRegenerateToolbarVisible] = useState(false);
+
   const [partialRegenerateToolbarPosition, setPartialRegenerateToolbarPosition] = useState({ top: 0, left: 0 });
+
   const [selectedTextForRegenerate, setSelectedTextForRegenerate] = useState('');
+
   const [selectionStartPosition, setSelectionStartPosition] = useState(0);
+
   const [selectionEndPosition, setSelectionEndPosition] = useState(0);
+
   const [partialRegenerateModalVisible, setPartialRegenerateModalVisible] = useState(false);
 
-  // 单章节生成进度状态
+
+
+  // 闂佸憡顨嗗ú婊堟偟閻戣姤鍤嶉柛灞剧矋閺呮悂鏌熺€涙ê濮岀紒缁樕戦幆鏃堟晜閹灝锕傛煙?
+
   const [singleChapterProgress, setSingleChapterProgress] = useState(0);
   const [singleChapterProgressMessage, setSingleChapterProgressMessage] = useState('');
   const [chapterQualityMetrics, setChapterQualityMetrics] = useState<ChapterQualityMetrics | null>(null);
@@ -302,1018 +1545,3056 @@ export default function Chapters() {
   const [chapterQualityGeneratedAt, setChapterQualityGeneratedAt] = useState<string | null>(null);
   const [chapterQualityLoading, setChapterQualityLoading] = useState(false);
 
-  // 批量生成相关状态
+  const recommendedCreationPresets = useMemo(
+    () => buildCreationPresetRecommendation(chapterQualityMetrics),
+    [chapterQualityMetrics],
+  );
+
+  // 闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭鏌ｉ埡鍐剧劸闁告鍥ㄥ亹闁煎摜顣介崑?
   const [batchGenerateVisible, setBatchGenerateVisible] = useState(false);
   const [batchGenerating, setBatchGenerating] = useState(false);
   const [batchTaskId, setBatchTaskId] = useState<string | null>(null);
   const [batchForm] = Form.useForm();
   const [manualCreateForm] = Form.useForm();
+  const batchStartChapterNumber = Form.useWatch('startChapterNumber', batchForm) as number | undefined;
   const [batchProgress, setBatchProgress] = useState<{
     status: string;
+
     total: number;
+
     completed: number;
+
     current_chapter_number: number | null;
+
     estimated_time_minutes?: number;
-    latest_quality_metrics?: {
-      overall_score?: number;
-      conflict_chain_hit_rate?: number;
-      rule_grounding_hit_rate?: number;
-      opening_hook_rate?: number;
-      payoff_chain_rate?: number;
-      cliffhanger_rate?: number;
-    };
-    quality_metrics_summary?: {
-      avg_overall_score?: number;
-      avg_conflict_chain_hit_rate?: number;
-      avg_rule_grounding_hit_rate?: number;
-      avg_opening_hook_rate?: number;
-      avg_payoff_chain_rate?: number;
-      avg_cliffhanger_rate?: number;
-      chapter_count?: number;
-    };
+
+    latest_quality_metrics?: ChapterLatestQualityMetrics | null;
+    quality_metrics_summary?: ChapterQualityMetricsSummary | null;
     quality_profile_summary?: ChapterQualityProfileSummary | null;
   } | null>(null);
+
+  const maxKnownChapterNumber = useMemo(
+    () => chapters.reduce((maxValue, chapter) => Math.max(maxValue, chapter.chapter_number || 0), 0),
+    [chapters],
+  );
+
+  const knownStructureChapterCount = useMemo(
+    () => Math.max(maxKnownChapterNumber, outlines.length),
+    [maxKnownChapterNumber, outlines.length],
+  );
+
+  const currentEditingChapter = useMemo(
+    () => chapters.find((chapter) => chapter.id === editingId),
+    [chapters, editingId],
+  );
+
+  const singleStoryCreationDraftStorageKey = useMemo(
+    () => (currentProject?.id && currentEditingChapter?.id
+      ? buildSingleStoryCreationDraftStorageKey(currentProject.id, currentEditingChapter.id)
+      : null),
+    [currentProject?.id, currentEditingChapter?.id],
+  );
+
+  const batchStoryCreationDraftStorageKey = useMemo(
+    () => (currentProject?.id ? buildBatchStoryCreationDraftStorageKey(currentProject.id) : null),
+    [currentProject?.id],
+  );
+
+  const resetSingleStoryCreationCockpit = useCallback((chapterNumber?: number | null) => {
+    singleStoryCreationAutoBriefRef.current = '';
+    singleStoryBeatPlannerAutoRef.current = { ...EMPTY_STORY_BEAT_PLANNER_DRAFT };
+    singleStorySceneOutlineAutoRef.current = { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT };
+    setTemporaryNarrativePerspective(undefined);
+    setSelectedCreativeMode(undefined);
+    setSelectedStoryFocus(undefined);
+    setSelectedPlotStage(inferCreationPlotStage({
+      chapterNumber: chapterNumber ?? undefined,
+      totalChapters: knownStructureChapterCount,
+    }));
+    setSingleStoryCreationBriefDraft('');
+    setSingleStoryBeatPlannerDraft({ ...EMPTY_STORY_BEAT_PLANNER_DRAFT });
+    setSingleStorySceneOutlineDraft({ ...EMPTY_STORY_SCENE_OUTLINE_DRAFT });
+  }, [knownStructureChapterCount]);
+
+  const resetBatchStoryCreationCockpit = useCallback(() => {
+    batchStoryCreationAutoBriefRef.current = '';
+    batchStoryBeatPlannerAutoRef.current = { ...EMPTY_STORY_BEAT_PLANNER_DRAFT };
+    batchStorySceneOutlineAutoRef.current = { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT };
+    setBatchSelectedCreativeMode(undefined);
+    setBatchSelectedStoryFocus(undefined);
+    setBatchSelectedPlotStage(undefined);
+    setBatchStoryCreationBriefDraft('');
+    setBatchStoryBeatPlannerDraft({ ...EMPTY_STORY_BEAT_PLANNER_DRAFT });
+    setBatchStorySceneOutlineDraft({ ...EMPTY_STORY_SCENE_OUTLINE_DRAFT });
+  }, []);
+
+  const applyInferredSinglePlotStage = useCallback(() => {
+    const inferredStage = inferCreationPlotStage({
+      chapterNumber: currentEditingChapter?.chapter_number,
+      totalChapters: knownStructureChapterCount,
+      presetId: activeSingleCreationPreset?.id,
+      storyFocus: selectedStoryFocus,
+      metrics: chapterQualityMetrics,
+    });
+    setSelectedPlotStage(inferredStage);
+  }, [activeSingleCreationPreset?.id, chapterQualityMetrics, currentEditingChapter?.chapter_number, knownStructureChapterCount, selectedStoryFocus]);
+
+  const applyInferredBatchPlotStage = useCallback(() => {
+    const inferredStage = inferCreationPlotStage({
+      chapterNumber: batchStartChapterNumber,
+      totalChapters: knownStructureChapterCount,
+      presetId: activeBatchCreationPreset?.id,
+      storyFocus: batchSelectedStoryFocus,
+      metrics: chapterQualityMetrics,
+    });
+    setBatchSelectedPlotStage(inferredStage);
+  }, [activeBatchCreationPreset?.id, batchSelectedStoryFocus, batchStartChapterNumber, chapterQualityMetrics, knownStructureChapterCount]);
+
+  const singleVolumePacingPlan = useMemo(
+    () => buildVolumePacingPlan(knownStructureChapterCount, {
+      preferredStage: selectedPlotStage,
+      currentChapterNumber: currentEditingChapter?.chapter_number,
+    }),
+    [currentEditingChapter?.chapter_number, knownStructureChapterCount, selectedPlotStage],
+  );
+
+  const batchVolumePacingPlan = useMemo(
+    () => buildVolumePacingPlan(knownStructureChapterCount, {
+      preferredStage: batchSelectedPlotStage,
+      currentChapterNumber: batchStartChapterNumber,
+    }),
+    [batchSelectedPlotStage, batchStartChapterNumber, knownStructureChapterCount],
+  );
+
+  const singleAfterScorecard = useMemo(
+    () => buildStoryAfterScorecard(chapterQualityMetrics, selectedCreativeMode, selectedStoryFocus, {
+      plotStage: selectedPlotStage,
+    }),
+    [chapterQualityMetrics, selectedCreativeMode, selectedStoryFocus, selectedPlotStage],
+  );
+
+  const batchAfterScorecard = useMemo(
+    () => buildBatchStoryAfterScorecard(batchProgress?.quality_metrics_summary ?? null, batchSelectedCreativeMode, batchSelectedStoryFocus, {
+      plotStage: batchSelectedPlotStage,
+    }),
+    [batchProgress?.quality_metrics_summary, batchSelectedCreativeMode, batchSelectedStoryFocus, batchSelectedPlotStage],
+  );
+
+  const singleScoreDrivenRecommendationCard = useMemo(
+    () => buildScoreDrivenRecommendationCard(chapterQualityMetrics, selectedCreativeMode, selectedStoryFocus, {
+      plotStage: selectedPlotStage,
+      chapterNumber: currentEditingChapter?.chapter_number,
+      totalChapters: knownStructureChapterCount,
+      activePresetId: activeSingleCreationPreset?.id,
+    }),
+    [
+      activeSingleCreationPreset?.id,
+      chapterQualityMetrics,
+      currentEditingChapter?.chapter_number,
+      knownStructureChapterCount,
+      selectedCreativeMode,
+      selectedPlotStage,
+      selectedStoryFocus,
+    ],
+  );
+
+  const batchScoreDrivenRecommendationCard = useMemo(
+    () => buildBatchScoreDrivenRecommendationCard(batchProgress?.quality_metrics_summary ?? null, batchSelectedCreativeMode, batchSelectedStoryFocus, {
+      plotStage: batchSelectedPlotStage,
+      chapterNumber: batchStartChapterNumber,
+      totalChapters: knownStructureChapterCount,
+      activePresetId: activeBatchCreationPreset?.id,
+    }),
+    [
+      activeBatchCreationPreset?.id,
+      batchProgress?.quality_metrics_summary,
+      batchSelectedCreativeMode,
+      batchSelectedPlotStage,
+      batchSelectedStoryFocus,
+      batchStartChapterNumber,
+      knownStructureChapterCount,
+    ],
+  );
+
+  const singleStoryRepairTargetCard = useMemo(
+    () => buildStoryRepairTargetCard(chapterQualityMetrics, selectedCreativeMode, selectedStoryFocus, {
+      plotStage: selectedPlotStage,
+      chapterNumber: currentEditingChapter?.chapter_number,
+      totalChapters: knownStructureChapterCount,
+      activePresetId: activeSingleCreationPreset?.id,
+    }),
+    [
+      activeSingleCreationPreset?.id,
+      chapterQualityMetrics,
+      currentEditingChapter?.chapter_number,
+      knownStructureChapterCount,
+      selectedCreativeMode,
+      selectedPlotStage,
+      selectedStoryFocus,
+    ],
+  );
+
+  const batchStoryRepairTargetCard = useMemo(
+    () => buildBatchStoryRepairTargetCard(batchProgress?.quality_metrics_summary ?? null, batchSelectedCreativeMode, batchSelectedStoryFocus, {
+      plotStage: batchSelectedPlotStage,
+      chapterNumber: batchStartChapterNumber,
+      totalChapters: knownStructureChapterCount,
+      activePresetId: activeBatchCreationPreset?.id,
+    }),
+    [
+      activeBatchCreationPreset?.id,
+      batchProgress?.quality_metrics_summary,
+      batchSelectedCreativeMode,
+      batchSelectedPlotStage,
+      batchSelectedStoryFocus,
+      batchStartChapterNumber,
+      knownStructureChapterCount,
+    ],
+  );
+
+  const singleStoryCreationControlCard = useMemo(
+    () => buildStoryCreationControlCard(chapterQualityMetrics, selectedCreativeMode, selectedStoryFocus, {
+      plotStage: selectedPlotStage,
+      chapterNumber: currentEditingChapter?.chapter_number,
+      totalChapters: knownStructureChapterCount,
+      activePresetId: activeSingleCreationPreset?.id,
+    }),
+    [
+      activeSingleCreationPreset?.id,
+      chapterQualityMetrics,
+      currentEditingChapter?.chapter_number,
+      knownStructureChapterCount,
+      selectedCreativeMode,
+      selectedPlotStage,
+      selectedStoryFocus,
+    ],
+  );
+
+  const batchStoryCreationControlCard = useMemo(
+    () => buildBatchStoryCreationControlCard(batchProgress?.quality_metrics_summary ?? null, batchSelectedCreativeMode, batchSelectedStoryFocus, {
+      plotStage: batchSelectedPlotStage,
+      chapterNumber: batchStartChapterNumber,
+      totalChapters: knownStructureChapterCount,
+      activePresetId: activeBatchCreationPreset?.id,
+    }),
+    [
+      activeBatchCreationPreset?.id,
+      batchProgress?.quality_metrics_summary,
+      batchSelectedCreativeMode,
+      batchSelectedPlotStage,
+      batchSelectedStoryFocus,
+      batchStartChapterNumber,
+      knownStructureChapterCount,
+    ],
+  );
+
+  const singleSystemStoryBeatPlanner = useMemo<StoryBeatPlannerDraft>(() => ({
+    openingHook: singleStoryObjectiveCard?.hook || singleStoryExecutionChecklist?.opening || '',
+    chapterGoal: singleStoryObjectiveCard?.objective || singleStoryResultCard?.progress || '',
+    conflictPressure: singleStoryObjectiveCard?.obstacle || singleStoryExecutionChecklist?.pressure || '',
+    turningPoint: singleStoryObjectiveCard?.turn || singleStoryExecutionChecklist?.pivot || '',
+    endingHook: singleStoryExecutionChecklist?.closing || singleStoryResultCard?.fallout || '',
+  }), [singleStoryExecutionChecklist, singleStoryObjectiveCard, singleStoryResultCard]);
+
+  const batchSystemStoryBeatPlanner = useMemo<StoryBeatPlannerDraft>(() => ({
+    openingHook: batchStoryObjectiveCard?.hook || batchStoryExecutionChecklist?.opening || '',
+    chapterGoal: batchStoryObjectiveCard?.objective || batchStoryResultCard?.progress || '',
+    conflictPressure: batchStoryObjectiveCard?.obstacle || batchStoryExecutionChecklist?.pressure || '',
+    turningPoint: batchStoryObjectiveCard?.turn || batchStoryExecutionChecklist?.pivot || '',
+    endingHook: batchStoryExecutionChecklist?.closing || batchStoryResultCard?.fallout || '',
+  }), [batchStoryExecutionChecklist, batchStoryObjectiveCard, batchStoryResultCard]);
+
+  const singleSuggestedStorySceneOutline = useMemo<StorySceneOutlineDraft>(() => buildStorySceneOutlineSuggestion({
+    beatPlanner: singleStoryBeatPlannerDraft,
+    objective: singleStoryObjectiveCard,
+    result: singleStoryResultCard,
+    acceptance: singleStoryAcceptanceCard,
+  }), [singleStoryAcceptanceCard, singleStoryBeatPlannerDraft, singleStoryObjectiveCard, singleStoryResultCard]);
+
+  const batchSuggestedStorySceneOutline = useMemo<StorySceneOutlineDraft>(() => buildStorySceneOutlineSuggestion({
+    beatPlanner: batchStoryBeatPlannerDraft,
+    objective: batchStoryObjectiveCard,
+    result: batchStoryResultCard,
+    acceptance: batchStoryAcceptanceCard,
+  }), [batchStoryAcceptanceCard, batchStoryBeatPlannerDraft, batchStoryObjectiveCard, batchStoryResultCard]);
+
+  const singleSystemStoryCreationBrief = singleStoryCreationControlCard?.promptBrief ?? '';
+
+  const batchSystemStoryCreationBrief = batchStoryCreationControlCard?.promptBrief ?? '';
+
+  const normalizedSingleStoryCreationBriefDraft = singleStoryCreationBriefDraft.trim();
+
+  const normalizedBatchStoryCreationBriefDraft = batchStoryCreationBriefDraft.trim();
+
+  const singleStoryBeatPlannerBrief = useMemo(
+    () => buildStoryBeatPlannerPrompt(singleStoryBeatPlannerDraft, 'single'),
+    [singleStoryBeatPlannerDraft],
+  );
+
+  const batchStoryBeatPlannerBrief = useMemo(
+    () => buildStoryBeatPlannerPrompt(batchStoryBeatPlannerDraft, 'batch'),
+    [batchStoryBeatPlannerDraft],
+  );
+
+  const singleStorySceneOutlineBrief = useMemo(
+    () => buildStorySceneOutlinePrompt(singleStorySceneOutlineDraft, 'single'),
+    [singleStorySceneOutlineDraft],
+  );
+
+  const batchStorySceneOutlineBrief = useMemo(
+    () => buildStorySceneOutlinePrompt(batchStorySceneOutlineDraft, 'batch'),
+    [batchStorySceneOutlineDraft],
+  );
+
+  const singleStoryCreationBaseBrief = normalizedSingleStoryCreationBriefDraft || singleSystemStoryCreationBrief || undefined;
+
+  const batchStoryCreationBaseBrief = normalizedBatchStoryCreationBriefDraft || batchSystemStoryCreationBrief || undefined;
+
+  const resolvedSingleStoryCreationBrief = mergeStoryCreationInstructions(
+    singleStoryCreationBaseBrief,
+    singleStoryBeatPlannerBrief,
+    singleStorySceneOutlineBrief,
+  );
+
+  const resolvedBatchStoryCreationBrief = mergeStoryCreationInstructions(
+    batchStoryCreationBaseBrief,
+    batchStoryBeatPlannerBrief,
+    batchStorySceneOutlineBrief,
+  );
+
+  const singleStoryCreationPromptLayerLabels = useMemo(
+    () => buildStoryCreationPromptLayerLabels({
+      summary: singleStoryCreationBaseBrief,
+      beat: singleStoryBeatPlannerBrief,
+      scene: singleStorySceneOutlineBrief,
+    }),
+    [singleStoryBeatPlannerBrief, singleStoryCreationBaseBrief, singleStorySceneOutlineBrief],
+  );
+
+  const batchStoryCreationPromptLayerLabels = useMemo(
+    () => buildStoryCreationPromptLayerLabels({
+      summary: batchStoryCreationBaseBrief,
+      beat: batchStoryBeatPlannerBrief,
+      scene: batchStorySceneOutlineBrief,
+    }),
+    [batchStoryBeatPlannerBrief, batchStoryCreationBaseBrief, batchStorySceneOutlineBrief],
+  );
+
+  const singleStoryCreationPromptCharCount = resolvedSingleStoryCreationBrief?.length ?? 0;
+
+  const batchStoryCreationPromptCharCount = resolvedBatchStoryCreationBrief?.length ?? 0;
+
+  const isSingleStoryCreationPromptVerbose = singleStoryCreationPromptCharCount >= STORY_CREATION_PROMPT_WARN_THRESHOLD;
+
+  const isBatchStoryCreationPromptVerbose = batchStoryCreationPromptCharCount >= STORY_CREATION_PROMPT_WARN_THRESHOLD;
+
+  const isSingleStoryCreationBriefCustomized = Boolean(
+    normalizedSingleStoryCreationBriefDraft
+    && normalizedSingleStoryCreationBriefDraft !== singleSystemStoryCreationBrief.trim(),
+  );
+
+  const isBatchStoryCreationBriefCustomized = Boolean(
+    normalizedBatchStoryCreationBriefDraft
+    && normalizedBatchStoryCreationBriefDraft !== batchSystemStoryCreationBrief.trim(),
+  );
+
+  const isSingleStoryBeatPlannerCustomized = Boolean(
+    !isStoryBeatPlannerDraftEmpty(singleStoryBeatPlannerDraft)
+    && !areStoryBeatPlannerDraftsEqual(singleStoryBeatPlannerDraft, singleSystemStoryBeatPlanner),
+  );
+
+  const isBatchStoryBeatPlannerCustomized = Boolean(
+    !isStoryBeatPlannerDraftEmpty(batchStoryBeatPlannerDraft)
+    && !areStoryBeatPlannerDraftsEqual(batchStoryBeatPlannerDraft, batchSystemStoryBeatPlanner),
+  );
+
+  const isSingleStorySceneOutlineCustomized = Boolean(
+    !isStorySceneOutlineDraftEmpty(singleStorySceneOutlineDraft)
+    && !areStorySceneOutlineDraftsEqual(singleStorySceneOutlineDraft, singleSuggestedStorySceneOutline),
+  );
+
+  const isBatchStorySceneOutlineCustomized = Boolean(
+    !isStorySceneOutlineDraftEmpty(batchStorySceneOutlineDraft)
+    && !areStorySceneOutlineDraftsEqual(batchStorySceneOutlineDraft, batchSuggestedStorySceneOutline),
+  );
+
+  const isSingleStoryCreationControlCustomized = isSingleStoryCreationBriefCustomized
+    || isSingleStoryBeatPlannerCustomized
+    || isSingleStorySceneOutlineCustomized;
+
+  const isBatchStoryCreationControlCustomized = isBatchStoryCreationBriefCustomized
+    || isBatchStoryBeatPlannerCustomized
+    || isBatchStorySceneOutlineCustomized;
+
+
+  const singleStoryCreationCurrentDraft = useMemo<PersistedStoryCreationDraft>(() => ({
+    creativeMode: selectedCreativeMode,
+    storyFocus: selectedStoryFocus,
+    plotStage: selectedPlotStage,
+    narrativePerspective: temporaryNarrativePerspective,
+    storyCreationBriefDraft: singleStoryCreationBriefDraft,
+    beatPlannerDraft: singleStoryBeatPlannerDraft,
+    sceneOutlineDraft: singleStorySceneOutlineDraft,
+    isBriefCustomized: isSingleStoryCreationBriefCustomized,
+    isBeatPlannerCustomized: isSingleStoryBeatPlannerCustomized,
+    isSceneOutlineCustomized: isSingleStorySceneOutlineCustomized,
+  }), [
+    isSingleStoryBeatPlannerCustomized,
+    isSingleStoryCreationBriefCustomized,
+    isSingleStorySceneOutlineCustomized,
+    selectedCreativeMode,
+    selectedPlotStage,
+    selectedStoryFocus,
+    singleStoryBeatPlannerDraft,
+    singleStoryCreationBriefDraft,
+    singleStorySceneOutlineDraft,
+    temporaryNarrativePerspective,
+  ]);
+
+  const batchStoryCreationCurrentDraft = useMemo<PersistedStoryCreationDraft>(() => ({
+    creativeMode: batchSelectedCreativeMode,
+    storyFocus: batchSelectedStoryFocus,
+    plotStage: batchSelectedPlotStage,
+    storyCreationBriefDraft: batchStoryCreationBriefDraft,
+    beatPlannerDraft: batchStoryBeatPlannerDraft,
+    sceneOutlineDraft: batchStorySceneOutlineDraft,
+    isBriefCustomized: isBatchStoryCreationBriefCustomized,
+    isBeatPlannerCustomized: isBatchStoryBeatPlannerCustomized,
+    isSceneOutlineCustomized: isBatchStorySceneOutlineCustomized,
+  }), [
+    batchSelectedCreativeMode,
+    batchSelectedPlotStage,
+    batchSelectedStoryFocus,
+    batchStoryBeatPlannerDraft,
+    batchStoryCreationBriefDraft,
+    batchStorySceneOutlineDraft,
+    isBatchStoryBeatPlannerCustomized,
+    isBatchStoryCreationBriefCustomized,
+    isBatchStorySceneOutlineCustomized,
+  ]);
+
+  const canSaveSingleStoryCreationSnapshot = Boolean(
+    singleStoryCreationDraftStorageKey
+    && currentEditingChapter
+    && hasMeaningfulStoryCreationDraft(singleStoryCreationCurrentDraft)
+  );
+
+  const canSaveBatchStoryCreationSnapshot = Boolean(
+    batchStoryCreationDraftStorageKey
+    && hasMeaningfulStoryCreationDraft(batchStoryCreationCurrentDraft)
+  );
+
+
+  useEffect(() => {
+    if (!currentEditingChapter) {
+      return;
+    }
+
+    if (!singleStoryCreationDraftStorageKey) {
+      resetSingleStoryCreationCockpit(currentEditingChapter.chapter_number);
+      return;
+    }
+
+    const persistedDraft = getPersistedStoryCreationDraft(singleStoryCreationDraftStorageKey);
+
+    if (!persistedDraft) {
+      resetSingleStoryCreationCockpit(currentEditingChapter.chapter_number);
+      return;
+    }
+
+    singleStoryCreationAutoBriefRef.current = persistedDraft.isBriefCustomized
+      ? MANUAL_STORY_CREATION_BRIEF_SENTINEL
+      : persistedDraft.storyCreationBriefDraft ?? '';
+    singleStoryBeatPlannerAutoRef.current = persistedDraft.isBeatPlannerCustomized
+      ? { ...EMPTY_STORY_BEAT_PLANNER_DRAFT }
+      : normalizeStoryBeatPlannerDraft(persistedDraft.beatPlannerDraft);
+    singleStorySceneOutlineAutoRef.current = persistedDraft.isSceneOutlineCustomized
+      ? { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT }
+      : normalizeStorySceneOutlineDraft(persistedDraft.sceneOutlineDraft);
+
+    setTemporaryNarrativePerspective(persistedDraft.narrativePerspective);
+    setSelectedCreativeMode(persistedDraft.creativeMode);
+    setSelectedStoryFocus(persistedDraft.storyFocus);
+    setSelectedPlotStage(
+      persistedDraft.plotStage
+      ?? inferCreationPlotStage({
+        chapterNumber: currentEditingChapter.chapter_number,
+        totalChapters: knownStructureChapterCount,
+      }),
+    );
+    setSingleStoryCreationBriefDraft(persistedDraft.storyCreationBriefDraft ?? '');
+    setSingleStoryBeatPlannerDraft(normalizeStoryBeatPlannerDraft(persistedDraft.beatPlannerDraft));
+    setSingleStorySceneOutlineDraft(normalizeStorySceneOutlineDraft(persistedDraft.sceneOutlineDraft));
+  }, [
+    currentEditingChapter?.chapter_number,
+    currentEditingChapter?.id,
+    knownStructureChapterCount,
+    resetSingleStoryCreationCockpit,
+    singleStoryCreationDraftStorageKey,
+  ]);
+
+  useEffect(() => {
+    if (!batchStoryCreationDraftStorageKey) {
+      resetBatchStoryCreationCockpit();
+      return;
+    }
+
+    const persistedDraft = getPersistedStoryCreationDraft(batchStoryCreationDraftStorageKey);
+
+    if (!persistedDraft) {
+      resetBatchStoryCreationCockpit();
+      return;
+    }
+
+    batchStoryCreationAutoBriefRef.current = persistedDraft.isBriefCustomized
+      ? MANUAL_STORY_CREATION_BRIEF_SENTINEL
+      : persistedDraft.storyCreationBriefDraft ?? '';
+    batchStoryBeatPlannerAutoRef.current = persistedDraft.isBeatPlannerCustomized
+      ? { ...EMPTY_STORY_BEAT_PLANNER_DRAFT }
+      : normalizeStoryBeatPlannerDraft(persistedDraft.beatPlannerDraft);
+    batchStorySceneOutlineAutoRef.current = persistedDraft.isSceneOutlineCustomized
+      ? { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT }
+      : normalizeStorySceneOutlineDraft(persistedDraft.sceneOutlineDraft);
+
+    setBatchSelectedCreativeMode(persistedDraft.creativeMode);
+    setBatchSelectedStoryFocus(persistedDraft.storyFocus);
+    setBatchSelectedPlotStage(persistedDraft.plotStage);
+    setBatchStoryCreationBriefDraft(persistedDraft.storyCreationBriefDraft ?? '');
+    setBatchStoryBeatPlannerDraft(normalizeStoryBeatPlannerDraft(persistedDraft.beatPlannerDraft));
+    setBatchStorySceneOutlineDraft(normalizeStorySceneOutlineDraft(persistedDraft.sceneOutlineDraft));
+  }, [batchStoryCreationDraftStorageKey, resetBatchStoryCreationCockpit]);
+
+  useEffect(() => {
+    if (!singleStoryCreationDraftStorageKey) {
+      setSingleStoryCreationSnapshots([]);
+      return;
+    }
+
+    setSingleStoryCreationSnapshots(getPersistedStoryCreationSnapshots(singleStoryCreationDraftStorageKey));
+  }, [singleStoryCreationDraftStorageKey]);
+
+  useEffect(() => {
+    if (!batchStoryCreationDraftStorageKey) {
+      setBatchStoryCreationSnapshots([]);
+      return;
+    }
+
+    setBatchStoryCreationSnapshots(getPersistedStoryCreationSnapshots(batchStoryCreationDraftStorageKey));
+  }, [batchStoryCreationDraftStorageKey]);
+
+  useEffect(() => {
+    if (!singleStoryCreationDraftStorageKey || !currentEditingChapter) {
+      return;
+    }
+
+    persistStoryCreationDraft(singleStoryCreationDraftStorageKey, {
+      creativeMode: selectedCreativeMode,
+      storyFocus: selectedStoryFocus,
+      plotStage: selectedPlotStage,
+      narrativePerspective: temporaryNarrativePerspective,
+      storyCreationBriefDraft: singleStoryCreationBriefDraft,
+      beatPlannerDraft: singleStoryBeatPlannerDraft,
+      sceneOutlineDraft: singleStorySceneOutlineDraft,
+      isBriefCustomized: isSingleStoryCreationBriefCustomized,
+      isBeatPlannerCustomized: isSingleStoryBeatPlannerCustomized,
+      isSceneOutlineCustomized: isSingleStorySceneOutlineCustomized,
+      updatedAt: new Date().toISOString(),
+    });
+  }, [
+    currentEditingChapter?.id,
+    isSingleStoryBeatPlannerCustomized,
+    isSingleStoryCreationBriefCustomized,
+    isSingleStorySceneOutlineCustomized,
+    selectedCreativeMode,
+    selectedPlotStage,
+    selectedStoryFocus,
+    singleStoryBeatPlannerDraft,
+    singleStoryCreationBriefDraft,
+    singleStoryCreationDraftStorageKey,
+    singleStorySceneOutlineDraft,
+    temporaryNarrativePerspective,
+  ]);
+
+  useEffect(() => {
+    if (!batchStoryCreationDraftStorageKey) {
+      return;
+    }
+
+    persistStoryCreationDraft(batchStoryCreationDraftStorageKey, {
+      creativeMode: batchSelectedCreativeMode,
+      storyFocus: batchSelectedStoryFocus,
+      plotStage: batchSelectedPlotStage,
+      storyCreationBriefDraft: batchStoryCreationBriefDraft,
+      beatPlannerDraft: batchStoryBeatPlannerDraft,
+      sceneOutlineDraft: batchStorySceneOutlineDraft,
+      isBriefCustomized: isBatchStoryCreationBriefCustomized,
+      isBeatPlannerCustomized: isBatchStoryBeatPlannerCustomized,
+      isSceneOutlineCustomized: isBatchStorySceneOutlineCustomized,
+      updatedAt: new Date().toISOString(),
+    });
+  }, [
+    batchSelectedCreativeMode,
+    batchSelectedPlotStage,
+    batchSelectedStoryFocus,
+    batchStoryBeatPlannerDraft,
+    batchStoryCreationBriefDraft,
+    batchStoryCreationDraftStorageKey,
+    batchStorySceneOutlineDraft,
+    isBatchStoryBeatPlannerCustomized,
+    isBatchStoryCreationBriefCustomized,
+    isBatchStorySceneOutlineCustomized,
+  ]);
+
+  const saveSingleStoryCreationSnapshot = useCallback((
+    reason: StoryCreationSnapshotReason = 'manual',
+    options?: { silent?: boolean; label?: string },
+  ): StoryCreationSnapshot | null => {
+    if (!singleStoryCreationDraftStorageKey || !currentEditingChapter) {
+      return null;
+    }
+
+    if (!hasMeaningfulStoryCreationDraft(singleStoryCreationCurrentDraft)) {
+      if (!options?.silent) {
+        message.warning('???????????????');
+      }
+      return null;
+    }
+
+    const prompt = resolvedSingleStoryCreationBrief?.trim();
+    const latestSnapshot = singleStoryCreationSnapshots[0];
+
+    if (
+      latestSnapshot
+      && latestSnapshot.reason === reason
+      && areStoryCreationDraftContentsEqual(latestSnapshot, singleStoryCreationCurrentDraft, { includeNarrativePerspective: true })
+      && normalizeOptionalText(latestSnapshot.prompt) === normalizeOptionalText(prompt)
+    ) {
+      if (!options?.silent && reason === 'manual') {
+        message.info('?????????????????????');
+      }
+      return latestSnapshot;
+    }
+
+    const createdAt = new Date().toISOString();
+    const chapterLabel = currentEditingChapter.chapter_number ? `?${currentEditingChapter.chapter_number}?` : '????';
+    const snapshot: StoryCreationSnapshot = {
+      ...singleStoryCreationCurrentDraft,
+      id: buildStoryCreationSnapshotId(),
+      scope: 'single',
+      createdAt,
+      updatedAt: createdAt,
+      reason,
+      label: options?.label?.trim() || `${chapterLabel} ? ${reason === 'generate' ? '?????' : '????'}`,
+      prompt: prompt || undefined,
+      promptLayerLabels: [...singleStoryCreationPromptLayerLabels],
+      promptCharCount: prompt?.length ?? 0,
+    };
+
+    const nextSnapshots = persistStoryCreationSnapshot(singleStoryCreationDraftStorageKey, snapshot);
+    setSingleStoryCreationSnapshots(nextSnapshots);
+
+    if (!options?.silent) {
+      message.success(reason === 'generate' ? '??????????' : '?????????');
+    }
+
+    return nextSnapshots[0] ?? snapshot;
+  }, [
+    currentEditingChapter,
+    resolvedSingleStoryCreationBrief,
+    singleStoryCreationCurrentDraft,
+    singleStoryCreationDraftStorageKey,
+    singleStoryCreationPromptLayerLabels,
+    singleStoryCreationSnapshots,
+  ]);
+
+  const saveBatchStoryCreationSnapshot = useCallback((
+    reason: StoryCreationSnapshotReason = 'manual',
+    options?: { silent?: boolean; label?: string },
+  ): StoryCreationSnapshot | null => {
+    if (!batchStoryCreationDraftStorageKey) {
+      return null;
+    }
+
+    if (!hasMeaningfulStoryCreationDraft(batchStoryCreationCurrentDraft)) {
+      if (!options?.silent) {
+        message.warning('???????????????');
+      }
+      return null;
+    }
+
+    const prompt = resolvedBatchStoryCreationBrief?.trim();
+    const latestSnapshot = batchStoryCreationSnapshots[0];
+
+    if (
+      latestSnapshot
+      && latestSnapshot.reason === reason
+      && areStoryCreationDraftContentsEqual(latestSnapshot, batchStoryCreationCurrentDraft)
+      && normalizeOptionalText(latestSnapshot.prompt) === normalizeOptionalText(prompt)
+    ) {
+      if (!options?.silent && reason === 'manual') {
+        message.info('?????????????????????');
+      }
+      return latestSnapshot;
+    }
+
+    const createdAt = new Date().toISOString();
+    const snapshot: StoryCreationSnapshot = {
+      ...batchStoryCreationCurrentDraft,
+      id: buildStoryCreationSnapshotId(),
+      scope: 'batch',
+      createdAt,
+      updatedAt: createdAt,
+      reason,
+      label: options?.label?.trim() || `???? ? ${reason === 'generate' ? '?????' : '????'}`,
+      prompt: prompt || undefined,
+      promptLayerLabels: [...batchStoryCreationPromptLayerLabels],
+      promptCharCount: prompt?.length ?? 0,
+    };
+
+    const nextSnapshots = persistStoryCreationSnapshot(batchStoryCreationDraftStorageKey, snapshot);
+    setBatchStoryCreationSnapshots(nextSnapshots);
+
+    if (!options?.silent) {
+      message.success(reason === 'generate' ? '??????????' : '?????????');
+    }
+
+    return nextSnapshots[0] ?? snapshot;
+  }, [
+    batchStoryCreationCurrentDraft,
+    batchStoryCreationDraftStorageKey,
+    batchStoryCreationPromptLayerLabels,
+    batchStoryCreationSnapshots,
+    resolvedBatchStoryCreationBrief,
+  ]);
+
+  const applySingleStoryCreationSnapshot = useCallback((snapshot: StoryCreationSnapshot) => {
+    singleStoryCreationAutoBriefRef.current = snapshot.isBriefCustomized
+      ? MANUAL_STORY_CREATION_BRIEF_SENTINEL
+      : snapshot.storyCreationBriefDraft ?? '';
+    singleStoryBeatPlannerAutoRef.current = snapshot.isBeatPlannerCustomized
+      ? { ...EMPTY_STORY_BEAT_PLANNER_DRAFT }
+      : normalizeStoryBeatPlannerDraft(snapshot.beatPlannerDraft);
+    singleStorySceneOutlineAutoRef.current = snapshot.isSceneOutlineCustomized
+      ? { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT }
+      : normalizeStorySceneOutlineDraft(snapshot.sceneOutlineDraft);
+
+    setTemporaryNarrativePerspective(snapshot.narrativePerspective);
+    setSelectedCreativeMode(snapshot.creativeMode);
+    setSelectedStoryFocus(snapshot.storyFocus);
+    setSelectedPlotStage(
+      snapshot.plotStage
+      ?? inferCreationPlotStage({
+        chapterNumber: currentEditingChapter?.chapter_number,
+        totalChapters: knownStructureChapterCount,
+      }),
+    );
+    setSingleStoryCreationBriefDraft(snapshot.storyCreationBriefDraft ?? '');
+    setSingleStoryBeatPlannerDraft(normalizeStoryBeatPlannerDraft(snapshot.beatPlannerDraft));
+    setSingleStorySceneOutlineDraft(normalizeStorySceneOutlineDraft(snapshot.sceneOutlineDraft));
+    message.success(`??????${snapshot.label}`);
+  }, [currentEditingChapter?.chapter_number, knownStructureChapterCount]);
+
+  const applyBatchStoryCreationSnapshot = useCallback((snapshot: StoryCreationSnapshot) => {
+    batchStoryCreationAutoBriefRef.current = snapshot.isBriefCustomized
+      ? MANUAL_STORY_CREATION_BRIEF_SENTINEL
+      : snapshot.storyCreationBriefDraft ?? '';
+    batchStoryBeatPlannerAutoRef.current = snapshot.isBeatPlannerCustomized
+      ? { ...EMPTY_STORY_BEAT_PLANNER_DRAFT }
+      : normalizeStoryBeatPlannerDraft(snapshot.beatPlannerDraft);
+    batchStorySceneOutlineAutoRef.current = snapshot.isSceneOutlineCustomized
+      ? { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT }
+      : normalizeStorySceneOutlineDraft(snapshot.sceneOutlineDraft);
+
+    setBatchSelectedCreativeMode(snapshot.creativeMode);
+    setBatchSelectedStoryFocus(snapshot.storyFocus);
+    setBatchSelectedPlotStage(snapshot.plotStage);
+    setBatchStoryCreationBriefDraft(snapshot.storyCreationBriefDraft ?? '');
+    setBatchStoryBeatPlannerDraft(normalizeStoryBeatPlannerDraft(snapshot.beatPlannerDraft));
+    setBatchStorySceneOutlineDraft(normalizeStorySceneOutlineDraft(snapshot.sceneOutlineDraft));
+    message.success(`??????${snapshot.label}`);
+  }, []);
+
+  const deleteSingleStoryCreationSnapshot = useCallback((snapshotId: string) => {
+    if (!singleStoryCreationDraftStorageKey) {
+      return;
+    }
+
+    const nextSnapshots = removePersistedStoryCreationSnapshot(singleStoryCreationDraftStorageKey, snapshotId);
+    setSingleStoryCreationSnapshots(nextSnapshots);
+    message.success('?????????');
+  }, [singleStoryCreationDraftStorageKey]);
+
+  const deleteBatchStoryCreationSnapshot = useCallback((snapshotId: string) => {
+    if (!batchStoryCreationDraftStorageKey) {
+      return;
+    }
+
+    const nextSnapshots = removePersistedStoryCreationSnapshot(batchStoryCreationDraftStorageKey, snapshotId);
+    setBatchStoryCreationSnapshots(nextSnapshots);
+    message.success('?????????');
+  }, [batchStoryCreationDraftStorageKey]);
+
+  const copyStoryCreationPrompt = useCallback(async (
+    content: string | undefined,
+    scopeLabel: '闂佸憡顨嗗ú婊堟偟? | '闂佸綊娼х紞濠囧闯?,
+  ) => {
+    const normalizedContent = content?.trim();
+
+    if (!normalizedContent) {
+      message.warning(`閻熸粎澧楅幐鍛婃櫠閻樻祴鏌﹂柍鈺佸暞缁犳帡鏌涘▎妯虹仩妞わ附鐓″畷姘跺礈娴ｅ湱鏆?{scopeLabel}闂佸憡甯楃粙鎰礊閺冨牆绠伴柛銉檮婵晢);
+      return;
+    }
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(normalizedContent);
+      } else {
+        const tempTextArea = document.createElement('textarea');
+        tempTextArea.value = normalizedContent;
+        tempTextArea.setAttribute('readonly', 'true');
+        tempTextArea.style.position = 'fixed';
+        tempTextArea.style.opacity = '0';
+        document.body.appendChild(tempTextArea);
+        tempTextArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(tempTextArea);
+      }
+
+      message.success(`${scopeLabel}闂佸憡甯楃粙鎰礊閺冨牆绠伴柛銉檮婵垻鈧懓鎲¤ぐ鍐囬弻銉ョ缂?;
+    } catch (error) {
+      console.error('婵犮垼娉涚粔鎾春濡ゅ懎绀嗘繛鎴烆殘缁嬪﹪鏌熺粙鎸庣煑闁硅翰鍊栧鍕綇椤愩儛?', error);
+      message.error('婵犮垼娉涚粔鎾春濡や礁绶為弶鍫亯琚濋梺鎸庣☉閻線顢氶鍕閻庯綆浜滆闂備緡鍋勯ˇ顕€鎳欓幋鐑囩矗闁告洦鍣鏃堟煛閸屾碍澶勬繝鈧悧鍫濈窞鐎广儱鎳庨悡?)';
+    }
+  }, []);
+  useEffect(() => {
+    const previousAutoBrief = singleStoryCreationAutoBriefRef.current;
+
+    if (!singleSystemStoryCreationBrief) {
+      singleStoryCreationAutoBriefRef.current = '';
+      setSingleStoryCreationBriefDraft(prev => (prev ? '' : prev));
+      return;
+    }
+
+    setSingleStoryCreationBriefDraft(prev => {
+      if (!prev.trim() || prev === previousAutoBrief) {
+        return singleSystemStoryCreationBrief;
+      }
+
+      return prev;
+    });
+
+    singleStoryCreationAutoBriefRef.current = singleSystemStoryCreationBrief;
+  }, [singleSystemStoryCreationBrief]);
+
+  useEffect(() => {
+    const previousAutoBrief = batchStoryCreationAutoBriefRef.current;
+
+    if (!batchSystemStoryCreationBrief) {
+      batchStoryCreationAutoBriefRef.current = '';
+      setBatchStoryCreationBriefDraft(prev => (prev ? '' : prev));
+      return;
+    }
+
+    setBatchStoryCreationBriefDraft(prev => {
+      if (!prev.trim() || prev === previousAutoBrief) {
+        return batchSystemStoryCreationBrief;
+      }
+
+      return prev;
+    });
+
+    batchStoryCreationAutoBriefRef.current = batchSystemStoryCreationBrief;
+  }, [batchSystemStoryCreationBrief]);
+
+  useEffect(() => {
+    const previousAutoPlanner = singleStoryBeatPlannerAutoRef.current;
+
+    if (isStoryBeatPlannerDraftEmpty(singleSystemStoryBeatPlanner)) {
+      singleStoryBeatPlannerAutoRef.current = EMPTY_STORY_BEAT_PLANNER_DRAFT;
+      setSingleStoryBeatPlannerDraft((prev) => (isStoryBeatPlannerDraftEmpty(prev) ? prev : { ...EMPTY_STORY_BEAT_PLANNER_DRAFT }));
+      return;
+    }
+
+    setSingleStoryBeatPlannerDraft((prev) => {
+      if (isStoryBeatPlannerDraftEmpty(prev) || areStoryBeatPlannerDraftsEqual(prev, previousAutoPlanner)) {
+        return singleSystemStoryBeatPlanner;
+      }
+
+      return prev;
+    });
+
+    singleStoryBeatPlannerAutoRef.current = singleSystemStoryBeatPlanner;
+  }, [singleSystemStoryBeatPlanner]);
+
+  useEffect(() => {
+    const previousAutoPlanner = batchStoryBeatPlannerAutoRef.current;
+
+    if (isStoryBeatPlannerDraftEmpty(batchSystemStoryBeatPlanner)) {
+      batchStoryBeatPlannerAutoRef.current = EMPTY_STORY_BEAT_PLANNER_DRAFT;
+      setBatchStoryBeatPlannerDraft((prev) => (isStoryBeatPlannerDraftEmpty(prev) ? prev : { ...EMPTY_STORY_BEAT_PLANNER_DRAFT }));
+      return;
+    }
+
+    setBatchStoryBeatPlannerDraft((prev) => {
+      if (isStoryBeatPlannerDraftEmpty(prev) || areStoryBeatPlannerDraftsEqual(prev, previousAutoPlanner)) {
+        return batchSystemStoryBeatPlanner;
+      }
+
+      return prev;
+    });
+
+    batchStoryBeatPlannerAutoRef.current = batchSystemStoryBeatPlanner;
+  }, [batchSystemStoryBeatPlanner]);
+
+  useEffect(() => {
+    const previousSuggestedOutline = singleStorySceneOutlineAutoRef.current;
+
+    if (isStorySceneOutlineDraftEmpty(singleSuggestedStorySceneOutline)) {
+      singleStorySceneOutlineAutoRef.current = EMPTY_STORY_SCENE_OUTLINE_DRAFT;
+      setSingleStorySceneOutlineDraft((prev) => (isStorySceneOutlineDraftEmpty(prev) ? prev : { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT }));
+      return;
+    }
+
+    setSingleStorySceneOutlineDraft((prev) => {
+      if (isStorySceneOutlineDraftEmpty(prev) || areStorySceneOutlineDraftsEqual(prev, previousSuggestedOutline)) {
+        return singleSuggestedStorySceneOutline;
+      }
+
+      return prev;
+    });
+
+    singleStorySceneOutlineAutoRef.current = singleSuggestedStorySceneOutline;
+  }, [singleSuggestedStorySceneOutline]);
+
+  useEffect(() => {
+    const previousSuggestedOutline = batchStorySceneOutlineAutoRef.current;
+
+    if (isStorySceneOutlineDraftEmpty(batchSuggestedStorySceneOutline)) {
+      batchStorySceneOutlineAutoRef.current = EMPTY_STORY_SCENE_OUTLINE_DRAFT;
+      setBatchStorySceneOutlineDraft((prev) => (isStorySceneOutlineDraftEmpty(prev) ? prev : { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT }));
+      return;
+    }
+
+    setBatchStorySceneOutlineDraft((prev) => {
+      if (isStorySceneOutlineDraftEmpty(prev) || areStorySceneOutlineDraftsEqual(prev, previousSuggestedOutline)) {
+        return batchSuggestedStorySceneOutline;
+      }
+
+      return prev;
+    });
+
+    batchStorySceneOutlineAutoRef.current = batchSuggestedStorySceneOutline;
+  }, [batchSuggestedStorySceneOutline]);
+
+  const singleStoryRepairPayload = useMemo(
+    () => buildStoryRepairPromptPayload(singleStoryRepairTargetCard),
+    [singleStoryRepairTargetCard],
+  );
+
+  const batchStoryRepairPayload = useMemo(
+    () => buildStoryRepairPromptPayload(batchStoryRepairTargetCard),
+    [batchStoryRepairTargetCard],
+  );
+
   const batchPollingIntervalRef = useRef<number | null>(null);
+
   const batchTaskMetaRef = useRef<Record<string, BatchTaskMeta>>({});
 
+
+
   useEffect(() => {
+
     const handleResize = () => {
+
       setIsMobile(window.innerWidth <= 768);
+
     };
+
+
 
     window.addEventListener('resize', handleResize);
+
     return () => window.removeEventListener('resize', handleResize);
+
   }, []);
 
+
+
   useEffect(() => {
+
     editingChapterIdRef.current = editingId;
+
   }, [editingId]);
 
+
+
   useEffect(() => {
+
     isEditorOpenRef.current = isEditorOpen;
+
   }, [isEditorOpen]);
 
-  // 处理文本选中 - 检测选中文本并显示浮动工具栏
+
+
+  // 婵犮垼娉涚€氼噣骞冩繝鍥ф闁搞儯鍔嶉幏閬嶆⒑椤愩埄妲烽柤?- 濠碘槅鍋€閸嬫挻绻涢弶鎴剶闁逞屽墮椤︻噣鎳欓幋锕€妫橀柛銉ｅ妽閹疯鲸顨ラ悙璺虹厫婵☆垰顦辩划鍫ユ倻濡法妾ㄩ梺鍛婃煟閸斿本瀵奸幇鏉跨闂佸灝顑囬崺?
+
   const handleTextSelection = useCallback(() => {
-    // 只在编辑器打开时处理选中
+
+    // 闂佸憡鐟禍婊冿耿椤忓棛纾介柡宥庡墰鐢棝鏌涢敐鍐ㄥ濠⒀嶇畱椤曪綁鍩€椤掑嫬绫嶉悹杞拌濡查亶鏌ｉ悙鍙夘棦闁逞屽墮椤︻噣鎳?
+
     if (!isEditorOpen) {
+
       setPartialRegenerateToolbarVisible(false);
+
       return;
+
     }
+
+
 
     const selection = window.getSelection();
+
     if (!selection || selection.rangeCount === 0) {
+
       setPartialRegenerateToolbarVisible(false);
+
       return;
+
     }
+
+
 
     const selectedText = selection.toString().trim();
+
     
-    // 至少选中10个字符才显示工具栏
+
+    // 闂佺厧鍢查崯鍧楁儍椤栫偞鐒诲璺侯槼閸?0婵炴垶鎼╂禍婊堟偤瑜忕划顓㈡晜閽樺鏋€闂佸搫瀚晶浠嬪Φ濮橆剦鍟呴柕澶堝劚瀵版棃鏌?
+
     if (selectedText.length < 10) {
+
       setPartialRegenerateToolbarVisible(false);
+
       return;
+
     }
 
-    // 检查选中是否在 TextArea 内
+
+
+    // 濠碘槅鍋€閸嬫捇鏌＄仦璇插姦闁逞屽墮椤︻噣鎳欓幋锕€鍙婃い鏍ㄧ閸庡﹪鏌?TextArea 闂?
+
     const textArea = contentTextAreaRef.current?.resizableTextArea?.textArea;
+
     if (!textArea) {
+
       setPartialRegenerateToolbarVisible(false);
+
       return;
-    }
-    
-    // 检查选中是否在 textarea 内（需要特殊处理，因为 textarea 的选中不会创建 range）
-    if (document.activeElement !== textArea) {
-      setPartialRegenerateToolbarVisible(false);
-      return;
+
     }
 
-    // 获取 textarea 中的选中位置
+    
+
+    // 濠碘槅鍋€閸嬫捇鏌＄仦璇插姦闁逞屽墮椤︻噣鎳欓幋锕€鍙婃い鏍ㄧ閸庡﹪鏌?textarea 闂佸憡鍔曢幏鎴犳濞嗘挻顥嗛柍褜鍓涢幉鐗堟媴閸濆嫷妫楀┑鐐茬墕閿曘倝藝閳哄懏鍋犻柛鈽嗗幘缁€澶愭煕閵壯冃￠悹?textarea 闂佹眹鍔岀€氫即鍩€椤掆偓椤︻噣鎳欓幋鐐碘枖鐎广儱瀚粣妤呮煕閹烘挾鈽夌紓?range闂?
+
+    if (document.activeElement !== textArea) {
+
+      setPartialRegenerateToolbarVisible(false);
+
+      return;
+
+    }
+
+
+
+    // 闂佸吋鍎抽崲鑼躲亹?textarea 婵炴垶鎼╅崢鎯р枔閹达附鐒诲璺侯槼閸橆剙霉閿濆懐肖闁?
+
     const start = textArea.selectionStart;
+
     const end = textArea.selectionEnd;
+
     const textContent = textArea.value;
+
     const selectedInTextArea = textContent.substring(start, end);
 
+
+
     if (selectedInTextArea.trim().length < 10) {
+
       setPartialRegenerateToolbarVisible(false);
+
       return;
+
     }
 
-    // 计算浮动工具栏位置
+
+
+    // 闁荤姳绶ょ槐鏇㈡偩鐠囪褰掝敊閻撳巩妤冣偓瑙勬偠閸庨亶宕ｉ崸妤€鍐€闊洤娴风粔瀵哥磽?
+
     const rect = textArea.getBoundingClientRect();
+
     const computedStyle = window.getComputedStyle(textArea);
+
     const lineHeight = parseFloat(computedStyle.lineHeight) || 24;
+
     const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
+
     
-    // 计算选中文本起始位置所在的行号
+
+    // 闁荤姳绶ょ槐鏇㈡偩婵犳碍鐒诲璺侯槼閸橆剟鏌￠崒姘婵犫偓閹殿喗灏庣€瑰嫰鍋婂妤€霉閿濆懐肖闁汇倕妫濋獮宥夊焵椤掑嫬鎹堕柕濞у嫮鏆犻柣鐐寸☉閼活垵銇?
+
     const textBeforeSelection = textContent.substring(0, start);
+
     const startLine = textBeforeSelection.split('\n').length - 1;
+
     
-    // 计算选中文本在 textarea 中的视觉位置
-    // 需要考虑 scrollTop（textarea 内部滚动偏移）
+
+    // 闁荤姳绶ょ槐鏇㈡偩婵犳碍鐒诲璺侯槼閸橆剟鏌￠崒姘婵犫偓娴兼潙鎹?textarea 婵炴垶鎼╅崢鎯р枔閹寸姵鍠嗛柛鈩冨嚬濞兼洖霉閿濆懐肖闁?
+
+    // 闂傚倸娲犻崑鎾绘偡閺囨碍绁伴柍褜鍓欓崯鍐差瀶?scrollTop闂佹寧绋戝鍗恱tarea 闂佸憡鍔曢幊姗€宕曢弶鎴叆婵﹩鍓欒闂佺顑呯换鎺嶇昂闂?
+
     const scrollTop = textArea.scrollTop;
+
     const visualTop = (startLine * lineHeight) + paddingTop - scrollTop;
+
     
-    // 工具栏位置：textarea 顶部 + 选中文本的视觉位置 - 工具栏高度偏移
+
+    // 閻庤鎮堕崕閬嶅矗閸ф鍐€闊洤娴风粔瀵哥磽閸愭儳娅欑紒杈╂疄extarea 婵＄偑鍊曢悥濂稿磿?+ 闂備緡鍋勯ˇ顕€鎳欓幋锕€妫橀柛銉ｅ妽閹烽亶鏌ｉ妸銉ヮ伂妞ゎ偄顑囬幉瀛樺緞婢跺瞼孝缂?- 閻庤鎮堕崕閬嶅矗閸ф鍐€闊洦绋撹ぐ顖炲箹鏉堝墽鐣卞ù婊冩憸缁?
+
     const toolbarTop = rect.top + visualTop - 45;
+
     
-    // 水平位置：放在 textarea 的右侧区域，避免遮挡文本
+
+    // 濠殿喗蓱濞兼瑩鏌﹂埡鍌涘鐎广儱娲ㄩ弸鍌炴煥濞戞瑧顣查柡鍌欑窔瀹?textarea 闂佹眹鍔岀€氼剝銇愰崨濠勭懝鐟滃秶浜搁鐐叉槬闁绘洖鍊荤粈澶愭⒑椤掆偓閻忔繈宕㈤妶澶嬬劶妞ゆ棁妫勯惃锟犳煛閸屾碍澶勬繝鈧?
+
     const toolbarLeft = rect.right - 180;
+
+
 
     setSelectedTextForRegenerate(selectedInTextArea);
+
     setSelectionStartPosition(start);
+
     setSelectionEndPosition(end);
+
     
-    // 计算工具栏位置，如果选中位置不在可视区域内，固定在边缘
+
+    // 闁荤姳绶ょ槐鏇㈡偩鐠囧樊鍟呴柕澶堝劚瀵版棃鏌″鍛缂傚秴鎳愮槐鏃堫敋閸℃瑧顦繝纰樷偓鍐测偓褰掓倶婢舵劖鐒诲璺侯槼閸橆剙霉閿濆懐肖闁汇倕妫欑粙澶婎吋閸涱喛鍚梺鍛婄懐閸ㄧ敻锝炵€ｎ喖绀岄柛婵嗗閸樼敻鏌涢幇顒佸珔缂佽鲸绻堝畷鍫曞传閸曨厽姣庨梺闈╄礋閸斿繒绮╅悢铏圭＝?
+
     let finalTop = toolbarTop;
+
     if (visualTop < 0) {
+
       finalTop = rect.top + 10;
+
     } else if (visualTop > textArea.clientHeight) {
+
       finalTop = rect.bottom - 50;
+
     }
+
     
+
     setPartialRegenerateToolbarPosition({
+
       top: Math.max(rect.top + 10, Math.min(finalTop, rect.bottom - 50)),
+
       left: Math.min(Math.max(rect.left + 20, toolbarLeft), window.innerWidth - 200),
+
     });
+
     setPartialRegenerateToolbarVisible(true);
+
   }, [isEditorOpen]);
 
-  // 更新工具栏位置的函数（不检测选中，只更新位置）
+
+
+  // 闂佸搫娲ら悺銊╁蓟婵犲偆鍟呴柕澶堝劚瀵版棃鏌″鍛缂傚秴鎳愮槐鏃堫敊閻愵剛鏆犻梺鍛婂灱婵倝寮抽悢鍏兼櫖闁割偅绮庨悷婵囦繆椤愮喎浜惧┑鐐存綑椤戝鍩€椤掆偓椤︻噣鎳欓幋锔芥櫖閻忕偠妫勫☉褔鏌￠崶褏鎽犻柡灞斤攻閹峰懎顓奸崶鈺傜€梺?
+
   const updateToolbarPosition = useCallback(() => {
+
     if (!partialRegenerateToolbarVisible || !selectedTextForRegenerate) return;
+
     
+
     const textArea = contentTextAreaRef.current?.resizableTextArea?.textArea;
+
     if (!textArea) return;
+
     
+
     const rect = textArea.getBoundingClientRect();
+
     const computedStyle = window.getComputedStyle(textArea);
+
     const lineHeight = parseFloat(computedStyle.lineHeight) || 24;
+
     const paddingTop = parseFloat(computedStyle.paddingTop) || 0;
+
     
+
     const textContent = textArea.value;
+
     const textBeforeSelection = textContent.substring(0, selectionStartPosition);
+
     const startLine = textBeforeSelection.split('\n').length - 1;
+
     
+
     const scrollTop = textArea.scrollTop;
+
     const visualTop = (startLine * lineHeight) + paddingTop - scrollTop;
+
     
+
     const toolbarTop = rect.top + visualTop - 45;
-    // 固定在 textarea 右上角，不随选中位置变化
+
+    // 闂佹悶鍎遍幖顐︽偩妤ｅ啫鎹?textarea 闂佸憡鐟ラ崢鏍箔閸屾粍鍠嗛柟铏瑰仧缁€澶娾槈閹惧磭效婵炲牄鍨介弻鍛緞婢跺骸骞€婵炶揪绲界粔鍫曟偪閸℃稑鐭楁俊顖氭惈椤?
+
     const toolbarLeft = rect.right - 180;
+
     
-    // 工具栏固定在 textarea 可视区域内，即使选中文本滚出视野也保持显示
-    // 如果选中位置在可视区域内，跟随选中位置
-    // 如果滚出视野，固定在顶部或底部边缘
+
+    // 閻庤鎮堕崕閬嶅矗閸ф鍐€闊洦鎸荤粊濂告倵鐟欏嫯澹樻繝鈧?textarea 闂佸憡鐟崹鐢革綖鐎ｎ喖绀岄柛婵嗗閸樼敻鏌涢幇顒佸珔缂佽鲸绻堝畷锟犲礂閸涱厸鏋忛梻渚囧亜椤︻噣鎳欓幋锕€妫橀柛銉ｅ妽閹疯鲸绻濇繝鍐闁搞値鍘鹃幉鎾幢濞戞ɑ顏犳繛鎴炴⒒閸犲秶鎹㈠璺虹濞达綀顫夐埢鏃傜磼閳?
+
+    // 婵犵鈧啿鈧綊鎮樻径鎰劵濠㈣泛顦抽崢顒€霉閿濆懐肖闁汇倕妫濆畷鐑藉Ω閵夈儴顔夐柣鐔哥懃濡浜搁鐐叉槬闁绘柨鍢查弫鍫曟煥濞戞鐒风紒鎰剁節濮婃崘绠涘☉鎺戜壕濠㈣泛顦抽崢顒€霉閿濆懐肖闁?
+
+    // 婵犵鈧啿鈧綊鎮樻径濠庣叆婵﹩鍓欏В澶愭偡濞嗗繑顥㈤柛锝呯秺閺佸秶浠﹂懞銉с偧闁诲氦顫夐懝鎯э耿椤忓懌浜滈柛顐ｆ礀閸斻儵鏌熺€涙澧紒銊﹀▕閺屽牓濡搁妸褏褰剧紓?
+
     let finalTop = toolbarTop;
+
     if (visualTop < 0) {
-      // 选中位置在上方视野外，工具栏固定在顶部
+
+      // 闂備緡鍋勯ˇ顕€鎳欓幋鐐村鐎广儱娲ㄩ弸鍌炴煕閿斿搫濡虹紒妤€鍊垮顒傛兜閸滀焦缍婇梻浣瑰絻妤犳悂藝婵犳碍鏅悘鐐村灊缁憋綁鏌涜箛娑欐暠闁绘牬鍣ｅ畷鍫曞传閸曨厽姣庨梺闈╄礋閸旀垿濡存繝鍥ㄧ劸?
+
       finalTop = rect.top + 10;
+
     } else if (visualTop > textArea.clientHeight) {
-      // 选中位置在下方视野外，工具栏固定在底部
+
+      // 闂備緡鍋勯ˇ顕€鎳欓幋鐐村鐎广儱娲ㄩ弸鍌炴煕閿斿搫濡虹紒妤€鎳樺顒傛兜閸滀焦缍婇梻浣瑰絻妤犳悂藝婵犳碍鏅悘鐐村灊缁憋綁鏌涜箛娑欐暠闁绘牬鍣ｅ畷鍫曞传閸曨厽姣庨梺闈╄礋閸斿瞼鑺遍幎鑺ョ劸?
+
       finalTop = rect.bottom - 50;
+
     }
+
     
+
     setPartialRegenerateToolbarPosition({
+
       top: Math.max(rect.top + 10, Math.min(finalTop, rect.bottom - 50)),
+
       left: Math.min(Math.max(rect.left + 20, toolbarLeft), window.innerWidth - 200),
+
     });
+
   }, [partialRegenerateToolbarVisible, selectedTextForRegenerate, selectionStartPosition]);
 
-  // 监听选中事件
+
+
+  // 闂佺儵鏅滈崹鐢稿箚婢舵劖鐒诲璺侯槼閸橆剙霉濠婂喚鍎庢繛?
+
   useEffect(() => {
+
     if (!isEditorOpen) return;
 
+
+
     const textArea = contentTextAreaRef.current?.resizableTextArea?.textArea;
+
     if (!textArea) return;
 
+
+
     const handleMouseUp = () => {
-      // 鼠标释放时检查选中
+
+      // 婵崿鍛ｉ柣鏍电秮閺屽本绻濋崘鈺傛緬闂佸搫鍟抽崺鏍夐崨鏉戣摕闁靛鏂侀崑鎾村緞婢跺骸骞€
+
       setTimeout(handleTextSelection, 50);
+
     };
+
+
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      // Shift + 方向键选中时检查
+
+      // Shift + 闂佸搫鍊婚幊鎾诲箖濠婂牊鐓ユい鏇楀亾闁逞屽墮椤︻噣鎳欓幋锕€绫嶉柤鍛婎問濮婇箖鏌?
+
       if (e.shiftKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+
         setTimeout(handleTextSelection, 50);
+
       }
+
     };
+
+
 
     const handleScroll = () => {
-      // 滚动时更新位置（使用 requestAnimationFrame 优化性能）
+
+      // 濠电姴锕ラ懝鐐叏閳哄懎绫嶉柤绋跨仛缁绢垶鏌￠崒鐑嗘殥缂傚秴鎳愮槐鏃堫敋閸℃瑧顦╂繛杈剧秬濞夋洟寮?requestAnimationFrame 婵炴潙鍚嬮敋閻庡灚鐓￠獮鈧憸鎴﹀礂濮椻偓閺?
+
       requestAnimationFrame(updateToolbarPosition);
+
     };
 
-    // 监听 textarea 滚动
+
+
+    // 闂佺儵鏅滈崹鐢稿箚?textarea 濠电姴锕ラ懝鐐叏?
+
     textArea.addEventListener('mouseup', handleMouseUp);
+
     textArea.addEventListener('keyup', handleKeyUp);
+
     textArea.addEventListener('scroll', handleScroll);
 
-    // 同时监听 Modal body 滚动（Modal 内容可能在外层容器滚动）
+
+
+    // 闂佸憡鑹鹃張顒€顪冮崒鐐村剮闁瑰瓨绻冮崕?Modal body 濠电姴锕ラ懝鐐叏閳哄懏鏅柛锔绘懓dal 闂佸憡鍔曢幊搴敊閹版澘鐭楁い鏍ㄧ箓閸樻挳鏌涢敂鍝勫妞わ箒宕垫禒锕傚磼濮樼厧鏅ｉ梺闈╃祷閸斿秶鍒掗幘顔肩妞ゎ厽甯炵粈?
+
     const modalBody = textArea.closest('.ant-modal-body');
+
     if (modalBody) {
+
       modalBody.addEventListener('scroll', handleScroll);
+
     }
 
-    // 监听窗口大小变化
+
+
+    // 闂佺儵鏅滈崹鐢稿箚婢跺瞼鐜绘俊銈傚亾鐟滅増绋掑鍕槻闁活煈鍓熷畷锝呂熼崫鍕靛殭
+
     window.addEventListener('resize', handleScroll);
 
+
+
     return () => {
+
       textArea.removeEventListener('mouseup', handleMouseUp);
+
       textArea.removeEventListener('keyup', handleKeyUp);
+
       textArea.removeEventListener('scroll', handleScroll);
+
       if (modalBody) {
+
         modalBody.removeEventListener('scroll', handleScroll);
+
       }
+
       window.removeEventListener('resize', handleScroll);
+
     };
+
   }, [isEditorOpen, handleTextSelection, updateToolbarPosition]);
 
-  // 点击其他区域时隐藏工具栏
+
+
+  // 闂佺粯鍔楅幊鎾诲吹椤曗偓瀹曟寮甸悽鐢告惃闂佸憡鐗曢幖顐︽偂濞嗘挸绫嶉柛顐ｆ礃椤撴椽鏌﹀Ο铏圭濞村吋鍔欏畷妤呮煥鐎ｎ剙鐒?
+
   useEffect(() => {
+
     const handleClickOutside = (e: MouseEvent) => {
+
       const target = e.target as HTMLElement;
+
       
-      // 如果点击的是工具栏，不隐藏
+
+      // 婵犵鈧啿鈧綊鎮樻径鎰€烽柣鐔告緲濮ｅ﹪鏌ｉ妸銉ヮ仾婵¤尙顭堥蹇涘Ψ閵夈儱绶梺鍝勭Т妤犲繒妲愬┑鍥┾枖鐎广儱顦伴娲煢?
+
       if (target.closest('[data-partial-regenerate-toolbar]')) {
+
         return;
+
       }
+
       
-      // 如果点击的是 textarea，不隐藏
+
+      // 婵犵鈧啿鈧綊鎮樻径鎰€烽柣鐔告緲濮ｅ﹪鏌ｉ妸銉ヮ仾婵?textarea闂佹寧绋戞總鏃傜箔婢舵劖鈷曢柟閭﹀灡椤?
+
       if (target.tagName === 'TEXTAREA') {
+
         return;
+
       }
+
       
-      // 如果点击的是 Modal 内部（包括滚动条），不隐藏
+
+      // 婵犵鈧啿鈧綊鎮樻径鎰€烽柣鐔告緲濮ｅ﹪鏌ｉ妸銉ヮ仾婵?Modal 闂佸憡鍔曢幊姗€宕曢幘顔芥櫖闁割偅绻傞惁鍫曟煙婵傚澧紒顔芥尦瀹曟繈濡搁敂鍊熸嫬闂佹寧绋戦¨鈧紒杈ㄧ箖缁嬪顓兼径瀣靛悈闂?
+
       if (target.closest('.ant-modal-content')) {
+
         return;
+
       }
+
       
-      // 点击 Modal 外部才隐藏工具栏
+
+      // 闂佺粯鍔楅幊鎾诲吹?Modal 婵犮垼鍩栭悧鐘诲磿閹绢喖绠ョ€广儱顦伴娲煢濡櫣绠板ù鍏煎姍瀹曟鏌ㄧ€ｎ剙鐒?
+
       setPartialRegenerateToolbarVisible(false);
+
     };
+
+
 
     if (partialRegenerateToolbarVisible) {
+
       document.addEventListener('click', handleClickOutside);
+
       return () => document.removeEventListener('click', handleClickOutside);
+
     }
+
   }, [partialRegenerateToolbarVisible]);
 
+
+
   const {
+
     refreshChapters,
+
     updateChapter,
+
     deleteChapter,
+
     generateChapterContentStream
+
   } = useChapterSync();
 
+
+
   useEffect(() => {
+
     if (currentProject?.id) {
-      refreshChapters();
+
+      if (chapters.length === 0) {
+
+        refreshChapters();
+
+      }
+
       loadWritingStyles();
+
       loadAnalysisTasks();
+
       checkAndRestoreBatchTask();
+
     }
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [currentProject?.id]);
 
-  // 清理轮询定时器
+
+
+  // 濠电偞鎸搁幊鎰板箖婵犲啯濮滄い鏃€顑欓崵鍕倵鐟欏嫮顣叉俊鐐插€垮畷?
+
   useEffect(() => {
+
     const pollingIntervals = pollingIntervalsRef.current;
+
     const batchPollingInterval = batchPollingIntervalRef.current;
+
     return () => {
+
       Object.values(pollingIntervals).forEach(interval => {
+
         clearInterval(interval);
+
       });
+
       if (batchPollingInterval) {
+
         clearInterval(batchPollingInterval);
+
       }
+
     };
+
   }, []);
 
-  // 加载所有章节的分析任务状态
-  // 接受可选的 chaptersToLoad 参数，解决 React 状态更新延迟导致的问题
+
+
+  // 闂佸憡姊绘慨鎯归崶顒€绠ラ柍褜鍓熷鍨緞瀹€鈧ぐ鍧楁煠閸濆嫬鈧鈻撻幋锕€绀嗛柛鈩冾焽閳ь剝濮ょ粋鎺旀嫚閹绘帩娼抽梺缁橆焾閸╂牠鍩€?
+
+  // 闂佽浜介崕杈亹閸儱鐭楁い鏍亹閸嬫挻寰勭仦鍓ф殸 chaptersToLoad 闂佸憡鐟ラ崐褰掑汲閻斿吋鏅€光偓閸愬啯甯″畷?React 闂佺粯顭堥崺鏍焵椤戣法鍔嶆繛鎻掓健瀵剟寮堕幐搴仺闁哄鏅濋崰搴敋闁秵鍤婇悗闈涙啞閻ｉ亶姊婚崒銈呮珝妞?
+
   const loadAnalysisTasks = async (chaptersToLoad?: typeof chapters) => {
+
     const targetChapters = chaptersToLoad || chapters;
+
     if (!targetChapters || targetChapters.length === 0) return;
+
+
+
+
+
+    if (currentProject?.id && !chaptersToLoad) {
+
+      const cachedTasks = chapterAnalysisTasksCache.get(currentProject.id);
+
+      if (cachedTasks) {
+
+        updateAnalysisTasksMap(cachedTasks);
+
+        return;
+
+      }
+
+    }
+
+    const taskEntries = await Promise.all(
+
+      targetChapters
+
+        .filter((chapter) => chapter.content && chapter.content.trim() !== '')
+
+        .map(async (chapter) => {
+
+          try {
+
+            const task = await chapterApi.getChapterAnalysisStatus(chapter.id, currentProject?.id);
+
+            return [chapter.id, task] as const;
+
+          } catch {
+
+            console.debug(`No analysis task for chapter ${chapter.id}`);
+
+            return null;
+
+          }
+
+        })
+
+    );
+
+
 
     const tasksMap: Record<string, AnalysisTask> = {};
 
-    for (const chapter of targetChapters) {
-      // 只查询有内容的章节
-      if (chapter.content && chapter.content.trim() !== '') {
-        try {
-          const task = await chapterApi.getChapterAnalysisStatus(chapter.id, currentProject?.id);
-          tasksMap[chapter.id] = task;
 
-          // 如果任务正在运行，启动轮询
-          if (task.status === 'pending' || task.status === 'running') {
-            startPollingTask(chapter.id);
-          }
-        } catch {
-          // 404或其他错误表示没有分析任务，忽略
-          console.debug(`章节 ${chapter.id} 暂无分析任务`);
-        }
+
+    taskEntries.forEach((entry) => {
+
+      if (!entry) {
+
+        return;
+
       }
-    }
 
-    setAnalysisTasksMap(tasksMap);
+
+
+      const [chapterId, task] = entry;
+
+      tasksMap[chapterId] = task;
+
+
+
+      if (task.status === 'pending' || task.status === 'running') {
+
+        startPollingTask(chapterId);
+
+      }
+
+    });
+
+
+
+    updateAnalysisTasksMap(tasksMap);
+
   };
 
-  // 启动单个章节的任务轮询
+
+
+  // 闂佸憡鍑归崹鐗堟叏閳哄懎纭€闁哄洦宀搁崵瀣磼閺冨倸鞋濠碘槅鍙冮幆鍐礋椤忓懎搴婇梺鍛婃瀫閵堝洦鐎柣?
+
   const startPollingTask = (chapterId: string) => {
-    // 如果已经在轮询，先清除
+
+    // 婵犵鈧啿鈧綊鎮樻径濠庡晠闁肩⒈鍓涢惀鍛存煕閿斿搫濮€闁汇倕妫涢幏鐘伙綖椤斿墽顦梺绋跨箰閻楀﹦绮╂繝姘挃?
+
     if (pollingIntervalsRef.current[chapterId]) {
+
       clearInterval(pollingIntervalsRef.current[chapterId]);
+
     }
 
+
+
     const interval = window.setInterval(async () => {
+
       try {
+
         const task = await chapterApi.getChapterAnalysisStatus(chapterId, currentProject?.id);
 
-        setAnalysisTasksMap(prev => ({
+
+
+        updateAnalysisTasksMap(prev => ({
+
           ...prev,
+
           [chapterId]: task
+
         }));
 
-        // 任务完成或失败，停止轮询
+
+
+        // 婵炲濮鹃褎鎱ㄩ悢琛″亾閻熺増婀伴柛銊﹀哺楠炲寮借娴滃ジ鎮归幇鈺佸姷缂佽鲸绻堝畷鎴濐煥閸曢潧澹橀柡澶屽剱閸犳盯顢?
+
         if (task.status === 'completed' || task.status === 'failed') {
+
           clearInterval(pollingIntervalsRef.current[chapterId]);
+
           delete pollingIntervalsRef.current[chapterId];
 
+
+
           if (task.status === 'completed') {
-            message.success(`章节分析完成`);
+
+            message.success(`缂備焦姊绘慨鐐繆椤撱垹绀嗛柛鈩冾焽閳ь剛鏅埀顒傛嚀閺堫剟宕瑰?;
+
           } else if (task.status === 'failed') {
-            message.error(`章节分析失败: ${task.error_message || '未知错误'}`);
+
+            message.error(`缂備焦姊绘慨鐐繆椤撱垹绀嗛柛鈩冾焽閳ь剝濮ゅ鍕綇椤愩儛? ${task.error_message || '闂佸搫鐗滄禍鐐烘偂閿熺姵鐓ユ繛鍡樺俯閸?}`)';
+
           }
+
         }
+
       } catch (error) {
-        console.error('轮询分析任务失败:', error);
+
+        console.error('闁哄鍎愰崰娑㈩敋濡ゅ懎绀嗛柛鈩冾焽閳ь剝濮ょ粋鎺旀嫚閹绘帩娼虫繝銏″劶缁墽鎲?', error);
+
       }
+
     }, 2000);
+
+
 
     pollingIntervalsRef.current[chapterId] = interval;
 
-    // 5分钟超时
+
+
+    // 5闂佸憡甯掑Λ婵嬪箰閹捐埖鎯ラ柛娑卞枟椤?
+
     setTimeout(() => {
+
       if (pollingIntervalsRef.current[chapterId]) {
+
         clearInterval(pollingIntervalsRef.current[chapterId]);
+
         delete pollingIntervalsRef.current[chapterId];
+
       }
+
     }, 300000);
+
   };
+
+
 
   const refreshChapterAnalysisTask = async (chapterId: string) => {
+
     const task = await chapterApi.getChapterAnalysisStatus(chapterId, currentProject?.id);
-    setAnalysisTasksMap(prev => ({
+
+    updateAnalysisTasksMap(prev => ({
+
       ...prev,
+
       [chapterId]: task
+
     }));
 
+
+
     if (task.status === 'pending' || task.status === 'running') {
+
       startPollingTask(chapterId);
+
     }
+
   };
 
+
+
   const triggerDeferredBatchAnalysis = async (
+
     startChapterNumber: number,
+
     count: number,
+
     latestChapters: Chapter[]
+
   ) => {
+
     if (!currentProject?.id || count <= 0) return;
 
+
+
     const targetChapterNumbers = new Set(
+
       Array.from({ length: count }, (_, index) => startChapterNumber + index)
+
     );
 
+
+
     const candidateChapters = latestChapters.filter(ch =>
+
       targetChapterNumbers.has(ch.chapter_number) &&
+
       Boolean(ch.content && ch.content.trim() !== '')
+
     );
+
+
 
     if (candidateChapters.length === 0) return;
 
+
+
     let queuedCount = 0;
+
     let skippedCount = 0;
+
     let failedCount = 0;
 
+
+
     const ensureAnalysisTask = async (chapter: Chapter) => {
+
       const localTask = analysisTasksMap[chapter.id];
+
       if (localTask?.has_task && ['pending', 'running', 'completed'].includes(localTask.status)) {
+
         skippedCount += 1;
+
         if (localTask.status === 'pending' || localTask.status === 'running') {
+
           startPollingTask(chapter.id);
+
         }
+
         return;
+
       }
 
+
+
       try {
+
         const remoteTask = await chapterApi.getChapterAnalysisStatus(chapter.id, currentProject.id);
+
         if (remoteTask.has_task && ['pending', 'running', 'completed'].includes(remoteTask.status)) {
+
           skippedCount += 1;
+
           if (remoteTask.status === 'pending' || remoteTask.status === 'running') {
+
             startPollingTask(chapter.id);
+
           }
+
           return;
+
         }
+
       } catch {
-        // 章节暂无分析任务时会继续触发创建
+
+        // 缂備焦姊绘慨鐐繆椤撱垹姹查柛灞剧⊕閿熴儵鏌涢幒鎴烆棡闁诲氦濮ょ粋鎺旀嫚閹绘帩娼抽梺鍝勫暞濠€鍦閹殿喚纾肩憸蹇涙偨閼姐倖鍠嗛柨鏇楀亾鐟滄澘鍊垮畷姘槈濡偐澶?
+
       }
 
+
+
       try {
+
         await chapterApi.triggerChapterAnalysis(chapter.id, currentProject.id);
+
         queuedCount += 1;
+
         startPollingTask(chapter.id);
+
       } catch (error) {
+
         failedCount += 1;
-        console.error(`触发第${chapter.chapter_number}章分析失败:`, error);
+
+        console.error(`闁荤喐鐟辩粻鎴ｃ亹閸屾粎绠?{chapter.chapter_number}缂備焦姊绘慨鎾垂鎼淬劌鍑犻柟閭﹀厵娴滃ジ鎮?`, error);
+
       }
+
     };
 
+
+
     const chunkSize = 3;
+
     for (let index = 0; index < candidateChapters.length; index += chunkSize) {
+
       const chunk = candidateChapters.slice(index, index + chunkSize);
+
       await Promise.all(chunk.map(ensureAnalysisTask));
+
     }
+
+
 
     if (queuedCount > 0) {
-      message.info(`正文生成完成，已在后台启动 ${queuedCount} 个章节分析任务`);
+
+      message.info(`濠殿喗绻愮徊楣冨几閸愵喗鍋ㄩ柣鏃傤焾閻忓洭鎮楅悷鐗堟拱闁搞劍宀搁弫宥囦沪閽樺娈ラ梺闈╄礋閸斿矂骞冨Δ鍛煑闁哄瀵ч崕娆撴煕?${queuedCount} 婵炴垶鎼╂禍鐐烘偟閻戣姤鍤嶉柛灞捐壘閻庡鏌＄€ｎ偄濮冮柟骞垮灲瀹曟繈銆€?;
+
     } else if (skippedCount > 0 && failedCount === 0) {
-      message.info('正文生成完成，相关章节分析任务已在后台执行或已完成');
+
+      message.info('濠殿喗绻愮徊楣冨几閸愵喗鍋ㄩ柣鏃傤焾閻忓洭鎮楅悷鐗堟拱闁搞劍宀搁弫宥呯暆閳ь剙霉婢舵劕绀傜€规洖娲ㄨぐ鍧楁煠閸濆嫬鈧悂宕规惔銊ュ嚑闁归偊浜濆畷鏌ユ煕閺傝　鍋撻崘鎻掓闂侀潻璐熼崝宀勫箖濡ゅ懎鐭楅柣妤€鐗嗛埛鏃堟偠濞戞ɑ婀伴柛銊ｅ妼椤斿繘骞撻幒鏃€娈梺?)';
+
     }
+
+
 
     if (failedCount > 0) {
-      message.warning(`有 ${failedCount} 个章节分析任务启动失败，可稍后手动触发`);
+
+      message.warning(`闂?${failedCount} 婵炴垶鎼╂禍鐐烘偟閻戣姤鍤嶉柛灞捐壘閻庡鏌＄€ｎ偄濮冮柟骞垮灲瀹曟繈鍨鹃搹顐㈠壔闂佸憡鏌ｉ崝宀勫Φ閹寸姵瀚婚柕澶樺灣缁€澶愭煕濞嗘ê鐏ｉ柍绗哄灲瀹曘儲鎯旈姀鐙€鏉归梺鍛婃煟閸斿繗顤傞梺鍛婄懄閸?;
+
     }
+
+
 
     await loadAnalysisTasks(latestChapters);
+
   };
+
+
+
+
 
   const loadWritingStyles = async () => {
+
     if (!currentProject?.id) return;
 
-    try {
-      const response = await writingStyleApi.getProjectStyles(currentProject.id);
-      setWritingStyles(response.styles);
 
-      // 设置默认风格为初始选中
-      const defaultStyle = response.styles.find(s => s.is_default);
-      if (defaultStyle) {
-        setSelectedStyleId(defaultStyle.id);
-      }
-    } catch (error) {
-      console.error('加载写作风格失败:', error);
-      message.error('加载写作风格失败');
+
+    const projectId = currentProject.id;
+
+    const cachedStyles = writingStylesCache.get(projectId);
+
+    if (cachedStyles) {
+
+      setWritingStyles(cachedStyles.styles);
+
+      setSelectedStyleId(cachedStyles.defaultStyleId);
+
+      return;
+
     }
+
+
+
+    const existingPromise = writingStylesLoadPromises.get(projectId);
+
+    if (existingPromise) {
+
+      await existingPromise;
+
+      return;
+
+    }
+
+
+
+    const loadPromise = (async () => {
+
+      try {
+
+        const response = await writingStyleApi.getProjectStyles(projectId);
+
+        setWritingStyles(response.styles);
+
+
+
+        const defaultStyle = response.styles.find(s => s.is_default);
+
+        setSelectedStyleId(defaultStyle?.id);
+
+        writingStylesCache.set(projectId, {
+
+          styles: response.styles,
+
+          defaultStyleId: defaultStyle?.id,
+
+        });
+
+      } catch (error) {
+
+        console.error('闂佸憡姊绘慨鎯归崶顒€绀冩繛鍡楁捣缁嬪﹤顪冪€ｎ亜顒㈤柣妤€鎲″鍕綇椤愩儛?', error);
+
+        message.error('闂佸憡姊绘慨鎯归崶顒€绀冩繛鍡楁捣缁嬪﹤顪冪€ｎ亜顒㈤柣妤€鎲″鍕綇椤愩儛?)';
+
+      }
+
+    })();
+
+
+
+    writingStylesLoadPromises.set(projectId, loadPromise);
+
+    try {
+
+      await loadPromise;
+
+    } finally {
+
+      writingStylesLoadPromises.delete(projectId);
+
+    }
+
   };
+
+
 
   const loadAvailableModels = async () => {
+
     try {
-      // 从设置API获取用户配置的模型列表
+
+      // 婵炲濮村锕傤敊閺囩姷纾鹃柣锛勵檮I闂佸吋鍎抽崲鑼躲亹閸ヮ剚鍋ㄩ柕濠忕畱閻撴洟姊洪弶璺ㄐら柣銈呮閹啴宕熼鐔剁窔瀹曞湱鈧綆浜滈悘娆撴偠?
+
       const settingsResponse = await fetch('/api/settings');
+
       if (settingsResponse.ok) {
+
         const settings = await settingsResponse.json();
+
         const { api_key, api_base_url, api_provider } = settings;
 
+
+
         if (api_key && api_base_url) {
+
           try {
+
             const modelsResponse = await fetch(
+
               `/api/settings/models?api_key=${encodeURIComponent(api_key)}&api_base_url=${encodeURIComponent(api_base_url)}&provider=${api_provider}`
+
             );
+
             if (modelsResponse.ok) {
+
               const data = await modelsResponse.json();
+
               if (data.models && data.models.length > 0) {
+
                 setAvailableModels(data.models);
-                // 设置默认模型为当前配置的模型
+
+                // 闁荤姳绀佹晶浠嬫偪閸℃﹩娓舵俊顖涱儥閸氬洦淇婇妞诲亾瀹曞洠鍋撻柨瀣枖闁告繂瀚粔濂告煕閹惧磭效闁告ǜ鍊楃槐鏃堫敊閻愵剛鏆犲┑鈽嗗灙閳ь剙纾埀?
+
                 setSelectedModel(settings.llm_model);
-                return settings.llm_model; // 返回模型名称
+
+                return settings.llm_model; // 闁哄鏅滈弻銊ッ洪弽顬喖鍨惧畷鍥ｅ亾閻戣棄瑙︾€广儱娉?
+
               }
+
             }
+
           } catch {
-            console.log('获取模型列表失败，将使用默认模型');
+
+            console.log('闂佸吋鍎抽崲鑼躲亹閸ヮ灛鐔煎灳瀹曞洠鍋撻悜钘夌婵°倕瀚ㄩ埀顒€鍟鍕綇椤愩儛鏇㈡煥濞戞瀚伴柣銊ｅ灪閹峰懐鎹勯妸锔芥婵帗绋掗…鍫ヮ敇鐠囧弬鐔煎灳瀹曞洠鍋?)';
+
           }
+
         }
+
       }
+
     } catch (error) {
-      console.error('加载可用模型失败:', error);
+
+      console.error('闂佸憡姊绘慨鎯归崶顒€鐭楁い鏍ㄧ矋閺嗗繑淇婇妞诲亾瀹曞洠鍋撻柨瀣窞閺夊牜鍋夎:', error);
+
     }
+
     return null;
+
   };
 
-  // 检查并恢复批量生成任务
+
+
+  // 濠碘槅鍋€閸嬫捇鏌＄仦璇插姎闁艰崵鍠栭獮渚€濮€閻欌偓濡插鏌熼棃娑氱Ш闁革絾妞介幃浠嬫偄缁嬭法浜ｆ繛瀵稿Ь椤曆勬叏?
+
+
+
   const checkAndRestoreBatchTask = async () => {
+
     if (!currentProject?.id) return;
 
-    try {
-      const data = await chapterBatchTaskApi.getActiveBatchGenerateTask(currentProject.id);
 
-      if (data.has_active_task && data.task) {
-        const task = data.task;
-        const persistedTaskMeta = getPersistedBatchTaskMeta(task.batch_id, currentProject.id);
-        if (persistedTaskMeta) {
-          batchTaskMetaRef.current[task.batch_id] = persistedTaskMeta;
+
+    const projectId = currentProject.id;
+
+    const existingPromise = batchTaskRestorePromises.get(projectId);
+
+    if (existingPromise) {
+
+      await existingPromise;
+
+      return;
+
+    }
+
+
+
+    const restorePromise = (async () => {
+
+      try {
+
+        const data = await chapterBatchTaskApi.getActiveBatchGenerateTask(projectId);
+
+
+
+        if (data.has_active_task && data.task) {
+
+          const task = data.task;
+
+          const persistedTaskMeta = getPersistedBatchTaskMeta(task.batch_id, projectId);
+
+          if (persistedTaskMeta) {
+
+            batchTaskMetaRef.current[task.batch_id] = persistedTaskMeta;
+
+          }
+
+
+
+          setBatchTaskId(task.batch_id);
+
+          setBatchProgress({
+
+            status: task.status,
+
+            total: task.total,
+
+            completed: task.completed,
+
+            current_chapter_number: task.current_chapter_number ?? null,
+
+            latest_quality_metrics: (task.latest_quality_metrics as {
+
+              overall_score?: number;
+
+              conflict_chain_hit_rate?: number;
+
+              rule_grounding_hit_rate?: number;
+
+              opening_hook_rate?: number;
+
+              payoff_chain_rate?: number;
+
+              cliffhanger_rate?: number;
+
+            } | null | undefined) ?? undefined,
+
+            quality_metrics_summary: (task.quality_metrics_summary as {
+
+              avg_overall_score?: number;
+
+              avg_conflict_chain_hit_rate?: number;
+
+              avg_rule_grounding_hit_rate?: number;
+
+              avg_opening_hook_rate?: number;
+
+              avg_payoff_chain_rate?: number;
+
+              avg_cliffhanger_rate?: number;
+
+              chapter_count?: number;
+
+            } | null | undefined) ?? undefined,
+
+            quality_profile_summary: task.quality_profile_summary ?? null,
+
+          });
+
+          setBatchGenerating(true);
+
+          setBatchGenerateVisible(false);
+
+          startBatchPolling(task.batch_id);
+
+          message.info('濠碘槅鍋€閸嬫挻绻涢弶鎴剰闁糕晛鐭傚鐢割敂閸曨厽娈梺鐟扮摠閸旀鈻撻幋锕€绠ョ憸鐗堝笒濞呫倝鏌ｉ姀銏犳瀾闁搞劍纰嶇粋鎺旀嫚閹绘帩娼抽梺鎸庣☉閼活垶宕欓敓鐘冲殜妞ゅ繐瀚闂佽鍘归崹褰捤?)';
+
         }
 
-        // 恢复任务状态
-        setBatchTaskId(task.batch_id);
-        setBatchProgress({
-          status: task.status,
-          total: task.total,
-          completed: task.completed,
-          current_chapter_number: task.current_chapter_number ?? null,
-          latest_quality_metrics: (task.latest_quality_metrics as {
-            overall_score?: number;
-            conflict_chain_hit_rate?: number;
-            rule_grounding_hit_rate?: number;
-            opening_hook_rate?: number;
-            payoff_chain_rate?: number;
-            cliffhanger_rate?: number;
-          } | null | undefined) ?? undefined,
-          quality_metrics_summary: (task.quality_metrics_summary as {
-            avg_overall_score?: number;
-            avg_conflict_chain_hit_rate?: number;
-            avg_rule_grounding_hit_rate?: number;
-            avg_opening_hook_rate?: number;
-            avg_payoff_chain_rate?: number;
-            avg_cliffhanger_rate?: number;
-            chapter_count?: number;
-          } | null | undefined) ?? undefined,
-          quality_profile_summary: task.quality_profile_summary ?? null,
-        });
-        setBatchGenerating(true);
-        setBatchGenerateVisible(false);
+      } catch (error) {
 
-        // 启动轮询
-        startBatchPolling(task.batch_id);
+        console.error('濠碘槅鍋€閸嬫捇鏌＄仦璇插姕濠㈣甯￠弻宀冪疀閺囩喐娅㈤梺鐟扮摠閸旀帡骞戦姀銈呯闁炽儳鍋ㄦ禍濂告偣?', error);
 
-        message.info('检测到未完成的批量生成任务，已自动恢复');
       }
-    } catch (error) {
-      console.error('检查批量生成任务失败:', error);
+
+    })();
+
+
+
+    batchTaskRestorePromises.set(projectId, restorePromise);
+
+    try {
+
+      await restorePromise;
+
+    } finally {
+
+      batchTaskRestorePromises.delete(projectId);
+
     }
+
   };
 
-  // 🔔 显示浏览器通知
+
+
   const showBrowserNotification = (title: string, body: string, type: 'success' | 'error' | 'info' = 'info') => {
-    // 检查浏览器是否支持通知
+
+    // 濠碘槅鍋€閸嬫捇鏌＄仦璇插姕缂佷浇宕甸幉鎾醇濠靛洨褰滈梺鍝勫閸ㄤ即骞嗘笟鈧銊╊敍濞戞妲烽梻渚囧亝濮樸劑鎮?
+
     if (!('Notification' in window)) {
-      console.log('浏览器不支持通知功能');
+
+      console.log('濠电偞娼欑换妤咃綖瀹ュ闂柕濞垮€楅悷婵嬫煛閳ь剟顢涘☉妯兼Х闂備緡鍋呭銊╂偂閿熺姴绀夐柣鏃囶嚙閸?)';
+
       return;
+
     }
 
-    // 检查通知权限
+
+
+    // 濠碘槅鍋€閸嬫捇鏌＄仦璇插姦闁逞屽墯濮樸劑鎮￠敓鐘茬骇闁告劦鍠楅?
+
     if (Notification.permission === 'granted') {
-      // 选择图标
+
+      // 闂備緡鍋勯ˇ鎵偓姘ュ姂瀹曞爼鎮欓鍌氱伇
+
       const icon = type === 'success' ? '/logo.svg' : type === 'error' ? '/favicon.ico' : '/logo.svg';
+
       
+
       const notification = new Notification(title, {
+
         body,
+
         icon,
+
         badge: '/favicon.ico',
-        tag: 'batch-generation', // 相同tag会替换旧通知
-        requireInteraction: false, // 自动关闭
-        silent: false, // 播放提示音
+
+        tag: 'batch-generation', // 闂佺儵鏅濋…鍫ュ箖閹兼槮g婵炴潙鍚嬬喊宥吤瑰☉銏犵闁靛繆鍓濋敍瀣⒑椤愶絾鐨戦柣?
+
+        requireInteraction: false, // 闂佺厧顨庢禍婊勬叏閳哄懎绀傞柟鎯板Г閿?
+
+        silent: false, // 闂佸湱铏庨崢浠嬪棘娓氣偓楠炴捇骞囬杞扮驳闂?
+
       });
 
-      // 点击通知时聚焦到窗口
+
+
+      // 闂佺粯鍔楅幊鎾诲吹椤曗偓閺屽懎顫濇潏鈺佸绩闂佸搫鍟崕鍏肩濞戙垺鍊块柨鏇楀亾闁糕晛鐬肩划锝呂旈埀顒冦亹?
+
       notification.onclick = () => {
+
         window.focus();
+
         notification.close();
+
       };
 
-      // 5秒后自动关闭
+
+
+      // 5缂備礁顦扮敮鎺楀箖濡ゅ懏鍤婃い蹇撳琚熼梺绋跨箲婵炲﹤螞?
+
       setTimeout(() => {
+
         notification.close();
+
       }, 5000);
+
     } else if (Notification.permission !== 'denied') {
-      // 如果权限未被明确拒绝，尝试请求权限
+
+      // 婵犵鈧啿鈧綊鎮樻径鎰骇闁告劦鍠楅娆撴煛閸偂娴锋い顐畵瀵増鎯旈敐鍌楀亾濮椻偓楠炲繘骞掗弮鍌氬椽闂佹寧绋戦懟顖炴儍閸撗勫珰闁哄洠妲呴崵鐐存叏閻熸澘鈧懓顭囬崼銉︹挃?
+
       Notification.requestPermission().then(permission => {
+
         if (permission === 'granted') {
+
           showBrowserNotification(title, body, type);
+
         }
+
       });
+
     }
+
   };
 
-  // 按章节号排序并按大纲分组章节 (必须在早返回之前调用，避免违反 Hooks 规则)
-  const { sortedChapters, groupedChapters } = useMemo(() => {
+  // Precompute chapter ordering, grouping and generation availability before early return.
+
+  const {
+
+    sortedChapters,
+
+    groupedChapters,
+
+    chapterGenerationStateById,
+
+    batchStartChapterOptions,
+
+    firstIncompleteChapter,
+
+  } = useMemo(() => {
+
     const sorted = [...chapters].sort((a, b) => a.chapter_number - b.chapter_number);
-    
+
     const groups: Record<string, {
+
       outlineId: string | null;
+
       outlineTitle: string;
+
       outlineOrder: number;
+
       chapters: Chapter[];
+
     }> = {};
 
+    const generationStateById: Record<string, { canGenerate: boolean; disabledReason: string }> = {};
+
+    const batchStartOptions: Chapter[] = [];
+
+    const incompletePreviousChapterNumbers: number[] = [];
+
+    let currentChapterNumber: number | null = null;
+
+    let currentChapterGroup: Chapter[] = [];
+
+
+
+    const flushChapterGroup = () => {
+
+      currentChapterGroup.forEach(groupChapter => {
+
+        if (!groupChapter.content || groupChapter.content.trim() === '') {
+
+          incompletePreviousChapterNumbers.push(groupChapter.chapter_number);
+
+        }
+
+      });
+
+      currentChapterGroup = [];
+
+    };
+
+
+
     sorted.forEach(chapter => {
+
+      if (currentChapterNumber !== null && chapter.chapter_number !== currentChapterNumber) {
+
+        flushChapterGroup();
+
+      }
+
+      currentChapterNumber = chapter.chapter_number;
+
+
+
       const key = chapter.outline_id || 'uncategorized';
 
       if (!groups[key]) {
+
         groups[key] = {
+
           outlineId: chapter.outline_id || null,
-          outlineTitle: chapter.outline_title || '未分类章节',
+
+          outlineTitle: chapter.outline_title || '闂佸搫鐗滄禍婊堝垂鎼达絿灏甸柤濮愬€楄ぐ鍧楁煠?',
+
           outlineOrder: chapter.outline_order ?? 999,
+
           chapters: []
+
         };
+
       }
 
       groups[key].chapters.push(chapter);
+
+
+
+      const disabledReason = incompletePreviousChapterNumbers.length > 0
+
+        ? `闂傚倸娲犻崑鎾绘偡閺囨氨顦﹂柛妯荤〒閳ь剛鎳撻張顒勫垂濮樿泛绀堢€广儱娲ㄩ弸鍌滅磼閺冨倸鞋濠碘槅鍙冮弫宥咁潩妲屾牕鍓?${incompletePreviousChapterNumbers.join('闂?)} 缂備焦姊婚崵?'
+
+        : '';
+
+
+
+      generationStateById[chapter.id] = {
+
+        canGenerate: disabledReason === '',
+
+        disabledReason,
+
+      };
+
+
+
+      if ((!chapter.content || chapter.content.trim() === '') && disabledReason === '') {
+
+        batchStartOptions.push(chapter);
+
+      }
+
+
+
+      currentChapterGroup.push(chapter);
+
     });
 
-    // 转换为数组并按大纲顺序排序
+
+
     const grouped = Object.values(groups).sort((a, b) => a.outlineOrder - b.outlineOrder);
-    
-    return { sortedChapters: sorted, groupedChapters: grouped };
+
+
+
+    return {
+
+      sortedChapters: sorted,
+
+      groupedChapters: grouped,
+
+      chapterGenerationStateById: generationStateById,
+
+      batchStartChapterOptions: batchStartOptions,
+
+      firstIncompleteChapter: sorted.find(ch => !ch.content || ch.content.trim() === ''),
+
+    };
+
   }, [chapters]);
+
+
+
+  const canGenerateChapter = (chapter: Chapter): boolean => {
+
+    return chapterGenerationStateById[chapter.id]?.canGenerate ?? false;
+
+  };
+
+
+
+  const getGenerateDisabledReason = (chapter: Chapter): string => {
+
+    return chapterGenerationStateById[chapter.id]?.disabledReason || '';
+
+  };
+
+
 
   if (!currentProject) return null;
 
-  // 获取人称的中文显示文本（同时支持中英文值）
+
+
   const getNarrativePerspectiveText = (perspective?: string): string => {
+
     const texts: Record<string, string> = {
-      // 英文值映射（向后兼容）
-      'first_person': '第一人称（我）',
-      'third_person': '第三人称（他/她）',
-      'omniscient': '全知视角',
-      // 中文值映射（项目设置使用）
-      '第一人称': '第一人称（我）',
-      '第三人称': '第三人称（他/她）',
-      '全知视角': '全知视角',
+
+      'first_person': '缂備焦顨忛崗娑氱博鐎涙顩查柧蹇撳ⅲ閻愮儤鏅柛顐ゅ枎閻忓鏌?',
+
+      'third_person': '缂備焦顨忛崗娑氱箔娴ｅ湱顩查柧蹇撳ⅲ閻愮儤鏅柛顐ｇ矌闁?婵犻潧鍊诲▍銏㈡?',
+
+      'omniscient': '闂佺绻堥崝搴ㄦ偂閿涘嫭鍠嗛柛鈩冨嚬濞?',
+
+      '缂備焦顨忛崗娑氱博鐎涙顩查柧蹇撳ⅲ?: '缂備焦顨忛崗娑氱博鐎涙顩查柧蹇撳ⅲ閻愮儤鏅柛顐ゅ枎閻忓鏌?,
+
+      '缂備焦顨忛崗娑氱箔娴ｅ湱顩查柧蹇撳ⅲ?: '缂備焦顨忛崗娑氱箔娴ｅ湱顩查柧蹇撳ⅲ閻愮儤鏅柛顐ｇ矌闁?婵犻潧鍊诲▍銏㈡?,
+
+      '闂佺绻堥崝搴ㄦ偂閿涘嫭鍠嗛柛鈩冨嚬濞?: '闂佺绻堥崝搴ㄦ偂閿涘嫭鍠嗛柛鈩冨嚬濞?,
+
     };
-    return texts[perspective || ''] || '第三人称（默认）';
-  };
 
-  const canGenerateChapter = (chapter: Chapter): boolean => {
-    if (chapter.chapter_number === 1) {
-      return true;
-    }
+    return texts[perspective || ''] || '缂備焦顨忛崗娑氱箔娴ｅ湱顩查柧蹇撳ⅲ閻愮儤鏅柛顐犲劤鐢盯鎮规担闈涒偓褏妲?';
 
-    const previousChapters = chapters.filter(
-      c => c.chapter_number < chapter.chapter_number
-    );
-
-    // 检查所有前置章节是否有内容
-    const allHaveContent = previousChapters.every(c => c.content && c.content.trim() !== '');
-    return allHaveContent;
-  };
-
-  const getGenerateDisabledReason = (chapter: Chapter): string => {
-    if (chapter.chapter_number === 1) {
-      return '';
-    }
-
-    const previousChapters = chapters.filter(
-      c => c.chapter_number < chapter.chapter_number
-    );
-
-    // 首先检查是否有未完成内容的章节
-    const incompleteChapters = previousChapters.filter(
-      c => !c.content || c.content.trim() === ''
-    );
-
-    if (incompleteChapters.length > 0) {
-      const numbers = incompleteChapters.map(c => c.chapter_number).join('、');
-      return `需要先完成前置章节：第 ${numbers} 章`;
-    }
-
-    return '';
   };
 
   const loadChapterQualityMetrics = async (chapterId: string) => {
+
     setChapterQualityLoading(true);
+
     try {
+
       const result = await chapterApi.getChapterQualityMetrics(chapterId);
+
       if (result.has_metrics && result.latest_metrics) {
+
         setChapterQualityMetrics(result.latest_metrics);
+
         setChapterQualityProfileSummary(result.quality_profile_summary ?? null);
+
         setChapterQualityGeneratedAt(result.generated_at);
+
       } else {
+
         setChapterQualityMetrics(null);
+
         setChapterQualityProfileSummary(result.quality_profile_summary ?? null);
+
         setChapterQualityGeneratedAt(null);
+
       }
+
     } catch (error) {
-      console.error('加载章节评分失败:', error);
+
+      console.error('闂佸憡姊绘慨鎯归崶鈺冨崥闁绘ê鎼灐闁荤姴娲ょ€氼剟宕规惔銏犵窞閺夊牜鍋夎:', error);
+
       setChapterQualityMetrics(null);
+
       setChapterQualityProfileSummary(null);
+
       setChapterQualityGeneratedAt(null);
+
     } finally {
+
       setChapterQualityLoading(false);
+
     }
+
   };
+
+
 
   const handleOpenModal = (id: string) => {
+
     const chapter = chapters.find(c => c.id === id);
+
     if (chapter) {
+
       form.setFieldsValue(chapter);
+
       setEditingId(id);
+
       setIsModalOpen(true);
+
     }
+
   };
+
+
 
   const handleSubmit = async (values: ChapterUpdate) => {
+
     if (!editingId) return;
 
+
+
     try {
+
       await updateChapter(editingId, values);
 
-      // 刷新章节列表以获取完整的章节数据（包括outline_title等联查字段）
+
+
+      // 闂佸憡甯￠弨閬嶅蓟婵犲嫮鍗氶柣妯烘惈铻￠梺鍛婂笚椤ㄥ濡撮崘鈺冾浄闁靛鍔岀粻顖炴煕濞嗘劗澧柣锝庡墴瀵偆鈧潧鎲￠悾杈╃磼閺冨倸鞋濠碘槅鍙冨顐︽偋閸繄銈﹂梺鎸庣☉閻楀棛鈧灚锕㈤獮蹇涙偠缁茬憙line_title缂備焦绋戦ˇ铏閸儱钃熼柕澶堝劤閹界喐绻涢崼銏╂殰缂?
+
       await refreshChapters();
 
-      message.success('章节更新成功');
+
+
+      message.success('缂備焦姊绘慨鐐繆椤撱垹鍗抽悗娑櫳戦悡鈧梺鐟扮摠閸旀洘鎱?)';
+
       setIsModalOpen(false);
+
       form.resetFields();
+
     } catch {
-      message.error('操作失败');
+
+      message.error('闂佺懓鐏濈粔宕囩礊閺冣偓瀵板嫭娼忛銉?)';
+
     }
+
   };
+
+
 
   const handleOpenEditor = (id: string) => {
+
     const chapter = chapters.find(c => c.id === id);
+
     if (chapter) {
+
       setCurrentChapter(chapter);
+
       editorForm.setFieldsValue({
+
         title: chapter.title,
+
         content: chapter.content,
+
       });
       setEditingId(id);
-      setTemporaryNarrativePerspective(undefined); // 重置人称选择
+      setTemporaryNarrativePerspective(undefined); // 闂備焦褰冪粔鍫曟偪閸℃顩查柧蹇撳ⅲ閻愮儤鐒诲璺侯儏椤?
+      setSelectedCreativeMode(undefined);
+      setSelectedStoryFocus(undefined);
+      setSelectedPlotStage(inferCreationPlotStage({
+        chapterNumber: chapter.chapter_number,
+        totalChapters: knownStructureChapterCount,
+      }));
       setIsEditorOpen(true);
       setChapterQualityMetrics(null);
+
       setChapterQualityProfileSummary(null);
+
       setChapterQualityGeneratedAt(null);
-      // 打开编辑窗口时加载模型列表
+
+      // 闂佺懓鐏氶幐鍝ユ閹寸姷纾介柡宥庡墰鐢棛绱掗幇顓ф當鐟滅増鐩顔炬崉閸濆嫷娼遍柡澶屽仩婵倛鍟梺鎼炲妼椤戝懘宕归鍡樺仒?
+
       loadAvailableModels();
-      // 同步加载该章节最近一次剧情评分
+
+      // 闂佸憡鑹鹃張顒勵敆閻愬搫绀夐柣妯煎劋缁佷即鎮归崶銉ュ姢闁绘繄鍏橀幊鐐哄磼濞戞瑤绮柡澶嗘櫆閸ㄥ磭绮╅弶鎴旀瀻闁炽儱鍟块埛鏃堟煙椤栨碍鍤€闁伙箑閰ｅ畷?
+
       void loadChapterQualityMetrics(chapter.id);
+
     }
+
   };
+
+
 
   const handleEditorSubmit = async (values: ChapterUpdate) => {
+
     if (!editingId || !currentProject) return;
 
+
+
     try {
+
       await updateChapter(editingId, values);
 
-      // 刷新项目信息以更新总字数统计
+
+
+      // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽敂鐣屽嚱闂佸搫鍊绘晶妤呭焵椤掑喚鍤欓柣鈯欏洤鏋侀柟娈垮枤閸╃娀鎮?
+
       const updatedProject = await projectApi.getProject(currentProject.id);
+
       setCurrentProject(updatedProject);
 
-      message.success('章节保存成功');
+
+
+      message.success('缂備焦姊绘慨鐐繆椤撶喓鈹嶆繝闈涙閹界娀鏌熺€涙ê濮囧┑?)';
+
       setIsEditorOpen(false);
+
     } catch {
-      message.error('保存失败');
+
+      message.error('婵烇絽娲︾换鍌炴偤閵婏箑绶為弶鍫亯琚?)';
+
     }
+
   };
 
+
+
   const handleGenerate = async () => {
+
     if (!editingId) return;
+
     const chapterId = editingId;
+
     if (runningSingleChapterTasks[chapterId]) {
-      message.info('该章节已有后台生成任务，请稍后查看结果');
+
+      message.info('闁荤姴娲㈤崕鎶芥偟閻戣姤鍤嶉柛灞捐壘閸ゆ帡鏌￠崼婵愭Ц闁诡喗顨婂畷锝夊箥椤旇姤娅㈤梺鐟扮摠閸旀帡骞戦姀銈呯闁宠棄鎳愮粈澶愭偣閸ヮ剦妫戦柍绗哄灲瀹曘儲鎯旈姀銏犲绩闂佹椿浜滈鍥╁垝閵娾晛鍑?)';
+
       return;
+
     }
+
     const progressMessageKey = `chapter-generate-progress-${chapterId}`;
 
+
+
     try {
+
+      saveSingleStoryCreationSnapshot('generate', { silent: true });
+
       setIsContinuing(true);
+
       setIsGenerating(true);
+
       setSingleChapterProgress(0);
-      setSingleChapterProgressMessage('正在创建后台任务...');
+
+      setSingleChapterProgressMessage('濠殿喗绻愮徊钘夛耿椤忓牆绀嗘繛鎴烆焽缁憋箓鏌涘顒勵€楃憸鏉跨摠缁傛帞鎷犻幓鎺濇匠...');
+
+
 
       const result = await generateChapterContentStream(
         chapterId,
         undefined,
         selectedStyleId,
         targetWordCount,
+
         (progressMsg, progressValue) => {
-          // 进度回调
+
+          // 闁哄鏅滅粙鎴犫偓瑙勫▕瀹曞爼鎮欓崜浣诡啀
+
           setSingleChapterProgress(progressValue);
+
           setSingleChapterProgressMessage(progressMsg);
+
         },
         selectedModel,
-        temporaryNarrativePerspective
+        temporaryNarrativePerspective,
+        selectedCreativeMode,
+        selectedStoryFocus,
+        selectedPlotStage,
+        resolvedSingleStoryCreationBrief,
+        singleStoryRepairPayload?.storyRepairSummary,
+        singleStoryRepairPayload?.storyRepairTargets,
+        singleStoryRepairPayload?.storyPreserveStrengths,
       );
 
+
       if (result.generation_task_id) {
+
         setRunningSingleChapterTasks(prev => ({
+
           ...prev,
+
           [chapterId]: result.generation_task_id
+
         }));
+
       }
 
+
+
       message.open({
+
         key: progressMessageKey,
+
         type: 'loading',
-        content: '后台创作进行中，可继续其他操作',
+
+        content: '闂佸憡鑹炬姝屻亹閹绢喖绀嗘繛鎴烆殘缁嬪﹪寮堕埡鍌滎灱妞ゃ垺鍨剁粙澶愵敇閵娧咁槷闂佸憡鐟崹鎶藉箣妞嬪海纾兼い鎾跺仜瀵版挸霉閻樺磭澧柟濂告敱閹?',
+
         duration: 0,
+
       });
 
-      // 后台继续执行：完成后自动更新文案；失败时提示错误
+
+
+      // 闂佸憡鑹炬姝屻亹鐎靛摜纾肩憸蹇涙偨婵犳艾绠ョ憸鎴︺€侀幋锔芥櫖婵﹩鍓涢弳姘舵煙鐎涙ê濮囬柟顔筋殜閹虫盯顢旈崟顐嶆鏌￠崶褏鎽犻柡灞斤躬瀵剟宕堕…鎴炴暤闂佹寧绋掔粙鎴﹀Φ閹寸姵瀚婚柕澶涢檮椤ρ囨煙缂佹ê濮夐柕鍥ㄥ哺閺屻劌鈻庨幒婵嗘
+
       result.completion
+
         .then(async (finalResult) => {
+
           if (isEditorOpenRef.current && editingChapterIdRef.current === chapterId) {
+
             const hasContentTouched = editorForm.isFieldsTouched(['content']);
+
             if (!hasContentTouched && finalResult?.content) {
+
               editorForm.setFieldsValue({ content: finalResult.content });
+
             } else if (hasContentTouched) {
-              message.info('后台生成已完成，检测到你正在编辑当前章节，未自动覆盖文本');
+
+              message.info('闂佸憡鑹炬姝屻亹閹绢喗鍋ㄩ柣鏃傤焾閻忓洨鈧懓鎲¤ぐ鍐偩椤掑嫬绠ｉ柟鏉垮缁€澶嬩繆椤愮喎浜惧┑鐐存綑椤戝懘宕虹仦鐐闁绘ɑ鍓氶崝鈧梺闈╄礋閸斿海妲愰鍛秶闁瑰瓨绻勭粔濂告煕閹惧磭肖闁绘繄鍏橀幊鐐哄磼閿斿墽顦梺鍝勭墱娴滐綁宕靛鍫濈闁靛鐓堝ú顒勬煟閳哄倻澧柡瀣暣瀵?)';
+
             }
+
           }
 
+
+
           message.open({
+
             key: progressMessageKey,
+
             type: 'success',
-            content: '后台创作任务已完成，章节内容已同步',
+
+            content: '闂佸憡鑹炬姝屻亹閹绢喖绀嗘繛鎴烆殘缁嬪﹤霉閻樹警鍤欏┑顔惧枎椤斿繘骞撻幒鏃€娈梺鐟扮摠閸斞呮濠靛牏鍗氶柣妯烘惈铻￠梺鍛婂姇閹冲酣顢欓幇顒夊晠闁圭粯甯楅崐杈ㄦ叏?',
+
             duration: 2,
+
           });
+
+
 
           if (finalResult?.analysis_task_id) {
+
             const taskId = finalResult.analysis_task_id;
+
             const pendingTask: AnalysisTask = {
+
               has_task: true,
+
               task_id: taskId,
+
               chapter_id: chapterId,
+
               status: 'pending',
+
               progress: 0
+
             };
-            setAnalysisTasksMap(prev => ({
+
+            updateAnalysisTasksMap(prev => ({
+
               ...prev,
+
               [chapterId]: pendingTask
+
             }));
-            chapterApi.upsertChapterAnalysisTaskToStore(pendingTask, currentProject?.id, '章节分析任务已创建');
+
+            chapterApi.upsertChapterAnalysisTaskToStore(pendingTask, currentProject?.id, '缂備焦姊绘慨鐐繆椤撱垹绀嗛柛鈩冾焽閳ь剝濮ょ粋鎺旀嫚閹绘帩娼抽悗鐟版啞瑜板啴宕归崡鐑嗗殘?)';
+
             startPollingTask(chapterId);
+
           }
+
           await loadChapterQualityMetrics(chapterId);
+
         })
+
         .catch((error) => {
+
           const completionError = error as ApiError;
+
           message.open({
+
             key: progressMessageKey,
+
             type: 'error',
-            content: '后台创作失败：' + (completionError.response?.data?.detail || completionError.message || '未知错误'),
+
+            content: '闂佸憡鑹炬姝屻亹閹绢喖绀嗘繛鎴烆殘缁嬪﹤顭块幆鎵翱閻熸瑱绠撻弫? + (completionError.response?.data?.detail || completionError.message || '闂佸搫鐗滄禍鐐烘偂閿熺姵鐓ユ繛鍡樺俯閸?),
+
             duration: 4,
+
           });
+
         })
+
         .finally(() => {
+
           setRunningSingleChapterTasks(prev => {
+
             if (!(chapterId in prev)) return prev;
+
             const next = { ...prev };
+
             delete next[chapterId];
+
             return next;
+
           });
+
         });
 
-      message.success('后台创作任务已创建，可继续其他操作');
+
+
+      message.success('闂佸憡鑹炬姝屻亹閹绢喖绀嗘繛鎴烆殘缁嬪﹤霉閻樹警鍤欏┑顔惧枎椤斿繘骞撻幒鎴犱画閻庣偣鍊楃亸銊ф濠靛鐭楁い鏍ㄧ矋閸╂稓绱撴笟鍥у箹闁告瑧鍋撶粋鎺楀冀閵婏附鍎ユ繛?)';
+
     } catch (error) {
+
       const apiError = error as ApiError;
-      message.error('AI创作失败：' + (apiError.response?.data?.detail || apiError.message || '未知错误'));
+
+      message.error('AI闂佸憡甯楃粙鎰礊閺冣偓瀵板嫭娼忛銉愭洟鏌? + (apiError.response?.data?.detail || apiError.message || '闂佸搫鐗滄禍鐐烘偂閿熺姵鐓ユ繛鍡樺俯閸?));
+
     } finally {
+
       setIsContinuing(false);
+
       setIsGenerating(false);
+
     }
+
   };
 
+
+
   const showGenerateModal = (chapter: Chapter) => {
+
     const previousChapters = chapters.filter(
+
       c => c.chapter_number < chapter.chapter_number
+
     ).sort((a, b) => a.chapter_number - b.chapter_number);
+
+
 
     const selectedStyle = writingStyles.find(s => s.id === selectedStyleId);
 
+
+
     const instance = modal.confirm({
-      title: 'AI创作章节内容',
+
+      title: 'AI闂佸憡甯楃粙鎰礊閺冨倻鍗氶柣妯烘惈铻￠梺鍛婂姇閹冲酣顢?',
+
       width: 700,
+
       centered: true,
+
       content: (
+
         <div style={{ marginTop: 16 }}>
-          <p>AI将根据以下信息创作本章内容：</p>
+
+          <p>AI闁诲繐绻愬Λ娆撴偋閹绢喖绠叉い鏃囶唺缁ㄦ澘鈽夐幘鎰佸剮濞ｅ洤锕獮渚€顢涘顒備画婵炶揪绲剧划宥咃耿閹殿喚鍗氶柣妯诲絻閺佸爼鎮楅崷顓燁仧缂?/p>
+
           <ul>
-            <li>章节大纲和要求</li>
-            <li>项目的世界观设定</li>
-            <li>相关角色信息</li>
-            <li><strong>前面已完成章节的内容（确保剧情连贯）</strong></li>
+
+            <li>缂備焦姊绘慨鐐繆椤撶喎绶炵憸蹇曠礄娴兼潙妞界€光偓閸愮偓鐭楀┑?/li>
+
+            <li>婵＄偑鍊曞﹢鍗灻烘导瀛樺剭闁告洦浜為悷顖炴煟閿濆懐鐒锋い顐㈡川閹峰骞嗚閺?/li>
+
+            <li>闂佺儵鏅濋…鍫ュ矗瑜忛幉鎾箳閺囩儐妫屾繛锝呮礌閸撴繃瀵?/li>
+
+            <li><strong>闂佸憡鎸哥粔鐟邦焽閺夋鍟呴柟缁樺笧閺嗘岸鏌熺€涙ê濮夐柣婵堝厴閹崇偤宕掑鍕殸闂佸憡鍔曢幊搴敊閹扮増鏅柛顐熸噰閳ь剚蓱缁屽崬鈹戦崱妞绘寖闂佽鍨伴幊鎾舵崲濞戞碍瀚绘い鏍ュ€楃粈?/strong></li>
+
             {selectedStyle && (
-              <li><strong>写作风格：{selectedStyle.name}</strong></li>
+              <li><strong>闂佸憡鍔栭悷銈囩礊閺冣偓椤︾増鎯旈姀銏狀棔闂佹寧绋掗绔lectedStyle.name}</strong></li>
             )}
-            <li><strong>目标字数：{targetWordCount}字</strong></li>
+            {selectedCreativeMode && (
+              <li><strong>闂佸憡甯楃粙鎰礊閺傝鐔煎灳瀹曞洨顢呴梺鎸庣⊕椤掔REATIVE_MODE_OPTIONS.find((item) => item.value === selectedCreativeMode)?.label || selectedCreativeMode}</strong></li>
+            )}
+            {selectedStoryFocus && (
+              <li><strong>缂傚倷鐒﹂幐濠氭倵椤栨稓鐟圭憸鏃堝闯閹间焦鏅慨婵堢瑢TORY_FOCUS_OPTIONS.find((item) => item.value === selectedStoryFocus)?.label || selectedStoryFocus}</strong></li>
+            )}
+            {selectedPlotStage && (
+              <li><strong>闂佽鍨伴幊鎾翠繆椤撱垺鈷撻柤鍛婎問閸炰粙鏌ㄥ☉娆樺姱CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === selectedPlotStage)?.label || selectedPlotStage}</strong></li>
+            )}
+            <li><strong>闂佺儵鏅╅崰妤呮偉閿濆洠鍋撳☉娆樻畷闁哄棛鍠栭弫宥咁潰缁虹棏rgetWordCount}闁?/strong></li>
           </ul>
 
+
           {previousChapters.length > 0 && (
+
             <div style={{
+
               marginTop: 16,
+
               padding: 12,
+
               background: 'var(--color-info-bg)',
+
               borderRadius: 4,
+
               border: '1px solid var(--color-info-border)'
+
             }}>
+
               <div style={{ marginBottom: 8, fontWeight: 500, color: 'var(--color-primary)' }}>
-                📚 将引用的前置章节（共{previousChapters.length}章）：
+
+                濡絽鍟幉?闁诲繐绻愬Λ妤冩閳哄懏鍋ㄩ柕濞у嫮鏆犻梺鍛婃尭缁夊爼鎮块崱娆戝崥闁绘ê鎼灐闂佹寧绋戦悧鍡涘矗椤垢reviousChapters.length}缂備焦姊绘刊瀵告濮樿埖鏅?
+
               </div>
+
               <div style={{ maxHeight: 150, overflowY: 'auto' }}>
+
                 {previousChapters.map(ch => (
+
                   <div key={ch.id} style={{ padding: '4px 0', fontSize: 13 }}>
-                    ✓ 第{ch.chapter_number}章：{ch.title} ({ch.word_count || 0}字)
+
+                    闂?缂備焦顨堥幉顡﹉.chapter_number}缂備焦姊绘刊瀵告閻ㄦh.title} ({ch.word_count || 0}闁?
+
                   </div>
+
                 ))}
+
               </div>
+
               <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
-                💡 AI会参考这些章节内容，确保情节连贯、角色状态一致
+
+                濡絽鍟€?AI婵炴潙鍚嬮懝鎯ь嚕椤掑嫭鍤€闁告劦鍘剧粻鐟懊瑰鍕€掗柣婵堝厴閹崇偤宕掑顒佹殽闁诲骸婀卞▍銏㈡濠靛牊鍏滄い鏃囧吹缁犱粙鏌熼姘殌濠碘槅鍘藉濠氭倷閸撲焦鐒鹃梺闈涙濞村洭锝炲Δ鍛殞闁肩⒈鍓欑瑧闂佽鍏涘鎺旂博閹绢喗鍤?
+
               </div>
+
             </div>
+
           )}
 
+
+
           <p style={{ color: '#ff4d4f', marginTop: 16, marginBottom: 0 }}>
-            ⚠️ 注意：此操作将覆盖当前章节内容
+
+            闂佸疇娉曟刊瀵哥箔?濠电偛顦崝宥夊礈娴煎瓨鏅慨姗嗗弾閸斿啴鏌熼崹顔拘＄紓宥嗘⒒娴滄悂宕卞鍏艰埞闂佺儵鏅滈悧鏇犵礊鐎ｎ喖绀堢€广儱娲ㄨぐ鍧楁煠閸濆嫬鈧悂宕€电硶鍋?
+
           </p>
+
         </div>
+
       ),
-      okText: '开始创作',
+
+      okText: '閻庢鍠掗崑鎾斥攽椤旂⒈鍎忛柛銊ㄩ哺閹?',
+
       okButtonProps: { danger: true },
-      cancelText: '取消',
+
+      cancelText: '闂佸憡鐟﹂悧妤冪矓?',
+
       onOk: async () => {
+
         instance.update({
+
           okButtonProps: { danger: true, loading: true },
+
           cancelButtonProps: { disabled: true },
+
           closable: false,
+
           maskClosable: false,
+
           keyboard: false,
+
         });
 
+
+
         try {
+
           if (!selectedStyleId) {
-            message.error('请先选择写作风格');
+
+            message.error('闁荤姴娲ら崲鏌ュ储濞戙垺鐒诲璺侯儏椤忋儵鏌涢幇顓犳噥缂傚秵姊归ˇ鐗堟償閵忋垹顥?)';
+
             instance.update({
+
               okButtonProps: { danger: true, loading: false },
+
               cancelButtonProps: { disabled: false },
+
               closable: true,
+
               maskClosable: true,
+
               keyboard: true,
+
             });
+
             return;
+
           }
+
           await handleGenerate();
+
           instance.destroy();
+
         } catch {
+
           instance.update({
+
             okButtonProps: { danger: true, loading: false },
+
             cancelButtonProps: { disabled: false },
+
             closable: true,
+
             maskClosable: true,
+
             keyboard: true,
+
           });
+
         }
+
       },
+
     });
+
   };
+
+
 
   const getStatusColor = (status: string) => {
+
     const colors: Record<string, string> = {
+
       'draft': 'default',
+
       'writing': 'processing',
+
       'completed': 'success',
+
     };
+
     return colors[status] || 'default';
+
   };
+
+
 
   const getStatusText = (status: string) => {
+
     const texts: Record<string, string> = {
-      'draft': '草稿',
-      'writing': '创作中',
-      'completed': '已完成',
+
+      'draft': '闂佽壈妫勯ˇ閬嶁€?',
+
+      'writing': '闂佸憡甯楃粙鎰礊閺冣偓缁?',
+
+      'completed': '閻庣懓鎲¤ぐ鍐偩椤掑嫬绠?',
+
     };
+
     return texts[status] || status;
+
   };
+
+
 
   const handleExport = () => {
+
     if (chapters.length === 0) {
-      message.warning('当前项目没有章节，无法导出');
+
+      message.warning('閻熸粎澧楅幐鍛婃櫠閻樼偨浜滈柛锔诲幗缁愭绻涚仦绋垮⒉婵犫偓娴ｈ櫣鍗氶柣妯烘惈铻￠梺鎸庣☉閺堫剙螞閵堝應鏋栭柡鍥╁剱閸ゃ倝鏌?)';
+
       return;
+
     }
 
+
+
     modal.confirm({
-      title: '导出项目章节',
-      content: `确定要将《${currentProject.title}》的所有章节导出为TXT文件吗？`,
+
+      title: '闁诲海鏁搁崢褔宕甸鐔翠簻闁革富鍘界粣妤冪磼閺冨倸鞋濠?',
+
+      content: `缂佺虎鍙庨崰鏍偩閸撗勫暫濞达絽鎽滃▓娲煏?{currentProject.title}闂侀潧妫楅鍥р枔閹达箑绠ラ柍褜鍓熷鍨緞瀹€鈧ぐ鍧楁煠閸濆嫬鈧悂顢氶柆宥呯閺夌偞濯界粈濠絏T闂佸搫鍊稿ú锝呪枎閵忋倕瑙︽俊銈咁儑閸氱,
+
       centered: true,
-      okText: '确定导出',
-      cancelText: '取消',
+
+      okText: '缂佺虎鍙庨崰鏍偩閸撗€鍋撻悽闈涘付闁?',
+
+      cancelText: '闂佸憡鐟﹂悧妤冪矓?',
+
       onOk: () => {
+
         try {
+
           projectApi.exportProject(currentProject.id);
-          message.success('开始下载导出文件');
+
+          message.success('閻庢鍠掗崑鎾斥攽椤旂⒈鍎庣紒妤€鎳忓顏堟寠婢舵ê娈奸梺鍛婂灩閸庛倝寮搁崘鈺冾浄?)';
+
         } catch {
-          message.error('导出失败，请重试');
+
+          message.error('闁诲海鏁搁崢褔宕甸鐔风窞閺夊牜鍋夎闂佹寧绋戦惌渚€顢氶鍕厒鐎广儱鐗忓Σ?)';
+
         }
+
       },
+
     });
+
   };
+
+
 
   const handleShowAnalysis = (chapterId: string) => {
+
     setAnalysisChapterId(chapterId);
+
     setAnalysisVisible(true);
+
   };
 
-  // 批量生成函数
+
+
+  // 闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭鏌涢幋锝呅撻柡?
+
   const handleBatchGenerate = async (values: {
     startChapterNumber: number;
     count: number;
@@ -1321,30 +4602,60 @@ export default function Chapters() {
     styleId?: number;
     targetWordCount?: number;
     model?: string;
+    creativeMode?: CreativeMode;
+    storyFocus?: StoryFocus;
+    plotStage?: PlotStage;
   }) => {
     if (!currentProject?.id) return;
 
-    // 调试日志
-    console.log('[批量生成] 表单values:', values);
-    console.log('[批量生成] batchSelectedModel状态:', batchSelectedModel);
 
-    // 使用批量生成对话框中选择的风格和字数，如果没有选择则使用默认值
+
+    // 闁荤姴顑呴崯鎶芥儊椤栫偛绫嶉柕澶堝劤缁?
+
+    console.log('[闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓槼 闁荤偞绋忛崝灞界暦閻掋倹lues:', values);
+
+    console.log('[闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓槼 batchSelectedModel闂佺粯顭堥崺鏍焵?', batchSelectedModel);
+
+
+
+    // 婵炶揪缍€濞夋洟寮妶澶婄鐟滅増甯掑▍銈夋煟閵忋垹鏋戦柛銊︽皑閳ь剛鏁搁、濠囨儊閽樺娴栭柛鈩冩礉閸橆剟姊洪銏╂Ч閻庢哎鍔戦幆鍐礋椤栵絾顥栭梺鍝勭Ф閸樠囧箯閹殿喒鍋撳☉娆樻畷闁哄棛鍠栭弫宥囦沪缁涘鎼愰梺鍝勵儐缁秹鎯€閸涙潙瀚夊鑸靛姀閸嬫挻寰勭€ｎ亶浠撮梺鍛婂笚閻熴倖绻涢崶顒佸仺闁靛ň鏅濈敮娑㈡偣娴ｉ潧鈧洟鍩€?
+
     const styleId = values.styleId || selectedStyleId;
+
     const wordCount = values.targetWordCount || targetWordCount;
 
-    // 使用批量生成专用的模型状态
-    const model = batchSelectedModel;
 
-    console.log('[批量生成] 最终使用的model:', model);
+
+    // 婵炶揪缍€濞夋洟寮妶澶婄鐟滅増甯掑▍銈夋煟閵忋垹鏋戦柛銊︾缁嬪骞橀懜鍨闂佹眹鍔岀€氼叀鍟梺鎼炲妼椤戝洦鎱ㄩ幖浣哥畱?
+    const model = batchSelectedModel;
+    const creativeMode = batchSelectedCreativeMode;
+    const storyFocus = batchSelectedStoryFocus;
+    const plotStage = batchSelectedPlotStage;
+
+
+    console.log('[闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓槼 闂佸搫鐗冮崑鎾剁磽娴ｅ摜澧斿┑鐐叉喘閹粙濡歌閻ｇ湌odel:', model);
+
+
 
     if (!styleId) {
-      message.error('请选择写作风格');
+
+      message.error('闁荤姴娲ㄩ崗姗€鍩€椤掆偓椤︽壆鈧哎鍔戝畷妯衡枎鎼达絿鈻曟俊鐐差儏鐎涒晠鎮?)';
+
       return;
+
     }
 
+
+
     try {
+
+      saveBatchStoryCreationSnapshot('generate', { silent: true });
+
       setBatchGenerating(true);
-      setBatchGenerateVisible(false); // 关闭配置对话框，避免遮挡进度弹窗
+
+      setBatchGenerateVisible(false); // 闂佺绻戞繛濠偽涢幘顔界厐鐎广儱娲ㄩ弸鍌炴倵閻㈡鏀伴柣锕佹椤╁ジ宕遍鐘殿槷闂備緡鍓欓悘婵嬪储閵堝鐒兼い鏃囨閻繝寮堕埡鍌溾槈閻庣懓鍟块锝夊捶椤撶姴鐐?
+
+
 
       const requestBody: {
         start_chapter_number: number;
@@ -1353,6 +4664,13 @@ export default function Chapters() {
         style_id: number;
         target_word_count: number;
         model?: string;
+        creative_mode?: CreativeMode;
+        story_focus?: StoryFocus;
+        plot_stage?: PlotStage;
+        story_creation_brief?: string;
+        story_repair_summary?: string;
+        story_repair_targets?: string[];
+        story_preserve_strengths?: string[];
       } = {
         start_chapter_number: values.startChapterNumber,
         count: values.count,
@@ -1361,2074 +4679,5537 @@ export default function Chapters() {
         target_word_count: wordCount,
       };
 
-      // 如果有模型参数，添加到请求体中
+
+      // 婵犵鈧啿鈧綊鎮樻径鎰珘濠㈣泛鐟旀笟鈧畷鍦偓锝庝簻濡﹢鏌℃担绋跨盎缂佽鲸绻傝彁閻犲洦褰冮～锝夋煕閹烘挸顎滄い鏇ㄥ墮鏁堥柛灞剧懅缁夌厧鈽?
+
       if (model) {
+
         requestBody.model = model;
-        console.log('[批量生成] 请求体包含model:', model);
+
+        console.log('[闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓槼 闁荤姴娲弨閬嶆儑閻楀牊濯撮柟鎯у暱閻﹀爼鏌涘鍗炵畱odel:', model);
+
       } else {
-        console.log('[批量生成] 请求体不包含model，使用后端默认模型');
+        console.log('[闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓槼 闁荤姴娲弨閬嶆儑閻楀牊濯撮柟鎹愬皺閻熸繈鏌涢弽褎鍣归柟顖氭桨odel闂佹寧绋戞總鏃€绻涢崶顒佸仺闁靛鍎查崐鐢电磼閺冩垵鐏︾紒顕呭灣閹峰濡堕崰锝勭窔瀹?)';
       }
 
-      console.log('[批量生成] 完整请求体:', JSON.stringify(requestBody, null, 2));
+      if (creativeMode) {
+        requestBody.creative_mode = creativeMode;
+      }
+
+      if (storyFocus) {
+        requestBody.story_focus = storyFocus;
+      }
+
+      if (plotStage) {
+        requestBody.plot_stage = plotStage;
+      }
+
+      if (resolvedBatchStoryCreationBrief) {
+        requestBody.story_creation_brief = resolvedBatchStoryCreationBrief;
+      }
+
+      if (batchStoryRepairPayload?.storyRepairSummary) {
+        requestBody.story_repair_summary = batchStoryRepairPayload.storyRepairSummary;
+      }
+
+      if (batchStoryRepairPayload?.storyRepairTargets?.length) {
+        requestBody.story_repair_targets = batchStoryRepairPayload.storyRepairTargets;
+      }
+
+      if (batchStoryRepairPayload?.storyPreserveStrengths?.length) {
+        requestBody.story_preserve_strengths = batchStoryRepairPayload.storyPreserveStrengths;
+      }
+
+
+      console.log('[闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓槼 闁诲海鎳撻張顒勫汲閿濆洦瀚氶梺鍨儑濠€鏉懨?', JSON.stringify(requestBody, null, 2));
+
+
 
       const result = await chapterBatchTaskApi.createBatchGenerateTask(currentProject.id, requestBody);
+
       setBatchTaskId(result.batch_id);
+
       batchTaskMetaRef.current[result.batch_id] = {
+
         startChapterNumber: values.startChapterNumber,
+
         count: values.count,
+
         autoAnalyze: values.enableAnalysis,
+
         projectId: currentProject.id,
+
       };
+
       persistBatchTaskMeta(result.batch_id, batchTaskMetaRef.current[result.batch_id]);
+
       setBatchProgress({
+
         status: 'running',
+
         total: result.chapters_to_generate.length,
+
         completed: 0,
+
         current_chapter_number: values.startChapterNumber,
+
         estimated_time_minutes: result.estimated_time_minutes,
+
         latest_quality_metrics: undefined,
+
         quality_metrics_summary: undefined,
+
         quality_profile_summary: null,
+
       });
 
-      message.success(`批量生成任务已创建，预计需要 ${result.estimated_time_minutes} 分钟`);
 
-      // 🔔 触发浏览器通知（任务开始）
+
+      message.success(`闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洤霉閻樹警鍤欏┑顔惧枎椤斿繘骞撻幒鎴犱画閻庣偣鍊楃亸銊ф濠靛浄绱ｉ柛鏇ㄥ櫘閸氣偓闂傚倸娲犻崑鎾绘偡?${result.estimated_time_minutes} 闂佸憡甯掑Λ婵嬪箰閹?;
+
+
+
+      // 濡絽鍟弲?闁荤喐鐟辩粻鎴ｃ亹閸屾纭呯疀濮樺吋缍岄梺闈╃祷閸旀垿鍩€椤掍焦鐨戦柣鎿勭節閺佸秹宕煎鍕簥闂佸憡鏌￠埀顒€纾壕璇测攽椤旂⒈鍎滅紒?
+
       showBrowserNotification(
-        '批量生成已启动',
-        `开始生成 ${result.chapters_to_generate.length} 章，预计需要 ${result.estimated_time_minutes} 分钟`,
+
+        '闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洨鈧懓鎲¤ぐ鍐箚鎼淬劌绀?',
+
+        `閻庢鍠掗崑鎾斥攽椤旂⒈鍎戦柡浣规崌楠?${result.chapters_to_generate.length} 缂備焦姊绘刊瀵告濠靛浄绱ｉ柛鏇ㄥ櫘閸氣偓闂傚倸娲犻崑鎾绘偡?${result.estimated_time_minutes} 闂佸憡甯掑Λ婵嬪箰閹?
+
         'info'
+
       );
 
-      // 开始轮询任务状态
+
+
+      // 閻庢鍠掗崑鎾斥攽椤旂⒈鍎撻柣銈呮閹风娀锝為鐔峰簥闂佸憡妫戠槐鏇熸叏閹间礁绠?
+
       startBatchPolling(result.batch_id);
 
+
+
     } catch (error: unknown) {
+
       const err = error as Error;
-      message.error('创建批量生成任务失败：' + (err.message || '未知错误'));
+
+      message.error('闂佸憡甯楃粙鎴犵磽閹捐绠ョ憸鐗堝笒濞呫倝鏌ｉ姀銏犳瀾闁搞劍纰嶇粋鎺旀嫚閹绘帩娼虫繝銏″劶缁墽鎲撮敃鍌涙櫖? + (err.message || '闂佸搫鐗滄禍鐐烘偂閿熺姵鐓ユ繛鍡樺俯閸?));
+
       setBatchGenerating(false);
+
       setBatchGenerateVisible(false);
+
     }
+
   };
 
-  // 轮询批量生成任务状态
+
+
+  // 闁哄鍎愰崰娑㈩敋濡ゅ懎绠ョ憸鐗堝笒濞呫倝鏌ｉ姀銏犳瀾闁搞劍纰嶇粋鎺旀嫚閹绘帩娼抽梺缁橆焾閸╂牠鍩€?
+
   const startBatchPolling = (taskId: string) => {
+
     if (batchPollingIntervalRef.current) {
+
       clearInterval(batchPollingIntervalRef.current);
+
     }
+
+
 
     const poll = async () => {
+
       try {
+
         const status = await chapterBatchTaskApi.getBatchGenerateStatus(taskId, currentProject?.id);
+
         setBatchProgress({
+
           status: status.status,
+
           total: status.total,
+
           completed: status.completed,
+
           current_chapter_number: status.current_chapter_number ?? null,
+
           latest_quality_metrics: (status.latest_quality_metrics as {
+
             overall_score?: number;
+
             conflict_chain_hit_rate?: number;
+
             rule_grounding_hit_rate?: number;
+
             opening_hook_rate?: number;
+
             payoff_chain_rate?: number;
+
             cliffhanger_rate?: number;
+
           } | null | undefined) ?? undefined,
+
           quality_metrics_summary: (status.quality_metrics_summary as {
+
             avg_overall_score?: number;
+
             avg_conflict_chain_hit_rate?: number;
+
             avg_rule_grounding_hit_rate?: number;
+
             avg_opening_hook_rate?: number;
+
             avg_payoff_chain_rate?: number;
+
             avg_cliffhanger_rate?: number;
+
             chapter_count?: number;
+
           } | null | undefined) ?? undefined,
+
           quality_profile_summary: status.quality_profile_summary ?? null,
+
         });
 
-        // 每次轮询时刷新章节列表和分析状态，实时显示新生成的章节和分析进度
-        // 使用 await 确保获取最新章节列表后再加载分析任务状态
+
+
+        // 濠殿噯绲界换鎴︻敃閸忓吋濮滄い鏃€顑欓崵鍕煛閸愵厽纭鹃柛鈺傜洴瀵剟骞嶉鎯у▏闂佺厧鎼崐鎼佸垂椤忓棙鍋橀柕濞垮劜鐎氭煡鏌涢幒鎴烆棡闁诲簼绮欓幃鈺呮嚋绾版ê浜惧〒姘功缁€澶愭倵閸︻厼浠︽俊鐐插€垮浼村礈瑜嬫禒娑㈡煛閸屾稑顥嬮柡浣规崌楠炲骞囬鐣屾殸缂備焦姊绘慨鐐繆椤撱垹妞介悘鐐舵閻庡鏌＄€ｎ偄濮岀紒缁樕戦幆?
+
+        // 婵炶揪缍€濞夋洟寮?await 缂佺虎鍙庨崰鏇犳崲濮樿埖鍤旂€瑰嫭婢樼徊鍧楁煛閸艾浜鹃梺鍝勫€规竟鍡涙偟閻戣姤鍤嶉柛灞捐壘閻忔瑩鎮跺☉鏍у闁诡喗顨婂畷妯侯吋閸涱収娼遍柡澶屽仩濡嫰宕规惔銊ュ嚑闁归偊浜濆畷鏌ユ煕閺冩挾纾垮┑顔芥倐楠炩偓?
+
         if (status.completed > 0) {
+
           const latestChapters = await refreshChapters();
+
           await loadAnalysisTasks(latestChapters);
 
-          // 刷新项目信息以实时更新总字数统计
+
+
+          // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽妷褎婢栭梺鍝勫暢閸╂牕煤閸ф妫橀柣妤€鐗冮崑鎾舵嫚閼碱剚鎲婚梺杞扮劍婢瑰棛鍒掗搹瑙勫?
+
           if (currentProject?.id) {
+
             const updatedProject = await projectApi.getProject(currentProject.id);
+
             setCurrentProject(updatedProject);
+
           }
+
         }
 
-        // 任务完成或失败，停止轮询
+
+
+        // 婵炲濮鹃褎鎱ㄩ悢琛″亾閻熺増婀伴柛銊﹀哺楠炲寮借娴滃ジ鎮归幇鈺佸姷缂佽鲸绻堝畷鎴濐煥閸曢潧澹橀柡澶屽剱閸犳盯顢?
+
         if (status.status === 'completed' || status.status === 'failed' || status.status === 'cancelled') {
+
           if (batchPollingIntervalRef.current) {
+
             clearInterval(batchPollingIntervalRef.current);
+
             batchPollingIntervalRef.current = null;
+
           }
+
+
 
           setBatchGenerating(false);
+
           const taskMeta = batchTaskMetaRef.current[taskId] ?? getPersistedBatchTaskMeta(taskId, currentProject?.id);
 
-          // 立即刷新章节列表和分析任务状态（在显示消息前）
-          // 使用 refreshChapters 返回的最新章节列表传递给 loadAnalysisTasks
+
+
+          // 缂備焦鏌ㄩ鍛暤閸℃稑绀嗛梺鍨儐閻撯偓缂備焦姊绘慨鐐繆椤撱垹绀嗘俊銈呭閳ь剙鍟村畷顏嗕沪閽樺鈧鏌＄€ｎ偄濮冮柟骞垮灲瀹曟繈鏁嶉崟顐嶏箓鏌熼璺ㄧ瓘缂佽鲸鐟╁畷鐑藉Ω閿旇В鏋栫紓浣插亾闁绘垶顭囧暩闂佽鍙庨崹鐗堟櫠閻樼粯鏅?
+
+          // 婵炶揪缍€濞夋洟寮?refreshChapters 闁哄鏅滈弻銊ッ洪弽顓熷剭闁告洦鍓氭禒姗€鏌￠崒娑橆棆闁绘繄鍏橀幊鐐哄磼濮橆剛浠氶柣鐐寸◤閸斿妲愰崼鏇熺劵闁圭儤姊婚懜?loadAnalysisTasks
+
           const finalChapters = await refreshChapters();
+
           await loadAnalysisTasks(finalChapters);
 
-          // 刷新项目信息以更新总字数统计
+
+
+          // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽敂鐣屽嚱闂佸搫鍊绘晶妤呭焵椤掑喚鍤欓柣鈯欏洤鏋侀柟娈垮枤閸╃娀鎮?
+
           if (currentProject?.id) {
+
             const updatedProject = await projectApi.getProject(currentProject.id);
+
             setCurrentProject(updatedProject);
+
           }
+
+
 
           if (status.status === 'completed') {
-            message.success(`批量生成完成！成功生成 ${status.completed} 章`);
-            // 🔔 触发浏览器通知
+
+            message.success(`闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭鎮楅悷鐗堟拱闁搞劍宀搁弫宥嗘媴閻熸壆浜ｉ梺鍛婃⒒閸犳捇寮幘璇茬?${status.completed} 缂備焦姊婚崵?;
+
+            // 濡絽鍟弲?闁荤喐鐟辩粻鎴ｃ亹閸屾纭呯疀濮樺吋缍岄梺闈╃祷閸旀垿鍩€椤掍焦鐨戦柣?
+
             showBrowserNotification(
-              '批量生成完成',
-              `《${currentProject?.title || '项目'}》成功生成 ${status.completed} 章节`,
+
+              '闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭鎮楅悷鐗堟拱闁?',
+
+              `闂?{currentProject?.title || '婵＄偑鍊曞﹢鍗灻?}闂侀潧妫楅鍡涘垂濮樿泛绀夐柣鏃傚劋閺呮悂鏌?${status.completed} 缂備焦姊绘慨鐐繆閻?'
+
               'success'
+
             );
+
+
 
             if (taskMeta?.autoAnalyze) {
+
               void triggerDeferredBatchAnalysis(taskMeta.startChapterNumber, taskMeta.count, finalChapters);
+
             }
+
           } else if (status.status === 'failed') {
-            message.error(`批量生成失败：${status.error_message || '未知错误'}`);
-            // 🔔 触发浏览器通知
+
+            message.error(`闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洤顭块幆鎵翱閻熸瑱绠撻弫?{status.error_message || '闂佸搫鐗滄禍鐐烘偂閿熺姵鐓ユ繛鍡樺俯閸?}`)';
+
+            // 濡絽鍟弲?闁荤喐鐟辩粻鎴ｃ亹閸屾纭呯疀濮樺吋缍岄梺闈╃祷閸旀垿鍩€椤掍焦鐨戦柣?
+
             showBrowserNotification(
-              '批量生成失败',
-              status.error_message || '未知错误',
+
+              '闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洤顭块幆鎵翱閻?',
+
+              status.error_message || '闂佸搫鐗滄禍鐐烘偂閿熺姵鐓ユ繛鍡樺俯閸?',
+
               'error'
+
             );
+
           } else if (status.status === 'cancelled') {
-            message.warning('批量生成已取消');
+
+            message.warning('闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洨鈧懓鎲¤ぐ鍐亹閸パ€妲?)';
+
           }
+
+
 
           delete batchTaskMetaRef.current[taskId];
+
           removePersistedBatchTaskMeta(taskId);
 
-          // 延迟关闭对话框，让用户看到最终状态
+
+
+          // 閻庣偣鍊栭崕鑲╂崲濠婂牆绀傞柟鎯板Г閿涙棃鎮楅悽娈挎敯闁伙箒妫勯々濂稿幢椤撶姷顦柣鐘辫閺呮繈寮妶澶婄濡炲瀛╃粻娆撴煕閹烘柨顣兼繛鎾冲缁辨帡宕奸姀鐘橈箓鏌?
+
           setTimeout(() => {
+
             setBatchGenerateVisible(false);
+
             setBatchTaskId(null);
+
             setBatchProgress(null);
+
           }, 2000);
+
         }
+
       } catch (error) {
-        console.error('轮询批量生成状态失败:', error);
+
+        console.error('闁哄鍎愰崰娑㈩敋濡ゅ懎绠ョ憸鐗堝笒濞呫倝鏌ｉ姀銏犳瀾闁搞劍宀搁幃鈺呮嚋绾版ê浜惧ù锝嗘偠娴滃ジ鎮?', error);
+
       }
+
     };
 
-    // 立即执行一次
+
+
+    // 缂備焦鏌ㄩ鍛暤閸℃稑绠ョ憸鎴︺€侀幋鐐碘枖闁逞屽墮閳?
+
     poll();
 
-    // 每2秒轮询一次
+
+
+    // 濠?缂備礁顦扮敮鐔兼偪閸℃瑦瀚氭い顐幘椤忚鲸绻?
+
     batchPollingIntervalRef.current = window.setInterval(poll, 2000);
+
   };
 
-  // 取消批量生成
+
+
+  // 闂佸憡鐟﹂悧妤冪矓閻戣棄绠ョ憸鐗堝笒濞呫倝鏌ｉ姀銏犳瀾闁?
+
   const handleCancelBatchGenerate = async () => {
+
     if (!batchTaskId) return;
 
+
+
     try {
+
       await chapterBatchTaskApi.cancelBatchGenerateTask(batchTaskId, currentProject?.id);
+
       delete batchTaskMetaRef.current[batchTaskId];
+
       removePersistedBatchTaskMeta(batchTaskId);
 
-      message.success('批量生成已取消');
 
-      // 取消后立即刷新章节列表和分析任务，显示已生成的章节
+
+      message.success('闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洨鈧懓鎲¤ぐ鍐亹閸パ€妲?)';
+
+
+
+      // 闂佸憡鐟﹂悧妤冪矓閻戣棄瑙﹂幖杈剧悼瑜板矂鏌涘Δ鈧崯鍧楀春濞戙垹妫橀柟娈垮枤瑜板潡鏌ら崫鍕偓鎼佸垂椤忓棙鍋橀柕濞垮劜鐎氭煡鏌涢幒鎴烆棡闁诲氦濮ょ粋鎺旀嫚閹绘帩娼抽梺鎸庣☉閺堫剙螣婢跺瞼鐭嗛柛婵嗗閸ゆ帡鏌ｉ姀銏犳瀾闁搞劍宀搁幆鍐礋椤撶姴濞囬梺?
+
       await refreshChapters();
+
       await loadAnalysisTasks();
 
-      // 刷新项目信息以更新总字数统计
+
+
+      // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽敂鐣屽嚱闂佸搫鍊绘晶妤呭焵椤掑喚鍤欓柣鈯欏洤鏋侀柟娈垮枤閸╃娀鎮?
+
       if (currentProject?.id) {
+
         const updatedProject = await projectApi.getProject(currentProject.id);
+
         setCurrentProject(updatedProject);
+
       }
+
     } catch (error: unknown) {
+
       const err = error as Error;
-      message.error('取消失败：' + (err.message || '未知错误'));
+
+      message.error('闂佸憡鐟﹂悧妤冪矓闁垮绶為弶鍫亯琚濋梺? + (err.message || '闂佸搫鐗滄禍鐐烘偂閿熺姵鐓ユ繛鍡樺俯閸?));
+
     }
+
   };
 
-  // 打开批量生成对话框
+
+
+  // 闂佺懓鐏氶幐鍝ユ閹达箑绠ョ憸鐗堝笒濞呫倝鏌ｉ姀銏犳瀾闁搞劍姘ㄩ埀顒傛暩椤㈠﹪鎯侀挊澶樻禆?
+
   const handleOpenBatchGenerate = async () => {
+
     if (batchGenerating) {
-      message.info('批量生成进行中，可在右下角进度弹窗查看任务状态');
+
+      message.info('闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭寮堕埡鍌滎灱妞ゃ垺鍨剁粙澶愵敇閵娧咁槷闂佸憡鐟崹鏉匡耿椤忓牆鐭楅柛蹇撴噽閻熸捇鎮峰▎鎰缂佺粯蓱閹棃鏁冮埀顒勬嚇婵犲嫮鐜绘俊銈勮兌閸欌偓闂佹椿浜滈鍕箲閵忋倕绀夐柨娑樺绗戦梺?)';
+
       return;
+
     }
 
-    // 找到第一个未生成的章节
-    const firstIncompleteChapter = sortedChapters.find(
-      ch => !ch.content || ch.content.trim() === ''
-    );
+
+
+
 
     if (!firstIncompleteChapter) {
-      message.info('所有章节都已生成内容');
+
+      message.info('闂佸湱顣介崑鎾绘煛閸繍妲洪柣婵堝厴閹崇偤宕掗悙鎻掑箣閻庤鐡曠亸娆撳极閹捐绠ｉ柟閭﹀墮閺佸爼鎮?)';
+
       return;
+
     }
 
-    // 检查该章节是否可以生成
+
+
+    // 濠碘槅鍋€閸嬫捇鏌＄仦璇插姤妞ゆ洘姘ㄧ划鈺呮偐閸濆嫀婵嬫煛閸曢潧鐏犻柟顖欑窔瀹曪綁顢涘▎搴ｉ瀺闂佹眹鍨婚崰鎰板垂?
+
     if (!canGenerateChapter(firstIncompleteChapter)) {
+
       const reason = getGenerateDisabledReason(firstIncompleteChapter);
+
       message.warning(reason);
+
       return;
+
     }
 
-    // 打开对话框时加载模型列表，等待完成
+
+
+    // 闂佺懓鐏氶幐鍝ユ閹寸姭鍋撻悽娈挎敯闁伙箒妫勯々濂稿幢濡椿妲梺鍛婃⒒婵儳霉閸ヮ灛鐔煎灳瀹曞洠鍋撻悜钘夌婵°倕瀚ㄩ埀顒€鍟撮弫宥呯暆閳ь剟鎮洪幋婵愬殫闁告侗鍘鹃弳姘舵煙?
+
     const defaultModel = await loadAvailableModels();
 
-    console.log('[打开批量生成] defaultModel:', defaultModel);
-    console.log('[打开批量生成] selectedStyleId:', selectedStyleId);
 
-    // 设置批量生成的模型选择状态
+
+    console.log('[闂佺懓鐏氶幐鍝ユ閹达箑绠ョ憸鐗堝笒濞呫倝鏌ｉ姀銏犳瀾闁搞劍鐡?defaultModel:', defaultModel);
+
+    console.log('[闂佺懓鐏氶幐鍝ユ閹达箑绠ョ憸鐗堝笒濞呫倝鏌ｉ姀銏犳瀾闁搞劍鐡?selectedStyleId:', selectedStyleId);
+
+
+
+    // 闁荤姳绀佹晶浠嬫偪閸℃稑绠ョ憸鐗堝笒濞呫倝鏌ｉ姀銏犳瀾闁搞劍宀搁幆鍐礋椤戠喍绶氬畷鍦偓锝庡枓閸嬫挻寰勭€ｎ亶浠撮梺缁橆焾閸╂牠鍩€?
     setBatchSelectedModel(defaultModel || undefined);
+    setBatchSelectedCreativeMode(undefined);
+    setBatchSelectedStoryFocus(undefined);
+    setBatchSelectedPlotStage(inferCreationPlotStage({
+      chapterNumber: firstIncompleteChapter.chapter_number,
+      totalChapters: knownStructureChapterCount,
+    }));
 
-    // 重置表单并设置初始值（使用缓存的字数）
+
+    // 闂備焦褰冪粔鍫曟偪閸℃瑦鍋橀柕濞垮劚缁€瀣殽閻愭潙鍔舵い鏃€娲滅槐鏃堫敊閻撳海浠存繝娈垮枛椤戝懘鍩€椤掑倶鈧妲愬▎鎰閻犳亽鍔嶉弳蹇曠磽閸屾稒灏柣掳鍔戦幆鍐礋椤愩倖鎲婚梺杞扮鎼存粎妲?
+
     batchForm.setFieldsValue({
+
       startChapterNumber: firstIncompleteChapter.chapter_number,
+
       count: 5,
+
       enableAnalysis: true,
+
       styleId: selectedStyleId,
+
       targetWordCount: getCachedWordCount(),
+
     });
+
+
 
     setBatchGenerateVisible(true);
+
   };
 
-  // 手动创建章节(仅one-to-many模式)
+
+
+  // 闂佸綊娼ч鍛叏閳哄懎绀嗘繛鎴烆焽缁憋妇绱掗弮鍌毿┑?婵炲濮村畵鈧琻e-to-many濠碘槅鍨埀顒€纾涵鈧?
+
   const showManualCreateChapterModal = () => {
-    // 计算下一个章节号
+
+    // 闁荤姳绶ょ槐鏇㈡偩缂佹鈻旈悗锝傛櫇椤忓崬鈽夐幙鍐х敖闁绘繄鍏橀幊鐐哄磼濮橆剙鈻?
+
     const nextChapterNumber = chapters.length > 0
+
       ? Math.max(...chapters.map(c => c.chapter_number)) + 1
+
       : 1;
 
+
+
     modal.confirm({
-      title: '手动创建章节',
+
+      title: '闂佸綊娼ч鍛叏閳哄懎绀嗘繛鎴烆焽缁憋妇绱掗弮鍌毿┑?',
+
       width: 600,
+
       centered: true,
+
       content: (
+
         <Form
+
           form={manualCreateForm}
+
           layout="vertical"
+
           initialValues={{
+
             chapter_number: nextChapterNumber,
+
             status: 'draft'
+
           }}
+
           style={{ marginTop: 16 }}
+
         >
+
           <Form.Item
-            label="章节序号"
+
+            label="缂備焦姊绘慨鐐繆椤撶喐鍎熼煫鍥ㄦ尭婵?"
+
             name="chapter_number"
-            rules={[{ required: true, message: '请输入章节序号' }]}
-            tooltip="建议按顺序创建章节，确保内容连贯性"
+
+            rules={[{ required: true, message: '闁荤姴娲ㄩ弻澶屾椤撱垹绀傞柕澹懎濞囬梺鐓庢惈閸婂摜鑺遍銏犵煑? }]'}
+
+            tooltip="閻庣偣鍊濈紓姘额敊閸涙潙绠板鑸靛姂閳ь剙瀛╅幆鏃囩疀閹惧磭浠悗鐐瑰€涘▍锝夋偟閻戣姤鍤嶉柛宀嬪缁€澶岀棯椤撗冩灆缂佺粯宀稿畷姗€宕ㄩ褍鏅ｉ柡澶嗘櫇閸嬬娀鎮块鈧獮鈧?"
+
           >
-            <InputNumber min={1} style={{ width: '100%' }} placeholder="自动计算的下一个序号" />
+
+            <InputNumber min={1} style={{ width: '100%' }} placeholder="闂佺厧顨庢禍婊勬叏閳哄啯濯奸柨娑樺閺嗩剟鏌ｉ妸銉ヮ仹缂佹鎳忕粙澶愬焵椤掍胶鈻旀い蹇撳绾板秹鏌? /">
+
           </Form.Item>
 
+
+
           <Form.Item
-            label="章节标题"
+
+            label="缂備焦姊绘慨鐐繆椤撱垹鍐€闁搞儺鍓﹂弳?"
+
             name="title"
-            rules={[{ required: true, message: '请输入标题' }]}
+
+            rules={[{ required: true, message: '闁荤姴娲ㄩ弻澶屾椤撱垹绀傞柕澶涘閸ㄧ厧螞? }]'}
+
           >
-            <Input placeholder="例如：第一章 初遇" />
+
+            <Input placeholder="婵炴挻鑹鹃鍛淬€呰閺佸秴顫濇鏍у壋婵炴垶鎸撮崑鎾剁磼?闂佸憡甯楃换鍫熺? /">
+
           </Form.Item>
 
+
+
           <Form.Item
-            label="关联大纲"
+
+            label="闂佺绻愰悿鍥ㄧ閸喎绶炵憸蹇曠礄?"
+
             name="outline_id"
-            rules={[{ required: true, message: '请选择关联的大纲' }]}
-            tooltip="one-to-many模式下，章节必须关联到大纲"
+
+            rules={[{ required: true, message: '闁荤姴娲ㄩ崗姗€鍩€椤掆偓椤︽壆鈧哎鍔戝畷妤冣偓鍦С缁捇鏌ｉ妸銉ヮ仼闁靛洤娲ㄩ惀? }]'}
+
+            tooltip="one-to-many濠碘槅鍨埀顒€纾涵鈧繛鎴炴尭椤戞垹妲愬┑鍫㈠崥闁绘ê鎼灐闂婎偄娲ら幊姗€濡磋箛娑樼閻庡湱濮崇划鎾绘煕閹烘挻绶查柕鍥ф川閻?"
+
           >
-            <Select placeholder="请选择所属大纲">
-              {/* 直接使用 store 中的 outlines 数据，而不是从现有章节中提取 */}
+
+            <Select placeholder="闁荤姴娲ㄩ崗姗€鍩€椤掆偓椤︽壆鈧哎鍔戦獮宥夊焵椤掑倷娌柣鎰湴娴滐絿绱?">
+
+              {/* 闂佺儵鏅涢悺銊ф暜鐎涙ɑ濯撮悹鎭掑妽閺?store 婵炴垶鎼╅崢鎯р枔?outlines 闂佽桨鑳舵晶妤€鐣垫笟鈧弫宥呯暆閸愶絽浜鹃悘鐐跺亹閻熸繈鏌￠崟闈涚仧缂侇喚濞€閹娊鎮ч崼鐔虹暢缂備焦姊绘慨鐐繆椤撶喓鈻旀い鎾跺枎缁插綊鏌?*/}
+
               {[...outlines]
+
                 .sort((a, b) => a.order_index - b.order_index)
+
                 .map(outline => (
+
                   <Select.Option key={outline.id} value={outline.id}>
-                    第{outline.order_index}卷：{outline.title}
+
+                    缂備焦顨堥幉顡祏tline.order_index}闂佸憡顨呴崵鏍閻ㄦutline.title}
+
                   </Select.Option>
+
                 ))}
+
             </Select>
+
           </Form.Item>
 
+
+
           <Form.Item
-            label="章节摘要（可选）"
+
+            label="缂備焦姊绘慨鐐繆椤撱垹绠烘俊顖涱儥濞诧綁鏌ㄥ☉妯煎鐟滅増鐓￠弻鍛緞濞戞氨顦?"
+
             name="summary"
-            tooltip="简要描述本章的主要内容和情节发展"
+
+            tooltip="缂備胶濮崑鎾绘偡閺囨氨鍔嶇€殿喗瀵у濠氭偋閸喐瀚崇紓浣规⒒婵嘲鈻撻幋鐐碘枖闁哄嫬娴氬ú锝夋煕閹邦剚鍣规い鏃€鍔欏畷顏嗕沪閹冨闂佺厧鎼崐姝屻亹閸屾粈娌?"
+
           >
+
             <TextArea
+
               rows={4}
-              placeholder="简要描述本章内容..."
+
+              placeholder="缂備胶濮崑鎾绘偡閺囨氨鍔嶇€殿喗瀵у濠氭偋閸喐瀚崇紓浣规⒒婵挳宕€电硶鍋?.."
+
             />
+
           </Form.Item>
 
+
+
           <Form.Item
-            label="状态"
+
+            label="闂佺粯顭堥崺鏍焵?"
+
             name="status"
+
           >
+
             <Select>
-              <Select.Option value="draft">草稿</Select.Option>
-              <Select.Option value="writing">创作中</Select.Option>
-              <Select.Option value="completed">已完成</Select.Option>
+
+              <Select.Option value="draft">闂佽壈妫勯ˇ閬嶁€?/Select.Option>
+
+              <Select.Option value="writing">闂佸憡甯楃粙鎰礊閺冣偓缁?/Select.Option>
+
+              <Select.Option value="completed">閻庣懓鎲¤ぐ鍐偩椤掑嫬绠?/Select.Option>
+
             </Select>
+
           </Form.Item>
+
         </Form>
+
       ),
-      okText: '创建',
-      cancelText: '取消',
+
+      okText: '闂佸憡甯楃粙鎴犵磽?',
+
+      cancelText: '闂佸憡鐟﹂悧妤冪矓?',
+
       onOk: async () => {
+
         const values = await manualCreateForm.validateFields();
 
-        // 检查章节序号是否已存在
+
+
+        // 濠碘槅鍋€閸嬫捇鏌＄仦璇插姢闁绘繄鍏橀幊鐐哄磼濮樿京顣查梺鍛婄懇閺€鍗炍ｉ幖浣歌Е闁挎洍鍋撻柛鎴磿閳ь剚绋掗敋婵犫偓?
+
         const conflictChapter = chapters.find(
+
           ch => ch.chapter_number === values.chapter_number
+
         );
+
+
 
         if (conflictChapter) {
-          // 显示冲突提示Modal
+
+          // 闂佸搫瀚晶浠嬪Φ濮樿泛绀冮柤纰卞墰瀹曟劙鏌熺紒妯哄闁靛洦鐡塷dal
+
           modal.confirm({
-            title: '章节序号冲突',
+
+            title: '缂備焦姊绘慨鐐繆椤撶喐鍎熼煫鍥ㄦ尭婵炲洭鏌涢幇顖氱毢闁?',
+
             icon: <InfoCircleOutlined style={{ color: '#ff4d4f' }} />,
+
             width: 500,
+
             centered: true,
+
             content: (
+
               <div>
+
                 <p style={{ marginBottom: 12 }}>
-                  第 <strong>{values.chapter_number}</strong> 章已存在：
+
+                  缂?<strong>{values.chapter_number}</strong> 缂備焦姊绘慨鎾礄閿涘嫧鍋撳☉娅亜锕㈤鍫熸櫖?
+
                 </p>
+
                 <div style={{
+
                   padding: 12,
+
                   background: '#fff7e6',
+
                   borderRadius: 4,
+
                   border: '1px solid #ffd591',
+
                   marginBottom: 12
+
                 }}>
-                  <div><strong>标题：</strong>{conflictChapter.title}</div>
-                  <div><strong>状态：</strong>{getStatusText(conflictChapter.status)}</div>
-                  <div><strong>字数：</strong>{conflictChapter.word_count || 0}字</div>
+
+                  <div><strong>闂佸搫绉村ú顓€傛禒瀣櫖?/strong>{conflictChapter.title}</div>
+
+                  <div><strong>闂佺粯顭堥崺鏍焵椤戣法绛忕紒?/strong>{getStatusText(conflictChapter.status)}</div>
+
+                  <div><strong>闁诲孩绋掗〃鍡涘汲閻斿吋鏅?/strong>{conflictChapter.word_count || 0}闁?/div>
+
                   {conflictChapter.outline_title && (
-                    <div><strong>所属大纲：</strong>{conflictChapter.outline_title}</div>
+
+                    <div><strong>闂佸湱顣介崑鎾绘倶閻愰潧浠滈柕鍥ф川閻ヮ亞鎷犺缁?/strong>{conflictChapter.outline_title}</div>
+
                   )}
+
                 </div>
+
                 <p style={{ color: '#ff4d4f', marginBottom: 8 }}>
-                  ⚠️ 是否删除旧章节并创建新章节？
+
+                  闂佸疇娉曟刊瀵哥箔?闂佸搫瀚烽崹浼村箚娓氣偓瀹曟岸鎮╃紒妯煎綉闂佸搫鍞查崨顖氬▏闂佺厧鎼崐鎼佹嚐閻旂厧绀嗘繛鎴烆焽缁憋箓鏌￠崒娑橆棆闁绘繄鍏橀幊鐐哄磼閿旀儳鎯?
+
                 </p>
+
                 <p style={{ fontSize: 12, color: '#666', marginBottom: 0 }}>
-                  删除后将无法恢复，章节内容和分析结果都将被删除。
+
+                  闂佸憡甯炴繛鈧繛鍛叄瀹曘儲鎯旈敍鍕啈闂佸搫鍟版慨鐢垫兜閸洖绠掗柕蹇曞濡插鏌ㄥ☉妯肩伇闁绘繄鍏橀幊鐐哄磼濮橆剚鏆ラ柣搴℃贡閹虫捇骞忔导鏉戠闁糕剝顭囬埀顒傛櫕缁辨帡骞樼€甸晲鍑介梻渚囧枦濡嫰鎯冮姀銏″仏妞ゆ劑鍨归悘鈺呮⒒閸曗晛鈧垿鍩€?
+
                 </p>
+
               </div>
+
             ),
-            okText: '删除并创建',
+
+            okText: '闂佸憡甯炴繛鈧繛鍛叄閻涱喚鎹勯崫鍕画閻?',
+
             okButtonProps: { danger: true },
-            cancelText: '取消',
+
+            cancelText: '闂佸憡鐟﹂悧妤冪矓?',
+
             onOk: async () => {
+
               try {
-                // 先删除旧章节
+
+                // 闂佺绻愰悧鍡涘垂瑜版帗鈷旈柕鍫濇閿涘绱掗弮鍌毿┑?
+
                 await handleDeleteChapter(conflictChapter.id);
 
-                // 等待一小段时间确保删除完成
+
+
+                // 缂備焦绋戦ˇ顖滄閻斿摜鈻旈柍褜鍓涙禍姝岀疀閺冩垵鏂€闂佸搫鍟悥鐓幬涚捄銊﹀厹妞ゆ棁宕电粻浠嬫煕閹烘柨鈻堟繛鍛捣閳ь剛鎳撻張顒勫垂?
+
                 await new Promise(resolve => setTimeout(resolve, 300));
 
-                // 创建新章节
+
+
+                // 闂佸憡甯楃粙鎴犵磽閹捐妫橀柟娈垮枤瑜板潡鏌?
+
                 await chapterApi.createChapter({
+
                   project_id: currentProject.id,
+
                   ...values
+
                 });
 
-                message.success('已删除旧章节并创建新章节');
+
+
+                message.success('閻庣懓鎲¤ぐ鍐垂瑜版帗鈷旈柕鍫濇閿涘绱掗弮鍌毿┑鈽嗗弮閻涱喚鎹勯崫鍕画閻庣偣鍊楅崕銈夊蓟婵犲嫮鍗氶柣妯烘惈铻?)';
+
                 await refreshChapters();
 
-                // 刷新项目信息以更新字数统计
+
+
+                // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽敂鐣屽嚱闂佸搫鍊瑰姗€鎮鸿瀵偊骞嶉鎯х厷闁?
+
                 const updatedProject = await projectApi.getProject(currentProject.id);
+
                 setCurrentProject(updatedProject);
 
+
+
                 manualCreateForm.resetFields();
+
               } catch (error: unknown) {
+
                 const err = error as Error;
-                message.error('操作失败：' + (err.message || '未知错误'));
+
+                message.error('闂佺懓鐏濈粔宕囩礊閺冣偓瀵板嫭娼忛銉愭洟鏌? + (err.message || '闂佸搫鐗滄禍鐐烘偂閿熺姵鐓ユ繛鍡樺俯閸?));
+
                 throw error;
+
               }
+
             }
+
           });
 
-          // 阻止外层Modal关闭
+
+
+          // 闂傚倸鍟扮划顖烆敆濞戞瑥绶為柡宓懏鍕綧odal闂佺绻戞繛濠偽?
+
           return Promise.reject();
+
         }
 
-        // 没有冲突，直接创建
+
+
+        // 濠电偛澶囬崜婵嗭耿娓氣偓瀹曟﹢鎳犻鍌氱９闂佹寧绋戦惉鐓幟洪崸妤€绠抽柕澶堝劚閻忥紕鈧?
+
         try {
+
           await chapterApi.createChapter({
+
             project_id: currentProject.id,
+
             ...values
+
           });
-          message.success('章节创建成功');
+
+          message.success('缂備焦姊绘慨鐐繆椤撱垹绀嗘繛鎴烆焽缁憋箓鏌熺€涙ê濮囧┑?)';
+
           await refreshChapters();
 
-          // 刷新项目信息以更新字数统计
+
+
+          // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽敂鐣屽嚱闂佸搫鍊瑰姗€鎮鸿瀵偊骞嶉鎯х厷闁?
+
           const updatedProject = await projectApi.getProject(currentProject.id);
+
           setCurrentProject(updatedProject);
 
+
+
           manualCreateForm.resetFields();
+
         } catch (error: unknown) {
+
           const err = error as Error;
-          message.error('创建失败：' + (err.message || '未知错误'));
+
+          message.error('闂佸憡甯楃粙鎴犵磽閹炬潙绶為弶鍫亯琚濋梺? + (err.message || '闂佸搫鐗滄禍鐐烘偂閿熺姵鐓ユ繛鍡樺俯閸?));
+
           throw error;
+
         }
+
       }
+
     });
+
   };
 
-  // 渲染分析状态标签
+
+
+  // 濠电偞鎸稿鍫曟偂鐎ｎ喖绀嗛柛鈩冾焽閳ь兛绮欓幃鈺呮嚋绾版ê浜惧ù锝呮贡閸ㄨ偐绱?
+
   const renderAnalysisStatus = (chapterId: string) => {
+
     const task = analysisTasksMap[chapterId];
 
+
+
     if (!task) {
+
       return null;
+
     }
+
+
 
     switch (task.status) {
+
       case 'pending':
+
         return (
+
           <Tag icon={<SyncOutlined spin />} color="processing">
-            等待分析
+
+            缂備焦绋戦ˇ顖滄閻旂厧绀嗛柛鈩冾焽閳?
+
           </Tag>
+
         );
+
       case 'running': {
-        // 检查是否正在重试（后端会在error_message中包含"重试"信息）
-const isRetrying = task.error_code === 'retrying' || (task.error_message && task.error_message.includes('重试'));
+
+        // 濠碘槅鍋€閸嬫捇鏌＄仦璇插姕婵″弶鎮傚畷銉╂晜缁涘濡ч梺闈╄礋閸旀垿宕抽崫銉﹀珰闁哄浂浜炵粈鍕煕濮橆剚鎹ｆい蹇ｅ墯鐎电厧顫濋浣藉惈error_message婵炴垶鎼╅崢鑲┾偓鍨耿瀹?闂備焦褰冪粔鐑芥儊?婵烇絽娲犻崜婵囧閸涘瓨鏅?
+
+const isRetrying = task.error_code === 'retrying' || (task.error_message && task.error_message.includes('闂備焦褰冪粔鐑芥儊?))';
+
         return (
+
           <Tag
+
             icon={<SyncOutlined spin />}
+
             color={isRetrying ? "warning" : "processing"}
+
             title={task.error_message || undefined}
+
           >
-            {isRetrying ? `重试中 ${task.progress}%` : `分析中 ${task.progress}%`}
+
+            {isRetrying ? `闂備焦褰冪粔鐑芥儊椤栨稓鈻?${task.progress}%` : `闂佸憡甯掑Λ娆撴倵閼恒儳鈻?${task.progress}%`}
+
           </Tag>
+
         );
+
       }
+
       case 'completed':
+
         return (
+
           <Tag icon={<CheckCircleOutlined />} color="success">
-            已分析
+
+            閻庣懓鎲¤ぐ鍐垂鎼淬劌鍑?
+
           </Tag>
+
         );
+
       case 'failed':
+
         return (
+
           <Tag icon={<CloseCircleOutlined />} color="error" title={task.error_message || undefined}>
-            分析失败
+
+            闂佸憡甯掑Λ娆撴倵閼恒儱绶為弶鍫亯琚?
+
           </Tag>
+
         );
+
       default:
+
         return null;
+
     }
+
   };
 
-  // 显示展开规划详情
+
+
+  // 闂佸搫瀚晶浠嬪Φ濮樺彉娌柡鍥╁仧绾惧鎮峰▎蹇擃仼闁搞劍绻勯幏鐘绘晜閽樺澹?
+
   const showExpansionPlanModal = (chapter: Chapter) => {
+
     if (!chapter.expansion_plan) return;
 
+
+
     try {
+
       const planData: ExpansionPlanData = JSON.parse(chapter.expansion_plan);
 
+
+
       modal.info({
+
         title: (
+
           <Space style={{ flexWrap: 'wrap' }}>
+
             <InfoCircleOutlined style={{ color: 'var(--color-primary)' }} />
-            <span style={{ wordBreak: 'break-word' }}>第{chapter.chapter_number}章展开规划</span>
+
+            <span style={{ wordBreak: 'break-word' }}>缂備焦顨堥幉顡﹉apter.chapter_number}缂備焦姊绘慨鎾儓瀹ュ拋鍤曢柍褜鍓涢幉鎾礋椤愩垻浜?/span>
+
           </Space>
+
         ),
+
         width: isMobile ? 'calc(100vw - 32px)' : 800,
+
         centered: true,
+
         style: isMobile ? {
+
           maxWidth: 'calc(100vw - 32px)',
+
           margin: '0 auto',
+
           padding: '0 16px'
+
         } : undefined,
+
         styles: {
+
           body: {
+
             maxHeight: isMobile ? 'calc(100vh - 200px)' : 'calc(80vh - 110px)',
+
             overflowY: 'auto'
+
           }
+
         },
+
         content: (
+
           <div style={{ marginTop: 16 }}>
+
             <Descriptions
+
               column={1}
+
               size="small"
+
               bordered
+
               labelStyle={{
+
                 whiteSpace: 'normal',
+
                 wordBreak: 'break-word',
+
                 width: isMobile ? '80px' : '100px'
+
               }}
+
               contentStyle={{
+
                 whiteSpace: 'normal',
+
                 wordBreak: 'break-word',
+
                 overflowWrap: 'break-word'
+
               }}
+
             >
-              <Descriptions.Item label="章节标题">
+
+              <Descriptions.Item label="缂備焦姊绘慨鐐繆椤撱垹鍐€闁搞儺鍓﹂弳?">
+
                 <strong style={{
+
                   wordBreak: 'break-word',
+
                   whiteSpace: 'normal',
+
                   overflowWrap: 'break-word'
+
                 }}>
+
                   {chapter.title}
+
                 </strong>
+
               </Descriptions.Item>
-              <Descriptions.Item label="情感基调">
+
+              <Descriptions.Item label="闂佽鍨伴幊蹇涘礉閸涙潙鏄ュΔ锕佹硶濞?">
+
                 <Tag
+
                   color="blue"
+
                   style={{
+
                     whiteSpace: 'normal',
+
                     wordBreak: 'break-word',
+
                     height: 'auto',
+
                     lineHeight: '1.5',
+
                     padding: '4px 8px'
+
                   }}
+
                 >
+
                   {planData.emotional_tone}
+
                 </Tag>
+
               </Descriptions.Item>
-              <Descriptions.Item label="冲突类型">
+
+              <Descriptions.Item label="闂佸憡鍔樼亸娆撴偘婵犲嫮灏甸悹鍥皺閳?">
+
                 <Tag
+
                   color="orange"
+
                   style={{
+
                     whiteSpace: 'normal',
+
                     wordBreak: 'break-word',
+
                     height: 'auto',
+
                     lineHeight: '1.5',
+
                     padding: '4px 8px'
+
                   }}
+
                 >
+
                   {planData.conflict_type}
+
                 </Tag>
+
               </Descriptions.Item>
-              <Descriptions.Item label="预估字数">
-                <Tag color="green">{planData.estimated_words}字</Tag>
+
+              <Descriptions.Item label="婵☆偅婢樼€氼亪宕ｆ繝鍕ㄥ亾濞戞瑯娈曢柡?">
+
+                <Tag color="green">{planData.estimated_words}闁?/Tag>
+
               </Descriptions.Item>
-              <Descriptions.Item label="叙事目标">
+
+              <Descriptions.Item label="闂佸憡鐟﹂悷銈囪姳閵娾晜鍎庢い鏃傛櫕閸?">
+
                 <span style={{
+
                   wordBreak: 'break-word',
+
                   whiteSpace: 'normal',
+
                   overflowWrap: 'break-word'
+
                 }}>
+
                   {planData.narrative_goal}
+
                 </span>
+
               </Descriptions.Item>
-              <Descriptions.Item label="关键事件">
+
+              <Descriptions.Item label="闂佺绻戞繛濠囧极椤撶喓顩查悗锝傛櫆椤?">
+
                 <Space direction="vertical" size="small" style={{ width: '100%' }}>
+
                   {planData.key_events.map((event, idx) => (
+
                     <div
+
                       key={idx}
+
                       style={{
+
                         padding: '4px 0',
+
                         wordBreak: 'break-word',
+
                         whiteSpace: 'normal',
+
                         overflowWrap: 'break-word'
+
                       }}
+
                     >
+
                       <Tag color="purple" style={{ flexShrink: 0 }}>{idx + 1}</Tag>{' '}
+
                       <span style={{
+
                         wordBreak: 'break-word',
+
                         whiteSpace: 'normal',
+
                         overflowWrap: 'break-word'
+
                       }}>
+
                         {event}
+
                       </span>
+
                     </div>
+
                   ))}
+
                 </Space>
+
               </Descriptions.Item>
-              <Descriptions.Item label="涉及角色">
+
+              <Descriptions.Item label="濠电偞鍨甸ˇ顖氼嚕妞嬪孩鍠嗛柟鐑樻礀椤?">
+
                 <Space wrap style={{ maxWidth: '100%' }}>
+
                   {planData.character_focus.map((char, idx) => (
+
                     <Tag
+
                       key={idx}
+
                       color="cyan"
+
                       style={{
+
                         whiteSpace: 'normal',
+
                         wordBreak: 'break-word',
+
                         height: 'auto',
+
                         lineHeight: '1.5'
+
                       }}
+
                     >
+
                       {char}
+
                     </Tag>
+
                   ))}
+
                 </Space>
+
               </Descriptions.Item>
+
               {planData.scenes && planData.scenes.length > 0 && (
-                <Descriptions.Item label="场景规划">
+
+                <Descriptions.Item label="闂侀潻濡囬崕銈呪枍濞嗘垶鍠嗛柛鏇ㄥ亜閻?">
+
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
+
                     {planData.scenes.map((scene, idx) => (
+
                       <Card
+
                         key={idx}
+
                         size="small"
+
                         style={{
+
                           backgroundColor: '#fafafa',
+
                           maxWidth: '100%',
+
                           overflow: 'hidden'
+
                         }}
+
                       >
+
                         <div style={{
+
                           marginBottom: 4,
+
                           wordBreak: 'break-word',
+
                           whiteSpace: 'normal',
+
                           overflowWrap: 'break-word'
+
                         }}>
-                          <strong>📍 地点：</strong>
+
+                          <strong>濡絽鍟幆?闂侀潻闄勬竟鍡涘磻閿濆鏅?/strong>
+
                           <span style={{
+
                             wordBreak: 'break-word',
+
                             whiteSpace: 'normal',
+
                             overflowWrap: 'break-word'
+
                           }}>
+
                             {scene.location}
+
                           </span>
+
                         </div>
+
                         <div style={{ marginBottom: 4 }}>
-                          <strong>👥 角色：</strong>
+
+                          <strong>濡絽鍟崳?闁荤喐鐟︾敮鐔哥珶婵犲洦鏅?/strong>
+
                           <Space
+
                             size="small"
+
                             wrap
+
                             style={{
+
                               marginLeft: isMobile ? 0 : 8,
+
                               marginTop: isMobile ? 4 : 0,
+
                               display: isMobile ? 'flex' : 'inline-flex'
+
                             }}
+
                           >
+
                             {scene.characters.map((char, charIdx) => (
+
                               <Tag
+
                                 key={charIdx}
+
                                 style={{
+
                                   whiteSpace: 'normal',
+
                                   wordBreak: 'break-word',
+
                                   height: 'auto'
+
                                 }}
+
                               >
+
                                 {char}
+
                               </Tag>
+
                             ))}
+
                           </Space>
+
                         </div>
+
                         <div style={{
+
                           wordBreak: 'break-word',
+
                           whiteSpace: 'normal',
+
                           overflowWrap: 'break-word'
+
                         }}>
-                          <strong>🎯 目的：</strong>
+
+                          <strong>濡絽鍟粻?闂佺儵鏅╅崰姘枔閹达附鏅?/strong>
+
                           <span style={{
+
                             wordBreak: 'break-word',
+
                             whiteSpace: 'normal',
+
                             overflowWrap: 'break-word'
+
                           }}>
+
                             {scene.purpose}
+
                           </span>
+
                         </div>
+
                       </Card>
+
                     ))}
+
                   </Space>
+
                 </Descriptions.Item>
+
               )}
+
             </Descriptions>
+
             <Alert
-              message="提示"
-              description="这些是AI在大纲展开时生成的规划信息，可以作为创作章节内容时的参考。"
+
+              message="闂佸湱绮崝妤呭Φ?"
+
+              description="闁哄鏅滈悷銈囪姳濞差亜鍙婇柣銈咁攳闂侀潻璐熼崝宀勫Φ閸モ晝妫柟缁樺笧濞兼梻鈧鍠掗崑鎾绘煛閸愩劌顣抽柡浣规崌楠炲骞囬鐣屾殸闁荤喐鐟ョ€氼剟宕瑰┑鍥┾攳闁斥晛鍟╃槐鏍煥濞戞瀚扮憸鏉垮级缁傛帡濡烽妶鍥┾枙婵炴垶鎸搁幖顐﹀垂鏉堛劍濯存繝濠傛噽瑜板潡鏌ら崫鍕偓鎼佸船鐎电硶鍋撶涵鍜佹綈婵＄偛鍊块幆鍐礋椤愩垺顥濋梺鍏兼緲閸熴劑鍩€?"
+
               type="info"
+
               showIcon
+
               style={{ marginTop: 16 }}
+
             />
+
           </div>
+
         ),
-        okText: '关闭',
+
+        okText: '闂佺绻戞繛濠偽?',
+
       });
+
     } catch (error) {
-      console.error('解析展开规划失败:', error);
-      message.error('展开规划数据格式错误');
+
+      console.error('闁荤喐鐟辩徊楣冩倵閻ｅ奔娌柡鍥╁仧绾惧鎮峰▎蹇擃仼闁搞劍绻冨鍕綇椤愩儛?', error);
+
+      message.error('闁诲繒鍋炲ú鏍閹寸姵鍠嗛柛鏇ㄥ亜閻忓﹪鏌℃担鍝勵暭鐎规挷绶氬浠嬫偂鎼达絿顢呴梻浣瑰閻熴劑顢?)';
+
     }
+
   };
 
-  // 删除章节处理函数
+
+
+  // 闂佸憡甯炴繛鈧繛鍛捣缁晠鎮╅崫鍕庢繂顭跨捄鍝勵伀闁诡喖锕畷娆撴嚍閵夛附顔?
+
   const handleDeleteChapter = async (chapterId: string) => {
+
     try {
+
       await deleteChapter(chapterId);
 
-      // 刷新章节列表
+
+
+      // 闂佸憡甯￠弨閬嶅蓟婵犲嫮鍗氶柣妯烘惈铻￠梺鍛婂笚椤ㄥ濡?
+
       await refreshChapters();
 
-      // 刷新项目信息以更新总字数统计
+
+
+      // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽敂鐣屽嚱闂佸搫鍊绘晶妤呭焵椤掑喚鍤欓柣鈯欏洤鏋侀柟娈垮枤閸╃娀鎮?
+
       if (currentProject) {
+
         const updatedProject = await projectApi.getProject(currentProject.id);
+
         setCurrentProject(updatedProject);
+
       }
 
-      message.success('章节删除成功');
+
+
+      message.success('缂備焦姊绘慨鐐繆椤撱垹绀嗛柣妯肩帛閻濈喖鏌熺€涙ê濮囧┑?)';
+
     } catch (error: unknown) {
+
       const err = error as Error;
-      message.error('删除章节失败：' + (err.message || '未知错误'));
+
+      message.error('闂佸憡甯炴繛鈧繛鍛捣缁晠鎮╅崫鍕庢繂顭块幆鎵翱閻熸瑱绠撻弫? + (err.message || '闂佸搫鐗滄禍鐐烘偂閿熺姵鐓ユ繛鍡樺俯閸?));
+
     }
+
   };
 
-  // 打开规划编辑器
+
+
+  // 闂佺懓鐏氶幐鍝ユ閹寸姵鍠嗛柛鏇ㄥ亜閻忓﹦绱撻崒娑氬⒊缂侀鍋婂畷?
+
   const handleOpenPlanEditor = (chapter: Chapter) => {
-    // 直接打开编辑器,如果没有规划数据则创建新的
+
+    // 闂佺儵鏅涢悺銊ф暜閹绢喖绠ラ柟鎯х－绾捐崵绱撻崒娑氬⒊缂侀鍋婂畷?婵犵鈧啿鈧綊鎮樻径濞炬煢闁斥晛鍟粻鎺楁偡濞嗗繐顏╅柛銊︾箞瀵偊鎮ч崼婵堛偊闂佸憡甯楅悷銉╁垂閸楃儐鍤堥柣鎴炆戦悡鈧梺?
+
     setEditingPlanChapter(chapter);
+
     setPlanEditorVisible(true);
+
   };
 
-  // 保存规划信息
+
+
+  // 婵烇絽娲︾换鍌炴偤閵娧勫枂闁告洦鍋勯悘濠偳庨崶锝呭⒉濞?
+
   const handleSavePlan = async (planData: ExpansionPlanData) => {
+
     if (!editingPlanChapter) return;
 
+
+
     try {
+
       const response = await fetch(`/api/chapters/${editingPlanChapter.id}/expansion-plan`, {
+
         method: 'PUT',
+
         headers: {
+
           'Content-Type': 'application/json',
+
         },
+
         body: JSON.stringify(planData),
+
       });
 
+
+
       if (!response.ok) {
+
         const error = await response.json();
-        throw new Error(error.detail || '更新失败');
+
+        throw new Error(error.detail || '闂佸搫娲ら悺銊╁蓟婵犲啫绶為弶鍫亯琚?)';
+
       }
 
-      // 刷新章节列表
+
+
+      // 闂佸憡甯￠弨閬嶅蓟婵犲嫮鍗氶柣妯烘惈铻￠梺鍛婂笚椤ㄥ濡?
+
       await refreshChapters();
 
-      message.success('规划信息更新成功');
 
-      // 关闭编辑器
+
+      message.success('闁荤喐鐟ョ€氼剟宕瑰┑鍥┾攳闁斥晛鍟╃槐鏍煛閸パ呮憼闁哄苯锕獮瀣箛椤掆偓椤?)';
+
+
+
+      // 闂佺绻戞繛濠偽涚€靛摜纾介柡宥庡墰鐢棝鏌?
+
       setPlanEditorVisible(false);
+
       setEditingPlanChapter(null);
+
     } catch (error: unknown) {
+
       const err = error as Error;
-      message.error('保存规划失败：' + (err.message || '未知错误'));
+
+      message.error('婵烇絽娲︾换鍌炴偤閵娧勫枂闁告洦鍋勯悘濠傤熆閹壆绨块悷娆欑畵閺? + (err.message || '闂佸搫鐗滄禍鐐烘偂閿熺姵鐓ユ繛鍡樺俯閸?));
+
       throw error;
+
     }
+
   };
+
+
 
   const handleChapterSelect = (chapterId: string) => {
+
     const element = document.getElementById(`chapter-item-${chapterId}`);
+
     if (element) {
+
       element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
       // Optional: add a visual highlight effect
+
       element.style.transition = 'background-color 0.5s ease';
+
       element.style.backgroundColor = '#e6f7ff';
+
       setTimeout(() => {
+
         element.style.backgroundColor = '';
+
       }, 1500);
+
     }
+
   };
 
-  // 打开阅读器
+
+
+  // 闂佺懓鐏氶幐鍝ユ閹达附鈷撻柛娑㈠亰閸ゃ垽鏌?
+
   const handleOpenReader = (chapter: Chapter) => {
+
     setReadingChapter(chapter);
+
     setReaderVisible(true);
+
   };
 
-  // 阅读器切换章节
+
+
+  // 闂傚倸鍟幊鎾活敋娴兼潙闂柕濞垮劚閻庡ジ鏌熼獮鍨伄闁绘繄鍏橀幊?
+
   const handleReaderChapterChange = async (chapterId: string) => {
+
     try {
+
       const response = await fetch(`/api/chapters/${chapterId}`);
-      if (!response.ok) throw new Error('获取章节失败');
+
+      if (!response.ok) throw new Error('闂佸吋鍎抽崲鑼躲亹閸モ晝鍗氶柣妯烘惈铻℃繝銏″劶缁墽鎲?)';
+
       const newChapter = await response.json();
+
       setReadingChapter(newChapter);
+
     } catch {
-      message.error('加载章节失败');
+
+      message.error('闂佸憡姊绘慨鎯归崶鈺冨崥闁绘ê鎼灐婵犮垺鍎肩划鍓ф喆?)';
+
     }
+
   };
 
-  // 打开局部重写弹窗
+
+
+  // 闂佺懓鐏氶幐鍝ユ閹寸姳娌柍褜鍓熼弻鍫ュΩ閳轰焦顏熼梺鍛婂姈閻熴儵鎳樻繝鍕幓?
+
   const handleOpenPartialRegenerate = () => {
+
     setPartialRegenerateToolbarVisible(false);
+
     setPartialRegenerateModalVisible(true);
+
   };
 
-  // 应用局部重写结果
+
+
+  // 闁圭厧鐡ㄥ濠氬极閵堝洣娌柍褜鍓熼弻鍫ュΩ閳轰焦顏熼梺鍛婂姈閻熝呭垝閵娾晛鍑?
+
   const handleApplyPartialRegenerate = (newText: string, startPos: number, endPos: number) => {
-    // 获取当前内容
+
+    // 闂佸吋鍎抽崲鑼躲亹閸ヮ亗浜归柟鎯у暱椤ゅ懘鏌涢幇顒佸櫣妞?
+
     const currentContent = editorForm.getFieldValue('content') || '';
+
     
-    // 替换选中部分
+
+    // 闂佸搫娲︾€笛冪暦閺屻儲鐒诲璺侯槼閸橆剟姊洪鍝勫闁?
+
     const newContent = currentContent.substring(0, startPos) + newText + currentContent.substring(endPos);
+
     
-    // 更新表单
+
+    // 闂佸搫娲ら悺銊╁蓟婵犲嫭鍋橀柕濞垮劚缁€?
+
     editorForm.setFieldsValue({ content: newContent });
+
     
-    // 关闭弹窗
+
+    // 闂佺绻戞繛濠偽涢弶鎴殨闁革富鍘惧畷?
+
     setPartialRegenerateModalVisible(false);
+
     
-    message.success('局部重写已应用');
+
+    message.success('闁诲繒鍋愰崑鎾绘⒑椤斿搫濮傞柛锝嗘倐瀹曟ê鈻庤箛鎾虫闁圭厧鐡ㄥ濠氬极?)';
+
   };
+
+
 
   return (
+
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+
       {contextHolder}
+
       <div style={{
+
         position: 'sticky',
+
         top: 0,
+
         zIndex: 10,
+
         backgroundColor: 'var(--color-bg-container)',
+
         padding: isMobile ? '12px 0' : '16px 0',
+
         marginBottom: isMobile ? 12 : 16,
+
         borderBottom: '1px solid #f0f0f0',
+
         display: 'flex',
+
         flexDirection: isMobile ? 'column' : 'row',
+
         gap: isMobile ? 12 : 0,
+
         justifyContent: 'space-between',
+
         alignItems: isMobile ? 'stretch' : 'center'
+
       }}>
+
         <h2 style={{ margin: 0, fontSize: isMobile ? 18 : 24 }}>
+
           <BookOutlined style={{ marginRight: 8 }} />
-          章节管理
+
+          缂備焦姊绘慨鐐繆椤撶姷涓嶉柨娑樺閸?
+
         </h2>
+
         <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : 'auto' }}>
+
           {currentProject.outline_mode === 'one-to-many' && (
+
             <Button
+
               icon={<PlusOutlined />}
+
               onClick={showManualCreateChapterModal}
+
               block={isMobile}
+
               size={isMobile ? 'middle' : 'middle'}
+
             >
-              手动创建
+
+              闂佸綊娼ч鍛叏閳哄懎绀嗘繛鎴烆焽缁?
+
             </Button>
+
           )}
+
           <Button
+
             type="primary"
+
             icon={<RocketOutlined />}
+
             onClick={handleOpenBatchGenerate}
+
             disabled={chapters.length === 0}
+
             block={isMobile}
+
             size={isMobile ? 'middle' : 'middle'}
+
             style={{ background: '#722ed1', borderColor: '#722ed1' }}
+
           >
-            批量生成
+
+            闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻?
+
           </Button>
+
           <Button
+
             type="default"
+
             icon={<DownloadOutlined />}
+
             onClick={handleExport}
+
             disabled={chapters.length === 0}
+
             block={isMobile}
+
             size={isMobile ? 'middle' : 'middle'}
+
           >
-            导出为TXT
+
+            闁诲海鏁搁崢褔宕甸鐔衡枖缂佲槅鏂乀
+
           </Button>
+
           {!isMobile && (
+
             <Tag color="blue">
+
               {currentProject.outline_mode === 'one-to-one'
-                ? '传统模式：章节由大纲管理，请在大纲页面操作'
-                : '细化模式：章节可在大纲页面展开'}
+
+                ? '婵炵鍋愭慨椋庡垝閸濆嫀鐔煎灳瀹曞洨顢呴梺鎸庣⊕濮樸劑鎮甸悜鑺ュ殟闁稿本绮嶉弳鐘差熆閸棗鎳愰崼顏嗙磼閻欏懐纾块柟顔硷躬閺佸秴鐣濋崘鎯ф闂侀潻璐熼崝宀勫Φ閸モ晝妫柡灞诲劘閳ь剙顦靛Λ鍐閳╁啯鍎ユ繛?'
+
+                : '缂傚倷绀佸Λ妤冣偓鍨絻铻ｉ柍銉ョ－绾偓闂佹寧绋掑銊╂偟閻戣姤鍤嶉柛灞捐壘鐠佹煡鏌涢敂鍝勫闁靛洤娲ㄩ惀顏堝蓟閵夛絺鍋撴径鎰棃闁靛繒濮峰鏃傗偓娈垮枓閸?'}
+
             </Tag>
+
           )}
+
         </Space>
+
       </div>
+
+
 
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+
         {chapters.length === 0 ? (
-          <Empty description="还没有章节，开始创作吧！" />
+
+          <Empty description="闁哄鏅滆摫闁汇儱鎳樺鍨緞瀹€鈧ぐ鍧楁煠閸濆嫬浜扮紒杈ㄧ箓椤曪綁鍩€椤掍焦鍙忛悗锝庝簻閻忊€趁归敐鍡欑煀闁诡垰鍊块弫? /">
+
         ) : currentProject.outline_mode === 'one-to-one' ? (
-          // one-to-one 模式：直接显示扁平列表
+
+          // one-to-one 濠碘槅鍨埀顒€纾涵鈧梺鎸庣⊕濮樸劌煤閸ф绠抽柕澶涢檮閳绘梻绱掗埀顒勬倻濡警鏆㈠Δ鐘靛仜閸熷潡宕归鍡樺仒?
+
           <List
+
             dataSource={sortedChapters}
+
             renderItem={(item) => (
+
               <List.Item
+
                 id={`chapter-item-${item.id}`}
+
                 style={{
+
                   padding: '16px',
+
                   marginBottom: 16,
+
                   background: '#fff',
+
                   borderRadius: 8,
+
                   border: '1px solid #f0f0f0',
+
                   flexDirection: isMobile ? 'column' : 'row',
+
                   alignItems: isMobile ? 'flex-start' : 'center',
+
                 }}
+
                 actions={isMobile ? undefined : [
+
                   <Button
+
                     type="text"
+
                     icon={<ReadOutlined />}
+
                     onClick={() => handleOpenReader(item)}
+
                     disabled={!item.content || item.content.trim() === ''}
-                    title={!item.content || item.content.trim() === '' ? '暂无内容' : '沉浸式阅读'}
+
+                    title={!item.content || item.content.trim() === '' ? '闂佸搫妫楅崐鐟拔涢妶澶婄闁告侗鍙庨崯? : '濠电偛鑻ˇ浼寸叓閸繍鍤曢煫鍥ㄧ⊕椤鎮?}
+
                   >
-                    阅读
+
+                    闂傚倸鍟幊鎾活敋?
+
                   </Button>,
+
                   <Button
+
                     type="text"
+
                     icon={<EditOutlined />}
+
                     onClick={() => handleOpenEditor(item.id)}
+
                   >
-                    编辑
+
+                    缂傚倸鍊归悧鐐垫?
+
                   </Button>,
+
                   (() => {
+
                     const task = analysisTasksMap[item.id];
+
                     const isAnalyzing = task && (task.status === 'pending' || task.status === 'running');
+
                     const hasContent = item.content && item.content.trim() !== '';
 
+
+
                     return (
+
                       <Button
+
                         type="text"
+
                         icon={isAnalyzing ? <SyncOutlined spin /> : <FundOutlined />}
+
                         onClick={() => handleShowAnalysis(item.id)}
+
                         disabled={!hasContent || isAnalyzing}
+
                         loading={isAnalyzing}
+
                         title={
-                          !hasContent ? '请先生成章节内容' :
-                            isAnalyzing ? '分析进行中，请稍候...' :
+
+                          !hasContent ? '闁荤姴娲ら崲鏌ュ储濞戙垺鍋ㄩ柣鏃傤焾閻忓洨绱掗弮鍌毿┑鈽嗗弮瀹曟﹢宕ㄩ褍鏅? :'
+
+                            isAnalyzing ? '闂佸憡甯掑Λ娆撴倵閼恒儲浜ゆ繛鎴炵矤閺€钘夆槈閹垮啫寮跨紒杈ㄧ箘閹风姵顦版惔妯伙紗闂?..' :
+
                               ''
+
                         }
+
                       >
-                        {isAnalyzing ? '分析中' : '分析'}
+
+                        {isAnalyzing ? '闂佸憡甯掑Λ娆撴倵閼恒儳鈻? : '闂佸憡甯掑Λ娆撴倵?}
+
                       </Button>
+
                     );
+
                   })(),
+
                   <Button
+
                     type="text"
+
                     icon={<SettingOutlined />}
+
                     onClick={() => handleOpenModal(item.id)}
+
                   >
-                    修改
+
+                    婵烇絽娴傞崰妤呭极?
+
                   </Button>,
+
                 ]}
+
               >
+
                 <div style={{ width: '100%' }}>
+
                   <List.Item.Meta
+
                     avatar={!isMobile && <FileTextOutlined style={{ fontSize: 32, color: 'var(--color-primary)' }} />}
+
                     title={
+
                       <div style={{
+
                         display: 'flex',
+
                         flexDirection: isMobile ? 'column' : 'row',
+
                         alignItems: isMobile ? 'flex-start' : 'center',
+
                         gap: isMobile ? 6 : 12,
+
                         width: '100%'
+
                       }}>
+
                         <span style={{ fontSize: isMobile ? 14 : 16, fontWeight: 500, flexShrink: 0 }}>
-                          第{item.chapter_number}章：{item.title}
+
+                          缂備焦顨堥幉顡痶em.chapter_number}缂備焦姊绘刊瀵告閻ㄦtem.title}
+
                         </span>
+
                         <Space wrap size={isMobile ? 4 : 8}>
+
                           <Tag color={getStatusColor(item.status)}>{getStatusText(item.status)}</Tag>
-                          <Badge count={`${item.word_count || 0}字`} style={{ backgroundColor: 'var(--color-success)' }} />
+
+                          <Badge count={`${item.word_count || 0}闁诲孩绋掗。纭?style={{ backgroundColor: 'var(--color-success)' }} />
+
                           {renderAnalysisStatus(item.id)}
+
                           {!canGenerateChapter(item) && (
+
                             <Tag icon={<LockOutlined />} color="warning" title={getGenerateDisabledReason(item)}>
-                              需前置章节
+
+                              闂傚倸娲犻崑鎾绘煕閹惧磭肖闁汇倕妫涚划鈺呮偐閸濆嫀?
+
                             </Tag>
+
                           )}
+
                         </Space>
+
                       </div>
+
                     }
+
                     description={
+
                       item.content ? (
+
                         <div style={{ marginTop: 8, color: 'rgba(0,0,0,0.65)', lineHeight: 1.6, fontSize: isMobile ? 12 : 14 }}>
+
                           {item.content.substring(0, isMobile ? 80 : 150)}
+
                           {item.content.length > (isMobile ? 80 : 150) && '...'}
+
                         </div>
+
                       ) : (
-                        <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>暂无内容</span>
+
+                        <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>闂佸搫妫楅崐鐟拔涢妶澶婄闁告侗鍙庨崯?/span>
+
                       )
+
                     }
+
                   />
 
+
+
                   {isMobile && (
+
                     <Space style={{ marginTop: 12, width: '100%', justifyContent: 'flex-end' }} wrap>
+
                       <Button
+
                         type="text"
+
                         icon={<ReadOutlined />}
+
                         onClick={() => handleOpenReader(item)}
+
                         size="small"
+
                         disabled={!item.content || item.content.trim() === ''}
-                        title={!item.content || item.content.trim() === '' ? '暂无内容' : '阅读'}
+
+                        title={!item.content || item.content.trim() === '' ? '闂佸搫妫楅崐鐟拔涢妶澶婄闁告侗鍙庨崯? : '闂傚倸鍟幊鎾活敋?}
+
                       />
+
                       <Button
+
                         type="text"
+
                         icon={<EditOutlined />}
+
                         onClick={() => handleOpenEditor(item.id)}
+
                         size="small"
-                        title="编辑"
+
+                        title="缂傚倸鍊归悧鐐垫?"
+
                       />
+
                       {(() => {
+
                         const task = analysisTasksMap[item.id];
+
                         const isAnalyzing = task && (task.status === 'pending' || task.status === 'running');
+
                         const hasContent = item.content && item.content.trim() !== '';
 
+
+
                         return (
+
                           <Button
+
                             type="text"
+
                             icon={isAnalyzing ? <SyncOutlined spin /> : <FundOutlined />}
+
                             onClick={() => handleShowAnalysis(item.id)}
+
                             size="small"
+
                             disabled={!hasContent || isAnalyzing}
+
                             loading={isAnalyzing}
+
                             title={
-                              !hasContent ? '请先生成章节内容' :
-                                isAnalyzing ? '分析中' :
-                                  '分析'
+
+                              !hasContent ? '闁荤姴娲ら崲鏌ュ储濞戙垺鍋ㄩ柣鏃傤焾閻忓洨绱掗弮鍌毿┑鈽嗗弮瀹曟﹢宕ㄩ褍鏅? :'
+
+                                isAnalyzing ? '闂佸憡甯掑Λ娆撴倵閼恒儳鈻? :'
+
+                                  '闂佸憡甯掑Λ娆撴倵?'
+
                             }
+
                           />
+
                         );
+
                       })()}
+
                       <Button
+
                         type="text"
+
                         icon={<SettingOutlined />}
+
                         onClick={() => handleOpenModal(item.id)}
+
                         size="small"
-                        title="修改"
+
+                        title="婵烇絽娴傞崰妤呭极?"
+
                       />
+
                     </Space>
+
                   )}
+
                 </div>
+
               </List.Item>
+
             )}
+
           />
+
         ) : (
-          // one-to-many 模式：按大纲分组显示
+
+          // one-to-many 濠碘槅鍨埀顒€纾涵鈧梺鎸庣⊕绾板秶鈧灚绮嶅鍕槾缂傚牅鍗冲畷姘跺幢濞嗘垹鐓侀梺鍝勫婢т粙濡?
+
           <Collapse
+
             bordered={false}
+
             defaultActiveKey={groupedChapters.map((_, idx) => idx.toString())}
+
             expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} />}
+
             style={{ background: 'transparent' }}
+
           >
+
             {groupedChapters.map((group, groupIndex) => (
+
               <Collapse.Panel
+
                 key={groupIndex.toString()}
+
                 header={
+
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+
                     <Tag color={group.outlineId ? 'blue' : 'default'} style={{ margin: 0 }}>
-                      {group.outlineId ? `📖 大纲 ${group.outlineOrder}` : '📝 未分类'}
+
+                      {group.outlineId ? `濡絽鍟幉?婵犮垹鐖㈤崨顖氱墯 ${group.outlineOrder}` : '濡絽鍟幉?闂佸搫鐗滄禍婊堝垂鎼达絿灏?'}
+
                     </Tag>
+
                     <span style={{ fontWeight: 600, fontSize: 16 }}>
+
                       {group.outlineTitle}
+
                     </span>
+
                     <Badge
-                      count={`${group.chapters.length} 章`}
+
+                      count={`${group.chapters.length} 缂備焦姊婚崵鐣?
+
                       style={{ backgroundColor: 'var(--color-success)' }}
+
                     />
+
                     <Badge
-                      count={`${group.chapters.reduce((sum, ch) => sum + (ch.word_count || 0), 0)} 字`}
+
+                      count={`${group.chapters.reduce((sum, ch) => sum + (ch.word_count || 0), 0)} 闁诲孩绋掗。纭?
+
                       style={{ backgroundColor: 'var(--color-primary)' }}
+
                     />
+
                   </div>
+
                 }
+
                 style={{
+
                   marginBottom: 16,
+
                   background: '#fff',
+
                   borderRadius: 8,
+
                   border: '1px solid #f0f0f0',
+
                 }}
+
               >
+
                 <List
+
                   dataSource={group.chapters}
+
                   renderItem={(item) => (
+
                     <List.Item
+
                       id={`chapter-item-${item.id}`}
+
                       style={{
+
                         padding: '16px 0',
+
                         borderRadius: 8,
+
                         transition: 'background 0.3s ease',
+
                         flexDirection: isMobile ? 'column' : 'row',
+
                         alignItems: isMobile ? 'flex-start' : 'center',
+
                       }}
+
                       actions={isMobile ? undefined : [
+
                         <Button
+
                           type="text"
+
                           icon={<ReadOutlined />}
+
                           onClick={() => handleOpenReader(item)}
+
                           disabled={!item.content || item.content.trim() === ''}
-                          title={!item.content || item.content.trim() === '' ? '暂无内容' : '沉浸式阅读'}
+
+                          title={!item.content || item.content.trim() === '' ? '闂佸搫妫楅崐鐟拔涢妶澶婄闁告侗鍙庨崯? : '濠电偛鑻ˇ浼寸叓閸繍鍤曢煫鍥ㄧ⊕椤鎮?}
+
                         >
-                          阅读
+
+                          闂傚倸鍟幊鎾活敋?
+
                         </Button>,
+
                         <Button
+
                           type="text"
+
                           icon={<EditOutlined />}
+
                           onClick={() => handleOpenEditor(item.id)}
+
                         >
-                          编辑
+
+                          缂傚倸鍊归悧鐐垫?
+
                         </Button>,
+
                         (() => {
+
                           const task = analysisTasksMap[item.id];
+
                           const isAnalyzing = task && (task.status === 'pending' || task.status === 'running');
+
                           const hasContent = item.content && item.content.trim() !== '';
 
+
+
                           return (
+
                             <Button
+
                               type="text"
+
                               icon={isAnalyzing ? <SyncOutlined spin /> : <FundOutlined />}
+
                               onClick={() => handleShowAnalysis(item.id)}
+
                               disabled={!hasContent || isAnalyzing}
+
                               loading={isAnalyzing}
+
                               title={
-                                !hasContent ? '请先生成章节内容' :
-                                  isAnalyzing ? '分析进行中，请稍候...' :
+
+                                !hasContent ? '闁荤姴娲ら崲鏌ュ储濞戙垺鍋ㄩ柣鏃傤焾閻忓洨绱掗弮鍌毿┑鈽嗗弮瀹曟﹢宕ㄩ褍鏅? :'
+
+                                  isAnalyzing ? '闂佸憡甯掑Λ娆撴倵閼恒儲浜ゆ繛鎴炵矤閺€钘夆槈閹垮啫寮跨紒杈ㄧ箘閹风姵顦版惔妯伙紗闂?..' :
+
                                     ''
+
                               }
+
                             >
-                              {isAnalyzing ? '分析中' : '分析'}
+
+                              {isAnalyzing ? '闂佸憡甯掑Λ娆撴倵閼恒儳鈻? : '闂佸憡甯掑Λ娆撴倵?}
+
                             </Button>
+
                           );
+
                         })(),
+
                         <Button
+
                           type="text"
+
                           icon={<SettingOutlined />}
+
                           onClick={() => handleOpenModal(item.id)}
+
                         >
-                          修改
+
+                          婵烇絽娴傞崰妤呭极?
+
                         </Button>,
-                        // 只在 one-to-many 模式下显示删除按钮
+
+                        // 闂佸憡鐟禍婊冿耿?one-to-many 濠碘槅鍨埀顒€纾涵鈧繛鎴炴尭椤戝棗螣婢跺瞼鐭嗛柛婵嗗閻忊晠姊婚崟鈺佲偓鏍偓鍨矒閺?
+
                         ...(currentProject.outline_mode === 'one-to-many' ? [
+
                           <Popconfirm
-                            title="确定删除这个章节吗？"
-                            description="删除后将无法恢复，章节内容和分析结果都将被删除。"
+
+                            title="缂佺虎鍙庨崰鏍偩妤ｅ啫绀嗛柣妯肩帛閻濈喖寮堕埡鍌滄噥闂佸弶绮庣划鈺呮偐閸濆嫀婵嬫煕濮橆収娈ｇ紒?"
+
+                            description="闂佸憡甯炴繛鈧繛鍛叄瀹曘儲鎯旈敍鍕啈闂佸搫鍟版慨鐢垫兜閸洖绠掗柕蹇曞濡插鏌ㄥ☉妯肩伇闁绘繄鍏橀幊鐐哄磼濮橆剚鏆ラ柣搴℃贡閹虫捇骞忔导鏉戠闁糕剝顭囬埀顒傛櫕缁辨帡骞樼€甸晲鍑介梻渚囧枦濡嫰鎯冮姀銏″仏妞ゆ劑鍨归悘鈺呮⒒閸曗晛鈧垿鍩€?"
+
                             onConfirm={() => handleDeleteChapter(item.id)}
-                            okText="确定删除"
-                            cancelText="取消"
+
+                            okText="缂佺虎鍙庨崰鏍偩妤ｅ啫绀嗛柣妯肩帛閻?"
+
+                            cancelText="闂佸憡鐟﹂悧妤冪矓?"
+
                             okButtonProps={{ danger: true }}
+
                           >
+
                             <Button
+
                               type="text"
+
                               danger
+
                               icon={<DeleteOutlined />}
+
                             >
-                              删除
+
+                              闂佸憡甯炴繛鈧繛?
+
                             </Button>
+
                           </Popconfirm>
+
                         ] : []),
+
                       ]}
+
                     >
+
                       <div style={{ width: '100%' }}>
+
                         <List.Item.Meta
+
                           avatar={!isMobile && <FileTextOutlined style={{ fontSize: 32, color: 'var(--color-primary)' }} />}
+
                           title={
+
                             <div style={{
+
                               display: 'flex',
+
                               flexDirection: isMobile ? 'column' : 'row',
+
                               alignItems: isMobile ? 'flex-start' : 'center',
+
                               gap: isMobile ? 6 : 12,
+
                               width: '100%'
+
                             }}>
+
                               <span style={{ fontSize: isMobile ? 14 : 16, fontWeight: 500, flexShrink: 0 }}>
-                                第{item.chapter_number}章：{item.title}
+
+                                缂備焦顨堥幉顡痶em.chapter_number}缂備焦姊绘刊瀵告閻ㄦtem.title}
+
                               </span>
+
                               <Space wrap size={isMobile ? 4 : 8}>
+
                                 <Tag color={getStatusColor(item.status)}>{getStatusText(item.status)}</Tag>
-                                <Badge count={`${item.word_count || 0}字`} style={{ backgroundColor: 'var(--color-success)' }} />
+
+                                <Badge count={`${item.word_count || 0}闁诲孩绋掗。纭?style={{ backgroundColor: 'var(--color-success)' }} />
+
                                 {renderAnalysisStatus(item.id)}
+
                                 {!canGenerateChapter(item) && (
+
                                   <Tag icon={<LockOutlined />} color="warning" title={getGenerateDisabledReason(item)}>
-                                    需前置章节
+
+                                    闂傚倸娲犻崑鎾绘煕閹惧磭肖闁汇倕妫涚划鈺呮偐閸濆嫀?
+
                                   </Tag>
+
                                 )}
+
                                 <Space size={4}>
+
                                   {item.expansion_plan && (
+
                                     <InfoCircleOutlined
-                                      title="查看展开详情"
+
+                                      title="闂佸搫琚崕鍐诧耿閸涱垯娌柡鍥╁仧绾惧鎮归崶鐑芥闁?"
+
                                       style={{ color: 'var(--color-primary)', cursor: 'pointer', fontSize: 16 }}
+
                                       onClick={(e) => {
+
                                         e.stopPropagation();
+
                                         showExpansionPlanModal(item);
+
                                       }}
+
                                     />
+
                                   )}
+
                                   <FormOutlined
-                                    title={item.expansion_plan ? "编辑规划信息" : "创建规划信息"}
+
+                                    title={item.expansion_plan ? "缂傚倸鍊归悧鐐垫椤愩倖鍠嗛柛鏇ㄥ亜閻忓﹤菐閸ワ絽澧插ù? : "闂佸憡甯楃粙鎴犵磽閹捐埖鍠嗛柛鏇ㄥ亜閻忓﹤菐閸ワ絽澧插ù?}
+
                                     style={{ color: 'var(--color-success)', cursor: 'pointer', fontSize: 16 }}
+
                                     onClick={(e) => {
+
                                       e.stopPropagation();
+
                                       handleOpenPlanEditor(item);
+
                                     }}
+
                                   />
+
                                 </Space>
+
                               </Space>
+
                             </div>
+
                           }
+
                           description={
+
                             item.content ? (
+
                               <div style={{ marginTop: 8, color: 'rgba(0,0,0,0.65)', lineHeight: 1.6, fontSize: isMobile ? 12 : 14 }}>
+
                                 {item.content.substring(0, isMobile ? 80 : 150)}
+
                                 {item.content.length > (isMobile ? 80 : 150) && '...'}
+
                               </div>
+
                             ) : (
-                              <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>暂无内容</span>
+
+                              <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>闂佸搫妫楅崐鐟拔涢妶澶婄闁告侗鍙庨崯?/span>
+
                             )
+
                           }
+
                         />
 
+
+
                         {isMobile && (
+
                           <Space style={{ marginTop: 12, width: '100%', justifyContent: 'flex-end' }} wrap>
+
                             <Button
+
                               type="text"
+
                               icon={<ReadOutlined />}
+
                               onClick={() => handleOpenReader(item)}
+
                               size="small"
+
                               disabled={!item.content || item.content.trim() === ''}
-                              title={!item.content || item.content.trim() === '' ? '暂无内容' : '阅读'}
+
+                              title={!item.content || item.content.trim() === '' ? '闂佸搫妫楅崐鐟拔涢妶澶婄闁告侗鍙庨崯? : '闂傚倸鍟幊鎾活敋?}
+
                             />
+
                             <Button
+
                               type="text"
+
                               icon={<EditOutlined />}
+
                               onClick={() => handleOpenEditor(item.id)}
+
                               size="small"
-                              title="编辑"
+
+                              title="缂傚倸鍊归悧鐐垫?"
+
                             />
+
                             {(() => {
+
                               const task = analysisTasksMap[item.id];
+
                               const isAnalyzing = task && (task.status === 'pending' || task.status === 'running');
+
                               const hasContent = item.content && item.content.trim() !== '';
 
+
+
                               return (
+
                                 <Button
+
                                   type="text"
+
                                   icon={isAnalyzing ? <SyncOutlined spin /> : <FundOutlined />}
+
                                   onClick={() => handleShowAnalysis(item.id)}
+
                                   size="small"
+
                                   disabled={!hasContent || isAnalyzing}
+
                                   loading={isAnalyzing}
+
                                   title={
-                                    !hasContent ? '请先生成章节内容' :
-                                      isAnalyzing ? '分析中' :
-                                        '分析'
+
+                                    !hasContent ? '闁荤姴娲ら崲鏌ュ储濞戙垺鍋ㄩ柣鏃傤焾閻忓洨绱掗弮鍌毿┑鈽嗗弮瀹曟﹢宕ㄩ褍鏅? :'
+
+                                      isAnalyzing ? '闂佸憡甯掑Λ娆撴倵閼恒儳鈻? :'
+
+                                        '闂佸憡甯掑Λ娆撴倵?'
+
                                   }
+
                                 />
+
                               );
+
                             })()}
+
                             <Button
+
                               type="text"
+
                               icon={<SettingOutlined />}
+
                               onClick={() => handleOpenModal(item.id)}
+
                               size="small"
-                              title="修改"
+
+                              title="婵烇絽娴傞崰妤呭极?"
+
                             />
-                            {/* 只在 one-to-many 模式下显示删除按钮 */}
+
+                            {/* 闂佸憡鐟禍婊冿耿?one-to-many 濠碘槅鍨埀顒€纾涵鈧繛鎴炴尭椤戝棗螣婢跺瞼鐭嗛柛婵嗗閻忊晠姊婚崟鈺佲偓鏍偓鍨矒閺?*/}
+
                             {currentProject.outline_mode === 'one-to-many' && (
+
                               <Popconfirm
-                                title="确定删除？"
-                                description="删除后无法恢复"
+
+                                title="缂佺虎鍙庨崰鏍偩妤ｅ啫绀嗛柣妯肩帛閻濈喖鏌?"
+
+                                description="闂佸憡甯炴繛鈧繛鍛叄瀹曘儲鎯旈姀鈽呴獜濠电偛顦板ú妯荤椤旇棄绶?"
+
                                 onConfirm={() => handleDeleteChapter(item.id)}
-                                okText="删除"
-                                cancelText="取消"
+
+                                okText="闂佸憡甯炴繛鈧繛?"
+
+                                cancelText="闂佸憡鐟﹂悧妤冪矓?"
+
                                 okButtonProps={{ danger: true }}
+
                               >
+
                                 <Button
+
                                   type="text"
+
                                   danger
+
                                   icon={<DeleteOutlined />}
+
                                   size="small"
-                                  title="删除章节"
+
+                                  title="闂佸憡甯炴繛鈧繛鍛捣缁晠鎮╅崫鍕?"
+
                                 />
+
                               </Popconfirm>
+
                             )}
+
                           </Space>
+
                         )}
+
                       </div>
+
                     </List.Item>
+
                   )}
+
                 />
+
               </Collapse.Panel>
+
             ))}
+
           </Collapse>
+
         )}
+
       </div>
 
+
+
       <Modal
-        title={editingId ? '编辑章节信息' : '添加章节'}
+
+        title={editingId ? '缂傚倸鍊归悧鐐垫椤愩倗鍗氶柣妯烘惈铻℃繛锝呮礌閸撴繃瀵? : '濠电儑缍€椤曆勬叏閻愮數鍗氶柣妯烘惈铻?}
+
         open={isModalOpen}
+
         onCancel={() => setIsModalOpen(false)}
+
         footer={null}
+
         centered
+
         width={isMobile ? 'calc(100vw - 32px)' : 520}
+
         style={isMobile ? {
+
           maxWidth: 'calc(100vw - 32px)',
+
           margin: '0 auto',
+
           padding: '0 16px'
+
         } : undefined}
+
         styles={{
+
           body: {
+
             maxHeight: isMobile ? 'calc(100vh - 200px)' : 'calc(80vh - 110px)',
+
             overflowY: 'auto'
+
           }
+
         }}
+
       >
+
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
+
           <Form.Item
-            label="章节标题"
+
+            label="缂備焦姊绘慨鐐繆椤撱垹鍐€闁搞儺鍓﹂弳?"
+
             name="title"
+
             tooltip={
+
               currentProject.outline_mode === 'one-to-one'
-                ? "章节标题由大纲管理，请在大纲页面修改"
-                : "一对多模式下可以修改章节标题"
+
+                ? "缂備焦姊绘慨鐐繆椤撱垹鍐€闁搞儺鍓﹂弳顖炴煟閵忕姴鑸归柕鍥ф川閻ヮ亪鎳犻澶婃倎闂佽崵鍋涘Λ瀵告濠靛牊瀚氱€瑰嫮澧楅煬顒€顭块崼鍡楁噽閸亜顪冮妶鍥ㄦ毈婵炶偐澧楃粚閬嶎敊閼恒儲姣?"
+
+                : "婵炴垶鎸撮崑鎾绘倵閻㈠灚鍤€妞わ箑鐏濊灒闁炽儱纾涵鈧繛鎴炴尭椤戝懓銇愰崣澶岊浄闁靛鍊栭崣蹇涙煛閳ь剟宕烽鐘插▏闂佺厧鎼崐褰掓偉閿濆棴绱?"
+
             }
+
             rules={
+
               currentProject.outline_mode === 'one-to-many'
-                ? [{ required: true, message: '请输入章节标题' }]
+
+                ? [{ required: true, message: '闁荤姴娲ㄩ弻澶屾椤撱垹绀傞柕澹懎濞囬梺鐓庢惈閸婂綊鎮ラ敐鍡矗? }']
+
                 : undefined
+
             }
+
           >
+
             <Input
-              placeholder="输入章节标题"
+
+              placeholder="闁哄鐗婇幐鎼佸矗閸℃瑧鍗氶柣妯烘惈铻￠梺鍝勭Т濞差參銆?"
+
               disabled={currentProject.outline_mode === 'one-to-one'}
+
             />
+
           </Form.Item>
+
+
 
           <Form.Item
-            label="章节序号"
+
+            label="缂備焦姊绘慨鐐繆椤撶喐鍎熼煫鍥ㄦ尭婵?"
+
             name="chapter_number"
-            tooltip="章节序号不允许修改，请删除对应大纲，重新生成"
+
+            tooltip="缂備焦姊绘慨鐐繆椤撶喐鍎熼煫鍥ㄦ尭婵炲洤鈽夐幘宕囆㈤柛妯诲灩閹峰姊归幇顓炲伎闂佽　鍋撻柣褍鎽滅粈澶愭偣閸パ冩Щ闁搞劌缍婂浠嬪Χ閸滀礁娈搁柟鐓庣摠閺屻劑濡甸崶鈺冩／閻犲泧鍛槷闂備焦褰冪粔鐢稿蓟婵犲洦鍋ㄩ柣鏃傤焾閻?"
+
           >
-            <Input type="number" placeholder="章节排序序号" disabled />
+
+            <Input type="number" placeholder="缂備焦姊绘慨鐐繆椤撱垹绠抽柟鐑樺灩绾板秹骞栭弶鎴犵鐟? disabled /">
+
           </Form.Item>
 
-          <Form.Item label="状态" name="status">
-            <Select placeholder="选择状态">
-              <Select.Option value="draft">草稿</Select.Option>
-              <Select.Option value="writing">创作中</Select.Option>
-              <Select.Option value="completed">已完成</Select.Option>
+
+
+          <Form.Item label="闂佺粯顭堥崺鏍焵? name="status"">
+
+            <Select placeholder="闂備緡鍋勯ˇ鎵偓姘ュ姂閹晠鎳滅喊妯轰壕?">
+
+              <Select.Option value="draft">闂佽壈妫勯ˇ閬嶁€?/Select.Option>
+
+              <Select.Option value="writing">闂佸憡甯楃粙鎰礊閺冣偓缁?/Select.Option>
+
+              <Select.Option value="completed">閻庣懓鎲¤ぐ鍐偩椤掑嫬绠?/Select.Option>
+
             </Select>
+
           </Form.Item>
+
+
 
           <Form.Item>
+
             <Space style={{ float: 'right' }}>
-              <Button onClick={() => setIsModalOpen(false)}>取消</Button>
+
+              <Button onClick={() => setIsModalOpen(false)}>闂佸憡鐟﹂悧妤冪矓?/Button>
+
               <Button type="primary" htmlType="submit">
-                更新
+
+                闂佸搫娲ら悺銊╁蓟?
+
               </Button>
+
             </Space>
+
           </Form.Item>
+
         </Form>
+
       </Modal>
 
+
+
       <Modal
-        title="编辑章节内容"
+
+        title="缂傚倸鍊归悧鐐垫椤愩倗鍗氶柣妯烘惈铻￠梺鍛婂姇閹冲酣顢?"
+
         open={isEditorOpen}
+
         onCancel={() => {
+
           setChapterQualityMetrics(null);
+
           setChapterQualityGeneratedAt(null);
+
           setIsEditorOpen(false);
+
         }}
+
         closable
+
         maskClosable={false}
+
         keyboard
+
         width={isMobile ? 'calc(100vw - 32px)' : '85%'}
+
         centered
+
         style={isMobile ? {
+
           maxWidth: 'calc(100vw - 32px)',
+
           margin: '0 auto',
+
           padding: '0 16px'
+
         } : undefined}
+
         styles={{
+
           body: {
+
             maxHeight: isMobile ? 'calc(100vh - 200px)' : 'calc(100vh - 110px)',
+
             overflowY: 'auto',
+
             padding: isMobile ? '16px 12px' : '8px'
+
           }
+
         }}
+
         footer={null}
+
       >
+
         <Form form={editorForm} layout="vertical" onFinish={handleEditorSubmit}>
-          {/* 章节标题和AI创作按钮 */}
+
+          {/* 缂備焦姊绘慨鐐繆椤撱垹鍐€闁搞儺鍓﹂弳顖炴煕濠婂啰鎼糏闂佸憡甯楃粙鎰礊閺冨牆绠板鑸靛姈鐏?*/}
+
           <Form.Item
-            label="章节标题"
-            tooltip="（1-1模式请在大纲修改，1-N模式请使用修改按钮编辑）"
+
+            label="缂備焦姊绘慨鐐繆椤撱垹鍐€闁搞儺鍓﹂弳?"
+
+            tooltip="闂?-1濠碘槅鍨埀顒€纾涵鈧柣鐘叉搐閸㈡彃锕㈤鍛窞鐟滃繒绱欓悧鍫⑩攳妞ゆ棁濮ら弳顓㈡煥?-N濠碘槅鍨埀顒€纾涵鈧柣鐘叉穿濞撹绻涢崶顒佸仺闁靛鍊栭崣蹇涙煛閳ь剛鎲撮崟顐ゆ▎闂備胶鐡旈崰姘辨椤忓懏缍囬柟鎼灣缁€?"
+
             style={{ marginBottom: isMobile ? 16 : 12 }}
+
           >
+
             <Space.Compact style={{ width: '100%' }}>
+
               <Form.Item name="title" noStyle>
+
                 <Input disabled style={{ flex: 1 }} />
+
               </Form.Item>
+
               {editingId && (() => {
+
                 const currentChapter = chapters.find(c => c.id === editingId);
+
                 const canGenerate = currentChapter ? canGenerateChapter(currentChapter) : false;
+
                 const disabledReason = currentChapter ? getGenerateDisabledReason(currentChapter) : '';
 
+
+
                 return (
+
                   <Button
+
                     type="primary"
+
                     icon={canGenerate ? <ThunderboltOutlined /> : <LockOutlined />}
+
                     onClick={() => currentChapter && showGenerateModal(currentChapter)}
+
                     loading={isContinuing}
+
                     disabled={!canGenerate}
+
                     danger={!canGenerate}
+
                     style={{ fontWeight: 'bold' }}
-                    title={!canGenerate ? disabledReason : '根据大纲和前置章节内容创作'}
+
+                    title={!canGenerate ? disabledReason : '闂佸搫绉烽～澶婄暤娴ｇ懓绶炵憸蹇曠礄娴兼潙妞介悘鐐舵椤ゅ懐绱撻崘鎯ф灓闁绘繄鍏橀幊鐐哄磼濮橆剚鏆ラ柣搴℃贡閹虫捇宕规潏銊﹀?'}
+
                   >
-                    {isMobile ? 'AI' : 'AI创作'}
+
+                    {isMobile ? 'AI' : 'AI闂佸憡甯楃粙鎰礊?'}
+
                   </Button>
+
                 );
+
               })()}
+
             </Space.Compact>
+
           </Form.Item>
 
-          {/* 第一行：写作风格 + 叙事角度 */}
+
+
+          {/* 缂備焦顨忛崗娑氱博鐎靛憡鍋樼€光偓鐎ｎ剛鐛ラ梺鍛婂姈閻熴倗绱為弮鈧ˇ鐗堟償閵忋垹顥?+ 闂佸憡鐟﹂悷銈囪姳閵娧勫枂闁圭儤鍨甸?*/}
+
           <div style={{
+
             display: isMobile ? 'block' : 'flex',
+
             gap: isMobile ? 0 : 16,
+
             marginBottom: isMobile ? 0 : 12
+
           }}>
+
             <Form.Item
-              label="写作风格"
-              tooltip="选择AI创作时使用的写作风格"
+
+              label="闂佸憡鍔栭悷銈囩礊閺冣偓椤︾増鎯旈姀銏狀棔"
+
+              tooltip="闂備緡鍋勯ˇ鎵偓姣稿┉闂佸憡甯楃粙鎰礊閺冨牆绫嶉柡鍫ユ涧閳诲繘鏌ｉ～顒€濡挎繛鍫熷灴瀹曟ê鈻庢惔锝団枙婵＄偛顑呯€涒晠鎮?"
+
               required
+
+              style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
+
+            >
+
+              <Select
+
+                placeholder="闁荤姴娲ㄩ崗姗€鍩€椤掆偓椤︽壆鈧哎鍔戝畷妯衡枎鎼达絿鈻曟俊鐐差儏鐎涒晠鎮?"
+
+                value={selectedStyleId}
+
+                onChange={setSelectedStyleId}
+
+                status={!selectedStyleId ? 'error' : undefined}
+
+              >
+
+                {writingStyles.map(style => (
+
+                  <Select.Option key={style.id} value={style.id}>
+
+                    {style.name}{style.is_default && ' (婵帗绋掗…鍫ヮ敇?'}
+
+                  </Select.Option>
+
+                ))}
+
+              </Select>
+
+              {!selectedStyleId && (
+
+                <div style={{ color: '#ff4d4f', fontSize: 12, marginTop: 4 }}>闁荤姴娲ㄩ崗姗€鍩€椤掆偓椤︽壆鈧哎鍔戝畷妯衡枎鎼达絿鈻曟俊鐐差儏鐎涒晠鎮?/div>
+
+              )}
+
+            </Form.Item>
+
+
+
+            <Form.Item
+              label="闂佸憡鐟﹂悷銈囪姳閵娧勫枂闁圭儤鍨甸?"
+              tooltip="缂備焦顨忛崗娑氱博鐎涙顩查柧蹇撳ⅲ?闂?婵炲濯寸徊浠嬪矗閸℃稑绠涢柣鏂垮槻缁讳線鏌ㄥ☉娆戙€掓い鎴濇处缁嬪寰勬径瀣簞缂?婵?婵?闂佸搫娲﹀娆擃敇閸︻厽鍠嗛柛宀嬪楠炪垽鏌涜箛瀣闁绘搫绱曢幉鎾幢濮樺吋鍋ュ┑鐐跺皺閸嬬偤宕愬┑鍥┾枖闁逞屽墴瀹?"
               style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
             >
               <Select
-                placeholder="请选择写作风格"
-                value={selectedStyleId}
-                onChange={setSelectedStyleId}
-                status={!selectedStyleId ? 'error' : undefined}
+
+                placeholder={`婵＄偑鍊曞﹢鍗灻洪悧鍫付婵☆垱顑欓崥? ${getNarrativePerspectiveText(currentProject?.narrative_perspective)}`}
+
+                value={temporaryNarrativePerspective}
+
+                onChange={setTemporaryNarrativePerspective}
+
+                allowClear
+
               >
-                {writingStyles.map(style => (
-                  <Select.Option key={style.id} value={style.id}>
-                    {style.name}{style.is_default && ' (默认)'}
+
+                <Select.Option value="缂備焦顨忛崗娑氱博鐎涙顩查柧蹇撳ⅲ?>缂備焦顨忛崗娑氱博鐎涙顩查柧蹇撳ⅲ?闂?</Select.Option">
+
+                <Select.Option value="缂備焦顨忛崗娑氱箔娴ｅ湱顩查柧蹇撳ⅲ?>缂備焦顨忛崗娑氱箔娴ｅ湱顩查柧蹇撳ⅲ?婵?婵?</Select.Option">
+
+                <Select.Option value="闂佺绻堥崝搴ㄦ偂閿涘嫭鍠嗛柛鈩冨嚬濞?>闂佺绻堥崝搴ㄦ偂閿涘嫭鍠嗛柛鈩冨嚬濞?/Select.Option">
+
+              </Select>
+
+              {temporaryNarrativePerspective && (
+
+                <div style={{ color: 'var(--color-success)', fontSize: 12, marginTop: 4 }}>
+
+                  闂?{getNarrativePerspectiveText(temporaryNarrativePerspective)}
+
+                </div>
+
+              )}
+            </Form.Item>
+
+            <Form.Item
+              label="闂佽鍨伴幊鎾翠繆椤撱垺鈷撻柤鍛婎問閸?"
+              tooltip="闁汇埄鍨奸崰鏍ㄦ叏?AI 闂佸憡甯囬崐鏍蓟閸ヮ剙瀚夋い鎺戝€昏ぐ鍧楁煛閸モ晩妫庢い鏇熷哺閺屟囧传閸曨厾锛涢梺闈涙閼冲爼锝為锕€绠婚柣鎴濇川缁€澶愬级閳哄伒鎴澪ｉ幖浣哥倞闁绘劕鐡ㄩ弳顏堟煛閳ь剟鎳滈崹顐㈢殺"
+              style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
+            >
+              <Select
+                placeholder="闂佸憡鐟崹杈ㄦ櫠濠婂牆绀夐柕濠忕畱閻﹀綊鎮楃憴鍕暡缂佽鲸绻冪粙濠囨偄瀹勬媽顔夐柣鐘辫閺呮繈鏌堢€靛摜纾奸柣鏂挎啞椤忥繝鏌ょ€圭姵顥夐柛銊ょ矙瀵?"
+                value={selectedPlotStage}
+                onChange={setSelectedPlotStage}
+                allowClear
+                optionLabelProp="label"
+              >
+                {CREATION_PLOT_STAGE_OPTIONS.map((option) => (
+                  <Select.Option key={option.value} value={option.value} label={option.label}>
+                    <div>{option.label}</div>
+                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
                   </Select.Option>
                 ))}
               </Select>
-              {!selectedStyleId && (
-                <div style={{ color: '#ff4d4f', fontSize: 12, marginTop: 4 }}>请选择写作风格</div>
-              )}
-            </Form.Item>
-
-            <Form.Item
-              label="叙事角度"
-              tooltip="第一人称(我)代入感强；第三人称(他/她)更客观；全知视角洞悉一切"
-              style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
-            >
-              <Select
-                placeholder={`项目默认: ${getNarrativePerspectiveText(currentProject?.narrative_perspective)}`}
-                value={temporaryNarrativePerspective}
-                onChange={setTemporaryNarrativePerspective}
-                allowClear
-              >
-                <Select.Option value="第一人称">第一人称(我)</Select.Option>
-                <Select.Option value="第三人称">第三人称(他/她)</Select.Option>
-                <Select.Option value="全知视角">全知视角</Select.Option>
-              </Select>
-              {temporaryNarrativePerspective && (
-                <div style={{ color: 'var(--color-success)', fontSize: 12, marginTop: 4 }}>
-                  ✓ {getNarrativePerspectiveText(temporaryNarrativePerspective)}
-                </div>
-              )}
+              <Space size={8} style={{ marginTop: 8 }}>
+                <Button size="small" onClick={applyInferredSinglePlotStage}>闂佸搫鎳樼紓姘跺礂濮椻偓瀹曟岸濡堕崱妯煎姺闂傚倸鍟抽崺鏍敊?/Button>
+                {selectedPlotStage && (
+                  <span style={{ color: 'var(--color-success)', fontSize: 12 }}>
+                    闂?{CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === selectedPlotStage)?.label || selectedPlotStage}
+                  </span>
+                )}
+              </Space>
             </Form.Item>
           </div>
 
-          {/* 第二行：目标字数 + AI模型 */}
+          <Card
+            size="small"
+            title="闂佸憡甯楃粙鎰礊閺冣偓閿涙劙宕熼鍛櫗"
+            style={{ marginBottom: 12 }}
+          >
+            <Space wrap>
+              {CREATION_PRESETS.map((preset) => (
+                <Button
+                  key={preset.id}
+                  type={activeSingleCreationPreset?.id === preset.id ? 'primary' : 'default'}
+                  onClick={() => applySingleCreationPreset(preset.id)}
+                >
+                  {preset.label}
+                </Button>
+              ))}
+              <Button
+                onClick={() => {
+                  setSelectedCreativeMode(undefined);
+                  setSelectedStoryFocus(undefined);
+                }}
+              >
+                {"濠电偞鎸搁幊鎰板煘閺嶎煉绱ｉ柛鏇ㄥ櫘閸?"}
+              </Button>
+            </Space>
+
+            {activeSingleCreationPreset && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginTop: 12 }}
+                message={`{"閻熸粎澧楅幐鍛婃櫠閻樼绱ｉ柛鏇ㄥ櫘閸?}?${activeSingleCreationPreset.label}`"}
+                description={activeSingleCreationPreset.description}
+              />
+            )}
+
+            {recommendedCreationPresets.length > 0 && (
+              <Alert
+                type="success"
+                showIcon
+                style={{ marginTop: 12 }}
+                message={"闂佸搫绉烽～澶婄暤娓氣偓瀵敻鍩€椤掍焦浜ら柟瀛樼矌椤忚鲸绻涢崰掳鍊曠粣娑㈡⒑閹绘帞绠洪柣锕€閰ｅ畷姘跺幢椤撶姷顦梺瑙勪航閸斿繐鐣峰Ο璇差嚤婵☆垰鎼敮銉╂倶韫囨梻绠氶柣锔诲灡缁傛帡濡烽妶鍥╂啴婵☆偅婢樼€氼垶顢?"}
+                description={(
+                  <Space wrap>
+                    {recommendedCreationPresets.map((item) => {
+                      const preset = getCreationPresetById(item.id);
+                      if (!preset) return null;
+                      return (
+                        <Button key={item.id} size="small" onClick={() => applySingleCreationPreset(item.id)}>
+                          {preset.label}?{item.reason}
+                        </Button>
+                      );
+                    })}
+                  </Space>
+                )}
+              />
+            )}
+
+            {singleScoreDrivenRecommendationCard && (
+              <Card size="small" title={singleScoreDrivenRecommendationCard.title} style={{ marginTop: 12 }}>
+                <Space direction="vertical" size={10} style={{ display: 'flex' }}>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message={singleScoreDrivenRecommendationCard.summary}
+                    description={singleScoreDrivenRecommendationCard.applyHint}
+                  />
+
+                  {singleScoreDrivenRecommendationCard.recommendedPresetLabel && (
+                    <div>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>{"闂佽浜介崝蹇撶暦濡紮绱ｉ柛鏇ㄥ櫘閸?}</div">
+                      <Space wrap size={[8, 8]}>
+                        <Tag color={singleScoreDrivenRecommendationCard.recommendedPresetId === activeSingleCreationPreset?.id ? 'blue' : 'processing'}>
+                          {singleScoreDrivenRecommendationCard.recommendedPresetLabel}
+                        </Tag>
+                        {singleScoreDrivenRecommendationCard.recommendedPresetReason && (
+                          <span style={{ color: 'var(--color-text-secondary)' }}>
+                            {singleScoreDrivenRecommendationCard.recommendedPresetReason}
+                          </span>
+                        )}
+                      </Space>
+                    </div>
+                  )}
+
+                  <div>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>{"闂佽浜介崝蹇撶暦濮椻偓濮婂ジ鎳滃▓鍨杸"}</div>
+                    <Space wrap size={[8, 8]}>
+                      <Tag color={singleScoreDrivenRecommendationCard.recommendedStage === selectedPlotStage ? 'blue' : 'purple'}>
+                        {singleScoreDrivenRecommendationCard.recommendedStageLabel}
+                      </Tag>
+                      <span style={{ color: 'var(--color-text-secondary)' }}>
+                        {singleScoreDrivenRecommendationCard.stageReason}
+                      </span>
+                    </Space>
+                  </div>
+
+                  {singleScoreDrivenRecommendationCard.alternatives.length > 0 && (
+                    <div>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>{"婵犮垼娉涘ú顓㈠焵椤掆偓椤︾増鏅堕敃鈧埢?}</div">
+                      <Space direction="vertical" size={4} style={{ display: 'flex' }}>
+                        {singleScoreDrivenRecommendationCard.alternatives.map((item) => (
+                          <div key={item.id} style={{ color: 'var(--color-text-secondary)' }}>
+                            - <strong>{item.label}</strong>?{item.reason}
+                          </div>
+                        ))}
+                      </Space>
+                    </div>
+                  )}
+
+                  <Space wrap>
+                    {singleScoreDrivenRecommendationCard.recommendedPresetId && (
+                      <Button size="small" onClick={() => applySingleCreationPreset(singleScoreDrivenRecommendationCard.recommendedPresetId!)}>
+                        {"闁圭厧鐡ㄥ濠氬极閵堝绠抽柕濞垮妼缁€鍐ㄎ涢弶鍨伂妞?"}
+                      </Button>
+                    )}
+                    {singleScoreDrivenRecommendationCard.recommendedStage && (
+                      <Button size="small" onClick={() => setSelectedPlotStage(singleScoreDrivenRecommendationCard.recommendedStage)}>
+                        {"闁圭厧鐡ㄥ濠氬极閵堝绠抽柕濞垮妼缁€鍐⒒閸愵厼鐓愭い?"}
+                      </Button>
+                    )}
+                    {(singleScoreDrivenRecommendationCard.recommendedPresetId || singleScoreDrivenRecommendationCard.recommendedStage) && (
+                      <Button
+                        type="primary"
+                        size="small"
+                        onClick={() => {
+                          if (singleScoreDrivenRecommendationCard.recommendedPresetId) {
+                            applySingleCreationPreset(singleScoreDrivenRecommendationCard.recommendedPresetId!);
+                          }
+                          if (singleScoreDrivenRecommendationCard.recommendedStage) {
+                            setSelectedPlotStage(singleScoreDrivenRecommendationCard.recommendedStage);
+                          }
+                        }}
+                      >
+                        {"婵炴垶鎸撮崑鎾绘⒑濞嗘儳鏋涚紒銊︾叀閹粙濡搁敃鈧懙褰掓煠?"}
+                      </Button>
+                    )}
+                  </Space>
+                </Space>
+              </Card>
+            )}
+
+            {singleStoryCreationControlCard && (
+              <Card
+                size="small"
+                title={singleStoryCreationControlCard.title}
+                extra={(
+                  <Space size={8}>
+                    <Tag color={isSingleStoryCreationControlCustomized ? 'purple' : 'blue'}>
+                      {isSingleStoryCreationControlCustomized ? '婵炲瓨绮岄幖顐ｅ閹邦喚纾介柡宥冨妼缁? : '缂備緡鍨靛畷鐢靛垝濞差亜绠烘俊顖涱儥濞?}
+                    </Tag>
+                    <Button
+                      size="small"
+                      type="link"
+                      onClick={() => setSingleStoryCreationBriefDraft(singleSystemStoryCreationBrief)}
+                      disabled={!singleSystemStoryCreationBrief || singleStoryCreationBriefDraft === singleSystemStoryCreationBrief}
+                    >
+                      闂佽鍘归崹褰捤囬懠顒€瀵查柤濮愬€楅崺鐘绘煙閼恒儺鐒炬い?
+                    </Button>
+                  </Space>
+                )}
+                style={{ marginTop: 12 }}
+              >
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message={singleStoryCreationControlCard.summary}
+                  description={singleStoryCreationControlCard.directive}
+                />
+                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>{"闂佸憡鐟崹宕囨椤忓懏缍囬柟瀵稿仦閺嗗牓鏌涜箛瀣姕闁规彃纾幉?}</div">
+                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginBottom: 8 }}>
+                      {"婵炶揪绲挎慨纾嬨亹閸欏顩烽柕澶堝劜闊剛绱掗婵嗗惞缂侇喖鎼娆愩偊濞嗘儳鏁舵繛鎴炴尭閿曪箓骞嬫搴ｇ＜妞ゆ挾鍠愰弳顓㈡煕閹邦厾鎳曠紒杈ㄧ箞瀵敻顢楁笟鍥т还缂備焦姊绘慨鐐繆椤撱垺鍋ㄩ柣鏃傤焾閻忓洤霉閸忚偐鐓紒槌栧弮瀹曟宕奸悢鍛婃畼闂佺绻堥崕瀵告崲閺嶎厽鐓傜€光偓閳ь剙鈻撻幋锕€绠烘俊顖涱儥濞诧綁鏌?"}
+                    </div>
+                    <TextArea
+                      value={singleStoryCreationBriefDraft}
+                      onChange={(event) => setSingleStoryCreationBriefDraft(event.target.value)}
+                      autoSize={{ minRows: 4, maxRows: 8 }}
+                      maxLength={600}
+                      showCount
+                      placeholder="闂佸憡鐟崹杈┾偓鍨矒瀵敻顢楅崒婊冨▏闂佺儵鏅╅崰妤呮偉閿濆洨纾肩憸蹇涙偨閼姐倗纾奸柛鈩冾殔椤曆囨煥濞戞瑧顣查悽顖濐潐濞艰鈽夊Δ鍐劶婵炴垶鏌ㄩ悧鍕焵椤戞寧顦风紒缁樺哺閹儳鈻庢惔锝囩劶婵炴垶鏌ㄩ悧鍕焵椤戣法绐斿ù灏栨櫊瀹曟顓奸崟顓犵劶婵炴垶鏌ㄩ悧鍐焵椤掑﹨鍚傞柍?"
+                    />
+                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
+                      {isSingleStoryCreationBriefCustomized
+                        ? '閻熸粎澧楅幐鍛婃櫠閻樺磭鈻旈弶鐐靛閻晫鈧鎮堕崕宕囨椤忓牆绠抽柟鐑樻煥椤ｅジ鏌￠崼顐㈠⒕缂佽鲸绻勬禍鎼佸幢濮樺吋鑸归梺鐑╂櫆閻楁粓鏌堢€靛摜纾奸柣鏃囧亹鐢盯鎮规担闈涒偓鏍箟瀹曞洦鍟哄ù锝囶暯閸?'
+                        : '閻熸粎澧楅幐鍛婃櫠閻樺磭鈻旈柧蹇撶秺閸忓洨绱撴担鍝勬灆闁搞倖绮撳畷婵嬪Ω閿旇棄鏋€闁荤喐娲戠欢銈囨濠靛鐭楁い鏍ㄧ矋缁绢垶鏌熼幁鎺戝姢闁轰焦鎹囬獮瀣箛閸撲胶顦繛鎴炴⒒閸犲氦銇愰懠顒傜＜鐟滃繘鎮界拠宸殫妞ゆ棁娉曞▓鍫曟煏?'}
+                    </div>
+                  </div>
+                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>{"缂傚倷鐒﹂幐濠氭倵椤栫偛绀岄柡宓啰浠繛杈剧稻缁秷銇愭担铏规／?}</div">
+                        <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
+                          {"闂佺娉涢敃銊ф崲閺嶃劎鈻旈柍褜鍓涚划鈺呮偐閸愬樊鈧洟鏌?5 婵炴垶鎼╂禍婊嗐亹閺屻儱绠ョ憸鎴︺€侀幋锔藉殟闁稿本绋戦鐐烘煥濞戞鐏遍柡浣规崌楠炲骞囬鐕佹Н婵炴潙鍚嬮惌顔剧箔瀹€鍕畱缂備焦锚娴犳﹢鏌熼懞銉劸妞も晪闄勭粙澶愬焵椤掑倹灏庨梺鍨儐閺嗗牓鏌涜箛瀣姌闁?"}
+                        </div>
+                      </div>
+                      <Button
+                        size="small"
+                        type="link"
+                        onClick={() => setSingleStoryBeatPlannerDraft(singleSystemStoryBeatPlanner)}
+                        disabled={
+                          isStoryBeatPlannerDraftEmpty(singleSystemStoryBeatPlanner)
+                          || areStoryBeatPlannerDraftsEqual(singleStoryBeatPlannerDraft, singleSystemStoryBeatPlanner)
+                        }
+                      >
+                        闂佽鍘归崹褰捤囬懠顒€瀵查柤濮愬€楅崺鐘电磽閸屾稓澧悽?
+                      </Button>
+                    </div>
+                    <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                      {STORY_BEAT_PLANNER_FIELDS.map((field) => (
+                        <div key={field.key}>
+                          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{field.label}</div>
+                          <Input
+                            value={singleStoryBeatPlannerDraft[field.key]}
+                            onChange={(event) => setSingleStoryBeatPlannerDraft((prev) => ({
+                              ...prev,
+                              [field.key]: event.target.value,
+                            }))}
+                            placeholder={field.placeholder}
+                            maxLength={120}
+                          />
+                        </div>
+                      ))}
+                    </Space>
+                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
+                      {isSingleStoryBeatPlannerCustomized
+                        ? '閻熸粎澧楅幐鍛婃櫠閻樼數纾奸柟鎯ь嚟閳ь剦鍨跺畷鐘诲冀閵娿儳鍊掔紓浣哄亾瑜板啴宕欓敍鍕仏妞ゆ劏鍓濋惇鐣屸偓瑙勬偠閸庢煡寮總绋跨婵炲棙鐟х粈澶娒归崗鑲╃叝缂佹鐭傞獮鈧紓浣姑禒姗€鏌熼懞銉劸妞も晪闄勭粙澶愬焵椤掑倹灏庨梺鍨儐閺嗗牓鏌涜箛瀣姢闁轰焦鎹囬獮瀣箛閳规儳浜?'
+                        : '閻熸粎澧楅幐鍛婃櫠閻樼數纾奸柟鎯ь嚟閳ь剦鍨跺畷鐘诲冀閵娿儳鍊掔紓浣瑰劤瀵泛顭囬悽鍛婂殜妞ゅ繐妫濋崗鍥╃磽娴ｅ搫鏋庣紓鍌涙尵閹峰顢氶崱娆戭槷闂佸憡鐟崹鎶藉箣妞嬪海纾兼い鎾跺Х缂堝崬菐閸ヨ泛鏋熼柛銊﹀哺瀵挳寮堕幋婵婎唹闂佸湱鐟抽崱鈺傛杸闂佹眹鍔岀€氼剟宕幘瀛樺婵犲﹤妫楄灐闂佺懓鍢茬粔鏌ュ焵?'}
+                    </div>
+                  </div>
+                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>{"闂侀潻濡囬崕銈呪枍濞嗘垳娌柡鍥╁仧绾剧粯绻涢幘铏櫣鐎?}</div">
+                        <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
+                          {"闂佺娉涢敃銊︿繆椤撱垹绠€广儱妫楃徊鍦磼閹规劕鐨洪柟鎾棑缁辨帡顢橀悙鍨秾閻庢鍠掗崑鎾绘煙?4 婵炴垶鎼╂禍婊冣攦閳ь剟鏌￠崪浣哥伈缂佽鲸绻冪粭鐔稿緞閸濄儴澹?AI 闂佸湱顭堥ˇ顖氣攦閳ь剟鏌熼幁鎺戝缂佺粯锕㈤弫宥呯暆閸愶絽浜鹃悘鐐跺亹閻熸繈鏌￠崟闈涚仧缂佹梹鎸抽幊鏍闁告挻濞婂畷妯衡枎韫囨洘娈梺?"}
+                        </div>
+                      </div>
+                      <Button
+                        size="small"
+                        type="link"
+                        onClick={() => setSingleStorySceneOutlineDraft(singleSuggestedStorySceneOutline)}
+                        disabled={
+                          isStorySceneOutlineDraftEmpty(singleSuggestedStorySceneOutline)
+                          || areStorySceneOutlineDraftsEqual(singleStorySceneOutlineDraft, singleSuggestedStorySceneOutline)
+                        }
+                      >
+                        闂佸湱顭堥ˇ顖滅礊鐎ｎ喖绀堢€广儱鐗嗚灐闂佺懓鍢茬粔褰掑闯缁嬫鍤?
+                      </Button>
+                    </div>
+                    <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                      {STORY_SCENE_OUTLINE_FIELDS.map((field) => (
+                        <div key={field.key}>
+                          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{field.label}</div>
+                          <TextArea
+                            value={singleStorySceneOutlineDraft[field.key]}
+                            onChange={(event) => setSingleStorySceneOutlineDraft((prev) => ({
+                              ...prev,
+                              [field.key]: event.target.value,
+                            }))}
+                            autoSize={{ minRows: 2, maxRows: 4 }}
+                            maxLength={220}
+                            showCount
+                            placeholder={field.placeholder}
+                          />
+                        </div>
+                      ))}
+                    </Space>
+                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
+                      {isSingleStorySceneOutlineCustomized
+                        ? '閻熸粎澧楅幐鍛婃櫠閻樿鎹堕柣鎴炆戦悵顖涚箾閹捐櫕鍣圭€规洜鍠庨蹇涙嚑妫版繃钑夋繛瀛樼矊閹碱偅瀵奸幇鏉跨哗闁荤喐婢橀弲鎼佹煥濞戞ê顨欑紒杈╁閹峰懎顭ㄩ埀顒傛嫻閻旂厧鍗抽悗闈涙憸閻骸螞閻楀牜娈橀柣顓熷灴閹啴宕熼鈶╂寖闂佽鍨伴幊蹇曟暜鐟欏嫭浜ゆ繛鎴炵懃閻︾懓霉閻橆喖鈧挾绮╃€靛憡灏庨梺鍨儐閺嗗牓鏌涜箛瀣姌闁?'
+                        : '閻熸粎澧楅幐鍛婃櫠閻樿鎹堕柣鎴炆戦悵顖涚箾閹捐櫕鍣圭€规洜鍠愮€电厧顫濆畷鍥垛偓鈧梻鍌氭噹缁绘淇婇銏犵鐎广儱妫楃徊鍦磼閹规劕钄奸柛銈嗙矒瀹曟繈濡搁妸銈囩煉闂佸憡妫忛悡澶屾濠靛鍎庨柡澶嬪灥閻撳倸霉閿濆洤校濠⒀勭矒瀹曟繈濡搁敂鑺ユ瘔闂佸憡鍔栭悷銈囨嫻閻斿娼版い顐厴閸?'}
+                    </div>
+                  </div>
+                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>{"闂佸搫鐗冮崑鎾剁磽娴ｅ摜澧涢柡浣哄仱瀹曟濡烽埡濠冩闁?}</div">
+                        <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
+                          {"婵炲濮伴崕鎵箔閸涙潙绀冮柛娑卞弾閸熷洤霉閸忓吋鐨戞繛鎻掓健楠炴帡濡烽敂鑺ユ畼闂佺绻堥崕宕囧垝閺夎鐔煎灳瀹曞洠鍋撻悜钘壩ラ柛灞剧矋閺呮悂鏌熺€涙ê濮囧褏濞€瀹曪綁顢涘顓炴笎闂備緡鍋嗛崰鎰八夐崨鏉戣摕闁靛闄勭瑧闂佸憡鐔粻鎾诲闯閸涘﹤绶炵€广儱鍟犻崑鎾存媴缁嬫寧娅濋梻鍌楀亾闁圭楠搁悘妤呮煕鐎ｎ亞绠虫い顒€娲鐢割敆閸屾粌濞囬梺鐑╂櫓閸犳鎮ラ敐澶嬫櫖婵炴垶顭囩粔濂告煕閹惧磭孝闁搞劏椴搁幏鍛煥閸涱垱銇濋梺鍦劋鐢﹦妲愭导瀛樺殜妞ゅ繐瀚婵烇絽娲︾换鍌炴偤閵娾晛鎹堕柕濠忛檮閹烽亶鏌涢敃浣哥劷闁?"}
+                        </div>
+                      </div>
+                      <Button
+                        size="small"
+                        type="link"
+                        disabled={!resolvedSingleStoryCreationBrief}
+                        onClick={() => void copyStoryCreationPrompt(resolvedSingleStoryCreationBrief, '闂佸憡顨嗗ú婊堟偟?)'}
+                      >
+                        婵犮垼娉涚粔鎾春濡や緤绱ｉ柛鏇ㄥ櫘濞?
+                      </Button>
+                    </div>
+                    <Space wrap size={[8, 8]} style={{ marginBottom: 8 }}>
+                      {singleStoryCreationPromptLayerLabels.map((item) => (
+                        <Tag key={item} color="processing">{item}</Tag>
+                      ))}
+                      <Tag color={isSingleStoryCreationPromptVerbose ? 'gold' : 'blue'}>
+                        {`缂?${singleStoryCreationPromptCharCount} 闁诲孩绋掗。纭?
+                      </Tag>
+                    </Space>
+                    {isSingleStoryCreationPromptVerbose && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        style={{ marginBottom: 8 }}
+                        message="閻熸粎澧楅幐鍛婃櫠閻樻祴鏋栭柕濞垮劚瀵娊鏌涢幇顒佸櫣妞ゆ梹鍔欏畷鎴ｇ疀濞戞瑦鐦?"
+                        description="婵犵鈧啿鈧綊鎮樻径鎰仺闁绘梻顭堥悘鍥╃磽娴ｈ灏伴柣蹇擃槸椤曪綁鍩€椤掍焦鍙忛悗锝庝簻缁叉椽鏌℃笟濠勭ɑ闁搞劊鍔戦弻灞筋吋閸滀焦些闂佹寧绋戦懟顖滅磽閹捐埖濯兼い鏃囧吹閸犳﹢鏌涜箛鎾跺閻㈩垰娲ㄧ槐鎾诲煛娴ｅ湱鐨婚梺鍝勬媼閸ㄨ京绮╂繝姘闁哄洦淇洪崢顒勬煟閵娿儱顏柛锝呮啞瀵板嫬顓奸崟顏嗙畾闂佽鍙庨崹顒勫焵?"
+                      />
+                    )}
+                    <TextArea
+                      value={resolvedSingleStoryCreationBrief ?? ''}
+                      autoSize={{ minRows: 6, maxRows: 12 }}
+                      readOnly
+                      placeholder="閻熸粎澧楅幐鍛婃櫠閻樻祴鏌﹂柍鈺佸暞缁犳帡鏌涘▎妯虹仭闁轰胶鍋ゅ畷妤呭Ψ瑜庨悾閬嶆煕閹烘挾鈼ョ紓宥嗘楠炴劙宕堕敂钘壭?"
+                    />
+                  </div>
+                  <StoryCreationSnapshotPanel
+                    scopeLabel="??"
+                    description="??????????????????????????????????"
+                    emptyText="?????????????????"
+                    snapshots={singleStoryCreationSnapshots}
+                    currentDraft={singleStoryCreationCurrentDraft}
+                    canSave={canSaveSingleStoryCreationSnapshot}
+                    onSave={() => void saveSingleStoryCreationSnapshot('manual')}
+                    onApply={applySingleStoryCreationSnapshot}
+                    onDelete={deleteSingleStoryCreationSnapshot}
+                    onCopy={copyStoryCreationPrompt}
+                    includeNarrativePerspective
+                  />
+                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>{"闂佸湱鐟抽崱鈺傛杸闁荤姳璀﹂崹鎵?}</div">
+                    <Space direction="vertical" size={4} style={{ display: 'flex' }}>
+                      {singleStoryCreationControlCard.executionPath.map((item) => (
+                        <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
+                      ))}
+                    </Space>
+                  </div>
+                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>{"缂傚倷鐒﹂幐濠氭倶婢舵劖鐓ユ慨妯哄船娴?}</div">
+                    <Space direction="vertical" size={4} style={{ display: 'flex' }}>
+                      {singleStoryCreationControlCard.expectedOutcomes.map((item) => (
+                        <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
+                      ))}
+                    </Space>
+                  </div>
+                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>{"婵＄偛顑呴柊锝呪枍閹捐绠柕鍫濇閸?}</div">
+                    <Space direction="vertical" size={4} style={{ display: 'flex' }}>
+                      {singleStoryCreationControlCard.guardrails.map((item) => (
+                        <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
+                      ))}
+                    </Space>
+                  </div>
+                </Space>
+              </Card>
+            )}
+
+            {singleStoryRepairTargetCard && (
+              <Card
+                size="small"
+                title={singleStoryRepairTargetCard.title}
+                extra={<Tag color="gold">闂佹眹鍨婚崰鎰板垂濮樿泛绫嶉柟顖涙緲濞堜即鏌涢弬璇插闁轰胶鍋ゅ畷?/Tag>}
+                style={{ marginTop: 12 }}
+              >
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message={singleStoryRepairTargetCard.repairSummary}
+                  description={singleStoryRepairTargetCard.applyHint}
+                />
+                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                  {[
+                    ["婵炴潙鍚嬮敋闁告ɑ绋掔粚閬嶎敊绾拌鲸些", singleStoryRepairTargetCard.priorityTarget],
+                    ["闂備緡鍓欓悘婵嬪储閵堝绀冩繛鍡樺姉閵?, singleStoryRepairTargetCard.antiPattern]",
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      style={{
+                        padding: '10px 12px',
+                        border: '1px solid #f0f0f0',
+                        borderRadius: 8,
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
+                    </div>
+                  ))}
+                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>{"闂佸搫鐗滈崜婵嬫偪閸℃鈹嶆い鏃傗拡濡插鏌涢弬璇插缂?}</div">
+                    <Space direction="vertical" size={4} style={{ display: 'flex' }}>
+                      {singleStoryRepairTargetCard.repairTargets.map((item) => (
+                        <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
+                      ))}
+                    </Space>
+                  </div>
+                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>{"婵烇絽娲︾换鍕汲閳ь剙霉閸忔祹顏呯箾?}</div">
+                    <Space direction="vertical" size={4} style={{ display: 'flex' }}>
+                      {singleStoryRepairTargetCard.preserveStrengths.map((item) => (
+                        <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
+                      ))}
+                    </Space>
+                  </div>
+                </Space>
+              </Card>
+            )}
+          </Card>
+
+          {singleCreationBlueprint && (
+            <Card size="small" title="缂傚倷鐒﹂幐濠氭倵椤栫偞瀚呮繝闈涙缁傚牆螞閺夊灝顏い? style={{ marginBottom: 12 }}">
+              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                {singleCreationBlueprint.summary}
+              </div>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>闂佽浜介崝蹇撶暦濮椻偓閹崇偤宕掑☉姗嗏偓?/div>
+              <Space direction="vertical" size={6} style={{ display: 'flex' }}>
+                {singleCreationBlueprint.beats.map((beat, index) => (
+                  <div key={beat}>{index + 1}. {beat}</div>
+                ))}
+              </Space>
+              {singleCreationBlueprint.risks.length > 0 && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginTop: 12 }}
+                  message="缂傚倷鐒﹂幐濠氭倵椤栫偛绠甸柟鐗堟緲閺?"
+                  description={singleCreationBlueprint.risks.join('闂?)'}
+                />
+              )}
+            </Card>
+          )}
+
+          {singleStoryObjectiveCard && (
+            <Card size="small" title="闂佺儵鏅╅崰妤呮偉閿濆纭€闁跨喓濯弳鏇㈡偡? style={{ marginBottom: 12 }}">
+              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                {singleStoryObjectiveCard.summary}
+              </div>
+              <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                {[
+                  ['闂佺儵鏅╅崰妤呮偉?, singleStoryObjectiveCard.objective]',
+                  ['闂傚倸鍟抽褎鎱?, singleStoryObjectiveCard.obstacle]',
+                  ['闁哄鍎愰崜姘叏?, singleStoryObjectiveCard.turn]',
+                  ['闂備浇袙閺呮盯鎮?, singleStoryObjectiveCard.hook]',
+                ].map(([label, value]) => (
+                  <div
+                    key={label}
+                    style={{
+                      padding: '10px 12px',
+                      border: '1px solid #f0f0f0',
+                      borderRadius: 8,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                    <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
+                  </div>
+                ))}
+              </Space>
+            </Card>
+          )}
+
+          {singleStoryResultCard && (
+            <Card size="small" title="缂傚倷鐒﹂幐濠氭倶婢舵劕纭€闁跨喓濯弳鏇㈡偡? style={{ marginBottom: 12 }}">
+              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                {singleStoryResultCard.summary}
+              </div>
+              <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                {[
+                  ['闂佽浜介崝蹇曟崲?, singleStoryResultCard.progress]',
+                  ['闂佽妞块崢楣冨Φ?, singleStoryResultCard.reveal]',
+                  ['闂佺绻愮壕顓㈡焾?, singleStoryResultCard.relationship]',
+                  ['婵炶揪绲鹃悷锔句焊?, singleStoryResultCard.fallout]',
+                ].map(([label, value]) => (
+                  <div
+                    key={label}
+                    style={{
+                      padding: '10px 12px',
+                      border: '1px solid #f0f0f0',
+                      borderRadius: 8,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                    <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
+                  </div>
+                ))}
+              </Space>
+            </Card>
+          )}
+
+          {singleStoryExecutionChecklist && (
+            <Card size="small" title="闂佸湱鐟抽崱鈺傛杸濠电偞鎸搁幊搴＄暦閻旈潻绱ｉ柛鏇ㄥ櫘濞? style={{ marginBottom: 12 }}">
+              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                {singleStoryExecutionChecklist.summary}
+              </div>
+              <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                {[
+                  ['閻庢鍠掗崑鎾绘煕?, singleStoryExecutionChecklist.opening]',
+                  ['闂佸憡姊绘慨瀵告暜?, singleStoryExecutionChecklist.pressure]',
+                  ['闁哄鍎愰崜姘叏?, singleStoryExecutionChecklist.pivot]',
+                  ['闂佽　鍋撻柤绋跨仛鐏?, singleStoryExecutionChecklist.closing]',
+                ].map(([label, value]) => (
+                  <div
+                    key={label}
+                    style={{
+                      padding: '10px 12px',
+                      border: '1px solid #f0f0f0',
+                      borderRadius: 8,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                    <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
+                  </div>
+                ))}
+              </Space>
+            </Card>
+          )}
+
+          {singleStoryRepetitionRiskCard && (
+            <Card size="small" title="闂備焦褰冪粔鎾囬崣澶樻Ч閹兼番鍔嶉悵锕€螞閺夊灝顏い? style={{ marginBottom: 12 }}">
+              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                {singleStoryRepetitionRiskCard.summary}
+              </div>
+              <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                {[
+                  ['閻庢鍠掗崑鎾绘煕閿旇姤銇濇い銉︽崌濮?, singleStoryRepetitionRiskCard.openingRisk]',
+                  ['闂佸憡姊绘慨瀵告暜閸ヮ煈妲归幖娣妽閻?, singleStoryRepetitionRiskCard.pressureRisk]',
+                  ['闁哄鍎愰崜姘叏鐏炵虎妲归幖娣妽閻?, singleStoryRepetitionRiskCard.pivotRisk]',
+                  ['闂佽　鍋撻悹楦挎閸熸彃顪冪€ｎ亪鍙勬繛?, singleStoryRepetitionRiskCard.closingRisk]',
+                ].map(([label, value]) => (
+                  <div
+                    key={label}
+                    style={{
+                      padding: '10px 12px',
+                      border: '1px solid #f0f0f0',
+                      borderRadius: 8,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                    <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
+                  </div>
+                ))}
+              </Space>
+            </Card>
+          )}
+
+          {singleStoryAcceptanceCard && (
+            <Card size="small" title="婵°倗濮撮張顒勫极瑜版帒纭€闁跨喓濯弳鏇㈡偡? style={{ marginBottom: 12 }}">
+              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                {singleStoryAcceptanceCard.summary}
+              </div>
+              <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                {[
+                  ['婵炲濮鹃褎鎱ㄩ悢鐓庡窛闁瑰瓨甯熼崢?, singleStoryAcceptanceCard.missionCheck]',
+                  ['闂佸憡鐟﹂敋閻庡灚鐓￠幏鍐寠婢跺瀣€', singleStoryAcceptanceCard.changeCheck],
+                  ['闂佸搫鍊烽崡鎶芥儗閻愬瓨鍎?, singleStoryAcceptanceCard.freshnessCheck]',
+                  ['闂佽　鍋撻柤绋跨仛鐏忓棝鎮归幇鈺佸闁?, singleStoryAcceptanceCard.closingCheck]',
+                ].map(([label, value]) => (
+                  <div
+                    key={label}
+                    style={{
+                      padding: '10px 12px',
+                      border: '1px solid #f0f0f0',
+                      borderRadius: 8,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                    <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
+                  </div>
+                ))}
+              </Space>
+            </Card>
+          )}
+
+          {singleStoryCharacterArcCard && (
+            <Card size="small" title="闁荤喐鐟︾敮鐔哥珶婵犲偆鍤曠憸宥夊储濠婂嫸绱ｉ柛鏇ㄥ櫘濞? style={{ marginBottom: 12 }}">
+              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                {singleStoryCharacterArcCard.summary}
+              </div>
+              <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                {[
+                  ['婵犮垼鍩栭悧鏇烇耿椤忓棛妫?, singleStoryCharacterArcCard.externalLine]',
+                  ['闂佸憡鍔曢幊搴★耿椤忓棛妫?, singleStoryCharacterArcCard.internalLine]',
+                  ['闂佺绻愮壕顓㈡焾鐎靛摜妫?, singleStoryCharacterArcCard.relationshipLine]',
+                  ['闂佽В鍋撻柣锝呰嫰娴?, singleStoryCharacterArcCard.arcLanding]',
+                ].map(([label, value]) => (
+                  <div
+                    key={label}
+                    style={{
+                      padding: '10px 12px',
+                      border: '1px solid #f0f0f0',
+                      borderRadius: 8,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                    <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
+                  </div>
+                ))}
+              </Space>
+            </Card>
+          )}
+
+          {singleVolumePacingPlan && (
+            <Card size="small" title="闂佸憡顨婇ˉ鎾搭殽閸ヮ剚鍤嶉柛灞惧嚬濞堁兾涢弶鍨伂妞? style={{ marginBottom: 12 }}">
+              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                {singleVolumePacingPlan.summary}
+              </div>
+              <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                {singleVolumePacingPlan.segments.map((segment) => (
+                  <div key={`${segment.stage}-${segment.startChapter}`}>
+                    <strong>缂備焦顨堥幉顡筫gment.startChapter}-{segment.endChapter}缂?閻?{segment.label}</strong>
+                    <div style={{ color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                      {segment.mission}
+                    </div>
+                  </div>
+                ))}
+              </Space>
+            </Card>
+          )}
+
+          <Form.Item
+            label="闂佸憡甯楃粙鎰礊閺傝鐔煎灳瀹曞洨顢?"
+            tooltip="闂佸憡鐟崹鍫曞焵椤掆偓椤р偓缂佽鲸澹嗛幏瀣煛閸屾稒瀚冲┑鐐叉４缁辨洟鎮甸悜鑺ュ殟闁稿本绋掔痪顖炴煕鐎ｎ亞绠伴柟顔界矒閺岋箓鍩℃担鐑樻啢闂侀潧妫旈悞锕傚磿韫囨洜纾兼い蹇撳€甸崑鎾存媴閻熼澹曢棅顐㈡川閸嬶綁鍩€椤戣法顦﹂柛娅诲懎瀵茬紓浣姑悘妤呮煕閵壯冧沪濠?"
+            style={{ marginBottom: isMobile ? 16 : 12 }}
+          >
+            <Select
+              placeholder="婵帗绋掗…鍫ヮ敇缂佹鈻旂€广儱顦介弶鍝勵熆閼哥數澧€规瓕浜幏顐﹀礃鐠恒劎顦梺鍛婄懐閸ㄨ京鈧灚绮撳鐢割敆閸屾粌濞囬梺鐑╂櫓閸犳鎮ラ敐澶嬬劵濠㈣泛顑呴?"
+              value={selectedCreativeMode}
+              onChange={setSelectedCreativeMode}
+              allowClear
+              optionLabelProp="label"
+            >
+              {CREATIVE_MODE_OPTIONS.map((option) => (
+                <Select.Option key={option.value} value={option.value} label={option.label}>
+                  <div>{option.label}</div>
+                  <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            label="缂傚倷鐒﹂幐濠氭倵椤栨稓鐟圭憸鏃堝闯閹间焦鍊?"
+            tooltip="闂佸憡鐟崹鍫曞焵椤掆偓椤р偓缂佸彉鍗抽獮鎰板炊瑜忛弳浼村级閳哄倻鎳呴柣婵堝厴瀵挳寮堕幋婊呭墾婵炴垶鎹佸畷鐢稿吹鎼淬劌绠抽柕濞垮妿缁犲鏌曢崱鏇燁樂婵懓顦甸幃褔鍩℃笟鍥ㄦ櫈閻熸粓鍋婂鍧楀焵椤戣法顦﹂柛鐔绘硶缁絾鎷呯粙璺紦缂備胶瀚忛崨顖涙儯闂佸憡鐟﹂悷銈囪姳閵婏妇顩烽悹鍥ㄥ絻椤?"
+            style={{ marginBottom: isMobile ? 16 : 12 }}
+          >
+            <Select
+              placeholder="婵帗绋掗…鍫ヮ敇婵犳艾閿ら柛銉簵閳ь兘鍋撻梺鐟扮仛鐎笛勫垔鐎涙ê绶炴慨姗€纭稿姘舵煕閺冨倸鏋欓柛蹇旓耿閺佸秶浠﹂挊澶庮唹闂佸湱顭堥ˇ鏉匡耿閹殿喚鍗氶柣妯块哺瀹曟煡鏌涢弬鍛€撶划鐢告煟?"
+              value={selectedStoryFocus}
+              onChange={setSelectedStoryFocus}
+              allowClear
+              optionLabelProp="label"
+            >
+              {STORY_FOCUS_OPTIONS.map((option) => (
+                <Select.Option key={option.value} value={option.value} label={option.label}>
+                  <div>{option.label}</div>
+                  <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          {/* 缂備焦顨忛崗娑氳姳閳哄啯鍋樼€光偓鐎ｎ剛鐛ラ梺鐑╂櫓閸犳鎮ラ敐鍥ｅ亾濞戞瑯娈曢柡?+ AI濠碘槅鍨埀顒€纾埀?*/}
           <div style={{
             display: isMobile ? 'block' : 'flex',
             gap: isMobile ? 0 : 16,
             marginBottom: isMobile ? 16 : 12
+
           }}>
-            <Form.Item
-              label="目标字数"
-              tooltip="AI生成章节时的目标字数，实际可能略有偏差（修改后会自动记住）"
-              style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
-            >
-              <InputNumber
-                min={500}
-                max={10000}
-                step={100}
-                value={targetWordCount}
-                onChange={(value) => {
-                  const newValue = value || DEFAULT_WORD_COUNT;
-                  setTargetWordCount(newValue);
-                  setCachedWordCount(newValue);
-                }}
-                style={{ width: '100%' }}
-                formatter={(value) => `${value} 字`}
-                parser={(value) => parseInt(value?.replace(' 字', '') || '0', 10) as unknown as 500}
-              />
-            </Form.Item>
 
             <Form.Item
-              label="AI模型"
-              tooltip="选择用于生成章节内容的AI模型，不选择则使用默认模型"
+
+              label="闂佺儵鏅╅崰妤呮偉閿濆洠鍋撳☉娆樻畷闁?"
+
+              tooltip="AI闂佹眹鍨婚崰鎰板垂濮樿京鍗氶柣妯烘惈铻￠梺鍝勫暙婢у骸鈻撻幋锔藉剮妞ゆ梻鏅崹濂告倵濞戞瑯娈曢柡鍡欏枛閺佸秶浠﹂悾灞炬緰闂傚倸瀚幊搴ゃ亹閺屻儲鍤勯柣锝呮湰濞堬綁鏌￠崼婵愭Ц濞存粎顭堥蹇涱敋閸℃瑧顦╂繛锝呮祩閸犳寮總绋胯Е閹煎瓨绻勭粣妤呮煠婵傚绨诲┑顔规櫇閹峰锛愭担铏剐ら梺?"
+
               style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
+
             >
-              <Select
-                placeholder={selectedModel ? `默认: ${availableModels.find(m => m.value === selectedModel)?.label || selectedModel}` : "使用默认模型"}
-                value={selectedModel}
-                onChange={setSelectedModel}
-                allowClear
-                showSearch
-                optionFilterProp="label"
-              >
-                {availableModels.map(model => (
-                  <Select.Option key={model.value} value={model.value} label={model.label}>
-                    {model.label}
-                  </Select.Option>
-                ))}
-              </Select>
+
+              <InputNumber
+
+                min={500}
+
+                max={10000}
+
+                step={100}
+
+                value={targetWordCount}
+
+                onChange={(value) => {
+
+                  const newValue = value || DEFAULT_WORD_COUNT;
+
+                  setTargetWordCount(newValue);
+
+                  setCachedWordCount(newValue);
+
+                }}
+
+                style={{ width: '100%' }}
+
+                formatter={(value) => `${value} 闁诲孩绋掗。纭?
+
+                parser={(value) => parseInt(value?.replace(' 闁?, '') || '0', 10) as unknown as 500'}
+
+              />
+
             </Form.Item>
+
+
+
+            <Form.Item
+
+              label="AI濠碘槅鍨埀顒€纾埀?"
+
+              tooltip="闂備緡鍋勯ˇ鎵偓姘ュ姂閹粙濡搁妶鍥闂佹眹鍨婚崰鎰板垂濮樿京鍗氶柣妯烘惈铻￠梺鍛婂姇閹冲酣顢欓幇鐗堝剭闁告垶鈹冨┑鈽嗗灙閳ь剙纾埀顒傚厴閺佸秶浠﹂懖鈺冩喒闂備緡鍋勯ˇ鎵偓姘ュ姂瀹曟艾鈻庢惔鈾€鏋忛梺娲绘娇閸旀垹鍒掗婊勫闁靛牆鏋烘笟鈧畷?"
+
+              style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
+
+            >
+
+              <Select
+
+                placeholder={selectedModel ? `婵帗绋掗…鍫ヮ敇? ${availableModels.find(m => m.value === selectedModel)?.label || selectedModel}` : "婵炶揪缍€濞夋洟寮妶鍡╂付婵☆垱顑欓崥鍥ㄤ繆椤栨せ鍋撳畷鍥ｅ亾?"}
+
+                value={selectedModel}
+
+                onChange={setSelectedModel}
+
+                allowClear
+
+                showSearch
+
+                optionFilterProp="label"
+
+              >
+
+                {availableModels.map(model => (
+
+                  <Select.Option key={model.value} value={model.value} label={model.label}>
+
+                    {model.label}
+
+                  </Select.Option>
+
+                ))}
+
+              </Select>
+
+            </Form.Item>
+
           </div>
 
-          <Card
-            size="small"
-            title="质量链说明"
-            style={{ marginBottom: 12 }}
-          >
-            {getQualityProfileDisplayItems(chapterQualityProfileSummary).length > 0 ? (
-              <>
-                <Alert
-                  type="success"
-                  showIcon
-                  style={{ marginBottom: 12 }}
-                  message="当前章节已接入统一质量画像"
-                  description="以下摘要仅用于说明本次生成/分析所使用的质量链，不在章节页提供编辑入口。"
-                />
-                <Descriptions column={1} size="small">
-                  {getQualityProfileDisplayItems(chapterQualityProfileSummary).map((item) => (
-                    <Descriptions.Item key={item.key} label={item.label}>
-                      {item.description}
-                    </Descriptions.Item>
-                  ))}
-                </Descriptions>
-              </>
-            ) : (
-              <Alert
-                type="info"
-                showIcon
-                message="当前章节尚未返回质量链摘要"
-                description="不影响单章生成、风格选择与 deferred analysis 主流程；待后端返回摘要后，此处会自动展示。"
-              />
-            )}
-          </Card>
+
 
           <Card
+
             size="small"
-            title="剧情评分（最近一次AI生成）"
-            loading={chapterQualityLoading}
+
+            title="闁荤姵鍔戦崝鎴﹀闯濞差亝鐓ｉ柟瑙勫姦閸ゆ盯鏌?"
+
             style={{ marginBottom: 12 }}
+
+          >
+
+            {getQualityProfileDisplayItems(chapterQualityProfileSummary).length > 0 ? (
+
+              <>
+
+                <Alert
+
+                  type="success"
+
+                  showIcon
+
+                  style={{ marginBottom: 12 }}
+
+                  message="閻熸粎澧楅幐鍛婃櫠閻樼數鍗氶柣妯烘惈铻￠悗鍦焾瀵墎鏁幘顔肩闁靛／鍛厷婵炴垶鎸撮崑鎾绘偣閹扳晛濮傞柛锝嗘そ閹晫鎷犻幓鎺戝"
+
+                  description="婵炲濮伴崕鎵箔閸涙潙绠烘俊顖涱儥濞诧絽霉閻樺弶鍣介柡浣靛€栫粋宥嗘償閵堝骸娈梺鍝勫鐎涒晛锕㈤弶搴撴瀻闁挎稑瀚弲鎼佹煙?闂佸憡甯掑Λ娆撴倵娴犲绠ラ柍褜鍓氶幏鍛崉閵婏附娈㈤梺姹囧妼鐎氼垰顔忓┑瀣厒闊洦绋掗幊鐘绘煥濞戞ê顨欑紒妤€顦靛畷鐑藉Ω瑜忚ぐ鍧楁煠閸濆嫬鈧潡濡存径鎰闁归偊浜炴潻鏃傜磽閸屾稓澧崇紒棰濆亰瀹曟濡烽妷銉х▔闂?"
+
+                />
+
+                <Descriptions column={1} size="small">
+
+                  {getQualityProfileDisplayItems(chapterQualityProfileSummary).map((item) => (
+
+                    <Descriptions.Item key={item.key} label={item.label}>
+
+                      {item.description}
+
+                    </Descriptions.Item>
+
+                  ))}
+
+                </Descriptions>
+
+              </>
+
+            ) : (
+
+              <Alert
+
+                type="info"
+
+                showIcon
+
+                message="閻熸粎澧楅幐鍛婃櫠閻樼數鍗氶柣妯烘惈铻￠柣蹇撶箲绾板秴锕㈤鐔镐氦闁哄倹瀵х粈鈧柣鐘冲姂閸旀垿宕冲ú顏呯叄闁绘劦鍓氶崰鍛存偡?"
+
+                description="婵炴垶鎸哥粔瀛樼附閺嶎厼浼犵€广儱鎳庣粈瀣磼閺冨倸啸闁轰焦鎹囬獮瀣箛閳规儳浜惧〒姘ｅ亾妞ゃ儲鎹囧鑺ョ附缁洖浜惧璺侯儏椤忋儱鈽?deferred analysis 婵炴垶鎸剧划顖滅矈閿斿墽鐭欓悗锝呭楠炪垻鈧灚婢橀幊搴ㄥ箖濡ゅ啰鍗氭い鏍ㄧ箘缁犳煡鏌涢妷褍浠﹂柟鎻掔－閹茬増鎷呴崨濠傗偓鐢告煥濞戞ɑ婀版い鎺撶箖瀵板嫰宕熼鍡欑崶闂佺厧顨庢禍婊勬叏閳哄啩娌柡鍥╁О娴犳盯鏌?"
+
+              />
+
+            )}
+
+          </Card>
+
+
+
+          <Card
+
+            size="small"
+
+            title="闂佸憡鎸嗛崟顐㈠闁荤姴娲ょ€氼剟宕规惔銊︽櫖闁割偆鍠愭禒姗€寮堕埡鍌氱仯缂佹梹娼欓埢搴ㄣ€€閸㈡棃鏌ｉ姀銏犳瀾闁搞劍宀搁弫?"
+
+            loading={chapterQualityLoading}
+
+            style={{ marginBottom: 12 }}
+
           >
             {chapterQualityMetrics ? (
               <>
+                {singleAfterScorecard && (
+                  <Card size="small" title="闂佸憡鑹鹃柊锝夋偘濞嗘垶瀚氶柛鏇ㄥ亜閻庡鏌? style={{ marginBottom: 12 }}">
+                    <Alert
+                      type={singleAfterScorecard.verdictColor as 'success' | 'info' | 'warning' | 'error'}
+                      showIcon
+                      style={{ marginBottom: 12 }}
+                      message={singleAfterScorecard.verdict}
+                      description={singleAfterScorecard.summary}
+                    />
+                    <Descriptions column={1} size="small" style={{ marginBottom: 12 }}>
+                      <Descriptions.Item label="闂佺绻戞繛濠囧极椤撶倣娑㈠焵椤掑嫬钃?">
+                        {singleAfterScorecard.focusCheck}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="婵炴潙鍚嬮敋闁告ɑ绋掔粚閬嶎敊缁涘濡?">
+                        {singleAfterScorecard.nextAction}
+                      </Descriptions.Item>
+                    </Descriptions>
+                    <div style={{ marginBottom: 8, fontWeight: 600 }}>閻熸粎澧楅幐鍛婃櫠閻樼粯鍎庣紒瀣儥閸ょ姷绱掔€ｎ亞锛嶆繛鍫熷灩缁辨帡寮堕幋婵愬敽</div>
+                    <Space wrap size={[8, 8]} style={{ marginBottom: 12 }}>
+                      {singleAfterScorecard.strengths.map((item) => (
+                        <Tag key={item} color="success">{item}</Tag>
+                      ))}
+                    </Space>
+                    <div style={{ marginBottom: 8, fontWeight: 600 }}>閻熸粎澧楅幐鍛婃櫠閻樼數纾介柛婵嗗缂?/div>
+                    <Space direction="vertical" size={6} style={{ display: 'flex' }}>
+                      {singleAfterScorecard.gaps.map((item) => (
+                        <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
+                      ))}
+                    </Space>
+                  </Card>
+                )}
+
                 <Descriptions column={isMobile ? 1 : 2} size="small">
-                  <Descriptions.Item label="综合评分">
+                  <Descriptions.Item label="缂傚倷鑳堕崢褔骞冩惔锝嗗珰闁告洦鍋勯悗?">
                     <Tag color={getOverallScoreColor(chapterQualityMetrics.overall_score)}>
                       {chapterQualityMetrics.overall_score}
                     </Tag>
+
                   </Descriptions.Item>
-                  <Descriptions.Item label={<Space size={4}>冲突链命中率<Tooltip title={QUALITY_METRIC_TIPS.conflict}><InfoCircleOutlined /></Tooltip></Space>}>
+
+                  <Descriptions.Item label={<Space size={4}>闂佸憡鍔樼亸娆撴偘婵犲洦鐓ｉ柟顖嗗嫬娈ユ繛鎴炴惄閸樻儳顔?Tooltip title={QUALITY_METRIC_TIPS.conflict}><InfoCircleOutlined /></Tooltip></Space>}>
+
                     <Tag color={getMetricRateColor(chapterQualityMetrics.conflict_chain_hit_rate)}>{chapterQualityMetrics.conflict_chain_hit_rate}%</Tag>
+
                   </Descriptions.Item>
-                  <Descriptions.Item label={<Space size={4}>规则落地命中率<Tooltip title={QUALITY_METRIC_TIPS.rule}><InfoCircleOutlined /></Tooltip></Space>}>
+
+                  <Descriptions.Item label={<Space size={4}>闁荤喐鐟ョ€氼剟宕归鐐村闁芥ê顦伴崟楣冩煕濞戞瑥鐏婇柤鍨灴閹?Tooltip title={QUALITY_METRIC_TIPS.rule}><InfoCircleOutlined /></Tooltip></Space>}>
+
                     <Tag color={getMetricRateColor(chapterQualityMetrics.rule_grounding_hit_rate)}>{chapterQualityMetrics.rule_grounding_hit_rate}%</Tag>
+
                   </Descriptions.Item>
-                  <Descriptions.Item label={<Space size={4}>开场钩子命中率<Tooltip title={QUALITY_METRIC_TIPS.opening}><InfoCircleOutlined /></Tooltip></Space>}>
+
+                  <Descriptions.Item label={<Space size={4}>閻庢鍠掗崑鎾绘煕閿旇姤銇濋柟鍓插墰閳ь剚绋掗崝鏇㈠箠閳╁啰鈻旀い鎾跺Т閼?Tooltip title={QUALITY_METRIC_TIPS.opening}><InfoCircleOutlined /></Tooltip></Space>}>
+
                     <Tag color={getMetricRateColor(chapterQualityMetrics.opening_hook_rate)}>{chapterQualityMetrics.opening_hook_rate}%</Tag>
+
                   </Descriptions.Item>
-                  <Descriptions.Item label={<Space size={4}>爽点链命中率<Tooltip title={QUALITY_METRIC_TIPS.payoff}><InfoCircleOutlined /></Tooltip></Space>}>
+
+                  <Descriptions.Item label={<Space size={4}>闂佺粯鐗滈弲顐﹀磻閿濆鐓ｉ柟顖嗗嫬娈ユ繛鎴炴惄閸樻儳顔?Tooltip title={QUALITY_METRIC_TIPS.payoff}><InfoCircleOutlined /></Tooltip></Space>}>
+
                     <Tag color={getMetricRateColor(chapterQualityMetrics.payoff_chain_rate)}>{chapterQualityMetrics.payoff_chain_rate}%</Tag>
+
                   </Descriptions.Item>
-                  <Descriptions.Item label={<Space size={4}>章尾钩子命中率<Tooltip title={QUALITY_METRIC_TIPS.cliffhanger}><InfoCircleOutlined /></Tooltip></Space>}>
+
+                  <Descriptions.Item label={<Space size={4}>缂備焦姊绘慨鎾偄椤掑嫭鐓㈤柍杞拌兌閹藉秹鏌涘☉娆忕亰闁煎灚鍨块幃?Tooltip title={QUALITY_METRIC_TIPS.cliffhanger}><InfoCircleOutlined /></Tooltip></Space>}>
+
                     <Tag color={getMetricRateColor(chapterQualityMetrics.cliffhanger_rate)}>{chapterQualityMetrics.cliffhanger_rate}%</Tag>
+
                   </Descriptions.Item>
-                  <Descriptions.Item label={<Space size={4}>对白自然度<Tooltip title={QUALITY_METRIC_TIPS.dialogue}><InfoCircleOutlined /></Tooltip></Space>}>
+
+                  <Descriptions.Item label={<Space size={4}>闁诲酣娼у﹢鍗炩枍瑜旈幊娑㈩敂閸℃衼闁?Tooltip title={QUALITY_METRIC_TIPS.dialogue}><InfoCircleOutlined /></Tooltip></Space>}>
+
                     <Tag color={getMetricRateColor(chapterQualityMetrics.dialogue_naturalness_rate)}>{chapterQualityMetrics.dialogue_naturalness_rate}%</Tag>
+
                   </Descriptions.Item>
-                  <Descriptions.Item label={<Space size={4}>大纲贴合度<Tooltip title={QUALITY_METRIC_TIPS.outline}><InfoCircleOutlined /></Tooltip></Space>}>
+
+                  <Descriptions.Item label={<Space size={4}>婵犮垹鐖㈤崨顖氱墯闁荤姵鍔栧娆撳箖鎼淬垺鍎?Tooltip title={QUALITY_METRIC_TIPS.outline}><InfoCircleOutlined /></Tooltip></Space>}>
+
                     <Tag color={getMetricRateColor(chapterQualityMetrics.outline_alignment_rate)}>{chapterQualityMetrics.outline_alignment_rate}%</Tag>
+
                   </Descriptions.Item>
-                  <Descriptions.Item label="评分时间">
-                    {chapterQualityGeneratedAt ? new Date(chapterQualityGeneratedAt).toLocaleString() : '未知'}
+
+                  <Descriptions.Item label="闁荤姴娲ょ€氼剟宕规惔銊ョ睄闁割偅娲橀敍?">
+
+                    {chapterQualityGeneratedAt ? new Date(chapterQualityGeneratedAt).toLocaleString() : '闂佸搫鐗滄禍鐐烘偂?'}
+
                   </Descriptions.Item>
+
                 </Descriptions>
+
                 <Alert
+
                   type={getWeakestQualityMetric(chapterQualityMetrics).value >= 60 ? 'info' : 'warning'}
+
                   showIcon
+
                   style={{ marginTop: 12 }}
-                  message={`当前短板：${getWeakestQualityMetric(chapterQualityMetrics).label} ${getWeakestQualityMetric(chapterQualityMetrics).value}%`}
-                  description="优先补最低项，通常比继续堆字数更能提升追更感。"
+
+                  message={`閻熸粎澧楅幐鍛婃櫠閻樼粯鍎楁い鎾跺枑缁舵煡鏌?{getWeakestQualityMetric(chapterQualityMetrics).label} ${getWeakestQualityMetric(chapterQualityMetrics).value}%`}
+
+                  description="婵炴潙鍚嬮敋闁告ɑ绋撻幃浼村Ψ閿旀垝绮繛杈剧到闁帮綁濡村澶嬫櫖鐎光偓閸曘劌浜炬慨姗嗗墰閸╂鎱ㄩ敐鍡樷拻闁规挳顥撶槐鎺楊敇閻愰潧鐏柣搴㈢⊕椤ㄥ棝寮抽悢鐓庡嵆缁炬儳顑呴崢鎾煙缂佹ê濮囩€规洖鏈濠氭嚍閵夛妇鍑介梺瑙勫閸犲棝鍩€?"
+
                 />
-                <Card size="small" title="质量结构" style={{ marginTop: 12 }}>
+
+                <Card size="small" title="闁荤姵鍔戦崝鎴﹀闯閾忓湱纾奸柟鎯ь嚟閳? style={{ marginTop: 12 }}">
+
                   <Space direction="vertical" style={{ width: '100%' }} size={10}>
+
                     {getQualityMetricItems(chapterQualityMetrics).map((item) => (
+
                       <div key={item.key}>
+
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, gap: 12 }}>
+
                           <Space size={4}>
+
                             <span>{item.label}</span>
+
                             <Tooltip title={item.tip}>
+
                               <InfoCircleOutlined style={{ color: '#8c8c8c' }} />
+
                             </Tooltip>
+
                           </Space>
+
                           <span style={{ color: '#595959' }}>{item.value}%</span>
+
                         </div>
+
                         <Progress percent={item.value} showInfo={false} size="small" strokeColor={getMetricStrokeColor(item.value)} />
+
                       </div>
+
                     ))}
+
                   </Space>
+
                 </Card>
+
               </>
+
             ) : (
+
               <Alert
+
                 type="info"
+
                 showIcon
-                message="暂无评分数据"
-                description="该章节还没有可用的AI生成评分。完成一次AI生成后会自动显示。"
+
+                message="闂佸搫妫楅崐鐟拔涢妶鍥ㄥ珰闁告洦鍋勯悗濠氭煛娴ｅ搫顣肩€?"
+
+                description="闁荤姴娲㈤崕鎶芥偟閻戣姤鍤嶉柛灞剧箘缁犻攱绻涚仦绋垮⒉婵犫偓娓氣偓瀹曪綁顢涘鍕闂佹眹鍔岄崵鍦涢梺姹囧灮閸犳劙宕瑰杈ㄥ珰闁告洦鍋勯悗濠氭煏閸℃鈧悂鎮鹃鍕闁归偊浜為杈ㄧ箾閸♀晜鎯廔闂佹眹鍨婚崰鎰板垂濮樿泛瑙﹂幖瀛樼箘缁愭鏌ゆ總澶夌盎濠殿喒鏅犲浼村礈瑜嬫禒娑㈡煏?"
+
               />
+
             )}
+
           </Card>
 
-          <Form.Item label="章节内容" name="content">
+
+
+          <Form.Item label="缂備焦姊绘慨鐐繆椤撱垹绀冮柛娑卞弾閸? name="content"">
+
             <TextArea
+
               ref={contentTextAreaRef}
+
               rows={isMobile ? 12 : 20}
-              placeholder="开始写作..."
+
+              placeholder="閻庢鍠掗崑鎾斥攽椤旂⒈鍎忛柛鐔告尰閹?.."
+
               style={{ fontFamily: 'monospace', fontSize: isMobile ? 12 : 14 }}
+
             />
+
           </Form.Item>
 
-          {/* 局部重写浮动工具栏 */}
+
+
+          {/* 闁诲繒鍋愰崑鎾绘⒑椤斿搫濮傞柛锝嗘倐瀹曟ê鈻庨幇顖滄闂佸憡鏌ｉ崝灞惧閹版澘绀傞梺鍨儑閸?*/}
+
           <div data-partial-regenerate-toolbar>
+
             <PartialRegenerateToolbar
+
               visible={partialRegenerateToolbarVisible}
+
               position={partialRegenerateToolbarPosition}
+
               selectedText={selectedTextForRegenerate}
+
               onRegenerate={handleOpenPartialRegenerate}
+
             />
+
           </div>
 
+
+
           <Form.Item>
+
             <Space style={{ width: '100%', justifyContent: 'flex-end', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center' }}>
+
               <Space style={{ width: isMobile ? '100%' : 'auto' }}>
+
                 <Button
+
                   onClick={() => {
+
                     setChapterQualityMetrics(null);
+
                     setChapterQualityProfileSummary(null);
+
                     setChapterQualityGeneratedAt(null);
+
                     setIsEditorOpen(false);
+
                   }}
+
                   block={isMobile}
+
                 >
-                  取消
+
+                  闂佸憡鐟﹂悧妤冪矓?
+
                 </Button>
+
                 <Button
+
                   type="primary"
+
                   htmlType="submit"
+
                   block={isMobile}
+
                 >
-                  保存章节
+
+                  婵烇絽娲︾换鍌炴偤閵娧呭崥闁绘ê鎼灐
+
                 </Button>
+
               </Space>
+
             </Space>
+
           </Form.Item>
+
         </Form>
+
       </Modal>
 
-      {analysisChapterId && (
-        <ChapterAnalysis
-          chapterId={analysisChapterId}
-          visible={analysisVisible}
-          onClose={() => {
-            setAnalysisVisible(false);
 
-            // 刷新章节列表以显示最新内容
+
+      {analysisChapterId ? (
+
+        <Suspense fallback={null}>
+
+          <LazyChapterAnalysis
+
+            chapterId={analysisChapterId}
+
+            visible={analysisVisible}
+
+            onClose={() => {
+
+              setAnalysisVisible(false);
+
+
+
+            // 闂佸憡甯￠弨閬嶅蓟婵犲嫮鍗氶柣妯烘惈铻￠梺鍛婂笚椤ㄥ濡撮崘鈺冾浄闁靛闄勯埢鏃傜磼閳ь剟鎮滃Ο璁崇帛闂佸搫鍊瑰姗€宕€电硶鍋?
+
             refreshChapters();
 
-            // 刷新项目信息以更新字数统计
+
+
+            // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽敂鐣屽嚱闂佸搫鍊瑰姗€鎮鸿瀵偊骞嶉鎯х厷闁?
+
             if (currentProject) {
+
               projectApi.getProject(currentProject.id)
+
                 .then(updatedProject => {
+
                   setCurrentProject(updatedProject);
+
                 })
+
                 .catch(error => {
-                  console.error('刷新项目信息失败:', error);
+
+                  console.error('闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺瀵板嫭娼忛銉?', error);
+
                 });
+
             }
 
-            // 延迟500ms后刷新该章节的分析状态，给后端足够时间完成数据库写入
+
+
+            // 閻庣偣鍊栭崕鑲╂崲?00ms闂佸憡鑹炬鎼佸春濞戙垹妫橀柟宄扮焾閸ゅ绱掗弮鍌毿┑鈽嗗弮閹啴宕熼銏⑩偓濠氭煛鐎ｎ偄濮夊┑顔芥倐楠炩偓濞撴艾锕︾粈澶岀磽娴ｅ湱鎳冮柟顔筋殘缁晠顢涘┑鍡楁灆婵犮垹澧庨崰鎰渻閸岀偞鈷掗柡澶嬪灩閺嗘岸鏌熺€涙ê濮堥柡鍡欏枛楠炴垿顢欓懖鈺傜殤闂佸憡鍔栭悷銉╁矗?
+
             if (analysisChapterId) {
+
               const chapterIdToRefresh = analysisChapterId;
 
+
+
               setTimeout(() => {
+
                 refreshChapterAnalysisTask(chapterIdToRefresh)
+
                   .catch(error => {
-                    console.error('刷新分析状态失败:', error);
-                    // 如果查询失败，再延迟尝试一次
+
+                    console.error('闂佸憡甯￠弨閬嶅蓟婵犲洤绀嗛柛鈩冾焽閳ь兛绮欓幃鈺呮嚋绾版ê浜惧ù锝嗘偠娴滃ジ鎮?', error);
+
+                    // 婵犵鈧啿鈧綊鎮樻径鎰摕闁靛鐓堥崵鍕熆閹壆绨块悷娆欑畵閺佸秶浠﹂挊澶嬫珒閻庣偣鍊栭崕鑲╂崲濠婂懍鐒婃繝闈涳功濡茬鈽夐幘顖氫壕濠?
+
                     setTimeout(() => {
+
                       refreshChapterAnalysisTask(chapterIdToRefresh)
-                        .catch(err => console.error('第二次刷新失败:', err));
+
+                        .catch(err => console.error('缂備焦顨忛崗娑氳姳閳轰讲鏋庨柍銉ュ暱閻撴洟鏌￠崒娑欑凡闁靛洦鍨归幏?', err));
+
                     }, 1000);
+
                   });
+
               }, 500);
+
             }
 
+
+
             setAnalysisChapterId(null);
+
           }}
-        />
-      )}
 
-      {/* 批量生成对话框 */}
+          />
+
+        </Suspense>
+
+      ) : null}
+
+
+
+      {/* 闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭鎮楅悽娈挎敯闁伙箒妫勯々?*/}
+
       <Modal
+
         title={
+
           <Space>
+
             <RocketOutlined style={{ color: '#722ed1' }} />
-            <span>批量生成章节内容</span>
+
+            <span>闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洨绱掗弮鍌毿┑鈽嗗弮瀹曟﹢宕ㄩ褍鏅?/span>
+
           </Space>
+
         }
+
         open={batchGenerateVisible}
+
         onCancel={() => setBatchGenerateVisible(false)}
+
         footer={!batchGenerating ? (
+
           <Space style={{ width: '100%', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+
             <Button onClick={() => setBatchGenerateVisible(false)}>
-              取消
+
+              闂佸憡鐟﹂悧妤冪矓?
+
             </Button>
+
             <Button type="primary" icon={<RocketOutlined />} onClick={() => batchForm.submit()}>
-              开始批量生成
+
+              閻庢鍠掗崑鎾斥攽椤旂⒈鍎愬瑙勫浮閺屽矁绠涢弴鐔告闂?
+
             </Button>
+
           </Space>
+
         ) : null}
+
         width={isMobile ? 'calc(100vw - 32px)' : 700}
+
         centered
+
         closable
+
         maskClosable
+
         style={isMobile ? {
+
           maxWidth: 'calc(100vw - 32px)',
+
           margin: '0 auto',
+
           padding: '0 16px'
+
         } : undefined}
+
         styles={{
+
           body: {
+
             maxHeight: isMobile ? 'calc(100vh - 200px)' : 'calc(100vh - 260px)',
+
             overflowY: 'auto',
+
             overflowX: 'hidden'
+
           }
+
         }}
+
       >
+
         {!batchGenerating ? (
+
           <Form
+
             form={batchForm}
+
             layout="vertical"
+
             onFinish={handleBatchGenerate}
+
             initialValues={{
+
               startChapterNumber: sortedChapters.find(ch => !ch.content || ch.content.trim() === '')?.chapter_number || 1,
+
               count: 5,
+
               enableAnalysis: true,
+
               styleId: selectedStyleId,
+
               targetWordCount: getCachedWordCount(),
+
               model: selectedModel,
+
             }}
+
           >
+
             <Alert
-              message="批量生成说明：严格按序生成 | 统一风格字数 | 任一失败则终止"
+
+              message="闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭鎮归崶褏鎽犳俊鍙夊灴閺佸秴顫濋銏㈣埞闂佸搫绉撮崥瀣偓鍨矋閹棁绠涢弴鐔告闂?| 缂傚倷鑳堕崰宥囩博鐎涙﹩妲归幖娣灮婢规劙鎮楀☉娆樻畷闁?| 婵炲濮鹃濠勭博鐎涙ê绶為弶鍫亯琚濋梺鍛婂笚閻熝呭垝閹炬剚娼?"
+
               type="info"
+
               showIcon
+
               style={{ marginBottom: 16 }}
+
             />
 
-            {/* 第一行：起始章节 + 生成数量 */}
+
+
+            {/* 缂備焦顨忛崗娑氱博鐎靛憡鍋樼€光偓鐎ｎ剛鐛ラ柣鐘欏啫妲绘い顐ｅ姉缁晠鎮╅崫鍕?+ 闂佹眹鍨婚崰鎰板垂濮樿泛鏋佸ù鍏兼綑濞?*/}
+
             <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 0 : 16 }}>
+
               <Form.Item
-                label="起始章节"
+
+                label="闁荤姍鍐ㄦЩ妞ゎ偅鍔楃划鈺呮偐閸濆嫀?"
+
                 name="startChapterNumber"
-                rules={[{ required: true, message: '请选择' }]}
+
+                rules={[{ required: true, message: '闁荤姴娲ㄩ崗姗€鍩€椤掆偓椤︽壆鈧? }]'}
+
                 style={{ flex: 1, marginBottom: 12 }}
+
               >
-                <Select placeholder="选择起始章节">
-                  {sortedChapters
-                    .filter(ch => !ch.content || ch.content.trim() === '')
-                    .filter(ch => canGenerateChapter(ch))
-                    .map(ch => (
-                      <Select.Option key={ch.id} value={ch.chapter_number}>
-                        第{ch.chapter_number}章：{ch.title}
-                      </Select.Option>
-                    ))}
+
+                <Select placeholder="闂備緡鍋勯ˇ鎵偓姘ュ妿閹秆冪暋闁附缍忕紓浣规⒒婵偓淇?">
+
+                  {batchStartChapterOptions.map(ch => (
+
+                    <Select.Option key={ch.id} value={ch.chapter_number}>
+
+                      {'\u7b2c'}{ch.chapter_number}{'\u7ae0\uff1a'}{ch.title}
+
+                    </Select.Option>
+
+                  ))}
+
                 </Select>
+
               </Form.Item>
 
+
+
               <Form.Item
-                label="生成数量"
+
+                label="闂佹眹鍨婚崰鎰板垂濮樿泛鏋佸ù鍏兼綑濞?"
+
                 name="count"
-                rules={[{ required: true, message: '请选择' }]}
+
+                rules={[{ required: true, message: '闁荤姴娲ㄩ崗姗€鍩€椤掆偓椤︽壆鈧? }]'}
+
                 style={{ marginBottom: 12 }}
+
               >
+
                 <Radio.Group buttonStyle="solid" size={isMobile ? 'small' : 'middle'}>
-                  <Radio.Button value={5}>5章</Radio.Button>
-                  <Radio.Button value={10}>10章</Radio.Button>
-                  <Radio.Button value={15}>15章</Radio.Button>
-                  <Radio.Button value={20}>20章</Radio.Button>
+
+                  <Radio.Button value={5}>5缂?/Radio.Button>
+
+                  <Radio.Button value={10}>10缂?/Radio.Button>
+
+                  <Radio.Button value={15}>15缂?/Radio.Button>
+
+                  <Radio.Button value={20}>20缂?/Radio.Button>
+
                 </Radio.Group>
+
               </Form.Item>
+
             </div>
 
-            {/* 第二行：写作风格 + 目标字数 */}
+
+
+            {/* 缂備焦顨忛崗娑氳姳閳哄啯鍋樼€光偓鐎ｎ剛鐛ラ梺鍛婂姈閻熴倗绱為弮鈧ˇ鐗堟償閵忋垹顥?+ 闂佺儵鏅╅崰妤呮偉閿濆洠鍋撳☉娆樻畷闁?*/}
+
             <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 0 : 16 }}>
               <Form.Item
-                label="写作风格"
+                label="闂佸憡鍔栭悷銈囩礊閺冣偓椤︾増鎯旈姀銏狀棔"
                 name="styleId"
-                rules={[{ required: true, message: '请选择' }]}
+                rules={[{ required: true, message: '闁荤姴娲ㄩ崗姗€鍩€椤掆偓椤︽壆鈧? }]'}
+
                 style={{ flex: 1, marginBottom: 12 }}
+
               >
-                <Select placeholder="请选择写作风格" showSearch optionFilterProp="children">
+
+                <Select placeholder="闁荤姴娲ㄩ崗姗€鍩€椤掆偓椤︽壆鈧哎鍔戝畷妯衡枎鎼达絿鈻曟俊鐐差儏鐎涒晠鎮? showSearch optionFilterProp="children"">
+
                   {writingStyles.map(style => (
+
                     <Select.Option key={style.id} value={style.id}>
-                      {style.name}{style.is_default && ' (默认)'}
+
+                      {style.name}{style.is_default && ' (婵帗绋掗…鍫ヮ敇?'}
+
                     </Select.Option>
+
                   ))}
+
                 </Select>
+
               </Form.Item>
 
+
+
               <Form.Item
-                label="目标字数"
+
+                label="闂佺儵鏅╅崰妤呮偉閿濆洠鍋撳☉娆樻畷闁?"
+
                 name="targetWordCount"
-                rules={[{ required: true, message: '请设置' }]}
-                tooltip="修改后自动记住"
+
+                rules={[{ required: true, message: '闁荤姴娲ㄩ弻澶愵敊閺囩姷纾? }]'}
+
+                tooltip="婵烇絽娴傞崰妤呭极婵傜瑙﹂幖娣€曞▓浼存煕閺傝濮€妞ゆ柨娲﹂幏?"
+
                 style={{ flex: 1, marginBottom: 12 }}
+
               >
+
                 <InputNumber
+
                   min={500}
+
                   max={10000}
+
                   step={100}
+
                   style={{ width: '100%' }}
-                  formatter={(value) => `${value} 字`}
-                  parser={(value) => parseInt(value?.replace(' 字', '') || '0', 10) as unknown as 500}
+
+                  formatter={(value) => `${value} 闁诲孩绋掗。纭?
+
+                  parser={(value) => parseInt(value?.replace(' 闁?, '') || '0', 10) as unknown as 500'}
+
                   onChange={(value) => {
+
                     if (value) {
+
                       setCachedWordCount(value);
+
                     }
+
                   }}
+
                 />
               </Form.Item>
             </div>
 
-            {/* 第三行：AI模型 + 后台分析 */}
-            <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 0 : 16 }}>
-              <Form.Item
-                label="AI模型"
-                tooltip="不选则使用默认模型"
-                style={{ flex: 1, marginBottom: 12 }}
+            <Form.Item
+              label="闂佽鍨伴幊鎾翠繆椤撱垺鈷撻柤鍛婎問閸?"
+              tooltip="闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭鏌￠崘銊ヮ暢缂侇喚鍎ょ粙澶愬焵椤掆偓椤曪絾銈︾捄銊︻啀閻熸粎澧楅幐鍛婃櫠閻樼數鍗氶柣妯烘惈铻＄紓鍌氭储閸婃牕煤閸ф纾婚煫鍥ㄦ尭缁叉椽鎮橀悙瀛樼８闁逞屽厸缁舵岸鎮甸纰辩劷妞ゆ棁娉曠粻鐑芥煛閸曢潧鐏犳繛鍙夌墵瀵?"
+              style={{ marginBottom: 12 }}
+            >
+              <Select
+                placeholder="闂佸憡鐟崹杈ㄦ櫠濠婂牆绀夐柕濠忕畱閻﹀綊鎮楃憴鍕暡缂佽鲸绻冪粙濠囨偄瀹勬媽顔夐柣鐘辫閺呮繈鏌堢€靛摜纾奸柣鏃傤焾閻﹀鎮硅閸㈡煡锝為幇顔惧崥闁绘ê鎼灐闂佸搫鎳樼紓姘跺礂濮椻偓瀹曟岸濡堕崱妯煎姺"
+                value={batchSelectedPlotStage}
+                onChange={setBatchSelectedPlotStage}
+                allowClear
+                optionLabelProp="label"
               >
-                <Select
-                  placeholder={batchSelectedModel ? `默认: ${availableModels.find(m => m.value === batchSelectedModel)?.label || batchSelectedModel}` : "使用默认模型"}
-                  value={batchSelectedModel}
-                  onChange={setBatchSelectedModel}
-                  allowClear
-                  showSearch
-                  optionFilterProp="label"
+                {CREATION_PLOT_STAGE_OPTIONS.map((option) => (
+                  <Select.Option key={option.value} value={option.value} label={option.label}>
+                    <div>{option.label}</div>
+                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
+                  </Select.Option>
+                ))}
+              </Select>
+              <Space size={8} style={{ marginTop: 8 }}>
+                <Button size="small" onClick={applyInferredBatchPlotStage}>闂佸搫鎳樼紓姘跺礂濮椻偓瀹曟岸濡堕崱妯煎姺闂傚倸鍟抽崺鏍敊?/Button>
+                {batchSelectedPlotStage && (
+                  <span style={{ color: 'var(--color-success)', fontSize: 12 }}>
+                    闂?{CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === batchSelectedPlotStage)?.label || batchSelectedPlotStage}
+                  </span>
+                )}
+              </Space>
+            </Form.Item>
+
+            <Card
+              size="small"
+              title="闂佸憡甯楃粙鎰礊閺冣偓閿涙劙宕熼鍛櫗"
+              style={{ marginBottom: 12 }}
+            >
+              <Space wrap>
+                {CREATION_PRESETS.map((preset) => (
+                  <Button
+                    key={preset.id}
+                    type={activeBatchCreationPreset?.id === preset.id ? 'primary' : 'default'}
+                    onClick={() => applyBatchCreationPreset(preset.id)}
+                  >
+                    {preset.label}
+                  </Button>
+                ))}
+                <Button
+                  onClick={() => {
+                    setBatchSelectedCreativeMode(undefined);
+                    setBatchSelectedStoryFocus(undefined);
+                  }}
                 >
-                  {availableModels.map(model => (
-                    <Select.Option key={model.value} value={model.value} label={model.label}>
-                      {model.label}
-                    </Select.Option>
-                  ))}
-                </Select>
-              </Form.Item>
+                  {"濠电偞鎸搁幊鎰板煘閺嶎煉绱ｉ柛鏇ㄥ櫘閸?"}
+                </Button>
+              </Space>
 
-              <Form.Item
-                label="后台分析"
-                name="enableAnalysis"
-                tooltip="正文完成后再后台分析，不阻塞章节生成"
-                style={{ marginBottom: 12 }}
-              >
-                <Radio.Group>
-                  <Radio value={true}>
-                    <span style={{ fontSize: 12, color: '#52c41a' }}>✓ 生成完成后自动后台分析</span>
-                  </Radio>
-                  <Radio value={false}>
-                    <span style={{ fontSize: 12, color: '#8c8c8c' }}>仅生成正文（稍后手动分析）</span>
-                  </Radio>
-                </Radio.Group>
-              </Form.Item>
-            </div>
-          </Form>
-        ) : (
-          <div>
-            <Alert
-              message="温馨提示"
-              description={
-                <ul style={{ margin: '8px 0 0 0', paddingLeft: 20 }}>
-                  <li>批量生成需要一定时间，可以切换到其他页面</li>
-                  <li>关闭页面后重新打开，会自动恢复任务进度</li>
-                  <li>可以随时点击"取消任务"按钮中止生成</li>
-                  {batchProgress?.estimated_time_minutes && batchProgress.completed === 0 && (
-                    <li>⏱️ 预计耗时：约 {batchProgress.estimated_time_minutes} 分钟</li>
-                  )}
-                  {batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined && (
-                    <li>
-                      📊 平均剧情评分：综合 {batchProgress.quality_metrics_summary.avg_overall_score}
-                      （冲突链 {batchProgress.quality_metrics_summary.avg_conflict_chain_hit_rate}% /
-                      规则落地 {batchProgress.quality_metrics_summary.avg_rule_grounding_hit_rate}% /
-                      开场钩子 {batchProgress.quality_metrics_summary.avg_opening_hook_rate ?? 0}% /
-                      爽点链 {batchProgress.quality_metrics_summary.avg_payoff_chain_rate ?? 0}% /
-                      章尾钩子 {batchProgress.quality_metrics_summary.avg_cliffhanger_rate ?? 0}%）
-                    </li>
-                  )}
-                </ul>
-              }
-              type="info"
-              showIcon
-              style={{ marginBottom: 16 }}
-            />
+              {activeBatchCreationPreset && (
+                <div style={{ marginTop: 12, color: 'var(--color-text-secondary)' }}>
+                  {"閻熸粎澧楅幐鍛婃櫠閻樼绱ｉ柛鏇ㄥ櫘閸熷酣鏌?}<strong>{activeBatchCreationPreset.label}</strong>?{activeBatchCreationPreset.description"}
+                </div>
+              )}
 
-            {batchProgress?.quality_profile_summary && getQualityProfileDisplayItems(batchProgress.quality_profile_summary).length > 0 && (
-              <Card size="small" title="质量链已生效" style={{ marginBottom: 16 }}>
-                <Alert
-                  type="success"
-                  showIcon
-                  style={{ marginBottom: 12 }}
-                  message="本批次已应用统一质量画像"
-                  description="这里只展示后端返回的摘要说明，不改变批量生成、风格选择与 deferred analysis 编排。"
-                />
-                <Descriptions column={1} size="small">
-                  {getQualityProfileDisplayItems(batchProgress.quality_profile_summary).map((item) => (
-                    <Descriptions.Item key={item.key} label={item.label}>
-                      {item.description}
-                    </Descriptions.Item>
+              {batchScoreDrivenRecommendationCard && (
+                <Card size="small" title={batchScoreDrivenRecommendationCard.title} style={{ marginTop: 12 }}>
+                  <Space direction="vertical" size={10} style={{ display: 'flex' }}>
+                    <Alert
+                      type="info"
+                      showIcon
+                      message={batchScoreDrivenRecommendationCard.summary}
+                      description={batchScoreDrivenRecommendationCard.applyHint}
+                    />
+
+                    {batchScoreDrivenRecommendationCard.recommendedPresetLabel && (
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: 6 }}>{"闂佽浜介崝蹇撶暦濡紮绱ｉ柛鏇ㄥ櫘閸?}</div">
+                        <Space wrap size={[8, 8]}>
+                          <Tag color={batchScoreDrivenRecommendationCard.recommendedPresetId === activeBatchCreationPreset?.id ? 'blue' : 'processing'}>
+                            {batchScoreDrivenRecommendationCard.recommendedPresetLabel}
+                          </Tag>
+                          {batchScoreDrivenRecommendationCard.recommendedPresetReason && (
+                            <span style={{ color: 'var(--color-text-secondary)' }}>
+                              {batchScoreDrivenRecommendationCard.recommendedPresetReason}
+                            </span>
+                          )}
+                        </Space>
+                      </div>
+                    )}
+
+                    <div>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>{"闂佽浜介崝蹇撶暦濮椻偓濮婂ジ鎳滃▓鍨杸"}</div>
+                      <Space wrap size={[8, 8]}>
+                        <Tag color={batchScoreDrivenRecommendationCard.recommendedStage === batchSelectedPlotStage ? 'blue' : 'purple'}>
+                          {batchScoreDrivenRecommendationCard.recommendedStageLabel}
+                        </Tag>
+                        <span style={{ color: 'var(--color-text-secondary)' }}>
+                          {batchScoreDrivenRecommendationCard.stageReason}
+                        </span>
+                      </Space>
+                    </div>
+
+                    {batchScoreDrivenRecommendationCard.alternatives.length > 0 && (
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: 6 }}>{"婵犮垼娉涘ú顓㈠焵椤掆偓椤︾増鏅堕敃鈧埢?}</div">
+                        <Space direction="vertical" size={4} style={{ display: 'flex' }}>
+                          {batchScoreDrivenRecommendationCard.alternatives.map((item) => (
+                            <div key={item.id} style={{ color: 'var(--color-text-secondary)' }}>
+                              - <strong>{item.label}</strong>?{item.reason}
+                            </div>
+                          ))}
+                        </Space>
+                      </div>
+                    )}
+
+                    <Space wrap>
+                      {batchScoreDrivenRecommendationCard.recommendedPresetId && (
+                        <Button size="small" onClick={() => applyBatchCreationPreset(batchScoreDrivenRecommendationCard.recommendedPresetId!)}>
+                          {"闁圭厧鐡ㄥ濠氬极閵堝绠抽柕濞垮妼缁€鍐ㄎ涢弶鍨伂妞?"}
+                        </Button>
+                      )}
+                      {batchScoreDrivenRecommendationCard.recommendedStage && (
+                        <Button size="small" onClick={() => setBatchSelectedPlotStage(batchScoreDrivenRecommendationCard.recommendedStage)}>
+                          {"闁圭厧鐡ㄥ濠氬极閵堝绠抽柕濞垮妼缁€鍐⒒閸愵厼鐓愭い?"}
+                        </Button>
+                      )}
+                      {(batchScoreDrivenRecommendationCard.recommendedPresetId || batchScoreDrivenRecommendationCard.recommendedStage) && (
+                        <Button
+                          type="primary"
+                          size="small"
+                          onClick={() => {
+                            if (batchScoreDrivenRecommendationCard.recommendedPresetId) {
+                              applyBatchCreationPreset(batchScoreDrivenRecommendationCard.recommendedPresetId!);
+                            }
+                            if (batchScoreDrivenRecommendationCard.recommendedStage) {
+                              setBatchSelectedPlotStage(batchScoreDrivenRecommendationCard.recommendedStage);
+                            }
+                          }}
+                        >
+                          {"婵炴垶鎸撮崑鎾绘⒑濞嗘儳鏋涚紒銊︾叀閹粙濡搁敃鈧懙褰掓煠?"}
+                        </Button>
+                      )}
+                    </Space>
+                  </Space>
+                </Card>
+              )}
+
+              {batchStoryCreationControlCard && (
+                <Card
+                  size="small"
+                  title={batchStoryCreationControlCard.title}
+                  extra={(
+                    <Space size={8}>
+                      <Tag color={isBatchStoryCreationControlCustomized ? 'purple' : 'blue'}>
+                        {isBatchStoryCreationControlCustomized ? '婵炲瓨绮岄幖顐ｅ閹邦喚纾介柡宥冨妼缁? : '缂備緡鍨靛畷鐢靛垝濞差亜绠烘俊顖涱儥濞?}
+                      </Tag>
+                      <Button
+                        size="small"
+                        type="link"
+                        onClick={() => setBatchStoryCreationBriefDraft(batchSystemStoryCreationBrief)}
+                        disabled={!batchSystemStoryCreationBrief || batchStoryCreationBriefDraft === batchSystemStoryCreationBrief}
+                      >
+                        闂佽鍘归崹褰捤囬懠顒€瀵查柤濮愬€楅崺鐘绘煙閼恒儺鐒炬い?
+                      </Button>
+                    </Space>
+                  )}
+                  style={{ marginTop: 12 }}
+                >
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message={batchStoryCreationControlCard.summary}
+                    description={batchStoryCreationControlCard.directive}
+                  />
+                  <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>{"闂佸憡鐟崹宕囨椤忓懏缍囬柟瀵稿仦閺嗗牓鏌涜箛瀣姕闁规彃纾幉?}</div">
+                      <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginBottom: 8 }}>
+                        {"婵炶揪绲挎慨纾嬨亹閸欏顩烽柕澶涚畱鎯熺紓渚囧灥瀹曠數鍒掗崫鍕靛殘濡わ附顑欓崬鎾煛閳ь剛鎲撮崟顐や海闂佸搫娲﹂幐鎶藉焵椤掆偓閸婃悂骞冩惔銊ュ珘妞ゆ帒鍟伴弸鍌炴煙闂堟稓绉洪柛锝嗘そ閹粙鎮㈢粙璺ㄤ海闂佹眹鍔岀€氼垱淇婇鐔洪檮闊洤娴烽悷銏ゆ煟閳哄﹤鏋熼柣鏍电秮閺佸秶浠﹂悙顒佸濠电偛妫岄埀顒€寮跺畷鏌ユ煕閺傝　鍋撳畷鍥啈婵炴潙鍚嬮敋闁告ɑ绋戦埢鏃堝Ω閵夈儱姹查柡澶嗘櫆閻熲晠宕抽悜鑺ュ剭闁告洦鍓氶崰鍛存偡閺囨岸妾烽柍?"}
+                      </div>
+                      <TextArea
+                        value={batchStoryCreationBriefDraft}
+                        onChange={(event) => setBatchStoryCreationBriefDraft(event.target.value)}
+                        autoSize={{ minRows: 4, maxRows: 8 }}
+                        maxLength={600}
+                        showCount
+                        placeholder="闂佸憡鐟崹杈┾偓鍨矒瀵敻顢楅崘顏呯€梺褰掓涧缂嶅﹪宕冲ú顏呭剮妞ゆ梻鏅崹鑲╃磽娴ｅ牆鎳愰弫鍓х磽閸屾稓澧悽顖涙崌閺佸秴顫濋崘鍙傛繂鈹戦崒姘辩疄闁逞屽厸閻掞妇鏁憴鍕氦婵炴垶鑹惧▓鐘绘煏閸℃洘顦风紒缁樺哺閹儳鈻庨幘鎵佸亾瀹ュ违濞撴埃鍋撳ù灏栨櫊瀹曟悂骞嬮悩韫寲闂佺偨鍎婚懙褰掑焵?"
+                      />
+                      <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
+                        {isBatchStoryCreationBriefCustomized
+                          ? '閻熸粎澧楅幐鍛婃櫠閻樺磭鈻旈弶鐐靛閻晫鈧鎮堕崕宕囨椤忓牆绠抽柟鐑樻煥椤ｅジ鏌￠崼顐㈠⒕缂佽鲸绻堥獮宥堛亹閹烘垶顏￠梺姹囧灮閸犳劙宕瑰璺虹睄闁哄牏鏁哥粣妤呮偡閺囩偞顥犳繛鎻掞功閸栨牠鎳￠妶鍥х厷婵帗绋掗…鍫ヮ敇婵犳艾绠烘俊顖涱儥濞诧綁鏌?'
+                          : '閻熸粎澧楅幐鍛婃櫠閻樺磭鈻旈柧蹇撶秺閸忓洨绱撴担鍝勬灆闁搞倖绮撳畷婵嬪Ω閿旇棄鏋€闁荤喐娲戠欢銈囨濠靛鐭楁い鏍ㄧ矋缁绢垶鏌熼幁鎺戝姎闁诡垰閰ｅ畷婵嬪Ω閿曗偓椤ユ姊洪幓鎺旂闁轰焦鎹囬獮瀣箛閸撲胶顦繛鎴炴⒒閸犲氦銇愰懠顒傜＜鐟滃繘鎮界拠宸殫妞ゆ棁娉曞▓鍫曟煏?'}
+                      </div>
+                    </div>
+                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+                        <div>
+                          <div style={{ fontWeight: 600, marginBottom: 4 }}>{"缂傚倷鐒﹂幐濠氭倵椤栫偛绀岄柡宓啰浠繛杈剧稻缁秷銇愭担铏规／?}</div">
+                          <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
+                            {"闂佺娉涢敃銊ф崲閺嶃劎鈻旈柍褜鍓氬顏堫敊閸撗冨▏闂佺厧鎼崐濠氬礂閵忋倕绠柛鈩兠悘?5 婵炴垶鎼╂禍锝嗕繆椤撱垹绠€广儱妫楅～澶愭煙闂堟侗鍎滅紒杈ㄧ箞楠炲秷銇愰幒鎴烆仭闂佹眹鍨婚崰鎰板垂濮樿泛绫嶉柡鍫㈡暩缁愭鏌ゆ總澶夌盎濠殿喒鏅滅粙澶嬫償閳垛晛浜剧紓浣姑禒姗€鏌熼懞銉劸妞も晪闄勭粙澶愬焵椤掑倹灏庨梺鍨儐閺嗗牓鏌涜箛瀣姌闁?"}
+                          </div>
+                        </div>
+                        <Button
+                          size="small"
+                          type="link"
+                          onClick={() => setBatchStoryBeatPlannerDraft(batchSystemStoryBeatPlanner)}
+                          disabled={
+                            isStoryBeatPlannerDraftEmpty(batchSystemStoryBeatPlanner)
+                            || areStoryBeatPlannerDraftsEqual(batchStoryBeatPlannerDraft, batchSystemStoryBeatPlanner)
+                          }
+                        >
+                          闂佽鍘归崹褰捤囬懠顒€瀵查柤濮愬€楅崺鐘电磽閸屾稓澧悽?
+                        </Button>
+                      </div>
+                      <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                        {STORY_BEAT_PLANNER_FIELDS.map((field) => (
+                          <div key={field.key}>
+                            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{field.label}</div>
+                            <Input
+                              value={batchStoryBeatPlannerDraft[field.key]}
+                              onChange={(event) => setBatchStoryBeatPlannerDraft((prev) => ({
+                                ...prev,
+                                [field.key]: event.target.value,
+                              }))}
+                              placeholder={field.placeholder}
+                              maxLength={120}
+                            />
+                          </div>
+                        ))}
+                      </Space>
+                      <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
+                        {isBatchStoryBeatPlannerCustomized
+                          ? '閻熸粎澧楅幐鍛婃櫠閻樼數纾奸柟鎯ь嚟閳ь剦鍨跺畷鐘诲冀閵娿儳鍊掔紓浣哄亾瑜板啴宕欓敍鍕仏妞ゆ劏鍓濋惇鐣屸偓瑙勬偠閸庢煡寮總绋跨婵炲棙鐟х粈澶愭煙闂堟稓绉洪柛锝嗘そ閹粙鎮㈢粙璺ㄤ海闂佸搫鍟﹢鍦閻楀牏鈻旈幖绮规噰閸嬫挾绱掑Ο杞扮帛闂佺濮ら…鍫ャ€呴敂鐣屸枖闁逞屽墰閹秆囨煥鐎ｎ偅娈橀梺绋跨箞閸庮垶鍩€?'
+                          : '閻熸粎澧楅幐鍛婃櫠閻樼數纾奸柟鎯ь嚟閳ь剦鍨跺畷鐘诲冀閵娿儳鍊掔紓浣瑰劤瀵泛顭囬悽鍛婂殜妞ゅ繐妫濋崗鍥╃磽娴ｅ搫鏋庣紓鍌涙尵閹峰顢氶崱娆戭槷闂佸憡鐟崹鎶藉箣妞嬪海纾兼い鎾跺仒缁ㄦ娊鎮圭€ｎ亜鏆為柛銊﹀哺瀵鈧數娲婇弮鍌楀亾鐟欏嫭鐨戞繛鍫熷灩缁晠鎮╅崫鍕庢繄绱撻崶銉モ偓鏍暜鐟欏嫭浜ゆ繛鎴炵矊铻￠梺鐟板槻缁夋煡鍩€?'}
+                      </div>
+                    </div>
+                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+                        <div>
+                          <div style={{ fontWeight: 600, marginBottom: 4 }}>{"闂侀潻濡囬崕銈呪枍濞嗘垳娌柡鍥╁仧绾剧粯绻涢幘铏櫣鐎?}</div">
+                          <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
+                            {"闂佺娉涢敃锕傛偟閻戣姤鍤嶉柛灞剧矊閸欏啴鏌ら崫鍕偓瑙勫垔鐠恒劎纾肩憸蹇涙偨閼姐倗纾奸柛鈩冾殔椤曆囨煙?4 婵炴垶鎼╂禍婊冣攦閳ь剟鏌￠崪浣哥仭閻㈩垵顫夊璇测槈濞嗘ê鏂€闂佹寧绋戦懟顖涙償濠婂牆绀夐柍鍝勫€搁ˉ妤呮⒑閹绘帞绠抽柡浣规崌楠炲骞囬鍡欘啍闂佸綊鏅插ù鍥ㄤ繆椤撶喓闄勯煫鍥ㄦ皑缁犲墽绱撴笟鍥у箲闁?"}
+                          </div>
+                        </div>
+                        <Button
+                          size="small"
+                          type="link"
+                          onClick={() => setBatchStorySceneOutlineDraft(batchSuggestedStorySceneOutline)}
+                          disabled={
+                            isStorySceneOutlineDraftEmpty(batchSuggestedStorySceneOutline)
+                            || areStorySceneOutlineDraftsEqual(batchStorySceneOutlineDraft, batchSuggestedStorySceneOutline)
+                          }
+                        >
+                          闂佸湱顭堥ˇ顖滅礊鐎ｎ喖绀堢€广儱鐗嗚灐闂佺懓鍢茬粔褰掑闯缁嬫鍤?
+                        </Button>
+                      </div>
+                      <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                        {STORY_SCENE_OUTLINE_FIELDS.map((field) => (
+                          <div key={field.key}>
+                            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{field.label}</div>
+                            <TextArea
+                              value={batchStorySceneOutlineDraft[field.key]}
+                              onChange={(event) => setBatchStorySceneOutlineDraft((prev) => ({
+                                ...prev,
+                                [field.key]: event.target.value,
+                              }))}
+                              autoSize={{ minRows: 2, maxRows: 4 }}
+                              maxLength={220}
+                              showCount
+                              placeholder={field.placeholder}
+                            />
+                          </div>
+                        ))}
+                      </Space>
+                      <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
+                        {isBatchStorySceneOutlineCustomized
+                          ? '閻熸粎澧楅幐鍛婃櫠閻樿鎹堕柣鎴炆戦悵顖涚箾閹捐櫕鍣圭€规洜鍠庨蹇涙嚑妫版繃钑夋繛瀛樼矊閹碱偅瀵奸幇鏉跨哗闁荤喐婢橀弲鎼佹煥濞戞ɑ婀板瑙勫浮閺屽矁绠涢弴鐔告闂佺懓鐡ㄩ崝鏍ь渻閸屾稑顕辨慨姗嗗亞缁嬪﹤鈽夐幘璺哄妺婵炶尪娉曠槐鎺楀幢濞戣鲸姣夌紓渚囧枟鐢偛鈻撻幋锕€绀堢憸搴ㄥ磿韫囨稑绠抽柕濞垮妿缁犲鏌熺粙鎸庣煑闁硅翰鍊栫粙澶愬焵椤掑倹灏庨梺鍨儐閺嗗牓鏌涜箛瀣姌闁?'
+                          : '閻熸粎澧楅幐鍛婃櫠閻樿鎹堕柣鎴炆戦悵顖涚箾閹捐櫕鍣圭€规洜鍠愮€电厧顫濆畷鍥垛偓鈧梻鍌氭噹缁绘淇婇銏犵鐎广儱妫楃徊鍦磼閹规劕钄奸柛銈嗙矒瀹曟繈濡搁妸銈囩煉闂佸憡妫忛悡澶屾濠靛鍎庨柡澶嬪灥閻撳倸霉閿濆洤校濠⒀勭矒瀹曟繈濡搁敂鑺ユ瘔闂佸憡鍔栭悷銈囨嫻閻斿娼版い顐厴閸?'}
+                      </div>
+                    </div>
+                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
+                        <div>
+                          <div style={{ fontWeight: 600, marginBottom: 4 }}>{"闂佸搫鐗冮崑鎾剁磽娴ｅ摜澧涢柡浣哄仱瀹曟濡烽埡濠冩闁?}</div">
+                          <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
+                            {"婵炲濮伴崕鎵箔閸涙潙绀冮柛娑卞弾閸熷洤霉閸忓吋鐨戞繛鎻掓健楠炴帡濡烽敂鑺ユ畼闂佺绻堥崕宕囧垝閺夎鐔煎灳瀹曞洠鍋撻悜钘壩ラ柛灞剧☉椤ユ姊洪幓鎺旂闁轰焦鎹囬獮瀣箛椤掆偓椤ゅ懐鈧偣鍊濈紓姘额敊閸涙潙绀傞柛顐ゅ櫏濮婇箖鏌＄仦璇插姎闁活亝婢橀埢搴ㄥ焺閸愨敩锕傛煕濮橀箖妾紒鏂款煼瀵煡鎳滈钘変壕濞达綀顫夌瑧闂佸憡鐔粻鎴﹀吹椤撱垺鍋濆ù鍏兼綑濞呫垹顭跨捄铏剐㈤柣鏍ュ灲瀹曪綁鎮崨顖氳€块悷婊呭閹稿憡鏅堕悩璇茬婵炴垶顨堢粙濠勭磽閸屾稓澧悽顖涙尰鐎电厧顫濋崘鍙夘唶闂佸憡鏌ｉ崝瀣崲濮樻墎鍋撳☉娅亜锕㈤鍫濆珘妞ゆ巻鍋撴繝鈧幘顔嘉?"}
+                          </div>
+                        </div>
+                        <Button
+                          size="small"
+                          type="link"
+                          disabled={!resolvedBatchStoryCreationBrief}
+                          onClick={() => void copyStoryCreationPrompt(resolvedBatchStoryCreationBrief, '闂佸綊娼х紞濠囧闯?)'}
+                        >
+                          婵犮垼娉涚粔鎾春濡や緤绱ｉ柛鏇ㄥ櫘濞?
+                        </Button>
+                      </div>
+                      <Space wrap size={[8, 8]} style={{ marginBottom: 8 }}>
+                        {batchStoryCreationPromptLayerLabels.map((item) => (
+                          <Tag key={item} color="processing">{item}</Tag>
+                        ))}
+                        <Tag color={isBatchStoryCreationPromptVerbose ? 'gold' : 'blue'}>
+                          {`缂?${batchStoryCreationPromptCharCount} 闁诲孩绋掗。纭?
+                        </Tag>
+                      </Space>
+                      {isBatchStoryCreationPromptVerbose && (
+                        <Alert
+                          type="warning"
+                          showIcon
+                          style={{ marginBottom: 8 }}
+                          message="閻熸粎澧楅幐鍛婃櫠閻樻祴鏋栭柕濞垮劚瀵娊鏌涢幇顒佸櫣妞ゆ梹鍔欏畷鎴ｇ疀濞戞瑦鐦?"
+                          description="婵犵鈧啿鈧綊鎮樻径鎰鐟滅増甯掑▍銈夋煙鐎涙ê濮夋い顓炵墦閹啴宕熼锝嗩棖闂佸搫绉堕崢褏妲愰幋鐐村弿閻庯綆浜滅徊娲煛娓氬﹦绉剁紒杈ㄧ箓椤曟瑦銈﹀▎鎯ф暥闂佺绻愰悧鍡欐暜閸モ晝纾介柍杞扮劍缁ㄦ岸鏌￠崪浣哥仭缂佹柨顭峰畷锟犲即濮樿京鎲块梺鐓庢惈閸婅鍒婇崸妤€绠甸柟閭﹀枤閸亪姊洪幓鎺旂伇婵炲牊鍨块弻灞筋吋閸滀焦些闂佸湱顭堝ú锝夊箮閵堝违?"
+                        />
+                      )}
+                      <TextArea
+                        value={resolvedBatchStoryCreationBrief ?? ''}
+                        autoSize={{ minRows: 6, maxRows: 12 }}
+                        readOnly
+                        placeholder="閻熸粎澧楅幐鍛婃櫠閻樻祴鏌﹂柍鈺佸暞缁犳帡鏌涘▎妯虹仭闁轰胶鍋ゅ畷妤呭Ψ瑜庨悾閬嶆煕閹烘挾鈼ョ紓宥嗘楠炴劙宕堕敂钘壭?"
+                      />
+                    </div>
+                    <StoryCreationSnapshotPanel
+                      scopeLabel="??"
+                      description="???????????????????????? prompt ??????????"
+                      emptyText="???????????????????"
+                      snapshots={batchStoryCreationSnapshots}
+                      currentDraft={batchStoryCreationCurrentDraft}
+                      canSave={canSaveBatchStoryCreationSnapshot}
+                      onSave={() => void saveBatchStoryCreationSnapshot('manual')}
+                      onApply={applyBatchStoryCreationSnapshot}
+                      onDelete={deleteBatchStoryCreationSnapshot}
+                      onCopy={copyStoryCreationPrompt}
+                    />
+                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>{"闂佸湱鐟抽崱鈺傛杸闁荤姳璀﹂崹鎵?}</div">
+                      <Space direction="vertical" size={4} style={{ display: 'flex' }}>
+                        {batchStoryCreationControlCard.executionPath.map((item) => (
+                          <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
+                        ))}
+                      </Space>
+                    </div>
+                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>{"缂傚倷鐒﹂幐濠氭倶婢舵劖鐓ユ慨妯哄船娴?}</div">
+                      <Space direction="vertical" size={4} style={{ display: 'flex' }}>
+                        {batchStoryCreationControlCard.expectedOutcomes.map((item) => (
+                          <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
+                        ))}
+                      </Space>
+                    </div>
+                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>{"婵＄偛顑呴柊锝呪枍閹捐绠柕鍫濇閸?}</div">
+                      <Space direction="vertical" size={4} style={{ display: 'flex' }}>
+                        {batchStoryCreationControlCard.guardrails.map((item) => (
+                          <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
+                        ))}
+                      </Space>
+                    </div>
+                  </Space>
+                </Card>
+              )}
+
+              {batchStoryRepairTargetCard && (
+                <Card
+                  size="small"
+                  title={batchStoryRepairTargetCard.title}
+                  extra={<Tag color="gold">闂佹眹鍨婚崰鎰板垂濮樿泛绫嶉柟顖涙緲濞堜即鏌涢弬璇插闁轰胶鍋ゅ畷?/Tag>}
+                  style={{ marginTop: 12 }}
+                >
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message={batchStoryRepairTargetCard.repairSummary}
+                    description={batchStoryRepairTargetCard.applyHint}
+                  />
+                  <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                    {[
+                      ["婵炴潙鍚嬮敋闁告ɑ绋掔粚閬嶎敊绾拌鲸些", batchStoryRepairTargetCard.priorityTarget],
+                      ["闂備緡鍓欓悘婵嬪储閵堝绀冩繛鍡樺姉閵?, batchStoryRepairTargetCard.antiPattern]",
+                    ].map(([label, value]) => (
+                      <div
+                        key={label}
+                        style={{
+                          padding: '10px 12px',
+                          border: '1px solid #f0f0f0',
+                          borderRadius: 8,
+                        }}
+                      >
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                        <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
+                      </div>
+                    ))}
+                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>{"闂佸搫鐗滈崜婵嬫偪閸℃鈹嶆い鏃傗拡濡插鏌涢弬璇插缂?}</div">
+                      <Space direction="vertical" size={4} style={{ display: 'flex' }}>
+                        {batchStoryRepairTargetCard.repairTargets.map((item) => (
+                          <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
+                        ))}
+                      </Space>
+                    </div>
+                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>{"婵烇絽娲︾换鍕汲閳ь剙霉閸忔祹顏呯箾?}</div">
+                      <Space direction="vertical" size={4} style={{ display: 'flex' }}>
+                        {batchStoryRepairTargetCard.preserveStrengths.map((item) => (
+                          <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
+                        ))}
+                      </Space>
+                    </div>
+                  </Space>
+                </Card>
+              )}
+            </Card>
+
+            {batchCreationBlueprint && (
+              <Card size="small" title="缂傚倷鐒﹂幐濠氭倵椤栫偞瀚呮繝闈涙缁傚牆螞閺夊灝顏い? style={{ marginBottom: 12 }}">
+                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                  {batchCreationBlueprint.summary}
+                </div>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>闂佸綊娼х紞濠囧闯閾忓湱鍗氶柣妯烘惈铻￠梺鐓庢惈閸婅鍒?/div>
+                <Space direction="vertical" size={6} style={{ display: 'flex' }}>
+                  {batchCreationBlueprint.beats.map((beat, index) => (
+                    <div key={beat}>{index + 1}. {beat}</div>
                   ))}
-                </Descriptions>
+                </Space>
+                {batchCreationBlueprint.risks.length > 0 && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginTop: 12 }}
+                    message="缂傚倷鐒﹂幐濠氭倵椤栫偛绠甸柟鐗堟緲閺?"
+                    description={batchCreationBlueprint.risks.join('闂?)'}
+                  />
+                )}
               </Card>
             )}
 
-            {batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined && (
-              <Card size="small" title="批量质量摘要" style={{ marginBottom: 16 }}>
-                <Space direction="vertical" style={{ width: '100%' }} size={10}>
-                  {getBatchSummaryMetricItems(batchProgress.quality_metrics_summary).map((item) => (
-                    <div key={item.key}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, gap: 12 }}>
-                        <Space size={4}>
-                          <span>{item.label}</span>
-                          <Tooltip title={item.tip}>
-                            <InfoCircleOutlined style={{ color: '#8c8c8c' }} />
-                          </Tooltip>
-                        </Space>
-                        <span style={{ color: '#595959' }}>{item.value}%</span>
-                      </div>
-                      <Progress percent={item.value} showInfo={false} size="small" strokeColor={getMetricStrokeColor(item.value)} />
+            {batchStoryObjectiveCard && (
+              <Card size="small" title="闂佺儵鏅╅崰妤呮偉閿濆纭€闁跨喓濯弳鏇㈡偡? style={{ marginBottom: 12 }}">
+                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                  {batchStoryObjectiveCard.summary}
+                </div>
+                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                  {[
+                    ['闂佺儵鏅╅崰妤呮偉?, batchStoryObjectiveCard.objective]',
+                    ['闂傚倸鍟抽褎鎱?, batchStoryObjectiveCard.obstacle]',
+                    ['闁哄鍎愰崜姘叏?, batchStoryObjectiveCard.turn]',
+                    ['闂備浇袙閺呮盯鎮?, batchStoryObjectiveCard.hook]',
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      style={{
+                        padding: '10px 12px',
+                        border: '1px solid #f0f0f0',
+                        borderRadius: 8,
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
                     </div>
                   ))}
                 </Space>
               </Card>
             )}
 
-            <div style={{ textAlign: 'center' }}>
-              <Button
-                danger
-                icon={<StopOutlined />}
-                onClick={() => {
-                  modal.confirm({
-                    title: '确认取消',
-                    content: '确定要取消批量生成吗？已生成的章节将保留。',
-                    okText: '确定取消',
-                    cancelText: '继续生成',
-                    okButtonProps: { danger: true },
-                    onOk: handleCancelBatchGenerate,
-                  });
-                }}
+            {batchStoryResultCard && (
+              <Card size="small" title="缂傚倷鐒﹂幐濠氭倶婢舵劕纭€闁跨喓濯弳鏇㈡偡? style={{ marginBottom: 12 }}">
+                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                  {batchStoryResultCard.summary}
+                </div>
+                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                  {[
+                    ['闂佽浜介崝蹇曟崲?, batchStoryResultCard.progress]',
+                    ['闂佽妞块崢楣冨Φ?, batchStoryResultCard.reveal]',
+                    ['闂佺绻愮壕顓㈡焾?, batchStoryResultCard.relationship]',
+                    ['婵炶揪绲鹃悷锔句焊?, batchStoryResultCard.fallout]',
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      style={{
+                        padding: '10px 12px',
+                        border: '1px solid #f0f0f0',
+                        borderRadius: 8,
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            )}
+
+            {batchStoryExecutionChecklist && (
+              <Card size="small" title="闂佸湱鐟抽崱鈺傛杸濠电偞鎸搁幊搴＄暦閻旈潻绱ｉ柛鏇ㄥ櫘濞? style={{ marginBottom: 12 }}">
+                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                  {batchStoryExecutionChecklist.summary}
+                </div>
+                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                  {[
+                    ['閻庢鍠掗崑鎾绘煕?, batchStoryExecutionChecklist.opening]',
+                    ['闂佸憡姊绘慨瀵告暜?, batchStoryExecutionChecklist.pressure]',
+                    ['闁哄鍎愰崜姘叏?, batchStoryExecutionChecklist.pivot]',
+                    ['闂佽　鍋撻柤绋跨仛鐏?, batchStoryExecutionChecklist.closing]',
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      style={{
+                        padding: '10px 12px',
+                        border: '1px solid #f0f0f0',
+                        borderRadius: 8,
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            )}
+
+            {batchStoryRepetitionRiskCard && (
+              <Card size="small" title="闂備焦褰冪粔鎾囬崣澶樻Ч閹兼番鍔嶉悵锕€螞閺夊灝顏い? style={{ marginBottom: 12 }}">
+                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                  {batchStoryRepetitionRiskCard.summary}
+                </div>
+                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                  {[
+                    ['閻庢鍠掗崑鎾绘煕閿旇姤銇濇い銉︽崌濮?, batchStoryRepetitionRiskCard.openingRisk]',
+                    ['闂佸憡姊绘慨瀵告暜閸ヮ煈妲归幖娣妽閻?, batchStoryRepetitionRiskCard.pressureRisk]',
+                    ['闁哄鍎愰崜姘叏鐏炵虎妲归幖娣妽閻?, batchStoryRepetitionRiskCard.pivotRisk]',
+                    ['闂佽　鍋撻悹楦挎閸熸彃顪冪€ｎ亪鍙勬繛?, batchStoryRepetitionRiskCard.closingRisk]',
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      style={{
+                        padding: '10px 12px',
+                        border: '1px solid #f0f0f0',
+                        borderRadius: 8,
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            )}
+
+            {batchStoryAcceptanceCard && (
+              <Card size="small" title="婵°倗濮撮張顒勫极瑜版帒纭€闁跨喓濯弳鏇㈡偡? style={{ marginBottom: 12 }}">
+                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                  {batchStoryAcceptanceCard.summary}
+                </div>
+                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                  {[
+                    ['婵炲濮鹃褎鎱ㄩ悢鐓庡窛闁瑰瓨甯熼崢?, batchStoryAcceptanceCard.missionCheck]',
+                    ['闂佸憡鐟﹂敋閻庡灚鐓￠幏鍐寠婢跺瀣€', batchStoryAcceptanceCard.changeCheck],
+                    ['闂佸搫鍊烽崡鎶芥儗閻愬瓨鍎?, batchStoryAcceptanceCard.freshnessCheck]',
+                    ['闂佽　鍋撻柤绋跨仛鐏忓棝鎮归幇鈺佸闁?, batchStoryAcceptanceCard.closingCheck]',
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      style={{
+                        padding: '10px 12px',
+                        border: '1px solid #f0f0f0',
+                        borderRadius: 8,
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            )}
+
+            {batchStoryCharacterArcCard && (
+              <Card size="small" title="闁荤喐鐟︾敮鐔哥珶婵犲偆鍤曠憸宥夊储濠婂嫸绱ｉ柛鏇ㄥ櫘濞? style={{ marginBottom: 12 }}">
+                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                  {batchStoryCharacterArcCard.summary}
+                </div>
+                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                  {[
+                    ['婵犮垼鍩栭悧鏇烇耿椤忓棛妫?, batchStoryCharacterArcCard.externalLine]',
+                    ['闂佸憡鍔曢幊搴★耿椤忓棛妫?, batchStoryCharacterArcCard.internalLine]',
+                    ['闂佺绻愮壕顓㈡焾鐎靛摜妫?, batchStoryCharacterArcCard.relationshipLine]',
+                    ['闂佽В鍋撻柣锝呰嫰娴?, batchStoryCharacterArcCard.arcLanding]',
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      style={{
+                        padding: '10px 12px',
+                        border: '1px solid #f0f0f0',
+                        borderRadius: 8,
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            )}
+
+            {batchVolumePacingPlan && (
+              <Card size="small" title="闂佸憡顨婇ˉ鎾搭殽閸ヮ剚鍤嶉柛灞惧嚬濞堁兾涢弶鍨伂妞? style={{ marginBottom: 12 }}">
+                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                  {batchVolumePacingPlan.summary}
+                </div>
+                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
+                  {batchVolumePacingPlan.segments.map((segment) => (
+                    <div key={`${segment.stage}-${segment.startChapter}`}>
+                      <strong>缂備焦顨堥幉顡筫gment.startChapter}-{segment.endChapter}缂?閻?{segment.label}</strong>
+                      <div style={{ color: 'var(--color-text-secondary)', marginTop: 2 }}>
+                        {segment.mission}
+                      </div>
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            )}
+
+            <Form.Item
+              label="闂佸憡甯楃粙鎰礊閺傝鐔煎灳瀹曞洨顢?"
+              tooltip="闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭鏌￠崘銊ヮ暢缂侇喚鍎ょ粙澶愬焵椤掆偓椤曪絾銈︾捄銊︻啀閻熸粎澧楅幐鍛婃櫠閻樼粯鈷撻柤鍛婎問閸炰粙鏌￠崼姘壕闂備焦褰冪粔鐑姐€呴敃鍌涘剭闁告洦鍣崵銏ゆ煠閺夋寧鍣洪柛鏂挎嚇瀹?"
+              style={{ marginBottom: 12 }}
+            >
+              <Select
+                placeholder="婵帗绋掗…鍫ヮ敇缂佹鈻旂€广儱顦介弶鍝勵熆閼哥數澧€规瓕浜幏顐﹀礃鐠恒劎顦梺鍛婄懐閸ㄥ爼鍩€椤掆偓椤﹁京鍒掗悜妯尖枖闁逞屽墴瀹曟艾鈽夊Δ鍐枙闂佺锕ラ崕鎶藉箖?"
+                value={batchSelectedCreativeMode}
+                onChange={setBatchSelectedCreativeMode}
+                allowClear
+                optionLabelProp="label"
               >
-                取消任务
-              </Button>
+                {CREATIVE_MODE_OPTIONS.map((option) => (
+                  <Select.Option key={option.value} value={option.value} label={option.label}>
+                    <div>{option.label}</div>
+                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+
+            <Form.Item
+              label="缂傚倷鐒﹂幐濠氭倵椤栨稓鐟圭憸鏃堝闯閹间焦鍊?"
+              tooltip="闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭鏌￠崘銊ヮ暢缂侇喚鍎ょ粙澶愬焵椤掆偓椤曪絾銈︾捄銊︻啀閻熸粎澧楅幐鍛婃櫠閻樼數鍗氶柣妯烘惈铻＄紓鍌氭储閸婃牕銆掗懜鐢碘枖闁哄嫬娴氬ú锝夋煟閵娿儱顏╃憸鏉匡攻缁傚秶鈧絺鏅滃畷鏌ユ煕?"
+              style={{ marginBottom: 12 }}
+            >
+              <Select
+                placeholder="婵帗绋掗…鍫ヮ敇婵犳艾閿ら柛銉簵閳ь兘鍋撻梺瑙勪航閸斿繒鎹㈠鈧弫宥囦沪閽樺顔夐梻渚囧亜椤﹁京鍒掗悜妯尖枖闁逞屽墰缁辨帡骞樼€电硶鍋撻娑氼浄閻犲洦褰冮～?"
+                value={batchSelectedStoryFocus}
+                onChange={setBatchSelectedStoryFocus}
+                allowClear
+                optionLabelProp="label"
+              >
+                {STORY_FOCUS_OPTIONS.map((option) => (
+                  <Select.Option key={option.value} value={option.value} label={option.label}>
+                    <div>{option.label}</div>
+                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+
+            {/* 缂備焦顨忛崗娑氱箔娴ｇ儤鍋樼€光偓鐎ｎ剛鐛I濠碘槅鍨埀顒€纾埀?+ 闂佸憡鑹炬姝屻亹閹绢喖绀嗛柛鈩冾焽閳?*/}
+            <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 0 : 16 }}>
+              <Form.Item
+
+                label="AI濠碘槅鍨埀顒€纾埀?"
+
+                tooltip="婵炴垶鎸哥粔褰掑焵椤掆偓椤︻垶宕归娑欏閻犳亽鍔嶉弳蹇擃潡濞戞瑯鐒炬い鎾诡嚙铻ｉ柍銉ョ－閳?"
+
+                style={{ flex: 1, marginBottom: 12 }}
+
+              >
+
+                <Select
+
+                  placeholder={batchSelectedModel ? `婵帗绋掗…鍫ヮ敇? ${availableModels.find(m => m.value === batchSelectedModel)?.label || batchSelectedModel}` : "婵炶揪缍€濞夋洟寮妶鍡╂付婵☆垱顑欓崥鍥ㄤ繆椤栨せ鍋撳畷鍥ｅ亾?"}
+
+                  value={batchSelectedModel}
+
+                  onChange={setBatchSelectedModel}
+
+                  allowClear
+
+                  showSearch
+
+                  optionFilterProp="label"
+
+                >
+
+                  {availableModels.map(model => (
+
+                    <Select.Option key={model.value} value={model.value} label={model.label}>
+
+                      {model.label}
+
+                    </Select.Option>
+
+                  ))}
+
+                </Select>
+
+              </Form.Item>
+
+
+
+              <Form.Item
+
+                label="闂佸憡鑹炬姝屻亹閹绢喖绀嗛柛鈩冾焽閳?"
+
+                name="enableAnalysis"
+
+                tooltip="濠殿喗绻愮徊楣冨几閸愵亖鍋撻悷鐗堟拱闁搞劍宀稿畷銉︽償閳ヨ櫕娅冮梺鍛婅壘妤犳瓕銇愰幘顔肩闁糕剝顭囬埀顑跨矙閺佸秶浠﹂懖鈺冩喒闂傚倸鍟抽褔銆侀敐鍥╁崥闁绘ê鎼灐闂佹眹鍨婚崰鎰板垂?"
+
+                style={{ marginBottom: 12 }}
+
+              >
+
+                <Radio.Group>
+
+                  <Radio value={true}>
+
+                    <span style={{ fontSize: 12, color: '#52c41a' }}>闂?闂佹眹鍨婚崰鎰板垂濮樻墎鍋撻悷鐗堟拱闁搞劍宀稿畷銉︽償閵堝懏顔囬梺鍛婃煟閸斿矂骞冨Δ鍛煑闁哄鐏濋悗濠氭煛?/span>
+
+                  </Radio>
+
+                  <Radio value={false}>
+
+                    <span style={{ fontSize: 12, color: '#8c8c8c' }}>婵炲濮撮幊鎰板极閹捐绠ｉ柟閭﹀弾閸斺偓闂佸搫鍊稿ù鍕濞嗘垹鐭欑€广儱鎳忛崐鐢告煙闂堟侗鍎忓┑顔规櫊瀹曟岸宕卞Ο灏栧亾娴犲鏅?/span>
+
+                  </Radio>
+
+                </Radio.Group>
+
+              </Form.Item>
+
             </div>
+
+          </Form>
+
+        ) : (
+
+          <div>
+
+            <Alert
+
+              message="濠电偞鎸撮弲鐘虹亪闂佸湱绮崝妤呭Φ?"
+
+              description={
+
+                <ul style={{ margin: '8px 0 0 0', paddingLeft: 20 }}>
+
+                  <li>闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭姊婚崶锝呬壕闁荤喐娲戝鎺旂博鐎电硶鍋撶憴鍕暡婵＄偛鍊垮缁樻綇閸撗咁槷闂佸憡鐟崹顖涚閹烘绀嗛柛銉ｅ妼鎼村﹪鏌涢幒鎾寸凡闁告瑧鍋撶粋鎺楀冀椤撴壕鍋撴径鎰棃?/li>
+
+                  <li>闂佺绻戞繛濠偽涚€涙ǜ浜滈柣銏犳啞濡椼劑鏌涘顒勫弰闁革絾鎮傚顒勬偋閸績鍙洪悗娈垮枓閸嬫捇鏌ㄥ☉妯侯殭缂佸彉鍗抽幊娑㈩敂閸曨倣妤呮煙椤撴粌鐏╂い锕€寮剁粋鎺旀嫚閹绘帩娼抽柡澶嗘櫆缁嬫垹鈧?/li>
+
+                  <li>闂佸憡鐟崹顖涚閹烘鈷曢煫鍥ㄦ⒐椤ρ囨煟閹邦喗鍤€闁?闂佸憡鐟﹂悧妤冪矓闁垮顩烽悹鍥ㄥ絻椤?闂佸湱顭堥ˇ鐢稿箰閾忣偆鈻旀い鎾跺櫏閸撻箖鏌ｉ姀銏犳瀾闁?/li>
+
+                  {batchProgress?.estimated_time_minutes && batchProgress.completed === 0 && (
+
+                    <li>闂佸啿鐡ㄩ崬鑽ょ箔?婵☆偅婢樼€氼垶顢橀幖浣瑰殌婵°倓鐒﹂ˇ褔鏌ㄥ☉娆愮殤閻?{batchProgress.estimated_time_minutes} 闂佸憡甯掑Λ婵嬪箰?/li>
+
+                  )}
+
+                  {batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined && (
+
+                    <li>
+
+                      濡絽鍟幆?濡ょ姷鍋涢崯鍨焽鎼淬劌绀堢憸搴ㄥ磿韫囨洘瀚氶柛鏇ㄥ亜閻庡鏌ㄥ☉娆愮殤闁诡噯缍佸畷?{batchProgress.quality_metrics_summary.avg_overall_score}
+
+                      闂佹寧绋戦悧鍡涘疮鐠恒劎鐜诲〒姘ｅ亾闁?{batchProgress.quality_metrics_summary.avg_conflict_chain_hit_rate}% /
+
+                      闁荤喐鐟ョ€氼剟宕归鐐村闁芥ê顦伴崟?{batchProgress.quality_metrics_summary.avg_rule_grounding_hit_rate}% /
+
+                      閻庢鍠掗崑鎾绘煕閿旇姤銇濋柟鍓插墰閳?{batchProgress.quality_metrics_summary.avg_opening_hook_rate ?? 0}% /
+
+                      闂佺粯鐗滈弲顐﹀磻閿濆鐓?{batchProgress.quality_metrics_summary.avg_payoff_chain_rate ?? 0}% /
+
+                      缂備焦姊绘慨鎾偄椤掑嫭鐓㈤柍杞拌兌閹?{batchProgress.quality_metrics_summary.avg_cliffhanger_rate ?? 0}%闂?
+
+                    </li>
+
+                  )}
+
+                </ul>
+
+              }
+
+              type="info"
+
+              showIcon
+
+              style={{ marginBottom: 16 }}
+
+            />
+
+
+
+            {batchProgress?.quality_profile_summary && getQualityProfileDisplayItems(batchProgress.quality_profile_summary).length > 0 && (
+
+              <Card size="small" title="闁荤姵鍔戦崝鎴﹀闯濞差亝鐓ｉ柟顖嗗啫娈ラ梺姹囧灮閸犳劙寮? style={{ marginBottom: 16 }}">
+
+                <Alert
+
+                  type="success"
+
+                  showIcon
+
+                  style={{ marginBottom: 12 }}
+
+                  message="闂佸搫鐗滈崜姘珶閹烘垟鏋庨柍銉ュ暱閸ゆ帡骞栫€涙ɑ鈷掗柡浣靛€楃槐鎺楁偄閸撲緡浼囬柣鐘冲姂閸旀垿宕冲ú顏呭仺閻犲洦褰冮崜?"
+
+                  description="闁哄鏅滈悷鈺呭闯閻戣棄鐭楁い蹇撳濞兼梻绱掗埀顒勫传閸曨剙鈧數绱掗弮鎴濈仴缂佺粯鍨垮畷鍫曟倷閸偆鏆犻梺纭呭Г椤牓銆呴敂鐐珰閻庢稒蓱椤牠鏌ㄥ☉妯侯殭缂佹顦靛銊╂偡閺夎法绉梺褰掓涧缂嶅﹪宕冲ú顏呭仺闁绘梻顭堥悘鍥煏閸℃洜绐旀い銉︽崌瀵姤绺界化鏇炰壕濠㈣泛顑呴銉モ槈?deferred analysis 缂傚倸鍊归悧妤冩暜閹捐违?"
+
+                />
+
+                <Descriptions column={1} size="small">
+
+                  {getQualityProfileDisplayItems(batchProgress.quality_profile_summary).map((item) => (
+
+                    <Descriptions.Item key={item.key} label={item.label}>
+
+                      {item.description}
+
+                    </Descriptions.Item>
+
+                  ))}
+
+                </Descriptions>
+
+              </Card>
+
+            )}
+
+
+
+            {batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined && (
+              <Card size="small" title="闂佸綊娼х紞濠囧闯閾忚瀚婚柕濞炬櫅濞呫倝鏌熼懞銉劸妞? style={{ marginBottom: 16 }}">
+                {batchAfterScorecard && (
+                  <Alert
+                    type={batchAfterScorecard.verdictColor as 'success' | 'info' | 'warning' | 'error'}
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message={batchAfterScorecard.verdict}
+                    description={`${batchAfterScorecard.summary} 婵炴潙鍚嬮敋闁告ɑ绋掔粚閬嶎敊缁涘濡ч梺?{batchAfterScorecard.nextAction}`}
+                  />
+                )}
+                <Space direction="vertical" style={{ width: '100%' }} size={10}>
+                  {getBatchSummaryMetricItems(batchProgress.quality_metrics_summary).map((item) => (
+                    <div key={item.key}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, gap: 12 }}>
+
+                        <Space size={4}>
+
+                          <span>{item.label}</span>
+
+                          <Tooltip title={item.tip}>
+
+                            <InfoCircleOutlined style={{ color: '#8c8c8c' }} />
+
+                          </Tooltip>
+
+                        </Space>
+
+                        <span style={{ color: '#595959' }}>{item.value}%</span>
+
+                      </div>
+
+                      <Progress percent={item.value} showInfo={false} size="small" strokeColor={getMetricStrokeColor(item.value)} />
+
+                    </div>
+
+                  ))}
+
+                </Space>
+
+              </Card>
+
+            )}
+
+
+
+            <div style={{ textAlign: 'center' }}>
+
+              <Button
+
+                danger
+
+                icon={<StopOutlined />}
+
+                onClick={() => {
+
+                  modal.confirm({
+
+                    title: '缂佺虎鍙庨崰娑㈩敇婵犳艾鐭楅柡宥冨妿鍟?',
+
+                    content: '缂佺虎鍙庨崰鏍偩閸撗勫暫濞达絿顭堢徊鎸庣箾閹存繄澧涘瑙勫浮閺屽矁绠涢弴鐔告闂佺懓鐡ㄩ崝鏇㈠箖瑜旈弫宥夋偄瀹勬澘娈ラ梺姹囧灮閸犳劙宕瑰鑸靛剭闁告洦鍘捐ぐ鍧楁煠閸濆嫬鈧悂鎯冮姀锛勨攳婵犻潧鐗婂▓宀勬煏?',
+
+                    okText: '缂佺虎鍙庨崰鏍偩妤ｅ啫鐭楅柡宥冨妿鍟?',
+
+                    cancelText: '缂傚倷缍€閸涱垱鏆伴梺姹囧灮閸犳劙宕?',
+
+                    okButtonProps: { danger: true },
+
+                    onOk: handleCancelBatchGenerate,
+
+                  });
+
+                }}
+
+              >
+
+                闂佸憡鐟﹂悧妤冪矓闁垮顩烽悹鍥ㄥ絻椤?
+
+              </Button>
+
+            </div>
+
           </div>
+
         )}
+
       </Modal>
 
-      {/* 单章节生成进度显示 */}
-      <SSELoadingOverlay
-        loading={isGenerating}
-        progress={singleChapterProgress}
-        message={singleChapterProgressMessage}
-        blocking={false}
-      />
 
-      {/* 批量生成进度显示 - 使用统一的进度组件 */}
-      <SSEProgressModal
-        visible={batchGenerating}
-        progress={batchProgress ? Math.round((batchProgress.completed / batchProgress.total) * 100) : 0}
-        message={
-          batchProgress?.current_chapter_number
-            ? `正在生成第 ${batchProgress.current_chapter_number} 章... (${batchProgress.completed}/${batchProgress.total})${
-                batchProgress.latest_quality_metrics?.overall_score !== undefined
-                  ? ` ｜评分 ${batchProgress.latest_quality_metrics.overall_score}`
-                  : ''
-              }`
-            : `批量生成进行中... (${batchProgress?.completed || 0}/${batchProgress?.total || 0})${
-                batchProgress?.latest_quality_metrics?.overall_score !== undefined
-                  ? ` ｜评分 ${batchProgress.latest_quality_metrics.overall_score}`
-                  : ''
-              }`
-        }
-        title="批量生成章节"
-        onCancel={() => {
-          modal.confirm({
-            title: '确认取消',
-            content: '确定要取消批量生成吗？已生成的章节将保留。',
-            okText: '确定取消',
-            cancelText: '继续生成',
-            okButtonProps: { danger: true },
-            centered: true,
-            onOk: handleCancelBatchGenerate,
-          });
-        }}
-        cancelButtonText="取消任务"
-        blocking={false}
-      />
+
+      {/* 闂佸憡顨嗗ú婊堟偟閻戣姤鍤嶉柛灞剧矋閺呮悂鏌熺€涙ê濮岀紒缁樕戦幆鏃堟晜閼恒儮鏋栫紓浣插亾?*/}
+
+      {isGenerating ? (
+
+        <Suspense fallback={null}>
+
+          <LazySSELoadingOverlay
+
+            loading={isGenerating}
+
+            progress={singleChapterProgress}
+
+            message={singleChapterProgressMessage}
+
+            blocking={false}
+
+          />
+
+        </Suspense>
+
+      ) : null}
+
+
+
+      {/* 闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭寮堕埡鍌溾槈閻庤濞婂浼村礈瑜嬫禒?- 婵炶揪缍€濞夋洟寮妶鍥╃＜闁绘柨澧庨閬嶆煟閵娿儱顏紒缁樕戦幆鏃堟晜閸撗呯厑婵?*/}
+
+      {batchGenerating ? (
+
+        <Suspense fallback={null}>
+
+          <LazySSEProgressModal
+
+            visible={batchGenerating}
+
+            progress={batchProgress ? Math.round((batchProgress.completed / batchProgress.total) * 100) : 0}
+
+            message={
+
+              batchProgress?.current_chapter_number
+
+                ? `濠殿喗绻愮徊钘夛耿椤忓牊鍋ㄩ柣鏃傤焾閻忓洨绱?${batchProgress.current_chapter_number} 缂?.. (${batchProgress.completed}/${batchProgress.total})${
+
+                    batchProgress.latest_quality_metrics?.overall_score !== undefined
+
+                      ? ` 闂佹寧绻冪划蹇涙儊鎼淬劌绀?${batchProgress.latest_quality_metrics.overall_score}`
+
+                      : ''
+
+                  }`
+
+                : `闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭寮堕埡鍌滎灱妞ゃ垺鍨剁粙?.. (${batchProgress?.completed || 0}/${batchProgress?.total || 0})${
+
+                    batchProgress?.latest_quality_metrics?.overall_score !== undefined
+
+                      ? ` 闂佹寧绻冪划蹇涙儊鎼淬劌绀?${batchProgress.latest_quality_metrics.overall_score}`
+
+                      : ''
+
+                  }`
+
+            }
+
+            title="闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洨绱掗弮鍌毿┑?"
+
+            onCancel={() => {
+
+              modal.confirm({
+
+                title: '缂佺虎鍙庨崰娑㈩敇婵犳艾鐭楅柡宥冨妿鍟?',
+
+                content: '缂佺虎鍙庨崰鏍偩閸撗勫暫濞达絿顭堢徊鎸庣箾閹存繄澧涘瑙勫浮閺屽矁绠涢弴鐔告闂佺懓鐡ㄩ崝鏇㈠箖瑜旈弫宥夋偄瀹勬澘娈ラ梺姹囧灮閸犳劙宕瑰鑸靛剭闁告洦鍘捐ぐ鍧楁煠閸濆嫬鈧悂鎯冮姀锛勨攳婵犻潧鐗婂▓宀勬煏?',
+
+                okText: '缂佺虎鍙庨崰鏍偩妤ｅ啫鐭楅柡宥冨妿鍟?',
+
+                cancelText: '缂傚倷缍€閸涱垱鏆伴梺姹囧灮閸犳劙宕?',
+
+                okButtonProps: { danger: true },
+
+                centered: true,
+
+                onOk: handleCancelBatchGenerate,
+
+              });
+
+            }}
+
+            cancelButtonText="闂佸憡鐟﹂悧妤冪矓闁垮顩烽悹鍥ㄥ絻椤?"
+
+            blocking={false}
+
+          />
+
+        </Suspense>
+
+      ) : null}
+
+
 
       <FloatButton
+
         icon={<BookOutlined />}
+
         type="primary"
-        tooltip="章节目录"
+
+        tooltip="缂備焦姊绘慨鐐繆椤撱垺鍎庢い鏃囧亹缁?"
+
         onClick={() => setIsIndexPanelVisible(true)}
+
         style={{ right: isMobile ? 24 : 48, bottom: isMobile ? 80 : 48 }}
+
       />
+
+
 
       <FloatingIndexPanel
+
         visible={isIndexPanelVisible}
+
         onClose={() => setIsIndexPanelVisible(false)}
+
         groupedChapters={groupedChapters}
+
         onChapterSelect={handleChapterSelect}
+
       />
 
-      {/* 章节阅读器 */}
+
+
+      {/* 缂備焦姊绘慨鐐繆椤撱垺鈷撻柛娑㈠亰閸ゃ垽鏌?*/}
+
       {readingChapter && (
+
         <ChapterReader
+
           visible={readerVisible}
+
           chapter={readingChapter}
+
           onClose={() => {
+
             setReaderVisible(false);
+
             setReadingChapter(null);
+
           }}
+
           onChapterChange={handleReaderChapterChange}
+
         />
+
       )}
 
-      {/* 局部重写弹窗 */}
+
+
+      {/* 闁诲繒鍋愰崑鎾绘⒑椤斿搫濮傞柛锝嗘倐瀹曟ê鈻庤箛姘⒕缂?*/}
+
       {editingId && (
+
         <PartialRegenerateModal
+
           visible={partialRegenerateModalVisible}
+
           chapterId={editingId}
+
           selectedText={selectedTextForRegenerate}
+
           startPosition={selectionStartPosition}
+
           endPosition={selectionEndPosition}
+
           styleId={selectedStyleId}
+
           onClose={() => setPartialRegenerateModalVisible(false)}
+
           onApply={handleApplyPartialRegenerate}
+
         />
+
       )}
 
-      {/* 规划编辑器 */}
+
+
+      {/* 闁荤喐鐟ョ€氼剟宕瑰┑鍫㈢＝闁哄稁鍓涚敮鍡涙煕?*/}
+
       {editingPlanChapter && currentProject && (() => {
+
         let parsedPlanData = null;
+
         try {
+
           if (editingPlanChapter.expansion_plan) {
+
             parsedPlanData = JSON.parse(editingPlanChapter.expansion_plan);
+
           }
+
         } catch (error) {
-          console.error('解析规划数据失败:', error);
+
+          console.error('闁荤喐鐟辩徊楣冩倵閻ｅ本鍠嗛柛鏇ㄥ亜閻忓﹪鏌℃担鍝勵暭鐎规挷鐒﹀鍕綇椤愩儛?', error);
+
         }
 
+
+
         return (
+
           <ExpansionPlanEditor
+
             visible={planEditorVisible}
+
             planData={parsedPlanData}
+
             chapterSummary={editingPlanChapter.summary || null}
+
             projectId={currentProject.id}
+
             onSave={handleSavePlan}
+
             onCancel={() => {
+
               setPlanEditorVisible(false);
+
               setEditingPlanChapter(null);
+
             }}
+
           />
+
         );
+
       })()}
+
     </div>
+
   );
+
 }
+
+

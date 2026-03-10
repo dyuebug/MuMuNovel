@@ -1,5 +1,5 @@
 ﻿"""提示词管理服务"""
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, Sequence
 import json
 import re
 
@@ -18,11 +18,11 @@ except Exception:
 QUALITY_RUNTIME_TRACKING_TAG = "rule_v3_quality_block_20260307"
 QUALITY_TEMPLATE_MARKER_PATTERN = re.compile(r"^<prompt_template_key value=\"(?P<key>[A-Z0-9_]+)\" />\n?", re.MULTILINE)
 
-QUALITY_BLOCK_SECTION_GENERATION = """<quality_contract priority=\"P0\">\n{quality_generation_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_GENERATION = """<quality_contract priority=\"P0\">\n{quality_generation_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{story_objective_card_block}\n{story_result_card_block}\n{story_repair_target_block}\n{story_execution_checklist_block}\n{story_repetition_risk_block}\n{story_acceptance_card_block}\n{story_character_arc_card_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
 QUALITY_BLOCK_SECTION_ANALYSIS = """<quality_contract priority=\"P0\">\n{quality_analysis_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
 QUALITY_BLOCK_SECTION_CHECKER = """<quality_contract priority=\"P0\">\n{quality_checker_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
 QUALITY_BLOCK_SECTION_REVISER = """<quality_contract priority=\"P0\">\n{quality_reviser_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
-QUALITY_BLOCK_SECTION_REGENERATION = """<quality_contract priority=\"P0\">\n{quality_regeneration_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_REGENERATION = """<quality_contract priority=\"P0\">\n{quality_regeneration_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{story_objective_card_block}\n{story_result_card_block}\n{story_repair_target_block}\n{story_execution_checklist_block}\n{story_repetition_risk_block}\n{story_acceptance_card_block}\n{story_character_arc_card_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
 
 QUALITY_TEMPLATE_INSERTIONS = {
     "CHAPTER_GENERATION_ONE_TO_MANY": QUALITY_BLOCK_SECTION_GENERATION,
@@ -34,6 +34,1109 @@ QUALITY_TEMPLATE_INSERTIONS = {
     "CHAPTER_TEXT_REVISER": QUALITY_BLOCK_SECTION_REVISER,
     "CHAPTER_REGENERATION_SYSTEM": QUALITY_BLOCK_SECTION_REGENERATION,
 }
+
+CREATIVE_STORY_ENGINE_GUIDE = """【故事发动机优先】
+- 先把人物眼前最想要什么、阻力从哪来、做错要付什么代价写清
+- 先让读者看到变化、压力和反应，再补背景解释
+- 每段内容至少服务推进情节、暴露关系、制造记忆点中的一项
+- 能用场景、动作、对白表达，就不要改写成抽象总结
+- 控制重复，不要全员同一种语气、全章同一种节拍、全篇同一种钩子"""
+
+CREATIVE_LOW_AI_GUARD = """【自然表达护栏】
+- 少用“总之/综上/值得注意的是/在这个过程中”等模板连接词
+- 少讲作者结论，多给角色动作、情绪回弹和现场压力
+- 允许少量不规整句式，别把文字修成统一说明书口吻
+- 保留人物自己的说话习惯，不把所有角色抹平成同一个声音"""
+
+CREATIVE_MODE_SPECS = {
+    "balanced": {
+        "label": "均衡推进",
+        "outline": [
+            "同时照顾钩子、推进、情绪和信息释放，不偏科。",
+            "每章都要既能往下推，又能留下后续空间。",
+        ],
+        "chapter": [
+            "兼顾推进效率、情绪余韵和章尾牵引，不让单一节拍统治全文。",
+            "既要有动作落点，也要有关系或情绪反馈。",
+        ],
+    },
+    "hook": {
+        "label": "钩子优先",
+        "outline": [
+            "每章优先设计读者会想点下一章的悬挂点和动作牵引。",
+            "关键信息不要一次讲透，尽量把转折放在章尾或场尾。",
+        ],
+        "chapter": [
+            "开场尽快抛出异常、任务或危险，章尾优先落在未解动作上。",
+            "减少平铺解释，多用突发变化和信息缺口带动阅读。",
+        ],
+    },
+    "emotion": {
+        "label": "情绪沉浸",
+        "outline": [
+            "每章都明确情绪波峰波谷，让冲突带出人物内在变化。",
+            "安排能让人物情绪外露的场面，不只给事件结果。",
+        ],
+        "chapter": [
+            "强化人物情绪的触发、压抑、外露和余震过程。",
+            "多写反应、动作和潜台词，少写统一口径的抒情总结。",
+        ],
+    },
+    "suspense": {
+        "label": "悬念拉满",
+        "outline": [
+            "优先铺信息差、误导、遮蔽与逐层揭开，避免过早讲透底牌。",
+            "每章至少留一个会迫使角色继续追查的新疑点。",
+        ],
+        "chapter": [
+            "控制信息披露节奏，把真相拆成连续可追的碎片。",
+            "对白和动作里埋认知偏差，让读者和角色都处在半知状态。",
+        ],
+    },
+    "relationship": {
+        "label": "关系张力",
+        "outline": [
+            "每章尽量让人物关系产生位移：靠近、撕裂、试探或互相利用。",
+            "冲突优先落在人与人之间的立场差和利益差上。",
+        ],
+        "chapter": [
+            "强化角色之间的试探、误解、压制、让步和反击。",
+            "至少让一段关键互动同时推动剧情与关系变化。",
+        ],
+    },
+    "payoff": {
+        "label": "爽点推进",
+        "outline": [
+            "优先规划反转、收获、打脸、突破等即时反馈，避免一直憋压不放。",
+            "每章都给读者一个清晰可感的阶段性兑现点。",
+        ],
+        "chapter": [
+            "强化铺垫→爆发→反馈链条，让爽点有落地动作和后续影响。",
+            "减少空转拉扯，关键节点尽量让角色主动出手换结果。",
+        ],
+    },
+}
+
+CREATIVE_MODE_ALIASES = {
+    "balanced": "balanced",
+    "均衡": "balanced",
+    "均衡推进": "balanced",
+    "hook": "hook",
+    "钩子": "hook",
+    "钩子优先": "hook",
+    "emotion": "emotion",
+    "情绪": "emotion",
+    "情绪沉浸": "emotion",
+    "suspense": "suspense",
+    "悬念": "suspense",
+    "悬念拉满": "suspense",
+    "relationship": "relationship",
+    "关系": "relationship",
+    "关系张力": "relationship",
+    "payoff": "payoff",
+    "爽点": "payoff",
+    "爽点推进": "payoff",
+}
+
+STORY_FOCUS_SPECS = {
+    "advance_plot": {
+        "label": "主线推进",
+        "outline": [
+            "本轮大纲优先让事件产生明确推进，不要原地打转。",
+            "每章都要形成新的行动结果、局势变化或任务升级。",
+        ],
+        "chapter": [
+            "优先写清角色做了什么、局势如何变化、下一步被逼向哪里。",
+            "减少原地解释和重复抒情，让情节真正往前走。",
+        ],
+    },
+    "deepen_character": {
+        "label": "人物塑形",
+        "outline": [
+            "本轮优先安排能暴露人物选择、弱点、执念与成长代价的章节。",
+            "不要只给事件节点，要给人物变化节点。",
+        ],
+        "chapter": [
+            "优先通过选择、反应、失误和坚持来立住人物。",
+            "让角色的独特声音、习惯与价值判断真正显形。",
+        ],
+    },
+    "escalate_conflict": {
+        "label": "冲突升级",
+        "outline": [
+            "本轮优先让阻力变强、代价变高、对立面更具体。",
+            "章节之间要形成持续抬升的压力链，而不是重复同级冲突。",
+        ],
+        "chapter": [
+            "优先写出目标受阻、局面恶化、选择更难的过程。",
+            "让冲突产生即时后果，不要只停留在嘴上对抗。",
+        ],
+    },
+    "reveal_mystery": {
+        "label": "谜团揭示",
+        "outline": [
+            "本轮优先安排线索出现、误导修正和真相推进的章节。",
+            "揭示要分层，不要一口气把所有底牌讲透。",
+        ],
+        "chapter": [
+            "优先通过调查、对质、异常细节与证据变化推进认知。",
+            "每章至少让读者比上一章多知道一点关键东西。",
+        ],
+    },
+    "relationship_shift": {
+        "label": "关系转折",
+        "outline": [
+            "本轮优先安排人物关系发生靠近、破裂、试探或重组。",
+            "让关系变化能反向影响后续行动，而不只是情绪点缀。",
+        ],
+        "chapter": [
+            "优先写互动中的试探、让步、误判、亏欠或立场重排。",
+            "对话和行动都要服务关系变化，不只写结果。",
+        ],
+    },
+    "foreshadow_payoff": {
+        "label": "伏笔回收",
+        "outline": [
+            "本轮优先处理前文埋下的信息、承诺、物件或关系线索。",
+            "回收时既要兑现，也要顺手打开新的后续空间。",
+        ],
+        "chapter": [
+            "优先让前文埋下的悬念、承诺或能力产生可感的回报。",
+            "回收不能只靠说明，要落在事件结果和人物反馈上。",
+        ],
+    },
+}
+
+STORY_FOCUS_ALIASES = {
+    "advance_plot": "advance_plot",
+    "主线": "advance_plot",
+    "主线推进": "advance_plot",
+    "推进剧情": "advance_plot",
+    "deepen_character": "deepen_character",
+    "人物": "deepen_character",
+    "人物塑形": "deepen_character",
+    "塑造人物": "deepen_character",
+    "escalate_conflict": "escalate_conflict",
+    "冲突": "escalate_conflict",
+    "冲突升级": "escalate_conflict",
+    "升级冲突": "escalate_conflict",
+    "reveal_mystery": "reveal_mystery",
+    "谜团": "reveal_mystery",
+    "谜团揭示": "reveal_mystery",
+    "揭示真相": "reveal_mystery",
+    "relationship_shift": "relationship_shift",
+    "关系": "relationship_shift",
+    "关系转折": "relationship_shift",
+    "关系变化": "relationship_shift",
+    "foreshadow_payoff": "foreshadow_payoff",
+    "伏笔": "foreshadow_payoff",
+    "伏笔回收": "foreshadow_payoff",
+    "回收伏笔": "foreshadow_payoff",
+}
+
+PLOT_STAGE_LABELS = {
+    "development": "发展阶段",
+    "climax": "高潮阶段",
+    "ending": "结局阶段",
+}
+
+PLOT_STAGE_MISSIONS = {
+    "development": "立局、铺变量、建立目标与第一轮压力。",
+    "climax": "持续抬压、逼近正面碰撞、推动关键反转。",
+    "ending": "回收承诺、兑现伏笔、收束关系并留下余味。",
+}
+
+PLOT_STAGE_ALIASES = {
+    "development": "development",
+    "发展": "development",
+    "发展阶段": "development",
+    "climax": "climax",
+    "高潮": "climax",
+    "高潮阶段": "climax",
+    "ending": "ending",
+    "结局": "ending",
+    "结局阶段": "ending",
+}
+
+
+def normalize_creative_mode(mode: Optional[str]) -> Optional[str]:
+    cleaned = str(mode or "").strip()
+    if not cleaned:
+        return None
+    return CREATIVE_MODE_ALIASES.get(cleaned) or CREATIVE_MODE_ALIASES.get(cleaned.lower())
+
+
+def build_creative_mode_block(mode: Optional[str], *, scene: str) -> str:
+    normalized = normalize_creative_mode(mode)
+    if not normalized:
+        return ""
+
+    spec = CREATIVE_MODE_SPECS.get(normalized)
+    if not spec:
+        return ""
+
+    bullets = spec.get(scene) or []
+    if not bullets:
+        return ""
+
+    lines = [f"【创作模式】当前采用“{spec['label']}”"]
+    lines.extend(f"- {item}" for item in bullets)
+    return _compact_prompt_text("\n".join(lines))
+
+
+def normalize_story_focus(value: Optional[str]) -> Optional[str]:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return None
+    return STORY_FOCUS_ALIASES.get(cleaned) or STORY_FOCUS_ALIASES.get(cleaned.lower())
+
+
+def build_story_focus_block(value: Optional[str], *, scene: str) -> str:
+    normalized = normalize_story_focus(value)
+    if not normalized:
+        return ""
+
+    spec = STORY_FOCUS_SPECS.get(normalized)
+    if not spec:
+        return ""
+
+    bullets = spec.get(scene) or []
+    if not bullets:
+        return ""
+
+    lines = [f"【结构侧重点】当前优先“{spec['label']}”"]
+    lines.extend(f"- {item}" for item in bullets)
+    return _compact_prompt_text("\n".join(lines))
+
+
+def normalize_plot_stage(value: Optional[str]) -> Optional[str]:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return None
+    return PLOT_STAGE_ALIASES.get(cleaned) or PLOT_STAGE_ALIASES.get(cleaned.lower())
+
+
+def _dedupe_prompt_items(items: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def build_narrative_blueprint_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    priority_beats: list[str] = []
+    priority_risks: list[str] = []
+
+    if normalized_mode == "hook":
+        priority_beats.extend([
+            "开场更早抛出异常、危险或未完成目标，先抓住读者注意力。",
+            "尾段优先保留信息缺口、危险临门或选择未决，不要平收。",
+        ])
+        priority_risks.append("不要只堆钩子和异常，却缺少实质推进。")
+    elif normalized_mode == "emotion":
+        priority_beats.extend([
+            "关键转折后要写出人物情绪余震和关系反应，不只交代结果。",
+            "让动作、停顿和对白共同承载情绪，而不是全靠抒情说明。",
+        ])
+        priority_risks.append("不要让情绪独自悬空，必须落回选择与后果。")
+    elif normalized_mode == "suspense":
+        priority_beats.extend([
+            "中前段持续制造信息差、误判或证据变化，让压力逐步抬升。",
+            "每个阶段都给出一点新认知，但不要一次讲透底牌。",
+        ])
+        priority_risks.append("避免把悬念写成纯遮掩，读者需要看到有效推进。")
+    elif normalized_mode == "relationship":
+        priority_beats.extend([
+            "把关键冲突尽量落在人与人之间的立场差、亏欠感或试探上。",
+            "安排一次关系位移，让后续行动因为关系变化而改道。",
+        ])
+        priority_risks.append("不要只有关系情绪，没有行动层面的后续影响。")
+    elif normalized_mode == "payoff":
+        priority_beats.extend([
+            "优先安排前文铺垫兑现、收获反馈或阶段性反转，给读者明确回报。",
+            "兑现后顺手打开下一轮更大的目标或麻烦，不把气口写死。",
+        ])
+        priority_risks.append("不要只顾爽点回收，忽略代价与后续空间。")
+    elif normalized_mode == "balanced":
+        priority_beats.extend([
+            "推进、情绪、信息释放和回报要彼此穿插，不让单一节拍统治全文。",
+        ])
+
+    if normalized_focus == "advance_plot":
+        priority_beats.extend([
+            "每个关键段都要写出行动结果和局势变化，避免原地解释。",
+        ])
+        priority_risks.append("避免设定说明和情绪回旋挤压主线推进。")
+    elif normalized_focus == "deepen_character":
+        priority_beats.extend([
+            "至少安排一次能暴露人物弱点、执念或价值判断的选择。",
+        ])
+        priority_risks.append("不要把人物塑形写成静态介绍，必须落到行为上。")
+    elif normalized_focus == "escalate_conflict":
+        priority_beats.extend([
+            "让阻力、代价和对立面逐段变强，形成持续抬压链条。",
+        ])
+        priority_risks.append("避免重复同级冲突，读者会觉得原地踏步。")
+    elif normalized_focus == "reveal_mystery":
+        priority_beats.extend([
+            "优先安排线索出现、误导修正和认知刷新，至少推进一点真相。",
+        ])
+        priority_risks.append("不要把揭示写成解释堆叠，尽量通过事件和证据推进。")
+    elif normalized_focus == "relationship_shift":
+        priority_beats.extend([
+            "对话、动作和站队变化都要服务关系转折，而不只是口头表态。",
+        ])
+        priority_risks.append("不要让关系变化只停留在情绪层，没有后续选择代价。")
+    elif normalized_focus == "foreshadow_payoff":
+        priority_beats.extend([
+            "回收时既要兑现前文承诺，也要带出新的悬念或任务。",
+        ])
+        priority_risks.append("避免只用说明句回收伏笔，最好落在事件结果上。")
+
+    if normalized_stage == "development":
+        priority_beats.append("当前阶段优先扩张局势、铺开变量，并把选择成本逐章抬高。")
+        priority_risks.append("避免太早交底或提前透支高潮。")
+    elif normalized_stage == "climax":
+        priority_beats.append("当前阶段要让核心矛盾正面碰撞，把选择逼到无法拖延的节点。")
+        priority_risks.append("避免高潮只有声量，没有清晰结果与代价。")
+    elif normalized_stage == "ending":
+        priority_beats.append("当前阶段要优先收束主承诺、主悬念和关键关系线，再留余味。")
+        priority_risks.append("避免只顾收尾，忘了兑现前文最重要的铺垫。")
+
+    if scene == "outline":
+        base_beats = [
+            "前段先放出主目标、局势缺口或新任务，不要直接堆设定。",
+            "中段持续抬高阻力、代价或信息差，让章节彼此形成递进关系。",
+            "后段安排一次明显转折、揭示或关系位移，改变后续走向。",
+            "收尾既给阶段性结果，也留下下一轮想追下去的问题。",
+        ]
+        base_risks = ["不要把整轮大纲写成同一种功能，节拍必须有起伏。"]
+        scene_label = "大纲"
+    else:
+        base_beats = [
+            "开场尽快抛出异常、目标或受阻点，不做平铺导入。",
+            "中段用连续动作推进局势，并让阻力或代价升级。",
+            "后段安排一次局势改写、信息刷新或关系位移。",
+            "结尾保留明确追读牵引，不要平收。",
+        ]
+        base_risks = ["不要把节拍写成说明书，关键节点都要有动作和即时结果。"]
+        scene_label = "章节"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    beats = _dedupe_prompt_items(priority_beats + base_beats)[:4]
+    risks = _dedupe_prompt_items(priority_risks + base_risks)
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认结构"
+
+    lines = [f"【结构蓝图】本轮按“{combo_text}”组织{scene_label}节拍"]
+    lines.extend(f"- {item}" for item in beats)
+    if risks:
+        lines.append(f"- 重点避免：{risks[0]}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_objective_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        objective = "让本轮章节承担清晰主任务，不平均摊功能。"
+        obstacle = "让中段持续抬压，每一章都比上一章更难一点。"
+        turn = "在后段安排一次会改写后续走向的结构转折。"
+        hook = "尾段留下下一轮章节必须回应的问题或新任务。"
+        scene_label = "大纲"
+    else:
+        objective = "让本章推动一个看得见的目标，不写空转段落。"
+        obstacle = "安排一次明确受阻、代价上升或信息错位。"
+        turn = "在中后段安排一次认知或局面改写。"
+        hook = "章尾留下追读牵引，不平收。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        hook = "把钩子放在异常、危险或未决选择上，尽量做到前段抓人、尾段牵引。"
+        turn = "转折优先用信息缺口扩大、危险临门或局势突然偏转来触发。"
+    elif normalized_mode == "emotion":
+        objective = (
+            "目标除了推进事件，还要逼出人物情绪波动和关系反馈。"
+            if scene == "outline"
+            else "让本章既推进事件，也逼出人物情绪与关系反应。"
+        )
+        turn = "转折优先落在情绪反噬、误伤、和解受阻或认知偏移上。"
+        hook = "钩子留在情绪未落地、关系未说破或选择仍有余震处。"
+    elif normalized_mode == "suspense":
+        obstacle = "阻力优先来自信息差、误判、证据反噬或真相未全。"
+        turn = "转折通过线索翻面、认知刷新、身份异动或危险升级完成。"
+        hook = "钩子留在新疑点、半揭开的答案或更近一步的危险上。"
+    elif normalized_mode == "relationship":
+        objective = (
+            "本轮重点推动人物关系位移，让站队和信任结构发生变化。"
+            if scene == "outline"
+            else "让本章推动一次明确的关系位移，而不只是情绪点缀。"
+        )
+        obstacle = "阻力来自立场差、亏欠、信任裂缝或试探失手。"
+        turn = "转折优先用关系破裂、突然靠近、站队变化或误会反转来完成。"
+        hook = "钩子留在关系未定、话没说透、立场悬空的地方。"
+    elif normalized_mode == "payoff":
+        objective = (
+            "本轮重点兑现前文铺垫、承诺或能力，并带出更大后果。"
+            if scene == "outline"
+            else "让本章承担一次明确兑现，让读者感到回报落地。"
+        )
+        turn = "转折优先让兑现带出更大代价、更高目标或新的麻烦。"
+        hook = "钩子放在回报之后的新失衡上，而不是只停在爽点本身。"
+
+    if normalized_focus == "advance_plot":
+        objective = "核心目标是把局势往前推一格，至少形成新的行动结果。"
+    elif normalized_focus == "deepen_character":
+        objective = "核心目标是让角色在选择里显形，暴露弱点、执念或价值判断。"
+    elif normalized_focus == "escalate_conflict":
+        obstacle = "阻力必须逐层变强，让代价和对立面都更具体。"
+    elif normalized_focus == "reveal_mystery":
+        turn = "转折优先通过线索出现、误导修正和认知刷新来完成。"
+    elif normalized_focus == "relationship_shift":
+        turn = "转折必须带来关系位移、立场重排或信任结构变化。"
+    elif normalized_focus == "foreshadow_payoff":
+        objective = "核心目标是兑现前文埋设，并顺手打开新的后续空间。"
+        hook = "钩子留在兑现后的新承诺、新麻烦或更大代价上。"
+
+    if normalized_stage == "development":
+        objective = (
+            "当前阶段先立局、铺变量和主任务，把后续压力链搭起来。"
+            if scene == "outline"
+            else "当前阶段先把局势和眼前目标推到更难的位置。"
+        )
+    elif normalized_stage == "climax":
+        obstacle = "阻力要逼近正面碰撞，选择代价必须明显抬高。"
+        turn = "转折要接近核心碰撞点，不能只是小波动。"
+    elif normalized_stage == "ending":
+        objective = (
+            "当前阶段优先回收主承诺、主悬念和关键关系线。"
+            if scene == "outline"
+            else "当前阶段让本章承担主承诺或关键关系线的回收职责。"
+        )
+        hook = "钩子更适合留余味、次级悬念或收束后的新失衡，不能抢走主收束。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认任务"
+    lines = [f"【{scene_label}目标卡】本轮按“{combo_text}”优先落实以下叙事任务"]
+    lines.append(f"- 目标：{objective}")
+    lines.append(f"- 阻力：{obstacle}")
+    lines.append(f"- 转折：{turn}")
+    lines.append(f"- 钩子：{hook}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_result_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        progress = "这一轮结束后，主线应进入一个更具体、更难回头的新局面。"
+        reveal = "至少释放一轮信息、真相碎片或兑现回报，避免纯拖延。"
+        relationship = "关键人物关系、站队或信任结构要出现可见位移。"
+        fallout = "尾段要把下一轮章节必须回应的压力、问题或任务钉住。"
+        scene_label = "大纲"
+    else:
+        progress = "这一章结束后，局势应明确前移，人物不能还停在原地。"
+        reveal = "至少交付一个新认知、新线索或一次有效兑现。"
+        relationship = "至少有一条人物关系线出现可见变化，而不是只说情绪。"
+        fallout = "章尾要留下一个会逼出下章动作的余波，而不是平稳收住。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        progress = (
+            "本轮结束后，读者要感到故事被明显拽进下一段更危险的局面。"
+            if scene == "outline"
+            else "本章结束后，局势必须被推到一个不继续看就会难受的节点。"
+        )
+        fallout = "余波优先落在未决选择、临门危险或刚被挑开的异常上。"
+    elif normalized_mode == "emotion":
+        reveal = "结果里要能看到情绪代价、误伤、和解受阻或内心认知变化。"
+        relationship = "关系结果要落到互动后果上，让人物之后的做法因此改变。"
+    elif normalized_mode == "suspense":
+        reveal = "至少留下一个更接近真相的新证据，同时制造新的误判空间。"
+        fallout = "余波留在新疑点、身份异动或危险升级上，不能只剩空白遮掩。"
+    elif normalized_mode == "relationship":
+        relationship = "结果里必须出现一次明确的关系位移、立场变化或信任重排。"
+        fallout = "余波最好落在关系未定、话未说透或站队未稳上。"
+    elif normalized_mode == "payoff":
+        reveal = "结果要让读者看到铺垫兑现、回报落地，并感到不是白等。"
+        progress = (
+            "兑现之后，主线要进入一个新的阶段，而不是只做结算。"
+            if scene == "outline"
+            else "兑现之后，局势要被顺势推向更高目标或更大麻烦。"
+        )
+
+    if normalized_focus == "advance_plot":
+        progress = "推进结果必须清晰可见：行动产生了后果，局势换了位置。"
+    elif normalized_focus == "deepen_character":
+        reveal = "结果要让人物的弱点、执念或价值判断真正显形，而非停在说明。"
+        relationship = "人物变化要影响他与他人的互动方式或后续选择。"
+    elif normalized_focus == "escalate_conflict":
+        progress = "推进结果不是前进一步，而是把人推入更高代价的冲突区。"
+        fallout = "余波要把冲突继续抬高，让下一轮没有轻松退路。"
+    elif normalized_focus == "reveal_mystery":
+        reveal = "揭示结果必须真实推进谜团，不只是制造更多模糊表述。"
+    elif normalized_focus == "relationship_shift":
+        relationship = "关系结果必须足够明确，能改变两人之后的说话方式、站位或合作条件。"
+    elif normalized_focus == "foreshadow_payoff":
+        reveal = "结果要让前文埋设获得兑现，同时打开新的后续空间。"
+        fallout = "余波放在兑现后的新承诺、新代价或更大失衡上。"
+
+    if normalized_stage == "development":
+        progress = (
+            "这一轮结束后，故事应完成立局并把压力链真正搭起来。"
+            if scene == "outline"
+            else "这一章结束后，故事要进入一个更难但更清晰的推进区。"
+        )
+        fallout = "余波要把后续任务钉住，让读者知道下一章不是重复上一章。"
+    elif normalized_stage == "climax":
+        progress = "推进结果要逼近或触发正面碰撞，不能只是外围晃动。"
+        reveal = "揭示结果要掀开关键底牌、核心真相或决定性误判。"
+    elif normalized_stage == "ending":
+        reveal = "揭示结果优先服务主承诺、主悬念与关键伏笔的回收。"
+        relationship = "关系结果要体现收束、定局或带余温的最终位移。"
+        fallout = "余波更适合留余味、后效和新失衡，不能抢走主收束。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认结果"
+    lines = [f"【{scene_label}结果卡】本轮写完后，至少让读者感知到以下结果变化（{combo_text}）"]
+    lines.append(f"- 推进：{progress}")
+    lines.append(f"- 揭示：{reveal}")
+    lines.append(f"- 关系：{relationship}")
+    lines.append(f"- 余波：{fallout}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_execution_checklist_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        opening = "前段先用 1-2 章立主任务、人物站位和局势缺口，尽快进入事件。"
+        pressure = "中段持续加压，每一章追加一个新阻力、代价或变量。"
+        pivot = "后段安排一次会改写路线的关键转折、揭示或站队变化。"
+        closing = "尾段先给阶段性结果，再把下一轮问题抛实。"
+        scene_label = "大纲"
+    else:
+        opening = "开场 30% 内抛出目标、异常或受阻点，不平铺背景。"
+        pressure = "中段用动作、对话和反馈连续加压，避免解释停顿。"
+        pivot = "中后段安排一次改写认知或局面的关键动作。"
+        closing = "收尾先落结果，再留下逼出下章的余波。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        opening = (
+            "前段优先让异常、危险或未决任务尽快冒头，不慢热铺垫。"
+            if scene == "outline"
+            else "开场尽快抛出异常、险情或未决选择，让读者立刻进入状态。"
+        )
+        closing = "收尾把悬而未决的危险、选择或信息缺口钉牢，形成追读牵引。"
+    elif normalized_mode == "emotion":
+        pressure = "中段用互动、误伤、退让受阻或情绪回弹来持续加压。"
+        pivot = "关键转折优先落在情绪爆裂、和解失败或认知刺痛上。"
+        closing = "收尾保留情绪余震，让人物无法当场彻底消化。"
+    elif normalized_mode == "suspense":
+        opening = "开场先扔出异常线索、误判苗头或危险信号，再补背景。"
+        pressure = "中段不断扩大信息差、证据变化和错误判断的代价。"
+        pivot = "转折优先让线索翻面、身份异动或危险升级来改写局面。"
+        closing = "收尾留下更尖锐的新疑点，而不是只把答案藏起来。"
+    elif normalized_mode == "relationship":
+        opening = "开场先把关系张力、站位差或试探动作摆上台面。"
+        pressure = "中段持续通过对话、行动和站队测试来挤压关系。"
+        pivot = "转折优先用关系破裂、突然靠近或立场变化来触发。"
+        closing = "收尾把关系悬在未定状态，逼出下一轮互动。"
+    elif normalized_mode == "payoff":
+        opening = "开场尽快回扣前文埋设，提醒读者这轮会有兑现。"
+        pressure = "中段不断把兑现条件推近，同时抬高兑现所需代价。"
+        pivot = "转折优先让铺垫兑现落地，但必须伴随新后果。"
+        closing = "收尾不要停在爽点，要顺手抛出兑现后的新失衡。"
+
+    if normalized_focus == "advance_plot":
+        opening = "开场先亮明本轮要推进的事，别让读者等太久才知道这章要干嘛。"
+        pressure = "中段每次推进都要带来新结果，避免原地解释和空转。"
+    elif normalized_focus == "deepen_character":
+        pressure = "中段把压力尽量变成选择题，让人物性格在决策里显形。"
+        pivot = "关键转折最好来自人物自己的选择、软肋或价值判断。"
+        closing = "收尾保留人物做完选择后的余震，而不是只交代事件结束。"
+    elif normalized_focus == "escalate_conflict":
+        pressure = "中段每一轮加压都要比上一轮更狠，别重复同级冲突。"
+        pivot = "转折要把冲突推向正面碰撞，而不是继续绕圈。"
+        closing = "收尾把人物钉在更高代价区，确保下一轮没法轻退。"
+    elif normalized_focus == "reveal_mystery":
+        opening = "开场尽快抛出线索、异常或疑点，别先讲设定。"
+        pressure = "中段通过调查、误导修正和证据变化推进认知。"
+        pivot = "转折要真正修正一次认知，而不是只多说一点背景。"
+    elif normalized_focus == "relationship_shift":
+        pressure = "中段每次互动都要推动信任、亏欠或站队发生偏移。"
+        pivot = "转折必须带来明确关系位移，而不是轻微情绪波动。"
+        closing = "收尾把关系停在新的不稳定位置，逼出后续回应。"
+    elif normalized_focus == "foreshadow_payoff":
+        opening = "开场尽快回扣旧埋设，提示这轮不是凭空发生。"
+        pivot = "转折优先让伏笔兑现落地，同时带出新的空间。"
+        closing = "收尾把兑现后的新承诺、新代价或新任务明确抛出。"
+
+    if normalized_stage == "development":
+        opening = (
+            "前段优先立局、铺变量和主任务，让整轮章节知道往哪推。"
+            if scene == "outline"
+            else "开场先把局势、变量和眼前目标摆上桌，不要空转导入。"
+        )
+        pivot = "转折可以不必最大，但必须让方向感发生变化。"
+        closing = "收尾把下一轮任务钉住，让压力链接得上。"
+    elif normalized_stage == "climax":
+        opening = "开场就贴近核心矛盾，不要再绕外围做长引子。"
+        pressure = "中段压缩时间、代价和回旋空间，让碰撞不可拖延。"
+        pivot = "转折必须接近决定性碰撞、底牌掀开或局势断裂。"
+        closing = "收尾把后果锁死，让人物进入无法回避的下一步。"
+    elif normalized_stage == "ending":
+        opening = "开场快速回扣未收束的主承诺、主悬念或关键关系线。"
+        pressure = "中段优先处理最重要的收束任务，不分散到支线琐事。"
+        pivot = "转折优先落在主承诺兑现、主真相揭开或关键关系定局上。"
+        closing = "收尾保留余味和后效，但不要再制造喧宾夺主的新主线。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认执行"
+    lines = [f"【{scene_label}执行清单】本轮按“{combo_text}”拆成以下执行步骤"]
+    lines.append(f"- 开场：{opening}")
+    lines.append(f"- 加压：{pressure}")
+    lines.append(f"- 转折：{pivot}")
+    lines.append(f"- 收束：{closing}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_repetition_risk_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        opening_risk = "不要每轮前段都只做设定铺陈，读者会感觉整轮大纲在原地起步。"
+        pressure_risk = "不要每章都用同一级别阻力灌水，中段会失去递进感。"
+        pivot_risk = "不要把每次转折都写成临时加设定或生硬插入新人物。"
+        closing_risk = "不要每轮都只用“下回更精彩”式尾章，下一轮任务必须具体。"
+        scene_label = "大纲"
+    else:
+        opening_risk = "不要反复用回忆、说明或同一种异常开场，容易让章节起手发闷。"
+        pressure_risk = "不要把受阻写成同一种争吵、误会或嘴上发狠，压力会显得空。"
+        pivot_risk = "不要把转折写成假反转、硬转念或只靠旁白解释。"
+        closing_risk = "不要每章都用同一种问句、敲门声或电话铃收尾，钩子会疲劳。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        opening_risk = "钩子模式下不要每次都靠突发危险硬拽开场，异常类型需要变化。"
+        closing_risk = "不要连续多章都用悬空危险硬切章尾，读者会识别套路。"
+    elif normalized_mode == "emotion":
+        pressure_risk = "不要反复靠争吵、沉默或内心独白制造情绪，否则张力会钝化。"
+        pivot_risk = "不要把情绪转折写成突然想通，缺少事件触发会显得虚。"
+    elif normalized_mode == "suspense":
+        opening_risk = "悬念模式下不要只会丢疑点不交代有效信息，否则会像故意遮掩。"
+        pivot_risk = "不要连续用“其实另有隐情”做反转，真相推进需要层次。"
+        closing_risk = "不要只留空白疑问而不给新证据，悬念会变成拖延。"
+    elif normalized_mode == "relationship":
+        pressure_risk = "不要把关系推进写成重复拉扯却没有立场后果，读者会觉得没变化。"
+        pivot_risk = "不要每次都靠误会触发关系变化，站队和选择也要轮换。"
+    elif normalized_mode == "payoff":
+        opening_risk = "回收模式下不要一上来就罗列旧伏笔目录，读者需要事件化兑现。"
+        closing_risk = "不要每次回收完都再塞一个更大的谜团，容易冲淡回报感。"
+
+    if normalized_focus == "advance_plot":
+        pressure_risk = "主线推进不要只做位移和赶路，缺少阻力变化会像流水账。"
+    elif normalized_focus == "deepen_character":
+        opening_risk = "人物塑形不要总从心理描写起手，最好让性格先在动作里显形。"
+        pressure_risk = "不要把成长写成同一种自责或回忆，人物弧线会发虚。"
+    elif normalized_focus == "escalate_conflict":
+        pressure_risk = "冲突升级不要一直放大音量不抬高代价，否则只是吵得更大声。"
+        pivot_risk = "不要把冲突转折只写成新敌人登场，最好让旧矛盾也发生质变。"
+    elif normalized_focus == "reveal_mystery":
+        pivot_risk = "谜团揭示不要总靠旁人解释，证据和事件本身也要承担揭示功能。"
+        closing_risk = "不要连续多次只留下谜面不回收谜底，读者会怀疑作者在拖。"
+    elif normalized_focus == "relationship_shift":
+        pressure_risk = "关系转折不要只换台词腔调，最好同步改变合作方式和站位。"
+    elif normalized_focus == "foreshadow_payoff":
+        closing_risk = "伏笔回收不要每次都变成新伏笔发射器，需保留真正落地的满足。"
+
+    if normalized_stage == "development":
+        opening_risk = "发展阶段不要长时间停在铺垫准备态，必须尽快把变量推上桌。"
+        closing_risk = "发展阶段不要每章都只留一个模糊目标，任务应逐步具体化。"
+    elif normalized_stage == "climax":
+        pressure_risk = "高潮阶段不要反复假装要碰撞却不断拖开，读者会明显感到泄劲。"
+        pivot_risk = "高潮阶段不要只有大声量和快节奏，没有决定性变化就不算高潮。"
+    elif normalized_stage == "ending":
+        opening_risk = "结局阶段不要又重新搭新盘子，优先收最重要的旧承诺。"
+        closing_risk = "结局阶段不要为了续作感强行再开主线，否则会稀释收束力度。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认避重"
+    lines = [f"【{scene_label}重复风险卡】本轮需主动规避以下高频套路（{combo_text}）"]
+    lines.append(f"- 开场风险：{opening_risk}")
+    lines.append(f"- 加压风险：{pressure_risk}")
+    lines.append(f"- 转折风险：{pivot_risk}")
+    lines.append(f"- 收尾风险：{closing_risk}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_acceptance_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        mission_check = "验收时先看这轮章节是否承担了明确主任务，而不是平均摊功能。"
+        change_check = "至少要看到局势、关系或认知层面的阶段性变化，不能只搭台。"
+        freshness_check = "检查本轮关键章法是否和上一轮过度同构，避免整卷节拍重复。"
+        closing_check = "尾段既要交代阶段结果，也要给下一轮留下具体任务。"
+        scene_label = "大纲"
+    else:
+        mission_check = "验收时先看本章是否完成了一个清晰主任务，而不是热闹但空转。"
+        change_check = "至少要看到局势、关系或认知有一项明确变化，不能原地踏步。"
+        freshness_check = "检查开场、加压、转折、收尾是否又落回同一种旧套路。"
+        closing_check = "章尾既要完成本章收束，也要留下合适的追读牵引或余味。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        mission_check = "验收时重点看开场和章尾是否真正形成牵引，而不只是制造噪音。"
+        closing_check = "结尾要让读者有继续读的冲动，但不能只有硬切和悬空。"
+    elif normalized_mode == "emotion":
+        change_check = "验收时要看到情绪余震和关系后果，而不是只有一段抒情。"
+        freshness_check = "检查情绪推进是否又只是争吵、沉默或内心独白轮换。"
+    elif normalized_mode == "suspense":
+        change_check = "验收时至少要有一个有效线索、认知刷新或危险升级真正落地。"
+        closing_check = "结尾要留下更尖锐的问题，但不能完全不给有效信息。"
+    elif normalized_mode == "relationship":
+        mission_check = "验收时看人物关系是否真的发生位移，而不是只多说了几句狠话。"
+        change_check = "关系变化最好能改动人物之后的站位、合作或信任条件。"
+    elif normalized_mode == "payoff":
+        mission_check = "验收时要确认前文铺垫是否真正兑现，而不是只口头提到。"
+        closing_check = "兑现之后要有后效和新失衡，不能只停在一次性爽点。"
+
+    if normalized_focus == "advance_plot":
+        mission_check = "验收时先看主线是否实打实前进，而不是忙了很多事却没推局势。"
+    elif normalized_focus == "deepen_character":
+        change_check = "验收时看人物是否在选择里显形，而不是只补充背景说明。"
+        freshness_check = "检查人物塑形是否又回到同一种回忆、自责或旁白总结。"
+    elif normalized_focus == "escalate_conflict":
+        change_check = "验收时要能看见代价升级、对立加深或冲突进入新层级。"
+        closing_check = "本轮结束后人物应被留在更难的位置，而不是轻松退回安全区。"
+    elif normalized_focus == "reveal_mystery":
+        mission_check = "验收时必须确认谜团有真实推进，而不是只多堆了一层雾。"
+    elif normalized_focus == "relationship_shift":
+        change_check = "验收时看关系是否足以改变说话方式、行动选择或站队逻辑。"
+    elif normalized_focus == "foreshadow_payoff":
+        mission_check = "验收时确认伏笔是否兑现落地，同时打开了新的后续空间。"
+
+    if normalized_stage == "development":
+        mission_check = "发展阶段验收重点是：有没有把局势、变量和主任务真正搭起来。"
+        closing_check = "收尾应让下一轮任务更具体，而不是继续停留在准备态。"
+    elif normalized_stage == "climax":
+        change_check = "高潮阶段验收重点是：有没有形成决定性碰撞、底牌掀开或局势断裂。"
+        freshness_check = "检查高潮是否只是声量更大，还是确实发生了不可逆变化。"
+    elif normalized_stage == "ending":
+        mission_check = "结局阶段验收重点是：主承诺、主悬念和关键关系线是否得到有效回收。"
+        closing_check = "收尾应保留余味，但不能为了留白再次打散已经完成的收束。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认验收"
+    lines = [f"【{scene_label}验收卡】成稿前请用以下标准验收本轮是否真正达标（{combo_text}）"]
+    lines.append(f"- 任务命中：{mission_check}")
+    lines.append(f"- 变化落地：{change_check}")
+    lines.append(f"- 新鲜度：{freshness_check}")
+    lines.append(f"- 收束质量：{closing_check}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+
+def build_story_creation_brief_block(creation_brief: Optional[str]) -> str:
+    brief = _compact_prompt_text(creation_brief)
+    if not brief:
+        return ""
+    lines = ["【本轮创作总控】"]
+    lines.append(f"- 执行摘要：{brief}")
+    lines.append("- 先按总控摘要定目标、推进与收束，再参考后续卡片补细节，不要彼此打架。")
+    return _compact_prompt_text("\n".join(lines))
+
+def build_story_repair_target_block(
+    repair_summary: Optional[str],
+    repair_targets: Optional[Sequence[str]],
+    preserve_strengths: Optional[Sequence[str]] = None,
+) -> str:
+    summary = str(repair_summary or "").strip()
+    targets = _dedupe_prompt_items([str(item or "").strip() for item in (repair_targets or [])])
+    strengths = _dedupe_prompt_items([str(item or "").strip() for item in (preserve_strengths or [])])
+
+    if not summary and not targets and not strengths:
+        return ""
+
+    lines = ["【修复目标卡】"]
+    if summary:
+        lines.append(f"- 当前问题：{summary}")
+    if targets:
+        lines.append("- 本轮动作：")
+        lines.extend(f"  - {item}" for item in targets)
+    if strengths:
+        lines.append("- 保留优势：")
+        lines.extend(f"  - {item}" for item in strengths)
+    lines.append("- 修复必须落到具体事件、动作和后果，不要只加解释或换说法。")
+    return _compact_prompt_text("\n".join(lines))
+
+def build_story_character_arc_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        external_line = "这一轮至少要让核心人物的外在线任务更明确，不只推动事件壳子。"
+        internal_line = "安排一次会暴露人物执念、伤口或价值判断的压力测试。"
+        relationship_line = "让关键关系在信任、站队或依赖上出现可见变化。"
+        arc_landing = "尾段给出人物阶段性变化，让下一轮成长方向更清晰。"
+        scene_label = "大纲"
+    else:
+        external_line = "本章要让人物在外在线上做出能看见后果的动作，而不是被剧情拖着走。"
+        internal_line = "本章要逼出一次能暴露人物软肋、执念或底线的反应。"
+        relationship_line = "至少让一条关系线发生可见位移，而不只是多说几句情绪台词。"
+        arc_landing = "章尾要留下人物状态的新落点，让后续成长有承接。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        external_line = "人物外在线最好和迫近危险、未决选择或新任务直接绑定，让他不得不动。"
+        arc_landing = "弧光落点要落在人物被推入新处境上，而不只是事件悬空。"
+    elif normalized_mode == "emotion":
+        internal_line = "内在线重点看人物如何被情绪反噬、误伤他人或压抑失败。"
+        relationship_line = "关系线最好呈现安慰失败、靠近受阻或误伤后的余震。"
+    elif normalized_mode == "suspense":
+        external_line = "人物外在线尽量和追查、判断、求生或拆解异常绑定。"
+        internal_line = "通过误判、恐惧和认知落差暴露人物真正的盲区与偏执。"
+    elif normalized_mode == "relationship":
+        relationship_line = "关系线必须承担主推进，最好出现站队变化、信任重排或亲疏重估。"
+        arc_landing = "落点应让人物在关系位置上进入一个再也回不到原点的新阶段。"
+    elif normalized_mode == "payoff":
+        external_line = "人物外在线要和旧承诺兑现、旧目标回收或能力回报直接挂钩。"
+        arc_landing = "落点要让人物因为兑现获得成长回报，或承担兑现带来的新责任。"
+
+    if normalized_focus == "advance_plot":
+        external_line = "人物外在线必须和主线推进同频，行动要真的改变局势而非走流程。"
+    elif normalized_focus == "deepen_character":
+        internal_line = "内在线要让人物在选择里显形，看见他的软肋、执念和价值判断。"
+        arc_landing = "落点最好形成一次人物自我认知偏移，而不只是事件结束。"
+    elif normalized_focus == "escalate_conflict":
+        internal_line = "冲突升级时要逼出人物底线，看看他在更高代价下会怎么变。"
+        relationship_line = "更强冲突最好同步改写人物之间的站位与依赖结构。"
+    elif normalized_focus == "reveal_mystery":
+        external_line = "人物外在线最好围绕调查、判断和选择展开，而不是旁观真相自己掉下来。"
+        internal_line = "认知刷新应反照人物偏见、恐惧或执念，而不是只补世界观信息。"
+    elif normalized_focus == "relationship_shift":
+        relationship_line = "关系线验收重点是：人物之后的说话方式、站位和合作条件是否真的变了。"
+    elif normalized_focus == "foreshadow_payoff":
+        arc_landing = "人物应因为伏笔兑现进入新的自我认知、责任位置或情感阶段。"
+
+    if normalized_stage == "development":
+        external_line = (
+            "发展阶段先让人物想要什么、怕什么、要付什么代价变得清楚。"
+            if scene == "outline"
+            else "发展阶段先把人物眼前要争什么、躲什么、赌什么摆清楚。"
+        )
+        arc_landing = "落点应把人物推入更难但更清晰的成长压力链。"
+    elif normalized_stage == "climax":
+        internal_line = "高潮阶段要逼出人物真正底线、真实选择或最不愿面对的自我。"
+        relationship_line = "高潮中的关系变化最好是定向性变化，而不是小幅试探。"
+    elif normalized_stage == "ending":
+        relationship_line = "结局阶段要让关键关系线出现收束、定局或带余温的最终位移。"
+        arc_landing = "落点要给人物阶段性定局、余味或代价后的新平衡。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认弧光"
+    lines = [f"【{scene_label}角色弧光卡】本轮至少让人物弧光出现以下推进（{combo_text}）"]
+    lines.append(f"- 外在线：{external_line}")
+    lines.append(f"- 内在线：{internal_line}")
+    lines.append(f"- 关系线：{relationship_line}")
+    lines.append(f"- 落点：{arc_landing}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def _allocate_volume_segments(chapter_count: int) -> list[tuple[str, int]]:
+    total = max(0, int(chapter_count or 0))
+    if total <= 0:
+        return []
+    if total == 1:
+        return [("development", 1)]
+    if total == 2:
+        return [("development", 1), ("ending", 1)]
+    if total == 3:
+        return [("development", 1), ("climax", 1), ("ending", 1)]
+
+    development_count = max(1, round(total * 0.45))
+    climax_count = max(1, round(total * 0.35))
+    ending_count = total - development_count - climax_count
+
+    if ending_count < 1:
+        ending_count = 1
+        if development_count >= climax_count and development_count > 1:
+            development_count -= 1
+        elif climax_count > 1:
+            climax_count -= 1
+
+    segments: list[tuple[str, int]] = []
+    if development_count > 0:
+        segments.append(("development", development_count))
+    if climax_count > 0:
+        segments.append(("climax", climax_count))
+    if ending_count > 0:
+        segments.append(("ending", ending_count))
+    return segments
+
+
+def build_volume_pacing_block(
+    chapter_count: Optional[int],
+    *,
+    plot_stage: Optional[str] = None,
+) -> str:
+    total = max(0, int(chapter_count or 0))
+    if total <= 0:
+        return ""
+
+    normalized_stage = normalize_plot_stage(plot_stage)
+    segments = _allocate_volume_segments(total)
+    if not segments:
+        return ""
+
+    lines = [f"【卷级节奏】若本轮规划 {total} 章，建议整体按以下节奏分段"]
+    cursor = 1
+    for stage, count in segments:
+        start_chapter = cursor
+        end_chapter = cursor + count - 1
+        cursor = end_chapter + 1
+        stage_label = PLOT_STAGE_LABELS.get(stage, stage)
+        mission = PLOT_STAGE_MISSIONS.get(stage, "")
+        lines.append(f"- 第{start_chapter}-{end_chapter}章：{stage_label}，重点任务是{mission}")
+
+    if normalized_stage:
+        lines.append(f"- 当前用户指定重点阶段：{PLOT_STAGE_LABELS.get(normalized_stage, normalized_stage)}，本轮应优先把资源集中到这一段的核心任务。")
+
+    return _compact_prompt_text("\n".join(lines))
+
 def _compact_prompt_text(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -2686,75 +3789,142 @@ class PromptService:
     INSPIRATION_GENRE_USER = "原始想法：{initial_idea}\n书名：{title}\n简介：{description}\n主题：{theme}\n请给我6个可组合且不重复语义的类型标签候选，兼顾主赛道与冲突气质，只返回JSON。"
 
     # 灵感模式智能补全提示词
-    INSPIRATION_QUICK_COMPLETE = """你是小说立项总编。用户给了部分信息，请补全缺失字段，并保证最终方案有新意但不跑题。
+    INSPIRATION_QUICK_COMPLETE = (
+        """<system>
+你是小说立项总编，负责把零散想法补成一套能直接开写的小说方案。
+</system>
 
-用户已提供的信息：
+<task>
+【补全任务】
+基于用户已经给出的线索，补齐缺失字段，让结果既有主赛道辨识度，又能直接支撑后续大纲与正文创作。
+
+【优先顺序】
+- 先补故事发动机，再补包装语言
+- 先补能推动创作的关键信息，再补气质修饰
+- 用户已明确给出的字段必须保留，不要擅自推翻
+</task>
+
+<story_engine>
+"""
+        + CREATIVE_STORY_ENGINE_GUIDE
+        + """
+</story_engine>
+
+<input>
+【用户已提供的信息】
 {existing}
+</input>
 
-请补全：
-1. title: 书名（3-10字；用户已给则保留）
-2. description: 简介（90-170字；紧贴已给信息）
-3. theme: 核心主题（55-120字；和简介保持同一冲突链）
-4. genre: 类型标签数组（2-3个）
+<requirements>
+【需要补全的字段】
+1. title：书名（3-10字；用户已给则保留）
+2. description：简介（90-170字；紧贴已给信息）
+3. theme：核心主题（55-120字；和简介保持同一冲突链）
+4. genre：类型标签数组（2-3个）
+5. narrative_perspective：叙事视角（第一人称 / 第三人称 / 全知视角 三选一）
 
-风格要求：
-1. 语言自然，符合中文读者阅读习惯，避免模板腔
-2. description 必须包含“目标→阻力→选择/代价”链条，不写空泛宣传语
-3. description 前两句内必须出现冲突触发、异常变化或高压任务
-4. description 至少包含一个可视化细节（地点/动作/物件/身体反应）
-5. description 尾句保留追读钩子，不用鸡汤总结句
-6. theme 要能一眼看出核心价值冲突，不要只说“成长与救赎”
-7. theme 尽量采用“命题→冲突现场→情绪余震”三拍表达
-8. 若出现设定术语，顺手补一句白话解释
-9. 四个字段要像同一部小说，人物动机和冲突方向保持一致
-10. description 与 title 要有番茄读者可快速识别的主赛道感，避免只有气氛没有卖点
+【写法要求】
+- description 必须包含“目标→阻力→选择/代价”链条，不写空泛宣传语
+- description 前两句内必须出现冲突触发、异常变化或高压任务
+- description 至少包含一个可视化细节（地点/动作/物件/身体反应）
+- description 尾句保留追读钩子，不用鸡汤总结句
+- theme 要能一眼看出核心价值冲突，不要只说“成长与救赎”
+- theme 尽量采用“命题→冲突现场→情绪余震”三拍表达
+- genre 要兼顾主赛道和冲突气质，避免只有氛围词没有卖点词
+- narrative_perspective 要选最适合当前题材和冲突表达的视角，不要机械默认
+- 四个核心字段要像同一部小说，人物动机、冲突方向和读者预期保持一致
+- 若出现设定术语，顺手补一句白话解释
+</requirements>
 
-第三版融合约束（灵感模式）：
-1. 只输出结果JSON，不输出执行步骤、调度术语或自我评注
-2. 禁止出现“执行X.X、调用Agent、方案A/B、复盘”等流程文本
-3. 信息不足时先保住“目标→阻力→选择→后果”，再补风格细节
-4. 模板追踪标签：rule_v3_fusion_20260303
+<writing_guard>
+"""
+        + CREATIVE_LOW_AI_GUARD
+        + """
 
-返回JSON：
+【第三版融合约束（灵感模式）】
+- 只输出结果 JSON，不输出执行步骤、调度术语或自我评注
+- 禁止出现“执行X.X、调用Agent、方案A/B、复盘”等流程文本
+- 信息不足时先保住“目标→阻力→选择→后果”，再补风格细节
+- 模板追踪标签：rule_v3_fusion_20260303
+</writing_guard>
+
+<output>
+返回 JSON：
 {{
     "title": "书名",
     "description": "简介内容...",
     "theme": "主题内容...",
-    "genre": ["类型1", "类型2"]
+    "genre": ["类型1", "类型2"],
+    "narrative_perspective": "第三人称"
 }}
 
-只返回纯JSON，不加其他文字。"""
+只返回纯 JSON，不加其他文字。
+</output>"""
+    )
 
     # AI去味默认提示词
-    AI_DENOISING = """你是中文小说润色搭档。请把下面文本改得更像真人写作，但不要改掉核心剧情和信息。
+    AI_DENOISING = (
+        """<system>
+你是中文小说润稿搭档，擅长把文本修得更像真人创作，同时保住故事骨架、人物声音和阅读黏性。
+</system>
 
-原文：
+<task>
+【润色任务】
+在不改掉核心剧情和信息的前提下，把原文修成更自然、更像网文作者在连载中的成稿。
+
+【本次润色侧重点】
+{focus_instruction}
+</task>
+
+<story_engine>
+"""
+        + CREATIVE_STORY_ENGINE_GUIDE
+        + """
+
+【正文创作底线】
+- 保留原意、人物关系、事件顺序，不擅自加新设定
+- 信息不足时优先保住“目标→阻力→选择→后果”链条，不做空泛拔高
+- 开场尽量在300字内进入冲突或异常变化，避免长背景起手
+- 每章尽量保留至少1个小爽点及其反馈
+- 章节结尾尽量保留追读钩子，不改成平铺总结
+</story_engine>
+
+<input>
+【原文】
 {original_text}
+</input>
 
-处理要求：
-1. 保留原意、人物关系、事件顺序，不擅自加剧情设定
-2. 去掉机械排比、模板化总结、空泛口号
-3. 句子长短有变化，读起来像自然叙述
-4. 对话要像中国人日常说话，避免书面腔和公文腔
-5. 减少“总之/综上/值得注意的是/在这个过程中”等套话
-6. 允许保留少量不完美表达，让语气更像真实创作
-7. 保留人物说话习惯，不把所有角色润色成同一种语气
-8. 能用动作和细节表达的，不要改成抽象解释句
-9. 只输出润色后的正文，不输出执行步骤、调度术语或改写说明
-10. 信息不足时优先保住“目标→阻力→选择→后果”链条，不做空泛拔高
-11. 开场尽量在300字内进入冲突或异常变化，避免长背景起手
-12. 每章尽量保留至少1个小爽点（反转/收获/打脸/突破）与对应反馈
-13. 章节结尾尽量保留追读钩子，不改成平铺总结
-14. 正文尽量形成“开场钩子→对抗推进→小爆发→章尾牵引”的节拍，至少保住其中三拍
-15. 章尾钩子优先落在信息缺口、危险临门、身份反转、选择未决之一，避免无力收束
+<rewrite_guard>
+"""
+        + CREATIVE_LOW_AI_GUARD
+        + """
 
-输出要求：
+【改写要求】
+- 去掉机械排比、模板化总结、空泛口号
+- 句子长短有变化，读起来像自然叙述
+- 对话要像中国人日常说话，避免书面腔和公文腔
+- 允许保留少量不完美表达，让语气更像真实创作
+- 能用动作和细节表达的，不要改成抽象解释句
+- 正文尽量形成“开场钩子→对抗推进→小爆发→章尾牵引”的节拍，至少保住其中三拍
+- 章尾钩子优先落在信息缺口、危险临门、身份反转、选择未决之一，避免无力收束
+</rewrite_guard>
+
+<runtime_controls>
+【结构与风格补充】
+{structure_instruction}
+
+{style_hint_block}
+</runtime_controls>
+
+<output>
+【输出要求】
 - 只输出润色后的正文
 - 不加解释、标题、注释
-- 不使用Markdown
+- 不使用 Markdown
 - 禁止出现“执行X.X/调用Agent/方案A-B/复盘”等流程文本
 - 模板追踪标签：rule_v3_fusion_20260303
-"""
+</output>"""
+    )
     # 世界观资料收集提示词（MCP增强用）
     MCP_WORLD_BUILDING_PLANNING = """你正在给小说《{title}》补世界观素材。
 
@@ -3615,6 +4785,16 @@ class PromptService:
             "style_name",
             "style_preset_id",
             "style_content",
+            "creative_mode",
+            "creative_mode_block",
+            "story_focus",
+            "story_focus_block",
+            "story_creation_brief",
+            "story_creation_brief_block",
+            "story_repair_summary",
+            "story_repair_targets",
+            "story_preserve_strengths",
+            "story_repair_target_block",
             "external_assets",
             "reference_assets",
             "quality_generation_block",
@@ -3661,6 +4841,87 @@ class PromptService:
         mcp_references = _compact_prompt_text(
             kwargs.get("mcp_references") or kwargs.get("quality_mcp_references")
         )
+        creative_mode_block = _compact_prompt_text(
+            kwargs.get("creative_mode_block") or build_creative_mode_block(kwargs.get("creative_mode"), scene="chapter")
+        )
+        story_focus_block = _compact_prompt_text(
+            kwargs.get("story_focus_block") or build_story_focus_block(kwargs.get("story_focus"), scene="chapter")
+        )
+        narrative_blueprint_block = _compact_prompt_text(
+            kwargs.get("narrative_blueprint_block")
+            or build_narrative_blueprint_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_creation_brief_block = _compact_prompt_text(
+            kwargs.get("story_creation_brief_block")
+            or build_story_creation_brief_block(kwargs.get("story_creation_brief"))
+        )
+        story_objective_card_block = _compact_prompt_text(
+            kwargs.get("story_objective_card_block")
+            or build_story_objective_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_result_card_block = _compact_prompt_text(
+            kwargs.get("story_result_card_block")
+            or build_story_result_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_repair_target_block = _compact_prompt_text(
+            kwargs.get("story_repair_target_block")
+            or build_story_repair_target_block(
+                kwargs.get("story_repair_summary"),
+                kwargs.get("story_repair_targets"),
+                kwargs.get("story_preserve_strengths"),
+            )
+        )
+        story_execution_checklist_block = _compact_prompt_text(
+            kwargs.get("story_execution_checklist_block")
+            or build_story_execution_checklist_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_repetition_risk_block = _compact_prompt_text(
+            kwargs.get("story_repetition_risk_block")
+            or build_story_repetition_risk_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_acceptance_card_block = _compact_prompt_text(
+            kwargs.get("story_acceptance_card_block")
+            or build_story_acceptance_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_character_arc_card_block = _compact_prompt_text(
+            kwargs.get("story_character_arc_card_block")
+            or build_story_character_arc_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
 
         quality_generation_protocol_block = _compact_prompt_text(
             "\n".join(
@@ -3701,6 +4962,17 @@ class PromptService:
             "quality_mcp_guard_block": mcp_guard_block,
             "quality_external_assets_block": external_assets_block,
             "quality_mcp_references_block": mcp_references,
+            "creative_mode_block": creative_mode_block,
+            "story_focus_block": story_focus_block,
+            "narrative_blueprint_block": narrative_blueprint_block,
+            "story_creation_brief_block": story_creation_brief_block,
+            "story_objective_card_block": story_objective_card_block,
+            "story_result_card_block": story_result_card_block,
+            "story_repair_target_block": story_repair_target_block,
+            "story_execution_checklist_block": story_execution_checklist_block,
+            "story_repetition_risk_block": story_repetition_risk_block,
+            "story_acceptance_card_block": story_acceptance_card_block,
+            "story_character_arc_card_block": story_character_arc_card_block,
         }
 
         template_insertion = QUALITY_TEMPLATE_INSERTIONS.get(template_key or "")
@@ -4273,7 +5545,7 @@ class PromptService:
                 "name": "AI去味",
                 "category": "文本润色",
                 "description": "将文本改写为更自然的中文表达，降低模板腔和AI腔",
-                "parameters": ["original_text"]
+                "parameters": ["original_text", "focus_instruction", "structure_instruction", "style_hint_block"]
             }
         }
         

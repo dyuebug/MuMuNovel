@@ -1,4 +1,4 @@
-import { ConfigProvider } from 'antd';
+import { ConfigProvider, theme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { PropsWithChildren } from 'react';
@@ -60,6 +60,7 @@ export const ThemeProvider = ({ children }: PropsWithChildren) => {
 
   const resolvedMode: ResolvedThemeMode = getResolvedMode(mode, systemMode);
   const themeConfig = useMemo(() => getThemeConfig(resolvedMode), [resolvedMode]);
+  const designToken = useMemo(() => theme.getDesignToken(themeConfig), [themeConfig]);
 
   const setMode = useCallback((nextMode: ThemeMode) => {
     if (nextMode === mode) {
@@ -117,10 +118,43 @@ export const ThemeProvider = ({ children }: PropsWithChildren) => {
     root.setAttribute('data-theme-resolved', resolvedMode);
     root.style.colorScheme = resolvedMode;
 
-    const tooltipBg = themeConfig.token?.colorPrimary ?? '#884d5c';
+    const tooltipBg = designToken.colorPrimary ?? '#884d5c';
     root.style.setProperty('--app-tooltip-bg', tooltipBg);
     root.style.setProperty('--app-tooltip-shadow', hexToRgba(tooltipBg, 0.3));
-  }, [mode, resolvedMode, themeConfig]);
+
+    const colorVariables = {
+      '--color-primary': designToken.colorPrimary,
+      '--color-primary-hover': designToken.colorPrimaryHover,
+      '--color-primary-active': designToken.colorPrimaryActive,
+      '--color-success': designToken.colorSuccess,
+      '--color-success-active': designToken.colorSuccessActive,
+      '--color-success-bg': designToken.colorSuccessBg,
+      '--color-success-border': designToken.colorSuccessBorder,
+      '--color-warning': designToken.colorWarning,
+      '--color-warning-bg': designToken.colorWarningBg,
+      '--color-warning-border': designToken.colorWarningBorder,
+      '--color-error': designToken.colorError,
+      '--color-error-bg': designToken.colorErrorBg,
+      '--color-error-border': designToken.colorErrorBorder,
+      '--color-info-bg': designToken.colorInfoBg,
+      '--color-info-border': designToken.colorInfoBorder,
+      '--color-bg-base': designToken.colorBgBase,
+      '--color-bg-container': designToken.colorBgContainer,
+      '--color-bg-layout': designToken.colorBgLayout,
+      '--color-border': designToken.colorBorder,
+      '--color-border-secondary': designToken.colorBorderSecondary,
+      '--color-text-primary': designToken.colorText,
+      '--color-text-secondary': designToken.colorTextSecondary,
+      '--color-text-tertiary': designToken.colorTextTertiary,
+      '--color-text-quaternary': designToken.colorTextQuaternary,
+    };
+
+    Object.entries(colorVariables).forEach(([key, value]) => {
+      if (value) {
+        root.style.setProperty(key, value);
+      }
+    });
+  }, [designToken, mode, resolvedMode]);
 
   useEffect(() => {
     return () => {

@@ -70,6 +70,18 @@ STEP_EXTRA_STYLE_GUARD = {
 """,
 }
 
+INSPIRATION_ALLOWED_PERSPECTIVES = ("第一人称", "第三人称", "全知视角")
+INSPIRATION_PERSPECTIVE_ALIASES = {
+    "第一人称": "第一人称",
+    "第三人称": "第三人称",
+    "全知视角": "全知视角",
+    "first_person": "第一人称",
+    "third_person": "第三人称",
+    "omniscient": "全知视角",
+    "firstperson": "第一人称",
+    "thirdperson": "第三人称",
+}
+
 _TEMPLATEY_PREFIXES = (
     "这是一个关于",
     "讲述了",
@@ -172,6 +184,71 @@ _SCENE_HINT_WORDS = (
 def _build_style_guard(step: str) -> str:
     extra = STEP_EXTRA_STYLE_GUARD.get(step, "")
     return f"{COMMON_INSPIRATION_STYLE_GUARD}\n{extra}".strip()
+
+
+def _normalize_genre_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+
+    raw_items: list[str] = []
+    if isinstance(value, str):
+        raw_items = re.split(r"[，,、/|｜]+", value)
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, str):
+                raw_items.extend(re.split(r"[，,、/|｜]+", item))
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        cleaned = item.strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned)
+    return normalized
+
+
+def _normalize_narrative_perspective(value: Any) -> str:
+    if value is None:
+        return "第三人称"
+
+    cleaned = str(value).strip()
+    if not cleaned:
+        return "第三人称"
+
+    mapped = INSPIRATION_PERSPECTIVE_ALIASES.get(cleaned)
+    if mapped:
+        return mapped
+
+    lowered = cleaned.lower().replace(" ", "")
+    mapped = INSPIRATION_PERSPECTIVE_ALIASES.get(lowered)
+    if mapped:
+        return mapped
+
+    return cleaned if cleaned in INSPIRATION_ALLOWED_PERSPECTIVES else "第三人称"
+
+
+def _build_quick_generate_existing_text(data: Dict[str, Any]) -> str:
+    existing_info: list[str] = []
+
+    if data.get("title"):
+        existing_info.append(f"- 书名：{data['title']}")
+    if data.get("description"):
+        existing_info.append(f"- 简介：{data['description']}")
+    if data.get("theme"):
+        existing_info.append(f"- 主题：{data['theme']}")
+
+    genre_values = _normalize_genre_list(data.get("genre"))
+    if genre_values:
+        existing_info.append(f"- 类型：{', '.join(genre_values)}")
+
+    if data.get("narrative_perspective"):
+        existing_info.append(
+            f"- 叙事视角：{_normalize_narrative_perspective(data.get('narrative_perspective'))}"
+        )
+
+    return "\n".join(existing_info) if existing_info else "暂无信息"
 
 
 def _normalize_text(value: str) -> str:
@@ -684,7 +761,8 @@ async def quick_generate(
             "title": "书名（可选）",
             "description": "简介（可选）",
             "theme": "主题（可选）",
-            "genre": ["类型1", "类型2"]（可选）
+            "genre": ["类型1", "类型2"] 或 "类型1,类型2"（可选）, 
+            "narrative_perspective": "第一人称/第三人称/全知视角"（可选）
         }
     
     Response:
@@ -692,39 +770,32 @@ async def quick_generate(
             "title": "补全的书名",
             "description": "补全的简介",
             "theme": "补全的主题",
-            "genre": ["补全的类型"]
+            "genre": ["补全的类型"],
+            "narrative_perspective": "叙事视角"
         }
     """
     try:
         logger.info("灵感模式：智能补全")
-        
+
         # 获取用户ID
         user_id = getattr(http_request.state, 'user_id', None)
-        
-        # 构建补全提示词
-        existing_info = []
-        if data.get("title"):
-            existing_info.append(f"- 书名：{data['title']}")
-        if data.get("description"):
-            existing_info.append(f"- 简介：{data['description']}")
-        if data.get("theme"):
-            existing_info.append(f"- 主题：{data['theme']}")
-        if data.get("genre"):
-            existing_info.append(f"- 类型：{', '.join(data['genre'])}")
-        
-        existing_text = "\n".join(existing_info) if existing_info else "暂无信息"
-        
+
+        provided_genre = _normalize_genre_list(data.get("genre"))
+        provided_perspective = _normalize_narrative_perspective(data.get("narrative_perspective"))
+        existing_text = _build_quick_generate_existing_text(data)
+
         # 获取自定义提示词模板
         system_template = await PromptService.get_template("INSPIRATION_QUICK_COMPLETE", user_id, db)
-        
+
         # 格式化提示词
         prompts = {
             "system": (
                 f"{PromptService.format_prompt(system_template, existing=existing_text)}\n\n"
-                f"{COMMON_INSPIRATION_STYLE_GUARD}\n"
+                f"{_build_style_guard('description')}\n"
                 "【智能补全专项】保证四个字段像同一部小说，人物语气自然，信息前后一致；"
                 "仅返回JSON字段值，不输出流程说明或执行步骤；"
-                "信息不足时先补目标→阻力→选择→后果链。"
+                "信息不足时先补目标→阻力→选择→后果链；"
+                "如果用户没给叙事视角，请补一个最适合题材与冲突表达的视角。"
             ),
             "user": "请在不偏离现有信息的前提下补全缺失字段，只返回JSON。"
         }
@@ -747,13 +818,23 @@ async def quick_generate(
             cleaned_content = ai_service._clean_json_response(content)
             
             result = json.loads(cleaned_content)
-            
+
+            result_genre = _normalize_genre_list(result.get("genre"))
+            result_perspective = _normalize_narrative_perspective(
+                result.get("narrative_perspective")
+            )
+
             # 合并用户已提供的信息（用户输入优先）
             final_result = {
                 "title": data.get("title") or result.get("title", ""),
                 "description": data.get("description") or result.get("description", ""),
                 "theme": data.get("theme") or result.get("theme", ""),
-                "genre": data.get("genre") or result.get("genre", [])
+                "genre": provided_genre or result_genre,
+                "narrative_perspective": (
+                    provided_perspective
+                    if data.get("narrative_perspective")
+                    else result_perspective
+                ),
             }
             
             logger.info(f"✅ 智能补全成功")

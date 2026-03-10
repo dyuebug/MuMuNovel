@@ -587,6 +587,70 @@ async def test_should_create_batch_generation_task_and_query_status(
         assert task.chapter_count == 2
 
 
+async def test_should_forward_creative_mode_to_batch_background_generation(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_execute_batch_generation(*args, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(
+        chapters_api,
+        "execute_batch_generation_in_order",
+        fake_execute_batch_generation,
+    )
+
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+
+    await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="第一章",
+        content="前置章节已完成",
+        status="completed",
+    )
+    await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title="第二章",
+        content=None,
+    )
+    await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=3,
+        title="第三章",
+        content=None,
+    )
+
+    response = await chapters_client.post(
+        f"/api/chapters/project/{project.id}/batch-generate",
+        json={
+            "start_chapter_number": 2,
+            "count": 2,
+            "target_word_count": 500,
+            "enable_analysis": False,
+            "enable_mcp": False,
+            "max_retries": 1,
+            "creative_mode": "payoff",
+            "story_focus": "foreshadow_payoff",
+            "plot_stage": "ending",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["creative_mode"] == "payoff"
+    assert captured["story_focus"] == "foreshadow_payoff"
+    assert captured["plot_stage"] == "ending"
+
+
 async def test_should_expose_runtime_workflow_phase_in_batch_status(
     chapters_client,
     chapters_session_factory,
@@ -1100,6 +1164,64 @@ async def test_should_allow_disabling_analysis_for_single_chapter_background_gen
         task = await session.get(BatchGenerationTask, body["task_id"])
         assert task is not None
         assert task.enable_analysis is False
+
+
+async def test_should_forward_creative_mode_to_single_background_generation(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_execute_batch_generation(*args, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(
+        chapters_api,
+        "execute_batch_generation_in_order",
+        fake_execute_batch_generation,
+    )
+
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    outline = await create_outline(
+        chapters_session_factory,
+        project_id=project.id,
+        order_index=1,
+        title="单章后台创作模式大纲",
+    )
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="待创作模式后台生成章节",
+        content=None,
+        outline_id=outline.id,
+    )
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/generate-background",
+        json={
+            "target_word_count": 1200,
+            "creative_mode": "suspense",
+            "story_focus": "reveal_mystery",
+            "plot_stage": "climax",
+            "story_creation_brief": "本轮先把正面对撞和章尾牵引写实",
+            "story_repair_summary": "优先补强冲突抬压",
+            "story_repair_targets": ["写实受阻", "升级代价"],
+            "story_preserve_strengths": ["保留对白辨识度"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["creative_mode"] == "suspense"
+    assert captured["story_focus"] == "reveal_mystery"
+    assert captured["plot_stage"] == "climax"
+    assert captured["story_creation_brief"] == "本轮先把正面对撞和章尾牵引写实"
+    assert captured["story_repair_summary"] == "优先补强冲突抬压"
+    assert captured["story_repair_targets"] == ["写实受阻", "升级代价"]
+    assert captured["story_preserve_strengths"] == ["保留对白辨识度"]
 
 
 async def test_should_reuse_active_background_task_for_same_chapter(
@@ -1696,32 +1818,32 @@ async def test_should_auto_recover_stale_analysis_status_and_keep_none_compatibl
         chapters_session_factory,
         project_id=project.id,
         chapter_number=1,
-        title="?????????",
-        content="??",
+        title="无任务状态章节",
+        content="正文",
         status="completed",
     )
     chapter_active = await create_chapter(
         chapters_session_factory,
         project_id=project.id,
         chapter_number=2,
-        title="????????",
-        content="??",
+        title="活跃分析章节",
+        content="正文",
         status="completed",
     )
     chapter_stale_running = await create_chapter(
         chapters_session_factory,
         project_id=project.id,
         chapter_number=3,
-        title="??????????",
-        content="??",
+        title="超时运行章节",
+        content="正文",
         status="completed",
     )
     chapter_stale_pending = await create_chapter(
         chapters_session_factory,
         project_id=project.id,
         chapter_number=4,
-        title="???????????",
-        content="??",
+        title="超时待启动章节",
+        content="正文",
         status="completed",
     )
 

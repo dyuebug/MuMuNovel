@@ -3,6 +3,7 @@ import { Button, Modal, Form, Input, Select, message, Row, Col, Empty, Tabs, Car
 import { ThunderboltOutlined, PlusOutlined, EditOutlined, DeleteOutlined, TrophyOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import api, { backgroundTaskApi } from '../services/api';
+import { invalidateProjectCareers, loadProjectCareers } from '../services/projectCareers';
 import SSEProgressModal from '../components/SSEProgressModal';
 
 const { TextArea } = Input;
@@ -49,13 +50,15 @@ export default function Careers() {
     const aiTaskIdRef = useRef<string | null>(null);
 
     const fetchCareers = useCallback(async () => {
+        if (!projectId) {
+            return;
+        }
+
         try {
             setLoading(true);
-            const response = await api.get('/careers', {
-                params: { project_id: projectId }
-            }) as { main_careers?: Career[]; sub_careers?: Career[] };
-            setMainCareers(response.main_careers || []);
-            setSubCareers(response.sub_careers || []);
+            const response = await loadProjectCareers(projectId) as { mainCareers: Career[]; subCareers: Career[] };
+            setMainCareers(response.mainCareers || []);
+            setSubCareers(response.subCareers || []);
         } catch (error: unknown) {
             console.error('获取职业列表失败:', error);
         } finally {
@@ -98,6 +101,7 @@ export default function Careers() {
                     aiTaskIdRef.current = null;
                     setAiGenerating(false);
                     message.success('AI新职业生成完成！');
+                    invalidateProjectCareers(projectId);
                     void fetchCareers();
                     return;
                 }
@@ -251,7 +255,8 @@ export default function Careers() {
 
             setIsModalOpen(false);
             form.resetFields();
-            fetchCareers();
+            invalidateProjectCareers(projectId);
+            void fetchCareers();
         } catch (error: unknown) {
             const axiosError = error as { response?: { data?: { detail?: string } } };
             message.error(axiosError.response?.data?.detail || '操作失败');
@@ -267,7 +272,8 @@ export default function Careers() {
                 try {
                     await api.delete(`/careers/${id}`);
                     message.success('职业删除成功');
-                    fetchCareers();
+                    invalidateProjectCareers(projectId);
+                    void fetchCareers();
                 } catch (error: unknown) {
                     const axiosError = error as { response?: { data?: { detail?: string } } };
                     message.error(axiosError.response?.data?.detail || '删除失败');

@@ -24,16 +24,16 @@ class FakeAIService:
 
 
 async def test_should_retry_plot_analysis_with_stricter_json_mode(monkeypatch):
-    invalid_json = '{"hooks": [{"type": "??", "content": "??", "strength"'
+    invalid_json = '{"hooks": [{"type": "冲突", "content": "门外敲门", "strength"'
     valid_json = json.dumps(
         {
             "hooks": [
                 {
-                    "type": "??",
-                    "content": "??",
+                    "type": "冲突",
+                    "content": "门外敲门",
                     "strength": 8,
-                    "position": "??",
-                    "keyword": "?????",
+                    "position": "开篇",
+                    "keyword": "门外敲了两下玻璃",
                 }
             ],
             "plot_points": [],
@@ -54,8 +54,8 @@ async def test_should_retry_plot_analysis_with_stricter_json_mode(monkeypatch):
 
     result = await analyzer.analyze_chapter(
         chapter_number=1,
-        title="???",
-        content="????" * 400,
+        title="第一章",
+        content="正文内容" * 400,
         word_count=3200,
         max_retries=2,
         on_retry=on_retry,

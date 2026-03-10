@@ -46,7 +46,16 @@ from app.schemas.regeneration import (
     RegenerationTaskStatus
 )
 from app.services.ai_service import AIService
-from app.services.prompt_service import prompt_service, PromptService, WritingStyleManager
+from app.services.prompt_service import (
+    prompt_service,
+    PromptService,
+    WritingStyleManager,
+    build_creative_mode_block,
+    build_narrative_blueprint_block,
+    build_story_creation_brief_block,
+    build_story_focus_block,
+    build_story_repair_target_block,
+)
 from app.services.plot_analyzer import PlotAnalyzer
 from app.services.memory_service import memory_service
 from app.services.foreshadow_service import foreshadow_service
@@ -80,7 +89,17 @@ async def get_db_write_lock(user_id: str) -> Lock:
     return db_write_locks[user_id]
 
 
-def _build_prompt_quality_kwargs(profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _build_prompt_quality_kwargs(
+    profile: Optional[Dict[str, Any]],
+    *,
+    creative_mode: Optional[str] = None,
+    story_focus: Optional[str] = None,
+    plot_stage: Optional[str] = None,
+    story_creation_brief: Optional[str] = None,
+    story_repair_summary: Optional[str] = None,
+    story_repair_targets: Optional[list[str]] = None,
+    story_preserve_strengths: Optional[list[str]] = None,
+) -> Dict[str, Any]:
     """提取可直接传给 PromptService.format_prompt 的统一质量画像参数。"""
     source = profile or {}
     external_assets = source.get("external_assets") or ()
@@ -94,6 +113,27 @@ def _build_prompt_quality_kwargs(profile: Optional[Dict[str, Any]]) -> Dict[str,
         "reference_assets": reference_assets,
         "mcp_guard": source.get("mcp_guard") or "",
         "mcp_references": source.get("mcp_references") or "",
+        "creative_mode": creative_mode or "",
+        "creative_mode_block": build_creative_mode_block(creative_mode, scene="chapter"),
+        "story_focus": story_focus or "",
+        "story_focus_block": build_story_focus_block(story_focus, scene="chapter"),
+        "plot_stage": plot_stage or "",
+        "story_creation_brief": story_creation_brief or "",
+        "story_creation_brief_block": build_story_creation_brief_block(story_creation_brief),
+        "story_repair_summary": story_repair_summary or "",
+        "story_repair_targets": story_repair_targets or [],
+        "story_preserve_strengths": story_preserve_strengths or [],
+        "story_repair_target_block": build_story_repair_target_block(
+            story_repair_summary,
+            story_repair_targets,
+            story_preserve_strengths,
+        ),
+        "narrative_blueprint_block": build_narrative_blueprint_block(
+            creative_mode,
+            story_focus,
+            scene="chapter",
+            plot_stage=plot_stage,
+        ),
     }
 
 
@@ -454,7 +494,7 @@ def _contains_chapter_workflow_meta_text(text: str) -> bool:
 
 
 def _lightly_polish_template_phrases(text: str) -> str:
-    """??????????????? AI ????"""
+    """轻度打磨高频模板句式，减少明显 AI 腔调。"""
     cleaned = text
 
     sentence_boundary_pattern = r"""(^|[。！？!?；;\n])([“"'‘「『（(]*)"""
@@ -3141,7 +3181,16 @@ async def generate_chapter_content_stream(
                     prefer_project_default_style=not bool(style_id),
                     log_prefix="单章生成",
                 )
-                prompt_quality_kwargs = _build_prompt_quality_kwargs(quality_profile)
+                prompt_quality_kwargs = _build_prompt_quality_kwargs(
+                    quality_profile,
+                    creative_mode=generate_request.creative_mode,
+                    story_focus=generate_request.story_focus,
+                    plot_stage=getattr(generate_request, 'plot_stage', None),
+                    story_creation_brief=getattr(generate_request, 'story_creation_brief', None),
+                    story_repair_summary=getattr(generate_request, 'story_repair_summary', None),
+                    story_repair_targets=getattr(generate_request, 'story_repair_targets', None),
+                    story_preserve_strengths=getattr(generate_request, 'story_preserve_strengths', None),
+                )
                 analysis_quality_kwargs = _build_analysis_quality_kwargs(quality_profile)
                 resolved_style_id = quality_profile.get("resolved_style_id")
                 style_content = quality_profile.get("style_content") or ""
@@ -3644,6 +3693,21 @@ async def generate_chapter_content_background(
         if hasattr(generate_request, 'narrative_perspective')
         else None
     )
+    creative_mode = (
+        generate_request.creative_mode
+        if hasattr(generate_request, 'creative_mode')
+        else None
+    )
+    story_focus = (
+        generate_request.story_focus
+        if hasattr(generate_request, 'story_focus')
+        else None
+    )
+    plot_stage = (
+        generate_request.plot_stage
+        if hasattr(generate_request, 'plot_stage')
+        else None
+    )
 
     single_task_quality_profile = await _resolve_chapter_quality_profile(
         db_session=db,
@@ -3684,7 +3748,14 @@ async def generate_chapter_content_background(
         user_id=user_id,
         ai_service=user_ai_service,
         custom_model=custom_model,
-        temp_narrative_perspective=temp_narrative_perspective
+        temp_narrative_perspective=temp_narrative_perspective,
+        creative_mode=creative_mode,
+        story_focus=story_focus,
+        plot_stage=plot_stage,
+        story_creation_brief=getattr(generate_request, 'story_creation_brief', None),
+        story_repair_summary=getattr(generate_request, 'story_repair_summary', None),
+        story_repair_targets=getattr(generate_request, 'story_repair_targets', None),
+        story_preserve_strengths=getattr(generate_request, 'story_preserve_strengths', None),
     )
 
     estimated_time = calculate_estimated_time(
@@ -3773,14 +3844,14 @@ async def get_analysis_task_status(
     auto_recovered = False
     current_time = datetime.now()
     
-    # ?????????
-    # ???running ?????????? progress=20??? PlotAnalyzer ??? AI ?????
-    # ??/????????????????????????
+    # 对分析任务做超时兜底恢复
+    # 进入 running 且 progress=20 后，通常已进入 PlotAnalyzer 调用 AI 的分析阶段
+    # 此时网络请求或重试耗时更长，需要放宽自动恢复超时阈值
     if task.status == 'running':
-        # ?????????error_message ??"??"???
-        is_retrying = task.error_message and '??' in task.error_message
-        # running ????????????????? AI ??? 3 ?????
-        # ?????????????????????????
+        # 通过错误信息里是否包含“重试”来判断当前是否处于重试阶段
+        is_retrying = task.error_message and '重试' in task.error_message
+        # running 状态下的章节分析可能触发 AI 最多 3 轮重试
+        # 因此这里比任务刚启动阶段使用更宽松的超时窗口
         timeout_minutes = 15 if is_retrying else 10
         
         # 如果任务在running状态超过超时时间，标记为失败
@@ -4451,7 +4522,14 @@ async def batch_generate_chapters_in_order(
         batch_id=batch_id,
         user_id=user_id,
         ai_service=user_ai_service,
-        custom_model=batch_request.model
+        custom_model=batch_request.model,
+        creative_mode=batch_request.creative_mode,
+        story_focus=batch_request.story_focus,
+        plot_stage=batch_request.plot_stage,
+        story_creation_brief=batch_request.story_creation_brief,
+        story_repair_summary=batch_request.story_repair_summary,
+        story_repair_targets=batch_request.story_repair_targets,
+        story_preserve_strengths=batch_request.story_preserve_strengths,
     )
     
     return BatchGenerateResponse(
@@ -4852,7 +4930,14 @@ async def execute_batch_generation_in_order(
     user_id: str,
     ai_service: AIService,
     custom_model: Optional[str] = None,
-    temp_narrative_perspective: Optional[str] = None
+    temp_narrative_perspective: Optional[str] = None,
+    creative_mode: Optional[str] = None,
+    story_focus: Optional[str] = None,
+    plot_stage: Optional[str] = None,
+    story_creation_brief: Optional[str] = None,
+    story_repair_summary: Optional[str] = None,
+    story_repair_targets: Optional[list[str]] = None,
+    story_preserve_strengths: Optional[list[str]] = None,
 ):
     """
     按顺序执行批量生成任务（后台任务）
@@ -5002,6 +5087,13 @@ async def execute_batch_generation_in_order(
                         custom_model=custom_model,
                         previous_summary_context=last_generated_summary,
                         temp_narrative_perspective=temp_narrative_perspective,
+                        creative_mode=creative_mode,
+                        story_focus=story_focus,
+                        plot_stage=plot_stage,
+                        story_creation_brief=story_creation_brief,
+                        story_repair_summary=story_repair_summary,
+                        story_repair_targets=story_repair_targets,
+                        story_preserve_strengths=story_preserve_strengths,
                         stream_task_id=batch_id,
                         stream_chunks=stream_chunks
                     )
@@ -5247,6 +5339,13 @@ async def generate_single_chapter_for_batch(
     custom_model: Optional[str] = None,
     previous_summary_context: Optional[str] = None,
     temp_narrative_perspective: Optional[str] = None,
+    creative_mode: Optional[str] = None,
+    story_focus: Optional[str] = None,
+    plot_stage: Optional[str] = None,
+    story_creation_brief: Optional[str] = None,
+    story_repair_summary: Optional[str] = None,
+    story_repair_targets: Optional[list[str]] = None,
+    story_preserve_strengths: Optional[list[str]] = None,
     stream_task_id: Optional[str] = None,
     stream_chunks: bool = False
 ) -> Optional[str]:
@@ -5293,7 +5392,16 @@ async def generate_single_chapter_for_batch(
         prefer_project_default_style=not bool(style_id),
         log_prefix="批量单章生成",
     )
-    prompt_quality_kwargs = _build_prompt_quality_kwargs(quality_profile)
+    prompt_quality_kwargs = _build_prompt_quality_kwargs(
+        quality_profile,
+        creative_mode=creative_mode,
+        story_focus=story_focus,
+        plot_stage=plot_stage,
+        story_creation_brief=story_creation_brief,
+        story_repair_summary=story_repair_summary,
+        story_repair_targets=story_repair_targets,
+        story_preserve_strengths=story_preserve_strengths,
+    )
     analysis_quality_kwargs = _build_analysis_quality_kwargs(quality_profile)
     style_id = quality_profile.get("resolved_style_id")
     style_content = quality_profile.get("style_content") or ""
@@ -5863,12 +5971,12 @@ async def regenerate_chapter_stream(
                 full_content, removed_meta_lines = _sanitize_generated_narrative_text(full_content)
                 if removed_meta_lines > 0:
                     logger.warning(
-                        f"????????? {removed_meta_lines} ?????????? chapter_id={chapter_id}"
+                        f"重新生成内容清理了 {removed_meta_lines} 行流程化元文本，chapter_id={chapter_id}"
                     )
                 if not full_content.strip():
-                    raise ValueError("?????????????????")
+                    raise ValueError("重新生成内容清理后为空，无法保存")
                 if _contains_chapter_workflow_meta_text(full_content):
-                    raise ValueError("???????????????????")
+                    raise ValueError("重新生成内容仍包含流程化元文本")
 
                 regen_task.status = 'completed'
                 regen_task.regenerated_content = full_content
@@ -6362,12 +6470,12 @@ async def apply_partial_regenerate(
     new_text, removed_meta_lines = _sanitize_generated_narrative_text(new_text_raw)
     if removed_meta_lines > 0:
         logger.warning(
-            f"??????????? {removed_meta_lines} ?????????? chapter_id={chapter_id}"
+            f"局部改写内容清理了 {removed_meta_lines} 行流程化元文本，chapter_id={chapter_id}"
         )
     if not new_text:
-        raise HTTPException(status_code=400, detail="??????")
+        raise HTTPException(status_code=400, detail="新内容不能为空")
     if _contains_chapter_workflow_meta_text(new_text):
-        raise HTTPException(status_code=400, detail="????????????")
+        raise HTTPException(status_code=400, detail="新内容包含流程化元文本")
     
     # 验证位置有效性
     content_length = len(chapter.content)

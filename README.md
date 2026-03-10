@@ -402,6 +402,12 @@ npm run dev  # 开发模式
 npm run build  # 生产构建
 ```
 
+
+#### 编码体检（可选）
+
+```bash
+python backend/tools/check_text_encoding_health.py
+```
 ## ⚙️ 配置说明
 
 ### 必需配置
@@ -527,7 +533,8 @@ MuMuAINovel/
 │   │   ├── middleware/     # 中间件
 │   │   ├── database.py     # 数据库连接
 │   │   └── main.py         # 应用入口
-│   ├── scripts/            # 工具脚本
+│   ├── scripts/            # 部署 / 数据库脚本
+│   ├── tools/              # 开发辅助工具
 │   └── requirements.txt    # Python 依赖
 ├── frontend/               # 前端应用
 │   ├── src/

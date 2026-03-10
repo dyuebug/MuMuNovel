@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, Table, Tag, Button, Space, message, Modal, Form, Select, Slider, Input, Tabs, AutoComplete, theme } from 'antd';
 import { PlusOutlined, ApartmentOutlined, UserOutlined, EditOutlined } from '@ant-design/icons';
 import { useStore } from '../store';
+import { useCharacterSync } from '../store/hooks';
 import axios from 'axios';
 
 const { TextArea } = Input;
@@ -26,19 +27,14 @@ interface RelationshipType {
   icon?: string;
 }
 
-interface Character {
-  id: string;
-  name: string;
-  is_organization: boolean;
-}
-
 export default function Relationships() {
   const { projectId } = useParams<{ projectId: string }>();
-  const { currentProject } = useStore();
+  const currentProject = useStore((state) => state.currentProject);
+  const storeCharacters = useStore((state) => state.characters);
+  const { refreshCharacters } = useCharacterSync();
   const navigate = useNavigate();
   const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [relationshipTypes, setRelationshipTypes] = useState<RelationshipType[]>([]);
-  const [characters, setCharacters] = useState<Character[]>([]);
   const [loading, setLoading] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -59,32 +55,38 @@ export default function Relationships() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  useEffect(() => {
-    if (projectId) {
-      loadData();
+  const loadData = useCallback(async () => {
+    if (!projectId) {
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
 
-  const loadData = async () => {
     setLoading(true);
     try {
-      const [relsRes, typesRes, charsRes] = await Promise.all([
+      const { currentProject: cachedProject, characters: cachedCharacters } = useStore.getState();
+      const shouldRefreshCharacters = cachedProject?.id !== projectId || cachedCharacters.length === 0;
+      const charactersPromise = shouldRefreshCharacters
+        ? refreshCharacters(projectId)
+        : Promise.resolve(cachedCharacters);
+
+      const [relsRes, typesRes] = await Promise.all([
         axios.get(`/api/relationships/project/${projectId}`),
         axios.get('/api/relationships/types'),
-        axios.get(`/api/characters?project_id=${projectId}`)
       ]);
+      await charactersPromise;
 
       setRelationships(relsRes.data);
       setRelationshipTypes(typesRes.data);
-      setCharacters(charsRes.data.items || []);
     } catch (error) {
       message.error('加载数据失败');
       console.error(error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [projectId, refreshCharacters]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   const handleCreateRelationship = async (values: {
     character_from_id: string;
@@ -102,14 +104,14 @@ export default function Relationships() {
       message.success('关系创建成功');
       setIsModalOpen(false);
       form.resetFields();
-      loadData();
+      await loadData();
     } catch (error) {
       message.error('创建关系失败');
       console.error(error);
     }
   };
 
-  const handleEditRelationship = (record: Relationship) => {
+  const handleEditRelationship = useCallback((record: Relationship) => {
     setEditingRelationship(record);
     setIsEditMode(true);
     form.setFieldsValue({
@@ -121,7 +123,7 @@ export default function Relationships() {
       description: record.description,
     });
     setIsModalOpen(true);
-  };
+  }, [form]);
 
   const handleUpdateRelationship = async (values: {
     character_from_id: string;
@@ -145,14 +147,14 @@ export default function Relationships() {
       setIsEditMode(false);
       setEditingRelationship(null);
       form.resetFields();
-      loadData();
+      await loadData();
     } catch (error) {
       message.error('更新关系失败');
       console.error(error);
     }
   };
 
-  const handleDeleteRelationship = async (id: string) => {
+  const handleDeleteRelationship = useCallback((id: string) => {
     modal.confirm({
       title: '确认删除',
       content: '确定要删除这条关系吗？',
@@ -164,19 +166,34 @@ export default function Relationships() {
         try {
           await axios.delete(`/api/relationships/${id}`);
           message.success('关系删除成功');
-          loadData();
+          await loadData();
         } catch (error) {
           message.error('删除失败');
           console.error(error);
         }
       }
     });
+  }, [loadData, modal]);
+
+  const categoryLabels: Record<string, string> = {
+    family: '家族关系',
+    social: '社交关系',
+    professional: '职业关系',
+    hostile: '敌对关系'
   };
 
-  const getCharacterName = (id: string) => {
-    const char = characters.find(c => c.id === id);
-    return char?.name || '未知';
-  };
+  const characterNameMap = useMemo(() => new Map(storeCharacters.map((character) => [character.id, character.name])), [storeCharacters]);
+
+  const selectableCharacterOptions = useMemo(() => storeCharacters
+    .filter((character) => !character.is_organization)
+    .map((character) => ({ label: character.name, value: character.id })), [storeCharacters]);
+
+  const relationshipTypeOptions = useMemo(() => relationshipTypes.map((type) => ({
+    label: `${type.icon || ''} ${type.name} (${categoryLabels[type.category]})`,
+    value: type.name,
+  })), [relationshipTypes]);
+
+  const getCharacterName = useCallback((id: string) => characterNameMap.get(id) || '未知', [characterNameMap]);
 
   const getIntimacyColor = (level: number) => {
     if (level >= 75) return 'green';
@@ -206,7 +223,7 @@ export default function Relationships() {
     return colors[category] || 'default';
   };
 
-  const columns = [
+  const columns = useMemo(() => [
     {
       title: '角色A',
       dataIndex: 'character_from_id',
@@ -289,23 +306,15 @@ export default function Relationships() {
       width: 140,
       fixed: isMobile ? ('right' as const) : undefined,
     },
-  ];
+  ], [getCharacterName, handleDeleteRelationship, handleEditRelationship, isMobile]);
 
-  // 按类别分组关系类型
-  const groupedTypes = relationshipTypes.reduce((acc, type) => {
+  const groupedTypes = useMemo(() => relationshipTypes.reduce((acc, type) => {
     if (!acc[type.category]) {
       acc[type.category] = [];
     }
     acc[type.category].push(type);
     return acc;
-  }, {} as Record<string, RelationshipType[]>);
-
-  const categoryLabels: Record<string, string> = {
-    family: '家族关系',
-    social: '社交关系',
-    professional: '职业关系',
-    hostile: '敌对关系'
-  };
+  }, {} as Record<string, RelationshipType[]>), [relationshipTypes]);
 
   return (
     <>
@@ -445,9 +454,7 @@ export default function Relationships() {
               filterOption={(input, option) =>
                 (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
               }
-              options={characters
-                .filter(c => !c.is_organization)
-                .map(c => ({ label: c.name, value: c.id }))}
+              options={selectableCharacterOptions}
             />
           </Form.Item>
 
@@ -458,10 +465,7 @@ export default function Relationships() {
           >
             <AutoComplete
               placeholder="选择预定义类型或输入自定义关系"
-              options={relationshipTypes.map(t => ({
-                label: `${t.icon || ''} ${t.name} (${categoryLabels[t.category]})`,
-                value: t.name
-              }))}
+              options={relationshipTypeOptions}
               filterOption={(inputValue, option) =>
                 option!.value.toUpperCase().indexOf(inputValue.toUpperCase()) !== -1
               }
@@ -480,9 +484,7 @@ export default function Relationships() {
               filterOption={(input, option) =>
                 (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
               }
-              options={characters
-                .filter(c => !c.is_organization)
-                .map(c => ({ label: c.name, value: c.id }))}
+              options={selectableCharacterOptions}
             />
           </Form.Item>
 

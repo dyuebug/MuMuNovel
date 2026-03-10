@@ -1,9 +1,9 @@
-import { Card, Space, Tag, Typography, Popconfirm, theme } from 'antd';
+﻿import { Card, Space, Tag, Typography, Popconfirm, theme } from 'antd';
 import { EditOutlined, DeleteOutlined, UserOutlined, BankOutlined, ExportOutlined } from '@ant-design/icons';
 import { characterCardStyles } from './CardStyles';
 import type { Character } from '../types';
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
 interface CharacterCardProps {
   character: Character;
@@ -36,6 +36,40 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({ character, onEdit,
   const isOrganization = character.is_organization;
   const charStatus = character.status || 'active';
   const isInactive = charStatus !== 'active';
+
+
+  const toPreviewText = (value: unknown, maxLength = 120) => {
+    if (value === null || value === undefined) {
+      return '';
+    }
+
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    if (!text) {
+      return '';
+    }
+
+    return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+  };
+
+  const organizationMembersFullText = character.organization_members
+    ? (typeof character.organization_members === 'string'
+      ? character.organization_members
+      : JSON.stringify(character.organization_members))
+    : '';
+  const personalityPreviewText = toPreviewText(character.personality, 100);
+  const relationshipsPreviewText = toPreviewText(character.relationships, 100);
+  const locationPreviewText = toPreviewText(character.location, 80);
+  const mottoPreviewText = toPreviewText(character.motto, 100);
+  const organizationPurposePreviewText = toPreviewText(character.organization_purpose, 100);
+  const organizationMembersText = toPreviewText(organizationMembersFullText, 100);
+  const backgroundPreviewText = toPreviewText(character.background, 180);
+  const singleLinePreviewStyle = {
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden' as const,
+    whiteSpace: 'nowrap' as const,
+    textOverflow: 'ellipsis' as const,
+  };
 
   const getStatusTag = () => {
     const statusConfig: Record<string, { color: string; label: string }> = {
@@ -124,22 +158,16 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({ character, onEdit,
                 {character.personality && (
                   <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
                     <Text type="secondary" style={{ flexShrink: 0 }}>性格：</Text>
-                    <Text
-                      style={{ flex: 1, minWidth: 0 }}
-                      ellipsis={{ tooltip: character.personality }}
-                    >
-                      {character.personality}
+                    <Text style={singleLinePreviewStyle} title={character.personality}>
+                      {personalityPreviewText}
                     </Text>
                   </div>
                 )}
                 {character.relationships && (
                   <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
                     <Text type="secondary" style={{ flexShrink: 0 }}>关系：</Text>
-                    <Text
-                      style={{ flex: 1, minWidth: 0 }}
-                      ellipsis={{ tooltip: character.relationships }}
-                    >
-                      {character.relationships}
+                    <Text style={singleLinePreviewStyle} title={character.relationships}>
+                      {relationshipsPreviewText}
                     </Text>
                   </div>
                 )}
@@ -166,11 +194,8 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({ character, onEdit,
                 {character.location && (
                   <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
                     <Text type="secondary" style={{ flexShrink: 0 }}>所在地：</Text>
-                    <Text
-                      style={{ flex: 1, minWidth: 0 }}
-                      ellipsis={{ tooltip: character.location }}
-                    >
-                      {character.location}
+                    <Text style={singleLinePreviewStyle} title={character.location}>
+                      {locationPreviewText}
                     </Text>
                   </div>
                 )}
@@ -183,32 +208,27 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({ character, onEdit,
                 {character.motto && (
                   <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
                     <Text type="secondary" style={{ flexShrink: 0 }}>格言：</Text>
-                    <Text
-                      style={{ flex: 1, minWidth: 0 }}
-                      ellipsis={{ tooltip: character.motto }}
-                    >
-                      {character.motto}
+                    <Text style={singleLinePreviewStyle} title={character.motto}>
+                      {mottoPreviewText}
                     </Text>
                   </div>
                 )}
                 {character.organization_purpose && (
                   <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
                     <Text type="secondary" style={{ flexShrink: 0 }}>目的：</Text>
-                    <Text
-                      style={{ flex: 1, minWidth: 0 }}
-                      ellipsis={{ tooltip: character.organization_purpose }}
-                    >
-                      {character.organization_purpose}
+                    <Text style={singleLinePreviewStyle} title={character.organization_purpose}>
+                      {organizationPurposePreviewText}
                     </Text>
                   </div>
                 )}
                 {character.organization_members && (
                   <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
-                    <Text type="secondary" style={{ flexShrink: 0 }}>成员：</Text>
-                    <Text style={{ flex: 1, minWidth: 0, fontSize: 12, lineHeight: 1.6, wordBreak: 'break-all' }}>
-                      {typeof character.organization_members === 'string'
-                        ? character.organization_members
-                        : JSON.stringify(character.organization_members)}
+                    <Text type="secondary" style={{ flexShrink: 0 }}>{'\u6210\u5458\uff1a'}</Text>
+                    <Text
+                      style={{ flex: 1, minWidth: 0, fontSize: 12, lineHeight: 1.6, wordBreak: 'break-all' }}
+                      title={organizationMembersFullText}
+                    >
+                      {organizationMembersText}
                     </Text>
                   </div>
                 )}
@@ -218,13 +238,19 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({ character, onEdit,
             {/* 通用字段 - 背景信息截断显示 */}
             {character.background && (
               <div style={{ marginTop: 12 }}>
-                <Paragraph
+                <Text
                   type="secondary"
-                  style={{ fontSize: 12, marginBottom: 0 }}
-                  ellipsis={{ tooltip: character.background, rows: 3 }}
+                  style={{
+                    display: 'block',
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    marginBottom: 0,
+                    wordBreak: 'break-word',
+                  }}
+                  title={character.background}
                 >
-                  {character.background}
-                </Paragraph>
+                  {backgroundPreviewText}
+                </Text>
               </div>
             )}
           </div>

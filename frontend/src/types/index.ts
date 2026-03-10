@@ -322,9 +322,24 @@ export interface ChapterUpdate {
 }
 
 // 章节生成请求类型
+export type CreativeMode = 'balanced' | 'hook' | 'emotion' | 'suspense' | 'relationship' | 'payoff';
+export type StoryFocus = 'advance_plot' | 'deepen_character' | 'escalate_conflict' | 'reveal_mystery' | 'relationship_shift' | 'foreshadow_payoff';
+export type PlotStage = 'development' | 'climax' | 'ending';
+
 export interface ChapterGenerateRequest {
   style_id?: number;
   target_word_count?: number;
+  enable_analysis?: boolean;
+  enable_mcp?: boolean;
+  model?: string;
+  narrative_perspective?: string;
+  creative_mode?: CreativeMode;
+  story_focus?: StoryFocus;
+  plot_stage?: PlotStage;
+  story_creation_brief?: string;
+  story_repair_summary?: string;
+  story_repair_targets?: string[];
+  story_preserve_strengths?: string[];
 }
 
 // 章节生成检查响应
@@ -430,8 +445,10 @@ export interface GenerateOutlineRequest {
   // 续写功能新增字段
   mode?: 'auto' | 'new' | 'continue';
   story_direction?: string;
-  plot_stage?: 'development' | 'climax' | 'ending';
+  plot_stage?: PlotStage;
   keep_existing?: boolean;
+  creative_mode?: CreativeMode;
+  story_focus?: StoryFocus;
 }
 
 // 大纲重排序请求类型
@@ -521,8 +538,34 @@ export interface GenerateCharacterRequest {
 }
 
 export interface PolishTextRequest {
-  text: string;
+  original_text?: string;
+  text?: string;
   style?: string;
+  project_id?: number;
+  provider?: string;
+  model?: string;
+  temperature?: number;
+  focus_mode?: 'balanced' | 'dialogue' | 'pacing' | 'emotion' | 'hook';
+  preserve_paragraphs?: boolean;
+  retain_hooks?: boolean;
+}
+
+export interface PolishTextResponse {
+  original_text: string;
+  polished_text: string;
+  word_count_before: number;
+  word_count_after: number;
+}
+
+export interface PolishBatchRequest {
+  texts: string[];
+  style?: string;
+  provider?: string;
+  model?: string;
+  temperature?: number;
+  focus_mode?: 'balanced' | 'dialogue' | 'pacing' | 'emotion' | 'hook';
+  preserve_paragraphs?: boolean;
+  retain_hooks?: boolean;
 }
 
 // 向导API响应类型

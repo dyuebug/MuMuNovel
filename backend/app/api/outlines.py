@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
-from typing import List, AsyncGenerator, Dict, Any
+from typing import List, AsyncGenerator, Dict, Any, Optional
 import json
 
 from app.database import get_db
@@ -27,7 +27,20 @@ from app.schemas.outline import (
     CreateChaptersFromPlansResponse
 )
 from app.services.ai_service import AIService
-from app.services.prompt_service import prompt_service, PromptService
+from app.services.prompt_service import (
+    prompt_service,
+    PromptService,
+    build_creative_mode_block,
+    build_volume_pacing_block,
+    build_story_focus_block,
+    build_narrative_blueprint_block,
+    build_story_objective_card_block,
+    build_story_result_card_block,
+    build_story_execution_checklist_block,
+    build_story_repetition_risk_block,
+    build_story_acceptance_card_block,
+    build_story_character_arc_card_block,
+)
 from app.services.memory_service import memory_service
 from app.services.plot_expansion_service import PlotExpansionService
 from app.services.foreshadow_service import foreshadow_service
@@ -79,6 +92,98 @@ def _format_outline_value(value: Any, max_items: int = 3) -> str:
                 parts.append(f"{key}:{text}")
         return "；".join(parts)
     return str(value).strip()
+
+
+def _merge_outline_requirements(
+    base_requirements: Optional[str],
+    creative_mode: Optional[str],
+    story_focus: Optional[str] = None,
+    plot_stage: Optional[str] = None,
+    chapter_count: Optional[int] = None,
+) -> str:
+    """合并自由要求与结构增强要求，避免改动模板本体。"""
+    parts: list[str] = []
+
+    base_text = str(base_requirements or "").strip()
+    if base_text:
+        parts.append(base_text)
+
+    creative_mode_block = build_creative_mode_block(creative_mode, scene="outline").strip()
+    if creative_mode_block:
+        parts.append(creative_mode_block)
+
+    story_focus_block = build_story_focus_block(story_focus, scene="outline").strip()
+    if story_focus_block:
+        parts.append(story_focus_block)
+
+    narrative_blueprint_block = build_narrative_blueprint_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if narrative_blueprint_block:
+        parts.append(narrative_blueprint_block)
+
+    story_objective_card_block = build_story_objective_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_objective_card_block:
+        parts.append(story_objective_card_block)
+
+    story_result_card_block = build_story_result_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_result_card_block:
+        parts.append(story_result_card_block)
+
+    story_execution_checklist_block = build_story_execution_checklist_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_execution_checklist_block:
+        parts.append(story_execution_checklist_block)
+
+    story_repetition_risk_block = build_story_repetition_risk_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_repetition_risk_block:
+        parts.append(story_repetition_risk_block)
+
+    story_acceptance_card_block = build_story_acceptance_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_acceptance_card_block:
+        parts.append(story_acceptance_card_block)
+
+    story_character_arc_card_block = build_story_character_arc_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_character_arc_card_block:
+        parts.append(story_character_arc_card_block)
+
+    volume_pacing_block = build_volume_pacing_block(chapter_count, plot_stage=plot_stage).strip()
+    if volume_pacing_block:
+        parts.append(volume_pacing_block)
+
+    return "\n\n".join(parts)
 
 
 def _build_outline_content_from_item(chapter_data: Dict[str, Any]) -> str:
@@ -1133,7 +1238,13 @@ async def new_outline_generator(
             atmosphere=project.world_atmosphere or "未设定",
             rules=project.world_rules or "未设定",
             characters_info=characters_info or "暂无角色信息",
-            requirements=data.get("requirements") or "",
+            requirements=_merge_outline_requirements(
+                data.get("requirements"),
+                data.get("creative_mode"),
+                data.get("story_focus"),
+                data.get("plot_stage"),
+                chapter_count,
+            ),
             mcp_references=""
         )
         outline_system_prompt = _build_outline_runtime_system_prompt(
@@ -1571,7 +1682,13 @@ async def continue_outline_generator(
                 current_chapter_count=len(latest_outlines),
                 plot_stage_instruction=stage_instruction,
                 story_direction=data.get("story_direction", "自然延续"),
-                requirements=data.get("requirements", ""),
+                requirements=_merge_outline_requirements(
+                    data.get("requirements"),
+                    data.get("creative_mode"),
+                    data.get("story_focus"),
+                    data.get("plot_stage"),
+                    current_batch_size,
+                ),
                 mcp_references=""
             )
             outline_system_prompt = _build_outline_runtime_system_prompt(

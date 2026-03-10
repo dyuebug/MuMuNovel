@@ -19,9 +19,88 @@ import type {
   OutlineUpdate,
   ChapterCreate,
   ChapterUpdate,
+  CreativeMode,
+  PlotStage,
+  StoryFocus,
   GenerateOutlineRequest,
   GenerateCharacterRequest
 } from '../types';
+
+const characterRefreshPromises = new Map<string, Promise<Character[]>>();
+const outlineRefreshPromises = new Map<string, Promise<Outline[]>>();
+const chapterRefreshPromises = new Map<string, Promise<Chapter[]>>();
+
+interface RefreshCollectionOptions {
+  silent?: boolean;
+}
+
+const resolveProjectId = (projectId?: string) => projectId || useStore.getState().currentProject?.id;
+
+export async function loadProjectCharacters(projectId?: string, options: RefreshCollectionOptions = {}) {
+  const id = resolveProjectId(projectId);
+  if (!id) return [];
+
+  const existingRefresh = characterRefreshPromises.get(id);
+  if (existingRefresh) {
+    return existingRefresh;
+  }
+
+  const refreshPromise = (async () => {
+    try {
+      const data = await characterApi.getCharacters(id);
+      const characters = Array.isArray(data) ? data : (data as PaginationResponse<Character>).items || [];
+      useStore.getState().setCharacters(characters);
+      return characters;
+    } catch (error) {
+      console.error('刷新角色列表失败:', error);
+      if (!options.silent) {
+        message.error('刷新角色列表失败');
+      }
+      return [];
+    }
+  })();
+
+  characterRefreshPromises.set(id, refreshPromise);
+
+  try {
+    return await refreshPromise;
+  } finally {
+    characterRefreshPromises.delete(id);
+  }
+}
+
+export async function loadProjectOutlines(projectId?: string, options: RefreshCollectionOptions = {}) {
+  const id = resolveProjectId(projectId);
+  if (!id) return [];
+
+  const existingRefresh = outlineRefreshPromises.get(id);
+  if (existingRefresh) {
+    return existingRefresh;
+  }
+
+  const refreshPromise = (async () => {
+    try {
+      const data = await outlineApi.getOutlines(id);
+      const outlines = Array.isArray(data) ? data : (data as PaginationResponse<Outline>).items || [];
+      useStore.getState().setOutlines(outlines);
+      return outlines;
+    } catch (error) {
+      console.error('刷新大纲列表失败:', error);
+      if (!options.silent) {
+        message.error('刷新大纲列表失败');
+      }
+      return [];
+    }
+  })();
+
+  outlineRefreshPromises.set(id, refreshPromise);
+
+  try {
+    return await refreshPromise;
+  } finally {
+    outlineRefreshPromises.delete(id);
+  }
+}
 
 /**
  * 项目数据同步 Hook
@@ -93,24 +172,13 @@ export function useProjectSync() {
  * 角色数据同步 Hook
  */
 export function useCharacterSync() {
-  const { currentProject, setCharacters, addCharacter, removeCharacter } = useStore();
+  const addCharacter = useStore((state) => state.addCharacter);
+  const removeCharacter = useStore((state) => state.removeCharacter);
 
-  // 刷新角色列表
+  // 刷新角色
   const refreshCharacters = useCallback(async (projectId?: string) => {
-    const id = projectId || currentProject?.id;
-    if (!id) return [];
-
-    try {
-      const data = await characterApi.getCharacters(id);
-      const characters = Array.isArray(data) ? data : (data as PaginationResponse<Character>).items || [];
-      setCharacters(characters);
-      return characters;
-    } catch (error) {
-      console.error('刷新角色列表失败:', error);
-      message.error('刷新角色列表失败');
-      return [];
-    }
-  }, [currentProject?.id, setCharacters]);
+    return loadProjectCharacters(projectId);
+  }, []);
 
   // 删除角色（带同步）
   const deleteCharacter = useCallback(async (id: string) => {
@@ -142,28 +210,15 @@ export function useCharacterSync() {
   };
 }
 
-/**
- * 大纲数据同步 Hook
- */
 export function useOutlineSync() {
-  const { currentProject, setOutlines, addOutline, updateOutline, removeOutline } = useStore();
+  const addOutline = useStore((state) => state.addOutline);
+  const updateOutline = useStore((state) => state.updateOutline);
+  const removeOutline = useStore((state) => state.removeOutline);
 
-  // 刷新大纲列表
+  // 刷新大纲
   const refreshOutlines = useCallback(async (projectId?: string) => {
-    const id = projectId || currentProject?.id;
-    if (!id) return [];
-
-    try {
-      const data = await outlineApi.getOutlines(id);
-      const outlines = Array.isArray(data) ? data : (data as PaginationResponse<Outline>).items || [];
-      setOutlines(outlines);
-      return outlines;
-    } catch (error) {
-      console.error('刷新大纲列表失败:', error);
-      message.error('刷新大纲列表失败');
-      return [];
-    }
-  }, [currentProject?.id, setOutlines]); // 添加 currentProject?.id 到依赖数组
+    return loadProjectOutlines(projectId);
+  }, []);
 
   // 创建大纲（带同步）
   const createOutline = useCallback(async (data: OutlineCreate) => {
@@ -222,30 +277,45 @@ export function useOutlineSync() {
   };
 }
 
-/**
- * 章节数据同步 Hook
- */
 export function useChapterSync() {
-  const { currentProject, setChapters, addChapter, updateChapter, removeChapter } = useStore();
+  const currentProject = useStore((state) => state.currentProject);
+  const setChapters = useStore((state) => state.setChapters);
+  const addChapter = useStore((state) => state.addChapter);
+  const updateChapter = useStore((state) => state.updateChapter);
+  const removeChapter = useStore((state) => state.removeChapter);
 
   // 刷新章节列表
   const refreshChapters = useCallback(async (projectId?: string) => {
-    const id = projectId || currentProject?.id;
+    const id = projectId || useStore.getState().currentProject?.id;
     if (!id) return [];
 
-    try {
-      const data = await chapterApi.getChapters(id);
-      const chapters = Array.isArray(data) ? data : (data as PaginationResponse<Chapter>).items || [];
-      setChapters(chapters);
-      return chapters;
-    } catch (error) {
-      console.error('刷新章节列表失败:', error);
-      message.error('刷新章节列表失败');
-      return [];
+    const existingRefresh = chapterRefreshPromises.get(id);
+    if (existingRefresh) {
+      return existingRefresh;
     }
-  }, [currentProject?.id, setChapters]); // 添加 currentProject?.id 到依赖数组
 
-  // 创建章节（带同步）
+    const refreshPromise = (async () => {
+      try {
+        const data = await chapterApi.getChapters(id);
+        const chapters = Array.isArray(data) ? data : (data as PaginationResponse<Chapter>).items || [];
+        setChapters(chapters);
+        return chapters;
+      } catch (error) {
+        console.error('刷新章节列表失败:', error);
+        message.error('刷新章节列表失败');
+        return [];
+      }
+    })();
+
+    chapterRefreshPromises.set(id, refreshPromise);
+
+    try {
+      return await refreshPromise;
+    } finally {
+      chapterRefreshPromises.delete(id);
+    }
+  }, [setChapters]);
+
   const createChapter = useCallback(async (data: ChapterCreate) => {
     try {
       const created = await chapterApi.createChapter(data);
@@ -288,7 +358,14 @@ export function useChapterSync() {
     targetWordCount?: number,
     onProgressUpdate?: (message: string, progress: number) => void,
     model?: string,
-    narrativePerspective?: string
+    narrativePerspective?: string,
+    creativeMode?: CreativeMode,
+    storyFocus?: StoryFocus,
+    plotStage?: PlotStage,
+    storyCreationBrief?: string,
+    storyRepairSummary?: string,
+    storyRepairTargets?: string[],
+    storyPreserveStrengths?: string[],
   ) => {
     const formatQualityMessage = (metrics: any): string | null => {
       if (!metrics || typeof metrics !== 'object') return null;
@@ -305,7 +382,14 @@ export function useChapterSync() {
         style_id: styleId,
         target_word_count: targetWordCount,
         model: model,
-        narrative_perspective: narrativePerspective
+        narrative_perspective: narrativePerspective,
+        creative_mode: creativeMode,
+        story_focus: storyFocus,
+        plot_stage: plotStage,
+        story_creation_brief: storyCreationBrief,
+        story_repair_summary: storyRepairSummary,
+        story_repair_targets: storyRepairTargets,
+        story_preserve_strengths: storyPreserveStrengths,
       },
       currentProject?.id
     );

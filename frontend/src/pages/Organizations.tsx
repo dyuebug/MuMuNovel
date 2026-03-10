@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { Card, Table, Tag, Button, Space, message, Modal, Form, Select, InputNumber, Input, Descriptions, Drawer, theme } from 'antd';
 import { PlusOutlined, UserOutlined, EditOutlined, DeleteOutlined, UnorderedListOutlined, BankOutlined } from '@ant-design/icons';
@@ -33,20 +33,14 @@ interface OrganizationMember {
   notes?: string;
 }
 
-interface Character {
-  id: string;
-  name: string;
-  is_organization: boolean;
-}
-
 export default function Organizations() {
   const { projectId } = useParams<{ projectId: string }>();
-  const { currentProject } = useStore();
+  const currentProject = useStore((state) => state.currentProject);
+  const storeCharacters = useStore((state) => state.characters);
   const { refreshCharacters } = useCharacterSync();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
   const [members, setMembers] = useState<OrganizationMember[]>([]);
-  const [characters, setCharacters] = useState<Character[]>([]);
   const [loading, setLoading] = useState(false);
   const [isAddMemberModalOpen, setIsAddMemberModalOpen] = useState(false);
   const [isEditMemberModalOpen, setIsEditMemberModalOpen] = useState(false);
@@ -58,6 +52,7 @@ export default function Organizations() {
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [modal, contextHolder] = Modal.useModal();
   const [orgListVisible, setOrgListVisible] = useState(false);
+  const selectedOrgIdRef = useRef<string | null>(null);
   const { token } = theme.useToken();
 
   useEffect(() => {
@@ -69,14 +64,33 @@ export default function Organizations() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  useEffect(() => {
+    selectedOrgIdRef.current = selectedOrg?.id ?? null;
+  }, [selectedOrg]);
+
   const loadOrganizations = useCallback(async () => {
+    if (!projectId) return;
+
     setLoading(true);
     try {
       const res = await axios.get(`/api/organizations/project/${projectId}`);
-      setOrganizations(res.data);
-      if (res.data.length > 0 && !selectedOrg) {
-        setSelectedOrg(res.data[0]);
-        loadMembers(res.data[0].id);
+      const nextOrganizations = res.data as Organization[];
+      setOrganizations(nextOrganizations);
+
+      const currentSelectedOrgId = selectedOrgIdRef.current;
+      const nextSelectedOrg = currentSelectedOrgId
+        ? nextOrganizations.find((org) => org.id === currentSelectedOrgId) ?? nextOrganizations[0] ?? null
+        : nextOrganizations[0] ?? null;
+
+      setSelectedOrg(nextSelectedOrg);
+
+      if (!nextSelectedOrg) {
+        setMembers([]);
+        return;
+      }
+
+      if (nextSelectedOrg.id !== currentSelectedOrgId) {
+        void loadMembers(nextSelectedOrg.id);
       }
     } catch (error) {
       message.error('加载组织列表失败');
@@ -87,21 +101,18 @@ export default function Organizations() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  const loadCharacters = useCallback(async () => {
-    try {
-      const res = await axios.get(`/api/characters?project_id=${projectId}`);
-      setCharacters(res.data.items || []);
-    } catch (error) {
-      console.error('加载角色列表失败', error);
-    }
-  }, [projectId]);
-
   useEffect(() => {
-    if (projectId) {
-      loadOrganizations();
-      loadCharacters();
+    if (!projectId) {
+      return;
     }
-  }, [projectId, loadOrganizations, loadCharacters]);
+
+    void loadOrganizations();
+
+    const { currentProject: cachedProject, characters: cachedCharacters } = useStore.getState();
+    if (cachedProject?.id !== projectId || cachedCharacters.length === 0) {
+      void refreshCharacters(projectId);
+    }
+  }, [projectId, loadOrganizations, refreshCharacters]);
 
   const loadMembers = async (orgId: string) => {
     try {
@@ -298,9 +309,15 @@ export default function Organizations() {
   ];
 
   // 过滤掉已是成员的角色
-  const availableCharacters = characters.filter(
-    c => !c.is_organization && !members.some(m => m.character_id === c.id)
-  );
+  const availableCharacters = useMemo(() => {
+    const memberCharacterIds = new Set(members.map((member) => member.character_id));
+    return storeCharacters.filter((character) => !character.is_organization && !memberCharacterIds.has(character.id));
+  }, [members, storeCharacters]);
+
+  const availableCharacterOptions = useMemo(() => availableCharacters.map((character) => ({
+    label: character.name,
+    value: character.id,
+  })), [availableCharacters]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -594,10 +611,7 @@ export default function Organizations() {
               filterOption={(input, option) =>
                 (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
               }
-              options={availableCharacters.map(c => ({
-                label: c.name,
-                value: c.id
-              }))}
+              options={availableCharacterOptions}
             />
           </Form.Item>
 
@@ -794,7 +808,7 @@ export default function Organizations() {
               }
 
               // 刷新全局 store
-              await refreshCharacters();
+              await refreshCharacters(projectId);
             } catch (error) {
               message.error('更新失败');
               console.error(error);
