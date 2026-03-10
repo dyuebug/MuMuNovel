@@ -130,17 +130,31 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     },
   });
 
-  const handleCancelCurrentTask = async () => {
-    if (!currentTaskId || isCancelling) return;
+  const handleCancelCurrentTask = async (): Promise<boolean> => {
+    if (!currentTaskId || isCancelling) return false;
+
     setIsCancelling(true);
     setProgressMessage('正在取消后台任务...');
+
     try {
       await backgroundTaskApi.cancelTask(currentTaskId);
-      message.info('正在取消后台任务...');
+      message.info('后台任务已取消');
+
+      // 等待状态更新
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
+      // 强制清理状态
+      cancelledByUserRef.current = true;
+      setCurrentTaskId(null);
+      setIsCancelling(false);
+      setLoading(false);
+
+      return true;
     } catch (error) {
       console.error('取消后台任务失败:', error);
       message.error('取消任务失败，请重试');
       setIsCancelling(false);
+      return false;
     }
   };
 
@@ -622,6 +636,23 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       return;
     }
 
+    // 【关键修复】如果有正在运行的任务，先取消
+    if (currentTaskId && !isCancelling) {
+      message.info('检测到正在运行的任务，正在取消...');
+      const cancelled = await handleCancelCurrentTask();
+      if (!cancelled) {
+        message.error('无法取消现有任务，请稍后重试');
+        return;
+      }
+    }
+
+    // 【关键修复】如果正在取消中，阻止重试
+    if (isCancelling) {
+      message.warning('正在取消任务，请稍后重试');
+      return;
+    }
+
+    // 重置所有状态
     cancelledByUserRef.current = false;
     setCurrentTaskId(null);
     setIsCancelling(false);
@@ -1203,8 +1234,8 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
             type="primary"
             size="large"
             onClick={handleSmartRetry}
-            loading={loading}
-            disabled={loading}
+            loading={loading || isCancelling}
+            disabled={loading || isCancelling}
           >
             智能重试
           </Button>
