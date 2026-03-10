@@ -77,6 +77,8 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   // 保存世界观生成结果，用于后续步骤
   const [worldBuildingResult, setWorldBuildingResult] = useState<WorldBuildingResult | null>(null);
   const cancelledByUserRef = useRef(false);
+  // 【修复】操作锁，防止并发调用
+  const operationLockRef = useRef(false);
 
   // LocalStorage 键名
   const storageKeys = {
@@ -121,18 +123,24 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       setProgressMessage(cancelMsg || '后台任务已取消');
       setLoading(false);
       setIsCancelling(false);
+      // 【修复】释放操作锁
+      operationLockRef.current = false;
       options.onCancelled?.(cancelMsg);
     },
     onComplete: () => {
       setCurrentTaskId(null);
       setIsCancelling(false);
+      // 【修复】释放操作锁
+      operationLockRef.current = false;
       options.onComplete?.();
     },
   });
 
   const handleCancelCurrentTask = async (): Promise<boolean> => {
-    if (!currentTaskId || isCancelling) return false;
+    // 【修复】防止并发调用
+    if (!currentTaskId || isCancelling || operationLockRef.current) return false;
 
+    operationLockRef.current = true;
     setIsCancelling(true);
     setProgressMessage('正在取消后台任务...');
 
@@ -140,20 +148,19 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       await backgroundTaskApi.cancelTask(currentTaskId);
       message.info('后台任务已取消');
 
-      // 等待状态更新
-      await new Promise(resolve => setTimeout(resolve, 1500));
-
-      // 强制清理状态
+      // 【修复】立即清理状态，移除硬编码延迟
       cancelledByUserRef.current = true;
       setCurrentTaskId(null);
       setIsCancelling(false);
       setLoading(false);
+      operationLockRef.current = false;
 
       return true;
     } catch (error) {
       console.error('取消后台任务失败:', error);
       message.error('取消任务失败，请重试');
       setIsCancelling(false);
+      operationLockRef.current = false;
       return false;
     }
   };
@@ -246,6 +253,8 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         setLoading(false);
         setIsCancelling(false);
         setCurrentTaskId(null);
+        // 【修复】释放操作锁
+        operationLockRef.current = false;
         return;
       }
       const apiError = error as ApiError;
@@ -254,6 +263,8 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       setErrorDetails(errorMsg);
       message.error('恢复生成失败：' + errorMsg);
       setLoading(false);
+      // 【修复】释放操作锁
+      operationLockRef.current = false;
     }
   };
 
@@ -618,6 +629,8 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         setLoading(false);
         setIsCancelling(false);
         setCurrentTaskId(null);
+        // 【修复】释放操作锁
+        operationLockRef.current = false;
         return;
       }
       const apiError = error as ApiError;
@@ -626,31 +639,44 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       setErrorDetails(errorMsg);
       message.error('创建项目失败：' + errorMsg);
       setLoading(false);
+      // 【修复】释放操作锁
+      operationLockRef.current = false;
     }
   };
 
   // 智能重试：从失败的步骤继续生成
   const handleSmartRetry = async () => {
+    // 【修复】防止并发调用
+    if (operationLockRef.current) {
+      message.warning('操作正在进行中，请稍后重试');
+      return;
+    }
+
     if (!generationData) {
       message.warning('缺少生成数据');
       return;
     }
 
-    // 【关键修复】如果有正在运行的任务，先取消
-    if (currentTaskId && !isCancelling) {
+    // 【修复】如果正在取消中，阻止重试
+    if (isCancelling) {
+      message.warning('正在取消任务，请稍后重试');
+      return;
+    }
+
+    // 【修复】如果有正在运行的任务，先取消
+    if (currentTaskId) {
       message.info('检测到正在运行的任务，正在取消...');
       const cancelled = await handleCancelCurrentTask();
       if (!cancelled) {
         message.error('无法取消现有任务，请稍后重试');
         return;
       }
+      // 【修复】等待状态稳定后再继续
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
 
-    // 【关键修复】如果正在取消中，阻止重试
-    if (isCancelling) {
-      message.warning('正在取消任务，请稍后重试');
-      return;
-    }
+    // 【修复】加锁防止重入
+    operationLockRef.current = true;
 
     // 重置所有状态
     cancelledByUserRef.current = false;
@@ -679,12 +705,17 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         setLoading(false);
         setIsCancelling(false);
         setCurrentTaskId(null);
+        operationLockRef.current = false;
         return;
       }
       console.error('智能重试失败:', error);
       const errorMessage = error instanceof Error ? error.message : '未知错误';
       message.error('重试失败：' + errorMessage);
       setLoading(false);
+      operationLockRef.current = false;
+    } finally {
+      // 【修复】确保锁一定会释放
+      operationLockRef.current = false;
     }
   };
 
