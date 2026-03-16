@@ -3,6 +3,8 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipRecreate,
     [switch]$NoCache,
+    [switch]$UseCnMirror,
+    [switch]$SkipFrontendBuild,
     [switch]$SkipAssetVerification,
     [switch]$FullRestart,
     [int]$HealthTimeoutSec = 180,
@@ -69,6 +71,12 @@ function Get-ContainerIndexAssetPath {
     return $match.Value
 }
 
+function Get-ContainerBackendStamp {
+    $command = "python -c \"import hashlib, pathlib, datetime; p=pathlib.Path('/app/app/api/background_tasks.py'); ts=datetime.datetime.utcfromtimestamp(p.stat().st_mtime).isoformat()+'Z'; h=hashlib.sha256(p.read_bytes()).hexdigest()[:12]; print(f'{ts} {h}')\""
+    $stamp = docker exec $AppContainerName sh -lc $command
+    return ($stamp | Out-String).Trim()
+}
+
 function Get-LocalIndexAssetPath {
     $localIndexFile = Join-Path $PSScriptRoot "backend/static/index.html"
     if (-not (Test-Path -Path $localIndexFile)) {
@@ -108,6 +116,14 @@ else {
 $buildArgs = @("compose", "build")
 if ($NoCache) {
     $buildArgs += "--no-cache"
+}
+if ($UseCnMirror) {
+    $buildArgs += "--build-arg"
+    $buildArgs += "USE_CN_MIRROR=true"
+}
+if ($SkipFrontendBuild) {
+    $buildArgs += "--build-arg"
+    $buildArgs += "SKIP_FRONTEND_BUILD=true"
 }
 $buildArgs += $AppService
 
@@ -151,6 +167,20 @@ if (-not $isHealthy) {
     Write-Host "Health check timed out. Printing recent logs..." -ForegroundColor Yellow
     docker compose logs --tail=120 mumuainovel
     throw "Redeploy finished but health check failed: $HealthUrl"
+}
+
+Write-Step "Verifying backend build stamp"
+try {
+    $backendStamp = Get-ContainerBackendStamp
+    if ($backendStamp) {
+        Write-Host "Backend stamp (UTC + sha12): $backendStamp" -ForegroundColor DarkCyan
+    }
+    else {
+        Write-Host "Backend stamp unavailable (empty response)." -ForegroundColor Yellow
+    }
+}
+catch {
+    Write-Host "Backend stamp lookup failed: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
 if (-not $SkipAssetVerification) {

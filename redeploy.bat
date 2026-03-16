@@ -1,6 +1,6 @@
 @echo off
 setlocal
-echo Usage: redeploy.bat [-NoCache] [-SkipAssetVerification] [-FullRestart] [other redeploy.ps1 args]
+echo Usage: redeploy.bat [-NoCache] [-UseCnMirror] [-SkipFrontendBuild] [-SkipAssetVerification] [-FullRestart] [other redeploy.ps1 args]
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0redeploy.ps1" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (

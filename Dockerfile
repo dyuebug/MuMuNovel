@@ -3,11 +3,13 @@
 
 # 构建参数
 ARG USE_CN_MIRROR=false
+ARG SKIP_FRONTEND_BUILD=false
 
 # 阶段1: 构建前端
 FROM node:22-alpine AS frontend-builder
 
 ARG USE_CN_MIRROR
+ARG SKIP_FRONTEND_BUILD
 
 WORKDIR /frontend
 
@@ -22,17 +24,20 @@ RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
 # 删除 package-lock.json 以避免因镜像源不一致导致的 404 错误
 RUN rm -f package-lock.json
 
-# 安装依赖
-RUN npm install
+# 安装依赖（可跳过）
+RUN if [ "$SKIP_FRONTEND_BUILD" != "true" ]; then npm install; fi
 
 # 复制前端源代码
 COPY frontend/ ./
 
-# 临时修改vite配置，使其输出到dist目录（而不是../backend/static）
-RUN sed -i "s|outDir: '../backend/static'|outDir: 'dist'|g" vite.config.ts
+# 提供后端静态资源作为跳过前端构建时的兜底
+COPY backend/static/ /frontend/dist/
 
-# 构建前端
-RUN npm run build
+# 临时修改vite配置，使其输出到dist目录（而不是../backend/static），并构建前端
+RUN if [ "$SKIP_FRONTEND_BUILD" != "true" ]; then \
+        sed -i "s|outDir: '../backend/static'|outDir: 'dist'|g" vite.config.ts && \
+        npm run build; \
+    fi
 
 # 阶段2: 构建最终镜像
 FROM python:3.11-slim
