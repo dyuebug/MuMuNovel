@@ -19,10 +19,28 @@ interface ProviderSelectorProps {
 const PROVIDER_OPTIONS: ProviderOption[] = [
   {
     value: 'openai',
-    label: 'OpenAI Compatible',
-    description: '兼容 OpenAI API 格式的服务',
-    features: ['推荐', '稳定可靠', '功能完整'],
+    label: 'OpenAI（官方格式）',
+    description: 'OpenAI Chat Completions 标准格式',
+    features: ['官方 API', '稳定可靠', '功能完整'],
     recommended: true,
+  },
+  {
+    value: 'openai_responses',
+    label: 'OpenAI（Responses）',
+    description: 'OpenAI Responses API 官方格式',
+    features: ['官方 API', 'Responses'],
+  },
+  {
+    value: 'anthropic',
+    label: 'Claude（Anthropic）',
+    description: 'Claude 官方 API',
+    features: ['Anthropic', 'Messages API'],
+  },
+  {
+    value: 'gemini',
+    label: 'Google Gemini',
+    description: 'Gemini 官方 API',
+    features: ['Google', 'Generative AI'],
   },
   {
     value: 'azure',

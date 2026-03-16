@@ -100,7 +100,7 @@ class AIService:
         self._gemini_provider: Optional[GeminiProvider] = None
         
         # 初始化 OpenAI
-        openai_compatible_providers = {'openai', 'newapi', 'azure', 'custom', 'sub2api'}
+        openai_compatible_providers = {'openai', 'openai_responses', 'newapi', 'azure', 'custom', 'sub2api'}
         if api_provider in openai_compatible_providers or (api_provider is None and app_settings.default_ai_provider in openai_compatible_providers):
             openai_key = api_key if api_provider in openai_compatible_providers else app_settings.openai_api_key
             if openai_key:
@@ -165,7 +165,7 @@ class AIService:
 
         将 newapi/azure/custom 归一为 openai-compatible 族
         """
-        openai_compatible = {'openai', 'newapi', 'azure', 'custom', 'sub2api'}
+        openai_compatible = {'openai', 'openai_responses', 'newapi', 'azure', 'custom', 'sub2api'}
         normalized = provider.lower()
         if normalized in openai_compatible:
             return 'openai'

@@ -343,6 +343,8 @@ export default function SettingsPage() {
     // 对于 openai 兼容族，统一走 openai 的默认 URL
     const providerDefaultUrls: Record<string, string> = {
       openai: 'https://api.openai.com/v1',
+      openai_responses: 'https://api.openai.com/v1',
+      anthropic: 'https://api.anthropic.com',
       newapi: '',
       azure: '',
       custom: '',
@@ -565,6 +567,8 @@ export default function SettingsPage() {
   const handlePresetProviderChange = (value: string) => {
     const providerDefaultUrls: Record<string, string> = {
       openai: 'https://api.openai.com/v1',
+      openai_responses: 'https://api.openai.com/v1',
+      anthropic: 'https://api.anthropic.com',
       sub2api: 'https://ai.qaq.al',
       gemini: 'https://generativelanguage.googleapis.com/v1beta',
     };
@@ -862,6 +866,10 @@ export default function SettingsPage() {
     switch (provider) {
       case 'openai':
         return 'blue';
+      case 'openai_responses':
+        return 'geekblue';
+      case 'anthropic':
+        return 'volcano';
       case 'azure':
         return 'cyan';
       case 'newapi':
@@ -1699,6 +1707,8 @@ export default function SettingsPage() {
                 >
                     <Select placeholder="选择提供商" onChange={handlePresetProviderChange}>
                       <Select.Option value="openai">OpenAI</Select.Option>
+                      <Select.Option value="openai_responses">OpenAI Responses</Select.Option>
+                      <Select.Option value="anthropic">Claude (Anthropic)</Select.Option>
                       <Select.Option value="azure">Azure OpenAI</Select.Option>
                       <Select.Option value="newapi">NewAPI</Select.Option>
                       <Select.Option value="custom">自定义</Select.Option>

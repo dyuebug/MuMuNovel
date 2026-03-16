@@ -31,7 +31,7 @@ class OpenAIClient(BaseAIClient):
         """
         super().__init__(api_key, base_url, config, backup_urls)
         self.compat_profile = compat_profile.lower()
-        self._responses_profiles = {"sub2api"}
+        self._responses_profiles = {"sub2api", "openai_responses"}
 
     def _use_responses_api(self) -> bool:
         """Whether this profile should use /responses wire API."""

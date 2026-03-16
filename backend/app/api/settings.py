@@ -307,8 +307,8 @@ async def get_available_models(
     """
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # OpenAI 兼容接口（包括 openai/azure/newapi/custom/sub2api）
-            openai_compatible_providers = {"openai", "azure", "newapi", "custom", "sub2api"}
+            # OpenAI 兼容接口（包括 openai/openai_responses/azure/newapi/custom/sub2api）
+            openai_compatible_providers = {"openai", "openai_responses", "azure", "newapi", "custom", "sub2api"}
             if provider in openai_compatible_providers:
                 base_url = api_base_url.rstrip("/")
                 candidate_urls = [f"{base_url}/models"]
