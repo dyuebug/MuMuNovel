@@ -190,7 +190,7 @@ const areStorySceneOutlineDraftsEqual = (
 
 const buildJoinedInstruction = (...parts: Array<string | undefined>): string => {
   const normalizedParts = parts.map((item) => item?.trim()).filter((item): item is string => Boolean(item));
-  return normalizedParts.join('闂?)';
+  return normalizedParts.join('; ');
 };
 
 const buildStoryBeatPlannerPrompt = (
@@ -205,10 +205,10 @@ const buildStoryBeatPlannerPrompt = (
   if (entries.length === 0) {
     return undefined;
   }
-
-  const title = scope === 'batch' ? '闂佸搫鐗滈崜婵嬫偪閸℃瑧鍗氶柣妯烘惈铻＄紓鍌氭储閸婃鍒掗妸鈺佸嚑闁告洦鍋勯褔鏌熺紒妯哄缂? : '闂佸搫鐗滈崜娑㈡偟妞嬪海纾奸柟鎯ь嚟閳ь剦鍨跺畷鐘诲冀閵娿儳鍊掔紓?;
-
-  return [title, ...entries.map((item) => `- ${item.label}闂?{item.value}`)].join('\n');
+  const title = scope === 'batch'
+    ? 'Batch story beat planner (fill in items)'
+    : 'Story beat planner (fill in items)';
+  return [title, ...entries.map((item) => `- ${item.label}: ${item.value}`)].join('\n');
 };
 
 const buildStorySceneOutlineSuggestion = (options: {
@@ -248,10 +248,10 @@ const buildStorySceneOutlinePrompt = (
   if (entries.length === 0) {
     return undefined;
   }
-
-  const title = scope === 'batch' ? '闂佸搫鐗滈崜婵嬫偪閸℃瑧鍗氶柣妯烘惈铻＄紓鍌氭储閸婃洖鈹冮埀顒勬煛閸滀礁鐏＄紒鏂款煼瀹? : '闂佸搫鐗滈崜娑㈡偟閻戣棄鎹堕柣鎴炆戦悵顖涚箾閹捐櫕鍣圭€?;
-
-  return [title, ...entries.map((item) => `${item.index}. ${item.label}闂?{item.value}`)].join('\n');
+  const title = scope === 'batch'
+    ? 'Batch story scene outline (fill in items)'
+    : 'Story scene outline (fill in items)';
+  return [title, ...entries.map((item) => `${item.index}. ${item.label}: ${item.value}`)].join('\n');
 };
 
 const mergeStoryCreationInstructions = (...parts: Array<string | undefined>): string | undefined => {
@@ -4323,112 +4323,63 @@ export default function Chapters() {
 
     const selectedStyle = writingStyles.find(s => s.id === selectedStyleId);
 
-
+    const creativeModeLabel = selectedCreativeMode
+      ? (CREATIVE_MODE_OPTIONS.find((item) => item.value === selectedCreativeMode)?.label || selectedCreativeMode)
+      : 'Not selected';
+    const storyFocusLabel = selectedStoryFocus
+      ? (STORY_FOCUS_OPTIONS.find((item) => item.value === selectedStoryFocus)?.label || selectedStoryFocus)
+      : 'Not selected';
+    const plotStageLabel = selectedPlotStage
+      ? (CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === selectedPlotStage)?.label || selectedPlotStage)
+      : 'Not selected';
 
     const instance = modal.confirm({
-
-      title: 'AI闂佸憡甯楃粙鎰礊閺冨倻鍗氶柣妯烘惈铻￠梺鍛婂姇閹冲酣顢?',
-
+      title: 'Confirm generation',
       width: 700,
-
       centered: true,
-
       content: (
-
         <div style={{ marginTop: 16 }}>
-
-          <p>AI闁诲繐绻愬Λ娆撴偋閹绢喖绠叉い鏃囶唺缁ㄦ澘鈽夐幘鎰佸剮濞ｅ洤锕獮渚€顢涘顒備画婵炶揪绲剧划宥咃耿閹殿喚鍗氶柣妯诲絻閺佸爼鎮楅崷顓燁仧缂?/p>
-
+          <p>This will continue generating the chapter with current settings.</p>
           <ul>
-
-            <li>缂備焦姊绘慨鐐繆椤撶喎绶炵憸蹇曠礄娴兼潙妞界€光偓閸愮偓鐭楀┑?/li>
-
-            <li>婵＄偑鍊曞﹢鍗灻烘导瀛樺剭闁告洦浜為悷顖炴煟閿濆懐鐒锋い顐㈡川閹峰骞嗚閺?/li>
-
-            <li>闂佺儵鏅濋…鍫ュ矗瑜忛幉鎾箳閺囩儐妫屾繛锝呮礌閸撴繃瀵?/li>
-
-            <li><strong>闂佸憡鎸哥粔鐟邦焽閺夋鍟呴柟缁樺笧閺嗘岸鏌熺€涙ê濮夐柣婵堝厴閹崇偤宕掑鍕殸闂佸憡鍔曢幊搴敊閹扮増鏅柛顐熸噰閳ь剚蓱缁屽崬鈹戦崱妞绘寖闂佽鍨伴幊鎾舵崲濞戞碍瀚绘い鏍ュ€楃粈?/strong></li>
-
-            {selectedStyle && (
-              <li><strong>闂佸憡鍔栭悷銈囩礊閺冣偓椤︾増鎯旈姀銏狀棔闂佹寧绋掗绔lectedStyle.name}</strong></li>
-            )}
-            {selectedCreativeMode && (
-              <li><strong>闂佸憡甯楃粙鎰礊閺傝鐔煎灳瀹曞洨顢呴梺鎸庣⊕椤掔REATIVE_MODE_OPTIONS.find((item) => item.value === selectedCreativeMode)?.label || selectedCreativeMode}</strong></li>
-            )}
-            {selectedStoryFocus && (
-              <li><strong>缂傚倷鐒﹂幐濠氭倵椤栨稓鐟圭憸鏃堝闯閹间焦鏅慨婵堢瑢TORY_FOCUS_OPTIONS.find((item) => item.value === selectedStoryFocus)?.label || selectedStoryFocus}</strong></li>
-            )}
-            {selectedPlotStage && (
-              <li><strong>闂佽鍨伴幊鎾翠繆椤撱垺鈷撻柤鍛婎問閸炰粙鏌ㄥ☉娆樺姱CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === selectedPlotStage)?.label || selectedPlotStage}</strong></li>
-            )}
-            <li><strong>闂佺儵鏅╅崰妤呮偉閿濆洠鍋撳☉娆樻畷闁哄棛鍠栭弫宥咁潰缁虹棏rgetWordCount}闁?/strong></li>
+            <li>Style: {selectedStyle?.name ?? 'Not selected'}</li>
+            <li>Creative mode: {creativeModeLabel}</li>
+            <li>Story focus: {storyFocusLabel}</li>
+            <li>Plot stage: {plotStageLabel}</li>
+            <li>Target words: {targetWordCount}</li>
           </ul>
-
-
           {previousChapters.length > 0 && (
-
-            <div style={{
-
-              marginTop: 16,
-
-              padding: 12,
-
-              background: 'var(--color-info-bg)',
-
-              borderRadius: 4,
-
-              border: '1px solid var(--color-info-border)'
-
-            }}>
-
+            <div
+              style={{
+                marginTop: 16,
+                padding: 12,
+                background: 'var(--color-info-bg)',
+                borderRadius: 4,
+                border: '1px solid var(--color-info-border)',
+              }}
+            >
               <div style={{ marginBottom: 8, fontWeight: 500, color: 'var(--color-primary)' }}>
-
-                濡絽鍟幉?闁诲繐绻愬Λ妤冩閳哄懏鍋ㄩ柕濞у嫮鏆犻梺鍛婃尭缁夊爼鎮块崱娆戝崥闁绘ê鎼灐闂佹寧绋戦悧鍡涘矗椤垢reviousChapters.length}缂備焦姊绘刊瀵告濮樿埖鏅?
-
+                Generated {previousChapters.length} chapters will be used as reference:
               </div>
-
               <div style={{ maxHeight: 150, overflowY: 'auto' }}>
-
-                {previousChapters.map(ch => (
-
+                {previousChapters.map((ch) => (
                   <div key={ch.id} style={{ padding: '4px 0', fontSize: 13 }}>
-
-                    闂?缂備焦顨堥幉顡﹉.chapter_number}缂備焦姊绘刊瀵告閻ㄦh.title} ({ch.word_count || 0}闁?
-
+                    Chapter {ch.chapter_number}: {ch.title} ({ch.word_count || 0} words)
                   </div>
-
                 ))}
-
               </div>
-
               <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
-
-                濡絽鍟€?AI婵炴潙鍚嬮懝鎯ь嚕椤掑嫭鍤€闁告劦鍘剧粻鐟懊瑰鍕€掗柣婵堝厴閹崇偤宕掑顒佹殽闁诲骸婀卞▍銏㈡濠靛牊鍏滄い鏃囧吹缁犱粙鏌熼姘殌濠碘槅鍘藉濠氭倷閸撲焦鐒鹃梺闈涙濞村洭锝炲Δ鍛殞闁肩⒈鍓欑瑧闂佽鍏涘鎺旂博閹绢喗鍤?
-
+                Continuing will overwrite the current chapter content.
               </div>
-
             </div>
-
           )}
-
-
-
           <p style={{ color: '#ff4d4f', marginTop: 16, marginBottom: 0 }}>
-
-            闂佸疇娉曟刊瀵哥箔?濠电偛顦崝宥夊礈娴煎瓨鏅慨姗嗗弾閸斿啴鏌熼崹顔拘＄紓宥嗘⒒娴滄悂宕卞鍏艰埞闂佺儵鏅滈悧鏇犵礊鐎ｎ喖绀堢€广儱娲ㄨぐ鍧楁煠閸濆嫬鈧悂宕€电硶鍋?
-
+            Please make sure important content is saved before continuing.
           </p>
-
         </div>
-
       ),
-
-      okText: '閻庢鍠掗崑鎾斥攽椤旂⒈鍎忛柛銊ㄩ哺閹?',
-
+      okText: 'Continue',
       okButtonProps: { danger: true },
-
-      cancelText: '闂佸憡鐟﹂悧妤冪矓?',
-
+      cancelText: 'Cancel',
       onOk: async () => {
 
         instance.update({
@@ -5315,11 +5266,11 @@ export default function Chapters() {
 
             <Select>
 
-              <Select.Option value="draft">闂佽壈妫勯ˇ閬嶁€?/Select.Option>
+              <Select.Option value="draft">闂佽壈妫勯ˇ閬嶁€</Select.Option>
 
-              <Select.Option value="writing">闂佸憡甯楃粙鎰礊閺冣偓缁?/Select.Option>
+              <Select.Option value="writing">闂佸憡甯楃粙鎰礊閺冣偓缁</Select.Option>
 
-              <Select.Option value="completed">閻庣懓鎲¤ぐ鍐偩椤掑嫬绠?/Select.Option>
+              <Select.Option value="completed">閻庣懓鎲¤ぐ鍐偩椤掑嫬绠</Select.Option>
 
             </Select>
 
@@ -5387,15 +5338,15 @@ export default function Chapters() {
 
                 }}>
 
-                  <div><strong>闂佸搫绉村ú顓€傛禒瀣櫖?/strong>{conflictChapter.title}</div>
+                  <div><strong>闂佸搫绉村ú顓€傛禒瀣櫖</strong>{conflictChapter.title}</div>
 
-                  <div><strong>闂佺粯顭堥崺鏍焵椤戣法绛忕紒?/strong>{getStatusText(conflictChapter.status)}</div>
+                  <div><strong>闂佺粯顭堥崺鏍焵椤戣法绛忕紒</strong>{getStatusText(conflictChapter.status)}</div>
 
-                  <div><strong>闁诲孩绋掗〃鍡涘汲閻斿吋鏅?/strong>{conflictChapter.word_count || 0}闁?/div>
+                  <div><strong>闁诲孩绋掗〃鍡涘汲閻斿吋鏅</strong>{conflictChapter.word_count || 0}闁</div>
 
                   {conflictChapter.outline_title && (
 
-                    <div><strong>闂佸湱顣介崑鎾绘倶閻愰潧浠滈柕鍥ф川閻ヮ亞鎷犺缁?/strong>{conflictChapter.outline_title}</div>
+                    <div><strong>闂佸湱顣介崑鎾绘倶閻愰潧浠滈柕鍥ф川閻ヮ亞鎷犺缁</strong>{conflictChapter.outline_title}</div>
 
                   )}
 
@@ -5649,7 +5600,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
             <InfoCircleOutlined style={{ color: 'var(--color-primary)' }} />
 
-            <span style={{ wordBreak: 'break-word' }}>缂備焦顨堥幉顡﹉apter.chapter_number}缂備焦姊绘慨鎾儓瀹ュ拋鍤曢柍褜鍓涢幉鎾礋椤愩垻浜?/span>
+            <span style={{ wordBreak: 'break-word' }}>缂備焦顨堥幉顡﹉apter.chapter_number}缂備焦姊绘慨鎾儓瀹ュ拋鍤曢柍褜鍓涢幉鎾礋椤愩垻浜</span>
 
           </Space>
 
@@ -5791,7 +5742,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
               <Descriptions.Item label="婵☆偅婢樼€氼亪宕ｆ繝鍕ㄥ亾濞戞瑯娈曢柡?">
 
-                <Tag color="green">{planData.estimated_words}闁?/Tag>
+                <Tag color="green">{planData.estimated_words}闁</Tag>
 
               </Descriptions.Item>
 
@@ -5935,7 +5886,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
                         }}>
 
-                          <strong>濡絽鍟幆?闂侀潻闄勬竟鍡涘磻閿濆鏅?/strong>
+                          <strong>濡絽鍟幆?闂侀潻闄勬竟鍡涘磻閿濆鏅</strong>
 
                           <span style={{
 
@@ -5955,7 +5906,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
                         <div style={{ marginBottom: 4 }}>
 
-                          <strong>濡絽鍟崳?闁荤喐鐟︾敮鐔哥珶婵犲洦鏅?/strong>
+                          <strong>濡絽鍟崳?闁荤喐鐟︾敮鐔哥珶婵犲洦鏅</strong>
 
                           <Space
 
@@ -6013,7 +5964,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
                         }}>
 
-                          <strong>濡絽鍟粻?闂佺儵鏅╅崰姘枔閹达附鏅?/strong>
+                          <strong>濡絽鍟粻?闂佺儵鏅╅崰姘枔閹达附鏅</strong>
 
                           <span style={{
 
@@ -6633,7 +6584,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
                       ) : (
 
-                        <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>闂佸搫妫楅崐鐟拔涢妶澶婄闁告侗鍙庨崯?/span>
+                        <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>闂佸搫妫楅崐鐟拔涢妶澶婄闁告侗鍙庨崯</span>
 
                       )
 
@@ -7081,7 +7032,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
                             ) : (
 
-                              <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>闂佸搫妫楅崐鐟拔涢妶澶婄闁告侗鍙庨崯?/span>
+                              <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>闂佸搫妫楅崐鐟拔涢妶澶婄闁告侗鍙庨崯</span>
 
                             )
 
@@ -7343,11 +7294,11 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
             <Select placeholder="闂備緡鍋勯ˇ鎵偓姘ュ姂閹晠鎳滅喊妯轰壕?">
 
-              <Select.Option value="draft">闂佽壈妫勯ˇ閬嶁€?/Select.Option>
+              <Select.Option value="draft">闂佽壈妫勯ˇ閬嶁€</Select.Option>
 
-              <Select.Option value="writing">闂佸憡甯楃粙鎰礊閺冣偓缁?/Select.Option>
+              <Select.Option value="writing">闂佸憡甯楃粙鎰礊閺冣偓缁</Select.Option>
 
-              <Select.Option value="completed">閻庣懓鎲¤ぐ鍐偩椤掑嫬绠?/Select.Option>
+              <Select.Option value="completed">閻庣懓鎲¤ぐ鍐偩椤掑嫬绠</Select.Option>
 
             </Select>
 
@@ -7359,7 +7310,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
             <Space style={{ float: 'right' }}>
 
-              <Button onClick={() => setIsModalOpen(false)}>闂佸憡鐟﹂悧妤冪矓?/Button>
+              <Button onClick={() => setIsModalOpen(false)}>闂佸憡鐟﹂悧妤冪矓</Button>
 
               <Button type="primary" htmlType="submit">
 
@@ -7549,7 +7500,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
               {!selectedStyleId && (
 
-                <div style={{ color: '#ff4d4f', fontSize: 12, marginTop: 4 }}>闁荤姴娲ㄩ崗姗€鍩€椤掆偓椤︽壆鈧哎鍔戝畷妯衡枎鎼达絿鈻曟俊鐐差儏鐎涒晠鎮?/div>
+                <div style={{ color: '#ff4d4f', fontSize: 12, marginTop: 4 }}>闁荤姴娲ㄩ崗姗€鍩€椤掆偓椤︽壆鈧哎鍔戝畷妯衡枎鎼达絿鈻曟俊鐐差儏鐎涒晠鎮</div>
 
               )}
 
@@ -7574,11 +7525,11 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
               >
 
-                <Select.Option value="缂備焦顨忛崗娑氱博鐎涙顩查柧蹇撳ⅲ?>缂備焦顨忛崗娑氱博鐎涙顩查柧蹇撳ⅲ?闂?</Select.Option">
+                <Select.Option value="first_person">First person</Select.Option>
 
-                <Select.Option value="缂備焦顨忛崗娑氱箔娴ｅ湱顩查柧蹇撳ⅲ?>缂備焦顨忛崗娑氱箔娴ｅ湱顩查柧蹇撳ⅲ?婵?婵?</Select.Option">
+                <Select.Option value="third_person">Third person</Select.Option>
 
-                <Select.Option value="闂佺绻堥崝搴ㄦ偂閿涘嫭鍠嗛柛鈩冨嚬濞?>闂佺绻堥崝搴ㄦ偂閿涘嫭鍠嗛柛鈩冨嚬濞?/Select.Option">
+                <Select.Option value="omniscient">Omniscient</Select.Option>
 
               </Select>
 
@@ -7613,7 +7564,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
                 ))}
               </Select>
               <Space size={8} style={{ marginTop: 8 }}>
-                <Button size="small" onClick={applyInferredSinglePlotStage}>闂佸搫鎳樼紓姘跺礂濮椻偓瀹曟岸濡堕崱妯煎姺闂傚倸鍟抽崺鏍敊?/Button>
+                <Button size="small" onClick={applyInferredSinglePlotStage}>闂佸搫鎳樼紓姘跺礂濮椻偓瀹曟岸濡堕崱妯煎姺闂傚倸鍟抽崺鏍敊</Button>
                 {selectedPlotStage && (
                   <span style={{ color: 'var(--color-success)', fontSize: 12 }}>
                     闂?{CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === selectedPlotStage)?.label || selectedPlotStage}
@@ -7983,7 +7934,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
               <Card
                 size="small"
                 title={singleStoryRepairTargetCard.title}
-                extra={<Tag color="gold">闂佹眹鍨婚崰鎰板垂濮樿泛绫嶉柟顖涙緲濞堜即鏌涢弬璇插闁轰胶鍋ゅ畷?/Tag>}
+                extra={<Tag color="gold">闂佹眹鍨婚崰鎰板垂濮樿泛绫嶉柟顖涙緲濞堜即鏌涢弬璇插闁轰胶鍋ゅ畷</Tag>}
                 style={{ marginTop: 12 }}
               >
                 <Alert
@@ -8032,11 +7983,11 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
           </Card>
 
           {singleCreationBlueprint && (
-            <Card size="small" title="缂傚倷鐒﹂幐濠氭倵椤栫偞瀚呮繝闈涙缁傚牆螞閺夊灝顏い? style={{ marginBottom: 12 }}">
+            <Card size="small" title="缂傚倷鐒﹂幐濠氭倵椤栫偞瀚呮繝闈涙缁傚牆螞閺夊灝顏い?" style={{ marginBottom: 12 }}">
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleCreationBlueprint.summary}
               </div>
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>闂佽浜介崝蹇撶暦濮椻偓閹崇偤宕掑☉姗嗏偓?/div>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>闂佽浜介崝蹇撶暦濮椻偓閹崇偤宕掑☉姗嗏偓</div>
               <Space direction="vertical" size={6} style={{ display: 'flex' }}>
                 {singleCreationBlueprint.beats.map((beat, index) => (
                   <div key={beat}>{index + 1}. {beat}</div>
@@ -8055,7 +8006,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
           )}
 
           {singleStoryObjectiveCard && (
-            <Card size="small" title="闂佺儵鏅╅崰妤呮偉閿濆纭€闁跨喓濯弳鏇㈡偡? style={{ marginBottom: 12 }}">
+            <Card size="small" title="闂佺儵鏅╅崰妤呮偉閿濆纭€闁跨喓濯弳鏇㈡偡?" style={{ marginBottom: 12 }}">
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryObjectiveCard.summary}
               </div>
@@ -8083,7 +8034,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
           )}
 
           {singleStoryResultCard && (
-            <Card size="small" title="缂傚倷鐒﹂幐濠氭倶婢舵劕纭€闁跨喓濯弳鏇㈡偡? style={{ marginBottom: 12 }}">
+            <Card size="small" title="缂傚倷鐒﹂幐濠氭倶婢舵劕纭€闁跨喓濯弳鏇㈡偡?" style={{ marginBottom: 12 }}">
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryResultCard.summary}
               </div>
@@ -8111,7 +8062,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
           )}
 
           {singleStoryExecutionChecklist && (
-            <Card size="small" title="闂佸湱鐟抽崱鈺傛杸濠电偞鎸搁幊搴＄暦閻旈潻绱ｉ柛鏇ㄥ櫘濞? style={{ marginBottom: 12 }}">
+            <Card size="small" title="闂佸湱鐟抽崱鈺傛杸濠电偞鎸搁幊搴＄暦閻旈潻绱ｉ柛鏇ㄥ櫘濞?" style={{ marginBottom: 12 }}">
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryExecutionChecklist.summary}
               </div>
@@ -8139,7 +8090,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
           )}
 
           {singleStoryRepetitionRiskCard && (
-            <Card size="small" title="闂備焦褰冪粔鎾囬崣澶樻Ч閹兼番鍔嶉悵锕€螞閺夊灝顏い? style={{ marginBottom: 12 }}">
+            <Card size="small" title="闂備焦褰冪粔鎾囬崣澶樻Ч閹兼番鍔嶉悵锕€螞閺夊灝顏い?" style={{ marginBottom: 12 }}">
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryRepetitionRiskCard.summary}
               </div>
@@ -8167,7 +8118,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
           )}
 
           {singleStoryAcceptanceCard && (
-            <Card size="small" title="婵°倗濮撮張顒勫极瑜版帒纭€闁跨喓濯弳鏇㈡偡? style={{ marginBottom: 12 }}">
+            <Card size="small" title="婵°倗濮撮張顒勫极瑜版帒纭€闁跨喓濯弳鏇㈡偡?" style={{ marginBottom: 12 }}">
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryAcceptanceCard.summary}
               </div>
@@ -8195,7 +8146,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
           )}
 
           {singleStoryCharacterArcCard && (
-            <Card size="small" title="闁荤喐鐟︾敮鐔哥珶婵犲偆鍤曠憸宥夊储濠婂嫸绱ｉ柛鏇ㄥ櫘濞? style={{ marginBottom: 12 }}">
+            <Card size="small" title="闁荤喐鐟︾敮鐔哥珶婵犲偆鍤曠憸宥夊储濠婂嫸绱ｉ柛鏇ㄥ櫘濞?" style={{ marginBottom: 12 }}">
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryCharacterArcCard.summary}
               </div>
@@ -8223,7 +8174,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
           )}
 
           {singleVolumePacingPlan && (
-            <Card size="small" title="闂佸憡顨婇ˉ鎾搭殽閸ヮ剚鍤嶉柛灞惧嚬濞堁兾涢弶鍨伂妞? style={{ marginBottom: 12 }}">
+            <Card size="small" title="闂佸憡顨婇ˉ鎾搭殽閸ヮ剚鍤嶉柛灞惧嚬濞堁兾涢弶鍨伂妞?" style={{ marginBottom: 12 }}">
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleVolumePacingPlan.summary}
               </div>
@@ -8454,7 +8405,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
             {chapterQualityMetrics ? (
               <>
                 {singleAfterScorecard && (
-                  <Card size="small" title="闂佸憡鑹鹃柊锝夋偘濞嗘垶瀚氶柛鏇ㄥ亜閻庡鏌? style={{ marginBottom: 12 }}">
+                  <Card size="small" title="闂佸憡鑹鹃柊锝夋偘濞嗘垶瀚氶柛鏇ㄥ亜閻庡鏌?" style={{ marginBottom: 12 }}">
                     <Alert
                       type={singleAfterScorecard.verdictColor as 'success' | 'info' | 'warning' | 'error'}
                       showIcon
@@ -8476,7 +8427,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
                         <Tag key={item} color="success">{item}</Tag>
                       ))}
                     </Space>
-                    <div style={{ marginBottom: 8, fontWeight: 600 }}>閻熸粎澧楅幐鍛婃櫠閻樼數纾介柛婵嗗缂?/div>
+                    <div style={{ marginBottom: 8, fontWeight: 600 }}>閻熸粎澧楅幐鍛婃櫠閻樼數纾介柛婵嗗缂</div>
                     <Space direction="vertical" size={6} style={{ display: 'flex' }}>
                       {singleAfterScorecard.gaps.map((item) => (
                         <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
@@ -8557,7 +8508,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
                 />
 
-                <Card size="small" title="闁荤姵鍔戦崝鎴﹀闯閾忓湱纾奸柟鎯ь嚟閳? style={{ marginTop: 12 }}">
+                <Card size="small" title="闁荤姵鍔戦崝鎴﹀闯閾忓湱纾奸柟鎯ь嚟閳?" style={{ marginTop: 12 }}">
 
                   <Space direction="vertical" style={{ width: '100%' }} size={10}>
 
@@ -8807,7 +8758,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
             <RocketOutlined style={{ color: '#722ed1' }} />
 
-            <span>闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洨绱掗弮鍌毿┑鈽嗗弮瀹曟﹢宕ㄩ褍鏅?/span>
+            <span>闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洨绱掗弮鍌毿┑鈽嗗弮瀹曟﹢宕ㄩ褍鏅</span>
 
           </Space>
 
@@ -8961,13 +8912,13 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
                 <Radio.Group buttonStyle="solid" size={isMobile ? 'small' : 'middle'}>
 
-                  <Radio.Button value={5}>5缂?/Radio.Button>
+                  <Radio.Button value={5}>5缂</Radio.Button>
 
-                  <Radio.Button value={10}>10缂?/Radio.Button>
+                  <Radio.Button value={10}>10缂</Radio.Button>
 
-                  <Radio.Button value={15}>15缂?/Radio.Button>
+                  <Radio.Button value={15}>15缂</Radio.Button>
 
-                  <Radio.Button value={20}>20缂?/Radio.Button>
+                  <Radio.Button value={20}>20缂</Radio.Button>
 
                 </Radio.Group>
 
@@ -9069,7 +9020,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
                 ))}
               </Select>
               <Space size={8} style={{ marginTop: 8 }}>
-                <Button size="small" onClick={applyInferredBatchPlotStage}>闂佸搫鎳樼紓姘跺礂濮椻偓瀹曟岸濡堕崱妯煎姺闂傚倸鍟抽崺鏍敊?/Button>
+                <Button size="small" onClick={applyInferredBatchPlotStage}>闂佸搫鎳樼紓姘跺礂濮椻偓瀹曟岸濡堕崱妯煎姺闂傚倸鍟抽崺鏍敊</Button>
                 {batchSelectedPlotStage && (
                   <span style={{ color: 'var(--color-success)', fontSize: 12 }}>
                     闂?{CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === batchSelectedPlotStage)?.label || batchSelectedPlotStage}
@@ -9411,7 +9362,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
                 <Card
                   size="small"
                   title={batchStoryRepairTargetCard.title}
-                  extra={<Tag color="gold">闂佹眹鍨婚崰鎰板垂濮樿泛绫嶉柟顖涙緲濞堜即鏌涢弬璇插闁轰胶鍋ゅ畷?/Tag>}
+                  extra={<Tag color="gold">闂佹眹鍨婚崰鎰板垂濮樿泛绫嶉柟顖涙緲濞堜即鏌涢弬璇插闁轰胶鍋ゅ畷</Tag>}
                   style={{ marginTop: 12 }}
                 >
                   <Alert
@@ -9460,11 +9411,11 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
             </Card>
 
             {batchCreationBlueprint && (
-              <Card size="small" title="缂傚倷鐒﹂幐濠氭倵椤栫偞瀚呮繝闈涙缁傚牆螞閺夊灝顏い? style={{ marginBottom: 12 }}">
+              <Card size="small" title="缂傚倷鐒﹂幐濠氭倵椤栫偞瀚呮繝闈涙缁傚牆螞閺夊灝顏い?" style={{ marginBottom: 12 }}">
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchCreationBlueprint.summary}
                 </div>
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>闂佸綊娼х紞濠囧闯閾忓湱鍗氶柣妯烘惈铻￠梺鐓庢惈閸婅鍒?/div>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>闂佸綊娼х紞濠囧闯閾忓湱鍗氶柣妯烘惈铻￠梺鐓庢惈閸婅鍒</div>
                 <Space direction="vertical" size={6} style={{ display: 'flex' }}>
                   {batchCreationBlueprint.beats.map((beat, index) => (
                     <div key={beat}>{index + 1}. {beat}</div>
@@ -9483,7 +9434,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
             )}
 
             {batchStoryObjectiveCard && (
-              <Card size="small" title="闂佺儵鏅╅崰妤呮偉閿濆纭€闁跨喓濯弳鏇㈡偡? style={{ marginBottom: 12 }}">
+              <Card size="small" title="闂佺儵鏅╅崰妤呮偉閿濆纭€闁跨喓濯弳鏇㈡偡?" style={{ marginBottom: 12 }}">
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryObjectiveCard.summary}
                 </div>
@@ -9511,7 +9462,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
             )}
 
             {batchStoryResultCard && (
-              <Card size="small" title="缂傚倷鐒﹂幐濠氭倶婢舵劕纭€闁跨喓濯弳鏇㈡偡? style={{ marginBottom: 12 }}">
+              <Card size="small" title="缂傚倷鐒﹂幐濠氭倶婢舵劕纭€闁跨喓濯弳鏇㈡偡?" style={{ marginBottom: 12 }}">
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryResultCard.summary}
                 </div>
@@ -9539,7 +9490,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
             )}
 
             {batchStoryExecutionChecklist && (
-              <Card size="small" title="闂佸湱鐟抽崱鈺傛杸濠电偞鎸搁幊搴＄暦閻旈潻绱ｉ柛鏇ㄥ櫘濞? style={{ marginBottom: 12 }}">
+              <Card size="small" title="闂佸湱鐟抽崱鈺傛杸濠电偞鎸搁幊搴＄暦閻旈潻绱ｉ柛鏇ㄥ櫘濞?" style={{ marginBottom: 12 }}">
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryExecutionChecklist.summary}
                 </div>
@@ -9567,7 +9518,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
             )}
 
             {batchStoryRepetitionRiskCard && (
-              <Card size="small" title="闂備焦褰冪粔鎾囬崣澶樻Ч閹兼番鍔嶉悵锕€螞閺夊灝顏い? style={{ marginBottom: 12 }}">
+              <Card size="small" title="闂備焦褰冪粔鎾囬崣澶樻Ч閹兼番鍔嶉悵锕€螞閺夊灝顏い?" style={{ marginBottom: 12 }}">
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryRepetitionRiskCard.summary}
                 </div>
@@ -9595,7 +9546,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
             )}
 
             {batchStoryAcceptanceCard && (
-              <Card size="small" title="婵°倗濮撮張顒勫极瑜版帒纭€闁跨喓濯弳鏇㈡偡? style={{ marginBottom: 12 }}">
+              <Card size="small" title="婵°倗濮撮張顒勫极瑜版帒纭€闁跨喓濯弳鏇㈡偡?" style={{ marginBottom: 12 }}">
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryAcceptanceCard.summary}
                 </div>
@@ -9623,7 +9574,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
             )}
 
             {batchStoryCharacterArcCard && (
-              <Card size="small" title="闁荤喐鐟︾敮鐔哥珶婵犲偆鍤曠憸宥夊储濠婂嫸绱ｉ柛鏇ㄥ櫘濞? style={{ marginBottom: 12 }}">
+              <Card size="small" title="闁荤喐鐟︾敮鐔哥珶婵犲偆鍤曠憸宥夊储濠婂嫸绱ｉ柛鏇ㄥ櫘濞?" style={{ marginBottom: 12 }}">
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryCharacterArcCard.summary}
                 </div>
@@ -9651,7 +9602,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
             )}
 
             {batchVolumePacingPlan && (
-              <Card size="small" title="闂佸憡顨婇ˉ鎾搭殽閸ヮ剚鍤嶉柛灞惧嚬濞堁兾涢弶鍨伂妞? style={{ marginBottom: 12 }}">
+              <Card size="small" title="闂佸憡顨婇ˉ鎾搭殽閸ヮ剚鍤嶉柛灞惧嚬濞堁兾涢弶鍨伂妞?" style={{ marginBottom: 12 }}">
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchVolumePacingPlan.summary}
                 </div>
@@ -9770,13 +9721,13 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
                   <Radio value={true}>
 
-                    <span style={{ fontSize: 12, color: '#52c41a' }}>闂?闂佹眹鍨婚崰鎰板垂濮樻墎鍋撻悷鐗堟拱闁搞劍宀稿畷銉︽償閵堝懏顔囬梺鍛婃煟閸斿矂骞冨Δ鍛煑闁哄鐏濋悗濠氭煛?/span>
+                    <span style={{ fontSize: 12, color: '#52c41a' }}>闂?闂佹眹鍨婚崰鎰板垂濮樻墎鍋撻悷鐗堟拱闁搞劍宀稿畷銉︽償閵堝懏顔囬梺鍛婃煟閸斿矂骞冨Δ鍛煑闁哄鐏濋悗濠氭煛</span>
 
                   </Radio>
 
                   <Radio value={false}>
 
-                    <span style={{ fontSize: 12, color: '#8c8c8c' }}>婵炲濮撮幊鎰板极閹捐绠ｉ柟閭﹀弾閸斺偓闂佸搫鍊稿ù鍕濞嗘垹鐭欑€广儱鎳忛崐鐢告煙闂堟侗鍎忓┑顔规櫊瀹曟岸宕卞Ο灏栧亾娴犲鏅?/span>
+                    <span style={{ fontSize: 12, color: '#8c8c8c' }}>婵炲濮撮幊鎰板极閹捐绠ｉ柟閭﹀弾閸斺偓闂佸搫鍊稿ù鍕濞嗘垹鐭欑€广儱鎳忛崐鐢告煙闂堟侗鍎忓┑顔规櫊瀹曟岸宕卞Ο灏栧亾娴犲鏅</span>
 
                   </Radio>
 
@@ -9800,15 +9751,15 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
                 <ul style={{ margin: '8px 0 0 0', paddingLeft: 20 }}>
 
-                  <li>闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭姊婚崶锝呬壕闁荤喐娲戝鎺旂博鐎电硶鍋撶憴鍕暡婵＄偛鍊垮缁樻綇閸撗咁槷闂佸憡鐟崹顖涚閹烘绀嗛柛銉ｅ妼鎼村﹪鏌涢幒鎾寸凡闁告瑧鍋撶粋鎺楀冀椤撴壕鍋撴径鎰棃?/li>
+                  <li>闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭姊婚崶锝呬壕闁荤喐娲戝鎺旂博鐎电硶鍋撶憴鍕暡婵＄偛鍊垮缁樻綇閸撗咁槷闂佸憡鐟崹顖涚閹烘绀嗛柛銉ｅ妼鎼村﹪鏌涢幒鎾寸凡闁告瑧鍋撶粋鎺楀冀椤撴壕鍋撴径鎰棃</li>
 
-                  <li>闂佺绻戞繛濠偽涚€涙ǜ浜滈柣銏犳啞濡椼劑鏌涘顒勫弰闁革絾鎮傚顒勬偋閸績鍙洪悗娈垮枓閸嬫捇鏌ㄥ☉妯侯殭缂佸彉鍗抽幊娑㈩敂閸曨倣妤呮煙椤撴粌鐏╂い锕€寮剁粋鎺旀嫚閹绘帩娼抽柡澶嗘櫆缁嬫垹鈧?/li>
+                  <li>闂佺绻戞繛濠偽涚€涙ǜ浜滈柣銏犳啞濡椼劑鏌涘顒勫弰闁革絾鎮傚顒勬偋閸績鍙洪悗娈垮枓閸嬫捇鏌ㄥ☉妯侯殭缂佸彉鍗抽幊娑㈩敂閸曨倣妤呮煙椤撴粌鐏╂い锕€寮剁粋鎺旀嫚閹绘帩娼抽柡澶嗘櫆缁嬫垹鈧</li>
 
-                  <li>闂佸憡鐟崹顖涚閹烘鈷曢煫鍥ㄦ⒐椤ρ囨煟閹邦喗鍤€闁?闂佸憡鐟﹂悧妤冪矓闁垮顩烽悹鍥ㄥ絻椤?闂佸湱顭堥ˇ鐢稿箰閾忣偆鈻旀い鎾跺櫏閸撻箖鏌ｉ姀銏犳瀾闁?/li>
+                  <li>闂佸憡鐟崹顖涚閹烘鈷曢煫鍥ㄦ⒐椤ρ囨煟閹邦喗鍤€闁?闂佸憡鐟﹂悧妤冪矓闁垮顩烽悹鍥ㄥ絻椤?闂佸湱顭堥ˇ鐢稿箰閾忣偆鈻旀い鎾跺櫏閸撻箖鏌ｉ姀銏犳瀾闁</li>
 
                   {batchProgress?.estimated_time_minutes && batchProgress.completed === 0 && (
 
-                    <li>闂佸啿鐡ㄩ崬鑽ょ箔?婵☆偅婢樼€氼垶顢橀幖浣瑰殌婵°倓鐒﹂ˇ褔鏌ㄥ☉娆愮殤閻?{batchProgress.estimated_time_minutes} 闂佸憡甯掑Λ婵嬪箰?/li>
+                    <li>闂佸啿鐡ㄩ崬鑽ょ箔?婵☆偅婢樼€氼垶顢橀幖浣瑰殌婵°倓鐒﹂ˇ褔鏌ㄥ☉娆愮殤閻?{batchProgress.estimated_time_minutes} 闂佸憡甯掑Λ婵嬪箰</li>
 
                   )}
 
@@ -9848,7 +9799,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
             {batchProgress?.quality_profile_summary && getQualityProfileDisplayItems(batchProgress.quality_profile_summary).length > 0 && (
 
-              <Card size="small" title="闁荤姵鍔戦崝鎴﹀闯濞差亝鐓ｉ柟顖嗗啫娈ラ梺姹囧灮閸犳劙寮? style={{ marginBottom: 16 }}">
+              <Card size="small" title="闁荤姵鍔戦崝鎴﹀闯濞差亝鐓ｉ柟顖嗗啫娈ラ梺姹囧灮閸犳劙寮?" style={{ marginBottom: 16 }}">
 
                 <Alert
 
@@ -9885,7 +9836,7 @@ const isRetrying = task.error_code === 'retrying' || (task.error_message && task
 
 
             {batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined && (
-              <Card size="small" title="闂佸綊娼х紞濠囧闯閾忚瀚婚柕濞炬櫅濞呫倝鏌熼懞銉劸妞? style={{ marginBottom: 16 }}">
+              <Card size="small" title="闂佸綊娼х紞濠囧闯閾忚瀚婚柕濞炬櫅濞呫倝鏌熼懞銉劸妞?" style={{ marginBottom: 16 }}">
                 {batchAfterScorecard && (
                   <Alert
                     type={batchAfterScorecard.verdictColor as 'success' | 'info' | 'warning' | 'error'}
