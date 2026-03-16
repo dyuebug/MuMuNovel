@@ -311,25 +311,37 @@ export default function BackgroundTaskCenter() {
   const [resumingTaskIds, setResumingTaskIds] = useState<Record<string, boolean>>({});
 
   const currentProject = useStore((state) => state.currentProject);
+  const projects = useStore((state) => state.projects);
   const hiddenByRoute = location.pathname === '/login' || location.pathname.startsWith('/auth/callback');
+  const knownProjectIds = useMemo(() => new Set(projects.map((project) => project.id)), [projects]);
   const routeProjectId = useMemo(() => {
     const matched = location.pathname.match(/^\/project\/([^/]+)/);
     return matched?.[1] ?? null;
   }, [location.pathname]);
-  const focusProjectId = routeProjectId ?? currentProject?.id ?? null;
+  const rawFocusProjectId = routeProjectId ?? currentProject?.id ?? null;
+  const focusProjectId =
+    rawFocusProjectId && (knownProjectIds.size === 0 || knownProjectIds.has(rawFocusProjectId))
+      ? rawFocusProjectId
+      : null;
 
   const tasksMap = useBackgroundTaskStore((state) => state.tasks);
   const removeTask = useBackgroundTaskStore((state) => state.removeTask);
   const clearTerminalTasks = useBackgroundTaskStore((state) => state.clearTerminalTasks);
 
   const tasks = useMemo(
-    () =>
-      Object.values(tasksMap).sort((a, b) => {
+    () => {
+      const allTasks = Object.values(tasksMap);
+      const filtered = knownProjectIds.size > 0
+        ? allTasks.filter((task) => !task.projectId || knownProjectIds.has(task.projectId))
+        : allTasks;
+
+      return filtered.sort((a, b) => {
         const statusDelta = statusPriority[a.status] - statusPriority[b.status];
         if (statusDelta !== 0) return statusDelta;
         return b.updatedAt - a.updatedAt;
-      }),
-    [tasksMap]
+      });
+    },
+    [tasksMap, knownProjectIds]
   );
 
   const activeTasks = useMemo(() => tasks.filter(isActiveBackgroundTask), [tasks]);
@@ -519,36 +531,39 @@ export default function BackgroundTaskCenter() {
         return;
       }
 
-      const requests: Promise<unknown>[] = [];
-
-      if (backgroundTasksApiSupported) {
-        requests.push(
-          backgroundTaskApi.listTasks({ active_only: true, limit: 50 }).catch((error: any) => {
+      const backgroundRequest = backgroundTasksApiSupported
+        ? backgroundTaskApi.listTasks({ active_only: true, limit: 200 })
+          .then((response) => ({ ok: true, items: response.items || [] }))
+          .catch((error: any) => {
             if (error?.response?.status === 404) {
               backgroundTasksApiSupported = false;
             }
-            return null;
+            return { ok: false, items: [] as Array<{ task_id: string }> };
           })
-        );
-      }
+        : Promise.resolve({ ok: false, items: [] as Array<{ task_id: string }> });
 
-      if (chapterActiveTasksApiSupported) {
-        requests.push(
-          chapterBatchTaskApi.listActiveTasks(50).catch((error: any) => {
+      const chapterRequest = chapterActiveTasksApiSupported
+        ? chapterBatchTaskApi.listActiveTasks(200)
+          .then((response) => ({ ok: true, items: response.items || [] }))
+          .catch((error: any) => {
             if (error?.response?.status === 404) {
               chapterActiveTasksApiSupported = false;
             }
-            return null;
+            return { ok: false, items: [] as Array<{ batch_id: string }> };
           })
-        );
-      }
-
-      if (requests.length === 0) {
-        return;
-      }
+        : Promise.resolve({ ok: false, items: [] as Array<{ batch_id: string }> });
 
       recoverableTasksSyncPromise = (async () => {
-        await Promise.allSettled(requests);
+        const [backgroundResult, chapterResult] = await Promise.all([backgroundRequest, chapterRequest]);
+        if (stopped) return;
+
+        if (backgroundResult.ok || chapterResult.ok) {
+          const activeIds = [
+            ...backgroundResult.items.map((item) => item.task_id),
+            ...chapterResult.items.map((item) => item.batch_id),
+          ];
+          useBackgroundTaskStore.getState().pruneMissingActiveTasks(activeIds);
+        }
       })();
 
       try {
@@ -598,24 +613,36 @@ export default function BackgroundTaskCenter() {
     if (activeTasks.length === 0) return;
 
     let stopped = false;
+    const handleMissingTask = (taskId: string, error: any) => {
+      if (error?.response?.status !== 404) return;
+      removeTask(taskId);
+    };
     const poll = async () => {
       if (stopped) return;
       await Promise.allSettled(
         activeTasks.map((task) => {
           if (task.taskType === 'chapters_batch_generate') {
-            return chapterBatchTaskApi.getBatchGenerateStatus(task.taskId, task.projectId);
+            return chapterBatchTaskApi
+              .getBatchGenerateStatus(task.taskId, task.projectId)
+              .catch((error: any) => handleMissingTask(task.taskId, error));
           }
           if (task.taskType === 'chapter_single_generate') {
-            return chapterSingleTaskApi.getSingleGenerateTaskStatus(task.taskId, task.projectId);
+            return chapterSingleTaskApi
+              .getSingleGenerateTaskStatus(task.taskId, task.projectId)
+              .catch((error: any) => handleMissingTask(task.taskId, error));
           }
           if (task.taskType === 'chapter_analysis') {
             const chapterId = typeof task.checkpoint?.chapter_id === 'string'
               ? task.checkpoint.chapter_id
               : undefined;
             if (!chapterId) return Promise.resolve(null);
-            return chapterApi.getChapterAnalysisStatus(chapterId, task.projectId);
+            return chapterApi
+              .getChapterAnalysisStatus(chapterId, task.projectId)
+              .catch((error: any) => handleMissingTask(task.taskId, error));
           }
-          return backgroundTaskApi.getTaskStatus(task.taskId);
+          return backgroundTaskApi
+            .getTaskStatus(task.taskId)
+            .catch((error: any) => handleMissingTask(task.taskId, error));
         })
       );
     };
@@ -629,7 +656,7 @@ export default function BackgroundTaskCenter() {
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [activeTaskPollKey, activeTasks, hiddenByRoute]);
+  }, [activeTaskPollKey, activeTasks, hiddenByRoute, removeTask]);
 
   useEffect(() => {
     const currentSnapshot = Object.fromEntries(tasks.map((task) => [task.taskId, task.status]));

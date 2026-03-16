@@ -6,6 +6,7 @@
 import { useCallback } from 'react';
 import { message } from 'antd';
 import { useStore } from './index';
+import { useBackgroundTaskStore } from './backgroundTasks';
 import { projectApi, outlineApi, characterApi, chapterApi, chapterSingleTaskApi } from '../services/api';
 import type {
   PaginationResponse,
@@ -106,7 +107,7 @@ export async function loadProjectOutlines(projectId?: string, options: RefreshCo
  * 项目数据同步 Hook
  */
 export function useProjectSync() {
-  const { setProjects, setLoading, addProject, updateProject, removeProject } = useStore();
+  const { setProjects, setLoading, addProject, updateProject, removeProject, setCurrentProject } = useStore();
 
   // 刷新项目列表
   const refreshProjects = useCallback(async () => {
@@ -115,6 +116,11 @@ export function useProjectSync() {
       const data = await projectApi.getProjects();
       const projects = Array.isArray(data) ? data : (data as PaginationResponse<Project>).items || [];
       setProjects(projects);
+      const currentProject = useStore.getState().currentProject;
+      if (currentProject && !projects.some((project) => project.id === currentProject.id)) {
+        setCurrentProject(null);
+      }
+      useBackgroundTaskStore.getState().pruneTasksByProjectIds(projects.map((project) => project.id));
       return projects;
     } catch (error) {
       console.error('刷新项目列表失败:', error);
@@ -154,6 +160,7 @@ export function useProjectSync() {
     try {
       await projectApi.deleteProject(id);
       removeProject(id);
+      useBackgroundTaskStore.getState().removeTasksByProjectId(id);
     } catch (error) {
       console.error('删除项目失败:', error);
       throw error;

@@ -41,6 +41,9 @@ interface BackgroundTaskState {
   tasks: Record<string, TrackedBackgroundTask>;
   upsertTask: (task: UpsertTaskPayload) => void;
   removeTask: (taskId: string) => void;
+  removeTasksByProjectId: (projectId: string) => void;
+  pruneTasksByProjectIds: (projectIds: string[]) => void;
+  pruneMissingActiveTasks: (activeTaskIds: string[]) => void;
   clearTerminalTasks: () => void;
   pruneExpiredTerminalTasks: () => void;
 }
@@ -49,6 +52,7 @@ const TERMINAL_STATUSES: BackgroundTaskRuntimeStatus[] = ['completed', 'failed',
 const TERMINAL_TASK_RETENTION_MS = 1000 * 60 * 60 * 12;
 const MAX_PERSISTED_TASKS = 30;
 const MAX_TERMINAL_TASKS = 12;
+const ACTIVE_TASK_GRACE_MS = 1000 * 60;
 
 const toTimestamp = (value?: string | null): number | undefined => {
   if (!value) return undefined;
@@ -132,6 +136,41 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
       removeTask: (taskId) => {
         const next = { ...get().tasks };
         delete next[taskId];
+        set({ tasks: next });
+      },
+      removeTasksByProjectId: (projectId) => {
+        if (!projectId) return;
+        const next = Object.fromEntries(
+          Object.entries(get().tasks).filter(([, task]) => task.projectId !== projectId)
+        );
+        set({ tasks: next });
+      },
+      pruneTasksByProjectIds: (projectIds) => {
+        const allowed = new Set(projectIds);
+        const next = Object.fromEntries(
+          Object.entries(get().tasks).filter(([, task]) =>
+            !task.projectId || allowed.has(task.projectId)
+          )
+        );
+        set({ tasks: next });
+      },
+      pruneMissingActiveTasks: (activeTaskIds) => {
+        const now = Date.now();
+        const activeSet = new Set(activeTaskIds);
+        const next = Object.fromEntries(
+          Object.entries(get().tasks).filter(([, task]) => {
+            if (TERMINAL_STATUSES.includes(task.status)) {
+              return true;
+            }
+            if (activeSet.has(task.taskId)) {
+              return true;
+            }
+            if (now - task.createdAt <= ACTIVE_TASK_GRACE_MS) {
+              return true;
+            }
+            return false;
+          })
+        );
         set({ tasks: next });
       },
       clearTerminalTasks: () => {

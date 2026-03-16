@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, Literal, Optional
 
@@ -453,7 +454,25 @@ async def get_background_task_status(task_id: str, request: Request):
 
     record = await background_task_manager.get_task(task_id, user_id)
     if not record:
-        raise HTTPException(status_code=404, detail="任务不存在")
+        now = datetime.now(timezone.utc).isoformat()
+        logger.warning(f"Background task missing: user={user_id}, task={task_id}")
+        return {
+            "task_id": task_id,
+            "task_type": "unknown",
+            "project_id": "",
+            "status": "cancelled",
+            "progress": 100,
+            "message": "任务不存在",
+            "error": "task_missing",
+            "stage_code": None,
+            "execution_mode": "interactive",
+            "workflow_scope": None,
+            "checkpoint": None,
+            "created_at": now,
+            "updated_at": now,
+            "started_at": None,
+            "completed_at": now,
+        }
 
     return record.to_dict()
 

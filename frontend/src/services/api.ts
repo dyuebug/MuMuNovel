@@ -3,6 +3,7 @@ import { message } from 'antd';
 import { ssePost } from '../utils/sseClient';
 import type { SSEClientOptions } from '../utils/sseClient';
 import { useBackgroundTaskStore } from '../store/backgroundTasks';
+import { useStore } from '../store';
 import type {
   User,
   AuthUrlResponse,
@@ -100,6 +101,9 @@ const showErrorToastWithThrottle = (errorMessage: string) => {
 
 const silentRequestConfig = <T extends RequestConfigWithToastControl>(config?: T): T =>
   ({ ...(config || {}), suppressErrorToast: true, suppressErrorLog: true } as T);
+
+const getKnownProjectIds = () =>
+  new Set(useStore.getState().projects.map((project) => project.id));
 
 const formatChapterAnalysisError = (
   errorCode?: import('../types').AnalysisTask['error_code'],
@@ -1153,7 +1157,17 @@ export const chapterBatchTaskApi = {
       throw error;
     }
 
-    for (const task of response.items || []) {
+    const projectIds = getKnownProjectIds();
+    const shouldFilterByProject = projectIds.size > 0;
+    const items = shouldFilterByProject
+      ? (response.items || []).filter((task) => !task.project_id || projectIds.has(task.project_id))
+      : (response.items || []);
+
+    if (shouldFilterByProject) {
+      useBackgroundTaskStore.getState().pruneTasksByProjectIds([...projectIds]);
+    }
+
+    for (const task of items) {
       upsertChapterTaskToStore({
         taskType: task.task_type,
         taskId: task.batch_id,
@@ -1170,7 +1184,7 @@ export const chapterBatchTaskApi = {
         completedAt: task.completed_at,
       });
     }
-    return response;
+    return { ...response, items };
   },
 
   cancelBatchGenerateTask: async (batchId: string, projectId?: string) => {
@@ -1466,7 +1480,8 @@ export interface BackgroundTaskStatus {
     | 'wizard_world_building'
     | 'wizard_career_system'
     | 'wizard_characters'
-    | 'wizard_outline';
+    | 'wizard_outline'
+    | 'unknown';
   project_id: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   progress: number;
@@ -1504,12 +1519,31 @@ export const backgroundTaskApi = {
   },
 
   getTaskStatus: async (taskId: string) => {
-    const status = await api.get<unknown, BackgroundTaskStatus>(
-      `/background-tasks/${taskId}`,
-      silentRequestConfig()
-    );
-    useBackgroundTaskStore.getState().upsertTask(status);
-    return status;
+    try {
+      const status = await api.get<unknown, BackgroundTaskStatus>(
+        `/background-tasks/${taskId}`,
+        silentRequestConfig()
+      );
+      useBackgroundTaskStore.getState().upsertTask(status);
+      return status;
+    } catch (error: any) {
+      if (error?.response?.status === 404) {
+        useBackgroundTaskStore.getState().removeTask(taskId);
+        const now = new Date().toISOString();
+        return {
+          task_id: taskId,
+          task_type: 'unknown',
+          project_id: '',
+          status: 'cancelled',
+          progress: 100,
+          message: '任务不存在',
+          created_at: now,
+          updated_at: now,
+          completed_at: now,
+        };
+      }
+      throw error;
+    }
   },
 
   listTasks: async (params?: {
@@ -1535,10 +1569,20 @@ export const backgroundTaskApi = {
       }
       throw error;
     }
-    for (const item of data.items || []) {
+    const projectIds = getKnownProjectIds();
+    const shouldFilterByProject = projectIds.size > 0;
+    const items = shouldFilterByProject
+      ? (data.items || []).filter((item) => !item.project_id || projectIds.has(item.project_id))
+      : (data.items || []);
+
+    if (shouldFilterByProject) {
+      useBackgroundTaskStore.getState().pruneTasksByProjectIds([...projectIds]);
+    }
+
+    for (const item of items) {
       useBackgroundTaskStore.getState().upsertTask(item);
     }
-    return data;
+    return { ...data, items };
   },
 
   updateWorkflowState: async (
