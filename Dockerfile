@@ -25,7 +25,7 @@ RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
 RUN rm -f package-lock.json
 
 # 安装依赖（可跳过）
-RUN if [ "$SKIP_FRONTEND_BUILD" != "true" ]; then npm install; fi
+RUN if [ "$SKIP_FRONTEND_BUILD" != "true" ]; then npm install && npm rebuild esbuild; fi
 
 # 复制前端源代码
 COPY frontend/ ./

@@ -72,8 +72,8 @@ function Get-ContainerIndexAssetPath {
 }
 
 function Get-ContainerBackendStamp {
-    $command = "python -c \"import hashlib, pathlib, datetime; p=pathlib.Path('/app/app/api/background_tasks.py'); ts=datetime.datetime.utcfromtimestamp(p.stat().st_mtime).isoformat()+'Z'; h=hashlib.sha256(p.read_bytes()).hexdigest()[:12]; print(f'{ts} {h}')\""
-    $stamp = docker exec $AppContainerName sh -lc $command
+    $code = "import hashlib, pathlib, datetime; p=pathlib.Path('/app/app/api/background_tasks.py'); ts=datetime.datetime.utcfromtimestamp(p.stat().st_mtime).isoformat()+'Z'; h=hashlib.sha256(p.read_bytes()).hexdigest()[:12]; print(f'{ts} {h}')"
+    $stamp = docker exec $AppContainerName python -c $code
     return ($stamp | Out-String).Trim()
 }
 

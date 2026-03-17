@@ -1537,10 +1537,12 @@ export const backgroundTaskApi = {
           status: 'cancelled',
           progress: 100,
           message: '任务不存在',
+          result: null,
+          error: null,
           created_at: now,
           updated_at: now,
           completed_at: now,
-        };
+        } as BackgroundTaskStatus;
       }
       throw error;
     }
