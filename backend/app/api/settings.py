@@ -28,12 +28,36 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["设置管理"])
 
+PLACEHOLDER_API_KEYS = {
+    "your_openai_api_key_here",
+    "your_anthropic_api_key_here",
+    "your_gemini_api_key_here",
+    "your_api_key_here",
+}
+
+
+def normalize_env_api_key(api_key: Optional[str]) -> str:
+    """Treat example API keys as empty values."""
+    if not api_key:
+        return ""
+
+    normalized = api_key.strip()
+    if normalized.lower() in PLACEHOLDER_API_KEYS:
+        return ""
+
+    return normalized
+
 
 def read_env_defaults() -> Dict[str, Any]:
     """从.env文件读取默认配置（仅读取，不修改）"""
     return {
         "api_provider": app_settings.default_ai_provider,
-        "api_key": app_settings.openai_api_key or app_settings.anthropic_api_key or "",
+        "api_key": (
+            normalize_env_api_key(app_settings.openai_api_key)
+            or normalize_env_api_key(app_settings.anthropic_api_key)
+            or normalize_env_api_key(app_settings.gemini_api_key)
+            or ""
+        ),
         "api_base_url": app_settings.openai_base_url or app_settings.anthropic_base_url or "",
         "llm_model": app_settings.default_model,
         "temperature": app_settings.default_temperature,

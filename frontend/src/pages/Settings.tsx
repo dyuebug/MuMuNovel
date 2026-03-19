@@ -7,6 +7,7 @@ import { eventBus, EventNames } from '../store/eventBus';
 import ProviderSelector from '../components/ProviderSelector';
 import EndpointListEditor from '../components/EndpointListEditor';
 import AzureConfigGuide from '../components/AzureConfigGuide';
+import { hasUsableApiCredentials, isPlaceholderApiKey } from '../utils/apiKey';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -374,9 +375,13 @@ export default function SettingsPage() {
     const apiBaseUrl = form.getFieldValue('api_base_url');
     const provider = form.getFieldValue('api_provider');
 
-    if (!apiKey || !apiBaseUrl) {
+    if (!hasUsableApiCredentials(apiKey, apiBaseUrl)) {
       if (!silent) {
-        message.warning('请先填写 API 密钥和 API 地址');
+        message.warning(
+          isPlaceholderApiKey(apiKey)
+            ? '当前 API 密钥仍为示例占位值，请先填写真实密钥'
+            : '请先填写 API 密钥和 API 地址'
+        );
       }
       return;
     }
@@ -523,9 +528,13 @@ export default function SettingsPage() {
     const apiBaseUrl = presetForm.getFieldValue('api_base_url');
     const provider = presetForm.getFieldValue('api_provider');
 
-    if (!apiKey || !apiBaseUrl) {
+    if (!hasUsableApiCredentials(apiKey, apiBaseUrl)) {
       if (!silent) {
-        message.warning('请先填写 API 密钥和 API 地址');
+        message.warning(
+          isPlaceholderApiKey(apiKey)
+            ? '当前 API 密钥仍为示例占位值，请先填写真实密钥'
+            : '请先填写 API 密钥和 API 地址'
+        );
       }
       return;
     }

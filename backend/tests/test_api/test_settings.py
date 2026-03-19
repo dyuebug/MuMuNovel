@@ -115,6 +115,16 @@ async def test_should_auto_create_settings_on_first_get(
     assert saved.api_key == "env-key"
 
 
+def test_read_env_defaults_should_skip_placeholder_openai_api_key(monkeypatch):
+    monkeypatch.setattr(settings_api.app_settings, "openai_api_key", "your_openai_api_key_here")
+    monkeypatch.setattr(settings_api.app_settings, "anthropic_api_key", "anthropic-live-key")
+    monkeypatch.setattr(settings_api.app_settings, "gemini_api_key", None)
+
+    defaults = settings_api.read_env_defaults()
+
+    assert defaults["api_key"] == "anthropic-live-key"
+
+
 async def test_should_return_existing_settings_when_already_saved(async_client, mock_settings):
     response = await async_client.get("/api/settings")
     assert response.status_code == 200

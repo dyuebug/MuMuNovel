@@ -14,6 +14,7 @@ import { useCharacterSync, useOutlineSync } from '../store/hooks';
 
 
 import { backgroundTaskApi, outlineApi, chapterApi, projectApi } from '../services/api';
+import { hasUsableApiCredentials } from '../utils/apiKey';
 
 
 import type { OutlineExpansionResponse, BatchOutlineExpansionResponse, ChapterPlanItem, ApiError, Character, CreativeMode, StoryFocus } from '../types';
@@ -2582,7 +2583,7 @@ export default function Outline() {
     let defaultModel: string | undefined = undefined;
 
 
-    if (api_key && api_base_url) {
+    if (hasUsableApiCredentials(api_key, api_base_url)) {
 
 
       try {

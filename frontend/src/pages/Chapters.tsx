@@ -8,6 +8,7 @@ import { useStore } from '../store';
 import { useChapterSync } from '../store/hooks';
 import { projectApi, writingStyleApi, chapterApi, chapterBatchTaskApi } from '../services/api';
 import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterLatestQualityMetrics, ChapterQualityMetrics, ChapterQualityMetricsSummary, ChapterQualityProfileSummary, CreativeMode, PlotStage, StoryFocus } from '../types';
+import { hasUsableApiCredentials } from '../utils/apiKey';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 
 import ExpansionPlanEditor from '../components/ExpansionPlanEditor';
@@ -3396,7 +3397,7 @@ export default function Chapters() {
 
 
 
-        if (api_key && api_base_url) {
+        if (hasUsableApiCredentials(api_key, api_base_url)) {
 
           try {
 
