@@ -977,7 +977,7 @@ export default function BookImport() {
                 description={
                   <div>
                     <Typography.Paragraph style={{ marginBottom: 12, color: 'rgba(0,0,0,0.65)' }}>
-                      以下AI生成步骤未能完成，但基础数据（章节、大纲）已成功导入。您可以选择重试或跳过。
+                      以下智能补全步骤未能完成，但基础数据（章节、大纲）已成功导入。您可以选择重试或跳过。
                     </Typography.Paragraph>
                     <List
                       size="small"
@@ -1049,7 +1049,7 @@ export default function BookImport() {
               marginTop: 32
             }}>
               <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                导入过程中，AI会自动帮您补全：<br />
+                导入过程中，系统会自动帮您补全：<br />
                 • 世界观设定（时间、地点、氛围、规则）<br />
                 • 职业体系（主职业与副职业）<br />
                 • 核心角色与相关组织<br />

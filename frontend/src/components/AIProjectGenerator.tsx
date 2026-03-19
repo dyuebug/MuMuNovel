@@ -1242,7 +1242,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           fontSize: isMobile ? 14 : 16
         }}
       >
-        {hasError ? '生成过程中出现错误，请点击重试按钮重新生成' : '请耐心等待，AI正在为您精心创作...'}
+        {hasError ? '生成过程中出现错误，请点击重试按钮重新生成' : '请耐心等待，正在为您精心创作...'}
       </Paragraph>
 
       {!hasError && loading && (

@@ -1024,7 +1024,7 @@ const Inspiration: React.FC = () => {
               padding: 20,
               animation: 'fadeIn 0.3s ease-in'
             }}>
-              <Spin tip={refining ? "正在根据您的反馈重新生成..." : "AI思考中..."} />
+              <Spin tip={refining ? "正在根据您的反馈重新生成..." : "正在思考中..."} />
             </div>
           )}
 

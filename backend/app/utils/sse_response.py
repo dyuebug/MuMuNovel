@@ -40,8 +40,8 @@ class StageConfig:
 STAGE_CONFIGS: Dict[ProgressStage, StageConfig] = {
     ProgressStage.INIT: StageConfig(0, 5, "开始处理..."),
     ProgressStage.LOADING: StageConfig(5, 15, "加载数据中..."),
-    ProgressStage.PREPARING: StageConfig(15, 20, "准备AI提示词..."),
-    ProgressStage.GENERATING: StageConfig(20, 85, "AI生成中..."),
+    ProgressStage.PREPARING: StageConfig(15, 20, "准备生成内容..."),
+    ProgressStage.GENERATING: StageConfig(20, 85, "正在生成中..."),
     ProgressStage.PARSING: StageConfig(85, 92, "解析数据..."),
     ProgressStage.SAVING: StageConfig(92, 98, "保存到数据库..."),
     ProgressStage.COMPLETE: StageConfig(100, 100, "完成!"),

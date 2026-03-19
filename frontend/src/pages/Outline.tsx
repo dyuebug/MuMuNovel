@@ -2409,7 +2409,7 @@ export default function Outline() {
       setSSEProgress(0);
 
 
-      setSSEMessage('正在连接AI服务...');
+      setSSEMessage('正在连接生成服务...');
 
 
       setSSEModalVisible(true);
@@ -2535,7 +2535,7 @@ export default function Outline() {
       console.error('AI生成失败:', error);
 
 
-      message.error('AI生成失败');
+      message.error('智能生成失败');
 
 
       stopGenerateTaskPolling();
@@ -2640,7 +2640,7 @@ export default function Outline() {
         <Space>
 
 
-          <span>AI生成/续写大纲</span>
+          <span>智能生成/续写大纲</span>
 
 
           <Tag color="blue">当前已有 {outlines.length} 卷</Tag>
@@ -2649,7 +2649,7 @@ export default function Outline() {
         </Space>
 
 
-      ) : 'AI生成大纲',
+      ) : '智能生成大纲',
 
 
       width: 700,
@@ -2853,7 +2853,7 @@ export default function Outline() {
                         name="story_direction"
 
 
-                        tooltip="告诉AI你希望故事接下来如何发展"
+                        tooltip="告诉系统你希望故事接下来如何发展"
 
 
                       >
@@ -2883,7 +2883,7 @@ export default function Outline() {
                         name="plot_stage"
 
 
-                        tooltip="帮助AI理解当前故事所处的阶段"
+                        tooltip="帮助系统理解当前故事所处的阶段"
 
 
                       >
@@ -8831,7 +8831,7 @@ export default function Outline() {
             message={sseMessage}
 
 
-            title="AI生成中..."
+            title="正在生成中..."
 
 
             blocking={false}
@@ -9005,7 +9005,7 @@ export default function Outline() {
             >
 
 
-              {isMobile ? 'AI生成/续写' : 'AI生成/续写大纲'}
+              {isMobile ? '智能生成/续写' : '智能生成/续写大纲'}
 
 
             </Button>

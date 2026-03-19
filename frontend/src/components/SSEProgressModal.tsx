@@ -21,7 +21,7 @@ export const SSEProgressModal: React.FC<SSEProgressModalProps> = ({
   visible,
   progress,
   message,
-  title = 'AI生成中...',
+  title = '正在生成中...',
   showPercentage = true,
   showIcon = true,
   onCancel,

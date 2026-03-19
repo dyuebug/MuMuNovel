@@ -119,7 +119,7 @@ export default function WorldSetting() {
 
     modal.confirm({
       title: '确认重新生成',
-      content: '确定要使用AI重新生成世界观设定吗？这将替换当前的世界观内容。',
+      content: '确定要使用智能重新生成世界观设定吗？这将替换当前的世界观内容。',
       centered: true,
       okText: '确认重新生成',
       cancelText: '取消',
@@ -281,7 +281,7 @@ export default function WorldSetting() {
                 flex: '1 1 auto'
               }}
             >
-              <span className="button-text-mobile">AI重新生成</span>
+              <span className="button-text-mobile">智能重新生成</span>
             </Button>
             <Button
               type="primary"

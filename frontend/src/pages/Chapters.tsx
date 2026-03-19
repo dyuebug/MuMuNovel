@@ -84,28 +84,28 @@ const STORY_BEAT_PLANNER_FIELDS: Array<{
 }> = [
   {
     key: 'openingHook',
-    label: '閻庢鍠掗崑鎾绘煕閿旀儳鍔嬪┑顔煎楠?',
-    placeholder: '闁哄鏅滈悷銈囩博鐎靛摜鍗氶柣妯挎珪娴犳﹢鏌涜箛鎾跺濠殿喖绻樺畷娆撴惞鐟欏嫮鏆犻悗娈垮枛閸婃悂鎮ラ崼鏇炍ュù锝夋敱瀹曟煡鏌涢弬鍛閸嬫挻鎷呯粙璺ㄣ偒闂傚倸瀚ч弲婊堝垂閵娾晛绠氶柛娑卞灠瀹曟洟鏌熺紒銏犲闁?',
+    label: '开篇钩子',
+    placeholder: '一句话抓住读者注意力，说明本章的开篇亮点',
   },
   {
     key: 'chapterGoal',
-    label: '闂佸搫鐗滈崜娑㈡偟閻戣姤鍎庢い鏃傛櫕閸?',
-    placeholder: '闁荤喐鐟︾敮鐔哥珶婵犲啯浜ゆ繛鍡楁捣椤忚京绱掗弮鍌毿㈢紒鐑╁亾婵＄偑鍊楃划顖滄暜鐟欏嫭浜ゆ繛鎴炵懃閻忔鏌熷畡鎵虎闁糕晛鏈粋鎺楀焵椤掍胶鈻?',
+    label: '章节目标',
+    placeholder: '本章需要达成的主要目标或推进点',
   },
   {
     key: 'conflictPressure',
-    label: '闂佸憡鍔樼亸娆撴偘婵犲洤绀夐柣妯诲絻缁?',
-    placeholder: '闂佸搫鐗滈崜娑㈡偟闁垮鈻旈柡鍕禋濞诧綁姊婚崘顓у殭濠殿喖绻樻俊瀛樻媴缁涘娈╅梺鍛婂竾閸婃垿鍩€椤戞寧顦烽柛鐑嗗墯缁傛帡鏌ㄧ€ｎ亞浠愭繝銏ｅ煐閻楃娀宕曢幘顔煎偍閻庯綆鍘借ぐ銉╂煛婢跺牆鍔ラ柛銈嗙矒瀹曨偊顢旈崼婵囶仦',
+    label: '冲突压力',
+    placeholder: '本章的主要冲突与压力来源',
   },
   {
     key: 'turningPoint',
-    label: '婵炴垶鎼╅崢浠嬵敊鐏炵偓濮滄い鎺嶇椤?',
-    placeholder: '婵炴垶鎼╅崢浠嬵敊瀹€鍕煑闁瑰濮甸弲绋棵归悩顐壕婵炴垶鏌ㄩ悧鍡氥亹婢舵劕绀岄柡宥囨暩缁€澶愭偣娴ｅ弶娅呴柣顏嶅墴瀹曟繈宕归鑲╋紦缂備胶瀚忔担鎻掍壕濞达絿顭堥崘鈧柡澶屽剱閸撴岸宕归妸鈺佹辈闁圭虎鍠楅懟鐔兼煟椤忓棗鏋旀繛?',
+    label: '转折点',
+    placeholder: '本章出现的关键转折或意外',
   },
   {
     key: 'endingHook',
-    label: '缂傚倷鐒﹂幐鎼佹偄椤掑嫭鐓㈤柍杞拌兌閹?',
-    placeholder: '缂備焦姊绘慨鎾偄椤掑嫭鍋╂繛鍡楁捣閻熸挸霉閻橆偄浜炬繛鎴炴煥閻楀﹪宕戦幘鍦杸闁绘劕鍘滈崑鎾存媴妞嬪海鈻忓┑鐐差槶閸ㄦ椽宕归妸锔锯枖閻庯絺鏅濋杈╃磼閺冨倸鈻堥柍鐟扮Ч瀹曟繈濡搁妷銉綕',
+    label: '结尾钩子',
+    placeholder: '结尾留下悬念或引导下一章',
   },
 ];
 
@@ -116,23 +116,23 @@ const STORY_SCENE_OUTLINE_FIELDS: Array<{
 }> = [
   {
     key: 'setupScene',
-    label: '闂侀潻濡囬崕銈呪枍?1闂佹寧绋掓穱娲箲閿濆绀夐柛顭戝枟缁?',
-    placeholder: '闁哄鏅滈悷銈囩博閹绢喖鎹堕柛婵嗗鐢儵鏌熺捄鐚撮練闁汇劍绻堥獮鎺楀Ω閵堝洨鎲梺鍛婄懆閸╁洭鍩€椤戣法鍔嶅┑顔肩箻瀹曟瑦娼幍顔剧劶婵炴垶鏌ㄩ悧鍡欐閹捐埖鏆滈柛娑橈工閻忔霉閻樹警鍤欏┑?',
+    label: '场景一：铺垫',
+    placeholder: '交代场景、角色状态与背景',
   },
   {
     key: 'confrontationScene',
-    label: '闂侀潻濡囬崕銈呪枍?2闂佹寧绋掗懝楣冾敋椤曗偓楠炲骸螖閳ь剙鈹冮埀?',
-    placeholder: '闂佸憡鍔樼亸娆撴偘婵犲啩绻嗛柛灞剧懅缁夊潡鏌涘Δ鈧ú銊︻殽閸ヮ剚鏅€光偓閸愮偓鍋ラ梺鑹邦潐瑜板啫锕㈤鍫濅紶妞ゅ繐鐗嗗▍锟犳煕濞嗘劦娈旈悽顖氭喘楠炲寮介鈶跨喖姊?',
+    label: '场景二：对抗',
+    placeholder: '冲突升级，推动情节发展',
   },
   {
     key: 'reversalScene',
-    label: '闂侀潻濡囬崕銈呪枍?3闂佹寧绋掓穱鍝劽归崱娑樼婵☆垳鍎ょ花?',
-    placeholder: '闁诲繒鍋愰崑鎾绘煕閺冣偓鐎笛囧焵椤掆偓鐎涒晠鎮ч柆宥呯煑鐎广儱鐗婄粊顕€鏌曢崱鏇犲妽婵絾宀稿Λ浣轰沪閸屾浜惧ù锝囩摂閸ゆ牠鎮楅棃娑樻倯闁搞劊鍔戝畷锝呂熼崹顔剧崺',
+    label: '场景三：转折',
+    placeholder: '出现反转或新的信息',
   },
   {
     key: 'payoffScene',
-    label: '闂侀潻濡囬崕銈呪枍?4闂佹寧绋掔喊宥夊极瑜版帒绾ч柣鏃堟敱缁?',
-    placeholder: '闁哄鏅滈悷銈囩博鐎靛摜鍗氶柣妯烘▕濞层倕霉閿濆棙绀冮柡浣告贡娴滄悂骞橀崨顖滎槷濡ょ姷鍋犻崺鏍ㄤ繆閸濄儲瀚氶柡鍕箚閸嬫捇宕ㄩ鑹板悅闂佸憡纰嶉崹宕囩箔閸涱喚鈻旈柍褜鍓涚划?',
+    label: '场景四：收束',
+    placeholder: '解决本章矛盾并埋下下一章线索',
   },
 ];
 
@@ -207,8 +207,8 @@ const buildStoryBeatPlannerPrompt = (
     return undefined;
   }
   const title = scope === 'batch'
-    ? 'Batch story beat planner (fill in items)'
-    : 'Story beat planner (fill in items)';
+    ? '批量故事节拍规划（逐项填写）'
+    : '故事节拍规划（逐项填写）';
   return [title, ...entries.map((item) => `- ${item.label}: ${item.value}`)].join('\n');
 };
 
@@ -250,8 +250,8 @@ const buildStorySceneOutlinePrompt = (
     return undefined;
   }
   const title = scope === 'batch'
-    ? 'Batch story scene outline (fill in items)'
-    : 'Story scene outline (fill in items)';
+    ? '批量故事场景提纲（逐项填写）'
+    : '故事场景提纲（逐项填写）';
   return [title, ...entries.map((item) => `${item.index}. ${item.label}: ${item.value}`)].join('\n');
 };
 
@@ -270,15 +270,14 @@ const buildStoryCreationPromptLayerLabels = (parts: {
   beat?: string;
   scene?: string;
 }): string[] => [
-  parts.summary?.trim() ? 'Summary' : '',
-  parts.beat?.trim() ? 'Beat Planner' : '',
-  parts.scene?.trim() ? 'Scene Outline' : '',
+  parts.summary?.trim() ? '梗概' : '',
+  parts.beat?.trim() ? '节拍规划' : '',
+  parts.scene?.trim() ? '场景提纲' : '',
 ].filter(Boolean);
 
 
 
 
-// localStorage 缂傚倸鍊归幐鎼佹偤閵娾晜鐓ユい鏂垮悑閸?
 
 const WORD_COUNT_CACHE_KEY = 'chapter_default_word_count';
 
@@ -365,46 +364,46 @@ const getMetricStrokeColor = (rate?: number): string => {
 
 
 const QUALITY_METRIC_TIPS: Record<string, string> = {
-  conflict: 'Conflict chain coverage.',
-  rule: 'Rule grounding.',
-  opening: 'Opening hook.',
-  payoff: 'Payoff chain.',
-  cliffhanger: 'Cliffhanger strength.',
-  dialogue: 'Dialogue naturalness.',
-  outline: 'Outline alignment.',
+  conflict: '冲突链覆盖情况。',
+  rule: '规则锚定情况。',
+  opening: '开篇钩子表现。',
+  payoff: '回收链表现。',
+  cliffhanger: '悬念收尾强度。',
+  dialogue: '对话自然度。',
+  outline: '大纲贴合度。',
 };
 
 
 const CREATIVE_MODE_OPTIONS: Array<{ value: CreativeMode; label: string; description: string }> = [
-  { value: 'balanced', label: 'Balanced', description: 'A balanced mix of story beats.' },
-  { value: 'hook', label: 'Hook', description: 'Emphasize the opening hook.' },
-  { value: 'emotion', label: 'Emotion', description: 'Emphasize emotional resonance.' },
-  { value: 'suspense', label: 'Suspense', description: 'Increase suspense and tension.' },
-  { value: 'relationship', label: 'Relationship', description: 'Focus on relationship dynamics.' },
-  { value: 'payoff', label: 'Payoff', description: 'Strengthen payoff and resolution.' },
+  { value: 'balanced', label: '均衡推进', description: '在多个故事节拍之间保持均衡。' },
+  { value: 'hook', label: '强化钩子', description: '突出开篇钩子与吸引力。' },
+  { value: 'emotion', label: '情感共鸣', description: '强化情绪张力与共鸣。' },
+  { value: 'suspense', label: '悬念拉升', description: '增强悬念感与紧张感。' },
+  { value: 'relationship', label: '关系推进', description: '聚焦人物关系变化。' },
+  { value: 'payoff', label: '强化回收', description: '加强伏笔回收与结果落地。' },
 ];
 
 
 const STORY_FOCUS_OPTIONS: Array<{ value: StoryFocus; label: string; description: string }> = [
-  { value: 'advance_plot', label: 'Advance plot', description: 'Move the plot forward.' },
-  { value: 'deepen_character', label: 'Deepen character', description: 'Develop character depth.' },
-  { value: 'escalate_conflict', label: 'Escalate conflict', description: 'Increase stakes and conflict.' },
-  { value: 'reveal_mystery', label: 'Reveal mystery', description: 'Reveal new information or clues.' },
-  { value: 'relationship_shift', label: 'Relationship shift', description: 'Shift relationships or alliances.' },
-  { value: 'foreshadow_payoff', label: 'Foreshadow payoff', description: 'Plant setup for future payoff.' },
+  { value: 'advance_plot', label: '推进主线', description: '推动主线情节继续发展。' },
+  { value: 'deepen_character', label: '深化角色', description: '增强角色层次与深度。' },
+  { value: 'escalate_conflict', label: '升级冲突', description: '提高风险与冲突强度。' },
+  { value: 'reveal_mystery', label: '揭示谜团', description: '揭示新的信息或线索。' },
+  { value: 'relationship_shift', label: '关系转变', description: '推动关系或阵营发生变化。' },
+  { value: 'foreshadow_payoff', label: '铺垫回收', description: '为后续回收埋设伏笔。' },
 ];
 
 
 
 const getWeakestQualityMetric = (metrics: ChapterQualityMetrics): { label: string; value: number } => {
   const items = [
-    { label: 'Conflict', value: metrics.conflict_chain_hit_rate },
-    { label: 'Rule', value: metrics.rule_grounding_hit_rate },
-    { label: 'Opening', value: metrics.opening_hook_rate },
-    { label: 'Payoff', value: metrics.payoff_chain_rate },
-    { label: 'Cliffhanger', value: metrics.cliffhanger_rate },
-    { label: 'Dialogue', value: metrics.dialogue_naturalness_rate },
-    { label: 'Outline', value: metrics.outline_alignment_rate },
+    { label: '冲突链', value: metrics.conflict_chain_hit_rate },
+    { label: '规则锚定', value: metrics.rule_grounding_hit_rate },
+    { label: '开篇钩子', value: metrics.opening_hook_rate },
+    { label: '回收链', value: metrics.payoff_chain_rate },
+    { label: '悬念收尾', value: metrics.cliffhanger_rate },
+    { label: '对话自然度', value: metrics.dialogue_naturalness_rate },
+    { label: '大纲贴合度', value: metrics.outline_alignment_rate },
   ];
   return items.reduce((min, item) => (item.value < min.value ? item : min), items[0]);
 };
@@ -413,13 +412,13 @@ const getWeakestQualityMetric = (metrics: ChapterQualityMetrics): { label: strin
 
 
 const getQualityMetricItems = (metrics: ChapterQualityMetrics) => [
-  { key: 'conflict', label: 'Conflict', value: metrics.conflict_chain_hit_rate, tip: QUALITY_METRIC_TIPS.conflict },
-  { key: 'rule', label: 'Rule', value: metrics.rule_grounding_hit_rate, tip: QUALITY_METRIC_TIPS.rule },
-  { key: 'opening', label: 'Opening', value: metrics.opening_hook_rate, tip: QUALITY_METRIC_TIPS.opening },
-  { key: 'payoff', label: 'Payoff', value: metrics.payoff_chain_rate, tip: QUALITY_METRIC_TIPS.payoff },
-  { key: 'cliffhanger', label: 'Cliffhanger', value: metrics.cliffhanger_rate, tip: QUALITY_METRIC_TIPS.cliffhanger },
-  { key: 'dialogue', label: 'Dialogue', value: metrics.dialogue_naturalness_rate, tip: QUALITY_METRIC_TIPS.dialogue },
-  { key: 'outline', label: 'Outline', value: metrics.outline_alignment_rate, tip: QUALITY_METRIC_TIPS.outline },
+  { key: 'conflict', label: '冲突链', value: metrics.conflict_chain_hit_rate, tip: QUALITY_METRIC_TIPS.conflict },
+  { key: 'rule', label: '规则锚定', value: metrics.rule_grounding_hit_rate, tip: QUALITY_METRIC_TIPS.rule },
+  { key: 'opening', label: '开篇钩子', value: metrics.opening_hook_rate, tip: QUALITY_METRIC_TIPS.opening },
+  { key: 'payoff', label: '回收链', value: metrics.payoff_chain_rate, tip: QUALITY_METRIC_TIPS.payoff },
+  { key: 'cliffhanger', label: '悬念收尾', value: metrics.cliffhanger_rate, tip: QUALITY_METRIC_TIPS.cliffhanger },
+  { key: 'dialogue', label: '对话自然度', value: metrics.dialogue_naturalness_rate, tip: QUALITY_METRIC_TIPS.dialogue },
+  { key: 'outline', label: '大纲贴合度', value: metrics.outline_alignment_rate, tip: QUALITY_METRIC_TIPS.outline },
 ];
 
 
@@ -432,11 +431,11 @@ const getBatchSummaryMetricItems = (summary?: {
   avg_payoff_chain_rate?: number;
   avg_cliffhanger_rate?: number;
 }) => [
-  { key: 'conflict', label: 'Conflict', value: summary?.avg_conflict_chain_hit_rate ?? 0, tip: QUALITY_METRIC_TIPS.conflict },
-  { key: 'rule', label: 'Rule', value: summary?.avg_rule_grounding_hit_rate ?? 0, tip: QUALITY_METRIC_TIPS.rule },
-  { key: 'opening', label: 'Opening', value: summary?.avg_opening_hook_rate ?? 0, tip: QUALITY_METRIC_TIPS.opening },
-  { key: 'payoff', label: 'Payoff', value: summary?.avg_payoff_chain_rate ?? 0, tip: QUALITY_METRIC_TIPS.payoff },
-  { key: 'cliffhanger', label: 'Cliffhanger', value: summary?.avg_cliffhanger_rate ?? 0, tip: QUALITY_METRIC_TIPS.cliffhanger },
+  { key: 'conflict', label: '冲突链', value: summary?.avg_conflict_chain_hit_rate ?? 0, tip: QUALITY_METRIC_TIPS.conflict },
+  { key: 'rule', label: '规则锚定', value: summary?.avg_rule_grounding_hit_rate ?? 0, tip: QUALITY_METRIC_TIPS.rule },
+  { key: 'opening', label: '开篇钩子', value: summary?.avg_opening_hook_rate ?? 0, tip: QUALITY_METRIC_TIPS.opening },
+  { key: 'payoff', label: '回收链', value: summary?.avg_payoff_chain_rate ?? 0, tip: QUALITY_METRIC_TIPS.payoff },
+  { key: 'cliffhanger', label: '悬念收尾', value: summary?.avg_cliffhanger_rate ?? 0, tip: QUALITY_METRIC_TIPS.cliffhanger },
 ];
 
 
@@ -459,11 +458,11 @@ const QUALITY_PROFILE_BLOCK_ORDER: Array<keyof Pick<ChapterQualityProfileSummary
 
 
 const QUALITY_PROFILE_BLOCK_LABELS: Record<typeof QUALITY_PROFILE_BLOCK_ORDER[number], string> = {
-  generation: 'Generation',
-  checker: 'Checker',
-  reviser: 'Reviser',
-  mcp_guard: 'MCP guard',
-  external_assets_block: 'External assets',
+  generation: '生成',
+  checker: '检查',
+  reviser: '修订',
+  mcp_guard: 'MCP 守卫',
+  external_assets_block: '外部资源',
 };
 
 
@@ -477,23 +476,23 @@ const getQualityProfileDisplayItems = (summary?: ChapterQualityProfileSummary | 
   const items: Array<{ key: string; label: string; description: string }> = [];
 
   if (summary.baseline_id) {
-    items.push({ key: 'baseline', label: 'Baseline', description: summary.baseline_id });
+    items.push({ key: 'baseline', label: '基线', description: summary.baseline_id });
   }
 
   if (summary.version) {
-    items.push({ key: 'version', label: 'Version', description: summary.version });
+    items.push({ key: 'version', label: '版本', description: summary.version });
   }
 
   if (summary.style_profile) {
-    items.push({ key: 'style', label: 'Style', description: summary.style_profile });
+    items.push({ key: 'style', label: '风格', description: summary.style_profile });
   }
 
   if (summary.genre_profiles?.length) {
-    items.push({ key: 'genres', label: 'Genres', description: summary.genre_profiles.join(' / ') });
+    items.push({ key: 'genres', label: '题材', description: summary.genre_profiles.join(' / ') });
   }
 
   if (summary.quality_dimensions?.length) {
-    items.push({ key: 'dimensions', label: 'Dimensions', description: summary.quality_dimensions.join(' / ') });
+    items.push({ key: 'dimensions', label: '维度', description: summary.quality_dimensions.join(' / ') });
   }
 
   QUALITY_PROFILE_BLOCK_ORDER.forEach((blockKey) => {
@@ -541,7 +540,6 @@ const getCachedWordCount = (): number => {
 
 
 
-// 婵烇絽娲︾换鍌炴偤閵娧€鍋撳☉娆樻畷闁哄棛鍠栧畷?localStorage
 
 const setCachedWordCount = (value: number): void => {
 
@@ -709,8 +707,8 @@ const normalizeStoryCreationSnapshot = (value: unknown): StoryCreationSnapshot |
     label: typeof snapshot.label === 'string' && snapshot.label.trim()
       ? snapshot.label.trim()
       : reason === 'generate'
-        ? '閻㈢喐鍨氶崜宥囨殌濡?'
-        : '閹靛濮╄箛顐ゅ弾',
+        ? '自动生成'
+        : '手动保存',
     prompt: normalizedPrompt || undefined,
     promptLayerLabels: normalizedLayerLabels,
     promptCharCount: normalizedPromptCharCount,
@@ -869,19 +867,19 @@ const buildStoryCreationSnapshotDiffLabels = (
   const labels: string[] = [];
 
   if (normalizeOptionalText(snapshot.storyCreationBriefDraft) !== normalizeOptionalText(currentDraft.storyCreationBriefDraft)) {
-    labels.push('Brief');
+    labels.push('简介');
   }
 
   if (!areStoryBeatPlannerDraftsEqual(snapshot.beatPlannerDraft, currentDraft.beatPlannerDraft)) {
-    labels.push('Beat Planner');
+    labels.push('节拍规划');
   }
 
   if (!areStorySceneOutlineDraftsEqual(snapshot.sceneOutlineDraft, currentDraft.sceneOutlineDraft)) {
-    labels.push('Scene Outline');
+    labels.push('场景提纲');
   }
 
   if (!areStoryCreationDraftMetaFieldsEqual(snapshot, currentDraft, { includeNarrativePerspective })) {
-    labels.push('Settings');
+    labels.push('设置');
   }
 
   return labels;
@@ -928,13 +926,13 @@ const StoryCreationSnapshotPanel = ({
     <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
         <div>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>{'Snapshots'}</div>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>{'快照'}</div>
           <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>{description}</div>
         </div>
         <Space size={[8, 8]} wrap>
-          {snapshots.length > 0 && <Tag color="purple">{`Total: ${snapshots.length}`}</Tag>}
+          {snapshots.length > 0 && <Tag color="purple">{`总数：${snapshots.length}`}</Tag>}
           <Button size="small" onClick={onSave} disabled={!canSave}>
-            Save snapshot
+            保存快照
           </Button>
         </Space>
       </div>
@@ -962,10 +960,10 @@ const StoryCreationSnapshotPanel = ({
                   </div>
                   <Space wrap size={[6, 6]}>
                     <Tag color={snapshot.reason === 'manual' ? 'green' : 'purple'}>
-                      {snapshot.reason === 'manual' ? 'Manual' : 'Auto'}
+                      {snapshot.reason === 'manual' ? '手动' : '自动'}
                     </Tag>
                     <Tag color={(snapshot.promptCharCount ?? 0) >= STORY_CREATION_PROMPT_WARN_THRESHOLD ? 'gold' : 'blue'}>
-                      {`Chars: ${snapshot.promptCharCount ?? 0}`}
+                      {`字符：${snapshot.promptCharCount ?? 0}`}
                     </Tag>
                   </Space>
                 </div>
@@ -985,12 +983,12 @@ const StoryCreationSnapshotPanel = ({
                 )}
                 <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginBottom: 8 }}>
                   {snapshot.prompt
-                    ? 'Includes prompt text for reuse.'
-                    : 'No prompt text saved for this snapshot.'}
+                    ? '已保存提示词文本，可直接复用。'
+                    : '该快照未保存提示词文本。'}
                 </div>
                 <Space wrap size={[8, 8]}>
                   <Button size="small" onClick={() => onApply(snapshot)}>
-                    Apply
+                    应用
                   </Button>
                   <Button
                     size="small"
@@ -998,16 +996,16 @@ const StoryCreationSnapshotPanel = ({
                     disabled={!snapshot.prompt}
                     onClick={() => void onCopy(snapshot.prompt, scopeLabel)}
                   >
-                    Copy
+                    复制
                   </Button>
                   <Popconfirm
-                    title="Delete this snapshot?"
-                    okText="Delete"
-                    cancelText="Cancel"
+                    title="删除这个快照？"
+                    okText="删除"
+                    cancelText="取消"
                     onConfirm={() => onDelete(snapshot.id)}
                   >
                     <Button size="small" type="link" danger>
-                      Delete
+                      删除
                     </Button>
                   </Popconfirm>
                 </Space>
@@ -1395,7 +1393,6 @@ export default function Chapters() {
   }, []);
   const [analysisChapterId, setAnalysisChapterId] = useState<string | null>(null);
 
-  // 闂佸憡甯掑Λ娆撴倵閼恒儳顩烽悹鍥ㄥ絻椤倝鏌ｅΟ鍨厫闁逞屽厸閼冲爼顢橀幖浣瑰仩?
 
   const [analysisTasksMap, setAnalysisTasksMap] = useState<Record<string, AnalysisTask>>({});
 
@@ -1435,7 +1432,6 @@ export default function Chapters() {
 
 
 
-  // 闂傚倸鍟幊鎾活敋娴兼潙闂柕濞у唭锕傛煙?
 
   const [readerVisible, setReaderVisible] = useState(false);
 
@@ -1443,7 +1439,6 @@ export default function Chapters() {
 
 
 
-  // 闁荤喐鐟ョ€氼剟宕瑰┑鍫㈢＝闁哄稁鍓涚敮鍡涙煟濡灝鐓愰柍?
 
   const [planEditorVisible, setPlanEditorVisible] = useState(false);
 
@@ -1451,7 +1446,6 @@ export default function Chapters() {
 
 
 
-  // 闁诲繒鍋愰崑鎾绘⒑椤斿搫濮傞柛锝嗘倐瀹曟ê鈻庨幋婢箓鏌?
 
   const [partialRegenerateToolbarVisible, setPartialRegenerateToolbarVisible] = useState(false);
 
@@ -1467,7 +1461,6 @@ export default function Chapters() {
 
 
 
-  // 闂佸憡顨嗗ú婊堟偟閻戣姤鍤嶉柛灞剧矋閺呮悂鏌熺€涙ê濮岀紒缁樕戦幆鏃堟晜閹灝锕傛煙?
 
   const [singleChapterProgress, setSingleChapterProgress] = useState(0);
   const [singleChapterProgressMessage, setSingleChapterProgressMessage] = useState('');
@@ -1481,7 +1474,6 @@ export default function Chapters() {
     [chapterQualityMetrics],
   );
 
-  // 闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭鏌ｉ埡鍐剧劸闁告鍥ㄥ亹闁煎摜顣介崑?
   const [batchGenerateVisible, setBatchGenerateVisible] = useState(false);
   const [batchGenerating, setBatchGenerating] = useState(false);
   const [batchTaskId, setBatchTaskId] = useState<string | null>(null);
@@ -2086,7 +2078,7 @@ export default function Chapters() {
 
     if (!hasMeaningfulStoryCreationDraft(singleStoryCreationCurrentDraft)) {
       if (!options?.silent) {
-        message.warning('???????????????');
+        message.warning('请先填写创作内容再保存快照');
       }
       return null;
     }
@@ -2101,13 +2093,13 @@ export default function Chapters() {
       && normalizeOptionalText(latestSnapshot.prompt) === normalizeOptionalText(prompt)
     ) {
       if (!options?.silent && reason === 'manual') {
-        message.info('?????????????????????');
+        message.info('当前内容无变化，已保留上次快照');
       }
       return latestSnapshot;
     }
 
     const createdAt = new Date().toISOString();
-    const chapterLabel = currentEditingChapter.chapter_number ? `?${currentEditingChapter.chapter_number}?` : '????';
+    const chapterLabel = currentEditingChapter.chapter_number ? `第${currentEditingChapter.chapter_number}章` : '未编号';
     const snapshot: StoryCreationSnapshot = {
       ...singleStoryCreationCurrentDraft,
       id: buildStoryCreationSnapshotId(),
@@ -2115,7 +2107,7 @@ export default function Chapters() {
       createdAt,
       updatedAt: createdAt,
       reason,
-      label: options?.label?.trim() || `${chapterLabel} ? ${reason === 'generate' ? '?????' : '????'}`,
+      label: options?.label?.trim() || `${chapterLabel} · ${reason === 'generate' ? '自动生成' : '手动保存'}`,
       prompt: prompt || undefined,
       promptLayerLabels: [...singleStoryCreationPromptLayerLabels],
       promptCharCount: prompt?.length ?? 0,
@@ -2125,7 +2117,7 @@ export default function Chapters() {
     setSingleStoryCreationSnapshots(nextSnapshots);
 
     if (!options?.silent) {
-      message.success(reason === 'generate' ? '??????????' : '?????????');
+      message.success(reason === 'generate' ? '已保存生成快照' : '已保存草稿快照');
     }
 
     return nextSnapshots[0] ?? snapshot;
@@ -2148,7 +2140,7 @@ export default function Chapters() {
 
     if (!hasMeaningfulStoryCreationDraft(batchStoryCreationCurrentDraft)) {
       if (!options?.silent) {
-        message.warning('???????????????');
+        message.warning('请先填写创作内容再保存快照');
       }
       return null;
     }
@@ -2163,7 +2155,7 @@ export default function Chapters() {
       && normalizeOptionalText(latestSnapshot.prompt) === normalizeOptionalText(prompt)
     ) {
       if (!options?.silent && reason === 'manual') {
-        message.info('?????????????????????');
+        message.info('当前内容无变化，已保留上次快照');
       }
       return latestSnapshot;
     }
@@ -2176,7 +2168,7 @@ export default function Chapters() {
       createdAt,
       updatedAt: createdAt,
       reason,
-      label: options?.label?.trim() || `???? ? ${reason === 'generate' ? '?????' : '????'}`,
+      label: options?.label?.trim() || `批量 · ${reason === 'generate' ? '自动生成' : '手动保存'}`,
       prompt: prompt || undefined,
       promptLayerLabels: [...batchStoryCreationPromptLayerLabels],
       promptCharCount: prompt?.length ?? 0,
@@ -2186,7 +2178,7 @@ export default function Chapters() {
     setBatchStoryCreationSnapshots(nextSnapshots);
 
     if (!options?.silent) {
-      message.success(reason === 'generate' ? '??????????' : '?????????');
+      message.success(reason === 'generate' ? '已保存生成快照' : '已保存草稿快照');
     }
 
     return nextSnapshots[0] ?? snapshot;
@@ -2222,7 +2214,7 @@ export default function Chapters() {
     setSingleStoryCreationBriefDraft(snapshot.storyCreationBriefDraft ?? '');
     setSingleStoryBeatPlannerDraft(normalizeStoryBeatPlannerDraft(snapshot.beatPlannerDraft));
     setSingleStorySceneOutlineDraft(normalizeStorySceneOutlineDraft(snapshot.sceneOutlineDraft));
-    message.success(`??????${snapshot.label}`);
+    message.success(`已应用快照：${snapshot.label}`);
   }, [currentEditingChapter?.chapter_number, knownStructureChapterCount]);
 
   const applyBatchStoryCreationSnapshot = useCallback((snapshot: StoryCreationSnapshot) => {
@@ -2242,7 +2234,7 @@ export default function Chapters() {
     setBatchStoryCreationBriefDraft(snapshot.storyCreationBriefDraft ?? '');
     setBatchStoryBeatPlannerDraft(normalizeStoryBeatPlannerDraft(snapshot.beatPlannerDraft));
     setBatchStorySceneOutlineDraft(normalizeStorySceneOutlineDraft(snapshot.sceneOutlineDraft));
-    message.success(`Loaded snapshot: ${snapshot.label}`);
+    message.success(`已加载快照：${snapshot.label}`);
   }, []);
 
   const deleteSingleStoryCreationSnapshot = useCallback((snapshotId: string) => {
@@ -2252,7 +2244,7 @@ export default function Chapters() {
 
     const nextSnapshots = removePersistedStoryCreationSnapshot(singleStoryCreationDraftStorageKey, snapshotId);
     setSingleStoryCreationSnapshots(nextSnapshots);
-    message.success('Snapshot deleted.');
+    message.success('快照已删除。');
   }, [singleStoryCreationDraftStorageKey]);
 
   const deleteBatchStoryCreationSnapshot = useCallback((snapshotId: string) => {
@@ -2262,7 +2254,7 @@ export default function Chapters() {
 
     const nextSnapshots = removePersistedStoryCreationSnapshot(batchStoryCreationDraftStorageKey, snapshotId);
     setBatchStoryCreationSnapshots(nextSnapshots);
-    message.success('Snapshot deleted.');
+    message.success('快照已删除。');
   }, [batchStoryCreationDraftStorageKey]);
 
   const copyStoryCreationPrompt = useCallback(async (
@@ -2271,7 +2263,7 @@ export default function Chapters() {
   ) => {
     const normalizedContent = content?.trim();
     if (!normalizedContent) {
-      message.warning(`No prompt content to copy for ${scopeLabel}.`);
+      message.warning(`${scopeLabel === 'single' ? '单章' : '批量'}提示词暂无可复制内容。`);
 
       return;
     }
@@ -2291,10 +2283,10 @@ export default function Chapters() {
         document.body.removeChild(tempTextArea);
       }
 
-      message.success(`Copied ${scopeLabel} prompt to clipboard.`);
+    message.success(`已将${scopeLabel === 'single' ? '单章' : '批量'}提示词复制到剪贴板。`);
     } catch (error) {
       console.error('Failed to copy prompt.', error);
-      message.error('Copy failed. Please try again.');
+      message.error('复制失败，请重试。');
     }
   }, []);
   useEffect(() => {
@@ -2467,11 +2459,9 @@ export default function Chapters() {
 
 
 
-  // 婵犮垼娉涚€氼噣骞冩繝鍥ф闁搞儯鍔嶉幏閬嶆⒑椤愩埄妲烽柤?- 濠碘槅鍋€閸嬫挻绻涢弶鎴剶闁逞屽墮椤︻噣鎳欓幋锕€妫橀柛銉ｅ妽閹疯鲸顨ラ悙璺虹厫婵☆垰顦辩划鍫ユ倻濡法妾ㄩ梺鍛婃煟閸斿本瀵奸幇鏉跨闂佸灝顑囬崺?
 
   const handleTextSelection = useCallback(() => {
 
-    // 闂佸憡鐟禍婊冿耿椤忓棛纾介柡宥庡墰鐢棝鏌涢敐鍐ㄥ濠⒀嶇畱椤曪綁鍩€椤掑嫬绫嶉悹杞拌濡查亶鏌ｉ悙鍙夘棦闁逞屽墮椤︻噣鎳?
 
     if (!isEditorOpen) {
 
@@ -2499,7 +2489,6 @@ export default function Chapters() {
 
     
 
-    // 闂佺厧鍢查崯鍧楁儍椤栫偞鐒诲璺侯槼閸?0婵炴垶鎼╂禍婊堟偤瑜忕划顓㈡晜閽樺鏋€闂佸搫瀚晶浠嬪Φ濮橆剦鍟呴柕澶堝劚瀵版棃鏌?
 
     if (selectedText.length < 10) {
 
@@ -2511,7 +2500,6 @@ export default function Chapters() {
 
 
 
-    // 濠碘槅鍋€閸嬫捇鏌＄仦璇插姦闁逞屽墮椤︻噣鎳欓幋锕€鍙婃い鏍ㄧ閸庡﹪鏌?TextArea 闂?
 
     const textArea = contentTextAreaRef.current?.resizableTextArea?.textArea;
 
@@ -2525,7 +2513,6 @@ export default function Chapters() {
 
     
 
-    // 濠碘槅鍋€閸嬫捇鏌＄仦璇插姦闁逞屽墮椤︻噣鎳欓幋锕€鍙婃い鏍ㄧ閸庡﹪鏌?textarea 闂佸憡鍔曢幏鎴犳濞嗘挻顥嗛柍褜鍓涢幉鐗堟媴閸濆嫷妫楀┑鐐茬墕閿曘倝藝閳哄懏鍋犻柛鈽嗗幘缁€澶愭煕閵壯冃￠悹?textarea 闂佹眹鍔岀€氫即鍩€椤掆偓椤︻噣鎳欓幋鐐碘枖鐎广儱瀚粣妤呮煕閹烘挾鈽夌紓?range闂?
 
     if (document.activeElement !== textArea) {
 
@@ -2537,7 +2524,6 @@ export default function Chapters() {
 
 
 
-    // 闂佸吋鍎抽崲鑼躲亹?textarea 婵炴垶鎼╅崢鎯р枔閹达附鐒诲璺侯槼閸橆剙霉閿濆懐肖闁?
 
     const start = textArea.selectionStart;
 
@@ -2559,7 +2545,6 @@ export default function Chapters() {
 
 
 
-    // 闁荤姳绶ょ槐鏇㈡偩鐠囪褰掝敊閻撳巩妤冣偓瑙勬偠閸庨亶宕ｉ崸妤€鍐€闊洤娴风粔瀵哥磽?
 
     const rect = textArea.getBoundingClientRect();
 
@@ -2571,7 +2556,6 @@ export default function Chapters() {
 
     
 
-    // 闁荤姳绶ょ槐鏇㈡偩婵犳碍鐒诲璺侯槼閸橆剟鏌￠崒姘婵犫偓閹殿喗灏庣€瑰嫰鍋婂妤€霉閿濆懐肖闁汇倕妫濋獮宥夊焵椤掑嫬鎹堕柕濞у嫮鏆犻柣鐐寸☉閼活垵銇?
 
     const textBeforeSelection = textContent.substring(0, start);
 
@@ -2579,9 +2563,7 @@ export default function Chapters() {
 
     
 
-    // 闁荤姳绶ょ槐鏇㈡偩婵犳碍鐒诲璺侯槼閸橆剟鏌￠崒姘婵犫偓娴兼潙鎹?textarea 婵炴垶鎼╅崢鎯р枔閹寸姵鍠嗛柛鈩冨嚬濞兼洖霉閿濆懐肖闁?
 
-    // 闂傚倸娲犻崑鎾绘偡閺囨碍绁伴柍褜鍓欓崯鍐差瀶?scrollTop闂佹寧绋戝鍗恱tarea 闂佸憡鍔曢幊姗€宕曢弶鎴叆婵﹩鍓欒闂佺顑呯换鎺嶇昂闂?
 
     const scrollTop = textArea.scrollTop;
 
@@ -2589,13 +2571,11 @@ export default function Chapters() {
 
     
 
-    // 閻庤鎮堕崕閬嶅矗閸ф鍐€闊洤娴风粔瀵哥磽閸愭儳娅欑紒杈╂疄extarea 婵＄偑鍊曢悥濂稿磿?+ 闂備緡鍋勯ˇ顕€鎳欓幋锕€妫橀柛銉ｅ妽閹烽亶鏌ｉ妸銉ヮ伂妞ゎ偄顑囬幉瀛樺緞婢跺瞼孝缂?- 閻庤鎮堕崕閬嶅矗閸ф鍐€闊洦绋撹ぐ顖炲箹鏉堝墽鐣卞ù婊冩憸缁?
 
     const toolbarTop = rect.top + visualTop - 45;
 
     
 
-    // 濠殿喗蓱濞兼瑩鏌﹂埡鍌涘鐎广儱娲ㄩ弸鍌炴煥濞戞瑧顣查柡鍌欑窔瀹?textarea 闂佹眹鍔岀€氼剝銇愰崨濠勭懝鐟滃秶浜搁鐐叉槬闁绘洖鍊荤粈澶愭⒑椤掆偓閻忔繈宕㈤妶澶嬬劶妞ゆ棁妫勯惃锟犳煛閸屾碍澶勬繝鈧?
 
     const toolbarLeft = rect.right - 180;
 
@@ -2609,7 +2589,6 @@ export default function Chapters() {
 
     
 
-    // 闁荤姳绶ょ槐鏇㈡偩鐠囧樊鍟呴柕澶堝劚瀵版棃鏌″鍛缂傚秴鎳愮槐鏃堫敋閸℃瑧顦繝纰樷偓鍐测偓褰掓倶婢舵劖鐒诲璺侯槼閸橆剙霉閿濆懐肖闁汇倕妫欑粙澶婎吋閸涱喛鍚梺鍛婄懐閸ㄧ敻锝炵€ｎ喖绀岄柛婵嗗閸樼敻鏌涢幇顒佸珔缂佽鲸绻堝畷鍫曞传閸曨厽姣庨梺闈╄礋閸斿繒绮╅悢铏圭＝?
 
     let finalTop = toolbarTop;
 
@@ -2639,7 +2618,6 @@ export default function Chapters() {
 
 
 
-  // 闂佸搫娲ら悺銊╁蓟婵犲偆鍟呴柕澶堝劚瀵版棃鏌″鍛缂傚秴鎳愮槐鏃堫敊閻愵剛鏆犻梺鍛婂灱婵倝寮抽悢鍏兼櫖闁割偅绮庨悷婵囦繆椤愮喎浜惧┑鐐存綑椤戝鍩€椤掆偓椤︻噣鎳欓幋锔芥櫖閻忕偠妫勫☉褔鏌￠崶褏鎽犻柡灞斤攻閹峰懎顓奸崶鈺傜€梺?
 
   const updateToolbarPosition = useCallback(() => {
 
@@ -2679,29 +2657,23 @@ export default function Chapters() {
 
     const toolbarTop = rect.top + visualTop - 45;
 
-    // 闂佹悶鍎遍幖顐︽偩妤ｅ啫鎹?textarea 闂佸憡鐟ラ崢鏍箔閸屾粍鍠嗛柟铏瑰仧缁€澶娾槈閹惧磭效婵炲牄鍨介弻鍛緞婢跺骸骞€婵炶揪绲界粔鍫曟偪閸℃稑鐭楁俊顖氭惈椤?
 
     const toolbarLeft = rect.right - 180;
 
     
 
-    // 閻庤鎮堕崕閬嶅矗閸ф鍐€闊洦鎸荤粊濂告倵鐟欏嫯澹樻繝鈧?textarea 闂佸憡鐟崹鐢革綖鐎ｎ喖绀岄柛婵嗗閸樼敻鏌涢幇顒佸珔缂佽鲸绻堝畷锟犲礂閸涱厸鏋忛梻渚囧亜椤︻噣鎳欓幋锕€妫橀柛銉ｅ妽閹疯鲸绻濇繝鍐闁搞値鍘鹃幉鎾幢濞戞ɑ顏犳繛鎴炴⒒閸犲秶鎹㈠璺虹濞达綀顫夐埢鏃傜磼閳?
 
-    // 婵犵鈧啿鈧綊鎮樻径鎰劵濠㈣泛顦抽崢顒€霉閿濆懐肖闁汇倕妫濆畷鐑藉Ω閵夈儴顔夐柣鐔哥懃濡浜搁鐐叉槬闁绘柨鍢查弫鍫曟煥濞戞鐒风紒鎰剁節濮婃崘绠涘☉鎺戜壕濠㈣泛顦抽崢顒€霉閿濆懐肖闁?
 
-    // 婵犵鈧啿鈧綊鎮樻径濠庣叆婵﹩鍓欏В澶愭偡濞嗗繑顥㈤柛锝呯秺閺佸秶浠﹂懞銉с偧闁诲氦顫夐懝鎯э耿椤忓懌浜滈柛顐ｆ礀閸斻儵鏌熺€涙澧紒銊﹀▕閺屽牓濡搁妸褏褰剧紓?
 
     let finalTop = toolbarTop;
 
     if (visualTop < 0) {
 
-      // 闂備緡鍋勯ˇ顕€鎳欓幋鐐村鐎广儱娲ㄩ弸鍌炴煕閿斿搫濡虹紒妤€鍊垮顒傛兜閸滀焦缍婇梻浣瑰絻妤犳悂藝婵犳碍鏅悘鐐村灊缁憋綁鏌涜箛娑欐暠闁绘牬鍣ｅ畷鍫曞传閸曨厽姣庨梺闈╄礋閸旀垿濡存繝鍥ㄧ劸?
 
       finalTop = rect.top + 10;
 
     } else if (visualTop > textArea.clientHeight) {
 
-      // 闂備緡鍋勯ˇ顕€鎳欓幋鐐村鐎广儱娲ㄩ弸鍌炴煕閿斿搫濡虹紒妤€鎳樺顒傛兜閸滀焦缍婇梻浣瑰絻妤犳悂藝婵犳碍鏅悘鐐村灊缁憋綁鏌涜箛娑欐暠闁绘牬鍣ｅ畷鍫曞传閸曨厽姣庨梺闈╄礋閸斿瞼鑺遍幎鑺ョ劸?
 
       finalTop = rect.bottom - 50;
 
@@ -2721,7 +2693,6 @@ export default function Chapters() {
 
 
 
-  // 闂佺儵鏅滈崹鐢稿箚婢舵劖鐒诲璺侯槼閸橆剙霉濠婂喚鍎庢繛?
 
   useEffect(() => {
 
@@ -2737,7 +2708,6 @@ export default function Chapters() {
 
     const handleMouseUp = () => {
 
-      // 婵崿鍛ｉ柣鏍电秮閺屽本绻濋崘鈺傛緬闂佸搫鍟抽崺鏍夐崨鏉戣摕闁靛鏂侀崑鎾村緞婢跺骸骞€
 
       setTimeout(handleTextSelection, 50);
 
@@ -2747,7 +2717,6 @@ export default function Chapters() {
 
     const handleKeyUp = (e: KeyboardEvent) => {
 
-      // Shift + 闂佸搫鍊婚幊鎾诲箖濠婂牊鐓ユい鏇楀亾闁逞屽墮椤︻噣鎳欓幋锕€绫嶉柤鍛婎問濮婇箖鏌?
 
       if (e.shiftKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
 
@@ -2761,7 +2730,6 @@ export default function Chapters() {
 
     const handleScroll = () => {
 
-      // 濠电姴锕ラ懝鐐叏閳哄懎绫嶉柤绋跨仛缁绢垶鏌￠崒鐑嗘殥缂傚秴鎳愮槐鏃堫敋閸℃瑧顦╂繛杈剧秬濞夋洟寮?requestAnimationFrame 婵炴潙鍚嬮敋閻庡灚鐓￠獮鈧憸鎴﹀礂濮椻偓閺?
 
       requestAnimationFrame(updateToolbarPosition);
 
@@ -2769,7 +2737,6 @@ export default function Chapters() {
 
 
 
-    // 闂佺儵鏅滈崹鐢稿箚?textarea 濠电姴锕ラ懝鐐叏?
 
     textArea.addEventListener('mouseup', handleMouseUp);
 
@@ -2779,7 +2746,6 @@ export default function Chapters() {
 
 
 
-    // 闂佸憡鑹鹃張顒€顪冮崒鐐村剮闁瑰瓨绻冮崕?Modal body 濠电姴锕ラ懝鐐叏閳哄懏鏅柛锔绘懓dal 闂佸憡鍔曢幊搴敊閹版澘鐭楁い鏍ㄧ箓閸樻挳鏌涢敂鍝勫妞わ箒宕垫禒锕傚磼濮樼厧鏅ｉ梺闈╃祷閸斿秶鍒掗幘顔肩妞ゎ厽甯炵粈?
 
     const modalBody = textArea.closest('.ant-modal-body');
 
@@ -2791,7 +2757,6 @@ export default function Chapters() {
 
 
 
-    // 闂佺儵鏅滈崹鐢稿箚婢跺瞼鐜绘俊銈傚亾鐟滅増绋掑鍕槻闁活煈鍓熷畷锝呂熼崫鍕靛殭
 
     window.addEventListener('resize', handleScroll);
 
@@ -2829,7 +2794,6 @@ export default function Chapters() {
 
       
 
-      // 婵犵鈧啿鈧綊鎮樻径鎰€烽柣鐔告緲濮ｅ﹪鏌ｉ妸銉ヮ仾婵¤尙顭堥蹇涘Ψ閵夈儱绶梺鍝勭Т妤犲繒妲愬┑鍥┾枖鐎广儱顦伴娲煢?
 
       if (target.closest('[data-partial-regenerate-toolbar]')) {
 
@@ -2839,7 +2803,6 @@ export default function Chapters() {
 
       
 
-      // 婵犵鈧啿鈧綊鎮樻径鎰€烽柣鐔告緲濮ｅ﹪鏌ｉ妸銉ヮ仾婵?textarea闂佹寧绋戞總鏃傜箔婢舵劖鈷曢柟閭﹀灡椤?
 
       if (target.tagName === 'TEXTAREA') {
 
@@ -2849,7 +2812,6 @@ export default function Chapters() {
 
       
 
-      // 婵犵鈧啿鈧綊鎮樻径鎰€烽柣鐔告緲濮ｅ﹪鏌ｉ妸銉ヮ仾婵?Modal 闂佸憡鍔曢幊姗€宕曢幘顔芥櫖闁割偅绻傞惁鍫曟煙婵傚澧紒顔芥尦瀹曟繈濡搁敂鍊熸嫬闂佹寧绋戦¨鈧紒杈ㄧ箖缁嬪顓兼径瀣靛悈闂?
 
       if (target.closest('.ant-modal-content')) {
 
@@ -2859,7 +2821,6 @@ export default function Chapters() {
 
       
 
-      // 闂佺粯鍔楅幊鎾诲吹?Modal 婵犮垼鍩栭悧鐘诲磿閹绢喖绠ョ€广儱顦伴娲煢濡櫣绠板ù鍏煎姍瀹曟鏌ㄧ€ｎ剙鐒?
 
       setPartialRegenerateToolbarVisible(false);
 
@@ -2917,7 +2878,6 @@ export default function Chapters() {
 
 
 
-  // 濠电偞鎸搁幊鎰板箖婵犲啯濮滄い鏃€顑欓崵鍕倵鐟欏嫮顣叉俊鐐插€垮畷?
 
   useEffect(() => {
 
@@ -2945,9 +2905,7 @@ export default function Chapters() {
 
 
 
-  // 闂佸憡姊绘慨鎯归崶顒€绠ラ柍褜鍓熷鍨緞瀹€鈧ぐ鍧楁煠閸濆嫬鈧鈻撻幋锕€绀嗛柛鈩冾焽閳ь剝濮ょ粋鎺旀嫚閹绘帩娼抽梺缁橆焾閸╂牠鍩€?
 
-  // 闂佽浜介崕杈亹閸儱鐭楁い鏍亹閸嬫挻寰勭仦鍓ф殸 chaptersToLoad 闂佸憡鐟ラ崐褰掑汲閻斿吋鏅€光偓閸愬啯甯″畷?React 闂佺粯顭堥崺鏍焵椤戣法鍔嶆繛鎻掓健瀵剟寮堕幐搴仺闁哄鏅濋崰搴敋闁秵鍤婇悗闈涙啞閻ｉ亶姊婚崒銈呮珝妞?
 
   const loadAnalysisTasks = async (chaptersToLoad?: typeof chapters) => {
 
@@ -3037,11 +2995,9 @@ export default function Chapters() {
 
 
 
-  // 闂佸憡鍑归崹鐗堟叏閳哄懎纭€闁哄洦宀搁崵瀣磼閺冨倸鞋濠碘槅鍙冮幆鍐礋椤忓懎搴婇梺鍛婃瀫閵堝洦鐎柣?
 
   const startPollingTask = (chapterId: string) => {
 
-    // 婵犵鈧啿鈧綊鎮樻径濠庡晠闁肩⒈鍓涢惀鍛存煕閿斿搫濮€闁汇倕妫涢幏鐘伙綖椤斿墽顦梺绋跨箰閻楀﹦绮╂繝姘挃?
 
     if (pollingIntervalsRef.current[chapterId]) {
 
@@ -3081,11 +3037,11 @@ export default function Chapters() {
 
           if (task.status === 'completed') {
 
-            message.success('Chapter analysis completed.');
+            message.success('章节分析已完成。');
 
           } else if (task.status === 'failed') {
 
-            message.error(`Chapter analysis failed: ${task.error_message || 'Unknown error'}`);
+            message.error(`章节分析失败：${task.error_message || '未知错误'}`);
 
           }
 
@@ -3231,7 +3187,6 @@ export default function Chapters() {
 
       } catch {
 
-        // 缂備焦姊绘慨鐐繆椤撱垹姹查柛灞剧⊕閿熴儵鏌涢幒鎴烆棡闁诲氦濮ょ粋鎺旀嫚閹绘帩娼抽梺鍝勫暞濠€鍦閹殿喚纾肩憸蹇涙偨閼姐倖鍠嗛柨鏇楀亾鐟滄澘鍊垮畷姘槈濡偐澶?
 
       }
 
@@ -3271,11 +3226,11 @@ export default function Chapters() {
 
     if (queuedCount > 0) {
 
-      message.info(`Queued ${queuedCount} chapters for analysis.`);
+      message.info(`已将 ${queuedCount} 章加入分析队列。`);
 
     } else if (skippedCount > 0 && failedCount === 0) {
 
-      message.info('Skipped chapters that were already analyzed.');
+      message.info('已跳过完成分析的章节。');
 
     }
 
@@ -3283,7 +3238,7 @@ export default function Chapters() {
 
     if (failedCount > 0) {
 
-      message.warning(`${failedCount} chapter analyses failed.`);
+      message.warning(`有 ${failedCount} 个章节分析失败。`);
 
     }
 
@@ -3357,7 +3312,7 @@ export default function Chapters() {
 
         console.error('Failed to load writing styles.', error);
 
-        message.error('Failed to load writing styles.');
+        message.error('加载写作风格失败。');
 
       }
 
@@ -3385,7 +3340,6 @@ export default function Chapters() {
 
     try {
 
-      // 婵炲濮村锕傤敊閺囩姷纾鹃柣锛勵檮I闂佸吋鍎抽崲鑼躲亹閸ヮ剚鍋ㄩ柕濠忕畱閻撴洟姊洪弶璺ㄐら柣銈呮閹啴宕熼鐔剁窔瀹曞湱鈧綆浜滈悘娆撴偠?
 
       const settingsResponse = await fetch('/api/settings');
 
@@ -3549,7 +3503,7 @@ export default function Chapters() {
 
           startBatchPolling(task.batch_id);
 
-          message.info('Batch generation restored and running.');
+          message.info('已恢复批量生成任务并继续运行。');
 
         }
 
@@ -3621,7 +3575,6 @@ export default function Chapters() {
 
 
 
-      // 闂佺粯鍔楅幊鎾诲吹椤曗偓閺屽懎顫濇潏鈺佸绩闂佸搫鍟崕鍏肩濞戙垺鍊块柨鏇楀亾闁糕晛鐬肩划锝呂旈埀顒冦亹?
 
       notification.onclick = () => {
 
@@ -3633,7 +3586,6 @@ export default function Chapters() {
 
 
 
-      // 5缂備礁顦扮敮鎺楀箖濡ゅ懏鍤婃い蹇撳琚熼梺绋跨箲婵炲﹤螞?
 
       setTimeout(() => {
 
@@ -3643,7 +3595,6 @@ export default function Chapters() {
 
     } else if (Notification.permission !== 'denied') {
 
-      // 婵犵鈧啿鈧綊鎮樻径鎰骇闁告劦鍠楅娆撴煛閸偂娴锋い顐畵瀵増鎯旈敐鍌楀亾濮椻偓楠炲繘骞掗弮鍌氬椽闂佹寧绋戦懟顖炴儍閸撗勫珰闁哄洠妲呴崵鐐存叏閻熸澘鈧懓顭囬崼銉︹挃?
 
       Notification.requestPermission().then(permission => {
 
@@ -3739,7 +3690,7 @@ export default function Chapters() {
 
           outlineId: chapter.outline_id || null,
 
-          outlineTitle: chapter.outline_title || 'Uncategorized',
+          outlineTitle: chapter.outline_title || '未分类',
 
           outlineOrder: chapter.outline_order ?? 999,
 
@@ -3831,12 +3782,12 @@ export default function Chapters() {
 
     const texts: Record<string, string> = {
 
-      first_person: 'First person',
-      third_person: 'Third person',
-      omniscient: 'Omniscient',
+      first_person: '第一人称',
+      third_person: '第三人称',
+      omniscient: '全知视角',
     };
 
-    return texts[perspective || ''] || 'Third person';
+    return texts[perspective || ''] || '第三人称';
 
   };
 
@@ -3916,13 +3867,12 @@ export default function Chapters() {
 
 
 
-      // 闂佸憡甯￠弨閬嶅蓟婵犲嫮鍗氶柣妯烘惈铻￠梺鍛婂笚椤ㄥ濡撮崘鈺冾浄闁靛鍔岀粻顖炴煕濞嗘劗澧柣锝庡墴瀵偆鈧潧鎲￠悾杈╃磼閺冨倸鞋濠碘槅鍙冨顐︽偋閸繄銈﹂梺鎸庣☉閻楀棛鈧灚锕㈤獮蹇涙偠缁茬憙line_title缂備焦绋戦ˇ铏閸儱钃熼柕澶堝劤閹界喐绻涢崼銏╂殰缂?
 
       await refreshChapters();
 
 
 
-      message.success('Chapter updated.');
+      message.success('章节已更新。');
 
       setIsModalOpen(false);
 
@@ -3930,7 +3880,7 @@ export default function Chapters() {
 
     } catch {
 
-      message.error('Failed to update chapter.');
+      message.error('更新章节失败。');
 
     }
 
@@ -3972,7 +3922,6 @@ export default function Chapters() {
 
       loadAvailableModels();
 
-      // 闂佸憡鑹鹃張顒勵敆閻愬搫绀夐柣妯煎劋缁佷即鎮归崶銉ュ姢闁绘繄鍏橀幊鐐哄磼濞戞瑤绮柡澶嗘櫆閸ㄥ磭绮╅弶鎴旀瀻闁炽儱鍟块埛鏃堟煙椤栨碍鍤€闁伙箑閰ｅ畷?
 
       void loadChapterQualityMetrics(chapter.id);
 
@@ -3994,7 +3943,6 @@ export default function Chapters() {
 
 
 
-      // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽敂鐣屽嚱闂佸搫鍊绘晶妤呭焵椤掑喚鍤欓柣鈯欏洤鏋侀柟娈垮枤閸╃娀鎮?
 
       const updatedProject = await projectApi.getProject(currentProject.id);
 
@@ -4002,13 +3950,13 @@ export default function Chapters() {
 
 
 
-      message.success('Project updated.');
+      message.success('项目已更新。');
 
       setIsEditorOpen(false);
 
     } catch {
 
-      message.error('Failed to update project.');
+      message.error('更新项目失败。');
 
     }
 
@@ -4024,7 +3972,7 @@ export default function Chapters() {
 
     if (runningSingleChapterTasks[chapterId]) {
 
-      message.info('This chapter is already generating.');
+      message.info('该章节正在生成中。');
 
       return;
 
@@ -4056,7 +4004,6 @@ export default function Chapters() {
 
         (progressMsg, progressValue) => {
 
-          // 闁哄鏅滅粙鎴犫偓瑙勫▕瀹曞爼鎮欓崜浣诡啀
 
           setSingleChapterProgress(progressValue);
 
@@ -4095,7 +4042,7 @@ export default function Chapters() {
 
         type: 'loading',
 
-        content: '闂佸憡鑹炬姝屻亹閹绢喖绀嗘繛鎴烆殘缁嬪﹪寮堕埡鍌滎灱妞ゃ垺鍨剁粙澶愵敇閵娧咁槷闂佸憡鐟崹鎶藉箣妞嬪海纾兼い鎾跺仜瀵版挸霉閻樺磭澧柟濂告敱閹?',
+        content: '正在继续生成章节内容，请稍候...',
 
         duration: 0,
 
@@ -4103,7 +4050,6 @@ export default function Chapters() {
 
 
 
-      // 闂佸憡鑹炬姝屻亹鐎靛摜纾肩憸蹇涙偨婵犳艾绠ョ憸鎴︺€侀幋锔芥櫖婵﹩鍓涢弳姘舵煙鐎涙ê濮囬柟顔筋殜閹虫盯顢旈崟顐嶆鏌￠崶褏鎽犻柡灞斤躬瀵剟宕堕…鎴炴暤闂佹寧绋掔粙鎴﹀Φ閹寸姵瀚婚柕澶涢檮椤ρ囨煙缂佹ê濮夐柕鍥ㄥ哺閺屻劌鈻庨幒婵嗘
 
       result.completion
 
@@ -4119,7 +4065,7 @@ export default function Chapters() {
 
             } else if (hasContentTouched) {
 
-              message.info('Content was edited; keeping your changes.');
+              message.info('内容已被编辑，已保留你的修改。');
 
             }
 
@@ -4133,7 +4079,7 @@ export default function Chapters() {
 
             type: 'success',
 
-            content: 'Generation completed.',
+            content: '生成完成。',
 
             duration: 2,
 
@@ -4187,7 +4133,7 @@ export default function Chapters() {
 
             type: 'error',
 
-            content: 'Chapter analysis failed: ' + (completionError.response?.data?.detail || completionError.message || 'Unknown error'),
+            content: '章节分析失败：' + (completionError.response?.data?.detail || completionError.message || '未知错误'),
 
             duration: 4,
 
@@ -4213,13 +4159,13 @@ export default function Chapters() {
 
 
 
-      message.success('Chapter analysis task created.');
+      message.success('已创建章节分析任务。');
 
     } catch (error) {
 
       const apiError = error as ApiError;
 
-      message.error('AI generation failed: ' + (apiError.response?.data?.detail || apiError.message || 'Unknown error'));
+      message.error('续写失败：' + (apiError.response?.data?.detail || apiError.message || '未知错误'));
 
     } finally {
 
@@ -4247,27 +4193,27 @@ export default function Chapters() {
 
     const creativeModeLabel = selectedCreativeMode
       ? (CREATIVE_MODE_OPTIONS.find((item) => item.value === selectedCreativeMode)?.label || selectedCreativeMode)
-      : 'Not selected';
+      : '未选择';
     const storyFocusLabel = selectedStoryFocus
       ? (STORY_FOCUS_OPTIONS.find((item) => item.value === selectedStoryFocus)?.label || selectedStoryFocus)
-      : 'Not selected';
+      : '未选择';
     const plotStageLabel = selectedPlotStage
       ? (CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === selectedPlotStage)?.label || selectedPlotStage)
-      : 'Not selected';
+      : '未选择';
 
     const instance = modal.confirm({
-      title: 'Confirm generation',
+      title: '确认继续生成',
       width: 700,
       centered: true,
       content: (
         <div style={{ marginTop: 16 }}>
-          <p>This will continue generating the chapter with current settings.</p>
+          <p>将按当前设置继续生成本章内容。</p>
           <ul>
-            <li>Style: {selectedStyle?.name ?? 'Not selected'}</li>
-            <li>Creative mode: {creativeModeLabel}</li>
-            <li>Story focus: {storyFocusLabel}</li>
-            <li>Plot stage: {plotStageLabel}</li>
-            <li>Target words: {targetWordCount}</li>
+            <li>写作风格：{selectedStyle?.name ?? '未选择'}</li>
+            <li>创作模式：{creativeModeLabel}</li>
+            <li>故事聚焦：{storyFocusLabel}</li>
+            <li>剧情阶段：{plotStageLabel}</li>
+            <li>目标字数：{targetWordCount}</li>
           </ul>
           {previousChapters.length > 0 && (
             <div
@@ -4280,28 +4226,28 @@ export default function Chapters() {
               }}
             >
               <div style={{ marginBottom: 8, fontWeight: 500, color: 'var(--color-primary)' }}>
-                Generated {previousChapters.length} chapters will be used as reference:
+                已生成的{previousChapters.length}章将作为参考：
               </div>
               <div style={{ maxHeight: 150, overflowY: 'auto' }}>
                 {previousChapters.map((ch) => (
                   <div key={ch.id} style={{ padding: '4px 0', fontSize: 13 }}>
-                    Chapter {ch.chapter_number}: {ch.title} ({ch.word_count || 0} words)
+                    第{ch.chapter_number}章：{ch.title}（{ch.word_count || 0}字）
                   </div>
                 ))}
               </div>
               <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
-                Continuing will overwrite the current chapter content.
+                继续操作将覆盖当前章节内容。
               </div>
             </div>
           )}
           <p style={{ color: '#ff4d4f', marginTop: 16, marginBottom: 0 }}>
-            Please make sure important content is saved before continuing.
+            请先确认重要内容已经保存，再继续操作。
           </p>
         </div>
       ),
-      okText: 'Continue',
+      okText: '继续生成',
       okButtonProps: { danger: true },
-      cancelText: 'Cancel',
+      cancelText: '取消',
       onOk: async () => {
 
         instance.update({
@@ -4324,7 +4270,7 @@ export default function Chapters() {
 
           if (!selectedStyleId) {
 
-            message.error('Please select a writing style first.');
+      message.error('请先选择写作风格。');
 
             instance.update({
 
@@ -4396,11 +4342,11 @@ export default function Chapters() {
 
     const texts: Record<string, string> = {
 
-      'draft': 'Draft',
+      'draft': '草稿',
 
-      'writing': 'Writing',
+      'writing': '创作中',
 
-      'completed': 'Completed',
+      'completed': '已完成',
 
     };
 
@@ -4414,7 +4360,7 @@ export default function Chapters() {
 
     if (chapters.length === 0) {
 
-      message.warning('No chapters to export.');
+      message.warning('暂无可导出的章节。');
 
       return;
 
@@ -4424,15 +4370,15 @@ export default function Chapters() {
 
     modal.confirm({
 
-      title: 'Export project',
+      title: '导出项目',
 
-      content: `Export project "${currentProject.title}"?`,
+      content: `确认导出项目“${currentProject.title}”吗？`,
 
       centered: true,
 
-      okText: 'Export',
+      okText: '导出',
 
-      cancelText: 'Cancel',
+      cancelText: '取消',
 
       onOk: () => {
 
@@ -4440,11 +4386,11 @@ export default function Chapters() {
 
           projectApi.exportProject(currentProject.id);
 
-          message.success('Export started.');
+          message.success('已开始导出。');
 
         } catch {
 
-          message.error('Export failed.');
+          message.error('导出失败。');
 
         }
 
@@ -4466,7 +4412,6 @@ export default function Chapters() {
 
 
 
-  // 闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭鏌涢幋锝呅撻柡?
 
   const handleBatchGenerate = async (values: {
     startChapterNumber: number;
@@ -4483,7 +4428,6 @@ export default function Chapters() {
 
 
 
-    // 闁荤姴顑呴崯鎶芥儊椤栫偛绫嶉柕澶堝劤缁?
 
     console.log('[闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓槼 闁荤偞绋忛崝灞界暦閻掋倹lues:', values);
 
@@ -4491,7 +4435,6 @@ export default function Chapters() {
 
 
 
-    // 婵炶揪缍€濞夋洟寮妶澶婄鐟滅増甯掑▍銈夋煟閵忋垹鏋戦柛銊︽皑閳ь剛鏁搁、濠囨儊閽樺娴栭柛鈩冩礉閸橆剟姊洪銏╂Ч閻庢哎鍔戦幆鍐礋椤栵絾顥栭梺鍝勭Ф閸樠囧箯閹殿喒鍋撳☉娆樻畷闁哄棛鍠栭弫宥囦沪缁涘鎼愰梺鍝勵儐缁秹鎯€閸涙潙瀚夊鑸靛姀閸嬫挻寰勭€ｎ亶浠撮梺鍛婂笚閻熴倖绻涢崶顒佸仺闁靛ň鏅濈敮娑㈡偣娴ｉ潧鈧洟鍩€?
 
     const styleId = values.styleId || selectedStyleId;
 
@@ -4499,7 +4442,6 @@ export default function Chapters() {
 
 
 
-    // 婵炶揪缍€濞夋洟寮妶澶婄鐟滅増甯掑▍銈夋煟閵忋垹鏋戦柛銊︾缁嬪骞橀懜鍨闂佹眹鍔岀€氼叀鍟梺鎼炲妼椤戝洦鎱ㄩ幖浣哥畱?
     const model = batchSelectedModel;
     const creativeMode = batchSelectedCreativeMode;
     const storyFocus = batchSelectedStoryFocus;
@@ -4512,7 +4454,7 @@ export default function Chapters() {
 
     if (!styleId) {
 
-      message.error('Please select a writing style first.');
+      message.error('请先选择写作风格。');
 
       return;
 
@@ -4553,7 +4495,6 @@ export default function Chapters() {
       };
 
 
-      // 婵犵鈧啿鈧綊鎮樻径鎰珘濠㈣泛鐟旀笟鈧畷鍦偓锝庝簻濡﹢鏌℃担绋跨盎缂佽鲸绻傝彁閻犲洦褰冮～锝夋煕閹烘挸顎滄い鏇ㄥ墮鏁堥柛灞剧懅缁夌厧鈽?
 
       if (model) {
 
@@ -4638,17 +4579,16 @@ export default function Chapters() {
 
 
 
-      message.success(`Batch generation started. Estimated time: ${result.estimated_time_minutes} min.`);
+      message.success(`已开始批量生成，预计耗时 ${result.estimated_time_minutes} 分钟。`);
 
 
 
-      // 濡絽鍟弲?闁荤喐鐟辩粻鎴ｃ亹閸屾纭呯疀濮樺吋缍岄梺闈╃祷閸旀垿鍩€椤掍焦鐨戦柣鎿勭節閺佸秹宕煎鍕簥闂佸憡鏌￠埀顒€纾壕璇测攽椤旂⒈鍎滅紒?
 
       showBrowserNotification(
 
-        'Batch generation started',
+        '批量生成已开始',
 
-        `Chapters: ${result.chapters_to_generate.length}, estimated time: ${result.estimated_time_minutes} min.`,
+        `计划生成 ${result.chapters_to_generate.length} 章，预计耗时 ${result.estimated_time_minutes} 分钟。`,
 
         'info'
 
@@ -4666,7 +4606,7 @@ export default function Chapters() {
 
       const err = error as Error;
 
-      message.error('Batch generation failed: ' + (err.message || 'Unknown error')) ;
+      message.error('批量生成失败：' + (err.message || '未知错误'));
 
       setBatchGenerating(false);
 
@@ -4678,7 +4618,6 @@ export default function Chapters() {
 
 
 
-  // 闁哄鍎愰崰娑㈩敋濡ゅ懎绠ョ憸鐗堝笒濞呫倝鏌ｉ姀銏犳瀾闁搞劍纰嶇粋鎺旀嫚閹绘帩娼抽梺缁橆焾閸╂牠鍩€?
 
   const startBatchPolling = (taskId: string) => {
 
@@ -4746,9 +4685,7 @@ export default function Chapters() {
 
 
 
-        // 濠殿噯绲界换鎴︻敃閸忓吋濮滄い鏃€顑欓崵鍕煛閸愵厽纭鹃柛鈺傜洴瀵剟骞嶉鎯у▏闂佺厧鎼崐鎼佸垂椤忓棙鍋橀柕濞垮劜鐎氭煡鏌涢幒鎴烆棡闁诲簼绮欓幃鈺呮嚋绾版ê浜惧〒姘功缁€澶愭倵閸︻厼浠︽俊鐐插€垮浼村礈瑜嬫禒娑㈡煛閸屾稑顥嬮柡浣规崌楠炲骞囬鐣屾殸缂備焦姊绘慨鐐繆椤撱垹妞介悘鐐舵閻庡鏌＄€ｎ偄濮岀紒缁樕戦幆?
 
-        // 婵炶揪缍€濞夋洟寮?await 缂佺虎鍙庨崰鏇犳崲濮樿埖鍤旂€瑰嫭婢樼徊鍧楁煛閸艾浜鹃梺鍝勫€规竟鍡涙偟閻戣姤鍤嶉柛灞捐壘閻忔瑩鎮跺☉鏍у闁诡喗顨婂畷妯侯吋閸涱収娼遍柡澶屽仩濡嫰宕规惔銊ュ嚑闁归偊浜濆畷鏌ユ煕閺冩挾纾垮┑顔芥倐楠炩偓?
 
         if (status.completed > 0) {
 
@@ -4758,7 +4695,6 @@ export default function Chapters() {
 
 
 
-          // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽妷褎婢栭梺鍝勫暢閸╂牕煤閸ф妫橀柣妤€鐗冮崑鎾舵嫚閼碱剚鎲婚梺杞扮劍婢瑰棛鍒掗搹瑙勫?
 
           if (currentProject?.id) {
 
@@ -4772,7 +4708,6 @@ export default function Chapters() {
 
 
 
-        // 婵炲濮鹃褎鎱ㄩ悢琛″亾閻熺増婀伴柛銊﹀哺楠炲寮借娴滃ジ鎮归幇鈺佸姷缂佽鲸绻堝畷鎴濐煥閸曢潧澹橀柡澶屽剱閸犳盯顢?
 
         if (status.status === 'completed' || status.status === 'failed' || status.status === 'cancelled') {
 
@@ -4792,9 +4727,7 @@ export default function Chapters() {
 
 
 
-          // 缂備焦鏌ㄩ鍛暤閸℃稑绀嗛梺鍨儐閻撯偓缂備焦姊绘慨鐐繆椤撱垹绀嗘俊銈呭閳ь剙鍟村畷顏嗕沪閽樺鈧鏌＄€ｎ偄濮冮柟骞垮灲瀹曟繈鏁嶉崟顐嶏箓鏌熼璺ㄧ瓘缂佽鲸鐟╁畷鐑藉Ω閿旇В鏋栫紓浣插亾闁绘垶顭囧暩闂佽鍙庨崹鐗堟櫠閻樼粯鏅?
 
-          // 婵炶揪缍€濞夋洟寮?refreshChapters 闁哄鏅滈弻銊ッ洪弽顓熷剭闁告洦鍓氭禒姗€鏌￠崒娑橆棆闁绘繄鍏橀幊鐐哄磼濮橆剛浠氶柣鐐寸◤閸斿妲愰崼鏇熺劵闁圭儤姊婚懜?loadAnalysisTasks
 
           const finalChapters = await refreshChapters();
 
@@ -4802,7 +4735,6 @@ export default function Chapters() {
 
 
 
-          // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽敂鐣屽嚱闂佸搫鍊绘晶妤呭焵椤掑喚鍤欓柣鈯欏洤鏋侀柟娈垮枤閸╃娀鎮?
 
           if (currentProject?.id) {
 
@@ -4816,15 +4748,14 @@ export default function Chapters() {
 
           if (status.status === 'completed') {
 
-            message.success(`Batch generation completed. Chapters: ${status.completed}.`);
+            message.success(`批量生成完成，共生成 ${status.completed} 章。`);
 
-            // 濡絽鍟弲?闁荤喐鐟辩粻鎴ｃ亹閸屾纭呯疀濮樺吋缍岄梺闈╃祷閸旀垿鍩€椤掍焦鐨戦柣?
 
             showBrowserNotification(
 
-              'Batch generation completed',
+              '批量生成已完成',
 
-              `Project "${currentProject?.title || 'Untitled'}": ${status.completed} chapters completed.`,
+              `项目“${currentProject?.title || '未命名项目'}”已完成 ${status.completed} 章生成。`,
 
               'success'
 
@@ -4840,15 +4771,14 @@ export default function Chapters() {
 
           } else if (status.status === 'failed') {
 
-            message.error(`Batch generation failed: ${status.error_message || 'Unknown error'}`);
+            message.error(`批量生成失败：${status.error_message || '未知错误'}`);
 
-            // 濡絽鍟弲?闁荤喐鐟辩粻鎴ｃ亹閸屾纭呯疀濮樺吋缍岄梺闈╃祷閸旀垿鍩€椤掍焦鐨戦柣?
 
             showBrowserNotification(
 
-              'Batch generation failed',
+              '批量生成失败',
 
-              status.error_message || 'Unknown error',
+              status.error_message || '未知错误',
 
               'error'
 
@@ -4856,7 +4786,7 @@ export default function Chapters() {
 
           } else if (status.status === 'cancelled') {
 
-            message.warning('Batch generation cancelled.');
+            message.warning('批量生成已取消。');
 
           }
 
@@ -4868,7 +4798,6 @@ export default function Chapters() {
 
 
 
-          // 閻庣偣鍊栭崕鑲╂崲濠婂牆绀傞柟鎯板Г閿涙棃鎮楅悽娈挎敯闁伙箒妫勯々濂稿幢椤撶姷顦柣鐘辫閺呮繈寮妶澶婄濡炲瀛╃粻娆撴煕閹烘柨顣兼繛鎾冲缁辨帡宕奸姀鐘橈箓鏌?
 
           setTimeout(() => {
 
@@ -4892,13 +4821,11 @@ export default function Chapters() {
 
 
 
-    // 缂備焦鏌ㄩ鍛暤閸℃稑绠ョ憸鎴︺€侀幋鐐碘枖闁逞屽墮閳?
 
     poll();
 
 
 
-    // 濠?缂備礁顦扮敮鐔兼偪閸℃瑦瀚氭い顐幘椤忚鲸绻?
 
     batchPollingIntervalRef.current = window.setInterval(poll, 2000);
 
@@ -4906,7 +4833,6 @@ export default function Chapters() {
 
 
 
-  // 闂佸憡鐟﹂悧妤冪矓閻戣棄绠ョ憸鐗堝笒濞呫倝鏌ｉ姀銏犳瀾闁?
 
   const handleCancelBatchGenerate = async () => {
 
@@ -4924,11 +4850,10 @@ export default function Chapters() {
 
 
 
-      message.success('Batch generation cancelled.');
+      message.success('批量生成已取消。');
 
 
 
-      // 闂佸憡鐟﹂悧妤冪矓閻戣棄瑙﹂幖杈剧悼瑜板矂鏌涘Δ鈧崯鍧楀春濞戙垹妫橀柟娈垮枤瑜板潡鏌ら崫鍕偓鎼佸垂椤忓棙鍋橀柕濞垮劜鐎氭煡鏌涢幒鎴烆棡闁诲氦濮ょ粋鎺旀嫚閹绘帩娼抽梺鎸庣☉閺堫剙螣婢跺瞼鐭嗛柛婵嗗閸ゆ帡鏌ｉ姀銏犳瀾闁搞劍宀搁幆鍐礋椤撶姴濞囬梺?
 
       await refreshChapters();
 
@@ -4936,7 +4861,6 @@ export default function Chapters() {
 
 
 
-      // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽敂鐣屽嚱闂佸搫鍊绘晶妤呭焵椤掑喚鍤欓柣鈯欏洤鏋侀柟娈垮枤閸╃娀鎮?
 
       if (currentProject?.id) {
 
@@ -4950,7 +4874,7 @@ export default function Chapters() {
 
       const err = error as Error;
 
-      message.error('Cancel batch generation failed: ' + (err.message || 'Unknown error'));
+      message.error('取消批量生成失败：' + (err.message || '未知错误'));
 
     }
 
@@ -4958,13 +4882,12 @@ export default function Chapters() {
 
 
 
-  // 闂佺懓鐏氶幐鍝ユ閹达箑绠ョ憸鐗堝笒濞呫倝鏌ｉ姀銏犳瀾闁搞劍姘ㄩ埀顒傛暩椤㈠﹪鎯侀挊澶樻禆?
 
   const handleOpenBatchGenerate = async () => {
 
     if (batchGenerating) {
 
-      message.info('Batch generation is running. Please wait for it to finish.');
+      message.info('批量生成进行中，请等待当前任务完成。');
 
       return;
 
@@ -4976,7 +4899,7 @@ export default function Chapters() {
 
     if (!firstIncompleteChapter) {
 
-      message.info('No incomplete chapters to generate.');
+      message.info('没有可生成的未完成章节。');
 
       return;
 
@@ -4984,7 +4907,6 @@ export default function Chapters() {
 
 
 
-    // 濠碘槅鍋€閸嬫捇鏌＄仦璇插姤妞ゆ洘姘ㄧ划鈺呮偐閸濆嫀婵嬫煛閸曢潧鐏犻柟顖欑窔瀹曪綁顢涘▎搴ｉ瀺闂佹眹鍨婚崰鎰板垂?
 
     if (!canGenerateChapter(firstIncompleteChapter)) {
 
@@ -4998,7 +4920,6 @@ export default function Chapters() {
 
 
 
-    // 闂佺懓鐏氶幐鍝ユ閹寸姭鍋撻悽娈挎敯闁伙箒妫勯々濂稿幢濡椿妲梺鍛婃⒒婵儳霉閸ヮ灛鐔煎灳瀹曞洠鍋撻悜钘夌婵°倕瀚ㄩ埀顒€鍟撮弫宥呯暆閳ь剟鎮洪幋婵愬殫闁告侗鍘鹃弳姘舵煙?
 
     const defaultModel = await loadAvailableModels();
 
@@ -5010,7 +4931,6 @@ export default function Chapters() {
 
 
 
-    // 闁荤姳绀佹晶浠嬫偪閸℃稑绠ョ憸鐗堝笒濞呫倝鏌ｉ姀銏犳瀾闁搞劍宀搁幆鍐礋椤戠喍绶氬畷鍦偓锝庡枓閸嬫挻寰勭€ｎ亶浠撮梺缁橆焾閸╂牠鍩€?
     setBatchSelectedModel(defaultModel || undefined);
     setBatchSelectedCreativeMode(undefined);
     setBatchSelectedStoryFocus(undefined);
@@ -5020,7 +4940,6 @@ export default function Chapters() {
     }));
 
 
-    // 闂備焦褰冪粔鍫曟偪閸℃瑦鍋橀柕濞垮劚缁€瀣殽閻愭潙鍔舵い鏃€娲滅槐鏃堫敊閻撳海浠存繝娈垮枛椤戝懘鍩€椤掑倶鈧妲愬▎鎰閻犳亽鍔嶉弳蹇曠磽閸屾稒灏柣掳鍔戦幆鍐礋椤愩倖鎲婚梺杞扮鎼存粎妲?
 
     batchForm.setFieldsValue({
 
@@ -5044,11 +4963,9 @@ export default function Chapters() {
 
 
 
-  // 闂佸綊娼ч鍛叏閳哄懎绀嗘繛鎴烆焽缁憋妇绱掗弮鍌毿┑?婵炲濮村畵鈧琻e-to-many濠碘槅鍨埀顒€纾涵鈧?
 
   const showManualCreateChapterModal = () => {
 
-    // 闁荤姳绶ょ槐鏇㈡偩缂佹鈻旈悗锝傛櫇椤忓崬鈽夐幙鍐х敖闁绘繄鍏橀幊鐐哄磼濮橆剙鈻?
 
     const nextChapterNumber = chapters.length > 0
 
@@ -5060,7 +4977,7 @@ export default function Chapters() {
 
     modal.confirm({
 
-      title: 'Create chapter manually',
+      title: '手动创建章节',
 
       width: 600,
 
@@ -5088,17 +5005,17 @@ export default function Chapters() {
 
           <Form.Item
 
-            label="Chapter number"
+            label="章节编号"
 
             name="chapter_number"
 
-            rules={[{ required: true, message: 'Please enter chapter number.' }]}
+            rules={[{ required: true, message: '请输入章节编号' }]}
 
-            tooltip="Chapter number must be unique."
+            tooltip="用于章节排序"
 
           >
 
-            <InputNumber min={1} style={{ width: '100%' }} placeholder="Enter chapter number" />
+            <InputNumber min={1} style={{ width: '100%' }} placeholder="请输入章节编号" />
 
           </Form.Item>
 
@@ -5106,15 +5023,17 @@ export default function Chapters() {
 
           <Form.Item
 
-            label="Chapter title"
+            label="章节标题"
 
             name="title"
 
-            rules={[{ required: true, message: 'Please enter chapter title.' }]}
+            rules={[{ required: true, message: '请输入章节标题' }]}
 
           >
 
-            <Input placeholder="Enter chapter title" />
+            <Input placeholder="请输入章节标题" />
+
+
 
           </Form.Item>
 
@@ -5122,19 +5041,18 @@ export default function Chapters() {
 
           <Form.Item
 
-            label="Outline"
+            label="大纲"
 
             name="outline_id"
 
-            rules={[{ required: true, message: 'Please select an outline.' }]}
+            rules={[{ required: true, message: '请选择大纲' }]}
 
-            tooltip="Each chapter must belong to an outline."
+            tooltip="每章必须归属到某个大纲"
 
           >
 
-            <Select placeholder="Select an outline">
+            <Select placeholder="请选择大纲">
 
-              {/* 闂佺儵鏅涢悺銊ф暜鐎涙ɑ濯撮悹鎭掑妽閺?store 婵炴垶鎼╅崢鎯р枔?outlines 闂佽桨鑳舵晶妤€鐣垫笟鈧弫宥呯暆閸愶絽浜鹃悘鐐跺亹閻熸繈鏌￠崟闈涚仧缂侇喚濞€閹娊鎮ч崼鐔虹暢缂備焦姊绘慨鐐繆椤撶喓鈻旀い鎾跺枎缁插綊鏌?*/}
 
               {[...outlines]
 
@@ -5158,11 +5076,11 @@ export default function Chapters() {
 
           <Form.Item
 
-            label="Summary"
+            label="梗概"
 
             name="summary"
 
-            tooltip="Short summary of the chapter."
+            tooltip="章节的简要梗概。"
 
           >
 
@@ -5170,9 +5088,17 @@ export default function Chapters() {
 
               rows={4}
 
-              placeholder="Enter a short summary"
+
+              placeholder="请输入简要梗概"
+
+
 
             />
+
+
+
+
+
 
           </Form.Item>
 
@@ -5180,7 +5106,7 @@ export default function Chapters() {
 
           <Form.Item
 
-            label="Status"
+            label="状态"
 
             name="status"
 
@@ -5188,11 +5114,11 @@ export default function Chapters() {
 
             <Select>
 
-              <Select.Option value="draft">Draft</Select.Option>
+              <Select.Option value="draft">草稿</Select.Option>
 
-              <Select.Option value="writing">Writing</Select.Option>
+              <Select.Option value="writing">写作中</Select.Option>
 
-              <Select.Option value="completed">Completed</Select.Option>
+              <Select.Option value="completed">已完成</Select.Option>
 
             </Select>
 
@@ -5202,9 +5128,9 @@ export default function Chapters() {
 
       ),
 
-      okText: 'Create',
+      okText: '创建章节',
 
-      cancelText: 'Cancel',
+      cancelText: '取消',
 
       onOk: async () => {
 
@@ -5212,7 +5138,6 @@ export default function Chapters() {
 
 
 
-        // 濠碘槅鍋€閸嬫捇鏌＄仦璇插姢闁绘繄鍏橀幊鐐哄磼濮樿京顣查梺鍛婄懇閺€鍗炍ｉ幖浣歌Е闁挎洍鍋撻柛鎴磿閳ь剚绋掗敋婵犫偓?
 
         const conflictChapter = chapters.find(
 
@@ -5224,11 +5149,10 @@ export default function Chapters() {
 
         if (conflictChapter) {
 
-          // 闂佸搫瀚晶浠嬪Φ濮樿泛绀冮柤纰卞墰瀹曟劙鏌熺紒妯哄闁靛洦鐡塷dal
 
           modal.confirm({
 
-            title: '缂備焦姊绘慨鐐繆椤撶喐鍎熼煫鍥ㄦ尭婵炲洭鏌涢幇顖氱毢闁?',
+            title: '章节编号冲突',
 
             icon: <InfoCircleOutlined style={{ color: '#ff4d4f' }} />,
 
@@ -5242,7 +5166,7 @@ export default function Chapters() {
 
                 <p style={{ marginBottom: 12 }}>
 
-                  缂?<strong>{values.chapter_number}</strong> 缂備焦姊绘慨鎾礄閿涘嫧鍋撳☉娅亜锕㈤鍫熸櫖?
+                  章节编号 <strong>{values.chapter_number}</strong> 已被现有章节占用。
 
                 </p>
 
@@ -5260,15 +5184,15 @@ export default function Chapters() {
 
                 }}>
 
-                  <div><strong>闂佸搫绉村ú顓€傛禒瀣櫖</strong>{conflictChapter.title}</div>
+                  <div><strong>章节标题：</strong>{conflictChapter.title}</div>
 
-                  <div><strong>闂佺粯顭堥崺鏍焵椤戣法绛忕紒</strong>{getStatusText(conflictChapter.status)}</div>
+                  <div><strong>当前状态：</strong>{getStatusText(conflictChapter.status)}</div>
 
-                  <div><strong>闁诲孩绋掗〃鍡涘汲閻斿吋鏅</strong>{conflictChapter.word_count || 0}闁</div>
+                  <div><strong>当前字数：</strong>{conflictChapter.word_count || 0} 字</div>
 
                   {conflictChapter.outline_title && (
 
-                    <div><strong>闂佸湱顣介崑鎾绘倶閻愰潧浠滈柕鍥ф川閻ヮ亞鎷犺缁</strong>{conflictChapter.outline_title}</div>
+                    <div><strong>关联大纲：</strong>{conflictChapter.outline_title}</div>
 
                   )}
 
@@ -5276,13 +5200,13 @@ export default function Chapters() {
 
                 <p style={{ color: '#ff4d4f', marginBottom: 8 }}>
 
-                  闂佸疇娉曟刊瀵哥箔?闂佸搫瀚烽崹浼村箚娓氣偓瀹曟岸鎮╃紒妯煎綉闂佸搫鍞查崨顖氬▏闂佺厧鎼崐鎼佹嚐閻旂厧绀嗘繛鎴烆焽缁憋箓鏌￠崒娑橆棆闁绘繄鍏橀幊鐐哄磼閿旀儳鎯?
+                  如果继续创建，系统会先删除当前章节，再使用该编号创建新章节。
 
                 </p>
 
                 <p style={{ fontSize: 12, color: '#666', marginBottom: 0 }}>
 
-                  闂佸憡甯炴繛鈧繛鍛叄瀹曘儲鎯旈敍鍕啈闂佸搫鍟版慨鐢垫兜閸洖绠掗柕蹇曞濡插鏌ㄥ☉妯肩伇闁绘繄鍏橀幊鐐哄磼濮橆剚鏆ラ柣搴℃贡閹虫捇骞忔导鏉戠闁糕剝顭囬埀顒傛櫕缁辨帡骞樼€甸晲鍑介梻渚囧枦濡嫰鎯冮姀銏″仏妞ゆ劑鍨归悘鈺呮⒒閸曗晛鈧垿鍩€?
+                  此操作不可撤销，请确认原章节内容已经不再需要。
 
                 </p>
 
@@ -5290,23 +5214,21 @@ export default function Chapters() {
 
             ),
 
-            okText: '闂佸憡甯炴繛鈧繛鍛叄閻涱喚鎹勯崫鍕画閻?',
+            okText: '删除原章节并继续',
 
             okButtonProps: { danger: true },
 
-            cancelText: 'Cancel',
+            cancelText: '取消',
 
             onOk: async () => {
 
               try {
 
-                // 闂佺绻愰悧鍡涘垂瑜版帗鈷旈柕鍫濇閿涘绱掗弮鍌毿┑?
 
                 await handleDeleteChapter(conflictChapter.id);
 
 
 
-                // 缂備焦绋戦ˇ顖滄閻斿摜鈻旈柍褜鍓涙禍姝岀疀閺冩垵鏂€闂佸搫鍟悥鐓幬涚捄銊﹀厹妞ゆ棁宕电粻浠嬫煕閹烘柨鈻堟繛鍛捣閳ь剛鎳撻張顒勫垂?
 
                 await new Promise(resolve => setTimeout(resolve, 300));
 
@@ -5324,13 +5246,12 @@ export default function Chapters() {
 
 
 
-                message.success('Chapter created.');
+                message.success('章节创建成功。');
 
                 await refreshChapters();
 
 
 
-                // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽敂鐣屽嚱闂佸搫鍊瑰姗€鎮鸿瀵偊骞嶉鎯х厷闁?
 
                 const updatedProject = await projectApi.getProject(currentProject.id);
 
@@ -5344,7 +5265,7 @@ export default function Chapters() {
 
                 const err = error as Error;
 
-                message.error('Create chapter failed: ' + (err.message || 'Unknown error'));
+          message.error('创建章节失败：' + (err.message || '未知错误'));
 
                 throw error;
 
@@ -5356,7 +5277,6 @@ export default function Chapters() {
 
 
 
-          // 闂傚倸鍟扮划顖烆敆濞戞瑥绶為柡宓懏鍕綧odal闂佺绻戞繛濠偽?
 
           return Promise.reject();
 
@@ -5364,7 +5284,6 @@ export default function Chapters() {
 
 
 
-        // 濠电偛澶囬崜婵嗭耿娓氣偓瀹曟﹢鎳犻鍌氱９闂佹寧绋戦惉鐓幟洪崸妤€绠抽柕澶堝劚閻忥紕鈧?
 
         try {
 
@@ -5376,13 +5295,12 @@ export default function Chapters() {
 
           });
 
-          message.success('Chapter created.');
+          message.success('章节创建成功。');
 
           await refreshChapters();
 
 
 
-          // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽敂鐣屽嚱闂佸搫鍊瑰姗€鎮鸿瀵偊骞嶉鎯х厷闁?
 
           const updatedProject = await projectApi.getProject(currentProject.id);
 
@@ -5396,7 +5314,7 @@ export default function Chapters() {
 
           const err = error as Error;
 
-          message.error('Create chapter failed: ' + (err.message || 'Unknown error'));
+        message.error('创建章节失败：' + (err.message || '未知错误'));
 
           throw error;
 
@@ -5410,7 +5328,6 @@ export default function Chapters() {
 
 
 
-  // 濠电偞鎸稿鍫曟偂鐎ｎ喖绀嗛柛鈩冾焽閳ь兛绮欓幃鈺呮嚋绾版ê浜惧ù锝呮贡閸ㄨ偐绱?
 
   const renderAnalysisStatus = (chapterId: string) => {
 
@@ -5434,7 +5351,7 @@ export default function Chapters() {
 
           <Tag icon={<SyncOutlined spin />} color="processing">
 
-            Pending
+            等待中
 
           </Tag>
 
@@ -5442,7 +5359,6 @@ export default function Chapters() {
 
       case 'running': {
 
-        // 濠碘槅鍋€閸嬫捇鏌＄仦璇插姕婵″弶鎮傚畷銉╂晜缁涘濡ч梺闈╄礋閸旀垿宕抽崫銉﹀珰闁哄浂浜炵粈鍕煕濮橆剚鎹ｆい蹇ｅ墯鐎电厧顫濋浣藉惈error_message婵炴垶鎼╅崢鑲┾偓鍨耿瀹?闂備焦褰冪粔鐑芥儊?婵烇絽娲犻崜婵囧閸涘瓨鏅?
 
         const isRetrying = task.error_code === 'retrying';
 
@@ -5458,7 +5374,7 @@ export default function Chapters() {
 
           >
 
-            {isRetrying ? `Retrying ${task.progress}%` : `Running ${task.progress}%`}
+            {isRetrying ? `重试中 ${task.progress}%` : `分析中 ${task.progress}%`}
 
           </Tag>
 
@@ -5472,7 +5388,7 @@ export default function Chapters() {
 
           <Tag icon={<CheckCircleOutlined />} color="success">
 
-            Completed
+            已完成
 
           </Tag>
 
@@ -5484,7 +5400,7 @@ export default function Chapters() {
 
           <Tag icon={<CloseCircleOutlined />} color="error" title={task.error_message || undefined}>
 
-            Failed
+            失败
 
           </Tag>
 
@@ -5500,7 +5416,6 @@ export default function Chapters() {
 
 
 
-  // 闂佸搫瀚晶浠嬪Φ濮樺彉娌柡鍥╁仧绾惧鎮峰▎蹇擃仼闁搞劍绻勯幏鐘绘晜閽樺澹?
 
   const showExpansionPlanModal = (chapter: Chapter) => {
 
@@ -5522,7 +5437,7 @@ export default function Chapters() {
 
             <InfoCircleOutlined style={{ color: 'var(--color-primary)' }} />
 
-            <span style={{ wordBreak: 'break-word' }}>Chapter ${chapter.chapter_number} expansion plan</span>
+            <span style={{ wordBreak: 'break-word' }}>第 {chapter.chapter_number} 章扩写计划</span>
 
           </Space>
 
@@ -5588,7 +5503,7 @@ export default function Chapters() {
 
             >
 
-              <Descriptions.Item label="缂備焦姊绘慨鐐繆椤撱垹鍐€闁搞儺鍓﹂弳?">
+              <Descriptions.Item label="章节标题">
 
                 <strong style={{
 
@@ -5606,7 +5521,7 @@ export default function Chapters() {
 
               </Descriptions.Item>
 
-              <Descriptions.Item label="闂佽鍨伴幊蹇涘礉閸涙潙鏄ュΔ锕佹硶濞?">
+              <Descriptions.Item label="情感基调">
 
                 <Tag
 
@@ -5634,7 +5549,7 @@ export default function Chapters() {
 
               </Descriptions.Item>
 
-              <Descriptions.Item label="闂佸憡鍔樼亸娆撴偘婵犲嫮灏甸悹鍥皺閳?">
+              <Descriptions.Item label="冲突类型">
 
                 <Tag
 
@@ -5662,13 +5577,13 @@ export default function Chapters() {
 
               </Descriptions.Item>
 
-              <Descriptions.Item label="婵☆偅婢樼€氼亪宕ｆ繝鍕ㄥ亾濞戞瑯娈曢柡?">
+              <Descriptions.Item label="预计字数">
 
-                <Tag color="green">{planData.estimated_words}闁</Tag>
+                <Tag color="green">{planData.estimated_words} 字</Tag>
 
               </Descriptions.Item>
 
-              <Descriptions.Item label="闂佸憡鐟﹂悷銈囪姳閵娾晜鍎庢い鏃傛櫕閸?">
+              <Descriptions.Item label="叙事目标">
 
                 <span style={{
 
@@ -5686,7 +5601,7 @@ export default function Chapters() {
 
               </Descriptions.Item>
 
-              <Descriptions.Item label="闂佺绻戞繛濠囧极椤撶喓顩查悗锝傛櫆椤?">
+              <Descriptions.Item label="关键事件">
 
                 <Space direction="vertical" size="small" style={{ width: '100%' }}>
 
@@ -5734,7 +5649,7 @@ export default function Chapters() {
 
               </Descriptions.Item>
 
-              <Descriptions.Item label="濠电偞鍨甸ˇ顖氼嚕妞嬪孩鍠嗛柟鐑樻礀椤?">
+              <Descriptions.Item label="关注角色">
 
                 <Space wrap style={{ maxWidth: '100%' }}>
 
@@ -5772,7 +5687,7 @@ export default function Chapters() {
 
               {planData.scenes && planData.scenes.length > 0 && (
 
-                <Descriptions.Item label="闂侀潻濡囬崕銈呪枍濞嗘垶鍠嗛柛鏇ㄥ亜閻?">
+                <Descriptions.Item label="场景列表">
 
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
 
@@ -5808,7 +5723,7 @@ export default function Chapters() {
 
                         }}>
 
-                          <strong>濡絽鍟幆?闂侀潻闄勬竟鍡涘磻閿濆鏅</strong>
+                          <strong>场景地点：</strong>
 
                           <span style={{
 
@@ -5828,7 +5743,7 @@ export default function Chapters() {
 
                         <div style={{ marginBottom: 4 }}>
 
-                          <strong>濡絽鍟崳?闁荤喐鐟︾敮鐔哥珶婵犲洦鏅</strong>
+                          <strong>涉及角色：</strong>
 
                           <Space
 
@@ -5886,7 +5801,7 @@ export default function Chapters() {
 
                         }}>
 
-                          <strong>濡絽鍟粻?闂佺儵鏅╅崰姘枔閹达附鏅</strong>
+                          <strong>场景目的：</strong>
 
                           <span style={{
 
@@ -5918,9 +5833,9 @@ export default function Chapters() {
 
             <Alert
 
-              message="闂佸湱绮崝妤呭Φ?"
+              message="说明"
 
-              description="闁哄鏅滈悷銈囪姳濞差亜鍙婇柣銈咁攳闂侀潻璐熼崝宀勫Φ閸モ晝妫柟缁樺笧濞兼梻鈧鍠掗崑鎾绘煛閸愩劌顣抽柡浣规崌楠炲骞囬鐣屾殸闁荤喐鐟ョ€氼剟宕瑰┑鍥┾攳闁斥晛鍟╃槐鏍煥濞戞瀚扮憸鏉垮级缁傛帡濡烽妶鍥┾枙婵炴垶鎸搁幖顐﹀垂鏉堛劍濯存繝濠傛噽瑜板潡鏌ら崫鍕偓鎼佸船鐎电硶鍋撶涵鍜佹綈婵＄偛鍊块幆鍐礋椤愩垺顥濋梺鍏兼緲閸熴劑鍩€?"
+              description="扩写计划用于辅助章节创作，建议结合实际写作需要进一步调整场景、冲突与角色目标。"
 
               type="info"
 
@@ -5934,7 +5849,7 @@ export default function Chapters() {
 
         ),
 
-        okText: 'OK',
+        okText: '知道了',
 
       });
 
@@ -5942,7 +5857,7 @@ export default function Chapters() {
 
       console.error('Failed to load expansion plan:', error);
 
-      message.error('Failed to load expansion plan.');
+      message.error('加载扩写计划失败。');
 
     }
 
@@ -5950,7 +5865,6 @@ export default function Chapters() {
 
 
 
-  // 闂佸憡甯炴繛鈧繛鍛捣缁晠鎮╅崫鍕庢繂顭跨捄鍝勵伀闁诡喖锕畷娆撴嚍閵夛附顔?
 
   const handleDeleteChapter = async (chapterId: string) => {
 
@@ -5960,13 +5874,11 @@ export default function Chapters() {
 
 
 
-      // 闂佸憡甯￠弨閬嶅蓟婵犲嫮鍗氶柣妯烘惈铻￠梺鍛婂笚椤ㄥ濡?
 
       await refreshChapters();
 
 
 
-      // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽敂鐣屽嚱闂佸搫鍊绘晶妤呭焵椤掑喚鍤欓柣鈯欏洤鏋侀柟娈垮枤閸╃娀鎮?
 
       if (currentProject) {
 
@@ -5978,13 +5890,13 @@ export default function Chapters() {
 
 
 
-      message.success('Chapter deleted.');
+      message.success('章节已删除。');
 
     } catch (error: unknown) {
 
       const err = error as Error;
 
-      message.error('Delete chapter failed: ' + (err.message || 'Unknown error'));
+      message.error('删除章节失败：' + (err.message || '未知错误'));
 
     }
 
@@ -5992,11 +5904,9 @@ export default function Chapters() {
 
 
 
-  // 闂佺懓鐏氶幐鍝ユ閹寸姵鍠嗛柛鏇ㄥ亜閻忓﹦绱撻崒娑氬⒊缂侀鍋婂畷?
 
   const handleOpenPlanEditor = (chapter: Chapter) => {
 
-    // 闂佺儵鏅涢悺銊ф暜閹绢喖绠ラ柟鎯х－绾捐崵绱撻崒娑氬⒊缂侀鍋婂畷?婵犵鈧啿鈧綊鎮樻径濞炬煢闁斥晛鍟粻鎺楁偡濞嗗繐顏╅柛銊︾箞瀵偊鎮ч崼婵堛偊闂佸憡甯楅悷銉╁垂閸楃儐鍤堥柣鎴炆戦悡鈧梺?
 
     setEditingPlanChapter(chapter);
 
@@ -6006,7 +5916,6 @@ export default function Chapters() {
 
 
 
-  // 婵烇絽娲︾换鍌炴偤閵娧勫枂闁告洦鍋勯悘濠偳庨崶锝呭⒉濞?
 
   const handleSavePlan = async (planData: ExpansionPlanData) => {
 
@@ -6042,17 +5951,15 @@ export default function Chapters() {
 
 
 
-      // 闂佸憡甯￠弨閬嶅蓟婵犲嫮鍗氶柣妯烘惈铻￠梺鍛婂笚椤ㄥ濡?
 
       await refreshChapters();
 
 
 
-      message.success('Plan saved.');
+      message.success('章节规划已保存。');
 
 
 
-      // 闂佺绻戞繛濠偽涚€靛摜纾介柡宥庡墰鐢棝鏌?
 
       setPlanEditorVisible(false);
 
@@ -6062,7 +5969,7 @@ export default function Chapters() {
 
       const err = error as Error;
 
-      message.error('Save plan failed: ' + (err.message || 'Unknown error'));
+      message.error('保存章节规划失败：' + (err.message || '未知错误'));
 
       throw error;
 
@@ -6110,7 +6017,6 @@ export default function Chapters() {
 
 
 
-  // 闂傚倸鍟幊鎾活敋娴兼潙闂柕濞垮劚閻庡ジ鏌熼獮鍨伄闁绘繄鍏橀幊?
 
   const handleReaderChapterChange = async (chapterId: string) => {
 
@@ -6126,7 +6032,7 @@ export default function Chapters() {
 
     } catch {
 
-      message.error('Failed to load chapter.');
+      message.error('加载章节失败。');
 
     }
 
@@ -6146,7 +6052,6 @@ export default function Chapters() {
 
 
 
-  // 闁圭厧鐡ㄥ濠氬极閵堝洣娌柍褜鍓熼弻鍫ュΩ閳轰焦顏熼梺鍛婂姈閻熝呭垝閵娾晛鍑?
 
   const handleApplyPartialRegenerate = (newText: string, startPos: number, endPos: number) => {
 
@@ -6156,25 +6061,22 @@ export default function Chapters() {
 
     
 
-    // 闂佸搫娲︾€笛冪暦閺屻儲鐒诲璺侯槼閸橆剟姊洪鍝勫闁?
 
     const newContent = currentContent.substring(0, startPos) + newText + currentContent.substring(endPos);
 
     
 
-    // 闂佸搫娲ら悺銊╁蓟婵犲嫭鍋橀柕濞垮劚缁€?
 
     editorForm.setFieldsValue({ content: newContent });
 
     
 
-    // 闂佺绻戞繛濠偽涢弶鎴殨闁革富鍘惧畷?
 
     setPartialRegenerateModalVisible(false);
 
     
 
-    message.success('Partial regeneration applied.');
+      message.success('局部重生成结果已应用。');
 
   };
 
@@ -6218,7 +6120,7 @@ export default function Chapters() {
 
           <BookOutlined style={{ marginRight: 8 }} />
 
-          Chapters
+          章节
 
         </h2>
 
@@ -6238,7 +6140,7 @@ export default function Chapters() {
 
             >
 
-              Create chapter
+              创建章节
 
             </Button>
 
@@ -6262,7 +6164,7 @@ export default function Chapters() {
 
           >
 
-            Batch generate
+            批量生成
 
           </Button>
 
@@ -6282,7 +6184,7 @@ export default function Chapters() {
 
           >
 
-            Export
+            导出
 
           </Button>
 
@@ -6292,9 +6194,9 @@ export default function Chapters() {
 
               {currentProject.outline_mode === 'one-to-one'
 
-                ? 'One outline per chapter'
+                ? '每章单独大纲'
 
-                : 'One outline for all chapters'}
+                : '全书共用大纲'}
 
             </Tag>
 
@@ -6310,11 +6212,10 @@ export default function Chapters() {
 
         {chapters.length === 0 ? (
 
-          <Empty description="No chapters yet." />
+          <Empty description="暂无章节。" />
 
         ) : currentProject.outline_mode === 'one-to-one' ? (
 
-          // one-to-one 濠碘槅鍨埀顒€纾涵鈧梺鎸庣⊕濮樸劌煤閸ф绠抽柕澶涢檮閳绘梻绱掗埀顒勬倻濡警鏆㈠Δ鐘靛仜閸熷潡宕归鍡樺仒?
 
           <List
 
@@ -6356,11 +6257,11 @@ export default function Chapters() {
 
                     disabled={!item.content || item.content.trim() === ''}
 
-                    title={!item.content || item.content.trim() === '' ? 'No content to read.' : 'Open reader'}
+                    title={!item.content || item.content.trim() === '' ? '暂无可阅读内容。' : '打开阅读器'}
 
                   >
 
-                    Read
+                    阅读
 
                   </Button>,
 
@@ -6374,7 +6275,7 @@ export default function Chapters() {
 
                   >
 
-                    Edit
+                    编辑
 
                   </Button>,
 
@@ -6404,9 +6305,9 @@ export default function Chapters() {
 
                         title={
 
-                          !hasContent ? 'No content to analyze.' :
+                          !hasContent ? '暂无可分析内容' :
 
-                            isAnalyzing ? 'Analyzing...' : ''
+                            isAnalyzing ? '分析中...' : ''
 
 
 
@@ -6414,7 +6315,7 @@ export default function Chapters() {
 
                       >
 
-                        {isAnalyzing ? 'Analyzing' : 'Analyze'}
+                        {isAnalyzing ? '分析中' : '分析'}
 
                       </Button>
 
@@ -6432,7 +6333,7 @@ export default function Chapters() {
 
                   >
 
-                    Settings
+                    设置
 
                   </Button>,
 
@@ -6472,7 +6373,7 @@ export default function Chapters() {
 
                           <Tag color={getStatusColor(item.status)}>{getStatusText(item.status)}</Tag>
 
-                          <Badge count={`${item.word_count || 0} words`} style={{ backgroundColor: 'var(--color-success)' }} />
+                          <Badge count={`${item.word_count || 0}字`} style={{ backgroundColor: 'var(--color-success)' }} />
 
                           {renderAnalysisStatus(item.id)}
 
@@ -6480,7 +6381,7 @@ export default function Chapters() {
 
                             <Tag icon={<LockOutlined />} color="warning" title={getGenerateDisabledReason(item)}>
 
-                              闂傚倸娲犻崑鎾绘煕閹惧磭肖闁汇倕妫涚划鈺呮偐閸濆嫀?
+                              暂不可生成
 
                             </Tag>
 
@@ -6506,7 +6407,7 @@ export default function Chapters() {
 
                       ) : (
 
-                        <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>闂佸搫妫楅崐鐟拔涢妶澶婄闁告侗鍙庨崯</span>
+                        <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>暂无内容</span>
 
                       )
 
@@ -6532,7 +6433,7 @@ export default function Chapters() {
 
                         disabled={!item.content || item.content.trim() === ''}
 
-                        title={!item.content || item.content.trim() === '' ? 'No content to read.' : 'Open reader'}
+                        title={!item.content || item.content.trim() === '' ? '暂无可阅读内容。' : '打开阅读器'}
 
                       />
 
@@ -6546,7 +6447,7 @@ export default function Chapters() {
 
                         size="small"
 
-                        title="Edit"
+                        title="编辑"
 
                       />
 
@@ -6576,7 +6477,7 @@ export default function Chapters() {
 
                             loading={isAnalyzing}
 
-                            title={!hasContent ? 'No content to analyze.' : isAnalyzing ? 'Analyzing...' : 'Analyze'}
+                            title={!hasContent ? '暂无可分析内容。' : isAnalyzing ? '分析中...' : '分析'}
 
 
 
@@ -6602,7 +6503,7 @@ export default function Chapters() {
 
                         size="small"
 
-                        title="Settings"
+                        title="设置"
 
                       />
 
@@ -6620,7 +6521,6 @@ export default function Chapters() {
 
         ) : (
 
-          // one-to-many 濠碘槅鍨埀顒€纾涵鈧梺鎸庣⊕绾板秶鈧灚绮嶅鍕槾缂傚牅鍗冲畷姘跺幢濞嗘垹鐓侀梺鍝勫婢т粙濡?
 
           <Collapse
 
@@ -6646,7 +6546,7 @@ export default function Chapters() {
 
                     <Tag color={group.outlineId ? 'blue' : 'default'} style={{ margin: 0 }}>
 
-                      {group.outlineId ? `濡絽鍟幉?婵犮垹鐖㈤崨顖氱墯 ${group.outlineOrder}` : '濡絽鍟幉?闂佸搫鐗滄禍婊堝垂鎼达絿灏?'}
+                      {group.outlineId ? `大纲 ${group.outlineOrder}` : '未关联大纲'}
 
                     </Tag>
 
@@ -6658,7 +6558,7 @@ export default function Chapters() {
 
                     <Badge
 
-                      count={`${group.chapters.length} chapters`}
+                      count={`${group.chapters.length}章`}
 
                       style={{ backgroundColor: 'var(--color-success)' }}
 
@@ -6666,7 +6566,7 @@ export default function Chapters() {
 
                     <Badge
 
-                      count={`${group.chapters.reduce((sum, ch) => sum + (ch.word_count || 0), 0)} words`}
+                      count={`${group.chapters.reduce((sum, ch) => sum + (ch.word_count || 0), 0)}字`}
 
                       style={{ backgroundColor: 'var(--color-primary)' }}
 
@@ -6726,11 +6626,11 @@ export default function Chapters() {
 
                           disabled={!item.content || item.content.trim() === ''}
 
-                          title={!item.content || item.content.trim() === '' ? 'No content' : 'Read'}
+                          title={!item.content || item.content.trim() === '' ? '暂无内容' : '阅读'}
 
                         >
 
-                          Read
+                          阅读
 
                         </Button>,
 
@@ -6744,7 +6644,7 @@ export default function Chapters() {
 
                         >
 
-                          Edit
+                          编辑
 
                         </Button>,
 
@@ -6774,17 +6674,17 @@ export default function Chapters() {
 
                               title={
 
-                                !hasContent ? 'No content' :
+                                !hasContent ? '暂无内容' :
 
-                                  isAnalyzing ? 'Analyzing...' :
+                                  isAnalyzing ? '分析中...' :
 
-                                    'Show analysis'
+                                    '查看分析'
 
                               }
 
                             >
 
-                              {isAnalyzing ? 'Analyzing' : 'Analyze'}
+                              {isAnalyzing ? '分析中' : '分析'}
 
                             </Button>
 
@@ -6802,25 +6702,24 @@ export default function Chapters() {
 
                         >
 
-                          Settings
+                          设置
 
                         </Button>,
 
-                        // 闂佸憡鐟禍婊冿耿?one-to-many 濠碘槅鍨埀顒€纾涵鈧繛鎴炴尭椤戝棗螣婢跺瞼鐭嗛柛婵嗗閻忊晠姊婚崟鈺佲偓鏍偓鍨矒閺?
 
                         ...(currentProject.outline_mode === 'one-to-many' ? [
 
                           <Popconfirm
 
-                            title="Delete chapter?"
+                            title="删除该章节？"
 
-                            description="This will remove the chapter from the list."
+                            description="这会将该章节从列表中移除。"
 
                             onConfirm={() => handleDeleteChapter(item.id)}
 
-                            okText="Delete"
+                            okText="删除"
 
-                            cancelText="Cancel"
+                            cancelText="取消"
 
                             okButtonProps={{ danger: true }}
 
@@ -6836,7 +6735,7 @@ export default function Chapters() {
 
                             >
 
-                              Delete
+                              删除
 
                             </Button>
 
@@ -6872,7 +6771,7 @@ export default function Chapters() {
 
                               <span style={{ fontSize: isMobile ? 14 : 16, fontWeight: 500, flexShrink: 0 }}>
 
-                                Chapter {item.chapter_number}: {item.title}
+                                第{item.chapter_number}章：{item.title}
 
                               </span>
 
@@ -6880,7 +6779,7 @@ export default function Chapters() {
 
                                 <Tag color={getStatusColor(item.status)}>{getStatusText(item.status)}</Tag>
 
-                                <Badge count={`${item.word_count || 0} words`} style={{ backgroundColor: 'var(--color-success)' }} />
+                                <Badge count={`${item.word_count || 0}字`} style={{ backgroundColor: 'var(--color-success)' }} />
 
                                 {renderAnalysisStatus(item.id)}
 
@@ -6888,7 +6787,7 @@ export default function Chapters() {
 
                                   <Tag icon={<LockOutlined />} color="warning" title={getGenerateDisabledReason(item)}>
 
-                                    Generation disabled
+                                    暂不可生成
 
                                   </Tag>
 
@@ -6900,7 +6799,7 @@ export default function Chapters() {
 
                                     <InfoCircleOutlined
 
-                                      title="View expansion plan"
+                                      title="查看扩写计划"
 
                                       style={{ color: 'var(--color-primary)', cursor: 'pointer', fontSize: 16 }}
 
@@ -6918,7 +6817,7 @@ export default function Chapters() {
 
                                   <FormOutlined
 
-                                    title={item.expansion_plan ? "Edit expansion plan" : "Create expansion plan"}
+                                    title={item.expansion_plan ? "编辑扩写计划" : "创建扩写计划"}
 
                                     style={{ color: 'var(--color-success)', cursor: 'pointer', fontSize: 16 }}
 
@@ -6954,7 +6853,7 @@ export default function Chapters() {
 
                             ) : (
 
-                              <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>No content yet.</span>
+                              <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>暂无内容</span>
 
                             )
 
@@ -6980,7 +6879,7 @@ export default function Chapters() {
 
                               disabled={!item.content || item.content.trim() === ''}
 
-                              title={!item.content || item.content.trim() === '' ? 'No content' : 'Read'}
+                              title={!item.content || item.content.trim() === '' ? '暂无内容' : '阅读'}
 
                             />
 
@@ -6994,7 +6893,7 @@ export default function Chapters() {
 
                               size="small"
 
-                              title="Edit"
+                              title="编辑"
 
                             />
 
@@ -7026,11 +6925,11 @@ export default function Chapters() {
 
                                   title={
 
-                                    !hasContent ? 'No content' :
+                                    !hasContent ? '暂无内容' :
 
-                                      isAnalyzing ? 'Analyzing...' :
+                                      isAnalyzing ? '分析中...' :
 
-                                        'Show analysis'
+                                        '查看分析'
 
                                   }
 
@@ -7050,25 +6949,24 @@ export default function Chapters() {
 
                               size="small"
 
-                              title="Settings"
+                              title="设置"
 
                             />
 
-                            {/* 闂佸憡鐟禍婊冿耿?one-to-many 濠碘槅鍨埀顒€纾涵鈧繛鎴炴尭椤戝棗螣婢跺瞼鐭嗛柛婵嗗閻忊晠姊婚崟鈺佲偓鏍偓鍨矒閺?*/}
 
                             {currentProject.outline_mode === 'one-to-many' && (
 
                               <Popconfirm
 
-                                title="Delete chapter?"
+                                title="删除该章节？"
 
-                                description="This will remove the chapter from the list."
+                                description="这会将该章节从列表中移除。"
 
                                 onConfirm={() => handleDeleteChapter(item.id)}
 
-                                okText="Delete"
+                                okText="删除"
 
-                                cancelText="Cancel"
+                                cancelText="取消"
 
                                 okButtonProps={{ danger: true }}
 
@@ -7084,7 +6982,7 @@ export default function Chapters() {
 
                                   size="small"
 
-                                  title="Delete"
+                                  title="删除"
 
                                 />
 
@@ -7118,7 +7016,7 @@ export default function Chapters() {
 
       <Modal
 
-        title={editingId ? 'Edit chapter' : 'Create chapter'}
+        title={editingId ? '编辑章节' : '创建章节'}
 
         open={isModalOpen}
 
@@ -7158,7 +7056,7 @@ export default function Chapters() {
 
           <Form.Item
 
-            label="Chapter title"
+            label="章节标题"
 
             name="title"
 
@@ -7166,9 +7064,9 @@ export default function Chapters() {
 
               currentProject.outline_mode === 'one-to-one'
 
-                ? "Title is fixed in one-to-one mode."
+                ? "一对一模式下标题固定。"
 
-                : "Title is required in one-to-many mode."
+                : "一对多模式下必须填写标题。"
 
             }
 
@@ -7176,7 +7074,7 @@ export default function Chapters() {
 
               currentProject.outline_mode === 'one-to-many'
 
-                ? [{ required: true, message: 'Title is required.' }]
+                ? [{ required: true, message: '请输入章节标题' }]
 
                 : undefined
 
@@ -7186,11 +7084,22 @@ export default function Chapters() {
 
             <Input
 
-              placeholder="Enter chapter title"
+
+
+              placeholder="请输入章节标题"
+
+
 
               disabled={currentProject.outline_mode === 'one-to-one'}
 
+
+
             />
+
+
+
+
+
 
           </Form.Item>
 
@@ -7198,29 +7107,29 @@ export default function Chapters() {
 
           <Form.Item
 
-            label="Chapter number"
+            label="章节编号"
 
             name="chapter_number"
 
-            tooltip="Used for ordering chapters."
+            tooltip="用于章节排序"
 
           >
 
-            <Input type="number" placeholder="Enter chapter number" />
+            <Input type="number" placeholder="请输入章节编号" />
 
           </Form.Item>
 
 
 
-          <Form.Item label="Status" name="status">
+          <Form.Item label="状态" name="status">
 
-            <Select placeholder="Select status">
+            <Select placeholder="请选择状态">
 
-              <Select.Option value="draft">Draft</Select.Option>
+              <Select.Option value="draft">草稿</Select.Option>
 
-              <Select.Option value="writing">Writing</Select.Option>
+              <Select.Option value="writing">写作中</Select.Option>
 
-              <Select.Option value="completed">Completed</Select.Option>
+              <Select.Option value="completed">已完成</Select.Option>
 
             </Select>
 
@@ -7232,11 +7141,11 @@ export default function Chapters() {
 
             <Space style={{ float: 'right' }}>
 
-              <Button onClick={() => setIsModalOpen(false)}>Cancel</Button>
+              <Button onClick={() => setIsModalOpen(false)}>取消</Button>
 
               <Button type="primary" htmlType="submit">
 
-                Save
+                保存
 
               </Button>
 
@@ -7252,7 +7161,7 @@ export default function Chapters() {
 
       <Modal
 
-        title="Edit chapter content"
+        title="编辑章节内容"
 
         open={isEditorOpen}
 
@@ -7306,13 +7215,12 @@ export default function Chapters() {
 
         <Form form={editorForm} layout="vertical" onFinish={handleEditorSubmit}>
 
-          {/* 缂備焦姊绘慨鐐繆椤撱垹鍐€闁搞儺鍓﹂弳顖炴煕濠婂啰鎼糏闂佸憡甯楃粙鎰礊閺冨牆绠板鑸靛姈鐏?*/}
 
           <Form.Item
 
-            label="缂備焦姊绘慨鐐繆椤撱垹鍐€闁搞儺鍓﹂弳?"
+            label="章节标题"
 
-            tooltip="闂?-1濠碘槅鍨埀顒€纾涵鈧柣鐘叉搐閸㈡彃锕㈤鍛窞鐟滃繒绱欓悧鍫⑩攳妞ゆ棁濮ら弳顓㈡煥?-N濠碘槅鍨埀顒€纾涵鈧柣鐘叉穿濞撹绻涢崶顒佸仺闁靛鍊栭崣蹇涙煛閳ь剛鎲撮崟顐ゆ▎闂備胶鐡旈崰姘辨椤忓懏缍囬柟鎼灣缁€?"
+            tooltip="标题由系统生成，仅供展示"
 
             style={{ marginBottom: isMobile ? 16 : 12 }}
 
@@ -7354,11 +7262,11 @@ export default function Chapters() {
 
                     style={{ fontWeight: 'bold' }}
 
-                    title={!canGenerate ? disabledReason : '闂佸搫绉烽～澶婄暤娴ｇ懓绶炵憸蹇曠礄娴兼潙妞介悘鐐舵椤ゅ懐绱撻崘鎯ф灓闁绘繄鍏橀幊鐐哄磼濮橆剚鏆ラ柣搴℃贡閹虫捇宕规潏銊﹀?'}
+                    title={!canGenerate ? disabledReason : '智能续写当前章节'}
 
                   >
 
-                    {isMobile ? 'AI' : 'AI闂佸憡甯楃粙鎰礊?'}
+                    {isMobile ? '续写' : '智能续写'}
 
                   </Button>
 
@@ -7372,7 +7280,6 @@ export default function Chapters() {
 
 
 
-          {/* 缂備焦顨忛崗娑氱博鐎靛憡鍋樼€光偓鐎ｎ剛鐛ラ梺鍛婂姈閻熴倗绱為弮鈧ˇ鐗堟償閵忋垹顥?+ 闂佸憡鐟﹂悷銈囪姳閵娧勫枂闁圭儤鍨甸?*/}
 
           <div style={{
 
@@ -7386,9 +7293,9 @@ export default function Chapters() {
 
             <Form.Item
 
-              label="闂佸憡鍔栭悷銈囩礊閺冣偓椤︾増鎯旈姀銏狀棔"
+              label="写作风格"
 
-              tooltip="闂備緡鍋勯ˇ鎵偓姣稿┉闂佸憡甯楃粙鎰礊閺冨牆绫嶉柡鍫ユ涧閳诲繘鏌ｉ～顒€濡挎繛鍫熷灴瀹曟ê鈻庢惔锝団枙婵＄偛顑呯€涒晠鎮?"
+              tooltip="选择写作风格会影响生成的语气、节奏和用词"
 
               required
 
@@ -7398,7 +7305,7 @@ export default function Chapters() {
 
               <Select
 
-                placeholder="闁荤姴娲ㄩ崗姗€鍩€椤掆偓椤︽壆鈧哎鍔戝畷妯衡枎鎼达絿鈻曟俊鐐差儏鐎涒晠鎮?"
+                placeholder="请选择写作风格"
 
                 value={selectedStyleId}
 
@@ -7412,7 +7319,7 @@ export default function Chapters() {
 
                   <Select.Option key={style.id} value={style.id}>
 
-                    {style.name}{style.is_default && ' (婵帗绋掗…鍫ヮ敇?'}
+                    {style.name}{style.is_default && ' (默认)'}
 
                   </Select.Option>
 
@@ -7422,7 +7329,7 @@ export default function Chapters() {
 
               {!selectedStyleId && (
 
-                <div style={{ color: '#ff4d4f', fontSize: 12, marginTop: 4 }}>闁荤姴娲ㄩ崗姗€鍩€椤掆偓椤︽壆鈧哎鍔戝畷妯衡枎鎼达絿鈻曟俊鐐差儏鐎涒晠鎮</div>
+                <div style={{ color: '#ff4d4f', fontSize: 12, marginTop: 4 }}>请选择写作风格</div>
 
               )}
 
@@ -7431,13 +7338,13 @@ export default function Chapters() {
 
 
             <Form.Item
-              label="闂佸憡鐟﹂悷銈囪姳閵娧勫枂闁圭儤鍨甸?"
-              tooltip="缂備焦顨忛崗娑氱博鐎涙顩查柧蹇撳ⅲ?闂?婵炲濯寸徊浠嬪矗閸℃稑绠涢柣鏂垮槻缁讳線鏌ㄥ☉娆戙€掓い鎴濇处缁嬪寰勬径瀣簞缂?婵?婵?闂佸搫娲﹀娆擃敇閸︻厽鍠嗛柛宀嬪楠炪垽鏌涜箛瀣闁绘搫绱曢幉鎾幢濮樺吋鍋ュ┑鐐跺皺閸嬬偤宕愬┑鍥┾枖闁逞屽墴瀹?"
+              label="叙事视角"
+              tooltip="可临时覆盖项目设置，用于控制第一/第三人称或全知视角"
               style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
             >
               <Select
 
-                placeholder={`婵＄偑鍊曞﹢鍗灻洪悧鍫付婵☆垱顑欓崥? ${getNarrativePerspectiveText(currentProject?.narrative_perspective)}`}
+                placeholder={`当前项目默认：${getNarrativePerspectiveText(currentProject?.narrative_perspective)}`}
 
                 value={temporaryNarrativePerspective}
 
@@ -7447,32 +7354,30 @@ export default function Chapters() {
 
               >
 
-                <Select.Option value="first_person">First person</Select.Option>
+                <Select.Option value="first_person">第一人称</Select.Option>
 
-                <Select.Option value="third_person">Third person</Select.Option>
+                <Select.Option value="third_person">第三人称</Select.Option>
 
-                <Select.Option value="omniscient">Omniscient</Select.Option>
+                <Select.Option value="omniscient">全知视角</Select.Option>
 
               </Select>
 
               {temporaryNarrativePerspective && (
 
                 <div style={{ color: 'var(--color-success)', fontSize: 12, marginTop: 4 }}>
-
-                  闂?{getNarrativePerspectiveText(temporaryNarrativePerspective)}
-
+                  当前视角：{getNarrativePerspectiveText(temporaryNarrativePerspective)}
                 </div>
 
               )}
             </Form.Item>
 
             <Form.Item
-              label="闂佽鍨伴幊鎾翠繆椤撱垺鈷撻柤鍛婎問閸?"
-              tooltip="闁汇埄鍨奸崰鏍ㄦ叏?AI 闂佸憡甯囬崐鏍蓟閸ヮ剙瀚夋い鎺戝€昏ぐ鍧楁煛閸モ晩妫庢い鏇熷哺閺屟囧传閸曨厾锛涢梺闈涙閼冲爼锝為锕€绠婚柣鎴濇川缁€澶愬级閳哄伒鎴澪ｉ幖浣哥倞闁绘劕鐡ㄩ弳顏堟煛閳ь剟鎳滈崹顐㈢殺"
+              label="剧情阶段"
+              tooltip="用于提示剧情推进阶段，帮助生成更符合节奏"
               style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
             >
               <Select
-                placeholder="闂佸憡鐟崹杈ㄦ櫠濠婂牆绀夐柕濠忕畱閻﹀綊鎮楃憴鍕暡缂佽鲸绻冪粙濠囨偄瀹勬媽顔夐柣鐘辫閺呮繈鏌堢€靛摜纾奸柣鏂挎啞椤忥繝鏌ょ€圭姵顥夐柛銊ょ矙瀵?"
+                placeholder="请选择剧情阶段"
                 value={selectedPlotStage}
                 onChange={setSelectedPlotStage}
                 allowClear
@@ -7486,10 +7391,10 @@ export default function Chapters() {
                 ))}
               </Select>
               <Space size={8} style={{ marginTop: 8 }}>
-                <Button size="small" onClick={applyInferredSinglePlotStage}>Apply inferred stage</Button>
+                <Button size="small" onClick={applyInferredSinglePlotStage}>应用推断阶段</Button>
                 {selectedPlotStage && (
                   <span style={{ color: 'var(--color-success)', fontSize: 12 }}>
-                    Selected: {CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === selectedPlotStage)?.label || selectedPlotStage}
+                    已选择： {CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === selectedPlotStage)?.label || selectedPlotStage}
                   </span>
                 )}
               </Space>
@@ -7498,7 +7403,7 @@ export default function Chapters() {
 
           <Card
             size="small"
-            title="Creation presets"
+            title="创作预设"
             style={{ marginBottom: 12 }}
           >
             <Space wrap>
@@ -7517,7 +7422,7 @@ export default function Chapters() {
                   setSelectedStoryFocus(undefined);
                 }}
               >
-                {"Reset selections"}
+                {"重置选择"}
               </Button>
             </Space>
 
@@ -7526,7 +7431,7 @@ export default function Chapters() {
                 type="info"
                 showIcon
                 style={{ marginTop: 12 }}
-                message={`Preset: ${activeSingleCreationPreset.label}`}
+                message={`当前预设：${activeSingleCreationPreset.label}`}
                 description={activeSingleCreationPreset.description}
               />
             )}
@@ -7536,7 +7441,7 @@ export default function Chapters() {
                 type="success"
                 showIcon
                 style={{ marginTop: 12 }}
-                message={"Recommended presets"}
+                message={"推荐预设"}
                 description={(
                   <Space wrap>
                     {recommendedCreationPresets.map((item) => {
@@ -7565,7 +7470,7 @@ export default function Chapters() {
 
                   {singleScoreDrivenRecommendationCard.recommendedPresetLabel && (
                     <div>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>Recommended preset</div>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>推荐预设</div>
                       <Space wrap size={[8, 8]}>
                         <Tag color={singleScoreDrivenRecommendationCard.recommendedPresetId === activeSingleCreationPreset?.id ? 'blue' : 'processing'}>
                           {singleScoreDrivenRecommendationCard.recommendedPresetLabel}
@@ -7580,7 +7485,7 @@ export default function Chapters() {
                   )}
 
                   <div>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>Recommended stage</div>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>推荐阶段</div>
                     <Space wrap size={[8, 8]}>
                       <Tag color={singleScoreDrivenRecommendationCard.recommendedStage === selectedPlotStage ? 'blue' : 'purple'}>
                         {singleScoreDrivenRecommendationCard.recommendedStageLabel}
@@ -7593,7 +7498,7 @@ export default function Chapters() {
 
                   {singleScoreDrivenRecommendationCard.alternatives.length > 0 && (
                     <div>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>Alternatives</div>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>备选方案</div>
                       <Space direction="vertical" size={4} style={{ display: 'flex' }}>
                         {singleScoreDrivenRecommendationCard.alternatives.map((item) => (
                           <div key={item.id} style={{ color: 'var(--color-text-secondary)' }}>
@@ -7643,7 +7548,7 @@ export default function Chapters() {
                 extra={(
                   <Space size={8}>
                     <Tag color={isSingleStoryCreationControlCustomized ? 'purple' : 'blue'}>
-                      {isSingleStoryCreationControlCustomized ? 'Customized' : 'System'}
+                      {isSingleStoryCreationControlCustomized ? '自定义' : '系统'}
                     </Tag>
                     <Button
                       size="small"
@@ -7651,7 +7556,7 @@ export default function Chapters() {
                       onClick={() => setSingleStoryCreationBriefDraft(singleSystemStoryCreationBrief)}
                       disabled={!singleSystemStoryCreationBrief || singleStoryCreationBriefDraft === singleSystemStoryCreationBrief}
                     >
-                      Reset to system
+                      恢复系统建议
                     </Button>
                   </Space>
                 )}
@@ -7666,9 +7571,9 @@ export default function Chapters() {
                 />
                 <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Story brief</div>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>故事简介</div>
                     <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginBottom: 8 }}>
-                      Provide a short brief to guide generation.
+                      提供一段简短说明，帮助引导生成。
                     </div>
                     <TextArea
                       value={singleStoryCreationBriefDraft}
@@ -7676,20 +7581,20 @@ export default function Chapters() {
                       autoSize={{ minRows: 4, maxRows: 8 }}
                       maxLength={600}
                       showCount
-                      placeholder="Describe the story briefly..."
+                      placeholder="请简要描述故事..."
                     />
                     <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
                       {isSingleStoryCreationBriefCustomized
-                        ? 'Using customized brief.'
-                        : 'Using system brief.'
+                        ? '当前使用自定义简介。'
+                        : '当前使用系统简介。'
                       }</div>
                   </div>
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 }}>
                       <div>
-                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Story beats</div>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>故事节拍</div>
                         <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
-                          Plan key beats for the story.
+                          规划故事的关键节拍。
                         </div>
                       </div>
                       <Button
@@ -7701,7 +7606,7 @@ export default function Chapters() {
                           || areStoryBeatPlannerDraftsEqual(singleStoryBeatPlannerDraft, singleSystemStoryBeatPlanner)
                         }
                       >
-                        Reset to system
+                        恢复系统建议
                       </Button>
                     </div>
                     <Space direction="vertical" size={8} style={{ display: 'flex' }}>
@@ -7722,16 +7627,16 @@ export default function Chapters() {
                     </Space>
                     <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
                       {isSingleStoryBeatPlannerCustomized
-                        ? 'Using customized beats.'
-                        : 'Using system beats.'
+                        ? '当前使用自定义节拍。'
+                        : '当前使用系统节拍。'
                       }</div>
                   </div>
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 }}>
                       <div>
-                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Scene outline</div>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>场景提纲</div>
                         <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
-                          Outline scenes for this story.
+                          为这个故事规划场景结构。
                         </div>
                       </div>
                       <Button
@@ -7743,7 +7648,7 @@ export default function Chapters() {
                           || areStorySceneOutlineDraftsEqual(singleStorySceneOutlineDraft, singleSuggestedStorySceneOutline)
                         }
                       >
-                        Reset to system
+                        恢复系统建议
                       </Button>
                     </div>
                     <Space direction="vertical" size={8} style={{ display: 'flex' }}>
@@ -7766,16 +7671,16 @@ export default function Chapters() {
                     </Space>
                     <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
                       {isSingleStorySceneOutlineCustomized
-                        ? 'Using customized outline.'
-                        : 'Using system outline.'
+                        ? '当前使用自定义提纲。'
+                        : '当前使用系统提纲。'
                       }</div>
                   </div>
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
                       <div>
-                        <div style={{ fontWeight: 600, marginBottom: 4 }}>Prompt</div>
+                        <div style={{ fontWeight: 600, marginBottom: 4 }}>提示词</div>
                         <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
-                          Generated prompt based on selections.
+                          根据当前选择生成的提示词。
                         </div>
                       </div>
                       <Button
@@ -7792,7 +7697,7 @@ export default function Chapters() {
                         <Tag key={item} color="processing">{item}</Tag>
                       ))}
                       <Tag color={isSingleStoryCreationPromptVerbose ? 'gold' : 'blue'}>
-                        {`${singleStoryCreationPromptCharCount} chars`}
+                        {`${singleStoryCreationPromptCharCount} 字符`}
                       </Tag>
                     </Space>
                     {isSingleStoryCreationPromptVerbose && (
@@ -7800,21 +7705,21 @@ export default function Chapters() {
                         type="warning"
                         showIcon
                         style={{ marginBottom: 8 }}
-                        message="Verbose prompt enabled"
-                        description="The prompt includes extra details and may be long."
+                        message="已启用详细提示词"
+                        description="提示词包含更多细节，长度可能较长。"
                       />
                     )}
                     <TextArea
                       value={resolvedSingleStoryCreationBrief ?? ''}
                       autoSize={{ minRows: 6, maxRows: 12 }}
                       readOnly
-                      placeholder="Prompt will appear here"
+                      placeholder="提示词将显示在此"
                     />
                   </div>
                   <StoryCreationSnapshotPanel
                     scopeLabel="single"
-                    description="Snapshots for story creation."
-                    emptyText="No snapshots yet."
+                    description="故事创作快照。"
+                    emptyText="暂无快照。"
                     snapshots={singleStoryCreationSnapshots}
                     currentDraft={singleStoryCreationCurrentDraft}
                     canSave={canSaveSingleStoryCreationSnapshot}
@@ -7825,7 +7730,7 @@ export default function Chapters() {
                     includeNarrativePerspective
                   />
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Execution path</div>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>执行路径</div>
                     <Space direction="vertical" size={4} style={{ display: 'flex' }}>
                       {singleStoryCreationControlCard.executionPath.map((item) => (
                         <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
@@ -7833,7 +7738,7 @@ export default function Chapters() {
                     </Space>
                   </div>
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Expected outcomes</div>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>预期结果</div>
                     <Space direction="vertical" size={4} style={{ display: 'flex' }}>
                       {singleStoryCreationControlCard.expectedOutcomes.map((item) => (
                         <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
@@ -7841,7 +7746,7 @@ export default function Chapters() {
                     </Space>
                   </div>
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Guardrails</div>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>约束规则</div>
                     <Space direction="vertical" size={4} style={{ display: 'flex' }}>
                       {singleStoryCreationControlCard.guardrails.map((item) => (
                         <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
@@ -7856,7 +7761,7 @@ export default function Chapters() {
               <Card
                 size="small"
                 title={singleStoryRepairTargetCard.title}
-                extra={<Tag color="gold">Repair target</Tag>}
+                extra={<Tag color="gold">修复重点</Tag>}
                 style={{ marginTop: 12 }}
               >
                 <Alert
@@ -7868,8 +7773,8 @@ export default function Chapters() {
                 />
                 <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                   {[
-                    ["Priority target", singleStoryRepairTargetCard.priorityTarget],
-                    ["Anti-pattern", singleStoryRepairTargetCard.antiPattern],
+                    ["优先修复项", singleStoryRepairTargetCard.priorityTarget],
+                    ["反模式", singleStoryRepairTargetCard.antiPattern],
                   ].map(([label, value]) => (
                     <div
                       key={label}
@@ -7884,7 +7789,7 @@ export default function Chapters() {
                     </div>
                   ))}
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Repair targets</div>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>修复目标</div>
                     <Space direction="vertical" size={4} style={{ display: 'flex' }}>
                       {singleStoryRepairTargetCard.repairTargets.map((item) => (
                         <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
@@ -7892,7 +7797,7 @@ export default function Chapters() {
                     </Space>
                   </div>
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Preserve strengths</div>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>保留优势</div>
                     <Space direction="vertical" size={4} style={{ display: 'flex' }}>
                       {singleStoryRepairTargetCard.preserveStrengths.map((item) => (
                         <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
@@ -7905,11 +7810,11 @@ export default function Chapters() {
           </Card>
 
           {singleCreationBlueprint && (
-            <Card size="small" title="Creation blueprint" style={{ marginBottom: 12 }}>
+            <Card size="small" title="创作蓝图" style={{ marginBottom: 12 }}>
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleCreationBlueprint.summary}
               </div>
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>Recommended beats</div>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>推荐节拍</div>
               <Space direction="vertical" size={6} style={{ display: 'flex' }}>
                 {singleCreationBlueprint.beats.map((beat, index) => (
                   <div key={beat}>{index + 1}. {beat}</div>
@@ -7920,7 +7825,7 @@ export default function Chapters() {
                   type="warning"
                   showIcon
                   style={{ marginTop: 12 }}
-                  message="Risks"
+                  message="风险提示"
                   description={singleCreationBlueprint.risks.join(', ')}
                 />
               )}
@@ -7928,16 +7833,16 @@ export default function Chapters() {
           )}
 
           {singleStoryObjectiveCard && (
-            <Card size="small" title="Story objective" style={{ marginBottom: 12 }}>
+            <Card size="small" title="故事目标" style={{ marginBottom: 12 }}>
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryObjectiveCard.summary}
               </div>
               <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                 {[
-                  ['Objective', singleStoryObjectiveCard.objective],
-                  ['Obstacle', singleStoryObjectiveCard.obstacle],
-                  ['Turn', singleStoryObjectiveCard.turn],
-                  ['Hook', singleStoryObjectiveCard.hook],
+                  ['目标', singleStoryObjectiveCard.objective],
+                  ['阻碍', singleStoryObjectiveCard.obstacle],
+                  ['转折', singleStoryObjectiveCard.turn],
+                  ['钩子', singleStoryObjectiveCard.hook],
                 ].map(([label, value]) => (
                   <div
                     key={label}
@@ -7956,16 +7861,16 @@ export default function Chapters() {
           )}
 
           {singleStoryResultCard && (
-            <Card size="small" title="Story result" style={{ marginBottom: 12 }}>
+            <Card size="small" title="故事结果" style={{ marginBottom: 12 }}>
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryResultCard.summary}
               </div>
               <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                 {[
-                  ['Progress', singleStoryResultCard.progress],
-                  ['Reveal', singleStoryResultCard.reveal],
-                  ['Relationship', singleStoryResultCard.relationship],
-                  ['Fallout', singleStoryResultCard.fallout],
+                  ['推进结果', singleStoryResultCard.progress],
+                  ['揭示信息', singleStoryResultCard.reveal],
+                  ['关系变化', singleStoryResultCard.relationship],
+                  ['后续影响', singleStoryResultCard.fallout],
                 ].map(([label, value]) => (
                   <div
                     key={label}
@@ -7984,16 +7889,16 @@ export default function Chapters() {
           )}
 
           {singleStoryExecutionChecklist && (
-            <Card size="small" title="Execution checklist" style={{ marginBottom: 12 }}>
+            <Card size="small" title="执行清单" style={{ marginBottom: 12 }}>
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryExecutionChecklist.summary}
               </div>
               <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                 {[
-                  ['Opening', singleStoryExecutionChecklist.opening],
-                  ['Pressure', singleStoryExecutionChecklist.pressure],
-                  ['Pivot', singleStoryExecutionChecklist.pivot],
-                  ['Closing', singleStoryExecutionChecklist.closing],
+                  ['开篇', singleStoryExecutionChecklist.opening],
+                  ['压力', singleStoryExecutionChecklist.pressure],
+                  ['转折', singleStoryExecutionChecklist.pivot],
+                  ['收束', singleStoryExecutionChecklist.closing],
                 ].map(([label, value]) => (
                   <div
                     key={label}
@@ -8012,16 +7917,16 @@ export default function Chapters() {
           )}
 
           {singleStoryRepetitionRiskCard && (
-            <Card size="small" title="Repetition risk" style={{ marginBottom: 12 }}>
+            <Card size="small" title="重复风险" style={{ marginBottom: 12 }}>
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryRepetitionRiskCard.summary}
               </div>
               <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                 {[
-                  ['Opening risk', singleStoryRepetitionRiskCard.openingRisk],
-                  ['Pressure risk', singleStoryRepetitionRiskCard.pressureRisk],
-                  ['Pivot risk', singleStoryRepetitionRiskCard.pivotRisk],
-                  ['Closing risk', singleStoryRepetitionRiskCard.closingRisk],
+                  ['开篇风险', singleStoryRepetitionRiskCard.openingRisk],
+                  ['压力风险', singleStoryRepetitionRiskCard.pressureRisk],
+                  ['转折风险', singleStoryRepetitionRiskCard.pivotRisk],
+                  ['收束风险', singleStoryRepetitionRiskCard.closingRisk],
                 ].map(([label, value]) => (
                   <div
                     key={label}
@@ -8040,16 +7945,16 @@ export default function Chapters() {
           )}
 
           {singleStoryAcceptanceCard && (
-            <Card size="small" title="Acceptance checks" style={{ marginBottom: 12 }}>
+            <Card size="small" title="验收检查" style={{ marginBottom: 12 }}>
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryAcceptanceCard.summary}
               </div>
               <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                 {[
-                  ['Mission check', singleStoryAcceptanceCard.missionCheck],
-                  ['Change check', singleStoryAcceptanceCard.changeCheck],
-                  ['Freshness check', singleStoryAcceptanceCard.freshnessCheck],
-                  ['Closing check', singleStoryAcceptanceCard.closingCheck],
+                  ['目标达成检查', singleStoryAcceptanceCard.missionCheck],
+                  ['变化检查', singleStoryAcceptanceCard.changeCheck],
+                  ['新鲜度检查', singleStoryAcceptanceCard.freshnessCheck],
+                  ['收束检查', singleStoryAcceptanceCard.closingCheck],
                 ].map(([label, value]) => (
                   <div
                     key={label}
@@ -8068,16 +7973,16 @@ export default function Chapters() {
           )}
 
           {singleStoryCharacterArcCard && (
-            <Card size="small" title="Character arc" style={{ marginBottom: 12 }}>
+            <Card size="small" title="人物弧光" style={{ marginBottom: 12 }}>
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryCharacterArcCard.summary}
               </div>
               <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                 {[
-                  ['External line', singleStoryCharacterArcCard.externalLine],
-                  ['Internal line', singleStoryCharacterArcCard.internalLine],
-                  ['Relationship line', singleStoryCharacterArcCard.relationshipLine],
-                  ['Arc landing', singleStoryCharacterArcCard.arcLanding],
+                  ['外在线', singleStoryCharacterArcCard.externalLine],
+                  ['内在线', singleStoryCharacterArcCard.internalLine],
+                  ['关系线', singleStoryCharacterArcCard.relationshipLine],
+                  ['弧光落点', singleStoryCharacterArcCard.arcLanding],
                 ].map(([label, value]) => (
                   <div
                     key={label}
@@ -8096,14 +8001,14 @@ export default function Chapters() {
           )}
 
           {singleVolumePacingPlan && (
-            <Card size="small" title="Volume pacing plan" style={{ marginBottom: 12 }}>
+            <Card size="small" title="篇幅节奏规划" style={{ marginBottom: 12 }}>
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleVolumePacingPlan.summary}
               </div>
               <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                 {singleVolumePacingPlan.segments.map((segment) => (
                   <div key={`${segment.stage}-${segment.startChapter}`}>
-                    <strong>Chapters {segment.startChapter}-{segment.endChapter}: {segment.label}</strong>
+                    <strong>第{segment.startChapter}-{segment.endChapter}章：{segment.label}</strong>
                     <div style={{ color: 'var(--color-text-secondary)', marginTop: 2 }}>
                       {segment.mission}
                     </div>
@@ -8114,12 +8019,12 @@ export default function Chapters() {
           )}
 
           <Form.Item
-            label="Creative mode"
-            tooltip="Choose a creative mode for the single story creation."
+            label="创作模式"
+            tooltip="选择单章创作的模式"
             style={{ marginBottom: isMobile ? 16 : 12 }}
           >
             <Select
-              placeholder="Select a mode"
+              placeholder="请选择创作模式"
               value={selectedCreativeMode}
               onChange={setSelectedCreativeMode}
               allowClear
@@ -8135,12 +8040,12 @@ export default function Chapters() {
           </Form.Item>
 
           <Form.Item
-            label="缂傚倷鐒﹂幐濠氭倵椤栨稓鐟圭憸鏃堝闯閹间焦鍊?"
-            tooltip="闂佸憡鐟崹鍫曞焵椤掆偓椤р偓缂佸彉鍗抽獮鎰板炊瑜忛弳浼村级閳哄倻鎳呴柣婵堝厴瀵挳寮堕幋婊呭墾婵炴垶鎹佸畷鐢稿吹鎼淬劌绠抽柕濞垮妿缁犲鏌曢崱鏇燁樂婵懓顦甸幃褔鍩℃笟鍥ㄦ櫈閻熸粓鍋婂鍧楀焵椤戣法顦﹂柛鐔绘硶缁絾鎷呯粙璺紦缂備胶瀚忛崨顖涙儯闂佸憡鐟﹂悷銈囪姳閵婏妇顩烽悹鍥ㄥ絻椤?"
+            label="故事聚焦"
+            tooltip="选择本次创作的关注点与重心"
             style={{ marginBottom: isMobile ? 16 : 12 }}
           >
             <Select
-              placeholder="婵帗绋掗…鍫ヮ敇婵犳艾閿ら柛銉簵閳ь兘鍋撻梺鐟扮仛鐎笛勫垔鐎涙ê绶炴慨姗€纭稿姘舵煕閺冨倸鏋欓柛蹇旓耿閺佸秶浠﹂挊澶庮唹闂佸湱顭堥ˇ鏉匡耿閹殿喚鍗氶柣妯块哺瀹曟煡鏌涢弬鍛€撶划鐢告煟?"
+              placeholder="请选择故事聚焦"
               value={selectedStoryFocus}
               onChange={setSelectedStoryFocus}
               allowClear
@@ -8155,7 +8060,6 @@ export default function Chapters() {
             </Select>
           </Form.Item>
 
-          {/* 缂備焦顨忛崗娑氳姳閳哄啯鍋樼€光偓鐎ｎ剛鐛ラ梺鐑╂櫓閸犳鎮ラ敐鍥ｅ亾濞戞瑯娈曢柡?+ AI濠碘槅鍨埀顒€纾埀?*/}
           <div style={{
             display: isMobile ? 'block' : 'flex',
             gap: isMobile ? 0 : 16,
@@ -8165,9 +8069,9 @@ export default function Chapters() {
 
             <Form.Item
 
-              label="闂佺儵鏅╅崰妤呮偉閿濆洠鍋撳☉娆樻畷闁?"
+              label="目标字数"
 
-              tooltip="AI闂佹眹鍨婚崰鎰板垂濮樿京鍗氶柣妯烘惈铻￠梺鍝勫暙婢у骸鈻撻幋锔藉剮妞ゆ梻鏅崹濂告倵濞戞瑯娈曢柡鍡欏枛閺佸秶浠﹂悾灞炬緰闂傚倸瀚幊搴ゃ亹閺屻儲鍤勯柣锝呮湰濞堬綁鏌￠崼婵愭Ц濞存粎顭堥蹇涱敋閸℃瑧顦╂繛锝呮祩閸犳寮總绋胯Е閹煎瓨绻勭粣妤呮煠婵傚绨诲┑顔规櫇閹峰锛愭担铏剐ら梺?"
+              tooltip="设置 生成时的目标字数范围（约）"
 
               style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
 
@@ -8195,8 +8099,8 @@ export default function Chapters() {
 
                 style={{ width: '100%' }}
 
-                formatter={(value) => (value ? String(value) + ' words' : '')}
-                parser={(value) => parseInt((value || '').replace(' words', ''), 10)}
+                formatter={(value) => (value ? String(value) + ' 字' : '')}
+                parser={(value) => parseInt((value || '').replace(' 字', ''), 10)}
 
 
               />
@@ -8207,9 +8111,9 @@ export default function Chapters() {
 
             <Form.Item
 
-              label="AI model"
+              label="AI 模型"
 
-              tooltip="Select a model for generation."
+              tooltip="选择用于生成的模型"
 
               style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
 
@@ -8217,7 +8121,7 @@ export default function Chapters() {
 
               <Select
 
-                placeholder={selectedModel ? 'Selected: ' + selectedModel : 'Select a model'}
+                placeholder={selectedModel ? '已选择：' + selectedModel : '请选择模型'}
 
                 value={selectedModel}
 
@@ -8253,7 +8157,7 @@ export default function Chapters() {
 
             size="small"
 
-            title="Quality profile"
+            title="质量画像"
 
             style={{ marginBottom: 12 }}
 
@@ -8271,9 +8175,9 @@ export default function Chapters() {
 
                   style={{ marginBottom: 12 }}
 
-                  message="Quality profile summary"
+                  message="质量画像摘要"
 
-                  description="This profile summarizes quality metrics and recommendations."
+                  description="该画像汇总了质量指标与优化建议。"
 
                 />
 
@@ -8301,9 +8205,9 @@ export default function Chapters() {
 
                 showIcon
 
-                message="No quality profile yet"
+                message="暂无质量画像"
 
-                description="Run analysis to generate the quality profile."
+                description="运行分析后可生成质量画像。"
 
               />
 
@@ -8317,7 +8221,7 @@ export default function Chapters() {
 
             size="small"
 
-            title="Quality metrics"
+            title="质量指标"
 
             loading={chapterQualityLoading}
 
@@ -8327,7 +8231,7 @@ export default function Chapters() {
             {chapterQualityMetrics ? (
               <>
                 {singleAfterScorecard && (
-                  <Card size="small" title="After scorecard" style={{ marginBottom: 12 }}>
+                  <Card size="small" title="优化后评分卡" style={{ marginBottom: 12 }}>
                     <Alert
                       type={singleAfterScorecard.verdictColor as 'success' | 'info' | 'warning' | 'error'}
                       showIcon
@@ -8336,10 +8240,10 @@ export default function Chapters() {
                       description={singleAfterScorecard.summary}
                     />
                     <Descriptions column={1} size="small" style={{ marginBottom: 12 }}>
-                      <Descriptions.Item label="Focus check">
+                      <Descriptions.Item label="焦点检查">
                         {singleAfterScorecard.focusCheck}
                       </Descriptions.Item>
-                      <Descriptions.Item label="Next action">
+                      <Descriptions.Item label="下一步行动">
                         {singleAfterScorecard.nextAction}
                       </Descriptions.Item>
                     </Descriptions>
@@ -8359,58 +8263,58 @@ export default function Chapters() {
                 )}
 
                 <Descriptions column={isMobile ? 1 : 2} size="small">
-                  <Descriptions.Item label="Overall score">
+                  <Descriptions.Item label="综合得分">
                     <Tag color={getOverallScoreColor(chapterQualityMetrics.overall_score)}>
                       {chapterQualityMetrics.overall_score}
                     </Tag>
 
                   </Descriptions.Item>
 
-                  <Descriptions.Item label="Conflict chain hit rate">
+                  <Descriptions.Item label="冲突链命中率">
 
                     <Tag color={getMetricRateColor(chapterQualityMetrics.conflict_chain_hit_rate)}>{chapterQualityMetrics.conflict_chain_hit_rate}%</Tag>
 
                   </Descriptions.Item>
 
-                  <Descriptions.Item label="Rule grounding hit rate">
+                  <Descriptions.Item label="规则锚定命中率">
 
                     <Tag color={getMetricRateColor(chapterQualityMetrics.rule_grounding_hit_rate)}>{chapterQualityMetrics.rule_grounding_hit_rate}%</Tag>
 
                   </Descriptions.Item>
 
-                  <Descriptions.Item label="Opening hook rate">
+                  <Descriptions.Item label="开篇钩子命中率">
 
                     <Tag color={getMetricRateColor(chapterQualityMetrics.opening_hook_rate)}>{chapterQualityMetrics.opening_hook_rate}%</Tag>
 
                   </Descriptions.Item>
 
-                  <Descriptions.Item label="Payoff chain rate">
+                  <Descriptions.Item label="回收链命中率">
 
                     <Tag color={getMetricRateColor(chapterQualityMetrics.payoff_chain_rate)}>{chapterQualityMetrics.payoff_chain_rate}%</Tag>
 
                   </Descriptions.Item>
 
-                  <Descriptions.Item label="Cliffhanger rate">
+                  <Descriptions.Item label="悬念收尾率">
 
                     <Tag color={getMetricRateColor(chapterQualityMetrics.cliffhanger_rate)}>{chapterQualityMetrics.cliffhanger_rate}%</Tag>
 
                   </Descriptions.Item>
 
-                  <Descriptions.Item label="Dialogue naturalness rate">
+                  <Descriptions.Item label="对话自然度">
 
                     <Tag color={getMetricRateColor(chapterQualityMetrics.dialogue_naturalness_rate)}>{chapterQualityMetrics.dialogue_naturalness_rate}%</Tag>
 
                   </Descriptions.Item>
 
-                  <Descriptions.Item label="Outline alignment rate">
+                  <Descriptions.Item label="大纲贴合度">
 
                     <Tag color={getMetricRateColor(chapterQualityMetrics.outline_alignment_rate)}>{chapterQualityMetrics.outline_alignment_rate}%</Tag>
 
                   </Descriptions.Item>
 
-                  <Descriptions.Item label="Generated at">
+                  <Descriptions.Item label="生成时间">
 
-                    {chapterQualityGeneratedAt ? new Date(chapterQualityGeneratedAt).toLocaleString() : 'Not generated yet'}
+                    {chapterQualityGeneratedAt ? new Date(chapterQualityGeneratedAt).toLocaleString() : '尚未生成'}
 
                   </Descriptions.Item>
 
@@ -8424,13 +8328,13 @@ export default function Chapters() {
 
                   style={{ marginTop: 12 }}
 
-                  message="Weakest metric"
+                  message="最弱指标"
 
-                  description="Improve the weakest metric to raise overall quality."
+                  description="优先改善最弱指标以提升整体质量。"
 
                 />
 
-                <Card size="small" title="Metric details" style={{ marginTop: 12 }}>
+                <Card size="small" title="指标详情" style={{ marginTop: 12 }}>
 
                   <Space direction="vertical" style={{ width: '100%' }} size={10}>
 
@@ -8476,9 +8380,9 @@ export default function Chapters() {
 
                 showIcon
 
-                message="No quality metrics yet."
+                message="暂无质量指标。"
 
-                description="Run analysis to generate quality metrics."
+                description="运行分析后可生成质量指标。"
 
               />
 
@@ -8488,15 +8392,23 @@ export default function Chapters() {
 
 
 
-          <Form.Item label="Chapter content" name="content">
+          <Form.Item label="章节内容" name="content">
 
             <TextArea
 
               ref={contentTextAreaRef}
 
+
               rows={isMobile ? 12 : 20}
 
-              placeholder="Enter chapter content..."
+
+
+              placeholder="请输入章节内容..."
+
+
+
+
+
 
               style={{ fontFamily: 'monospace', fontSize: isMobile ? 12 : 14 }}
 
@@ -8506,7 +8418,6 @@ export default function Chapters() {
 
 
 
-          {/* 闁诲繒鍋愰崑鎾绘⒑椤斿搫濮傞柛锝嗘倐瀹曟ê鈻庨幇顖滄闂佸憡鏌ｉ崝灞惧閹版澘绀傞梺鍨儑閸?*/}
 
           <div data-partial-regenerate-toolbar>
 
@@ -8550,7 +8461,7 @@ export default function Chapters() {
 
                 >
 
-                  闂佸憡鐟﹂悧妤冪矓?
+                  取消
 
                 </Button>
 
@@ -8564,7 +8475,7 @@ export default function Chapters() {
 
                 >
 
-                  婵烇絽娲︾换鍌炴偤閵娧呭崥闁绘ê鎼灐
+                  保存内容
 
                 </Button>
 
@@ -8596,13 +8507,11 @@ export default function Chapters() {
 
 
 
-            // 闂佸憡甯￠弨閬嶅蓟婵犲嫮鍗氶柣妯烘惈铻￠梺鍛婂笚椤ㄥ濡撮崘鈺冾浄闁靛闄勯埢鏃傜磼閳ь剟鎮滃Ο璁崇帛闂佸搫鍊瑰姗€宕€电硶鍋?
 
             refreshChapters();
 
 
 
-            // 闂佸憡甯￠弨閬嶅蓟婵犲啨浜滈柛锔诲幗缁愭菐閸ワ絽澧插ù鐓庢噺缁傛帡濡烽敂鐣屽嚱闂佸搫鍊瑰姗€鎮鸿瀵偊骞嶉鎯х厷闁?
 
             if (currentProject) {
 
@@ -8624,7 +8533,6 @@ export default function Chapters() {
 
 
 
-            // 閻庣偣鍊栭崕鑲╂崲?00ms闂佸憡鑹炬鎼佸春濞戙垹妫橀柟宄扮焾閸ゅ绱掗弮鍌毿┑鈽嗗弮閹啴宕熼銏⑩偓濠氭煛鐎ｎ偄濮夊┑顔芥倐楠炩偓濞撴艾锕︾粈澶岀磽娴ｅ湱鎳冮柟顔筋殘缁晠顢涘┑鍡楁灆婵犮垹澧庨崰鎰渻閸岀偞鈷掗柡澶嬪灩閺嗘岸鏌熺€涙ê濮堥柡鍡欏枛楠炴垿顢欓懖鈺傜殤闂佸憡鍔栭悷銉╁矗?
 
             if (analysisChapterId) {
 
@@ -8640,7 +8548,6 @@ export default function Chapters() {
 
                     console.error('闂佸憡甯￠弨閬嶅蓟婵犲洤绀嗛柛鈩冾焽閳ь兛绮欓幃鈺呮嚋绾版ê浜惧ù锝嗘偠娴滃ジ鎮?', error);
 
-                    // 婵犵鈧啿鈧綊鎮樻径鎰摕闁靛鐓堥崵鍕熆閹壆绨块悷娆欑畵閺佸秶浠﹂挊澶嬫珒閻庣偣鍊栭崕鑲╂崲濠婂懍鐒婃繝闈涳功濡茬鈽夐幘顖氫壕濠?
 
                     setTimeout(() => {
 
@@ -8670,7 +8577,6 @@ export default function Chapters() {
 
 
 
-      {/* 闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭鎮楅悽娈挎敯闁伙箒妫勯々?*/}
 
       <Modal
 
@@ -8680,7 +8586,7 @@ export default function Chapters() {
 
             <RocketOutlined style={{ color: '#722ed1' }} />
 
-            <span>闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洨绱掗弮鍌毿┑鈽嗗弮瀹曟﹢宕ㄩ褍鏅</span>
+            <span>批量生成章节</span>
 
           </Space>
 
@@ -8696,13 +8602,13 @@ export default function Chapters() {
 
             <Button onClick={() => setBatchGenerateVisible(false)}>
 
-              闂佸憡鐟﹂悧妤冪矓?
+              取消
 
             </Button>
 
             <Button type="primary" icon={<RocketOutlined />} onClick={() => batchForm.submit()}>
 
-              閻庢鍠掗崑鎾斥攽椤旂⒈鍎愬瑙勫浮閺屽矁绠涢弴鐔告闂?
+              开始批量生成
 
             </Button>
 
@@ -8774,7 +8680,7 @@ export default function Chapters() {
 
             <Alert
 
-              message="Batch generation will create multiple chapters based on the current settings."
+              message="批量生成会基于当前设置一次生成多个章节。"
 
               type="info"
 
@@ -8786,29 +8692,28 @@ export default function Chapters() {
 
 
 
-            {/* 缂備焦顨忛崗娑氱博鐎靛憡鍋樼€光偓鐎ｎ剛鐛ラ柣鐘欏啫妲绘い顐ｅ姉缁晠鎮╅崫鍕?+ 闂佹眹鍨婚崰鎰板垂濮樿泛鏋佸ù鍏兼綑濞?*/}
 
             <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 0 : 16 }}>
 
               <Form.Item
 
-                label="Start chapter"
+                label="起始章节"
 
                 name="startChapterNumber"
 
-                rules={[{ required: true, message: 'Start chapter is required.' }]}
+                rules={[{ required: true, message: '请选择起始章节' }]}
 
                 style={{ flex: 1, marginBottom: 12 }}
 
               >
 
-                <Select placeholder="Select a chapter">
+                <Select placeholder="请选择章节">
 
                   {batchStartChapterOptions.map(ch => (
 
                     <Select.Option key={ch.id} value={ch.chapter_number}>
 
-                      {'Chapter ' + ch.chapter_number + ': ' + ch.title}
+                      {'第' + ch.chapter_number + '章：' + ch.title}
 
                     </Select.Option>
 
@@ -8822,11 +8727,11 @@ export default function Chapters() {
 
               <Form.Item
 
-                label="Chapter count"
+                label="章节数量"
 
                 name="count"
 
-                rules={[{ required: true, message: 'Chapter count is required.' }]}
+                rules={[{ required: true, message: '请选择章节数量' }]}
 
                 style={{ marginBottom: 12 }}
 
@@ -8834,13 +8739,13 @@ export default function Chapters() {
 
                 <Radio.Group buttonStyle="solid" size={isMobile ? 'small' : 'middle'}>
 
-                  <Radio.Button value={5}>5 chapters</Radio.Button>
+                  <Radio.Button value={5}>5章</Radio.Button>
 
-                  <Radio.Button value={10}>10 chapters</Radio.Button>
+                  <Radio.Button value={10}>10章</Radio.Button>
 
-                  <Radio.Button value={15}>15 chapters</Radio.Button>
+                  <Radio.Button value={15}>15章</Radio.Button>
 
-                  <Radio.Button value={20}>20 chapters</Radio.Button>
+                  <Radio.Button value={20}>20章</Radio.Button>
 
                 </Radio.Group>
 
@@ -8850,21 +8755,28 @@ export default function Chapters() {
 
 
 
-            {/* 缂備焦顨忛崗娑氳姳閳哄啯鍋樼€光偓鐎ｎ剛鐛ラ梺鍛婂姈閻熴倗绱為弮鈧ˇ鐗堟償閵忋垹顥?+ 闂佺儵鏅╅崰妤呮偉閿濆洠鍋撳☉娆樻畷闁?*/}
 
             <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 0 : 16 }}>
               <Form.Item
-                label="Writing style"
+                label="写作风格"
                 name="styleId"
-                rules={[{ required: true, message: 'Writing style is required.' }]}
+                rules={[{ required: true, message: '请选择写作风格' }]}
 
                 style={{ flex: 1, marginBottom: 12 }}
 
               >
 
+
+
                 <Select
 
-                  placeholder="Select a writing style"
+
+
+                  placeholder="请选择写作风格"
+
+
+
+
 
                   showSearch
 
@@ -8876,7 +8788,7 @@ export default function Chapters() {
 
                     <Select.Option key={style.id} value={style.id}>
 
-                      {style.name}{style.is_default && ' (Default)'}
+                      {style.name}{style.is_default && ' (默认)'}
 
                     </Select.Option>
 
@@ -8890,13 +8802,13 @@ export default function Chapters() {
 
               <Form.Item
 
-                label="Target word count"
+                label="目标字数"
 
                 name="targetWordCount"
 
-                rules={[{ required: true, message: 'Target word count is required.' }]}
+                rules={[{ required: true, message: '请输入目标字数' }]}
 
-                tooltip="Used to guide batch generation length."
+                tooltip="用于控制批量生成的篇幅。"
 
                 style={{ flex: 1, marginBottom: 12 }}
 
@@ -8912,9 +8824,9 @@ export default function Chapters() {
 
                   style={{ width: '100%' }}
 
-                  formatter={(value) => (value ? String(value) + ' words' : '')}
+                  formatter={(value) => (value ? String(value) + ' 字' : '')}
 
-                  parser={(value) => parseInt((value || '').replace(' words', ''), 10)}
+                  parser={(value) => parseInt((value || '').replace(' 字', ''), 10)}
 
                   onChange={(value) => {
 
@@ -8931,12 +8843,22 @@ export default function Chapters() {
             </div>
 
             <Form.Item
-              label="Plot stage"
-              tooltip="Choose a plot stage for batch creation."
+              label="剧情阶段"
+
+
+
+              tooltip="选择用于批量创作的剧情阶段"
+
               style={{ marginBottom: 12 }}
+
             >
+
               <Select
-                placeholder="Select a plot stage"
+
+                placeholder="请选择剧情阶段"
+
+
+
                 value={batchSelectedPlotStage}
                 onChange={setBatchSelectedPlotStage}
                 allowClear
@@ -8950,10 +8872,10 @@ export default function Chapters() {
                 ))}
               </Select>
               <Space size={8} style={{ marginTop: 8 }}>
-                <Button size="small" onClick={applyInferredBatchPlotStage}>Apply inferred stage</Button>
+                <Button size="small" onClick={applyInferredBatchPlotStage}>应用推断阶段</Button>
                 {batchSelectedPlotStage && (
                   <span style={{ color: 'var(--color-success)', fontSize: 12 }}>
-                    Selected: {CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === batchSelectedPlotStage)?.label || batchSelectedPlotStage}
+                    已选择： {CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === batchSelectedPlotStage)?.label || batchSelectedPlotStage}
                   </span>
                 )}
               </Space>
@@ -8961,7 +8883,7 @@ export default function Chapters() {
 
             <Card
               size="small"
-              title="Creation presets"
+              title="创作预设"
               style={{ marginBottom: 12 }}
             >
               <Space wrap>
@@ -8980,7 +8902,7 @@ export default function Chapters() {
                     setBatchSelectedStoryFocus(undefined);
                   }}
                 >
-                  {"Reset selections"}
+                  {"重置选择"}
                 </Button>
               </Space>
 
@@ -9002,7 +8924,7 @@ export default function Chapters() {
 
                     {batchScoreDrivenRecommendationCard.recommendedPresetLabel && (
                       <div>
-                        <div style={{ fontWeight: 600, marginBottom: 6 }}>Recommended preset</div>
+                        <div style={{ fontWeight: 600, marginBottom: 6 }}>推荐预设</div>
                         <Space wrap size={[8, 8]}>
                           <Tag color={batchScoreDrivenRecommendationCard.recommendedPresetId === activeBatchCreationPreset?.id ? 'blue' : 'processing'}>
                             {batchScoreDrivenRecommendationCard.recommendedPresetLabel}
@@ -9017,7 +8939,7 @@ export default function Chapters() {
                     )}
 
                     <div>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>Recommended stage</div>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>推荐阶段</div>
                       <Space wrap size={[8, 8]}>
                         <Tag color={batchScoreDrivenRecommendationCard.recommendedStage === batchSelectedPlotStage ? 'blue' : 'purple'}>
                           {batchScoreDrivenRecommendationCard.recommendedStageLabel}
@@ -9030,7 +8952,7 @@ export default function Chapters() {
 
                     {batchScoreDrivenRecommendationCard.alternatives.length > 0 && (
                       <div>
-                        <div style={{ fontWeight: 600, marginBottom: 6 }}>Alternatives</div>
+                        <div style={{ fontWeight: 600, marginBottom: 6 }}>备选方案</div>
                         <Space direction="vertical" size={4} style={{ display: 'flex' }}>
                           {batchScoreDrivenRecommendationCard.alternatives.map((item) => (
                             <div key={item.id} style={{ color: 'var(--color-text-secondary)' }}>
@@ -9044,12 +8966,12 @@ export default function Chapters() {
                     <Space wrap>
                       {batchScoreDrivenRecommendationCard.recommendedPresetId && (
                         <Button size="small" onClick={() => applyBatchCreationPreset(batchScoreDrivenRecommendationCard.recommendedPresetId!)}>
-                          {"Apply preset"}
+                          {"应用预设"}
                         </Button>
                       )}
                       {batchScoreDrivenRecommendationCard.recommendedStage && (
                         <Button size="small" onClick={() => setBatchSelectedPlotStage(batchScoreDrivenRecommendationCard.recommendedStage)}>
-                          {"Apply stage"}
+                          {"应用阶段"}
                         </Button>
                       )}
                       {(batchScoreDrivenRecommendationCard.recommendedPresetId || batchScoreDrivenRecommendationCard.recommendedStage) && (
@@ -9065,7 +8987,7 @@ export default function Chapters() {
                             }
                           }}
                         >
-                          {"Apply recommendations"}
+                          {"应用建议"}
                         </Button>
                       )}
                     </Space>
@@ -9081,7 +9003,7 @@ export default function Chapters() {
                   extra={(
                     <Space size={8}>
                       <Tag color={isBatchStoryCreationControlCustomized ? 'purple' : 'blue'}>
-                        {isBatchStoryCreationControlCustomized ? 'Customized' : 'System'}
+                        {isBatchStoryCreationControlCustomized ? '自定义' : '系统'}
                       </Tag>
                       <Button
                         size="small"
@@ -9089,7 +9011,7 @@ export default function Chapters() {
                         onClick={() => setBatchStoryCreationBriefDraft(batchSystemStoryCreationBrief)}
                         disabled={!batchSystemStoryCreationBrief || batchStoryCreationBriefDraft === batchSystemStoryCreationBrief}
                       >
-                        Reset to system
+                        恢复系统建议
                       </Button>
                     </Space>
                   )}
@@ -9104,9 +9026,9 @@ export default function Chapters() {
                   />
                   <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                     <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>Story brief</div>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>故事简介</div>
                       <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginBottom: 8 }}>
-                        Provide a short brief to guide generation.
+                        提供一段简短说明，帮助引导生成。
                       </div>
                       <TextArea
                         value={batchStoryCreationBriefDraft}
@@ -9114,20 +9036,20 @@ export default function Chapters() {
                         autoSize={{ minRows: 4, maxRows: 8 }}
                         maxLength={600}
                         showCount
-                        placeholder="Describe the story briefly..."
+                        placeholder="请简要描述故事..."
                       />
                       <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
                         {isBatchStoryCreationBriefCustomized
-                          ? 'Using customized brief.'
-                          : 'Using system brief.'
+                          ? '当前使用自定义简介。'
+                          : '当前使用系统简介。'
                         }</div>
                     </div>
                     <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 }}>
                         <div>
-                          <div style={{ fontWeight: 600, marginBottom: 4 }}>Story beats</div>
+                          <div style={{ fontWeight: 600, marginBottom: 4 }}>故事节拍</div>
                           <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
-                            Plan key beats for the story.
+                            规划故事的关键节拍。
                           </div>
                         </div>
                         <Button
@@ -9139,7 +9061,7 @@ export default function Chapters() {
                             || areStoryBeatPlannerDraftsEqual(batchStoryBeatPlannerDraft, batchSystemStoryBeatPlanner)
                           }
                         >
-                          Reset to system
+                          恢复系统建议
                         </Button>
                       </div>
                       <Space direction="vertical" size={8} style={{ display: 'flex' }}>
@@ -9160,16 +9082,16 @@ export default function Chapters() {
                       </Space>
                       <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
                         {isBatchStoryBeatPlannerCustomized
-                          ? 'Using customized beats.'
-                          : 'Using system beats.'
+                          ? '当前使用自定义节拍。'
+                          : '当前使用系统节拍。'
                         }</div>
                     </div>
                     <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 }}>
                         <div>
-                          <div style={{ fontWeight: 600, marginBottom: 4 }}>Scene outline</div>
+                          <div style={{ fontWeight: 600, marginBottom: 4 }}>场景提纲</div>
                           <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
-                            Outline scenes for this story.
+                            为这个故事规划场景结构。
                           </div>
                         </div>
                         <Button
@@ -9181,7 +9103,7 @@ export default function Chapters() {
                             || areStorySceneOutlineDraftsEqual(batchStorySceneOutlineDraft, batchSuggestedStorySceneOutline)
                           }
                         >
-                          Reset to system
+                          恢复系统建议
                         </Button>
                       </div>
                       <Space direction="vertical" size={8} style={{ display: 'flex' }}>
@@ -9204,16 +9126,16 @@ export default function Chapters() {
                       </Space>
                       <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
                         {isBatchStorySceneOutlineCustomized
-                          ? 'Using customized outline.'
-                          : 'Using system outline.'
+                          ? '当前使用自定义提纲。'
+                          : '当前使用系统提纲。'
                         }</div>
                     </div>
                     <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
                         <div>
-                          <div style={{ fontWeight: 600, marginBottom: 4 }}>Prompt</div>
+                          <div style={{ fontWeight: 600, marginBottom: 4 }}>提示词</div>
                           <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
-                            Generated prompt based on selections.
+                            根据当前选择生成的提示词。
                           </div>
                         </div>
                         <Button
@@ -9222,7 +9144,7 @@ export default function Chapters() {
                           disabled={!resolvedBatchStoryCreationBrief}
                           onClick={() => void copyStoryCreationPrompt(resolvedBatchStoryCreationBrief, 'batch')}
                         >
-                          Copy prompt
+                          复制提示词
                         </Button>
                       </div>
                       <Space wrap size={[8, 8]} style={{ marginBottom: 8 }}>
@@ -9230,7 +9152,7 @@ export default function Chapters() {
                           <Tag key={item} color="processing">{item}</Tag>
                         ))}
                         <Tag color={isBatchStoryCreationPromptVerbose ? 'gold' : 'blue'}>
-                          {batchStoryCreationPromptCharCount + ' chars'}
+                          {batchStoryCreationPromptCharCount + ' 字符'}
                         </Tag>
                       </Space>
                       {isBatchStoryCreationPromptVerbose && (
@@ -9238,21 +9160,21 @@ export default function Chapters() {
                           type="warning"
                           showIcon
                           style={{ marginBottom: 8 }}
-                          message="Verbose prompt enabled"
-                          description="The prompt includes detailed guidance for generation."
+                          message="已启用详细提示词"
+                          description="提示词包含更详细的生成指导。"
                         />
                       )}
                       <TextArea
                         value={resolvedBatchStoryCreationBrief ?? ''}
                         autoSize={{ minRows: 6, maxRows: 12 }}
                         readOnly
-                        placeholder="Prompt preview will appear here."
+                        placeholder="提示词预览将显示在此。"
                       />
                     </div>
                     <StoryCreationSnapshotPanel
                       scopeLabel="batch"
-                      description="Save prompt snapshots for reuse."
-                      emptyText="No snapshots yet."
+                      description="保存提示词快照以便复用。"
+                      emptyText="暂无快照。"
                       snapshots={batchStoryCreationSnapshots}
                       currentDraft={batchStoryCreationCurrentDraft}
                       canSave={canSaveBatchStoryCreationSnapshot}
@@ -9262,7 +9184,7 @@ export default function Chapters() {
                       onCopy={copyStoryCreationPrompt}
                     />
                     <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>Execution path</div>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>执行路径</div>
                       <Space direction="vertical" size={4} style={{ display: 'flex' }}>
                         {batchStoryCreationControlCard.executionPath.map((item) => (
                           <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
@@ -9270,7 +9192,7 @@ export default function Chapters() {
                       </Space>
                     </div>
                     <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>Expected outcomes</div>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>预期结果</div>
                       <Space direction="vertical" size={4} style={{ display: 'flex' }}>
                         {batchStoryCreationControlCard.expectedOutcomes.map((item) => (
                           <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
@@ -9278,7 +9200,7 @@ export default function Chapters() {
                       </Space>
                     </div>
                     <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>Guardrails</div>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>约束规则</div>
                       <Space direction="vertical" size={4} style={{ display: 'flex' }}>
                         {batchStoryCreationControlCard.guardrails.map((item) => (
                           <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
@@ -9293,7 +9215,7 @@ export default function Chapters() {
               <Card
                 size="small"
                 title={batchStoryRepairTargetCard.title}
-                extra={<Tag color="gold">Repair focus</Tag>}
+                extra={<Tag color="gold">修复重点</Tag>}
                 style={{ marginTop: 12 }}
               >
                 <Alert
@@ -9305,8 +9227,8 @@ export default function Chapters() {
                 />
                 <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                   {[
-                    ['Priority target', batchStoryRepairTargetCard.priorityTarget],
-                    ['Anti pattern', batchStoryRepairTargetCard.antiPattern],
+                    ['优先修复项', batchStoryRepairTargetCard.priorityTarget],
+                    ['反模式', batchStoryRepairTargetCard.antiPattern],
                   ].map(([label, value]) => (
                     <div
                       key={label}
@@ -9321,7 +9243,7 @@ export default function Chapters() {
                     </div>
                   ))}
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Repair targets</div>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>修复目标</div>
                     <Space direction="vertical" size={4} style={{ display: 'flex' }}>
                       {batchStoryRepairTargetCard.repairTargets.map((item) => (
                         <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
@@ -9329,7 +9251,7 @@ export default function Chapters() {
                     </Space>
                   </div>
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>Preserve strengths</div>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>保留优势</div>
                     <Space direction="vertical" size={4} style={{ display: 'flex' }}>
                       {batchStoryRepairTargetCard.preserveStrengths.map((item) => (
                         <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
@@ -9341,11 +9263,11 @@ export default function Chapters() {
             )}
 
             {batchCreationBlueprint && (
-              <Card size="small" title="Batch creation blueprint" style={{ marginBottom: 12 }}>
+              <Card size="small" title="批量创作蓝图" style={{ marginBottom: 12 }}>
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchCreationBlueprint.summary}
                 </div>
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>Key beats</div>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>关键节拍</div>
                 <Space direction="vertical" size={6} style={{ display: 'flex' }}>
                   {batchCreationBlueprint.beats.map((beat, index) => (
                     <div key={beat}>{index + 1}. {beat}</div>
@@ -9356,7 +9278,7 @@ export default function Chapters() {
                     type="warning"
                     showIcon
                     style={{ marginTop: 12 }}
-                    message="Risks"
+                    message="风险提示"
                     description={batchCreationBlueprint.risks.join(', ')}
                   />
                 )}
@@ -9364,16 +9286,16 @@ export default function Chapters() {
             )}
 
             {batchStoryObjectiveCard && (
-              <Card size="small" title="Story objective" style={{ marginBottom: 12 }}>
+              <Card size="small" title="故事目标" style={{ marginBottom: 12 }}>
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryObjectiveCard.summary}
                 </div>
                 <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                   {[
-                    ['Objective', batchStoryObjectiveCard.objective],
-                    ['Obstacle', batchStoryObjectiveCard.obstacle],
-                    ['Turn', batchStoryObjectiveCard.turn],
-                    ['Hook', batchStoryObjectiveCard.hook],
+                    ['目标', batchStoryObjectiveCard.objective],
+                    ['阻碍', batchStoryObjectiveCard.obstacle],
+                    ['转折', batchStoryObjectiveCard.turn],
+                    ['钩子', batchStoryObjectiveCard.hook],
                   ].map(([label, value]) => (
                     <div
                       key={label}
@@ -9392,16 +9314,16 @@ export default function Chapters() {
             )}
 
             {batchStoryResultCard && (
-              <Card size="small" title="Story result" style={{ marginBottom: 12 }}>
+              <Card size="small" title="故事结果" style={{ marginBottom: 12 }}>
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryResultCard.summary}
                 </div>
                 <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                   {[
-                    ['Progress', batchStoryResultCard.progress],
-                    ['Reveal', batchStoryResultCard.reveal],
-                    ['Relationship', batchStoryResultCard.relationship],
-                    ['Fallout', batchStoryResultCard.fallout],
+                    ['推进结果', batchStoryResultCard.progress],
+                    ['揭示信息', batchStoryResultCard.reveal],
+                    ['关系变化', batchStoryResultCard.relationship],
+                    ['后续影响', batchStoryResultCard.fallout],
                   ].map(([label, value]) => (
                     <div
                       key={label}
@@ -9420,16 +9342,16 @@ export default function Chapters() {
             )}
 
             {batchStoryExecutionChecklist && (
-              <Card size="small" title="Execution checklist" style={{ marginBottom: 12 }}>
+              <Card size="small" title="执行清单" style={{ marginBottom: 12 }}>
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryExecutionChecklist.summary}
                 </div>
                 <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                   {[
-                    ['Opening', batchStoryExecutionChecklist.opening],
-                    ['Pressure', batchStoryExecutionChecklist.pressure],
-                    ['Pivot', batchStoryExecutionChecklist.pivot],
-                    ['Closing', batchStoryExecutionChecklist.closing],
+                    ['开篇', batchStoryExecutionChecklist.opening],
+                    ['压力', batchStoryExecutionChecklist.pressure],
+                    ['转折', batchStoryExecutionChecklist.pivot],
+                    ['收束', batchStoryExecutionChecklist.closing],
                   ].map(([label, value]) => (
                     <div
                       key={label}
@@ -9448,16 +9370,16 @@ export default function Chapters() {
             )}
 
             {batchStoryRepetitionRiskCard && (
-              <Card size="small" title="Repetition risks" style={{ marginBottom: 12 }}>
+              <Card size="small" title="重复风险" style={{ marginBottom: 12 }}>
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryRepetitionRiskCard.summary}
                 </div>
                 <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                   {[
-                    ['Opening risk', batchStoryRepetitionRiskCard.openingRisk],
-                    ['Pressure risk', batchStoryRepetitionRiskCard.pressureRisk],
-                    ['Pivot risk', batchStoryRepetitionRiskCard.pivotRisk],
-                    ['Closing risk', batchStoryRepetitionRiskCard.closingRisk],
+                    ['开篇风险', batchStoryRepetitionRiskCard.openingRisk],
+                    ['压力风险', batchStoryRepetitionRiskCard.pressureRisk],
+                    ['转折风险', batchStoryRepetitionRiskCard.pivotRisk],
+                    ['收束风险', batchStoryRepetitionRiskCard.closingRisk],
                   ].map(([label, value]) => (
                     <div
                       key={label}
@@ -9476,16 +9398,16 @@ export default function Chapters() {
             )}
 
             {batchStoryAcceptanceCard && (
-              <Card size="small" title="Acceptance checklist" style={{ marginBottom: 12 }}>
+              <Card size="small" title="验收清单" style={{ marginBottom: 12 }}>
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryAcceptanceCard.summary}
                 </div>
                 <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                   {[
-                    ['Mission check', batchStoryAcceptanceCard.missionCheck],
-                    ['Change check', batchStoryAcceptanceCard.changeCheck],
-                    ['Freshness check', batchStoryAcceptanceCard.freshnessCheck],
-                    ['Closing check', batchStoryAcceptanceCard.closingCheck],
+                    ['目标达成检查', batchStoryAcceptanceCard.missionCheck],
+                    ['变化检查', batchStoryAcceptanceCard.changeCheck],
+                    ['新鲜度检查', batchStoryAcceptanceCard.freshnessCheck],
+                    ['收束检查', batchStoryAcceptanceCard.closingCheck],
                   ].map(([label, value]) => (
                     <div
                       key={label}
@@ -9504,16 +9426,16 @@ export default function Chapters() {
             )}
 
             {batchStoryCharacterArcCard && (
-              <Card size="small" title="Character arc" style={{ marginBottom: 12 }}>
+              <Card size="small" title="人物弧光" style={{ marginBottom: 12 }}>
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryCharacterArcCard.summary}
                 </div>
                 <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                   {[
-                    ['External line', batchStoryCharacterArcCard.externalLine],
-                    ['Internal line', batchStoryCharacterArcCard.internalLine],
-                    ['Relationship line', batchStoryCharacterArcCard.relationshipLine],
-                    ['Arc landing', batchStoryCharacterArcCard.arcLanding],
+                    ['外在线', batchStoryCharacterArcCard.externalLine],
+                    ['内在线', batchStoryCharacterArcCard.internalLine],
+                    ['关系线', batchStoryCharacterArcCard.relationshipLine],
+                    ['弧光落点', batchStoryCharacterArcCard.arcLanding],
                   ].map(([label, value]) => (
                     <div
                       key={label}
@@ -9532,14 +9454,14 @@ export default function Chapters() {
             )}
 
             {batchVolumePacingPlan && (
-              <Card size="small" title="Volume pacing plan" style={{ marginBottom: 12 }}>
+              <Card size="small" title="篇幅节奏规划" style={{ marginBottom: 12 }}>
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchVolumePacingPlan.summary}
                 </div>
                 <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                   {batchVolumePacingPlan.segments.map((segment) => (
                     <div key={segment.stage + '-' + segment.startChapter}>
-                      <strong>{'Segment ' + segment.startChapter + '-' + segment.endChapter + ': ' + segment.label}</strong>
+                      <strong>{'第 ' + segment.startChapter + '-' + segment.endChapter + ' 章：' + segment.label}</strong>
                       <div style={{ color: 'var(--color-text-secondary)', marginTop: 2 }}>
                         {segment.mission}
                       </div>
@@ -9550,12 +9472,12 @@ export default function Chapters() {
             )}
 
             <Form.Item
-              label="Creative mode"
-              tooltip="Select a creative mode for batch creation."
+              label="创作模式"
+              tooltip="选择用于批量创作的模式"
               style={{ marginBottom: 12 }}
             >
               <Select
-                placeholder="Select a creative mode"
+                placeholder="请选择创作模式"
                 value={batchSelectedCreativeMode}
                 onChange={setBatchSelectedCreativeMode}
                 allowClear
@@ -9571,12 +9493,22 @@ export default function Chapters() {
             </Form.Item>
 
             <Form.Item
-              label="Story focus"
-              tooltip="Choose a focus for batch creation."
+
+              label="故事聚焦"
+
+              tooltip="选择批量创作的关注点与重心"
+
               style={{ marginBottom: 12 }}
+
             >
+
               <Select
-                placeholder="Select a story focus"
+
+                placeholder="请选择故事聚焦"
+
+
+
+
                 value={batchSelectedStoryFocus}
                 onChange={setBatchSelectedStoryFocus}
                 allowClear
@@ -9591,17 +9523,16 @@ export default function Chapters() {
               </Select>
             </Form.Item>
 
-            {/* 缂備焦顨忛崗娑氱箔娴ｇ儤鍋樼€光偓鐎ｎ剛鐛I濠碘槅鍨埀顒€纾埀?+ 闂佸憡鑹炬姝屻亹閹绢喖绀嗛柛鈩冾焽閳?*/}
             <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 0 : 16 }}>
             <Form.Item
-              label="AI model"
-              tooltip="Choose a model for batch generation."
+              label="AI 模型"
+              tooltip="选择用于批量生成的模型。"
               style={{ flex: 1, marginBottom: 12 }}
             >
               <Select
                 placeholder={batchSelectedModel
-                  ? `Selected: ${availableModels.find(m => m.value === batchSelectedModel)?.label || batchSelectedModel}`
-                  : 'Select a model'}
+                  ? `已选择：${availableModels.find(m => m.value === batchSelectedModel)?.label || batchSelectedModel}`
+                  : '请选择模型'}
                 value={batchSelectedModel}
                 onChange={setBatchSelectedModel}
                 allowClear
@@ -9620,11 +9551,11 @@ export default function Chapters() {
 
               <Form.Item
 
-                label="闂佸憡鑹炬姝屻亹閹绢喖绀嗛柛鈩冾焽閳?"
+                label="开启质量分析"
 
                 name="enableAnalysis"
 
-                tooltip="濠殿喗绻愮徊楣冨几閸愵亖鍋撻悷鐗堟拱闁搞劍宀稿畷銉︽償閳ヨ櫕娅冮梺鍛婅壘妤犳瓕銇愰幘顔肩闁糕剝顭囬埀顑跨矙閺佸秶浠﹂懖鈺冩喒闂傚倸鍟抽褔銆侀敐鍥╁崥闁绘ê鎼灐闂佹眹鍨婚崰鎰板垂?"
+                tooltip="开启后将对生成内容进行质量分析与建议"
 
                 style={{ marginBottom: 12 }}
 
@@ -9634,13 +9565,13 @@ export default function Chapters() {
 
                   <Radio value={true}>
 
-                    <span style={{ fontSize: 12, color: '#52c41a' }}>闂?闂佹眹鍨婚崰鎰板垂濮樻墎鍋撻悷鐗堟拱闁搞劍宀稿畷銉︽償閵堝懏顔囬梺鍛婃煟閸斿矂骞冨Δ鍛煑闁哄鐏濋悗濠氭煛</span>
+                    <span style={{ fontSize: 12, color: '#52c41a' }}>开启（生成后自动分析）</span>
 
                   </Radio>
 
                   <Radio value={false}>
 
-                    <span style={{ fontSize: 12, color: '#8c8c8c' }}>婵炲濮撮幊鎰板极閹捐绠ｉ柟閭﹀弾閸斺偓闂佸搫鍊稿ù鍕濞嗘垹鐭欑€广儱鎳忛崐鐢告煙闂堟侗鍎忓┑顔规櫊瀹曟岸宕卞Ο灏栧亾娴犲鏅</span>
+                    <span style={{ fontSize: 12, color: '#8c8c8c' }}>关闭（不做分析）</span>
 
                   </Radio>
 
@@ -9658,21 +9589,21 @@ export default function Chapters() {
 
             <Alert
 
-              message="濠电偞鎸撮弲鐘虹亪闂佸湱绮崝妤呭Φ?"
+              message="批量生成进行中说明"
 
               description={
 
                 <ul style={{ margin: '8px 0 0 0', paddingLeft: 20 }}>
 
-                  <li>闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭姊婚崶锝呬壕闁荤喐娲戝鎺旂博鐎电硶鍋撶憴鍕暡婵＄偛鍊垮缁樻綇閸撗咁槷闂佸憡鐟崹顖涚閹烘绀嗛柛銉ｅ妼鎼村﹪鏌涢幒鎾寸凡闁告瑧鍋撶粋鎺楀冀椤撴壕鍋撴径鎰棃</li>
+                  <li>系统会按章节顺序依次生成，并在完成后自动更新状态。</li>
 
-                  <li>闂佺绻戞繛濠偽涚€涙ǜ浜滈柣銏犳啞濡椼劑鏌涘顒勫弰闁革絾鎮傚顒勬偋閸績鍙洪悗娈垮枓閸嬫捇鏌ㄥ☉妯侯殭缂佸彉鍗抽幊娑㈩敂閸曨倣妤呮煙椤撴粌鐏╂い锕€寮剁粋鎺旀嫚閹绘帩娼抽柡澶嗘櫆缁嬫垹鈧</li>
+                  <li>生成过程中可以关闭此窗口，任务会继续在后台执行。</li>
 
-                  <li>闂佸憡鐟崹顖涚閹烘鈷曢煫鍥ㄦ⒐椤ρ囨煟閹邦喗鍤€闁?闂佸憡鐟﹂悧妤冪矓闁垮顩烽悹鍥ㄥ絻椤?闂佸湱顭堥ˇ鐢稿箰閾忣偆鈻旀い鎾跺櫏閸撻箖鏌ｉ姀銏犳瀾闁</li>
+                  <li>如需停止任务，可点击下方“取消生成”。</li>
 
                   {batchProgress?.estimated_time_minutes && batchProgress.completed === 0 && (
 
-                    <li>闂佸啿鐡ㄩ崬鑽ょ箔?婵☆偅婢樼€氼垶顢橀幖浣瑰殌婵°倓鐒﹂ˇ褔鏌ㄥ☉娆愮殤閻?{batchProgress.estimated_time_minutes} 闂佸憡甯掑Λ婵嬪箰</li>
+                    <li>预计耗时约 {batchProgress.estimated_time_minutes} 分钟。</li>
 
                   )}
 
@@ -9680,17 +9611,7 @@ export default function Chapters() {
 
                     <li>
 
-                      濡絽鍟幆?濡ょ姷鍋涢崯鍨焽鎼淬劌绀堢憸搴ㄥ磿韫囨洘瀚氶柛鏇ㄥ亜閻庡鏌ㄥ☉娆愮殤闁诡噯缍佸畷?{batchProgress.quality_metrics_summary.avg_overall_score}
-
-                      闂佹寧绋戦悧鍡涘疮鐠恒劎鐜诲〒姘ｅ亾闁?{batchProgress.quality_metrics_summary.avg_conflict_chain_hit_rate}% /
-
-                      闁荤喐鐟ョ€氼剟宕归鐐村闁芥ê顦伴崟?{batchProgress.quality_metrics_summary.avg_rule_grounding_hit_rate}% /
-
-                      閻庢鍠掗崑鎾绘煕閿旇姤銇濋柟鍓插墰閳?{batchProgress.quality_metrics_summary.avg_opening_hook_rate ?? 0}% /
-
-                      闂佺粯鐗滈弲顐﹀磻閿濆鐓?{batchProgress.quality_metrics_summary.avg_payoff_chain_rate ?? 0}% /
-
-                      缂備焦姊绘慨鎾偄椤掑嫭鐓㈤柍杞拌兌閹?{batchProgress.quality_metrics_summary.avg_cliffhanger_rate ?? 0}%闂?
+                      当前平均质量分 {batchProgress.quality_metrics_summary.avg_overall_score}，冲突链 / 规则锚定 / 开篇钩子 / 回收链 / 悬念收尾分别为 {batchProgress.quality_metrics_summary.avg_conflict_chain_hit_rate}% / {batchProgress.quality_metrics_summary.avg_rule_grounding_hit_rate}% / {batchProgress.quality_metrics_summary.avg_opening_hook_rate ?? 0}% / {batchProgress.quality_metrics_summary.avg_payoff_chain_rate ?? 0}% / {batchProgress.quality_metrics_summary.avg_cliffhanger_rate ?? 0}%。
 
                     </li>
 
@@ -9712,7 +9633,7 @@ export default function Chapters() {
 
             {batchProgress?.quality_profile_summary && getQualityProfileDisplayItems(batchProgress.quality_profile_summary).length > 0 && (
 
-              <Card size="small" title="Quality profile summary" style={{ marginBottom: 16 }}>
+              <Card size="small" title="质量画像摘要" style={{ marginBottom: 16 }}>
 
                 <Alert
 
@@ -9722,9 +9643,9 @@ export default function Chapters() {
 
                   style={{ marginBottom: 12 }}
 
-                  message="Quality profile summary"
+                  message="质量画像摘要"
 
-                  description="Review the guidance below."
+                  description="请参考以下建议。"
 
                 />
 
@@ -9749,7 +9670,7 @@ export default function Chapters() {
 
 
             {batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined && (
-              <Card size="small" title="Quality metrics summary" style={{ marginBottom: 16 }}>
+              <Card size="small" title="质量指标摘要" style={{ marginBottom: 16 }}>
                 {batchAfterScorecard && (
                   <Alert
                     type={batchAfterScorecard.verdictColor as 'success' | 'info' | 'warning' | 'error'}
@@ -9806,13 +9727,13 @@ export default function Chapters() {
 
                   modal.confirm({
 
-                    title: '缂佺虎鍙庨崰娑㈩敇婵犳艾鐭楅柡宥冨妿鍟?',
+                    title: '确认取消批量生成？',
 
-                    content: '缂佺虎鍙庨崰鏍偩閸撗勫暫濞达絿顭堢徊鎸庣箾閹存繄澧涘瑙勫浮閺屽矁绠涢弴鐔告闂佺懓鐡ㄩ崝鏇㈠箖瑜旈弫宥夋偄瀹勬澘娈ラ梺姹囧灮閸犳劙宕瑰鑸靛剭闁告洦鍘捐ぐ鍧楁煠閸濆嫬鈧悂鎯冮姀锛勨攳婵犻潧鐗婂▓宀勬煏?',
+                    content: '取消后当前批量生成任务将停止，已生成的章节会保留。确定要取消吗？',
 
-                    okText: '缂佺虎鍙庨崰鏍偩妤ｅ啫鐭楅柡宥冨妿鍟?',
+                    okText: '确认取消',
 
-                    cancelText: '缂傚倷缍€閸涱垱鏆伴梺姹囧灮閸犳劙宕?',
+                    cancelText: '继续生成',
 
                     okButtonProps: { danger: true },
 
@@ -9824,7 +9745,7 @@ export default function Chapters() {
 
               >
 
-                闂佸憡鐟﹂悧妤冪矓闁垮顩烽悹鍥ㄥ絻椤?
+                取消批量生成
 
               </Button>
 
@@ -9838,7 +9759,6 @@ export default function Chapters() {
 
 
 
-      {/* 闂佸憡顨嗗ú婊堟偟閻戣姤鍤嶉柛灞剧矋閺呮悂鏌熺€涙ê濮岀紒缁樕戦幆鏃堟晜閼恒儮鏋栫紓浣插亾?*/}
 
       {isGenerating ? (
 
@@ -9862,7 +9782,6 @@ export default function Chapters() {
 
 
 
-      {/* 闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭寮堕埡鍌溾槈閻庤濞婂浼村礈瑜嬫禒?- 婵炶揪缍€濞夋洟寮妶鍥╃＜闁绘柨澧庨閬嶆煟閵娿儱顏紒缁樕戦幆鏃堟晜閸撗呯厑婵?*/}
 
       {batchGenerating ? (
 
@@ -9878,21 +9797,21 @@ export default function Chapters() {
 
               batchProgress?.current_chapter_number
 
-                ? `濠殿喗绻愮徊钘夛耿椤忓牊鍋ㄩ柣鏃傤焾閻忓洨绱?${batchProgress.current_chapter_number} 缂?.. (${batchProgress.completed}/${batchProgress.total})${
+                ? `正在生成第 ${batchProgress.current_chapter_number} 章... (${batchProgress.completed}/${batchProgress.total})${
 
                     batchProgress.latest_quality_metrics?.overall_score !== undefined
 
-                      ? ` 闂佹寧绻冪划蹇涙儊鎼淬劌绀?${batchProgress.latest_quality_metrics.overall_score}`
+                      ? ` 质量分：${batchProgress.latest_quality_metrics.overall_score}`
 
                       : ''
 
                   }`
 
-                : `闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭寮堕埡鍌滎灱妞ゃ垺鍨剁粙?.. (${batchProgress?.completed || 0}/${batchProgress?.total || 0})${
+                : `批量生成进行中... (${batchProgress?.completed || 0}/${batchProgress?.total || 0})${
 
                     batchProgress?.latest_quality_metrics?.overall_score !== undefined
 
-                      ? ` 闂佹寧绻冪划蹇涙儊鎼淬劌绀?${batchProgress.latest_quality_metrics.overall_score}`
+                      ? ` 质量分：${batchProgress.latest_quality_metrics.overall_score}`
 
                       : ''
 
@@ -9900,19 +9819,19 @@ export default function Chapters() {
 
             }
 
-            title="闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洨绱掗弮鍌毿┑?"
+            title="批量生成进度"
 
             onCancel={() => {
 
               modal.confirm({
 
-                title: '缂佺虎鍙庨崰娑㈩敇婵犳艾鐭楅柡宥冨妿鍟?',
+                title: '确认取消批量生成？',
 
-                content: '缂佺虎鍙庨崰鏍偩閸撗勫暫濞达絿顭堢徊鎸庣箾閹存繄澧涘瑙勫浮閺屽矁绠涢弴鐔告闂佺懓鐡ㄩ崝鏇㈠箖瑜旈弫宥夋偄瀹勬澘娈ラ梺姹囧灮閸犳劙宕瑰鑸靛剭闁告洦鍘捐ぐ鍧楁煠閸濆嫬鈧悂鎯冮姀锛勨攳婵犻潧鐗婂▓宀勬煏?',
+                content: '取消后当前批量生成任务将停止，已生成的章节会保留。确定要取消吗？',
 
-                okText: '缂佺虎鍙庨崰鏍偩妤ｅ啫鐭楅柡宥冨妿鍟?',
+                okText: '确认取消',
 
-                cancelText: '缂傚倷缍€閸涱垱鏆伴梺姹囧灮閸犳劙宕?',
+                cancelText: '继续生成',
 
                 okButtonProps: { danger: true },
 
@@ -9924,7 +9843,7 @@ export default function Chapters() {
 
             }}
 
-            cancelButtonText="闂佸憡鐟﹂悧妤冪矓闁垮顩烽悹鍥ㄥ絻椤?"
+            cancelButtonText="取消生成"
 
             blocking={false}
 
@@ -9942,7 +9861,7 @@ export default function Chapters() {
 
         type="primary"
 
-        tooltip="缂備焦姊绘慨鐐繆椤撱垺鍎庢い鏃囧亹缁?"
+        tooltip="打开章节目录"
 
         onClick={() => setIsIndexPanelVisible(true)}
 
@@ -9966,7 +9885,6 @@ export default function Chapters() {
 
 
 
-      {/* 缂備焦姊绘慨鐐繆椤撱垺鈷撻柛娑㈠亰閸ゃ垽鏌?*/}
 
       {readingChapter && (
 
@@ -9992,7 +9910,6 @@ export default function Chapters() {
 
 
 
-      {/* 闁诲繒鍋愰崑鎾绘⒑椤斿搫濮傞柛锝嗘倐瀹曟ê鈻庤箛姘⒕缂?*/}
 
       {editingId && (
 
@@ -10020,7 +9937,6 @@ export default function Chapters() {
 
 
 
-      {/* 闁荤喐鐟ョ€氼剟宕瑰┑鍫㈢＝闁哄稁鍓涚敮鍡涙煕?*/}
 
       {editingPlanChapter && currentProject && (() => {
 

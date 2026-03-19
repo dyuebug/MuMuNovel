@@ -388,13 +388,13 @@ export default function Characters() {
 
       message.success('后台角色生成任务已启动，可继续进行其他操作');
       currentTaskIdRef.current = task.task_id;
-      startTaskPolling(task.task_id, 'AI生成角色成功');
+      startTaskPolling(task.task_id, '智能生成角色成功');
     } catch (error: unknown) {
       stopTaskPolling();
       currentTaskIdRef.current = null;
       setIsCancellingTask(false);
       setIsGenerating(false);
-      const errorMessage = error instanceof Error ? error.message : 'AI生成失败';
+      const errorMessage = error instanceof Error ? error.message : '智能生成失败';
       message.error(errorMessage);
     }
   };
@@ -437,13 +437,13 @@ export default function Characters() {
 
       message.success('后台组织生成任务已启动，可继续进行其他操作');
       currentTaskIdRef.current = task.task_id;
-      startTaskPolling(task.task_id, 'AI生成组织成功');
+      startTaskPolling(task.task_id, '智能生成组织成功');
     } catch (error: unknown) {
       stopTaskPolling();
       currentTaskIdRef.current = null;
       setIsCancellingTask(false);
       setIsGenerating(false);
-      const errorMessage = error instanceof Error ? error.message : 'AI生成失败';
+      const errorMessage = error instanceof Error ? error.message : '智能生成失败';
       message.error(errorMessage);
     }
   };
@@ -822,7 +822,7 @@ export default function Characters() {
 
   const showGenerateModal = () => {
     modal.confirm({
-      title: 'AI生成角色',
+      title: '智能生成角色',
       width: 600,
       centered: true,
       content: (
@@ -831,7 +831,7 @@ export default function Characters() {
             label="角色名称"
             name="name"
           >
-            <Input placeholder="如：张三、李四（可选，AI会自动生成）" />
+            <Input placeholder="如：张三、李四（可选，系统会自动生成）" />
           </Form.Item>
           <Form.Item
             label="角色定位"
@@ -862,7 +862,7 @@ export default function Characters() {
 
   const showGenerateOrgModal = () => {
     modal.confirm({
-      title: 'AI生成组织',
+      title: '智能生成组织',
       width: 600,
       centered: true,
       content: (
@@ -871,13 +871,13 @@ export default function Characters() {
             label="组织名称"
             name="name"
           >
-            <Input placeholder="如：天剑门、黑龙会（可选，AI会自动生成）" />
+            <Input placeholder="如：天剑门、黑龙会（可选，系统会自动生成）" />
           </Form.Item>
           <Form.Item
             label="组织类型"
             name="organization_type"
           >
-            <Input placeholder="如：门派、帮派、公司、学院（可选，AI会根据世界观生成）" />
+            <Input placeholder="如：门派、帮派、公司、学院（可选，系统会根据世界观生成）" />
           </Form.Item>
           <Form.Item label="背景设定" name="background">
             <TextArea rows={3} placeholder="简要描述组织的背景和环境..." />
@@ -1116,7 +1116,7 @@ export default function Characters() {
             loading={isGenerating}
             size={isMobile ? 'small' : 'middle'}
           >
-            AI生成角色
+            智能生成角色
           </Button>
           <Button
             type="dashed"
@@ -1125,7 +1125,7 @@ export default function Characters() {
             loading={isGenerating}
             size={isMobile ? 'small' : 'middle'}
           >
-            AI生成组织
+            智能生成组织
           </Button>
           <Button
             icon={<ImportOutlined />}

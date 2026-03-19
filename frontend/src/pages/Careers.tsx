@@ -100,7 +100,7 @@ export default function Careers() {
                     stopAiTaskPolling();
                     aiTaskIdRef.current = null;
                     setAiGenerating(false);
-                    message.success('AI新职业生成完成！');
+                    message.success('智能生成新职业完成！');
                     invalidateProjectCareers(projectId);
                     void fetchCareers();
                     return;
@@ -293,7 +293,7 @@ export default function Careers() {
                     <TrophyOutlined />
                     {career.name}
                     <Tag color={career.source === 'ai' ? 'blue' : 'default'}>
-                        {career.source === 'ai' ? 'AI生成' : '手动创建'}
+                        {career.source === 'ai' ? '智能生成' : '手动创建'}
                     </Tag>
                     {career.category && <Tag>{career.category}</Tag>}
                 </Space>
@@ -387,7 +387,7 @@ export default function Careers() {
                             }}
                             loading={aiGenerating}
                         >
-                            AI生成新职业
+                            智能生成新职业
                         </Button>
                         <Button
                             type="primary"
@@ -477,14 +477,14 @@ export default function Careers() {
 
             {/* AI生成对话框 */}
             <Modal
-                title="AI生成新职业（增量式）"
+                title="智能生成新职业（增量式）"
                 open={isAIModalOpen}
                 onCancel={() => setIsAIModalOpen(false)}
                 footer={null}
             >
                 <Form form={aiForm} layout="vertical" onFinish={handleAIGenerate}>
                     <Paragraph type="secondary">
-                        AI将分析当前世界观和已有职业，智能生成新的补充职业。
+                        系统将分析当前世界观和已有职业，智能生成新的补充职业。
                         <br />
                         💡 可以多次生成，逐步完善职业体系，不会替换已有职业。
                     </Paragraph>
@@ -511,7 +511,7 @@ export default function Careers() {
                 visible={aiGenerating}
                 progress={aiProgress}
                 message={aiMessage}
-                title="AI生成新职业中..."
+                title="正在生成新职业..."
                 blocking={false}
                 onCancel={handleCancelAIGenerate}
             />

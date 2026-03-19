@@ -47,7 +47,7 @@ export const PartialRegenerateToolbar: React.FC<PartialRegenerateToolbarProps> =
       }}
     >
       <Tooltip
-        title={`AI重写选中内容: "${displayText}"`}
+        title={`智能重写选中内容: "${displayText}"`}
         placement="top"
       >
         <Button
@@ -66,7 +66,7 @@ export const PartialRegenerateToolbar: React.FC<PartialRegenerateToolbarProps> =
             boxShadow: token.boxShadowSecondary,
           }}
         >
-          AI重写
+          智能重写
         </Button>
       </Tooltip>
       <span style={{ 

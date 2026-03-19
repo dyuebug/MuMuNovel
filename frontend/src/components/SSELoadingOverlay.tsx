@@ -85,7 +85,7 @@ export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
             color: 'var(--color-text-primary)',
           }}
         >
-          {blocking ? 'AI 生成中...' : 'AI 后台处理中...'}
+          {blocking ? '正在生成中...' : '后台处理中...'}
         </div>
       </div>
 
@@ -204,7 +204,7 @@ export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
                         textOverflow: 'ellipsis',
                       }}
                     >
-                      AI 后台处理中
+                      后台处理中
                     </div>
                     <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-primary)' }}>
                       {progress}%

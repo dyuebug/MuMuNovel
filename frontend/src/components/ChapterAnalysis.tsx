@@ -21,6 +21,58 @@ import ChapterContentComparison from './ChapterContentComparison';
 // 判断是否为移动设备
 const isMobileDevice = () => window.innerWidth < 768;
 
+const ANALYSIS_PLOT_STAGE_LABELS: Record<string, string> = {
+  development: '发展阶段',
+  climax: '高潮阶段',
+  ending: '结局阶段',
+};
+
+const ANALYSIS_MEMORY_TYPE_LABELS: Record<string, string> = {
+  chapter_summary: '章节摘要',
+  hook: '钩子',
+  foreshadow: '伏笔',
+  plot_point: '情节点',
+  character_event: '角色事件',
+};
+
+const ANALYSIS_INLINE_TERM_LABELS: Array<[string, string]> = [
+  ['chapter_summary', '章节摘要'],
+  ['character_event', '角色事件'],
+  ['plot_point', '情节点'],
+  ['foreshadow', '伏笔'],
+  ['hook', '钩子'],
+  ['revelation', '揭示'],
+  ['resolution', '解决'],
+  ['transition', '过渡'],
+  ['conflict', '冲突'],
+  ['planted', '已埋下'],
+  ['resolved', '已回收'],
+];
+
+const localizeAnalysisPlotStage = (value?: string | null): string => {
+  if (!value) {
+    return '';
+  }
+  return ANALYSIS_PLOT_STAGE_LABELS[value] || value;
+};
+
+const localizeAnalysisMemoryType = (value?: string | null): string => {
+  if (!value) {
+    return '';
+  }
+  return ANALYSIS_MEMORY_TYPE_LABELS[value] || value;
+};
+
+const localizeAnalysisMemoryText = (value?: string | null): string => {
+  if (!value) {
+    return '';
+  }
+  return ANALYSIS_INLINE_TERM_LABELS.reduce(
+    (result, [source, label]) => result.replaceAll(source, label),
+    value,
+  );
+};
+
 interface ChapterAnalysisProps {
   chapterId: string;
   visible: boolean;
@@ -213,7 +265,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
             color: task.status === 'failed' ? 'var(--color-error)' : 'var(--color-text-primary)'
           }}>
             {task.status === 'pending' && '等待分析...'}
-            {task.status === 'running' && 'AI正在分析中...'}
+            {task.status === 'running' && '正在分析中...'}
             {task.status === 'failed' && '分析失败'}
           </div>
         </div>
@@ -457,7 +509,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                     message="发现改进建议"
                     description={
                       <div>
-                        <p style={{ marginBottom: 12 }}>AI已分析出 {analysis_data.suggestions.length} 条改进建议，您可以根据这些建议重新生成章节内容。</p>
+                        <p style={{ marginBottom: 12 }}>已分析出 {analysis_data.suggestions.length} 条改进建议，您可以根据这些建议重新生成章节内容。</p>
                         <Button
                           type="primary"
                           icon={<EditOutlined />}
@@ -753,7 +805,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                         </Col>
                       </Row>
                       <Card type="inner" title="剧情阶段" size="small">
-                        <p><strong>阶段：</strong>{analysis_data.plot_stage}</p>
+                        <p><strong>阶段：</strong>{localizeAnalysisPlotStage(analysis_data.plot_stage)}</p>
                         <p><strong>冲突等级：</strong>{analysis_data.conflict_level} / 10</p>
                         {analysis_data.conflict_types && analysis_data.conflict_types.length > 0 && (
                           <div style={{ marginTop: 8 }}>
@@ -831,11 +883,11 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                           <List.Item.Meta
                             title={
                               <div>
-                                <Tag color="blue">{memory.type}</Tag>
+                                <Tag color="blue">{localizeAnalysisMemoryType(memory.type)}</Tag>
                                 <Tag color="orange">重要性: {memory.importance.toFixed(1)}</Tag>
                                 {memory.is_foreshadow === 1 && <Tag color="green">已埋下伏笔</Tag>}
                                 {memory.is_foreshadow === 2 && <Tag color="purple">已回收伏笔</Tag>}
-                                <span style={{ marginLeft: 8 }}>{memory.title}</span>
+                                <span style={{ marginLeft: 8 }}>{localizeAnalysisMemoryText(memory.title)}</span>
                               </div>
                             }
                             description={
@@ -843,7 +895,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                                 <p>{memory.content}</p>
                                 <div>
                                   {memory.tags.map((tag, idx) => (
-                                    <Tag key={idx} style={{ margin: 2 }}>{tag}</Tag>
+                                    <Tag key={idx} style={{ margin: 2 }}>{localizeAnalysisMemoryText(tag)}</Tag>
                                   ))}
                                 </div>
                               </div>

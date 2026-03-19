@@ -180,7 +180,7 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
       title={
         <Space>
           <EditOutlined style={{ color: token.colorPrimary }} />
-          <span>AI局部重写</span>
+          <span>局部智能重写</span>
         </Space>
       }
       open={visible}

@@ -475,7 +475,7 @@ const ChapterAnalysis: React.FC = () => {
                     {!hasAnnotations && (
                       <Alert
                         message="暂无分析数据"
-                        description="该章节尚未进行AI分析，无法显示记忆标注。"
+                        description="该章节尚未进行章节分析，无法显示记忆标注。"
                         type="info"
                         showIcon
                         style={{ marginBottom: 24 }}

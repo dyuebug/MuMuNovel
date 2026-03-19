@@ -276,7 +276,7 @@ export default function Relationships() {
       dataIndex: 'source',
       key: 'source',
       render: (source: string) => (
-        <Tag>{source === 'ai' ? 'AI生成' : '手动创建'}</Tag>
+        <Tag>{source === 'ai' ? '智能生成' : '手动创建'}</Tag>
       ),
       width: 100,
     },

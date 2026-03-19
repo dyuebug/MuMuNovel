@@ -799,7 +799,7 @@ export default function Foreshadows() {
             </Col>
           </Row>
           
-          <Divider style={{ margin: '12px 0' }}>AI辅助设置</Divider>
+          <Divider style={{ margin: '12px 0' }}>智能辅助设置</Divider>
           
           <Row gutter={16}>
             <Col span={8}>
