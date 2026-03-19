@@ -532,7 +532,7 @@ export default function BackgroundTaskCenter() {
       }
 
       const backgroundRequest = backgroundTasksApiSupported
-        ? backgroundTaskApi.listTasks({ active_only: true, limit: 200 })
+        ? backgroundTaskApi.listTasks({ active_only: true, limit: 100 })
           .then((response) => ({ ok: true, items: response.items || [] }))
           .catch((error: any) => {
             if (error?.response?.status === 404) {
@@ -543,7 +543,7 @@ export default function BackgroundTaskCenter() {
         : Promise.resolve({ ok: false, items: [] as Array<{ task_id: string }> });
 
       const chapterRequest = chapterActiveTasksApiSupported
-        ? chapterBatchTaskApi.listActiveTasks(200)
+        ? chapterBatchTaskApi.listActiveTasks(100)
           .then((response) => ({ ok: true, items: response.items || [] }))
           .catch((error: any) => {
             if (error?.response?.status === 404) {
