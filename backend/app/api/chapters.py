@@ -58,6 +58,7 @@ from app.services.prompt_service import (
 )
 from app.services.plot_analyzer import PlotAnalyzer
 from app.services.memory_service import memory_service
+from app.services.chapter_web_research_service import chapter_web_research_service
 from app.services.foreshadow_service import foreshadow_service
 from app.services.chapter_regenerator import ChapterRegenerator
 from app.services.mcp_tools_loader import mcp_tools_loader
@@ -3753,6 +3754,8 @@ async def generate_chapter_content_background(
         story_focus=story_focus,
         plot_stage=plot_stage,
         story_creation_brief=getattr(generate_request, 'story_creation_brief', None),
+        enable_web_research=getattr(generate_request, 'enable_web_research', None),
+        web_research_query=getattr(generate_request, 'web_research_query', None),
         story_repair_summary=getattr(generate_request, 'story_repair_summary', None),
         story_repair_targets=getattr(generate_request, 'story_repair_targets', None),
         story_preserve_strengths=getattr(generate_request, 'story_preserve_strengths', None),
@@ -4527,6 +4530,8 @@ async def batch_generate_chapters_in_order(
         story_focus=batch_request.story_focus,
         plot_stage=batch_request.plot_stage,
         story_creation_brief=batch_request.story_creation_brief,
+        enable_web_research=batch_request.enable_web_research,
+        web_research_query=batch_request.web_research_query,
         story_repair_summary=batch_request.story_repair_summary,
         story_repair_targets=batch_request.story_repair_targets,
         story_preserve_strengths=batch_request.story_preserve_strengths,
@@ -4935,6 +4940,8 @@ async def execute_batch_generation_in_order(
     story_focus: Optional[str] = None,
     plot_stage: Optional[str] = None,
     story_creation_brief: Optional[str] = None,
+    enable_web_research: Optional[bool] = None,
+    web_research_query: Optional[str] = None,
     story_repair_summary: Optional[str] = None,
     story_repair_targets: Optional[list[str]] = None,
     story_preserve_strengths: Optional[list[str]] = None,
@@ -5091,6 +5098,8 @@ async def execute_batch_generation_in_order(
                         story_focus=story_focus,
                         plot_stage=plot_stage,
                         story_creation_brief=story_creation_brief,
+                        enable_web_research=enable_web_research,
+                        web_research_query=web_research_query,
                         story_repair_summary=story_repair_summary,
                         story_repair_targets=story_repair_targets,
                         story_preserve_strengths=story_preserve_strengths,
@@ -5343,6 +5352,8 @@ async def generate_single_chapter_for_batch(
     story_focus: Optional[str] = None,
     plot_stage: Optional[str] = None,
     story_creation_brief: Optional[str] = None,
+    enable_web_research: Optional[bool] = None,
+    web_research_query: Optional[str] = None,
     story_repair_summary: Optional[str] = None,
     story_repair_targets: Optional[list[str]] = None,
     story_preserve_strengths: Optional[list[str]] = None,
@@ -5381,7 +5392,51 @@ async def generate_single_chapter_for_batch(
             .where(Outline.order_index == chapter.chapter_number)
         )
     outline = outline_result.scalar_one_or_none()
-    
+
+    research_assets: List[Dict[str, str]] = []
+    research_query = ""
+    if chapter_web_research_service.is_enabled(enable_web_research):
+        if stream_task_id:
+            await publish_task_stream_event(stream_task_id, {
+                "type": "progress",
+                "message": f"第{chapter.chapter_number}章检索外部资料中",
+                "progress": 18,
+                "status": "running",
+                "phase": "researching",
+            })
+        research_bundle = await chapter_web_research_service.collect_for_chapter(
+            project=project,
+            chapter=chapter,
+            outline=outline,
+            story_creation_brief=story_creation_brief,
+            enable_web_research=enable_web_research,
+            web_research_query=web_research_query,
+        )
+        research_assets = list(research_bundle.get("assets") or [])
+        research_query = str(research_bundle.get("query") or "")
+        if research_assets:
+            async with write_lock:
+                saved_memory_ids = await chapter_web_research_service.replace_chapter_memories(
+                    db_session=db_session,
+                    user_id=user_id,
+                    project=project,
+                    chapter=chapter,
+                    query=research_query,
+                    archive_path=str(research_bundle.get("archive_path") or ""),
+                    assets=research_assets,
+                )
+            logger.info(
+                f"🌐 批量生成 - 章节{chapter.chapter_number}已接入{len(research_assets)}条外部资料，保存记忆{len(saved_memory_ids)}条"
+            )
+            if stream_task_id:
+                await publish_task_stream_event(stream_task_id, {
+                    "type": "progress",
+                    "message": f"第{chapter.chapter_number}章已接入{len(research_assets)}条外部资料",
+                    "progress": 22,
+                    "status": "running",
+                    "phase": "researching",
+                })
+
     # 获取写作风格与统一质量画像
     quality_profile = await _resolve_chapter_quality_profile(
         db_session=db_session,
@@ -5389,6 +5444,8 @@ async def generate_single_chapter_for_batch(
         project=project,
         style_id=style_id,
         enable_mcp=True,
+        external_assets=research_assets,
+        reference_assets=research_assets,
         prefer_project_default_style=not bool(style_id),
         log_prefix="批量单章生成",
     )

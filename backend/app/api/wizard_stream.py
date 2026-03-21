@@ -2,7 +2,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import Dict, Any, AsyncGenerator
+from typing import Dict, Any, AsyncGenerator, Optional
+from datetime import datetime
 import json
 import re
 
@@ -18,6 +19,7 @@ from app.models.project_default_style import ProjectDefaultStyle
 from app.services.ai_service import AIService
 from app.services.prompt_service import prompt_service, PromptService
 from app.services.plot_expansion_service import PlotExpansionService
+from app.services.chapter_web_research_service import chapter_web_research_service
 from app.logger import get_logger
 from app.utils.sse_response import SSEResponse, create_sse_response, WizardProgressTracker
 from app.api.settings import get_user_ai_service
@@ -142,6 +144,49 @@ def _build_outline_runtime_system_prompt(project: Project, chapter_count: int) -
 """
 
 
+def _normalize_research_text(value: Any, limit: int = 180) -> str:
+    text = " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split()).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _compose_research_seed(*values: Any, limit: int = 320) -> str:
+    cleaned = [_normalize_research_text(value, 160) for value in values if _normalize_research_text(value, 160)]
+    seed = " | ".join(cleaned[:5])
+    return seed[:limit]
+
+
+async def _save_project_research_assets(
+    *,
+    db: AsyncSession,
+    user_id: Optional[str],
+    project_id: str,
+    query: str,
+    archive_path: str,
+    assets: list[Dict[str, str]],
+    memory_type: str,
+    title_prefix: str,
+) -> None:
+    if not user_id or not assets:
+        return
+    try:
+        await chapter_web_research_service.replace_memories(
+            db_session=db,
+            user_id=user_id,
+            project_id=project_id,
+            query=query,
+            archive_path=archive_path,
+            assets=assets,
+            memory_type=memory_type,
+            title_prefix=title_prefix,
+            story_timeline=0,
+            chapter_id=None,
+        )
+    except Exception as error:
+        logger.warning(f"⚠️ 保存项目级研究资料失败: {error}")
+
+
 async def world_building_generator(
     data: Dict[str, Any],
     db: AsyncSession,
@@ -170,6 +215,8 @@ async def world_building_generator(
         provider = data.get("provider")
         model = data.get("model")
         enable_mcp = data.get("enable_mcp", True)  # 默认启用MCP
+        enable_web_research = data.get("enable_web_research")
+        web_research_query = data.get("web_research_query")
         user_id = data.get("user_id")  # 从中间件注入
         
         if not title or not description or not theme or not genre:
@@ -178,13 +225,29 @@ async def world_building_generator(
         
         # 获取基础提示词（支持自定义）
         yield await tracker.preparing("准备AI提示词...")
+        world_research_bundle = await chapter_web_research_service.collect_assets(
+            user_id=user_id,
+            db_session=db,
+            exa_query=_compose_research_seed(title, theme, genre, description),
+            grok_query=(
+                f"请为小说世界观搭建做实时网络研究，提炼时代、地点、社会秩序、规则和氛围素材，并给出来源。"
+                f"背景：{_compose_research_seed(title, theme, genre, description, limit=260)}"
+            ) if _compose_research_seed(title, theme, genre, description, limit=260) else "",
+            enable_web_research=enable_web_research,
+            archive_scope=f"wizard_{user_id or 'anonymous'}",
+            archive_id=f"world_building_{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            metadata={"title": title, "theme": theme, "genre": genre},
+        )
+        world_research_assets = list(world_research_bundle.get("assets") or [])
         template = await PromptService.get_template("WORLD_BUILDING", user_id, db)
         base_prompt = PromptService.format_prompt(
             template,
             title=title,
             theme=theme,
             genre=genre or "通用类型",
-            description=description or "暂无简介"
+            description=description or "暂无简介",
+            external_assets=world_research_assets,
+            reference_assets=world_research_assets,
         )
         
         # 设置用户信息以启用MCP
@@ -364,6 +427,17 @@ async def world_building_generator(
         # wizard_step: 0=未开始, 1=世界观已完成, 2=职业体系已完成, 3=角色已完成, 4=大纲已完成
         project.wizard_step = 1
         await db.commit()
+
+        await _save_project_research_assets(
+            db=db,
+            user_id=user_id,
+            project_id=project.id,
+            query=str(world_research_bundle.get("query") or ""),
+            archive_path=str(world_research_bundle.get("archive_path") or ""),
+            assets=world_research_assets,
+            memory_type=chapter_web_research_service.WORLD_MEMORY_TYPE,
+            title_prefix="世界观外部资料",
+        )
         
         # ===== 世界观生成完成 =====
         db_committed = True
@@ -376,7 +450,9 @@ async def world_building_generator(
             "time_period": world_data.get("time_period"),
             "location": world_data.get("location"),
             "atmosphere": world_data.get("atmosphere"),
-            "rules": world_data.get("rules")
+            "rules": world_data.get("rules"),
+            "research_query": str(world_research_bundle.get("query") or ""),
+            "research_assets": world_research_assets,
         })
         
         # 发送世界观完成信号
@@ -434,6 +510,8 @@ async def career_system_generator(
         project_id = data.get("project_id")
         provider = data.get("provider")
         model = data.get("model")
+        enable_web_research = data.get("enable_web_research")
+        web_research_query = data.get("web_research_query")
         user_id = data.get("user_id")
         
         if not project_id:
@@ -465,6 +543,28 @@ async def career_system_generator(
         
         # 获取职业生成提示词模板（支持用户自定义）
         yield await tracker.preparing("准备AI提示词...")
+        careers_research_seed = web_research_query or _compose_research_seed(
+            project.title,
+            project.theme,
+            project.genre,
+            world_data.get("time_period"),
+            world_data.get("location"),
+            world_data.get("rules"),
+        )
+        careers_research_bundle = await chapter_web_research_service.collect_assets(
+            user_id=user_id,
+            db_session=db,
+            exa_query=careers_research_seed,
+            grok_query=(
+                "请为小说职业体系设计做实时网络研究，提炼职业分层、晋升逻辑、能力体系、社会分工与可借鉴设定，并给出来源。"
+                f"背景：{_compose_research_seed(project.title, project.theme, project.genre, world_data.get('time_period'), world_data.get('location'), world_data.get('rules'), limit=260)}"
+            ) if _compose_research_seed(project.title, project.theme, project.genre, world_data.get('time_period'), world_data.get('location'), world_data.get('rules'), limit=260) else "",
+            enable_web_research=enable_web_research,
+            archive_scope=project.id,
+            archive_id="wizard_careers",
+            metadata={"project_id": project.id, "context": "careers"},
+        )
+        careers_research_assets = list(careers_research_bundle.get("assets") or [])
         template = await PromptService.get_template("CAREER_SYSTEM_GENERATION", user_id, db)
         career_prompt = PromptService.format_prompt(
             template,
@@ -475,7 +575,9 @@ async def career_system_generator(
             time_period=world_data.get('time_period', '未设定'),
             location=world_data.get('location', '未设定'),
             atmosphere=world_data.get('atmosphere', '未设定'),
-            rules=world_data.get('rules', '未设定')
+            rules=world_data.get('rules', '未设定'),
+            external_assets=careers_research_assets,
+            reference_assets=careers_research_assets,
         )
         
         estimated_total = 5000
@@ -608,6 +710,17 @@ async def career_system_generator(
                     # 更新向导步骤状态为2（职业体系已完成）
                     # wizard_step: 0=未开始, 1=世界观已完成, 2=职业体系已完成, 3=角色已完成, 4=大纲已完成
                     project.wizard_step = 2
+
+                    await _save_project_research_assets(
+                        db=db,
+                        user_id=user_id,
+                        project_id=project.id,
+                        query=str(careers_research_bundle.get("query") or ""),
+                        archive_path=str(careers_research_bundle.get("archive_path") or ""),
+                        assets=careers_research_assets,
+                        memory_type=chapter_web_research_service.CAREERS_MEMORY_TYPE,
+                        title_prefix="职业体系外部资料",
+                    )
                     
                     await db.commit()
                     db_committed = True
@@ -624,7 +737,9 @@ async def career_system_generator(
                         "main_careers_count": len(main_careers_created),
                         "sub_careers_count": len(sub_careers_created),
                         "main_careers": main_careers_created,
-                        "sub_careers": sub_careers_created
+                        "sub_careers": sub_careers_created,
+                        "research_query": str(careers_research_bundle.get("query") or ""),
+                        "research_assets": careers_research_assets,
                     })
                     
                     yield await tracker.done()
@@ -711,6 +826,8 @@ async def characters_generator(
         provider = data.get("provider")
         model = data.get("model")
         enable_mcp = data.get("enable_mcp", True)  # 默认启用MCP
+        enable_web_research = data.get("enable_web_research")
+        web_research_query = data.get("web_research_query")
         user_id = data.get("user_id")  # 从中间件注入
         
         # 验证项目
@@ -736,6 +853,28 @@ async def characters_generator(
         if user_id:
             user_ai_service.user_id = user_id
             user_ai_service.db_session = db
+
+        characters_research_bundle = await chapter_web_research_service.collect_assets(
+            user_id=user_id,
+            db_session=db,
+            exa_query=web_research_query or _compose_research_seed(
+                project.title,
+                project.theme,
+                project.genre,
+                world_context.get("location"),
+                world_context.get("rules"),
+                requirements,
+            ),
+            grok_query=(
+                "请为小说角色设计做实时网络研究，提炼人物原型、职业细节、社会语境、表达习惯与可借鉴素材，并给出来源。"
+                f"背景：{_compose_research_seed(project.title, project.theme, project.genre, world_context.get('location'), requirements, limit=260)}"
+            ) if _compose_research_seed(project.title, project.theme, project.genre, world_context.get('location'), requirements, limit=260) else "",
+            enable_web_research=enable_web_research,
+            archive_scope=project.id,
+            archive_id="wizard_characters",
+            metadata={"project_id": project.id, "context": "characters"},
+        )
+        characters_research_assets = list(characters_research_bundle.get("assets") or [])
         
         # 获取项目的职业列表，用于角色职业分配
         yield await tracker.loading("加载职业体系...", 0.8)
@@ -841,7 +980,9 @@ async def characters_generator(
                         rules=world_context.get("rules", ""),
                         theme=theme or project.theme or "",
                         genre=genre or project.genre or "",
-                        requirements=batch_requirements + careers_context  # 添加职业上下文
+                        requirements=batch_requirements + careers_context,  # 添加职业上下文
+                        external_assets=characters_research_assets,
+                        reference_assets=characters_research_assets,
                     )
                     
                     prompt = base_prompt
@@ -1290,6 +1431,17 @@ async def characters_generator(
         project.character_count = len(created_characters)
         project.wizard_step = 3
         logger.info(f"✅ 更新项目角色数量: {project.character_count}")
+
+        await _save_project_research_assets(
+            db=db,
+            user_id=user_id,
+            project_id=project_id,
+            query=str(characters_research_bundle.get("query") or ""),
+            archive_path=str(characters_research_bundle.get("archive_path") or ""),
+            assets=characters_research_assets,
+            memory_type=chapter_web_research_service.CHARACTERS_MEMORY_TYPE,
+            title_prefix="角色外部资料",
+        )
         
         await db.commit()
         db_committed = True
@@ -1304,6 +1456,8 @@ async def characters_generator(
             "message": f"成功生成{len(created_characters)}个角色/组织（分{total_batches}批完成）",
             "count": len(created_characters),
             "batches": total_batches,
+            "research_query": str(characters_research_bundle.get("query") or ""),
+            "research_assets": characters_research_assets,
             "characters": [
                 {
                     "id": char.id,
@@ -1388,6 +1542,8 @@ async def outline_generator(
         provider = data.get("provider")
         model = data.get("model")
         enable_mcp = data.get("enable_mcp", True)  # 默认启用MCP
+        enable_web_research = data.get("enable_web_research")
+        web_research_query = data.get("web_research_query")
         user_id = data.get("user_id")  # 从中间件注入
         
         # 获取项目信息
@@ -1425,6 +1581,27 @@ async def outline_generator(
         outline_requirements += "7. 不要在JSON字符串值中使用中文引号（\"\"''），请使用【】或《》标记\n"
         
         # 获取自定义提示词模板
+        outline_research_bundle = await chapter_web_research_service.collect_assets(
+            user_id=user_id,
+            db_session=db,
+            exa_query=web_research_query or _compose_research_seed(
+                project.title,
+                project.theme,
+                project.genre,
+                project.world_rules,
+                characters_info,
+                requirements,
+            ),
+            grok_query=(
+                "请为小说开局大纲设计做实时网络研究，提炼冲突搭建、节奏推进、悬念设计、组织/职业细节与流行叙事语感，并给出来源。"
+                f"背景：{_compose_research_seed(project.title, project.theme, project.genre, project.world_rules, characters_info, requirements, limit=260)}"
+            ) if _compose_research_seed(project.title, project.theme, project.genre, project.world_rules, characters_info, requirements, limit=260) else "",
+            enable_web_research=enable_web_research,
+            archive_scope=project.id,
+            archive_id="wizard_outline",
+            metadata={"project_id": project.id, "context": "outline", "outline_count": outline_count},
+        )
+        outline_research_assets = list(outline_research_bundle.get("assets") or [])
         template = await PromptService.get_template("OUTLINE_CREATE", user_id, db)
         outline_prompt = PromptService.format_prompt(
             template,
@@ -1440,7 +1617,9 @@ async def outline_generator(
             rules=project.world_rules or "未设定",
             characters_info=characters_info or "暂无角色信息",
             mcp_references="",
-            requirements=outline_requirements
+            requirements=outline_requirements,
+            external_assets=outline_research_assets,
+            reference_assets=outline_research_assets,
         )
         outline_system_prompt = _build_outline_runtime_system_prompt(
             project=project,
@@ -1609,6 +1788,17 @@ async def outline_generator(
         project.status = "writing"
         project.wizard_status = "completed"
         project.wizard_step = 4
+
+        await _save_project_research_assets(
+            db=db,
+            user_id=user_id,
+            project_id=project_id,
+            query=str(outline_research_bundle.get("query") or ""),
+            archive_path=str(outline_research_bundle.get("archive_path") or ""),
+            assets=outline_research_assets,
+            memory_type=chapter_web_research_service.OUTLINE_MEMORY_TYPE,
+            title_prefix="大纲外部资料",
+        )
         
         await db.commit()
         db_committed = True
@@ -1634,6 +1824,8 @@ async def outline_generator(
             "outline_count": len(created_outlines),
             "chapter_count": len(created_chapters),
             "outline_mode": project.outline_mode,
+            "research_query": str(outline_research_bundle.get("query") or ""),
+            "research_assets": outline_research_assets,
             "outlines": [
                 {
                     "id": outline.id,

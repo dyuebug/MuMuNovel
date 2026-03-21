@@ -26,6 +26,13 @@ export interface Settings {
   temperature: number;
   max_tokens: number;
   system_prompt?: string;
+  web_research_enabled?: boolean;
+  web_research_exa_enabled?: boolean;
+  web_research_grok_enabled?: boolean;
+  web_research_exa_api_key?: string;
+  web_research_grok_api_key?: string;
+  web_research_grok_base_url?: string;
+  web_research_grok_model?: string;
   preferences?: string;
   created_at: string;
   updated_at: string;
@@ -43,6 +50,13 @@ export interface SettingsUpdate {
   temperature?: number;
   max_tokens?: number;
   system_prompt?: string;
+  web_research_enabled?: boolean;
+  web_research_exa_enabled?: boolean;
+  web_research_grok_enabled?: boolean;
+  web_research_exa_api_key?: string;
+  web_research_grok_api_key?: string;
+  web_research_grok_base_url?: string;
+  web_research_grok_model?: string;
   preferences?: string;
 }
 
@@ -172,6 +186,12 @@ export interface ProjectWizardRequest {
     atmosphere: string;
     rules: string;
   };
+  enable_web_research?: boolean;
+  web_research_query?: string;
+  world_building_research_query?: string;
+  careers_research_query?: string;
+  characters_research_query?: string;
+  outline_research_query?: string;
 }
 
 export interface WorldBuildingResponse {
@@ -180,6 +200,16 @@ export interface WorldBuildingResponse {
   location: string;
   atmosphere: string;
   rules: string;
+  research_query?: string;
+  research_assets?: ResearchAssetSummary[];
+}
+
+export interface ResearchAssetSummary {
+  title: string;
+  source?: string;
+  summary?: string;
+  usage_hint?: string;
+  asset_type?: string;
 }
 
 // 大纲类型定义
@@ -571,10 +601,14 @@ export interface PolishBatchRequest {
 // 向导API响应类型
 export interface GenerateCharactersResponse {
   characters: Character[];
+  research_query?: string;
+  research_assets?: ResearchAssetSummary[];
 }
 
 export interface GenerateOutlineResponse {
   outlines: Outline[];
+  research_query?: string;
+  research_assets?: ResearchAssetSummary[];
 }
 
 // API响应类型
@@ -644,6 +678,12 @@ export interface WizardBasicInfo {
   character_count?: number;
   target_words?: number;
   outline_mode?: 'one-to-one' | 'one-to-many';  // 大纲章节模式
+  enable_web_research?: boolean;
+  web_research_query?: string;
+  world_building_research_query?: string;
+  careers_research_query?: string;
+  characters_research_query?: string;
+  outline_research_query?: string;
 }
 
 // API 错误响应类型

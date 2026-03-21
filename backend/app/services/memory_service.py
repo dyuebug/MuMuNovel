@@ -771,6 +771,43 @@ class MemoryService:
         except Exception as e:
             logger.error(f"❌ 删除章节记忆失败: {str(e)}")
             return False
+
+    async def delete_memories_by_types(
+        self,
+        user_id: str,
+        project_id: str,
+        chapter_id: Optional[str],
+        memory_types: List[str]
+    ) -> bool:
+        """按章节与记忆类型删除向量记忆。"""
+        try:
+            normalized_types = {str(item).strip() for item in (memory_types or []) if str(item).strip()}
+            if not normalized_types:
+                return True
+
+            collection = self.get_collection(user_id, project_id)
+            results = collection.get(where={"chapter_id": chapter_id}) if chapter_id else collection.get()
+            ids = results.get('ids') or []
+            metadatas = results.get('metadatas') or []
+
+            ids_to_delete = []
+            for memory_id, metadata in zip(ids, metadatas):
+                if not isinstance(metadata, dict):
+                    continue
+                metadata_chapter_id = str(metadata.get("chapter_id") or "").strip()
+                chapter_matches = metadata_chapter_id == (chapter_id or "")
+                if chapter_matches and str(metadata.get("memory_type") or "").strip() in normalized_types:
+                    ids_to_delete.append(memory_id)
+
+            if ids_to_delete:
+                collection.delete(ids=ids_to_delete)
+                logger.info(
+                    f"🗑️ 已删除章节{chapter_id[:8]}的{len(ids_to_delete)}条指定类型记忆: {sorted(normalized_types)}"
+                )
+            return True
+        except Exception as e:
+            logger.error(f"❌ 按类型删除记忆失败: {str(e)}")
+            return False
     
     async def delete_project_memories(
         self,

@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect } from 'react';
-import { Card, Form, Input, Button, Select, Slider, InputNumber, message, Space, Typography, Spin, Modal, Alert, Grid, Tabs, List, Tag, Popconfirm, Empty, Row, Col, Radio } from 'antd';
+import { Card, Form, Input, Button, Select, Slider, InputNumber, message, Space, Typography, Spin, Modal, Alert, Grid, Tabs, List, Tag, Popconfirm, Empty, Row, Col, Radio, Switch } from 'antd';
 import { SaveOutlined, DeleteOutlined, ReloadOutlined, InfoCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, ThunderboltOutlined, PlusOutlined, EditOutlined, CopyOutlined, WarningOutlined } from '@ant-design/icons';
 import { settingsApi, mcpPluginApi } from '../services/api';
 import type { SettingsUpdate, APIKeyPreset, PresetCreateRequest, APIKeyPresetConfig } from '../types';
@@ -61,6 +61,18 @@ export default function SettingsPage() {
     suggestions?: string[];
   } | null>(null);
   const [showTestResult, setShowTestResult] = useState(false);
+  const [testingWebResearchProvider, setTestingWebResearchProvider] = useState<'exa' | 'grok' | null>(null);
+  const [webResearchTestResult, setWebResearchTestResult] = useState<{
+    success: boolean;
+    provider: string;
+    message: string;
+    response_preview?: string;
+    result_count?: number;
+    source_count?: number;
+    error?: string;
+    error_type?: string;
+    suggestions?: string[];
+  } | null>(null);
 
   // 预设相关状态
   const [activeTab, setActiveTab] = useState('current');
@@ -104,6 +116,7 @@ export default function SettingsPage() {
       // 清除旧的测试结果，因为可能是其他配置的测试结果
       setTestResult(null);
       setShowTestResult(false);
+      setWebResearchTestResult(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
@@ -149,6 +162,10 @@ export default function SettingsPage() {
           llm_model: 'gpt-4',
           temperature: 0.7,
           max_tokens: 2000,
+          web_research_enabled: false,
+          web_research_exa_enabled: true,
+          web_research_grok_enabled: true,
+          web_research_grok_model: 'grok-4.1-fast',
         });
       } else {
         message.error('加载设置失败');
@@ -198,6 +215,7 @@ export default function SettingsPage() {
       // 保存后清除测试结果，因为配置可能已变更
       setTestResult(null);
       setShowTestResult(false);
+      setWebResearchTestResult(null);
       
       // 手动保存配置后，需要同步更新预设激活状态
       // 因为用户手动修改的配置可能与之前激活的预设不一致了
@@ -306,10 +324,18 @@ export default function SettingsPage() {
           llm_model: 'gpt-4',
           temperature: 0.7,
           max_tokens: 2000,
+          web_research_enabled: false,
+          web_research_exa_enabled: true,
+          web_research_grok_enabled: true,
+          web_research_exa_api_key: '',
+          web_research_grok_api_key: '',
+          web_research_grok_base_url: '',
+          web_research_grok_model: 'grok-4.1-fast',
         });
         setSelectedProvider('openai');
         setEndpoints([{ url: 'https://api.openai.com/v1', type: 'primary', status: 'untested' }]);
         setFallbackStrategy('auto');
+        setWebResearchTestResult(null);
         message.info('已重置为默认值，请点击保存');
       },
     });
@@ -467,6 +493,53 @@ export default function SettingsPage() {
       setShowTestResult(true);
     } finally {
       setTestingApi(false);
+    }
+  };
+
+  const handleTestWebResearch = async (provider: 'exa' | 'grok') => {
+    const exaApiKey = form.getFieldValue('web_research_exa_api_key');
+    const grokApiKey = form.getFieldValue('web_research_grok_api_key');
+    const grokBaseUrl = form.getFieldValue('web_research_grok_base_url');
+    const grokModel = form.getFieldValue('web_research_grok_model');
+
+    if (provider === 'exa' && !exaApiKey) {
+      message.warning('请先填写 Exa API Key');
+      return;
+    }
+    if (provider === 'grok' && (!grokApiKey || !grokBaseUrl)) {
+      message.warning('请先填写 Grok API Key 和 Base URL');
+      return;
+    }
+
+    setTestingWebResearchProvider(provider);
+    setWebResearchTestResult(null);
+    try {
+      const result = await settingsApi.testWebResearchConnection({
+        provider,
+        exa_api_key: exaApiKey,
+        grok_api_key: grokApiKey,
+        grok_base_url: grokBaseUrl,
+        grok_model: grokModel,
+      });
+      setWebResearchTestResult(result);
+      if (result.success) {
+        message.success(`${provider.toUpperCase()} 检索测试成功`);
+      } else {
+        message.error(`${provider.toUpperCase()} 检索测试失败`);
+      }
+    } catch (error: any) {
+      const errorMsg = error?.response?.data?.detail || '检索测试请求失败';
+      setWebResearchTestResult({
+        success: false,
+        provider,
+        message: `${provider.toUpperCase()} 检索测试失败`,
+        error: errorMsg,
+        error_type: 'RequestError',
+        suggestions: ['请检查后端服务是否正常', '请检查网络和技能目录配置'],
+      });
+      message.error(errorMsg);
+    } finally {
+      setTestingWebResearchProvider(null);
     }
   };
 
@@ -1437,6 +1510,134 @@ export default function SettingsPage() {
                               style={{ fontSize: isMobile ? '13px' : '14px' }}
                             />
                           </Form.Item>
+
+                          <Card
+                            size="small"
+                            title="生成前网络检索"
+                            style={{ marginBottom: isMobile ? 16 : 24 }}
+                          >
+                            <Alert
+                              type="info"
+                              showIcon
+                              message="用于章节 / 世界观 / 角色 / 大纲生成前，自动通过 Exa / Grok 检索资料，并把摘要保存到记忆中。"
+                              style={{ marginBottom: 16 }}
+                            />
+
+                            <Row gutter={16}>
+                              <Col xs={24} md={8}>
+                                <Form.Item name="web_research_enabled" label="启用检索" valuePropName="checked">
+                                  <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                                </Form.Item>
+                              </Col>
+                              <Col xs={12} md={8}>
+                                <Form.Item name="web_research_exa_enabled" label="启用 Exa" valuePropName="checked">
+                                  <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                                </Form.Item>
+                              </Col>
+                              <Col xs={12} md={8}>
+                                <Form.Item name="web_research_grok_enabled" label="启用 Grok" valuePropName="checked">
+                                  <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                                </Form.Item>
+                              </Col>
+                            </Row>
+
+                            <Row gutter={16}>
+                              <Col xs={24} md={12}>
+                                <Form.Item name="web_research_exa_api_key" label="Exa API Key">
+                                  <Input.Password placeholder="填写 Exa API Key" autoComplete="new-password" />
+                                </Form.Item>
+                              </Col>
+                              <Col xs={24} md={12}>
+                                <Form.Item name="web_research_grok_api_key" label="Grok API Key">
+                                  <Input.Password placeholder="填写 Grok API Key" autoComplete="new-password" />
+                                </Form.Item>
+                              </Col>
+                            </Row>
+
+                            <Row gutter={16}>
+                              <Col xs={24} md={14}>
+                                <Form.Item
+                                  name="web_research_grok_base_url"
+                                  label="Grok Base URL"
+                                  rules={[
+                                    {
+                                      validator: (_, value) => {
+                                        if (!value) return Promise.resolve();
+                                        try {
+                                          new URL(value);
+                                          return Promise.resolve();
+                                        } catch {
+                                          return Promise.reject(new Error('请输入有效的 URL'));
+                                        }
+                                      },
+                                    },
+                                  ]}
+                                >
+                                  <Input placeholder="https://your-grok-endpoint.example" />
+                                </Form.Item>
+                              </Col>
+                              <Col xs={24} md={10}>
+                                <Form.Item name="web_research_grok_model" label="Grok 模型">
+                                  <Input placeholder="grok-4.1-fast" />
+                                </Form.Item>
+                              </Col>
+                            </Row>
+
+                            <Space wrap>
+                              <Button
+                                icon={<ThunderboltOutlined />}
+                                onClick={() => handleTestWebResearch('exa')}
+                                loading={testingWebResearchProvider === 'exa'}
+                              >
+                                测试 Exa
+                              </Button>
+                              <Button
+                                icon={<ThunderboltOutlined />}
+                                onClick={() => handleTestWebResearch('grok')}
+                                loading={testingWebResearchProvider === 'grok'}
+                              >
+                                测试 Grok
+                              </Button>
+                            </Space>
+
+                            {webResearchTestResult && (
+                              <Alert
+                                style={{ marginTop: 16 }}
+                                type={webResearchTestResult.success ? 'success' : 'error'}
+                                showIcon
+                                closable
+                                onClose={() => setWebResearchTestResult(null)}
+                                message={`${webResearchTestResult.provider.toUpperCase()}：${webResearchTestResult.message}`}
+                                description={
+                                  <div>
+                                    {webResearchTestResult.response_preview && (
+                                      <div style={{ marginBottom: 8 }}>
+                                        <strong>返回预览：</strong> {webResearchTestResult.response_preview}
+                                      </div>
+                                    )}
+                                    {typeof webResearchTestResult.result_count === 'number' && (
+                                      <div>结果数：{webResearchTestResult.result_count}</div>
+                                    )}
+                                    {typeof webResearchTestResult.source_count === 'number' && (
+                                      <div>来源数：{webResearchTestResult.source_count}</div>
+                                    )}
+                                    {webResearchTestResult.error && (
+                                      <div style={{ color: 'var(--color-error)', marginTop: 8 }}>
+                                        <strong>错误：</strong> {webResearchTestResult.error}
+                                      </div>
+                                    )}
+                                    {webResearchTestResult.suggestions && webResearchTestResult.suggestions.length > 0 && (
+                                      <ul style={{ marginTop: 8, paddingLeft: 18 }}>
+                                        {webResearchTestResult.suggestions.map((item, index) => (
+                                          <li key={index}>{item}</li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                  </div>
+                                }
+                              />
+                            )}
+                          </Card>
 
                           {/* 测试结果展示 */}
                           {showTestResult && testResult && (

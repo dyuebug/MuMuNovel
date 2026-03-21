@@ -23,6 +23,13 @@ def build_settings_payload(**overrides):
         "llm_model": "gpt-4.1-mini",
         "temperature": 0.4,
         "max_tokens": 1024,
+        "web_research_enabled": True,
+        "web_research_exa_enabled": True,
+        "web_research_grok_enabled": True,
+        "web_research_exa_api_key": "exa-test-key",
+        "web_research_grok_api_key": "grok-test-key",
+        "web_research_grok_base_url": "https://grok.example.com/v1",
+        "web_research_grok_model": "grok-4.1-fast",
     }
     payload.update(overrides)
     return payload
@@ -189,6 +196,23 @@ async def test_should_update_existing_settings_via_post_and_deactivate_changed_a
     saved = await fetch_settings(test_db, mock_user.user_id)
     prefs = json.loads(saved.preferences)
     assert prefs["api_presets"]["presets"][0]["is_active"] is False
+
+
+async def test_should_store_web_research_settings_in_preferences(async_client, test_db, mock_user):
+    payload = build_settings_payload()
+    response = await async_client.post("/api/settings", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["web_research_enabled"] is True
+    assert body["web_research_exa_api_key"] == "exa-test-key"
+    assert body["web_research_grok_base_url"] == "https://grok.example.com/v1"
+
+    saved = await fetch_settings(test_db, mock_user.user_id)
+    prefs = json.loads(saved.preferences)
+    web_research = prefs["web_research"]
+    assert web_research["web_research_enabled"] is True
+    assert web_research["web_research_exa_api_key"] == "exa-test-key"
+    assert web_research["web_research_grok_api_key"] == "grok-test-key"
 
 
 async def test_should_update_settings_via_put(async_client, mock_settings):
@@ -594,6 +618,37 @@ async def test_should_return_failure_for_common_api_errors(
     assert body["success"] is False
     assert body["error_type"] == "RuntimeError"
     assert error_message in body["error"]
+
+
+async def test_should_test_web_research_connection(async_client, monkeypatch):
+    async def fake_test_provider_connection(**kwargs):
+        assert kwargs["provider"] == "exa"
+        return {
+            "success": True,
+            "provider": "exa",
+            "message": "Exa 连接测试成功",
+            "response_preview": "preview",
+            "result_count": 1,
+        }
+
+    monkeypatch.setattr(
+        settings_api.chapter_web_research_service,
+        "test_provider_connection",
+        fake_test_provider_connection,
+    )
+
+    response = await async_client.post(
+        "/api/settings/test-web-research",
+        json={
+            "provider": "exa",
+            "exa_api_key": "exa-test-key",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["provider"] == "exa"
+    assert body["result_count"] == 1
 
 
 async def test_should_detect_function_calling_support_when_tool_calls_present(async_client, monkeypatch):

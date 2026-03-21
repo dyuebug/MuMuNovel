@@ -4,7 +4,7 @@ import { Card, Button, Space, Typography, message, Progress } from 'antd';
 import { CheckCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import { backgroundTaskApi, wizardStreamApi } from '../services/api';
 import type { SSEClientOptions } from '../utils/sseClient';
-import type { ApiError } from '../types';
+import type { ApiError, ResearchAssetSummary } from '../types';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -17,7 +17,13 @@ export interface GenerationConfig {
   target_words: number;
   chapter_count: number;
   character_count: number;
-  outline_mode?: 'one-to-one' | 'one-to-many';  // 大纲章节模式
+  outline_mode?: 'one-to-one' | 'one-to-many';
+  enable_web_research?: boolean;
+  web_research_query?: string;
+  world_building_research_query?: string;
+  careers_research_query?: string;
+  characters_research_query?: string;
+  outline_research_query?: string;
 }
 
 interface AIProjectGeneratorProps {
@@ -38,12 +44,21 @@ interface GenerationSteps {
   outline: GenerationStep;
 }
 
+type ResearchStepKey = keyof GenerationSteps;
+
+interface StepResearchSummary {
+  query?: string;
+  assets: ResearchAssetSummary[];
+}
+
 interface WorldBuildingResult {
   project_id: string;
   time_period: string;
   location: string;
   atmosphere: string;
   rules: string;
+  research_query?: string;
+  research_assets?: ResearchAssetSummary[];
 }
 
 export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
@@ -76,6 +91,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   const [generationData, setGenerationData] = useState<GenerationConfig | null>(null);
   // 保存世界观生成结果，用于后续步骤
   const [worldBuildingResult, setWorldBuildingResult] = useState<WorldBuildingResult | null>(null);
+  const [researchSummaries, setResearchSummaries] = useState<Partial<Record<ResearchStepKey, StepResearchSummary>>>({});
   const cancelledByUserRef = useRef(false);
   // 【修复】操作锁，防止并发调用
   const operationLockRef = useRef(false);
@@ -103,6 +119,80 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     localStorage.removeItem(storageKeys.projectId);
     localStorage.removeItem(storageKeys.generationData);
     localStorage.removeItem(storageKeys.currentStep);
+  };
+
+  const buildResearchFields = (data: GenerationConfig, step: ResearchStepKey) => {
+    const stepQueryMap: Record<ResearchStepKey, string | undefined> = {
+      worldBuilding: data.world_building_research_query,
+      careers: data.careers_research_query,
+      characters: data.characters_research_query,
+      outline: data.outline_research_query,
+    };
+    return {
+      enable_web_research: data.enable_web_research,
+      web_research_query: (stepQueryMap[step] || data.web_research_query)?.trim() || undefined,
+    };
+  };
+
+  const buildWorldBuildingPayload = (data: GenerationConfig) => {
+    const genreString = Array.isArray(data.genre) ? data.genre.join('、') : data.genre;
+    return {
+      title: data.title,
+      description: data.description,
+      theme: data.theme,
+      genre: genreString,
+      narrative_perspective: data.narrative_perspective,
+      target_words: data.target_words,
+      chapter_count: data.chapter_count,
+      character_count: data.character_count,
+      outline_mode: data.outline_mode || 'one-to-many',
+      ...buildResearchFields(data, 'worldBuilding'),
+    };
+  };
+
+  const buildCareerPayload = (pid: string, data: GenerationConfig) => ({
+    project_id: pid,
+    ...buildResearchFields(data, 'careers'),
+  });
+
+  const buildCharactersPayload = (pid: string, data: GenerationConfig, worldResult: WorldBuildingResult) => {
+    const genreString = Array.isArray(data.genre) ? data.genre.join('、') : data.genre;
+    return {
+      project_id: pid,
+      count: data.character_count,
+      world_context: {
+        time_period: worldResult.time_period || '',
+        location: worldResult.location || '',
+        atmosphere: worldResult.atmosphere || '',
+        rules: worldResult.rules || '',
+      },
+      theme: data.theme,
+      genre: genreString,
+      ...buildResearchFields(data, 'characters'),
+    };
+  };
+
+  const buildOutlinePayload = (pid: string, data: GenerationConfig) => ({
+    project_id: pid,
+    chapter_count: data.chapter_count,
+    narrative_perspective: data.narrative_perspective,
+    target_words: data.target_words,
+    ...buildResearchFields(data, 'outline'),
+  });
+
+
+  const updateStepResearch = (
+    step: ResearchStepKey,
+    payload?: { research_query?: string; research_assets?: ResearchAssetSummary[] }
+  ) => {
+    if (!payload) return;
+    const query = payload.research_query?.trim() || '';
+    const assets = Array.isArray(payload.research_assets) ? payload.research_assets.slice(0, 5) : [];
+    if (!query && assets.length === 0) return;
+    setResearchSummaries((prev) => ({
+      ...prev,
+      [step]: { query, assets },
+    }));
   };
 
   const isTaskCancelledError = (error: unknown) => {
@@ -270,20 +360,8 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
   // 恢复:从世界观步骤开始
   const resumeFromWorldBuilding = async (data: GenerationConfig) => {
-    const genreString = Array.isArray(data.genre) ? data.genre.join('、') : data.genre;
-
     const worldResult = await wizardStreamApi.generateWorldBuildingStream(
-      {
-        title: data.title,
-        description: data.description,
-        theme: data.theme,
-        genre: genreString,
-        narrative_perspective: data.narrative_perspective,
-        target_words: data.target_words,
-        chapter_count: data.chapter_count,
-        character_count: data.character_count,
-        outline_mode: data.outline_mode || 'one-to-many',  // 传递大纲模式
-      },
+      buildWorldBuildingPayload(data),
       buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
@@ -292,6 +370,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         },
         onResult: (result) => {
           setWorldBuildingResult(result);
+          updateStepResearch('worldBuilding', result);
           setGenerationSteps(prev => ({ ...prev, worldBuilding: 'completed' }));
         },
         onError: (error) => {
@@ -318,9 +397,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     setProgressMessage('正在生成职业体系...');
 
     await wizardStreamApi.generateCareerSystemStream(
-      {
-        project_id: pid,
-      },
+      buildCareerPayload(pid, data),
       buildTaskOptions({
         onProgress: (msg, prog) => {
           setProgress(prog);
@@ -348,25 +425,13 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
   // 恢复:从角色步骤继续
   const resumeFromCharacters = async (data: GenerationConfig, worldResult: WorldBuildingResult) => {
-    const genreString = Array.isArray(data.genre) ? data.genre.join('、') : data.genre;
     const pid = projectId || worldResult.project_id;
 
     setGenerationSteps(prev => ({ ...prev, characters: 'processing' }));
     setProgressMessage('正在生成角色...');
 
     await wizardStreamApi.generateCharactersStream(
-      {
-        project_id: pid,
-        count: data.character_count,
-        world_context: {
-          time_period: worldResult.time_period || '',
-          location: worldResult.location || '',
-          atmosphere: worldResult.atmosphere || '',
-          rules: worldResult.rules || '',
-        },
-        theme: data.theme,
-        genre: genreString,
-      },
+      buildCharactersPayload(pid, data, worldResult),
       buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
@@ -399,12 +464,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     setProgressMessage('正在生成大纲...');
 
     await wizardStreamApi.generateCompleteOutlineStream(
-      {
-        project_id: pid,
-        chapter_count: data.chapter_count,
-        narrative_perspective: data.narrative_perspective,
-        target_words: data.target_words,
-      },
+      buildOutlinePayload(pid, data),
       buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
@@ -454,24 +514,12 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       setGenerationData(data);
       saveProgress('', data, 'generating');
 
-      const genreString = Array.isArray(data.genre) ? data.genre.join('、') : data.genre;
-
       // 步骤1: 生成世界观并创建项目
       setGenerationSteps(prev => ({ ...prev, worldBuilding: 'processing' }));
       setProgressMessage('正在生成世界观...');
 
       const worldResult = await wizardStreamApi.generateWorldBuildingStream(
-        {
-          title: data.title,
-          description: data.description,
-          theme: data.theme,
-          genre: genreString,
-          narrative_perspective: data.narrative_perspective,
-          target_words: data.target_words,
-          chapter_count: data.chapter_count,
-          character_count: data.character_count,
-          outline_mode: data.outline_mode || 'one-to-many',  // 传递大纲模式
-        },
+        buildWorldBuildingPayload(data),
         buildTaskOptions({
           onProgress: (msg, prog) => {
             // 直接使用后端返回的进度值
@@ -481,6 +529,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           onResult: (result) => {
             setProjectId(result.project_id);
             setWorldBuildingResult(result);
+            updateStepResearch('worldBuilding', result);
             setGenerationSteps(prev => ({ ...prev, worldBuilding: 'completed' }));
           },
           onError: (error) => {
@@ -510,9 +559,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       setProgressMessage('正在生成职业体系...');
 
       await wizardStreamApi.generateCareerSystemStream(
-        {
-          project_id: createdProjectId,
-        },
+        buildCareerPayload(createdProjectId, data),
         buildTaskOptions({
           onProgress: (msg, prog) => {
             setProgress(prog);
@@ -540,18 +587,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       setProgressMessage('正在生成角色...');
 
       await wizardStreamApi.generateCharactersStream(
-        {
-          project_id: createdProjectId,
-          count: data.character_count,
-          world_context: {
-            time_period: worldResult.time_period || '',
-            location: worldResult.location || '',
-            atmosphere: worldResult.atmosphere || '',
-            rules: worldResult.rules || '',
-          },
-          theme: data.theme,
-          genre: genreString,
-        },
+        buildCharactersPayload(createdProjectId, data, worldResult),
         buildTaskOptions({
           onProgress: (msg, prog) => {
             // 直接使用后端返回的进度值
@@ -580,12 +616,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       setProgressMessage('正在生成大纲...');
 
       await wizardStreamApi.generateCompleteOutlineStream(
-        {
-          project_id: createdProjectId,
-          chapter_count: data.chapter_count,
-          narrative_perspective: data.narrative_perspective,
-          target_words: data.target_words,
-        },
+        buildOutlinePayload(createdProjectId, data),
         buildTaskOptions({
           onProgress: (msg, prog) => {
             // 直接使用后端返回的进度值
@@ -726,20 +757,8 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     setGenerationSteps(prev => ({ ...prev, worldBuilding: 'processing' }));
     setProgressMessage('重新生成世界观...');
 
-    const genreString = Array.isArray(generationData.genre) ? generationData.genre.join('、') : generationData.genre;
-
     const worldResult = await wizardStreamApi.generateWorldBuildingStream(
-      {
-        title: generationData.title,
-        description: generationData.description,
-        theme: generationData.theme,
-        genre: genreString,
-        narrative_perspective: generationData.narrative_perspective,
-        target_words: generationData.target_words,
-        chapter_count: generationData.chapter_count,
-        character_count: generationData.character_count,
-        outline_mode: generationData.outline_mode || 'one-to-many',  // 传递大纲模式
-      },
+      buildWorldBuildingPayload(generationData),
       buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
@@ -749,6 +768,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         onResult: (result) => {
           setProjectId(result.project_id);
           setWorldBuildingResult(result);
+          updateStepResearch('worldBuilding', result);
           setGenerationSteps(prev => ({ ...prev, worldBuilding: 'completed' }));
         },
         onError: (error) => {
@@ -773,7 +793,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
   // 从职业体系步骤继续
   const retryFromCareers = async () => {
-    if (!worldBuildingResult) {
+    if (!generationData || !worldBuildingResult) {
       message.warning('缺少必要数据，无法从职业体系步骤继续');
       setLoading(false);
       return;
@@ -790,9 +810,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     setProgressMessage('重新生成职业体系...');
 
     await wizardStreamApi.generateCareerSystemStream(
-      {
-        project_id: pid,
-      },
+      buildCareerPayload(pid, generationData),
       buildTaskOptions({
         onProgress: (msg, prog) => {
           setProgress(prog);
@@ -837,21 +855,8 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     setGenerationSteps(prev => ({ ...prev, characters: 'processing' }));
     setProgressMessage('重新生成角色...');
 
-    const genreString = Array.isArray(generationData.genre) ? generationData.genre.join('、') : generationData.genre;
-
     await wizardStreamApi.generateCharactersStream(
-      {
-        project_id: pid,
-        count: generationData.character_count,
-        world_context: {
-          time_period: worldBuildingResult.time_period || '',
-          location: worldBuildingResult.location || '',
-          atmosphere: worldBuildingResult.atmosphere || '',
-          rules: worldBuildingResult.rules || '',
-        },
-        theme: generationData.theme,
-        genre: genreString,
-      },
+      buildCharactersPayload(pid, generationData, worldBuildingResult),
       buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
@@ -898,12 +903,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     setProgressMessage('重新生成大纲...');
 
     await wizardStreamApi.generateCompleteOutlineStream(
-      {
-        project_id: pid,
-        chapter_count: generationData.chapter_count,
-        narrative_perspective: generationData.narrative_perspective,
-        target_words: generationData.target_words,
-      },
+      buildOutlinePayload(pid, generationData),
       buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
@@ -953,9 +953,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     setProgressMessage('正在生成职业体系...');
 
     await wizardStreamApi.generateCareerSystemStream(
-      {
-        project_id: pid,
-      },
+      buildCareerPayload(pid, generationData),
       buildTaskOptions({
         onProgress: (msg, prog) => {
           setProgress(prog);
@@ -986,24 +984,12 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     if (!generationData || !worldResult?.project_id) return;
 
     const pid = worldResult.project_id;
-    const genreString = Array.isArray(generationData.genre) ? generationData.genre.join('、') : generationData.genre;
 
     setGenerationSteps(prev => ({ ...prev, characters: 'processing' }));
     setProgressMessage('正在生成角色...');
 
     await wizardStreamApi.generateCharactersStream(
-      {
-        project_id: pid,
-        count: generationData.character_count,
-        world_context: {
-          time_period: worldResult.time_period || '',
-          location: worldResult.location || '',
-          atmosphere: worldResult.atmosphere || '',
-          rules: worldResult.rules || '',
-        },
-        theme: generationData.theme,
-        genre: genreString,
-      },
+      buildCharactersPayload(pid, generationData, worldResult),
       buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
@@ -1038,12 +1024,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     setProgressMessage('正在生成大纲...');
 
     await wizardStreamApi.generateCompleteOutlineStream(
-      {
-        project_id: pid,
-        chapter_count: generationData.chapter_count,
-        narrative_perspective: generationData.narrative_perspective,
-        target_words: generationData.target_words,
-      },
+      buildOutlinePayload(pid, generationData),
       buildTaskOptions({
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
@@ -1168,6 +1149,56 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
             >
               {errorDetails}
             </Text>
+          </Card>
+        )}
+
+        {Object.values(researchSummaries).some((item) => item && (item.query || item.assets.length > 0)) && (
+          <Card
+            size="small"
+            title="本次检索资料摘要"
+            style={{
+              marginBottom: 24,
+              textAlign: 'left',
+              maxWidth: '100%',
+              overflow: 'hidden',
+            }}
+          >
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              {([
+                ['worldBuilding', '世界观'],
+                ['careers', '职业体系'],
+                ['characters', '角色'],
+                ['outline', '大纲'],
+              ] as Array<[ResearchStepKey, string]>).map(([stepKey, label]) => {
+                const item = researchSummaries[stepKey];
+                if (!item || (!item.query && item.assets.length === 0)) {
+                  return null;
+                }
+                return (
+                  <div key={stepKey} style={{ padding: '12px', border: '1px solid var(--color-border-secondary)', borderRadius: 8 }}>
+                    <Text strong>{label}</Text>
+                    {item.query && (
+                      <div style={{ marginTop: 6, color: 'var(--color-text-secondary)', fontSize: 13 }}>
+                        <strong>Query：</strong>{item.query}
+                      </div>
+                    )}
+                    {item.assets.length > 0 && (
+                      <ul style={{ margin: '8px 0 0 0', paddingLeft: 18 }}>
+                        {item.assets.map((asset, index) => (
+                          <li key={`${stepKey}-${index}`} style={{ marginBottom: 8 }}>
+                            <div style={{ fontWeight: 500 }}>{asset.title}</div>
+                            {asset.summary && <div style={{ fontSize: 13 }}>{asset.summary}</div>}
+                            {asset.source && (
+                              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{asset.source}</div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
+            </Space>
           </Card>
         )}
 

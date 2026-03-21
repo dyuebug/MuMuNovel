@@ -23,6 +23,7 @@ from app.user_manager import User
 from app.logger import get_logger
 from app.config import settings as app_settings, PROJECT_ROOT
 from app.services.ai_service import AIService, create_user_ai_service, create_user_ai_service_with_mcp
+from app.services.chapter_web_research_service import chapter_web_research_service
 
 logger = get_logger(__name__)
 
@@ -33,6 +34,17 @@ PLACEHOLDER_API_KEYS = {
     "your_anthropic_api_key_here",
     "your_gemini_api_key_here",
     "your_api_key_here",
+}
+
+WEB_RESEARCH_PREF_KEY = "web_research"
+WEB_RESEARCH_DEFAULTS = {
+    "web_research_enabled": False,
+    "web_research_exa_enabled": True,
+    "web_research_grok_enabled": True,
+    "web_research_exa_api_key": "",
+    "web_research_grok_api_key": "",
+    "web_research_grok_base_url": "",
+    "web_research_grok_model": "grok-4.1-fast",
 }
 
 
@@ -63,6 +75,59 @@ def read_env_defaults() -> Dict[str, Any]:
         "temperature": app_settings.default_temperature,
         "max_tokens": app_settings.default_max_tokens,
     }
+
+
+def build_default_web_research_settings() -> Dict[str, Any]:
+    return {
+        **WEB_RESEARCH_DEFAULTS,
+        "web_research_enabled": bool(app_settings.pre_generation_web_research_enabled),
+        "web_research_exa_enabled": bool(app_settings.pre_generation_web_research_exa_enabled),
+        "web_research_grok_enabled": bool(app_settings.pre_generation_web_research_grok_enabled),
+    }
+
+
+def load_settings_preferences(settings_obj: Optional[Settings]) -> Dict[str, Any]:
+    if not settings_obj or not settings_obj.preferences:
+        return {}
+    try:
+        value = json.loads(settings_obj.preferences)
+        return value if isinstance(value, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def extract_web_research_payload(preferences: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    defaults = build_default_web_research_settings()
+    source = preferences.get(WEB_RESEARCH_PREF_KEY) if isinstance(preferences, dict) else None
+    if isinstance(source, dict):
+        for key in list(defaults.keys()):
+            if key in source and source[key] is not None:
+                defaults[key] = source[key]
+    return defaults
+
+
+def pop_web_research_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
+    result: Dict[str, Any] = {}
+    for key in list(WEB_RESEARCH_DEFAULTS.keys()):
+        if key in payload:
+            result[key] = payload.pop(key)
+    return result
+
+
+def merge_web_research_preferences(preferences: Dict[str, Any], values: Dict[str, Any]) -> Dict[str, Any]:
+    merged = extract_web_research_payload(preferences)
+    for key, value in values.items():
+        if value is not None:
+            merged[key] = value
+    next_preferences = dict(preferences)
+    next_preferences[WEB_RESEARCH_PREF_KEY] = merged
+    return next_preferences
+
+
+def serialize_settings_response(settings_obj: Settings) -> Dict[str, Any]:
+    base = SettingsResponse.model_validate(settings_obj).model_dump()
+    base.update(extract_web_research_payload(load_settings_preferences(settings_obj)))
+    return base
 
 
 def require_login(request: Request):
@@ -172,7 +237,7 @@ async def get_settings(
         logger.info(f"用户 {user.user_id} 的设置已从.env同步到数据库")
     
     logger.info(f"用户 {user.user_id} 获取已保存的设置")
-    return settings
+    return serialize_settings_response(settings)
 
 
 @router.post("", response_model=SettingsResponse)
@@ -197,12 +262,19 @@ async def save_settings(
     
     # 准备数据
     settings_dict = data.model_dump(exclude_unset=True)
+    web_research_values = pop_web_research_fields(settings_dict)
 
     # api_backup_urls 需要序列化为 JSON 字符串存储
     if 'api_backup_urls' in settings_dict and settings_dict['api_backup_urls'] is not None:
         settings_dict['api_backup_urls'] = json.dumps(settings_dict['api_backup_urls'], ensure_ascii=False)
 
     if settings:
+        current_preferences = load_settings_preferences(settings)
+        if web_research_values:
+            settings.preferences = json.dumps(
+                merge_web_research_preferences(current_preferences, web_research_values),
+                ensure_ascii=False,
+            )
         # 更新现有设置
         for key, value in settings_dict.items():
             setattr(settings, key, value)
@@ -242,8 +314,12 @@ async def save_settings(
         logger.info(f"用户 {user.user_id} 更新设置")
     else:
         # 创建新设置
+        preferences = {}
+        if web_research_values:
+            preferences = merge_web_research_preferences(preferences, web_research_values)
         settings = Settings(
             user_id=user.user_id,
+            preferences=json.dumps(preferences, ensure_ascii=False) if preferences else None,
             **settings_dict
         )
         db.add(settings)
@@ -251,7 +327,7 @@ async def save_settings(
         await db.refresh(settings)
         logger.info(f"用户 {user.user_id} 创建设置")
     
-    return settings
+    return serialize_settings_response(settings)
 
 
 @router.put("", response_model=SettingsResponse)
@@ -274,10 +350,17 @@ async def update_settings(
     
     # 更新设置
     update_data = data.model_dump(exclude_unset=True)
+    web_research_values = pop_web_research_fields(update_data)
 
     # api_backup_urls 需要序列化为 JSON 字符串存储
     if 'api_backup_urls' in update_data and update_data['api_backup_urls'] is not None:
         update_data['api_backup_urls'] = json.dumps(update_data['api_backup_urls'], ensure_ascii=False)
+
+    if web_research_values:
+        settings.preferences = json.dumps(
+            merge_web_research_preferences(load_settings_preferences(settings), web_research_values),
+            ensure_ascii=False,
+        )
 
     for key, value in update_data.items():
         setattr(settings, key, value)
@@ -286,7 +369,7 @@ async def update_settings(
     await db.refresh(settings)
     logger.info(f"用户 {user.user_id} 更新设置")
     
-    return settings
+    return serialize_settings_response(settings)
 
 
 @router.delete("")
@@ -506,6 +589,17 @@ class ApiTestRequest(BaseModel):
     llm_model: str
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
+
+
+class WebResearchTestRequest(BaseModel):
+    """生成前网络检索测试请求模型"""
+
+    provider: str
+    exa_api_key: Optional[str] = None
+    grok_api_key: Optional[str] = None
+    grok_base_url: Optional[str] = None
+    grok_model: Optional[str] = None
+    query: Optional[str] = None
 
 
 @router.post("/check-function-calling")
@@ -894,6 +988,36 @@ async def test_api_connection(data: ApiTestRequest):
             "error_type": error_type,
             "suggestions": suggestions
         }
+
+
+@router.post("/test-web-research")
+async def test_web_research_connection(data: WebResearchTestRequest):
+    """测试 Exa / Grok 检索配置是否可用。"""
+    provider = (data.provider or "").strip().lower()
+    if provider not in {"exa", "grok"}:
+        raise HTTPException(status_code=400, detail="provider 仅支持 exa 或 grok")
+
+    if provider == "exa" and not (data.exa_api_key or "").strip():
+        raise HTTPException(status_code=400, detail="请填写 Exa API Key")
+    if provider == "grok":
+        if not (data.grok_api_key or "").strip():
+            raise HTTPException(status_code=400, detail="请填写 Grok API Key")
+        if not (data.grok_base_url or "").strip():
+            raise HTTPException(status_code=400, detail="请填写 Grok Base URL")
+
+    return await chapter_web_research_service.test_provider_connection(
+        provider=provider,
+        overrides={
+            "enabled": True,
+            "exa_enabled": provider == "exa",
+            "grok_enabled": provider == "grok",
+            "exa_api_key": data.exa_api_key,
+            "grok_api_key": data.grok_api_key,
+            "grok_base_url": data.grok_base_url,
+            "grok_model": data.grok_model,
+        },
+        query=data.query,
+    )
 
 
 # ========== API配置预设管理（零数据库改动方案）==========

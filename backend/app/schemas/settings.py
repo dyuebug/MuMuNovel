@@ -20,6 +20,13 @@ class SettingsBase(BaseModel):
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0, description="温度参数")
     max_tokens: Optional[int] = Field(default=2000, ge=1, description="最大token数")
     system_prompt: Optional[str] = Field(default=None, description="系统级别提示词，每次AI调用都会使用")
+    web_research_enabled: Optional[bool] = Field(default=False, description="是否启用生成前网络检索")
+    web_research_exa_enabled: Optional[bool] = Field(default=True, description="是否启用 Exa 检索")
+    web_research_grok_enabled: Optional[bool] = Field(default=True, description="是否启用 Grok 检索")
+    web_research_exa_api_key: Optional[str] = Field(default=None, description="Exa API Key")
+    web_research_grok_api_key: Optional[str] = Field(default=None, description="Grok API Key")
+    web_research_grok_base_url: Optional[str] = Field(default=None, description="Grok Base URL")
+    web_research_grok_model: Optional[str] = Field(default="grok-4.1-fast", description="Grok 模型名称")
     preferences: Optional[str] = Field(default=None, description="其他偏好设置(JSON)")
 
 

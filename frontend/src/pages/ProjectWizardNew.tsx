@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Form, Input, InputNumber, Select, Button, Card,
-  Row, Col, Typography, Space, message, Radio, theme
+  Row, Col, Typography, Space, message, Radio, theme, Switch, Alert
 } from 'antd';
 import {
   RocketOutlined, ArrowLeftOutlined, CheckCircleOutlined
@@ -65,6 +65,23 @@ export default function ProjectWizardNew() {
         character_count: project.character_count || 5,
       };
 
+      try {
+        const raw = localStorage.getItem('wizard_generation_data');
+        if (raw) {
+          const saved = JSON.parse(raw);
+          if (saved && typeof saved === 'object') {
+            config.enable_web_research = saved.enable_web_research;
+            config.web_research_query = saved.web_research_query;
+            config.world_building_research_query = saved.world_building_research_query;
+            config.careers_research_query = saved.careers_research_query;
+            config.characters_research_query = saved.characters_research_query;
+            config.outline_research_query = saved.outline_research_query;
+          }
+        }
+      } catch {
+        // ignore local restore parse failures
+      }
+
       setGenerationConfig(config);
       setCurrentStep('generating');
     } catch (error) {
@@ -86,6 +103,12 @@ export default function ProjectWizardNew() {
       chapter_count: 3, // 默认生成3章大纲
       character_count: values.character_count || 5,
       outline_mode: values.outline_mode || 'one-to-many', // 添加大纲模式
+      enable_web_research: values.enable_web_research,
+      web_research_query: values.web_research_query,
+      world_building_research_query: values.world_building_research_query,
+      careers_research_query: values.careers_research_query,
+      characters_research_query: values.characters_research_query,
+      outline_research_query: values.outline_research_query,
     };
 
     setGenerationConfig(config);
@@ -124,6 +147,7 @@ export default function ProjectWizardNew() {
           character_count: 5,
           target_words: 100000,
           outline_mode: 'one-to-one', // 默认为传统模式（1-1）
+          enable_web_research: false,
         }}
       >
         <Form.Item
@@ -295,6 +319,62 @@ export default function ProjectWizardNew() {
             placeholder="整部小说的目标字数"
           />
         </Form.Item>
+
+        <Card size="small" title="生成前网络检索" style={{ marginBottom: 24 }}>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="可选。开启后会在世界观、职业体系、角色和大纲生成前先做网络检索，并把资料归档到项目记忆。"
+          />
+
+          <Form.Item
+            label="启用网络检索"
+            name="enable_web_research"
+            valuePropName="checked"
+          >
+            <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+          </Form.Item>
+
+          <Form.Item
+            label="自定义检索 Query"
+            name="web_research_query"
+            tooltip="可选。留空时系统会按书名、简介、主题、类型自动生成检索词。"
+          >
+            <TextArea
+              rows={3}
+              placeholder="例如：现代都市权谋、资本运作、公关舆论、年轻高管说话风格、企业组织架构"
+              showCount
+              maxLength={400}
+            />
+          </Form.Item>
+
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item label="世界观检索 Query" name="world_building_research_query">
+                <TextArea rows={2} placeholder="可选，单独覆盖世界观生成的检索词" maxLength={300} showCount />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="职业体系检索 Query" name="careers_research_query">
+                <TextArea rows={2} placeholder="可选，单独覆盖职业体系生成的检索词" maxLength={300} showCount />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item label="角色检索 Query" name="characters_research_query">
+                <TextArea rows={2} placeholder="可选，单独覆盖角色生成的检索词" maxLength={300} showCount />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="大纲检索 Query" name="outline_research_query">
+                <TextArea rows={2} placeholder="可选，单独覆盖大纲生成的检索词" maxLength={300} showCount />
+              </Form.Item>
+            </Col>
+          </Row>
+        </Card>
 
         <Form.Item>
           <Space direction="vertical" style={{ width: '100%' }} size={12}>

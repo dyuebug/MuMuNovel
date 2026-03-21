@@ -80,6 +80,14 @@ class Settings(BaseSettings):
     
     # MCP配置
     mcp_max_rounds: int = 3  # MCP工具调用最大轮数（全局统一控制）
+
+    # 生成前外部检索配置
+    pre_generation_web_research_enabled: bool = False
+    pre_generation_web_research_skill_repo_path: str = str(PROJECT_ROOT.parent.parent / "openclaw-dae-skills")
+    pre_generation_web_research_timeout_seconds: int = 90
+    pre_generation_web_research_max_assets: int = 4
+    pre_generation_web_research_exa_enabled: bool = True
+    pre_generation_web_research_grok_enabled: bool = True
     
     # LinuxDO OAuth2 配置
     LINUXDO_CLIENT_ID: Optional[str] = None

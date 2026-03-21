@@ -335,6 +335,26 @@ export const settingsApi = {
       suggestions?: string[];
     }>('/settings/test', params),
 
+  testWebResearchConnection: (params: {
+    provider: 'exa' | 'grok';
+    exa_api_key?: string;
+    grok_api_key?: string;
+    grok_base_url?: string;
+    grok_model?: string;
+    query?: string;
+  }) =>
+    api.post<unknown, {
+      success: boolean;
+      provider: string;
+      message: string;
+      response_preview?: string;
+      result_count?: number;
+      source_count?: number;
+      error?: string;
+      error_type?: string;
+      suggestions?: string[];
+    }>('/settings/test-web-research', params),
+
   checkFunctionCalling: (params: { api_key: string; api_base_url: string; provider: string; llm_model: string }) =>
     api.post<unknown, {
       success: boolean;
@@ -1751,6 +1771,8 @@ export const wizardStreamApi = {
       outline_mode?: 'one-to-one' | 'one-to-many';  // 添加大纲模式参数
       provider?: string;
       model?: string;
+      enable_web_research?: boolean;
+      web_research_query?: string;
     },
     options?: SSEClientOptions
   ) => runBackgroundTaskWithPolling<WorldBuildingResponse>(
@@ -1770,6 +1792,8 @@ export const wizardStreamApi = {
       requirements?: string;
       provider?: string;
       model?: string;
+      enable_web_research?: boolean;
+      web_research_query?: string;
     },
     options?: SSEClientOptions
   ) => runBackgroundTaskWithPolling<GenerateCharactersResponse>(
@@ -1784,6 +1808,8 @@ export const wizardStreamApi = {
       project_id: string;
       provider?: string;
       model?: string;
+      enable_web_research?: boolean;
+      web_research_query?: string;
     },
     options?: SSEClientOptions
   ) => runBackgroundTaskWithPolling<{
@@ -1792,6 +1818,14 @@ export const wizardStreamApi = {
     sub_careers_count: number;
     main_careers: string[];
     sub_careers: string[];
+    research_query?: string;
+    research_assets?: Array<{
+      title: string;
+      source?: string;
+      summary?: string;
+      usage_hint?: string;
+      asset_type?: string;
+    }>;
   }>(
     'wizard_career_system',
     data.project_id,
@@ -1810,6 +1844,8 @@ export const wizardStreamApi = {
       model?: string;
       creative_mode?: CreativeMode;
       story_focus?: StoryFocus;
+      enable_web_research?: boolean;
+      web_research_query?: string;
     },
     options?: SSEClientOptions
   ) => runBackgroundTaskWithPolling<GenerateOutlineResponse>(

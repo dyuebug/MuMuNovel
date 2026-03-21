@@ -121,6 +121,11 @@ class ChapterGenerateRequest(BaseModel):
     )
     enable_analysis: bool = Field(True, description="是否启用同步分析")
     enable_mcp: bool = Field(True, description="是否启用MCP工具增强（搜索参考资料）")
+    enable_web_research: Optional[bool] = Field(
+        None,
+        description="是否在章节生成前执行 Exa/Grok 网络检索；不传则跟随后端全局配置",
+    )
+    web_research_query: Optional[str] = Field(None, description="可选，自定义生成前网络检索 query")
     model: Optional[str] = Field(None, description="指定使用的AI模型，不提供则使用用户默认模型")
     narrative_perspective: Optional[str] = Field(None, description="临时人称视角：first_person/third_person/omniscient，不提供则使用项目默认")
     creative_mode: Optional[str] = Field(
@@ -154,6 +159,11 @@ class BatchGenerateRequest(BaseModel):
     )
     enable_analysis: bool = Field(False, description="是否启用同步分析")
     enable_mcp: bool = Field(True, description="是否启用MCP工具增强（搜索参考资料）")
+    enable_web_research: Optional[bool] = Field(
+        None,
+        description="是否在章节生成前执行 Exa/Grok 网络检索；不传则跟随后端全局配置",
+    )
+    web_research_query: Optional[str] = Field(None, description="可选，自定义生成前网络检索 query")
     max_retries: int = Field(3, description="每个章节的最大重试次数", ge=0, le=5)
     model: Optional[str] = Field(None, description="指定使用的AI模型，不提供则使用用户默认模型")
 
