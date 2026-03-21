@@ -27,6 +27,7 @@ def build_settings_payload(**overrides):
         "web_research_exa_enabled": True,
         "web_research_grok_enabled": True,
         "web_research_exa_api_key": "exa-test-key",
+        "web_research_exa_base_url": "https://exa.chengtx.vip",
         "web_research_grok_api_key": "grok-test-key",
         "web_research_grok_base_url": "https://grok.example.com/v1",
         "web_research_grok_model": "grok-4.1-fast",
@@ -205,6 +206,7 @@ async def test_should_store_web_research_settings_in_preferences(async_client, t
     body = response.json()
     assert body["web_research_enabled"] is True
     assert body["web_research_exa_api_key"] == "exa-test-key"
+    assert body["web_research_exa_base_url"] == "https://exa.chengtx.vip"
     assert body["web_research_grok_base_url"] == "https://grok.example.com/v1"
 
     saved = await fetch_settings(test_db, mock_user.user_id)
@@ -212,6 +214,7 @@ async def test_should_store_web_research_settings_in_preferences(async_client, t
     web_research = prefs["web_research"]
     assert web_research["web_research_enabled"] is True
     assert web_research["web_research_exa_api_key"] == "exa-test-key"
+    assert web_research["web_research_exa_base_url"] == "https://exa.chengtx.vip"
     assert web_research["web_research_grok_api_key"] == "grok-test-key"
 
 
@@ -623,6 +626,7 @@ async def test_should_return_failure_for_common_api_errors(
 async def test_should_test_web_research_connection(async_client, monkeypatch):
     async def fake_test_provider_connection(**kwargs):
         assert kwargs["provider"] == "exa"
+        assert kwargs["overrides"]["exa_base_url"] == "https://exa.chengtx.vip"
         return {
             "success": True,
             "provider": "exa",
@@ -642,6 +646,7 @@ async def test_should_test_web_research_connection(async_client, monkeypatch):
         json={
             "provider": "exa",
             "exa_api_key": "exa-test-key",
+            "exa_base_url": "https://exa.chengtx.vip",
         },
     )
     assert response.status_code == 200

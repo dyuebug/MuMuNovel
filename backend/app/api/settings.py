@@ -42,6 +42,7 @@ WEB_RESEARCH_DEFAULTS = {
     "web_research_exa_enabled": True,
     "web_research_grok_enabled": True,
     "web_research_exa_api_key": "",
+    "web_research_exa_base_url": "",
     "web_research_grok_api_key": "",
     "web_research_grok_base_url": "",
     "web_research_grok_model": "grok-4.1-fast",
@@ -596,6 +597,7 @@ class WebResearchTestRequest(BaseModel):
 
     provider: str
     exa_api_key: Optional[str] = None
+    exa_base_url: Optional[str] = None
     grok_api_key: Optional[str] = None
     grok_base_url: Optional[str] = None
     grok_model: Optional[str] = None
@@ -1012,6 +1014,7 @@ async def test_web_research_connection(data: WebResearchTestRequest):
             "exa_enabled": provider == "exa",
             "grok_enabled": provider == "grok",
             "exa_api_key": data.exa_api_key,
+            "exa_base_url": data.exa_base_url,
             "grok_api_key": data.grok_api_key,
             "grok_base_url": data.grok_base_url,
             "grok_model": data.grok_model,

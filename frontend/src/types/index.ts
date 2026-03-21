@@ -30,6 +30,7 @@ export interface Settings {
   web_research_exa_enabled?: boolean;
   web_research_grok_enabled?: boolean;
   web_research_exa_api_key?: string;
+  web_research_exa_base_url?: string;
   web_research_grok_api_key?: string;
   web_research_grok_base_url?: string;
   web_research_grok_model?: string;
@@ -54,6 +55,7 @@ export interface SettingsUpdate {
   web_research_exa_enabled?: boolean;
   web_research_grok_enabled?: boolean;
   web_research_exa_api_key?: string;
+  web_research_exa_base_url?: string;
   web_research_grok_api_key?: string;
   web_research_grok_base_url?: string;
   web_research_grok_model?: string;

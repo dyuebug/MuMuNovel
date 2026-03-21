@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock
 
+from app.services.ai_config import AIClientConfig
 from app.services.ai_clients.openai_client import OpenAIClient
 
 
@@ -22,6 +23,32 @@ class FakeStreamResponse:
     async def aiter_lines(self):
         for line in self._lines:
             yield line
+
+
+class FakeInvalidJsonResponse:
+    status_code = 200
+    text = "<html>bad gateway</html>"
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        raise json.JSONDecodeError("Expecting value", "", 0)
+
+
+class FakeSSEJsonResponse:
+    status_code = 200
+    text = '\n'.join([
+        'data: {"choices":[{"delta":{"content":"Hello "},"finish_reason":null}]}',
+        'data: {"choices":[{"delta":{"content":"world"},"finish_reason":"stop"}]}',
+        'data: [DONE]',
+    ])
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        raise json.JSONDecodeError("Expecting value", "", 0)
 
 
 @pytest.mark.asyncio
@@ -186,3 +213,54 @@ async def test_should_stream_responses_delta_and_tool_calls_for_sub2api():
     assert any(chunk.get("content") == "Hello " for chunk in chunks)
     assert any(chunk.get("tool_calls") for chunk in chunks)
     assert any(chunk.get("done") is True for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_should_raise_readable_error_when_response_is_not_json():
+    config = AIClientConfig()
+    config.retry.max_retries = 1
+    config.rate_limit.request_delay = 0
+
+    client = OpenAIClient(
+        api_key="sk-test",
+        base_url="https://ai.zzhdsgsss.xyz",
+        compat_profile="openai",
+        config=config,
+    )
+    client.http_client.request = AsyncMock(return_value=FakeInvalidJsonResponse())
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await client.chat_completion(
+            messages=[{"role": "user", "content": "ping"}],
+            model="grok-4.1-fast",
+            temperature=0.0,
+            max_tokens=32,
+        )
+
+    assert "非 JSON 内容" in str(exc_info.value)
+    assert "/v1" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_should_parse_sse_text_body_when_proxy_returns_data_lines():
+    config = AIClientConfig()
+    config.retry.max_retries = 1
+    config.rate_limit.request_delay = 0
+
+    client = OpenAIClient(
+        api_key="sk-test",
+        base_url="https://ai.zzhdsgsss.xyz/v1",
+        compat_profile="openai",
+        config=config,
+    )
+    client.http_client.request = AsyncMock(return_value=FakeSSEJsonResponse())
+
+    result = await client.chat_completion(
+        messages=[{"role": "user", "content": "ping"}],
+        model="grok-4.1-fast",
+        temperature=0.0,
+        max_tokens=32,
+    )
+
+    assert result["content"] == "Hello world"
+    assert result["finish_reason"] == "stop"

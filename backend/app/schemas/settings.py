@@ -24,6 +24,7 @@ class SettingsBase(BaseModel):
     web_research_exa_enabled: Optional[bool] = Field(default=True, description="是否启用 Exa 检索")
     web_research_grok_enabled: Optional[bool] = Field(default=True, description="是否启用 Grok 检索")
     web_research_exa_api_key: Optional[str] = Field(default=None, description="Exa API Key")
+    web_research_exa_base_url: Optional[str] = Field(default=None, description="Exa Base URL")
     web_research_grok_api_key: Optional[str] = Field(default=None, description="Grok API Key")
     web_research_grok_base_url: Optional[str] = Field(default=None, description="Grok Base URL")
     web_research_grok_model: Optional[str] = Field(default="grok-4.1-fast", description="Grok 模型名称")

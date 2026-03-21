@@ -1,5 +1,5 @@
-﻿import { useState, useEffect } from 'react';
-import { Card, Form, Input, Button, Select, Slider, InputNumber, message, Space, Typography, Spin, Modal, Alert, Grid, Tabs, List, Tag, Popconfirm, Empty, Row, Col, Radio, Switch } from 'antd';
+import { useState, useEffect } from 'react';
+import { Card, Form, Input, Button, Select, Slider, InputNumber, message, Space, Typography, Spin, Modal, Alert, Grid, Tabs, List, Tag, Popconfirm, Empty, Row, Col, Radio, Segmented, Switch } from 'antd';
 import { SaveOutlined, DeleteOutlined, ReloadOutlined, InfoCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, ThunderboltOutlined, PlusOutlined, EditOutlined, CopyOutlined, WarningOutlined } from '@ant-design/icons';
 import { settingsApi, mcpPluginApi } from '../services/api';
 import type { SettingsUpdate, APIKeyPreset, PresetCreateRequest, APIKeyPresetConfig } from '../types';
@@ -14,6 +14,7 @@ const { useBreakpoint } = Grid;
 const { TextArea } = Input;
 
 type ModelOption = { value: string; label: string; description: string };
+type SettingsSectionKey = 'provider' | 'network' | 'model' | 'research';
 
 const buildModelSelectOptions = (
   options: ModelOption[],
@@ -76,6 +77,7 @@ export default function SettingsPage() {
 
   // 预设相关状态
   const [activeTab, setActiveTab] = useState('current');
+  const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSectionKey>('provider');
   const [presets, setPresets] = useState<APIKeyPreset[]>([]);
   const [presetsLoading, setPresetsLoading] = useState(false);
   const [activePresetId, setActivePresetId] = useState<string | undefined>();
@@ -98,6 +100,104 @@ export default function SettingsPage() {
     status?: 'success' | 'error' | 'pending' | 'untested';
   }>>([]);
   const [fallbackStrategy, setFallbackStrategy] = useState<'auto' | 'manual'>('auto');
+
+  const watchedProvider = Form.useWatch('api_provider', form) || selectedProvider;
+  const watchedModel = Form.useWatch('llm_model', form) || '未设置';
+  const watchedBaseUrl = Form.useWatch('api_base_url', form) || '未设置';
+  const watchedTemperature = Form.useWatch('temperature', form) ?? 0.7;
+  const watchedMaxTokens = Form.useWatch('max_tokens', form) ?? '未设置';
+  const watchedWebResearchEnabled = Boolean(Form.useWatch('web_research_enabled', form));
+  const watchedExaEnabled = Form.useWatch('web_research_exa_enabled', form) !== false;
+  const watchedGrokEnabled = Form.useWatch('web_research_grok_enabled', form) !== false;
+
+  const clipDisplayText = (value: string, limit = isMobile ? 20 : 32) => {
+    const normalized = value.trim();
+    if (!normalized) return '未设置';
+    return normalized.length <= limit ? normalized : `${normalized.slice(0, limit - 1)}…`;
+  };
+
+  const sectionCardStyle = {
+    marginBottom: isMobile ? 16 : 20,
+    borderRadius: isMobile ? 14 : 18,
+    border: '1px solid #edf2f7',
+    boxShadow: '0 10px 30px rgba(15, 23, 42, 0.05)',
+    background: 'linear-gradient(180deg, #ffffff 0%, #fbfdff 100%)',
+    overflow: 'hidden' as const,
+  };
+
+  const sectionCardStyles = {
+    header: {
+      padding: isMobile ? '14px 16px' : '16px 20px',
+      borderBottom: '1px solid #f1f5f9',
+      background: 'rgba(248, 250, 252, 0.9)',
+    },
+    body: {
+      padding: isMobile ? 16 : 20,
+    },
+  };
+
+  const fieldPanelStyle = {
+    padding: isMobile ? 14 : 16,
+    borderRadius: 14,
+    border: '1px solid #eef2f7',
+    background: 'linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)',
+    height: '100%',
+  };
+
+  const fieldHintTextStyle = {
+    display: 'block',
+    marginBottom: 12,
+    color: 'var(--color-text-secondary)',
+    fontSize: isMobile ? 12 : 13,
+    lineHeight: 1.65,
+  };
+
+  const renderSectionTitle = (title: string, description: string, tagLabel: string, tagColor: string) => (
+    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+      <Space wrap size={8}>
+        <Text strong style={{ fontSize: isMobile ? 15 : 16 }}>{title}</Text>
+        <Tag color={tagColor} style={{ marginInlineEnd: 0 }}>{tagLabel}</Tag>
+      </Space>
+      <Text style={{ fontSize: isMobile ? 12 : 13, color: 'var(--color-text-secondary)' }}>
+        {description}
+      </Text>
+    </Space>
+  );
+
+  const settingsSectionItems: Array<{
+    key: SettingsSectionKey;
+    label: string;
+    description: string;
+    summary: string;
+  }> = [
+    {
+      key: 'provider',
+      label: '基础接入',
+      description: '选择 API 提供商，并填写 Key 与基础地址。',
+      summary: String(watchedProvider).toUpperCase(),
+    },
+    {
+      key: 'network',
+      label: '网络容灾',
+      description: '维护主备端点与切换策略，提升稳定性。',
+      summary: `${Math.max(endpoints.length, watchedBaseUrl === '未设置' ? 0 : 1)} 个端点 / ${fallbackStrategy === 'auto' ? '自动降级' : '手动切换'}`,
+    },
+    {
+      key: 'model',
+      label: '生成参数',
+      description: '配置模型、温度、Token 与系统提示词。',
+      summary: `${clipDisplayText(String(watchedModel), isMobile ? 12 : 18)} / Token ${String(watchedMaxTokens)}`,
+    },
+    {
+      key: 'research',
+      label: '联网检索',
+      description: '分别配置 Exa 与 Grok 的检索增强能力。',
+      summary: watchedWebResearchEnabled ? `Exa ${watchedExaEnabled ? '开' : '关'} / Grok ${watchedGrokEnabled ? '开' : '关'}` : '总开关关闭',
+    },
+  ];
+
+  const activeSettingsSectionMeta =
+    settingsSectionItems.find((item) => item.key === activeSettingsSection) || settingsSectionItems[0];
 
   useEffect(() => {
     loadSettings();
@@ -165,6 +265,7 @@ export default function SettingsPage() {
           web_research_enabled: false,
           web_research_exa_enabled: true,
           web_research_grok_enabled: true,
+          web_research_exa_base_url: '',
           web_research_grok_model: 'grok-4.1-fast',
         });
       } else {
@@ -328,6 +429,7 @@ export default function SettingsPage() {
           web_research_exa_enabled: true,
           web_research_grok_enabled: true,
           web_research_exa_api_key: '',
+          web_research_exa_base_url: '',
           web_research_grok_api_key: '',
           web_research_grok_base_url: '',
           web_research_grok_model: 'grok-4.1-fast',
@@ -498,6 +600,7 @@ export default function SettingsPage() {
 
   const handleTestWebResearch = async (provider: 'exa' | 'grok') => {
     const exaApiKey = form.getFieldValue('web_research_exa_api_key');
+    const exaBaseUrl = form.getFieldValue('web_research_exa_base_url');
     const grokApiKey = form.getFieldValue('web_research_grok_api_key');
     const grokBaseUrl = form.getFieldValue('web_research_grok_base_url');
     const grokModel = form.getFieldValue('web_research_grok_model');
@@ -517,6 +620,7 @@ export default function SettingsPage() {
       const result = await settingsApi.testWebResearchConnection({
         provider,
         exa_api_key: exaApiKey,
+        exa_base_url: exaBaseUrl,
         grok_api_key: grokApiKey,
         grok_base_url: grokBaseUrl,
         grok_model: grokModel,
@@ -1216,393 +1320,744 @@ export default function SettingsPage() {
                           onFinish={handleSave}
                           autoComplete="off"
                         >
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>API 提供商</span>
-                                <InfoCircleOutlined
-                                  title="选择你的AI服务提供商"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="api_provider"
-                            rules={[{ required: true, message: '请选择API提供商' }]}
+                          <Card
+                            size="small"
+                            style={{
+                              ...sectionCardStyle,
+                              background: 'linear-gradient(135deg, rgba(77, 128, 136, 0.08) 0%, rgba(90, 155, 165, 0.04) 100%)',
+                            }}
+                            styles={{
+                              body: {
+                                padding: isMobile ? 14 : 18,
+                              },
+                            }}
                           >
-                            <ProviderSelector
-                              value={selectedProvider}
-                              onChange={(value) => {
-                                handleProviderChange(value);
-                                form.setFieldValue('api_provider', value);
-                              }}
-                            />
-                          </Form.Item>
-
-                          <AzureConfigGuide visible={selectedProvider === 'azure'} />
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>API 密钥</span>
-                                <InfoCircleOutlined
-                                  title="你的API密钥，将加密存储"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="api_key"
-                            rules={[{ required: true, message: '请输入API密钥' }]}
-                          >
-                            <Input.Password
-                              size={isMobile ? 'middle' : 'large'}
-                              placeholder="sk-..."
-                              autoComplete="new-password"
-                            />
-                          </Form.Item>
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>API 地址</span>
-                                <InfoCircleOutlined
-                                  title="API的基础URL地址"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="api_base_url"
-                            rules={[
-                              { required: true, message: '请输入API地址' },
-                              { type: 'url', message: '请输入有效的URL' }
-                            ]}
-                          >
-                            <Input
-                              size={isMobile ? 'middle' : 'large'}
-                              placeholder="https://api.openai.com/v1"
-                              onChange={(e) => {
-                                // 同步更新端点列表的主端点
-                                const url = e.target.value;
-                                setEndpoints(prev => {
-                                  if (prev.length === 0) return [{ url, type: 'primary', status: 'untested' as const }];
-                                  const updated = [...prev];
-                                  updated[0] = { ...updated[0], url, status: 'untested' as const };
-                                  return updated;
-                                });
-                              }}
-                            />
-                          </Form.Item>
-
-                          {/* 备用端点配置 */}
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>端点配置</span>
-                                <InfoCircleOutlined
-                                  title="配置主备端点，主端点失败时自动切换到备端点"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                          >
-                            <EndpointListEditor
-                              endpoints={endpoints}
-                              onChange={setEndpoints}
-                              loading={testingApi}
-                            />
-                          </Form.Item>
-
-                          <Form.Item
-                            label="端点切换策略"
-                          >
-                            <Radio.Group value={fallbackStrategy} onChange={(e) => setFallbackStrategy(e.target.value)}>
-                              <Radio value="auto">自动降级（主端点失败自动切换备端点）</Radio>
-                              <Radio value="manual">手动切换</Radio>
-                            </Radio.Group>
-                          </Form.Item>
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>模型名称</span>
-                                <InfoCircleOutlined
-                                  title="AI模型的名称，如 gpt-4, gpt-3.5-turbo"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="llm_model"
-                            rules={[{ required: true, message: '请输入或选择模型名称' }]}
-                          >
-                            <Select
-                              size={isMobile ? 'middle' : 'large'}
-                              showSearch
-                              placeholder={isMobile ? "选择模型" : "输入模型名称或点击获取"}
-                              optionFilterProp="label"
-                              loading={fetchingModels}
-                              onFocus={handleModelSelectFocus}
-                              onSearch={(value) => setModelSearchText(value)}
-                              onChange={() => setModelSearchText('')}
-                              onBlur={() => {
-                                const customModel = modelSearchText.trim();
-                                if (customModel) {
-                                  form.setFieldValue('llm_model', customModel);
-                                }
-                              }}
-                              onInputKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                  const customModel = modelSearchText.trim();
-                                  if (customModel) {
-                                    form.setFieldValue('llm_model', customModel);
-                                  }
-                                }
-                              }}
-                              filterOption={(input, option) =>
-                                (option?.label ?? '').toLowerCase().includes(input.toLowerCase()) ||
-                                (option?.description ?? '').toLowerCase().includes(input.toLowerCase())
-                              }
-                              dropdownRender={(menu) => (
-                                <>
-                                  {menu}
-                                  {fetchingModels && (
-                                    <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                      <Spin size="small" /> 正在获取模型列表...
-                                    </div>
-                                  )}
-                                  {!fetchingModels && modelOptions.length === 0 && modelsFetched && (
-                                    <div style={{ padding: '8px 12px', color: '#ff4d4f', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                      未能获取到模型列表，请检查 API 配置
-                                    </div>
-                                  )}
-                                  {!fetchingModels && modelOptions.length === 0 && !modelsFetched && (
-                                    <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                      点击输入框自动获取模型列表
-                                    </div>
-                                  )}
-                                </>
-                              )}
-                              notFoundContent={
-                                fetchingModels ? (
-                                  <div style={{ padding: '8px 12px', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                    <Spin size="small" /> 加载中...
-                                  </div>
-                                ) : (
-                                  <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                    未找到匹配的模型，可直接输入后按回车
-                                  </div>
-                                )
-                              }
-                              suffixIcon={
-                                !isMobile ? (
+                            <Row gutter={[12, 12]}>
+                              {[
+                                {
+                                  label: '当前提供商',
+                                  value: String(watchedProvider).toUpperCase(),
+                                  hint: '决定协议与兼容行为',
+                                },
+                                {
+                                  label: '当前模型',
+                                  value: clipDisplayText(String(watchedModel)),
+                                  hint: '生成与测试将复用',
+                                },
+                                {
+                                  label: '主端点',
+                                  value: clipDisplayText(String(watchedBaseUrl), isMobile ? 18 : 28),
+                                  hint: `已配置 ${Math.max(endpoints.length, watchedBaseUrl === '未设置' ? 0 : 1)} 个端点`,
+                                },
+                                {
+                                  label: '联网检索',
+                                  value: watchedWebResearchEnabled ? '已开启' : '已关闭',
+                                  hint: `Exa ${watchedExaEnabled ? '开启' : '关闭'} / Grok ${watchedGrokEnabled ? '开启' : '关闭'}`,
+                                },
+                              ].map((item) => (
+                                <Col xs={12} lg={6} key={item.label}>
                                   <div
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (!fetchingModels) {
-                                        setModelsFetched(false);
-                                        handleFetchModels(false);
-                                      }
-                                    }}
                                     style={{
-                                      cursor: fetchingModels ? 'not-allowed' : 'pointer',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      padding: '0 4px',
                                       height: '100%',
-                                      marginRight: -8
+                                      padding: isMobile ? '10px 12px' : '12px 14px',
+                                      borderRadius: 12,
+                                      background: 'rgba(255,255,255,0.82)',
+                                      border: '1px solid rgba(77, 128, 136, 0.10)',
                                     }}
-                                    title="重新获取模型列表"
                                   >
-                                    <Button
-                                      type="text"
-                                      size="small"
-                                      icon={<ReloadOutlined />}
-                                      loading={fetchingModels}
-                                      style={{ pointerEvents: 'none' }}
-                                    >
-                                      刷新
-                                    </Button>
-                                  </div>
-                                ) : undefined
-                              }
-                              options={mergedModelOptions.map(model => ({
-                                value: model.value,
-                                label: model.label,
-                                description: model.description
-                              }))}
-                              optionRender={(option) => (
-                                <div>
-                                  <div style={{ fontWeight: 500, fontSize: isMobile ? '13px' : '14px' }}>{option.data.label}</div>
-                                  {option.data.description && (
-                                    <div style={{ fontSize: isMobile ? '11px' : '12px', color: '#8c8c8c', marginTop: '2px' }}>
-                                      {option.data.description}
+                                    <Text style={{ fontSize: isMobile ? 11 : 12, color: 'var(--color-text-secondary)' }}>
+                                      {item.label}
+                                    </Text>
+                                    <div style={{ marginTop: 6, fontSize: isMobile ? 13 : 15, fontWeight: 600, color: '#22313f' }}>
+                                      {item.value}
                                     </div>
-                                  )}
-                                </div>
-                              )}
-                            />
-                          </Form.Item>
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>温度参数</span>
-                                <InfoCircleOutlined
-                                  title="控制输出的随机性，值越高越随机（0.0-2.0）"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="temperature"
-                          >
-                            <Slider
-                              min={0}
-                              max={2}
-                              step={0.1}
-                              marks={{
-                                0: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '0.0' },
-                                0.7: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '0.7' },
-                                1: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '1.0' },
-                                2: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '2.0' }
-                              }}
-                            />
-                          </Form.Item>
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>最大 Token 数</span>
-                                <InfoCircleOutlined
-                                  title="单次请求的最大token数量"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="max_tokens"
-                            rules={[
-                              { required: true, message: '请输入最大token数' },
-                              { type: 'number', min: 1, message: '请输入大于0的数字' }
-                            ]}
-                          >
-                            <InputNumber
-                              size={isMobile ? 'middle' : 'large'}
-                              style={{ width: '100%' }}
-                              min={1}
-                              placeholder="2000"
-                            />
-                          </Form.Item>
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>系统提示词</span>
-                                <InfoCircleOutlined
-                                  title="设置全局系统提示词，每次AI调用时都会自动使用。可用于设定AI的角色、语言风格等"
-                                  style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="system_prompt"
-                          >
-                            <TextArea
-                              rows={4}
-                              placeholder="例如：你是一个专业的小说创作助手，请用生动、细腻的文字进行创作..."
-                              maxLength={10000}
-                              showCount
-                              style={{ fontSize: isMobile ? '13px' : '14px' }}
-                            />
-                          </Form.Item>
+                                    <Text style={{ fontSize: isMobile ? 11 : 12, color: '#8c8c8c' }}>
+                                      {item.hint}
+                                    </Text>
+                                  </div>
+                                </Col>
+                              ))}
+                            </Row>
+                          </Card>
 
                           <Card
                             size="small"
-                            title="生成前网络检索"
-                            style={{ marginBottom: isMobile ? 16 : 24 }}
+                            style={{
+                              ...sectionCardStyle,
+                              background: 'linear-gradient(135deg, rgba(24, 144, 255, 0.08) 0%, rgba(255, 255, 255, 0.98) 100%)',
+                            }}
+                            styles={{
+                              body: {
+                                padding: isMobile ? 14 : 18,
+                              },
+                            }}
+                          >
+                            <Space direction="vertical" size={14} style={{ width: '100%' }}>
+                              <Row gutter={[12, 12]} align="middle" justify="space-between">
+                                <Col xs={24} md={16}>
+                                  <Space direction="vertical" size={2}>
+                                    <Text strong style={{ fontSize: isMobile ? 14 : 15 }}>配置分类菜单</Text>
+                                    <Text style={{ fontSize: isMobile ? 12 : 13, color: 'var(--color-text-secondary)' }}>
+                                      当前仅展示一个分区，减少长表单滚动；保存时仍会提交整张表单。
+                                    </Text>
+                                  </Space>
+                                </Col>
+                                <Col xs={24} md="auto">
+                                  <Tag color="processing" style={{ marginInlineEnd: 0 }}>
+                                    当前：{activeSettingsSectionMeta.label}
+                                  </Tag>
+                                </Col>
+                              </Row>
+
+                              <Segmented
+                                block
+                                size={isMobile ? 'middle' : 'large'}
+                                value={activeSettingsSection}
+                                onChange={(value) => setActiveSettingsSection(value as SettingsSectionKey)}
+                                options={settingsSectionItems.map((item) => ({
+                                  value: item.key,
+                                  label: item.label,
+                                }))}
+                              />
+
+                              <div
+                                style={{
+                                  padding: isMobile ? '12px 14px' : '14px 16px',
+                                  borderRadius: 12,
+                                  background: 'rgba(255, 255, 255, 0.88)',
+                                  border: '1px solid rgba(24, 144, 255, 0.12)',
+                                }}
+                              >
+                                <Text strong>{activeSettingsSectionMeta.label}</Text>
+                                <div style={{ marginTop: 4 }}>
+                                  <Text style={{ fontSize: isMobile ? 12 : 13, color: 'var(--color-text-secondary)' }}>
+                                    {activeSettingsSectionMeta.description}
+                                  </Text>
+                                </div>
+                                <Tag color="blue" style={{ marginTop: 10, marginInlineEnd: 0 }}>
+                                  {activeSettingsSectionMeta.summary}
+                                </Tag>
+                              </div>
+                            </Space>
+                          </Card>
+
+                          <div style={{ display: activeSettingsSection === 'provider' ? 'block' : 'none' }}>
+                          <Card
+                            size="small"
+                            title={renderSectionTitle('供应商与凭证', '先确定服务提供商，再填写 API Key 与主地址。', '基础接入', 'blue')}
+                            style={sectionCardStyle}
+                            styles={sectionCardStyles}
+                          >
+                            <Text style={{ ...fieldHintTextStyle, marginBottom: 16 }}>
+                              这里负责最基础的接入信息。若你使用 OpenAI 兼容中转站，建议把基础地址填写到完整的 <code>/v1</code> 路径。
+                            </Text>
+
+                            <Row gutter={[16, 16]}>
+                              <Col xs={24}>
+                                <div style={fieldPanelStyle}>
+                                  <Form.Item
+                                    label={
+                                      <Space size={4}>
+                                        <span>API 提供商</span>
+                                        <InfoCircleOutlined
+                                          title="选择你的AI服务提供商"
+                                          style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                        />
+                                      </Space>
+                                    }
+                                    name="api_provider"
+                                    rules={[{ required: true, message: '请选择API提供商' }]}
+                                    style={{ marginBottom: 0 }}
+                                  >
+                                    <ProviderSelector
+                                      value={selectedProvider}
+                                      onChange={(value) => {
+                                        handleProviderChange(value);
+                                        form.setFieldValue('api_provider', value);
+                                      }}
+                                    />
+                                  </Form.Item>
+                                </div>
+                              </Col>
+
+                              {selectedProvider === 'azure' && (
+                                <Col xs={24}>
+                                  <AzureConfigGuide visible />
+                                </Col>
+                              )}
+
+                              <Col xs={24} lg={10}>
+                                <div style={fieldPanelStyle}>
+                                  <Text style={fieldHintTextStyle}>
+                                    仅用于接口鉴权，支持官方 Key、兼容网关 Key 与各类 NewAPI / 中转服务。
+                                  </Text>
+                                  <Form.Item
+                                    label={
+                                      <Space size={4}>
+                                        <span>API 密钥</span>
+                                        <InfoCircleOutlined
+                                          title="你的API密钥，将加密存储"
+                                          style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                        />
+                                      </Space>
+                                    }
+                                    name="api_key"
+                                    rules={[{ required: true, message: '请输入API密钥' }]}
+                                    style={{ marginBottom: 0 }}
+                                  >
+                                    <Input.Password
+                                      size={isMobile ? 'middle' : 'large'}
+                                      placeholder="sk-..."
+                                      autoComplete="new-password"
+                                    />
+                                  </Form.Item>
+                                </div>
+                              </Col>
+
+                              <Col xs={24} lg={14}>
+                                <div style={fieldPanelStyle}>
+                                  <Text style={fieldHintTextStyle}>
+                                    建议填写完整基础路径；若走代理或中转站，请优先确认是否需要显式追加 <code>/v1</code>。
+                                  </Text>
+                                  <Form.Item
+                                    label={
+                                      <Space size={4}>
+                                        <span>API 地址</span>
+                                        <InfoCircleOutlined
+                                          title="API的基础URL地址"
+                                          style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                        />
+                                      </Space>
+                                    }
+                                    name="api_base_url"
+                                    rules={[
+                                      { required: true, message: '请输入API地址' },
+                                      { type: 'url', message: '请输入有效的URL' }
+                                    ]}
+                                    style={{ marginBottom: 0 }}
+                                  >
+                                    <Input
+                                      size={isMobile ? 'middle' : 'large'}
+                                      placeholder="https://api.openai.com/v1"
+                                      onChange={(e) => {
+                                        const url = e.target.value;
+                                        setEndpoints(prev => {
+                                          if (prev.length === 0) return [{ url, type: 'primary', status: 'untested' as const }];
+                                          const updated = [...prev];
+                                          updated[0] = { ...updated[0], url, status: 'untested' as const };
+                                          return updated;
+                                        });
+                                      }}
+                                    />
+                                  </Form.Item>
+                                </div>
+                              </Col>
+                            </Row>
+                          </Card>
+                          </div>
+
+                          <div style={{ display: activeSettingsSection === 'network' ? 'block' : 'none' }}>
+                          <Card
+                            size="small"
+                            title={renderSectionTitle('网络与容灾', '配置主备端点与切换策略，提升稳定性与可恢复性。', '高可用', 'cyan')}
+                            style={sectionCardStyle}
+                            styles={sectionCardStyles}
+                          >
+                            <Text style={{ ...fieldHintTextStyle, marginBottom: 16 }}>
+                              主端点负责日常请求，备用端点用于降级。若你使用多个代理或网关，可以在这里统一维护主备链路。
+                            </Text>
+
+                            <Row gutter={[16, 16]}>
+                              <Col xs={24} xl={16}>
+                                <div style={fieldPanelStyle}>
+                                  <Form.Item
+                                    label={
+                                      <Space size={4}>
+                                        <span>端点配置</span>
+                                        <InfoCircleOutlined
+                                          title="配置主备端点，主端点失败时自动切换到备端点"
+                                          style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                        />
+                                      </Space>
+                                    }
+                                    style={{ marginBottom: 0 }}
+                                  >
+                                    <EndpointListEditor
+                                      endpoints={endpoints}
+                                      onChange={setEndpoints}
+                                      loading={testingApi}
+                                    />
+                                  </Form.Item>
+                                </div>
+                              </Col>
+
+                              <Col xs={24} xl={8}>
+                                <div
+                                  style={{
+                                    ...fieldPanelStyle,
+                                    background: 'linear-gradient(180deg, #f6feff 0%, #ffffff 100%)',
+                                  }}
+                                >
+                                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                    <div
+                                      style={{
+                                        padding: 12,
+                                        borderRadius: 12,
+                                        background: 'rgba(24, 144, 255, 0.06)',
+                                        border: '1px solid rgba(24, 144, 255, 0.12)',
+                                      }}
+                                    >
+                                      <Text strong style={{ display: 'block', marginBottom: 4 }}>
+                                        切换建议
+                                      </Text>
+                                      <Text style={{ fontSize: isMobile ? 12 : 13, color: 'var(--color-text-secondary)' }}>
+                                        自动降级更适合日常使用；若你想固定单一端点并手动排查故障，再选择手动切换。
+                                      </Text>
+                                    </div>
+
+                                    <Space wrap size={[8, 8]}>
+                                      <Tag color="cyan">
+                                        已配置端点：{Math.max(endpoints.length, watchedBaseUrl === '未设置' ? 0 : 1)}
+                                      </Tag>
+                                      <Tag color={fallbackStrategy === 'auto' ? 'success' : 'default'}>
+                                        当前策略：{fallbackStrategy === 'auto' ? '自动降级' : '手动切换'}
+                                      </Tag>
+                                    </Space>
+
+                                    <Form.Item label="端点切换策略" style={{ marginBottom: 0 }}>
+                                      <Radio.Group value={fallbackStrategy} onChange={(e) => setFallbackStrategy(e.target.value)}>
+                                        <Space direction="vertical" size={8}>
+                                          <Radio value="auto">自动降级（主端点失败自动切换备端点）</Radio>
+                                          <Radio value="manual">手动切换</Radio>
+                                        </Space>
+                                      </Radio.Group>
+                                    </Form.Item>
+                                  </Space>
+                                </div>
+                              </Col>
+                            </Row>
+                          </Card>
+                          </div>
+
+                          <div style={{ display: activeSettingsSection === 'model' ? 'block' : 'none' }}>
+                          <Card
+                            size="small"
+                            title={renderSectionTitle('模型与生成参数', '调节模型、温度、Token 与系统提示词，控制输出风格与成本。', '生成策略', 'purple')}
+                            style={sectionCardStyle}
+                            styles={sectionCardStyles}
+                          >
+                            <Text style={{ ...fieldHintTextStyle, marginBottom: 16 }}>
+                              这里控制模型能力、生成长度与文风。建议先确定模型，再微调 Token、温度和系统提示词。
+                            </Text>
+
+                            <Row gutter={[16, 16]}>
+                              <Col xs={24} xl={16}>
+                                <div style={fieldPanelStyle}>
+                                  <Form.Item
+                                    label={
+                                      <Space size={4}>
+                                        <span>模型名称</span>
+                                        <InfoCircleOutlined
+                                          title="AI模型的名称，如 gpt-4, gpt-3.5-turbo"
+                                          style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                        />
+                                      </Space>
+                                    }
+                                    name="llm_model"
+                                    rules={[{ required: true, message: '请输入或选择模型名称' }]}
+                                    style={{ marginBottom: 0 }}
+                                  >
+                                    <Select
+                                      size={isMobile ? 'middle' : 'large'}
+                                      showSearch
+                                      placeholder={isMobile ? '选择模型' : '输入模型名称或点击获取'}
+                                      optionFilterProp="label"
+                                      loading={fetchingModels}
+                                      onFocus={handleModelSelectFocus}
+                                      onSearch={(value) => setModelSearchText(value)}
+                                      onChange={() => setModelSearchText('')}
+                                      onBlur={() => {
+                                        const customModel = modelSearchText.trim();
+                                        if (customModel) {
+                                          form.setFieldValue('llm_model', customModel);
+                                        }
+                                      }}
+                                      onInputKeyDown={(event) => {
+                                        if (event.key === 'Enter') {
+                                          const customModel = modelSearchText.trim();
+                                          if (customModel) {
+                                            form.setFieldValue('llm_model', customModel);
+                                          }
+                                        }
+                                      }}
+                                      filterOption={(input, option) =>
+                                        (option?.label ?? '').toLowerCase().includes(input.toLowerCase()) ||
+                                        (option?.description ?? '').toLowerCase().includes(input.toLowerCase())
+                                      }
+                                      dropdownRender={(menu) => (
+                                        <>
+                                          {menu}
+                                          {fetchingModels && (
+                                            <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
+                                              <Spin size="small" /> 正在获取模型列表...
+                                            </div>
+                                          )}
+                                          {!fetchingModels && modelOptions.length === 0 && modelsFetched && (
+                                            <div style={{ padding: '8px 12px', color: '#ff4d4f', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
+                                              未能获取到模型列表，请检查 API 配置
+                                            </div>
+                                          )}
+                                          {!fetchingModels && modelOptions.length === 0 && !modelsFetched && (
+                                            <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
+                                              点击输入框自动获取模型列表
+                                            </div>
+                                          )}
+                                        </>
+                                      )}
+                                      notFoundContent={
+                                        fetchingModels ? (
+                                          <div style={{ padding: '8px 12px', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
+                                            <Spin size="small" /> 加载中...
+                                          </div>
+                                        ) : (
+                                          <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
+                                            未找到匹配的模型，可直接输入后按回车
+                                          </div>
+                                        )
+                                      }
+                                      suffixIcon={
+                                        !isMobile ? (
+                                          <div
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              if (!fetchingModels) {
+                                                setModelsFetched(false);
+                                                handleFetchModels(false);
+                                              }
+                                            }}
+                                            style={{
+                                              cursor: fetchingModels ? 'not-allowed' : 'pointer',
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              padding: '0 4px',
+                                              height: '100%',
+                                              marginRight: -8
+                                            }}
+                                            title="重新获取模型列表"
+                                          >
+                                            <Button
+                                              type="text"
+                                              size="small"
+                                              icon={<ReloadOutlined />}
+                                              loading={fetchingModels}
+                                              style={{ pointerEvents: 'none' }}
+                                            >
+                                              刷新
+                                            </Button>
+                                          </div>
+                                        ) : undefined
+                                      }
+                                      options={mergedModelOptions.map(model => ({
+                                        value: model.value,
+                                        label: model.label,
+                                        description: model.description
+                                      }))}
+                                      optionRender={(option) => (
+                                        <div>
+                                          <div style={{ fontWeight: 500, fontSize: isMobile ? '13px' : '14px' }}>{option.data.label}</div>
+                                          {option.data.description && (
+                                            <div style={{ fontSize: isMobile ? '11px' : '12px', color: '#8c8c8c', marginTop: '2px' }}>
+                                              {option.data.description}
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                    />
+                                  </Form.Item>
+                                </div>
+                              </Col>
+
+                              <Col xs={24} xl={8}>
+                                <div
+                                  style={{
+                                    ...fieldPanelStyle,
+                                    background: 'linear-gradient(180deg, #ffffff 0%, #fcfbff 100%)',
+                                  }}
+                                >
+                                  <Text style={fieldHintTextStyle}>
+                                    限制单次返回长度，能更稳定地控制成本和响应大小。
+                                  </Text>
+                                  <Form.Item
+                                    label={
+                                      <Space size={4}>
+                                        <span>最大 Token 数</span>
+                                        <InfoCircleOutlined
+                                          title="单次请求的最大token数量"
+                                          style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                        />
+                                      </Space>
+                                    }
+                                    name="max_tokens"
+                                    rules={[
+                                      { required: true, message: '请输入最大token数' },
+                                      { type: 'number', min: 1, message: '请输入大于0的数字' }
+                                    ]}
+                                    style={{ marginBottom: 0 }}
+                                  >
+                                    <InputNumber
+                                      size={isMobile ? 'middle' : 'large'}
+                                      style={{ width: '100%' }}
+                                      min={1}
+                                      placeholder="2000"
+                                    />
+                                  </Form.Item>
+                                </div>
+                              </Col>
+
+                              <Col xs={24}>
+                                <div style={fieldPanelStyle}>
+                                  <Space wrap size={[8, 8]} style={{ marginBottom: 12 }}>
+                                    <Tag color="purple">模型：{clipDisplayText(String(watchedModel), isMobile ? 18 : 26)}</Tag>
+                                    <Tag color="geekblue">Token：{String(watchedMaxTokens)}</Tag>
+                                    <Tag color="magenta">
+                                      温度：{typeof watchedTemperature === 'number' ? watchedTemperature.toFixed(1) : String(watchedTemperature)}
+                                    </Tag>
+                                  </Space>
+                                  <Form.Item
+                                    label={
+                                      <Space size={4}>
+                                        <span>温度参数</span>
+                                        <InfoCircleOutlined
+                                          title="控制输出的随机性，值越高越随机（0.0-2.0）"
+                                          style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                        />
+                                      </Space>
+                                    }
+                                    name="temperature"
+                                    style={{ marginBottom: 0 }}
+                                  >
+                                    <Slider
+                                      min={0}
+                                      max={2}
+                                      step={0.1}
+                                      marks={{
+                                        0: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '0.0' },
+                                        0.7: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '0.7' },
+                                        1: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '1.0' },
+                                        2: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '2.0' }
+                                      }}
+                                    />
+                                  </Form.Item>
+                                </div>
+                              </Col>
+
+                              <Col xs={24}>
+                                <div
+                                  style={{
+                                    ...fieldPanelStyle,
+                                    background: 'linear-gradient(180deg, #ffffff 0%, #fcfbff 100%)',
+                                  }}
+                                >
+                                  <Text style={fieldHintTextStyle}>
+                                    用于统一设定角色、语气和输出边界，适合作为整站创作默认行为。
+                                  </Text>
+                                  <Form.Item
+                                    label={
+                                      <Space size={4}>
+                                        <span>系统提示词</span>
+                                        <InfoCircleOutlined
+                                          title="设置全局系统提示词，每次AI调用时都会自动使用。可用于设定AI的角色、语言风格等"
+                                          style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                        />
+                                      </Space>
+                                    }
+                                    name="system_prompt"
+                                    style={{ marginBottom: 0 }}
+                                  >
+                                    <TextArea
+                                      rows={4}
+                                      placeholder="例如：你是一个专业的小说创作助手，请用生动、细腻的文字进行创作..."
+                                      maxLength={10000}
+                                      showCount
+                                      style={{ fontSize: isMobile ? '13px' : '14px' }}
+                                    />
+                                  </Form.Item>
+                                </div>
+                              </Col>
+                            </Row>
+                          </Card>
+                          </div>
+
+                          <div style={{ display: activeSettingsSection === 'research' ? 'block' : 'none' }}>
+                          <Card
+                            size="small"
+                            title={renderSectionTitle('生成前网络检索', '将 Exa 与 Grok 的外部检索能力拆分管理，适合分别配置来源抓取与趋势摘要。', '增强信息', 'gold')}
+                            style={sectionCardStyle}
+                            styles={sectionCardStyles}
                           >
                             <Alert
                               type="info"
                               showIcon
                               message="用于章节 / 世界观 / 角色 / 大纲生成前，自动通过 Exa / Grok 检索资料，并把摘要保存到记忆中。"
-                              style={{ marginBottom: 16 }}
+                              style={{ marginBottom: 16, borderRadius: 12 }}
                             />
 
-                            <Row gutter={16}>
-                              <Col xs={24} md={8}>
-                                <Form.Item name="web_research_enabled" label="启用检索" valuePropName="checked">
-                                  <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-                                </Form.Item>
-                              </Col>
-                              <Col xs={12} md={8}>
-                                <Form.Item name="web_research_exa_enabled" label="启用 Exa" valuePropName="checked">
-                                  <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-                                </Form.Item>
-                              </Col>
-                              <Col xs={12} md={8}>
-                                <Form.Item name="web_research_grok_enabled" label="启用 Grok" valuePropName="checked">
-                                  <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-                                </Form.Item>
-                              </Col>
-                            </Row>
+                            <div
+                              style={{
+                                padding: isMobile ? 14 : 16,
+                                borderRadius: 14,
+                                background: 'linear-gradient(135deg, rgba(250, 173, 20, 0.08) 0%, rgba(255, 255, 255, 0.96) 100%)',
+                                border: '1px solid rgba(250, 173, 20, 0.14)',
+                                marginBottom: 16,
+                              }}
+                            >
+                              <Row gutter={[16, 8]} align="middle">
+                                <Col xs={24} md={8}>
+                                  <Form.Item name="web_research_enabled" label="启用检索" valuePropName="checked" style={{ marginBottom: 8 }}>
+                                    <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                                  </Form.Item>
+                                </Col>
+                                <Col xs={12} md={8}>
+                                  <Form.Item name="web_research_exa_enabled" label="启用 Exa" valuePropName="checked" style={{ marginBottom: 8 }}>
+                                    <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                                  </Form.Item>
+                                </Col>
+                                <Col xs={12} md={8}>
+                                  <Form.Item name="web_research_grok_enabled" label="启用 Grok" valuePropName="checked" style={{ marginBottom: 8 }}>
+                                    <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                                  </Form.Item>
+                                </Col>
+                              </Row>
+                              <Space wrap size={[8, 8]}>
+                                <Tag color={watchedWebResearchEnabled ? 'success' : 'default'}>
+                                  检索总开关：{watchedWebResearchEnabled ? '开启' : '关闭'}
+                                </Tag>
+                                <Tag color={watchedExaEnabled ? 'blue' : 'default'}>
+                                  Exa：{watchedExaEnabled ? '已启用' : '未启用'}
+                                </Tag>
+                                <Tag color={watchedGrokEnabled ? 'purple' : 'default'}>
+                                  Grok：{watchedGrokEnabled ? '已启用' : '未启用'}
+                                </Tag>
+                              </Space>
+                            </div>
 
-                            <Row gutter={16}>
-                              <Col xs={24} md={12}>
-                                <Form.Item name="web_research_exa_api_key" label="Exa API Key">
-                                  <Input.Password placeholder="填写 Exa API Key" autoComplete="new-password" />
-                                </Form.Item>
-                              </Col>
-                              <Col xs={24} md={12}>
-                                <Form.Item name="web_research_grok_api_key" label="Grok API Key">
-                                  <Input.Password placeholder="填写 Grok API Key" autoComplete="new-password" />
-                                </Form.Item>
-                              </Col>
-                            </Row>
-
-                            <Row gutter={16}>
-                              <Col xs={24} md={14}>
-                                <Form.Item
-                                  name="web_research_grok_base_url"
-                                  label="Grok Base URL"
-                                  rules={[
-                                    {
-                                      validator: (_, value) => {
-                                        if (!value) return Promise.resolve();
-                                        try {
-                                          new URL(value);
-                                          return Promise.resolve();
-                                        } catch {
-                                          return Promise.reject(new Error('请输入有效的 URL'));
-                                        }
-                                      },
-                                    },
-                                  ]}
+                            <Row gutter={[16, 16]}>
+                              <Col xs={24} xl={12}>
+                                <Card
+                                  size="small"
+                                  title={
+                                    <Space wrap size={8}>
+                                      <span style={{ fontWeight: 600 }}>Exa 检索</span>
+                                      <Tag color={watchedExaEnabled ? 'blue' : 'default'} style={{ marginInlineEnd: 0 }}>
+                                        {watchedExaEnabled ? '来源抓取' : '已关闭'}
+                                      </Tag>
+                                    </Space>
+                                  }
+                                  style={{
+                                    height: '100%',
+                                    borderRadius: 14,
+                                    border: '1px solid #e6f4ff',
+                                    background: 'linear-gradient(180deg, #ffffff 0%, #f8fcff 100%)',
+                                  }}
+                                  styles={{ body: { padding: isMobile ? 14 : 16 } }}
                                 >
-                                  <Input placeholder="https://your-grok-endpoint.example" />
-                                </Form.Item>
+                                  <Text style={{ display: 'block', color: 'var(--color-text-secondary)', marginBottom: 14 }}>
+                                    更适合抓取可追溯来源、链接与事实型资料。
+                                  </Text>
+                                  <Form.Item name="web_research_exa_api_key" label="Exa API Key">
+                                    <Input.Password placeholder="填写 Exa API Key" autoComplete="new-password" />
+                                  </Form.Item>
+                                  <Form.Item
+                                    name="web_research_exa_base_url"
+                                    label="Exa Base URL"
+                                    rules={[
+                                      {
+                                        validator: (_, value) => {
+                                          if (!value) return Promise.resolve();
+                                          try {
+                                            new URL(value);
+                                            return Promise.resolve();
+                                          } catch {
+                                            return Promise.reject(new Error('请输入有效的 URL'));
+                                          }
+                                        },
+                                      },
+                                    ]}
+                                  >
+                                    <Input placeholder="https://exa.chengtx.vip" />
+                                  </Form.Item>
+                                  <Button
+                                    icon={<ThunderboltOutlined />}
+                                    onClick={() => handleTestWebResearch('exa')}
+                                    loading={testingWebResearchProvider === 'exa'}
+                                    block={isMobile}
+                                  >
+                                    测试 Exa
+                                  </Button>
+                                </Card>
                               </Col>
-                              <Col xs={24} md={10}>
-                                <Form.Item name="web_research_grok_model" label="Grok 模型">
-                                  <Input placeholder="grok-4.1-fast" />
-                                </Form.Item>
+                              <Col xs={24} xl={12}>
+                                <Card
+                                  size="small"
+                                  title={
+                                    <Space wrap size={8}>
+                                      <span style={{ fontWeight: 600 }}>Grok 检索</span>
+                                      <Tag color={watchedGrokEnabled ? 'purple' : 'default'} style={{ marginInlineEnd: 0 }}>
+                                        {watchedGrokEnabled ? '摘要趋势' : '已关闭'}
+                                      </Tag>
+                                    </Space>
+                                  }
+                                  style={{
+                                    height: '100%',
+                                    borderRadius: 14,
+                                    border: '1px solid #f0e6ff',
+                                    background: 'linear-gradient(180deg, #ffffff 0%, #fcfaff 100%)',
+                                  }}
+                                  styles={{ body: { padding: isMobile ? 14 : 16 } }}
+                                >
+                                  <Text style={{ display: 'block', color: 'var(--color-text-secondary)', marginBottom: 14 }}>
+                                    更适合实时讨论、趋势摘要与表达参考。
+                                  </Text>
+                                  <Form.Item name="web_research_grok_api_key" label="Grok API Key">
+                                    <Input.Password placeholder="填写 Grok API Key" autoComplete="new-password" />
+                                  </Form.Item>
+                                  <Form.Item
+                                    name="web_research_grok_base_url"
+                                    label="Grok Base URL"
+                                    rules={[
+                                      {
+                                        validator: (_, value) => {
+                                          if (!value) return Promise.resolve();
+                                          try {
+                                            new URL(value);
+                                            return Promise.resolve();
+                                          } catch {
+                                            return Promise.reject(new Error('请输入有效的 URL'));
+                                          }
+                                        },
+                                      },
+                                    ]}
+                                  >
+                                    <Input placeholder="https://your-grok-endpoint.example" />
+                                  </Form.Item>
+                                  <Form.Item name="web_research_grok_model" label="Grok 模型">
+                                    <Input placeholder="grok-4.1-fast" />
+                                  </Form.Item>
+                                  <Button
+                                    icon={<ThunderboltOutlined />}
+                                    onClick={() => handleTestWebResearch('grok')}
+                                    loading={testingWebResearchProvider === 'grok'}
+                                    block={isMobile}
+                                  >
+                                    测试 Grok
+                                  </Button>
+                                </Card>
                               </Col>
                             </Row>
-
-                            <Space wrap>
-                              <Button
-                                icon={<ThunderboltOutlined />}
-                                onClick={() => handleTestWebResearch('exa')}
-                                loading={testingWebResearchProvider === 'exa'}
-                              >
-                                测试 Exa
-                              </Button>
-                              <Button
-                                icon={<ThunderboltOutlined />}
-                                onClick={() => handleTestWebResearch('grok')}
-                                loading={testingWebResearchProvider === 'grok'}
-                              >
-                                测试 Grok
-                              </Button>
-                            </Space>
 
                             {webResearchTestResult && (
                               <Alert
-                                style={{ marginTop: 16 }}
+                                style={{ marginTop: 16, borderRadius: 12 }}
                                 type={webResearchTestResult.success ? 'success' : 'error'}
                                 showIcon
                                 closable
@@ -1638,6 +2093,7 @@ export default function SettingsPage() {
                               />
                             )}
                           </Card>
+                          </div>
 
                           {/* 测试结果展示 */}
                           {showTestResult && testResult && (

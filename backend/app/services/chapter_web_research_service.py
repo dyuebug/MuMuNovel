@@ -10,7 +10,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
+from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,11 +23,13 @@ from app.models.memory import StoryMemory
 from app.models.outline import Outline
 from app.models.project import Project
 from app.models.settings import Settings
+from app.services.ai_clients.openai_client import OpenAIClient
 from app.services.memory_service import memory_service
 
 logger = get_logger(__name__)
 
 WEB_RESEARCH_PREF_KEY = "web_research"
+DEFAULT_EXA_BASE_URL = "https://api.exa.ai"
 DEFAULT_GROK_MODEL = "grok-4.1-fast"
 
 
@@ -35,6 +39,7 @@ class WebResearchRuntimeConfig:
     exa_enabled: bool = True
     grok_enabled: bool = True
     exa_api_key: str = ""
+    exa_base_url: str = ""
     grok_api_key: str = ""
     grok_base_url: str = ""
     grok_model: str = DEFAULT_GROK_MODEL
@@ -74,13 +79,14 @@ class ChapterWebResearchService:
             if isinstance(value, Mapping):
                 pref_payload = dict(value)
         payload = {
-            "enabled": pref_payload.get("enabled", default.enabled),
-            "exa_enabled": pref_payload.get("exa_enabled", default.exa_enabled),
-            "grok_enabled": pref_payload.get("grok_enabled", default.grok_enabled),
-            "exa_api_key": str(pref_payload.get("exa_api_key") or "").strip(),
-            "grok_api_key": str(pref_payload.get("grok_api_key") or "").strip(),
-            "grok_base_url": str(pref_payload.get("grok_base_url") or "").strip(),
-            "grok_model": str(pref_payload.get("grok_model") or DEFAULT_GROK_MODEL).strip() or DEFAULT_GROK_MODEL,
+            "enabled": pref_payload.get("enabled", pref_payload.get("web_research_enabled", default.enabled)),
+            "exa_enabled": pref_payload.get("exa_enabled", pref_payload.get("web_research_exa_enabled", default.exa_enabled)),
+            "grok_enabled": pref_payload.get("grok_enabled", pref_payload.get("web_research_grok_enabled", default.grok_enabled)),
+            "exa_api_key": str(pref_payload.get("exa_api_key") or pref_payload.get("web_research_exa_api_key") or "").strip(),
+            "exa_base_url": str(pref_payload.get("exa_base_url") or pref_payload.get("web_research_exa_base_url") or "").strip(),
+            "grok_api_key": str(pref_payload.get("grok_api_key") or pref_payload.get("web_research_grok_api_key") or "").strip(),
+            "grok_base_url": str(pref_payload.get("grok_base_url") or pref_payload.get("web_research_grok_base_url") or "").strip(),
+            "grok_model": str(pref_payload.get("grok_model") or pref_payload.get("web_research_grok_model") or DEFAULT_GROK_MODEL).strip() or DEFAULT_GROK_MODEL,
             "timeout_seconds": pref_payload.get("timeout_seconds", default.timeout_seconds),
             "max_assets": pref_payload.get("max_assets", default.max_assets),
         }
@@ -93,6 +99,7 @@ class ChapterWebResearchService:
             exa_enabled=bool(payload["exa_enabled"]),
             grok_enabled=bool(payload["grok_enabled"]),
             exa_api_key=str(payload["exa_api_key"] or "").strip(),
+            exa_base_url=str(payload["exa_base_url"] or "").strip(),
             grok_api_key=str(payload["grok_api_key"] or "").strip(),
             grok_base_url=str(payload["grok_base_url"] or "").strip(),
             grok_model=str(payload["grok_model"] or DEFAULT_GROK_MODEL).strip() or DEFAULT_GROK_MODEL,
@@ -193,16 +200,226 @@ class ChapterWebResearchService:
             payload["detail"] = self._clip_text(stderr_text, 600)
         return payload
 
+    @staticmethod
+    def _resolve_exa_search_url(base_url: Optional[str]) -> str:
+        normalized = str(base_url or DEFAULT_EXA_BASE_URL).strip() or DEFAULT_EXA_BASE_URL
+        normalized = normalized.rstrip("/")
+        if normalized.endswith("/search"):
+            return normalized
+        return f"{normalized}/search"
+
+    @staticmethod
+    def _resolve_openai_compatible_base_url(base_url: Optional[str]) -> str:
+        normalized = str(base_url or "").strip()
+        if not normalized:
+            return ""
+
+        parts = urlsplit(normalized)
+        path = (parts.path or "").rstrip("/")
+        if not path:
+            path = "/v1"
+
+        return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment)).rstrip("/")
+
+    @staticmethod
+    def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+        if not text:
+            return None
+        candidate = text.strip()
+        if candidate.startswith("```"):
+            parts = candidate.split("```")
+            if len(parts) >= 3:
+                candidate = parts[1]
+                if "\n" in candidate:
+                    candidate = candidate.split("\n", 1)[1]
+        start = candidate.find("{")
+        end = candidate.rfind("}")
+        if start >= 0 and end > start:
+            candidate = candidate[start : end + 1]
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    @staticmethod
+    def _normalize_sources(value: Any) -> List[Dict[str, str]]:
+        sources: List[Dict[str, str]] = []
+        if not isinstance(value, list):
+            return sources
+        for item in value:
+            if not isinstance(item, Mapping):
+                continue
+            title = str(item.get("title") or item.get("url") or "").strip()
+            url = str(item.get("url") or "").strip()
+            snippet = str(item.get("snippet") or item.get("summary") or item.get("title") or "").strip()
+            if not title and not url and not snippet:
+                continue
+            sources.append({
+                "title": title or url or "来源",
+                "url": url,
+                "snippet": snippet,
+            })
+        return sources
+
+    @staticmethod
+    def _should_retry_as_stream(exc: Exception) -> bool:
+        message = str(exc or "")
+        return "非 JSON 内容" in message or "chat.completion.chunk" in message or "data:" in message
+
+    async def _collect_stream_completion(
+        self,
+        *,
+        client: OpenAIClient,
+        messages: List[Dict[str, str]],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+    ) -> Dict[str, Any]:
+        parts: List[str] = []
+        tool_calls: Optional[List[Dict[str, Any]]] = None
+
+        async for chunk in client.chat_completion_stream(
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ):
+            content = chunk.get("content")
+            if isinstance(content, str) and content:
+                parts.append(content)
+            if chunk.get("tool_calls"):
+                tool_calls = chunk.get("tool_calls")
+
+        return {"content": "".join(parts).strip(), "tool_calls": tool_calls}
+
+    @staticmethod
+    def _can_run_direct_exa_search(runtime_config: WebResearchRuntimeConfig) -> bool:
+        return bool(runtime_config.exa_api_key)
+
+    @staticmethod
+    def _can_run_direct_grok_search(runtime_config: WebResearchRuntimeConfig) -> bool:
+        return bool(runtime_config.grok_api_key and runtime_config.grok_base_url)
+
+    async def _run_exa_direct_search(self, query: str, runtime_config: WebResearchRuntimeConfig) -> Dict[str, Any]:
+        if not runtime_config.exa_api_key:
+            return {"error": "missing_exa_credentials", "detail": "Exa API Key 为空"}
+
+        request_url = self._resolve_exa_search_url(runtime_config.exa_base_url)
+        timeout = httpx.Timeout(10.0, read=max(15.0, float(runtime_config.timeout_seconds)))
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    request_url,
+                    headers={
+                        "Authorization": f"Bearer {runtime_config.exa_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"query": query, "numResults": 3},
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text.strip() if exc.response is not None else str(exc)
+            return {
+                "error": "direct_exa_http_error",
+                "detail": self._clip_text(f"HTTP {exc.response.status_code}: {detail}", 600),
+            }
+        except (httpx.HTTPError, ValueError) as exc:
+            return {"error": "direct_exa_request_failed", "detail": self._clip_text(str(exc), 600)}
+
+        if not isinstance(payload, dict):
+            return {"error": "invalid_exa_response", "detail": "Exa 返回格式不是 JSON 对象"}
+
+        payload.setdefault("results", [])
+        payload["mode"] = "direct_search_api"
+        payload["request_url"] = request_url
+        return payload
+
     async def _run_exa_search(self, query: str, runtime_config: WebResearchRuntimeConfig) -> Dict[str, Any]:
+        if runtime_config.exa_base_url:
+            return await self._run_exa_direct_search(query, runtime_config)
+
         args = ["search", "--query", query, "--num", "3", "--text"]
         if runtime_config.exa_api_key:
             args.extend(["--api-key", runtime_config.exa_api_key])
-        return await self._run_skill_script(
+        payload = await self._run_skill_script(
             skill_dir_name="exa-search",
             script_name="exa_search.py",
             args=args,
             timeout_seconds=runtime_config.timeout_seconds,
         )
+        if payload.get("error") == "script_not_found" and self._can_run_direct_exa_search(runtime_config):
+            logger.warning("⚠️ Exa skill script missing, fallback to direct Exa API search: %s", payload.get("detail"))
+            return await self._run_exa_direct_search(query, runtime_config)
+        return payload
+
+    async def _run_grok_direct_search(self, query: str, runtime_config: WebResearchRuntimeConfig) -> Dict[str, Any]:
+        if not self._can_run_direct_grok_search(runtime_config):
+            return {"error": "missing_grok_credentials", "detail": "Grok API Key 或 Base URL 为空"}
+
+        resolved_base_url = self._resolve_openai_compatible_base_url(runtime_config.grok_base_url)
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a web research assistant. Return JSON only with keys content and sources. "
+                    "sources must be an array of objects with title, url, snippet. "
+                    "If you do not have reliable source URLs, return an empty array."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Research this topic and keep it concise: {query}",
+            },
+        ]
+
+        client = OpenAIClient(
+            api_key=runtime_config.grok_api_key,
+            base_url=resolved_base_url,
+            compat_profile="openai",
+        )
+        try:
+            response = await client.chat_completion(
+                messages=messages,
+                model=runtime_config.grok_model or DEFAULT_GROK_MODEL,
+                temperature=0.2,
+                max_tokens=512,
+            )
+        except RuntimeError as exc:
+            if not self._should_retry_as_stream(exc):
+                return {"error": "direct_grok_search_failed", "detail": self._clip_text(str(exc), 600)}
+            try:
+                response = await self._collect_stream_completion(
+                    client=client,
+                    messages=messages,
+                    model=runtime_config.grok_model or DEFAULT_GROK_MODEL,
+                    temperature=0.2,
+                    max_tokens=512,
+                )
+            except Exception as stream_exc:
+                return {"error": "direct_grok_search_failed", "detail": self._clip_text(str(stream_exc), 600)}
+        except Exception as exc:
+            return {"error": "direct_grok_search_failed", "detail": self._clip_text(str(exc), 600)}
+
+        raw_content = str(response.get("content") or "").strip()
+        if not raw_content:
+            return {"error": "empty_response", "detail": "Grok 兼容接口已连接，但检索返回内容为空"}
+
+        structured = self._extract_json_object(raw_content)
+        if structured:
+            content = self._clip_text(str(structured.get("content") or structured.get("summary") or raw_content), self.MAX_RAW_CHARS)
+            return {
+                "content": content,
+                "sources": self._normalize_sources(structured.get("sources")),
+                "mode": "direct_chat_search",
+            }
+
+        return {
+            "content": self._clip_text(raw_content, self.MAX_RAW_CHARS),
+            "sources": [],
+            "mode": "direct_chat_search",
+        }
 
     async def _run_grok_search(self, query: str, runtime_config: WebResearchRuntimeConfig) -> Dict[str, Any]:
         args = ["--mode", "research", "--query", query]
@@ -212,12 +429,60 @@ class ChapterWebResearchService:
             args.extend(["--base-url", runtime_config.grok_base_url])
         if runtime_config.grok_model:
             args.extend(["--model", runtime_config.grok_model])
-        return await self._run_skill_script(
+        payload = await self._run_skill_script(
             skill_dir_name="grok-search",
             script_name="grok_search.py",
             args=args,
             timeout_seconds=runtime_config.timeout_seconds,
         )
+        if payload.get("error") == "script_not_found" and self._can_run_direct_grok_search(runtime_config):
+            logger.warning("⚠️ Grok skill script missing, fallback to OpenAI-compatible direct search: %s", payload.get("detail"))
+            return await self._run_grok_direct_search(query, runtime_config)
+        return payload
+
+    async def _test_grok_direct_connection(self, runtime_config: WebResearchRuntimeConfig) -> Dict[str, Any]:
+        if not runtime_config.grok_api_key or not runtime_config.grok_base_url:
+            return {"error": "missing_grok_credentials", "detail": "Grok API Key 或 Base URL 为空"}
+
+        resolved_base_url = self._resolve_openai_compatible_base_url(runtime_config.grok_base_url)
+        messages = [
+            {"role": "system", "content": "You are a connection test assistant."},
+            {"role": "user", "content": "Reply with OK and one short sentence."},
+        ]
+
+        client = OpenAIClient(
+            api_key=runtime_config.grok_api_key,
+            base_url=resolved_base_url,
+            compat_profile="openai",
+        )
+        try:
+            response = await client.chat_completion(
+                messages=messages,
+                model=runtime_config.grok_model or DEFAULT_GROK_MODEL,
+                temperature=0.0,
+                max_tokens=48,
+            )
+        except RuntimeError as exc:
+            if not self._should_retry_as_stream(exc):
+                return {"error": "direct_connection_failed", "detail": self._clip_text(str(exc), 600)}
+            try:
+                response = await self._collect_stream_completion(
+                    client=client,
+                    messages=messages,
+                    model=runtime_config.grok_model or DEFAULT_GROK_MODEL,
+                    temperature=0.0,
+                    max_tokens=48,
+                )
+            except Exception as stream_exc:
+                return {"error": "direct_connection_failed", "detail": self._clip_text(str(stream_exc), 600)}
+        except Exception as exc:
+            return {"error": "direct_connection_failed", "detail": self._clip_text(str(exc), 600)}
+
+        content = self._clip_text(response.get("content"), self.MAX_RAW_CHARS)
+        if not content:
+            return {"error": "empty_response", "detail": "Grok 兼容接口已连接，但返回内容为空"}
+
+        return {"content": content, "sources": [], "mode": "direct_chat_test"}
 
     def _build_exa_assets(self, payload: Dict[str, Any]) -> List[Dict[str, str]]:
         if not isinstance(payload, dict) or payload.get("error"):
@@ -298,9 +563,16 @@ class ChapterWebResearchService:
         resolved_config = runtime_config or await self.get_runtime_config(user_id=user_id, db_session=db_session)
         if not self.is_enabled(enable_web_research, resolved_config):
             return {"enabled": False, "assets": [], "query": "", "archive_path": ""}
-        if not self.skills_root().exists():
+        skills_root_exists = self.skills_root().exists()
+        direct_search_available = (
+            (resolved_config.exa_enabled and bool(exa_query) and self._can_run_direct_exa_search(resolved_config))
+            or (resolved_config.grok_enabled and bool(grok_query) and self._can_run_direct_grok_search(resolved_config))
+        )
+        if not skills_root_exists and not direct_search_available:
             logger.warning("⚠️ 外部检索技能目录不存在，跳过预生成检索: %s", self.skills_root())
             return {"enabled": True, "assets": [], "query": "", "archive_path": "", "skip_reason": "skills_root_missing"}
+        if not skills_root_exists:
+            logger.warning("⚠️ 外部检索技能目录不存在，尝试使用 API 直连回退: %s", self.skills_root())
         if not exa_query and not grok_query:
             return {"enabled": True, "assets": [], "query": "", "archive_path": "", "skip_reason": "empty_query"}
 
@@ -451,9 +723,12 @@ class ChapterWebResearchService:
                 "result_count": len(results),
                 "error": payload.get("detail") or payload.get("error"),
                 "error_type": "SkillError" if payload.get("error") else None,
-                "suggestions": [] if success else ["检查 Exa API Key 是否正确", "确认技能仓库路径和网络访问正常"],
+                "suggestions": [] if success else ["检查 Exa API Key 是否正确", "确认 Exa Base URL 可访问；未填写时会使用默认地址"],
             }
         payload = await self._run_grok_search(query or "Summarize current discussion around fiction writing trends with sources", runtime_config)
+        if payload.get("error") == "script_not_found" and self._can_run_direct_grok_search(runtime_config):
+            logger.warning("⚠️ Grok skill script missing, fallback to OpenAI-compatible direct test: %s", payload.get("detail"))
+            payload = await self._test_grok_direct_connection(runtime_config)
         sources = payload.get("sources") or []
         content = self._clip_text(payload.get("content"), 180)
         success = not payload.get("error") and bool(content)

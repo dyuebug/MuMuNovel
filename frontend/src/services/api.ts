@@ -338,6 +338,7 @@ export const settingsApi = {
   testWebResearchConnection: (params: {
     provider: 'exa' | 'grok';
     exa_api_key?: string;
+    exa_base_url?: string;
     grok_api_key?: string;
     grok_base_url?: string;
     grok_model?: string;

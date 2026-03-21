@@ -1,6 +1,7 @@
 """AI 客户端基类"""
 import asyncio
 import hashlib
+import json
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict, Optional, List
 
@@ -148,7 +149,20 @@ class BaseAIClient(ABC):
                         if endpoint_index > 0:
                             logger.info(f"✅ 主端点失败，已自动切换到备端点 {endpoint_index}，响应成功")
 
-                        return response.json()
+                        try:
+                            return response.json()
+                        except json.JSONDecodeError as e:
+                            raw_text = (response.text or "").strip()
+                            if raw_text.startswith("data:"):
+                                return {
+                                    "_raw_sse_text": raw_text,
+                                    "_raw_response_status_code": response.status_code,
+                                }
+
+                            body_preview = raw_text.replace("\r", " ").replace("\n", " ")[:200]
+                            raise RuntimeError(
+                                f"API 返回了非 JSON 内容，可能是 Base URL 路径不正确（例如缺少 /v1）。HTTP {response.status_code}，响应片段: {body_preview}"
+                            ) from e
 
                     except httpx.HTTPStatusError as e:
                         last_exception = e

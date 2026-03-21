@@ -197,6 +197,85 @@ class OpenAIClient(BaseAIClient):
         if arguments_delta:
             buffer[call_id]["function"]["arguments"] += arguments_delta
 
+    @staticmethod
+    def _extract_message_content_value(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            chunks: List[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    chunks.append(item)
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                text = item.get("text")
+                if isinstance(text, str) and text:
+                    chunks.append(text)
+            return "".join(chunks)
+        return ""
+
+    def _parse_chat_completions_sse_text(self, raw_sse_text: str) -> Dict[str, Any]:
+        content_parts: List[str] = []
+        tool_calls_buffer: Dict[str, Dict[str, Any]] = {}
+        finish_reason: Optional[str] = None
+
+        for raw_line in raw_sse_text.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("data: "):
+                continue
+
+            data_str = line[6:].strip()
+            if not data_str or data_str == "[DONE]":
+                continue
+
+            try:
+                data = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            choices = data.get("choices", [])
+            if not choices:
+                continue
+
+            choice = choices[0]
+            finish_reason = choice.get("finish_reason") or finish_reason
+
+            delta = choice.get("delta") or {}
+            delta_content = self._extract_message_content_value(delta.get("content"))
+            if delta_content:
+                content_parts.append(delta_content)
+
+            message = choice.get("message") or {}
+            message_content = self._extract_message_content_value(message.get("content"))
+            if message_content:
+                content_parts.append(message_content)
+
+            text_content = choice.get("text")
+            if isinstance(text_content, str) and text_content:
+                content_parts.append(text_content)
+
+            tc_list = delta.get("tool_calls") or message.get("tool_calls")
+            if tc_list:
+                for tc in tc_list:
+                    index = str(tc.get("index", len(tool_calls_buffer)))
+                    if index not in tool_calls_buffer:
+                        tool_calls_buffer[index] = tc
+                    else:
+                        existing = tool_calls_buffer[index]
+                        if "function" in tc and "function" in existing:
+                            arguments_delta = tc["function"].get("arguments")
+                            if arguments_delta:
+                                existing["function"]["arguments"] = (
+                                    existing["function"].get("arguments", "") + arguments_delta
+                                )
+
+        return {
+            "content": "".join(content_parts),
+            "tool_calls": list(tool_calls_buffer.values()) or None,
+            "finish_reason": finish_reason or "stop",
+        }
+
     async def chat_completion(
         self,
         messages: list,
@@ -214,6 +293,9 @@ class OpenAIClient(BaseAIClient):
         data = await self._request_with_retry("POST", endpoint, payload)
 
         logger.debug(f"OpenAI raw response: {json.dumps(data, ensure_ascii=False, indent=2)}")
+
+        if not self._use_responses_api() and isinstance(data, dict) and data.get("_raw_sse_text"):
+            return self._parse_chat_completions_sse_text(str(data.get("_raw_sse_text") or ""))
 
         if self._use_responses_api():
             tool_calls = self._extract_response_tool_calls(data)
