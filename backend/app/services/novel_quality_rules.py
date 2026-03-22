@@ -4,8 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-QUALITY_PROFILE_VERSION = "novel_quality_profile_v1_20260307"
-QUALITY_BASELINE_ID = "fanqie_serial_baseline_v1"
+QUALITY_PROFILE_VERSION = "novel_quality_profile_v1_20260322"
+QUALITY_BASELINE_ID = "fanqie_serial_baseline_v2"
 DEFAULT_STYLE_PROFILE = "default"
 DEFAULT_GENRE_PROFILE = "generic"
 QUALITY_BLOCK_ORDER: Tuple[str, ...] = (
@@ -76,11 +76,74 @@ QUALITY_DIMENSIONS: Tuple[QualityDimension, ...] = (
         reviser_focus="优先修复漏写的大纲锚点与剧情承接断层，保持主线稳定。",
     ),
     QualityDimension(
+        key="viewpoint_discipline",
+        label="视角纪律",
+        generation_goal="叙事镜头默认贴近当前主视角，除明确设计外不无故切入多人内心，不替角色下全知结论。",
+        checker_focus="检查是否出现视角漂移、替角色解释真实想法，或作者俯视式替人物总结命运。",
+        reviser_focus="优先删改无依据的内心切换与全知判断，保持人称、镜头重心和情绪来源稳定。",
+    ),
+    QualityDimension(
+        key="scene_anchoring",
+        label="场景锚定",
+        generation_goal="场景开场与切换要交代时间、地点、在场者和行动阶段，让空间变化和人物站位可追踪。",
+        checker_focus="检查是否存在镜头漂浮、场景空跳、时间地点失焦，或人物仿佛凭空移动的问题。",
+        reviser_focus="优先补齐入场锚点与切换承接，让动作、环境和人物站位重新连上。",
+    ),
+    QualityDimension(
+        key="information_release",
+        label="信息投放",
+        generation_goal="新设定、新背景和新动机一次只放一层，优先嵌在动作、观察和对白里，不整段倾倒说明。",
+        checker_focus="检查是否一段内连讲多层背景、术语或动机，导致节奏停滞和信息拥堵。",
+        reviser_focus="把说明性信息拆回动作链和互动里，保留必要解释但减少讲解腔。",
+    ),
+    QualityDimension(
+        key="emotion_landing",
+        label="情绪落点",
+        generation_goal="情绪先落在触发事件、动作停顿、生理反应、对白变化和关系余波上，少用抽象词直接替人物下情绪结论。",
+        checker_focus="检查是否频繁直接宣布‘难过/愤怒/害怕’，却缺少触发、反应与余波，或把情绪一步讲死没有层次。",
+        reviser_focus="优先把抽象情绪判断改成触发→反应→关系变化的现场表达，让情绪可感而不是只被告知。",
+    ),
+    QualityDimension(
+        key="action_rendering",
+        label="动作显影",
+        generation_goal="关键冲突、破局和兑现优先写出动作发起、碰撞反馈与局面变化，不用一句话跳过最该现场化的过程。",
+        checker_focus="检查是否大量用‘随后/很快/最终’直接报结果，跳过关键动作链，导致桥段失重、爽点失真或冲突发虚。",
+        reviser_focus="优先补齐关键动作链和现场反馈，把摘要句压回可视化过程，但不无意义拉长水字数。",
+    ),
+    QualityDimension(
+        key="summary_tone_control",
+        label="总结腔抑制",
+        generation_goal="少用‘他知道/她明白/这意味着/命运从此改变’这类作者盖章句，优先让读者从动作、对白、物件和余波里自行得出判断。",
+        checker_focus="检查是否频繁用总结句替代现场表达，把情绪、关系和主题直接说穿，削弱留白、代入和回味。",
+        reviser_focus="优先删减盖章式总结句，把结论压回动作、对白、细节和局面变化，不额外制造文绉绉金句。",
+    ),
+    QualityDimension(
+        key="repetition_control",
+        label="重复压缩",
+        generation_goal="同一信息、情绪和判断尽量只命中一次，避免连续换说法、反复确认和同义复述拖慢推进。",
+        checker_focus="检查是否在相邻段落里重复解释同一动机、风险、设定或情绪，导致读者像被提醒而不是被推进。",
+        reviser_focus="优先合并同义重复与近义复述，保留最有效的一次表达，让信息命中后立即回到事件推进。",
+    ),
+    QualityDimension(
         key="dialogue_naturalness",
         label="对白自然度",
         generation_goal="对白像真人交流，要有停顿、反问、改口、潜台词和角色声线差异。",
         checker_focus="检查角色是否同口吻讲道理，或对白过长、过整齐、过说明书化。",
         reviser_focus="优先压短生硬对白，补动作、语气和信息落差，保留角色各自的声音。",
+    ),
+    QualityDimension(
+        key="voice_separation",
+        label="口吻分离",
+        generation_goal="对白和内心反应要带角色身份、教育、关系远近与当下情绪差异，避免所有人都说完整正确的标准句。",
+        checker_focus="检查不同角色是否同口吻输出观点、解释背景或轮流讲道理，导致人物声音混同、辨识度塌陷。",
+        reviser_focus="优先调整句长、词汇、停顿、潜台词和回避方式，让角色说话方式彼此可区分。",
+    ),
+    QualityDimension(
+        key="paragraph_rhythm",
+        label="段落节奏",
+        generation_goal="段落长短要随事件压力变化：推进段更短更快，情绪段允许停顿，但不能连续堆砌大段解释性整段。",
+        checker_focus="检查是否长期维持同长度、同密度段落，或连续多个大段都在解释、回忆、分析，导致阅读气口单一。",
+        reviser_focus="优先拆分过长解释段、合并过碎空段，让动作段更利落、情绪段更聚焦，形成可追读的呼吸感。",
     ),
     QualityDimension(
         key="opening_hook",
@@ -111,8 +174,16 @@ DEFAULT_TOMATO_BASELINE_RULES: Tuple[str, ...] = (
     "正文优先写正在发生的动作、人物反应和局面变化，再补必要解释。",
     "关键桥段尽量落成“动作→反馈→余波/代价”，避免大段概述替代现场。",
     "单章允许只有一个主冲突，但必须让角色做出选择，并看到即时后果。",
+    "叙事视角默认贴近当前主镜头，除特殊设计外不无故切入多人内心或替角色下全知判断。",
+    "场景开场和切换要交代时间、地点、动作阶段，让空间与人物站位可追踪。",
+    "新设定和新信息一次只放一层，优先嵌到动作、观察和对白里，不整段倾倒说明。",
+    "情绪优先落在触发、动作停顿、生理反应、对白变化和关系余波上，少用抽象词直接盖章。",
+    "关键冲突、破局与兑现尽量写出现场动作链，不用一句话跳过最有张力的过程。",
+    "少用‘他知道/她明白/这意味着/命运从此改变’式作者总结句，把判断压回场景内部。",
+    "同一信息、情绪和判断命中一次就够，避免相邻段落连续换说法重复提醒。",
     "设定术语、行业术语和力量规则出现时，要在三句内补一句读者能听懂的人话解释。",
-    "对白要分角色声线，不把所有人写成同一张嘴，也不把情绪一步写到终点。",
+    "对白和心理反应要带角色各自的身份、关系和当下处境，不把所有人写成同一张嘴，也不把情绪一步写到终点。",
+    "段落长度要随事件压力变化，别连续堆相同密度的大段解释，让读者能顺着气口往下读。",
     "禁止流程化元文本、模型自述、总结腔、预告腔和模板化口号。",
 )
 
@@ -325,6 +396,15 @@ CHECKER_ALLOWED_CATEGORIES: Tuple[str, ...] = (
     "对话质量",
     "结尾处理",
     "术语可读性",
+    "视角纪律",
+    "场景锚定",
+    "信息投放",
+    "情绪落点",
+    "动作显影",
+    "总结腔抑制",
+    "重复压缩",
+    "口吻分离",
+    "段落节奏",
     "开场抓力",
     "爽点链条",
     "章尾牵引",

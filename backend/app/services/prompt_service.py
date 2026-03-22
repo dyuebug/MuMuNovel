@@ -18,11 +18,11 @@ except Exception:
 QUALITY_RUNTIME_TRACKING_TAG = "rule_v3_quality_block_20260307"
 QUALITY_TEMPLATE_MARKER_PATTERN = re.compile(r"^<prompt_template_key value=\"(?P<key>[A-Z0-9_]+)\" />\n?", re.MULTILINE)
 
-QUALITY_BLOCK_SECTION_GENERATION = """<quality_contract priority=\"P0\">\n{quality_generation_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{story_objective_card_block}\n{story_result_card_block}\n{story_repair_target_block}\n{story_execution_checklist_block}\n{story_repetition_risk_block}\n{story_acceptance_card_block}\n{story_character_arc_card_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_GENERATION = """<quality_contract priority=\"P0\">\n{quality_generation_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{quality_preference_block}\n{story_objective_card_block}\n{story_result_card_block}\n{story_payoff_chain_card_block}\n{story_rule_grounding_card_block}\n{story_information_release_card_block}\n{story_emotion_landing_card_block}\n{story_action_rendering_card_block}\n{story_summary_tone_control_card_block}\n{story_repetition_control_card_block}\n{story_viewpoint_discipline_card_block}\n{story_dialogue_advancement_card_block}\n{story_opening_hook_card_block}\n{story_repair_target_block}\n{story_execution_checklist_block}\n{story_scene_anchor_card_block}\n{story_scene_density_card_block}\n{story_repetition_risk_block}\n{story_acceptance_card_block}\n{story_cliffhanger_card_block}\n{story_character_arc_card_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
 QUALITY_BLOCK_SECTION_ANALYSIS = """<quality_contract priority=\"P0\">\n{quality_analysis_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
 QUALITY_BLOCK_SECTION_CHECKER = """<quality_contract priority=\"P0\">\n{quality_checker_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
 QUALITY_BLOCK_SECTION_REVISER = """<quality_contract priority=\"P0\">\n{quality_reviser_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
-QUALITY_BLOCK_SECTION_REGENERATION = """<quality_contract priority=\"P0\">\n{quality_regeneration_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{story_objective_card_block}\n{story_result_card_block}\n{story_repair_target_block}\n{story_execution_checklist_block}\n{story_repetition_risk_block}\n{story_acceptance_card_block}\n{story_character_arc_card_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_REGENERATION = """<quality_contract priority=\"P0\">\n{quality_regeneration_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{quality_preference_block}\n{story_objective_card_block}\n{story_result_card_block}\n{story_payoff_chain_card_block}\n{story_rule_grounding_card_block}\n{story_information_release_card_block}\n{story_emotion_landing_card_block}\n{story_action_rendering_card_block}\n{story_summary_tone_control_card_block}\n{story_repetition_control_card_block}\n{story_viewpoint_discipline_card_block}\n{story_dialogue_advancement_card_block}\n{story_opening_hook_card_block}\n{story_repair_target_block}\n{story_execution_checklist_block}\n{story_scene_anchor_card_block}\n{story_scene_density_card_block}\n{story_repetition_risk_block}\n{story_acceptance_card_block}\n{story_cliffhanger_card_block}\n{story_character_arc_card_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
 
 QUALITY_TEMPLATE_INSERTIONS = {
     "CHAPTER_GENERATION_ONE_TO_MANY": QUALITY_BLOCK_SECTION_GENERATION,
@@ -258,6 +258,82 @@ PLOT_STAGE_ALIASES = {
     "结局阶段": "ending",
 }
 
+QUALITY_PREFERENCE_SPECS = {
+    "balanced": {
+        "label": "均衡质感",
+        "outline": [
+            "兼顾推进、情绪、场景和信息释放，不让单一维度长期压过其他维度。",
+            "每轮最好既有推进结果，也有可感回报和后续余味。",
+        ],
+        "chapter": [
+            "兼顾抓力、推进、情绪和信息密度，不让正文只剩单项发力。",
+            "每章最好既有局势变化，也有读者能感到的回报与余味。",
+        ],
+    },
+    "plot_drive": {
+        "label": "强情节回报",
+        "outline": [
+            "优先强化开头抓力、动作桥段、爽点回收和章尾牵引。",
+            "减少空转解释和过度铺垫，让大纲更偏可追读连载感。",
+        ],
+        "chapter": [
+            "优先强化开头抓力、动作现场化、回报节点和章尾追读牵引。",
+            "减少空转解释、慢热预热和没有反馈的过程性段落。",
+        ],
+    },
+    "immersive": {
+        "label": "沉浸场景感",
+        "outline": [
+            "优先强化设定落地、视角稳定、场景密度与空间感。",
+            "信息解释尽量压进事件和场景里，减少说明书式铺陈。",
+        ],
+        "chapter": [
+            "优先强化设定落地、视角纪律、场景密度和现场感。",
+            "解释尽量嵌进动作、对白和环境反馈里，减少飘在空中的说明。",
+        ],
+    },
+    "emotion_drama": {
+        "label": "情绪关系向",
+        "outline": [
+            "优先强化情绪落点、对白推进、关系余波和误伤后的后效。",
+            "让人物关系变化真正反向推动下一轮行动。",
+        ],
+        "chapter": [
+            "优先强化情绪触发、外显反应、对白张力和关系余波。",
+            "让人物靠近、误伤、试探和迟来的理解都落在现场里。",
+        ],
+    },
+    "clean_prose": {
+        "label": "克制干净文风",
+        "outline": [
+            "优先强化信息压缩、重复压缩、总结腔抑制和表达克制。",
+            "减少花哨总结和自我解释，让结构更清楚干净。",
+        ],
+        "chapter": [
+            "优先强化信息压缩、重复压缩、少盖章、少同义复述。",
+            "减少油腻金句、过度解释和模板连接词，让正文更利落。",
+        ],
+    },
+}
+
+QUALITY_PREFERENCE_ALIASES = {
+    "balanced": "balanced",
+    "均衡": "balanced",
+    "均衡质感": "balanced",
+    "plot_drive": "plot_drive",
+    "强情节": "plot_drive",
+    "强情节回报": "plot_drive",
+    "immersive": "immersive",
+    "沉浸": "immersive",
+    "沉浸场景感": "immersive",
+    "emotion_drama": "emotion_drama",
+    "情绪关系": "emotion_drama",
+    "情绪关系向": "emotion_drama",
+    "clean_prose": "clean_prose",
+    "克制文风": "clean_prose",
+    "克制干净文风": "clean_prose",
+}
+
 
 def normalize_creative_mode(mode: Optional[str]) -> Optional[str]:
     cleaned = str(mode or "").strip()
@@ -306,6 +382,39 @@ def build_story_focus_block(value: Optional[str], *, scene: str) -> str:
 
     lines = [f"【结构侧重点】当前优先“{spec['label']}”"]
     lines.extend(f"- {item}" for item in bullets)
+    return _compact_prompt_text("\n".join(lines))
+
+
+def normalize_quality_preset(value: Optional[str]) -> Optional[str]:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return None
+    return QUALITY_PREFERENCE_ALIASES.get(cleaned) or QUALITY_PREFERENCE_ALIASES.get(cleaned.lower())
+
+
+def build_quality_preference_block(
+    quality_preset: Optional[str],
+    quality_notes: Optional[str],
+    *,
+    scene: str,
+) -> str:
+    normalized_preset = normalize_quality_preset(quality_preset)
+    notes = _compact_prompt_text(quality_notes)
+
+    spec = QUALITY_PREFERENCE_SPECS.get(normalized_preset) if normalized_preset else None
+    bullets = spec.get(scene) if spec else []
+
+    if not bullets and not notes:
+        return ""
+
+    if spec:
+        lines = [f"【质量预设】当前采用“{spec['label']}”"]
+        lines.extend(f"- {item}" for item in bullets)
+    else:
+        lines = ["【质量偏好补充】"]
+
+    if notes:
+        lines.append(f"- 补充偏好：{notes}")
     return _compact_prompt_text("\n".join(lines))
 
 
@@ -780,6 +889,100 @@ def build_story_execution_checklist_block(
     return _compact_prompt_text("\n".join(lines))
 
 
+def build_story_scene_anchor_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        entry_anchor = "每一章先写清谁在场、身处何处、眼前要做什么，让事件有落地空间。"
+        lens_focus = "单章优先只设一个主镜头重心（主行动/主关系/主线索其一），别平均撒给所有元素。"
+        info_release = "新设定、新背景和新关系判断分批投放，优先绑在事件推进节点上。"
+        transition_rule = "章节与章节之间的换场要写明触发动作、时间位移或局势变化，不空跳。"
+        scene_label = "大纲场景调度卡"
+    else:
+        entry_anchor = "开场3-5句内交代人在何处、正在做什么、眼前压力从哪来，让读者先站稳。"
+        lens_focus = "单场景优先盯住一个镜头重心（动作推进/关系碰撞/线索识别其一），别四处撒。"
+        info_release = "新信息优先嵌进动作、观察、对白和即时反应里，一次只释放一层。"
+        transition_rule = "切换时间、地点或行动阶段时，用简短动作或环境变化做承接，避免镜头空跳。"
+        scene_label = "章节场景调度卡"
+
+    if normalized_mode == "hook":
+        entry_anchor = (
+            "每章开头优先把异常、危险或任务阻力放进当前场景，不靠背景慢慢预热。"
+            if scene == "outline"
+            else "开场第一时间让异常、危险或任务阻力进入场内，别先讲完整背景。"
+        )
+        lens_focus = "镜头优先跟着最能制造牵引的问题走，别被枝节说明抢掉主注意力。"
+        info_release = "关键情报分两步以内放出，不一次把答案和解释全说透。"
+    elif normalized_mode == "emotion":
+        lens_focus = "镜头优先盯动作停顿、身体距离、视线变化和话没说满的地方。"
+        info_release = "情绪信息优先藏在回避、试探、失控边缘和即时反应里，不整段抒情讲完。"
+    elif normalized_mode == "suspense":
+        entry_anchor = "先把异常细节、危险信号或错误判断的触发点放进场，再补必要背景。"
+        lens_focus = "镜头优先盯可疑细节、认知偏差和证据变化，不被大段说明拖停。"
+        info_release = "线索一次只推进半步到一步，并配一个读者可验证的细节支点。"
+    elif normalized_mode == "relationship":
+        lens_focus = "镜头优先盯站位、语气、视线和试探动作，让关系张力有身体感。"
+        transition_rule = "换场要让读者明白关系位置为什么变了，而不是人物凭空突然亲疏变化。"
+    elif normalized_mode == "payoff":
+        entry_anchor = "让待兑现的人、物、承诺或麻烦尽快回到场内，别临时凭空冒出。"
+        info_release = "先让兑现条件现身，再给爆发反馈与余波，不把回报写成一句结果通知。"
+
+    if normalized_focus == "advance_plot":
+        lens_focus = "镜头重心跟主任务走，和主推进无关的抒情或设定只保留必要量。"
+    elif normalized_focus == "deepen_character":
+        lens_focus = "镜头贴近人物决策前后的犹疑、反应和自控失效，让性格在现场显形。"
+        info_release = "人物信息通过选择、动作和反应露出，不靠整段自述讲完。"
+    elif normalized_focus == "escalate_conflict":
+        transition_rule = "每次换场都要把压力抬高一级，不重复同级拉扯或相似争执。"
+    elif normalized_focus == "reveal_mystery":
+        info_release = "线索一次只推进一层，且必须挂在可见证据、异常反应或判断修正上。"
+    elif normalized_focus == "relationship_shift":
+        lens_focus = "镜头重点盯说话方式、身体距离和站队动作的变化，让关系位移可见。"
+    elif normalized_focus == "foreshadow_payoff":
+        entry_anchor = "让前文埋下的人、物、承诺或代价尽早回到场内，别临时补设定。"
+        info_release = "兑现信息要让读者能认出回扣来源，再补当下反馈与新后果。"
+
+    if normalized_stage == "development":
+        entry_anchor = (
+            "前几章先把高频场景、常驻人物和主要行动空间固定下来，再持续加变量。"
+            if scene == "outline"
+            else "发展阶段先把当前场景秩序和人物站位立稳，再推进变量入场。"
+        )
+    elif normalized_stage == "climax":
+        lens_focus = "高潮阶段镜头尽量贴近最核心的碰撞点，不频繁切旁枝和外围观察。"
+        transition_rule = "高潮阶段减少无效横移，切换要短促直接，始终围着主碰撞服务。"
+    elif normalized_stage == "ending":
+        info_release = "收束阶段优先回收主承诺、主关系和主真相，不再新开大块信息池。"
+        transition_rule = "结尾换场要服务收束或余味，别再把战线铺散到新的主空间。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认场景调度"
+    lines = [f"【{scene_label}】本轮优先按以下场景调度执行（{combo_text}）"]
+    lines.append(f"- 入场锚点：{entry_anchor}")
+    lines.append(f"- 镜头重心：{lens_focus}")
+    lines.append(f"- 信息投放：{info_release}")
+    lines.append(f"- 切换规则：{transition_rule}")
+    return _compact_prompt_text("\n".join(lines))
+
+
 def build_story_repetition_risk_block(
     creative_mode: Optional[str],
     story_focus: Optional[str],
@@ -952,6 +1155,934 @@ def build_story_acceptance_card_block(
     return _compact_prompt_text("\n".join(lines))
 
 
+def build_story_opening_hook_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        first_strike = "卷首前几章要尽快抛出异常、险情、失衡或难以回避的任务，让读者立刻知道这卷为什么值得追。"
+        trouble_seed = "开篇尽量同步埋下一个会持续发酵的麻烦种子，后文要能不断翻面或加压。"
+        unresolved_question = "首轮要留下一个具体未决问题，最好与人物选择、关系走向或危险来源直接绑定。"
+        avoid_line = "不要先用大段设定、背景回顾或气氛铺陈占满开头，再迟迟不进入真正问题。"
+        scene_label = "大纲"
+    else:
+        first_strike = "开篇前几段尽快给出异常、险情、冲突或打断日常的事件，不要慢热兜圈。"
+        trouble_seed = "第一轮动作里要埋下会继续追着人物跑的麻烦种子，而不是一次性小插曲。"
+        unresolved_question = "开场后尽快形成一个具体未决问题，让读者明确想知道下一步会发生什么。"
+        avoid_line = "不要用天气、环境、回忆或泛情绪独白拖长预热，却迟迟没有真正抓手。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        first_strike = "第一击优先落在异常、险情、失衡或强制选择上，先抓住人再补信息。"
+        unresolved_question = "未决问题最好带明确倒计时、后果或风险，而不是空泛地卖关子。"
+    elif normalized_mode == "emotion":
+        trouble_seed = "麻烦种子最好和关系裂缝、误伤余震或压抑失败绑定，让情绪从开头就带刺。"
+        avoid_line = "不要只写情绪氛围和内心感受，却没有触发情绪的外部事件。"
+    elif normalized_mode == "suspense":
+        first_strike = "第一击优先给出异常迹象、线索反常、危险逼近或认知落差。"
+        unresolved_question = "未决问题应当具体到谁在做什么、哪里不对、真相缺了哪一块。"
+    elif normalized_mode == "relationship":
+        trouble_seed = "麻烦种子最好是站位变化、信任裂缝、关系失衡或合作条件改变。"
+        unresolved_question = "开头要让读者关心这段关系接下来会靠近、决裂还是暂时停摆。"
+    elif normalized_mode == "payoff":
+        first_strike = "第一击可以直接掀开旧承诺开始兑现，或让旧伏笔先产生回响和副作用。"
+        trouble_seed = "兑现之后要立刻带出新的失衡、代价或连锁反应，不要只给一个爽点就停。"
+
+    if normalized_focus == "advance_plot":
+        first_strike = "开场动作要直接推动主线，不要热闹很多却没有实际推进。"
+    elif normalized_focus == "deepen_character":
+        trouble_seed = "麻烦种子最好能逼出人物软肋、执念或底线，而不是只补背景设定。"
+    elif normalized_focus == "escalate_conflict":
+        first_strike = "第一击最好就是一次对立碰撞、局势加压或安全区失效。"
+        unresolved_question = "未决问题要落在冲突会升级到什么程度、谁先扛不住、谁会失手上。"
+    elif normalized_focus == "reveal_mystery":
+        first_strike = "开头尽快抛出异常证据、反常细节或新线索，不要把谜团完全藏在后半段。"
+    elif normalized_focus == "relationship_shift":
+        trouble_seed = "麻烦种子最好让关系一开始就处在新的拉扯位置，而不是老样子慢慢磨。"
+    elif normalized_focus == "foreshadow_payoff":
+        first_strike = "开场可以先响一下旧伏笔，让读者迅速意识到这次不是无关紧要的新事件。"
+
+    stage_line = ""
+    if normalized_stage == "development":
+        stage_line = "发展阶段的开篇重点是尽快把本轮主任务、变量和压力源摆上桌，别一直停在准备态。"
+    elif normalized_stage == "climax":
+        stage_line = "高潮阶段的开篇要延续既有高压，不要重新慢启动或重新铺盘子。"
+        avoid_line = "不要在高潮章/卷开头突然切回长铺垫、慢解释或轻松日常，导致气压掉线。"
+    elif normalized_stage == "ending":
+        stage_line = "结局阶段的开篇优先抓回核心承诺、关键关系或最后代价，不要另起大盘。"
+        avoid_line = "不要在结局阶段开头又抛全新主线，把读者注意力从收束目标上拉开。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认抓力"
+    lines = [f"【{scene_label}开篇抓力卡】开场请尽快建立抓手与牵引（{combo_text}）"]
+    lines.append(f"- 第一击：{first_strike}")
+    lines.append(f"- 麻烦种子：{trouble_seed}")
+    lines.append(f"- 未决问题：{unresolved_question}")
+    if stage_line:
+        lines.append(f"- 阶段提醒：{stage_line}")
+    lines.append(f"- 避免：{avoid_line}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_rule_grounding_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        rule_landing = "这一轮至少让一个核心规则、行业逻辑或力量边界在情节里真正起作用，不只停在设定表。"
+        trigger_condition = "提前想清楚规则是被什么动作、条件、身份、地点或代价触发的。"
+        cost_limit = "规则一旦出手，要带出门槛、冷却、风险、限制或现实成本，别只剩万能效果。"
+        scene_manifestation = "安排规则在关键场景里留下清晰反馈：局势变了、关系变了、后续选择变了。"
+        avoid_line = "不要先用整段说明把规则讲透，到了情节里却几乎用不上。"
+        scene_label = "大纲"
+    else:
+        rule_landing = "本章至少让一个设定规则通过人物动作、现场反馈和后果被看见，而不是靠讲解出现。"
+        trigger_condition = "写清这条规则是怎么被触发的，谁触发、在什么条件下触发、为什么现在触发。"
+        cost_limit = "规则生效后要有边界、耗损、反噬、误差或现实牵连，避免像开挂按钮。"
+        scene_manifestation = "规则必须改写当下场面：让人受限、受益、失手、暴露、受伤或改变判断。"
+        avoid_line = "不要把设定写成只存在于说明文字里的背景板，也不要一触发就万能解决所有问题。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        rule_landing = "设定最好一上来就制造麻烦、压力或危险，让规则本身成为抓手。"
+    elif normalized_mode == "emotion":
+        scene_manifestation = "规则落地最好能压到情绪与关系，让人物因为规则约束、代价或失手而受伤。"
+    elif normalized_mode == "suspense":
+        trigger_condition = "规则触发最好带出异常征兆、反常反馈或认知缺口，让读者感觉哪里不对。"
+        cost_limit = "边界与代价不要一次讲完，先给足够可感的反常，再逐步揭开机制。"
+    elif normalized_mode == "relationship":
+        rule_landing = "设定最好落在身份、契约、门第、组织纪律或社会规则上，直接影响人物站位。"
+    elif normalized_mode == "payoff":
+        scene_manifestation = "优先让前文埋过的规则真正兑现，展示它终于生效时的爽点与后效。"
+
+    if normalized_focus == "advance_plot":
+        scene_manifestation = "规则生效后必须推动主线，不要只是展示世界观却不改局势。"
+    elif normalized_focus == "deepen_character":
+        trigger_condition = "最好通过人物主动触发、拒绝触发或误用规则，暴露他的价值判断与软肋。"
+    elif normalized_focus == "escalate_conflict":
+        cost_limit = "规则的代价、限制或反噬要把冲突抬高，而不是轻松替角色解围。"
+    elif normalized_focus == "reveal_mystery":
+        rule_landing = "规则落地应顺带暴露机制缺口、异常样本或隐藏条件，让谜团推进。"
+    elif normalized_focus == "relationship_shift":
+        scene_manifestation = "设定效果最好改写人与人之间的信任、合作权限或站队关系。"
+    elif normalized_focus == "foreshadow_payoff":
+        rule_landing = "优先回收前文提过的规则伏笔，让读者感到“原来之前那句设定现在真有用”。"
+
+    stage_line = ""
+    if normalized_stage == "development":
+        stage_line = "发展阶段先把最常用、最会咬人的规则边界立清楚，后面推进才有稳定抓手。"
+    elif normalized_stage == "climax":
+        stage_line = "高潮阶段让规则真正咬人或兑现，不要临近决战才重新解释一整套世界观。"
+        avoid_line = "不要在高潮段落里突然停下来长讲机制说明，优先让规则直接在碰撞中显形。"
+    elif normalized_stage == "ending":
+        stage_line = "结局阶段优先回收最核心的规则承诺与代价，不要再抛全新体系。"
+        avoid_line = "不要在结局阶段新增大块设定补丁，把收束重心冲散。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认设定落地"
+    lines = [f"【{scene_label}设定落地卡】本轮请让规则与设定真正进场（{combo_text}）"]
+    lines.append(f"- 规则着陆：{rule_landing}")
+    lines.append(f"- 触发条件：{trigger_condition}")
+    lines.append(f"- 代价/限制：{cost_limit}")
+    lines.append(f"- 场景表现：{scene_manifestation}")
+    if stage_line:
+        lines.append(f"- 阶段提醒：{stage_line}")
+    lines.append(f"- 避免：{avoid_line}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_information_release_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        new_info = "每轮优先只放一层最必要的新信息：新规则、新背景、新动机里选最该知道的一层即可。"
+        carrier = "优先通过动作结果、人物观察、关系碰撞和对白交换带出信息，不单列说明段。"
+        explanation_limit = "解释只够读者跟上当前局势，不需要一次性讲完整个体系。"
+        reader_handle = "复杂术语或新概念最好在三句内给一个人话抓手，让读者知道它对眼前事情意味着什么。"
+        avoid_line = "不要把这一轮当设定百科补丁包，一口气倾倒多层背景。"
+        scene_label = "大纲"
+    else:
+        new_info = "本章新信息尽量只命中一层：让读者明白当前最关键的规则、背景或动机即可。"
+        carrier = "把信息拆进动作、观察、对白和即时后果里，尽量让读者边看事边懂事。"
+        explanation_limit = "解释到能支撑当前冲突和理解即可，剩下的留给后续场景继续补。"
+        reader_handle = "新词、新职业、新力量或新关系出现时，尽快补一句读者能立刻听懂的人话。"
+        avoid_line = "不要在高潮动作中间突然插整段背景介绍，也不要连着三段都在解释。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        carrier = "先抓事件，再补信息；解释要贴着异常、危险或选择出现，别抢在钩子前面。"
+    elif normalized_mode == "emotion":
+        carrier = "信息最好从争执、试探、隐瞒、误解或安慰失败里漏出来，而不是平铺直叙。"
+    elif normalized_mode == "suspense":
+        new_info = "悬念型信息优先只揭半层：给可追踪的新线索，不把底牌一口气翻完。"
+        explanation_limit = "解释要刚好够读者继续猜，不要把所有反常都立刻讲穿。"
+    elif normalized_mode == "relationship":
+        carrier = "信息最好挂在关系互动里，用谁敢说、谁不肯说、谁故意隐瞒来制造张力。"
+    elif normalized_mode == "payoff":
+        new_info = "优先释放与兑现直接相关的信息，让读者知道这次回收了什么、又打开了什么后效。"
+
+    if normalized_focus == "advance_plot":
+        new_info = "只放能推动主线前进的信息，和当前推进无关的设定先别急着补。"
+    elif normalized_focus == "deepen_character":
+        carrier = "信息最好通过人物选择、口误、回避和偏见露出来，而不是作者代说。"
+    elif normalized_focus == "escalate_conflict":
+        reader_handle = "让读者迅速明白这条信息为什么会让局势更糟、更难、更贵。"
+    elif normalized_focus == "reveal_mystery":
+        new_info = "优先放能推进谜团的一小块有效信息，而不是旁枝背景。"
+        explanation_limit = "每次只多揭一层，不要直接把谜底和世界观补课一起打包端上来。"
+    elif normalized_focus == "relationship_shift":
+        carrier = "信息最好通过立场变化、试探问答、隐瞒失效或关系破口流出来。"
+    elif normalized_focus == "foreshadow_payoff":
+        new_info = "信息释放要服务于伏笔回收，让读者在“原来如此”和“接下来怎么办”之间获得连锁反馈。"
+
+    stage_line = ""
+    if normalized_stage == "development":
+        stage_line = "发展阶段重点是把任务所需的最小信息量说清，别一开始就把整套世界全摊开。"
+    elif normalized_stage == "climax":
+        stage_line = "高潮阶段压缩说明比例，优先用已建立的信息打架，让新增解释只服务当下决断。"
+        avoid_line = "不要在高潮关键碰撞前后连续长讲设定，把情绪和动作气口掐断。"
+    elif normalized_stage == "ending":
+        stage_line = "结局阶段优先投放回收性信息和结果性信息，不要突然补大量新设定。"
+        avoid_line = "不要在结局处开启新的百科讲解，避免把收束拉回说明书。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认投放"
+    lines = [f"【{scene_label}信息投放卡】本轮请控制信息释放方式与密度（{combo_text}）"]
+    lines.append(f"- 本轮信息：{new_info}")
+    lines.append(f"- 承载方式：{carrier}")
+    lines.append(f"- 解释上限：{explanation_limit}")
+    lines.append(f"- 读者抓手：{reader_handle}")
+    if stage_line:
+        lines.append(f"- 阶段提醒：{stage_line}")
+    lines.append(f"- 避免：{avoid_line}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_emotion_landing_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        trigger_point = "每轮关键情绪先绑定一个具体触发：受伤、误会、失手、迟到的安慰、失去或看见了不该看见的东西。"
+        outer_reaction = "情绪尽量落在动作停顿、生理反应、说话方式变化和选择偏移上，不只写抽象结论。"
+        relationship_wave = "安排情绪在关系里留下余波：更靠近、更疏远、嘴硬、误伤、补偿失败或信任松动。"
+        layered_shift = "同一轮情绪最好有层次变化，不要一上来就把人物情绪和主题判断全部说透。"
+        avoid_line = "不要用“他很难过/她非常愤怒/他忽然明白了一切”直接代替现场表达。"
+        scene_label = "大纲"
+    else:
+        trigger_point = "本章关键情绪先落在明确触发事件上，别让情绪像凭空冒出来。"
+        outer_reaction = "优先写呼吸、停顿、动作错位、措辞变化、沉默和失控边缘，而不是直接给标签。"
+        relationship_wave = "让情绪改变人与人之间的距离、说话方式、信任程度或之后的选择。"
+        layered_shift = "情绪推进尽量分层：先忍、再裂、再回避/反击/崩掉，不要一步到顶。"
+        avoid_line = "不要连续几句旁白都在盖章人物心情，也不要把复杂情绪一句话写死。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        trigger_point = "开场情绪最好直接绑定险情、麻烦或打断，让压力先压到人物身上。"
+    elif normalized_mode == "emotion":
+        outer_reaction = "情绪型段落更要靠停顿、改口、嘴硬、回避和细小动作发声，而不是抒情盖章。"
+        layered_shift = "情绪最好出现误伤、自我压抑、短暂失控和余波回流的层次。"
+    elif normalized_mode == "suspense":
+        trigger_point = "悬念型情绪优先来自异常、误判、恐惧和答案缺口，而不是纯抒情。"
+    elif normalized_mode == "relationship":
+        relationship_wave = "关系戏里的情绪重点是靠近失败、信任松动、边界被碰、迟到的理解或不肯承认。"
+    elif normalized_mode == "payoff":
+        layered_shift = "兑现后的情绪别只停在爽或痛，要继续写余震、亏欠、松一口气后的空心或新责任。"
+
+    if normalized_focus == "advance_plot":
+        outer_reaction = "情绪反应之后最好立刻影响下一步行动，不让情绪段和主线脱节。"
+    elif normalized_focus == "deepen_character":
+        layered_shift = "人物塑形时优先写他怎么忍、怎么装、怎么解释自己，而不是作者替他总结性格。"
+    elif normalized_focus == "escalate_conflict":
+        relationship_wave = "冲突升级时让情绪带来误伤、顶撞、失控或撤回援手，而不是只提高音量。"
+    elif normalized_focus == "reveal_mystery":
+        trigger_point = "谜团推进时把情绪绑定到“看懂了一半”和“更不安了”这种认知落差上。"
+    elif normalized_focus == "relationship_shift":
+        relationship_wave = "关系变化重点写温差、试探落空、迟疑和态度微偏，不只写一句“关系变了”。"
+    elif normalized_focus == "foreshadow_payoff":
+        trigger_point = "伏笔兑现时优先写人物对旧承诺、旧创伤、旧误解被碰到时的即时反应。"
+
+    stage_line = ""
+    if normalized_stage == "development":
+        stage_line = "发展阶段先把情绪触发与余波立住，让后续人物线有持续发酵空间。"
+    elif normalized_stage == "climax":
+        stage_line = "高潮阶段情绪要跟着碰撞一起爆，不要躲回长段抒情和解释。"
+        avoid_line = "不要在高潮情绪点后立刻用旁白把人物全部解释完，冲掉现场余震。"
+    elif normalized_stage == "ending":
+        stage_line = "结局阶段的情绪更适合落在余波、代价、和解未尽或迟来的理解上。"
+        avoid_line = "不要在结尾把所有情绪做成统一口号式总结，留一点人味和回声。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认情绪落点"
+    lines = [f"【{scene_label}情绪落点卡】本轮请把情绪压回现场与关系里（{combo_text}）"]
+    lines.append(f"- 触发点：{trigger_point}")
+    lines.append(f"- 外显反应：{outer_reaction}")
+    lines.append(f"- 关系余波：{relationship_wave}")
+    lines.append(f"- 层次推进：{layered_shift}")
+    if stage_line:
+        lines.append(f"- 阶段提醒：{stage_line}")
+    lines.append(f"- 避免：{avoid_line}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_action_rendering_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        action_start = "这一轮最值钱的桥段优先写成可视化动作：谁先动、怎么动、为什么现在动。"
+        collision_feedback = "动作之后要有受阻、反击、误差、意外或被迫变招，别一键直达结果。"
+        visible_change = "关键动作必须改变局面：位置变了、关系变了、危险级别变了、代价落下来了。"
+        lens_priority = "需要现场化的节点优先给镜头，不要把最该看的桥段压成摘要。"
+        avoid_line = "不要用“随后/很快/最终”一句话带过最关键的碰撞、破局或兑现。"
+        scene_label = "大纲"
+    else:
+        action_start = "本章关键桥段先写动作发起：谁出手、谁试探、谁先失手、谁先顶上去。"
+        collision_feedback = "动作里要有碰撞反馈：被挡住、打偏、误判、迟疑、反咬、变招或代价。"
+        visible_change = "动作之后必须带来可见变化，不只报结果，要看见场面怎么被改写。"
+        lens_priority = "最值钱的冲突、破局、兑现和危险临门尽量给现场镜头，不要躲去摘要句。"
+        avoid_line = "不要把整场关键动作压成“他们打了一阵”“事情很快解决了”这种概述。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        action_start = "钩子段优先让动作先响，先让事情发生，再补解释。"
+    elif normalized_mode == "emotion":
+        collision_feedback = "情绪戏里的动作也要显形：推开、停住、没接住、想碰又收回，比抽象形容更有劲。"
+    elif normalized_mode == "suspense":
+        visible_change = "悬念型动作优先留下新反常、新危险或新证据，不要动作做完什么都没变。"
+    elif normalized_mode == "relationship":
+        action_start = "关系戏里的关键动作可以是靠近、退开、挡住、递回去、没接、转身或越界。"
+    elif normalized_mode == "payoff":
+        lens_priority = "兑现型桥段更要现场化，把最值钱的那一下真正写在台前。"
+
+    if normalized_focus == "advance_plot":
+        visible_change = "动作结束后主线最好明确前进一格，而不是热闹完还在原地。"
+    elif normalized_focus == "deepen_character":
+        collision_feedback = "动作反馈要顺手照出人物习惯、底线、软肋和犹豫，不只看热闹。"
+    elif normalized_focus == "escalate_conflict":
+        action_start = "冲突升级时优先写更难的现场碰撞，不靠旁白宣布“局势更严重了”。"
+    elif normalized_focus == "reveal_mystery":
+        visible_change = "动作之后最好掉出线索、破绽、证据或更大的缺口。"
+    elif normalized_focus == "relationship_shift":
+        collision_feedback = "关系变化尽量通过动作错位、接与不接、站位变化和边界碰撞来显形。"
+    elif normalized_focus == "foreshadow_payoff":
+        lens_priority = "伏笔兑现时优先写兑现发生的那一刻，不要只在事后回顾“原来如此”。"
+
+    stage_line = ""
+    if normalized_stage == "development":
+        stage_line = "发展阶段先把关键动作链写清，别让中段长期停在说明和准备态。"
+    elif normalized_stage == "climax":
+        stage_line = "高潮阶段的动作要更现场、更具体、更有反馈，不要只剩结果播报。"
+        avoid_line = "不要在高潮关键桥段里大量省略动作过程，让最该爆的地方直接哑火。"
+    elif normalized_stage == "ending":
+        stage_line = "结局阶段优先现场化最重要的兑现、告别、冲突终局和代价落地。"
+        avoid_line = "不要在收尾阶段把关键回收全写成叙述总结，削弱满足感。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认动作显影"
+    lines = [f"【{scene_label}动作显影卡】本轮请把关键桥段写成可见动作链（{combo_text}）"]
+    lines.append(f"- 起手动作：{action_start}")
+    lines.append(f"- 碰撞反馈：{collision_feedback}")
+    lines.append(f"- 局面变化：{visible_change}")
+    lines.append(f"- 镜头优先：{lens_priority}")
+    if stage_line:
+        lines.append(f"- 阶段提醒：{stage_line}")
+    lines.append(f"- 避免：{avoid_line}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_summary_tone_control_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        conclusion_hold = "主题、人物判断和关系结论尽量少直接盖章，优先让事件走向和余波自己说话。"
+        replacement_path = "如果需要表达判断，优先用动作、对白、物件、站位变化和后果来替代总结句。"
+        blank_space = "关键段落保留一点留白，让读者自己接上“原来是这样”，不要每次都替读者总结。"
+        sentence_control = "压缩“他知道/她明白/这意味着/从此以后/命运注定”这类盖章句频率。"
+        avoid_line = "不要把每个转折都写成作者点评，更不要在段尾连发金句式结论。"
+        scene_label = "大纲"
+    else:
+        conclusion_hold = "本章少直接宣布人物心境、关系定性和主题意义，优先把判断埋进现场。"
+        replacement_path = "该写结论时，尽量换成动作停顿、没说出口的话、被看见的物件和局面变化。"
+        blank_space = "给读者留一点自己体会的空间，不要刚发生完就立刻替他总结感受。"
+        sentence_control = "少用抽象总结句和命运句，尤其别用旁白把人物成长、爱情或主题一次性说穿。"
+        avoid_line = "不要连续用“他终于明白”“她忽然懂得”“这意味着一切都变了”收段。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        conclusion_hold = "钩子段更要少总结，优先把问题留在事件和动作上。"
+    elif normalized_mode == "emotion":
+        replacement_path = "情绪结论尽量改成呼吸、目光、错开的动作、答非所问和沉默。"
+        blank_space = "情绪戏别刚掀起就旁白总结，给余波一点扩散空间。"
+    elif normalized_mode == "suspense":
+        sentence_control = "悬念段更要克制解释性总结，别一边卖疑一边把答案和意义都旁白清楚。"
+    elif normalized_mode == "relationship":
+        replacement_path = "关系变化尽量通过称呼、距离、口气、是否接话和是否站到一起表现，不靠盖章。"
+    elif normalized_mode == "payoff":
+        conclusion_hold = "兑现后少讲大道理，优先让反馈和代价证明这次回收值不值。"
+
+    if normalized_focus == "advance_plot":
+        replacement_path = "主线推进时用“发生了什么变化”代替“这意味着什么”，让局势自己发声。"
+    elif normalized_focus == "deepen_character":
+        blank_space = "人物塑形时少替人物写人物小结，保留一些矛盾和自欺让读者自己品。"
+    elif normalized_focus == "escalate_conflict":
+        sentence_control = "冲突升级时少复盘和评点，让更贵的动作和后果承担说服力。"
+    elif normalized_focus == "reveal_mystery":
+        conclusion_hold = "揭谜时只给必要答案，不顺手把主题点评和全部意义打包讲完。"
+    elif normalized_focus == "relationship_shift":
+        replacement_path = "关系变化更适合落在没接住的话、退后的半步、迟疑和让步上，而不是口头定性。"
+    elif normalized_focus == "foreshadow_payoff":
+        blank_space = "回收伏笔时让“原来如此”的快感由前后呼应产生，不用旁白替读者喊出来。"
+
+    stage_line = ""
+    if normalized_stage == "development":
+        stage_line = "发展阶段先克制解释欲，让读者跟着事件自己建立判断。"
+    elif normalized_stage == "climax":
+        stage_line = "高潮阶段尤其要少讲道理，让碰撞、代价和沉默承担重量。"
+        avoid_line = "不要在高潮关键段突然插长句评语，把现场冲击改写成作者感悟。"
+    elif normalized_stage == "ending":
+        stage_line = "结局阶段允许有余味，但不等于大段讲主题总结，优先让结尾意象和余波说话。"
+        avoid_line = "不要在收尾用旁白把所有主题、成长和命运一次性解释完。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认抑制"
+    lines = [f"【{scene_label}总结腔抑制卡】本轮请减少作者盖章式结论（{combo_text}）"]
+    lines.append(f"- 结论克制：{conclusion_hold}")
+    lines.append(f"- 替代表现：{replacement_path}")
+    lines.append(f"- 留白位置：{blank_space}")
+    lines.append(f"- 句式控制：{sentence_control}")
+    if stage_line:
+        lines.append(f"- 阶段提醒：{stage_line}")
+    lines.append(f"- 避免：{avoid_line}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_repetition_control_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        repeat_target = "同一轮里同一信息、情绪判断、人物动机和风险提醒尽量只命中一次，不连续换说法重讲。"
+        first_hit = "第一次命中时尽量写到位：要么最清楚、要么最有劲，让后面不必重复提醒。"
+        later_handle = "后续再提时优先推进新变化、新后果或新角度，不重复旧结论本身。"
+        merge_rule = "相邻场景若承担同一功能，优先并掉弱的那次表达，把篇幅留给新推进。"
+        avoid_line = "不要把同一个担心、同一个设定、同一个情绪在三段里换着词反复说。"
+        scene_label = "大纲"
+    else:
+        repeat_target = "本章同一信息、情绪、设定提醒和人物判断尽量只打一次重击，别连着复述。"
+        first_hit = "第一次出现时尽量让它足够清晰、足够具体，后面就用动作和后果承接。"
+        later_handle = "后续若必须再提，最好带出升级、反转、误差或代价，不只原话重来。"
+        merge_rule = "相邻段若在做同一件事，优先删掉弱重复，保留最有效的一次表达。"
+        avoid_line = "不要前一段刚说完人物害怕、设定危险或任务困难，后一段马上换说法再提醒一遍。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        first_hit = "钩子信息第一次出现就要够尖，别靠反复提醒硬撑抓力。"
+    elif normalized_mode == "emotion":
+        repeat_target = "情绪不要连着用近义词重复盖章，优先让余波和动作替情绪继续发声。"
+    elif normalized_mode == "suspense":
+        later_handle = "悬念再提时要带新反常或新缺口，别只是重复“事情不对劲”。"
+    elif normalized_mode == "relationship":
+        merge_rule = "关系拉扯不要连续两三轮都在说同一种疏离或暧昧，要让关系位置真的变。"
+    elif normalized_mode == "payoff":
+        first_hit = "回收点第一次兑现时就把满足感打满，别后面再靠解释重复证明它很重要。"
+
+    if normalized_focus == "advance_plot":
+        later_handle = "主线推进时，重复提旧问题不如让问题进入新阶段。"
+    elif normalized_focus == "deepen_character":
+        repeat_target = "人物塑形别反复旁白同一性格标签，优先换成不同场景下的新选择来证明。"
+    elif normalized_focus == "escalate_conflict":
+        later_handle = "冲突升级时要给更高代价和新碰撞，不要只反复提醒“矛盾很激烈”。"
+    elif normalized_focus == "reveal_mystery":
+        merge_rule = "谜团提示要层层推进，不重复播报同一团迷雾。"
+    elif normalized_focus == "relationship_shift":
+        later_handle = "关系变化再提时要让说话方式、站位或行动条件变化，而不是重说“他们变了”。"
+    elif normalized_focus == "foreshadow_payoff":
+        first_hit = "伏笔第一次埋下就尽量精准，后面少反复提醒存在感。"
+
+    stage_line = ""
+    if normalized_stage == "development":
+        stage_line = "发展阶段尤其容易水在重复提醒里，要尽快把同类信息压缩成一次有效命中。"
+    elif normalized_stage == "climax":
+        stage_line = "高潮阶段少复盘、少重复解释，让碰撞和后果接管篇幅。"
+        avoid_line = "不要在高潮段落连续复述同一危险、同一情绪和同一动机，削弱冲击。"
+    elif normalized_stage == "ending":
+        stage_line = "结局阶段优先用结果和余波说话，不要反复回顾已经兑现的东西。"
+        avoid_line = "不要在收尾用多段重复总结同一主题和同一成长，拖慢收束。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认压缩"
+    lines = [f"【{scene_label}重复压缩卡】本轮请减少同义复述与连续提醒（{combo_text}）"]
+    lines.append(f"- 重复对象：{repeat_target}")
+    lines.append(f"- 首次命中：{first_hit}")
+    lines.append(f"- 后续处理：{later_handle}")
+    lines.append(f"- 删并原则：{merge_rule}")
+    if stage_line:
+        lines.append(f"- 阶段提醒：{stage_line}")
+    lines.append(f"- 避免：{avoid_line}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_viewpoint_discipline_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        camera_focus = "这一轮默认贴住一个主镜头人物推进，除非明确设计，否则不要在同一关键段里随意钻入多人内心。"
+        visible_boundary = "只写主镜头此刻能看见、听见、推断到的内容，未知就保留未知。"
+        inner_access = "内心优先给当前主视角人物，其他人物更多通过动作、失言、停顿和选择显形。"
+        switch_rule = "如果必须切视角，最好让章节分隔、场景切换或明确标识承担切换。"
+        avoid_line = "不要用作者口吻替所有角色下判断，也不要一句话把每个人真实心思都说穿。"
+        scene_label = "大纲"
+    else:
+        camera_focus = "本章关键场景尽量贴住一个主视角，让读者跟着同一双眼睛承受信息差和压力。"
+        visible_boundary = "当前人物不知道的东西，尽量不要直接盖章给读者，先通过异常、动作和线索侧写。"
+        inner_access = "内心戏优先写主视角人物的当下反应，不要一句话顺手把周围所有人都看透。"
+        switch_rule = "要切视角时，尽量借章节断点、明确场景跳转或强需求切换，不在紧张现场横跳。"
+        avoid_line = "不要上一句还在甲的脑子里，下一句就跳进乙的内心，再下一句作者来总结真相。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        camera_focus = "钩子段尽量贴住最先承受异常、危险或任务压力的人，让抓力更直接。"
+    elif normalized_mode == "emotion":
+        inner_access = "情绪型段落优先写体感、误读、嘴硬和停顿，不要全靠作者替人物命名情绪。"
+    elif normalized_mode == "suspense":
+        visible_boundary = "悬念型段落更要守住可见边界，不要为了省事提前透出标准答案。"
+        avoid_line = "不要一边让人物发懵，一边又让旁白抢先把谜底和真意解释完。"
+    elif normalized_mode == "relationship":
+        inner_access = "关系戏里更适合通过对视、回避、打断和措辞变化显露双方状态，而不是双向内心旁白轮流讲解。"
+    elif normalized_mode == "payoff":
+        camera_focus = "兑现瞬间尽量贴住最能感到“终于到了”的人物，让回报更有代入感。"
+
+    if normalized_focus == "advance_plot":
+        camera_focus = "优先跟随最能推动主线下一步的人物视角，少切去旁支人物分散推进。"
+    elif normalized_focus == "deepen_character":
+        inner_access = "聚焦人物做选择时的偏见、软肋和自我辩解，不用全知口吻替他写人物小传。"
+    elif normalized_focus == "escalate_conflict":
+        visible_boundary = "冲突升级时更要守住局中人视角，让错误判断和迟来的发现保留张力。"
+    elif normalized_focus == "reveal_mystery":
+        switch_rule = "如需切视角揭新线索，必须让切换本身带来新证据，而不是单纯替作者补课。"
+    elif normalized_focus == "relationship_shift":
+        inner_access = "关系变化优先让读者从主视角的误判、迟疑、试探和受伤里感到变化。"
+    elif normalized_focus == "foreshadow_payoff":
+        camera_focus = "回收伏笔时尽量站在最受那条伏笔影响的人物身上，让兑现更有分量。"
+
+    stage_line = ""
+    if normalized_stage == "development":
+        stage_line = "发展阶段先把主镜头稳定住，让读者知道该跟谁看、跟谁担心。"
+    elif normalized_stage == "climax":
+        stage_line = "高潮阶段更要贴住最疼、最险、最难选的那个视角，少横跳、少俯视。"
+        avoid_line = "不要在高潮现场频繁切镜头解释全局，导致碰撞被切碎、情绪被稀释。"
+    elif normalized_stage == "ending":
+        stage_line = "结局阶段的视角切换应服务收束与余味，不要为了补信息乱开上帝视角。"
+        avoid_line = "不要在结尾靠作者总结式全知旁白把人物命运一次性说教完。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认视角"
+    lines = [f"【{scene_label}视角纪律卡】本轮请稳定镜头与信息边界（{combo_text}）"]
+    lines.append(f"- 主镜头：{camera_focus}")
+    lines.append(f"- 可见边界：{visible_boundary}")
+    lines.append(f"- 内心准入：{inner_access}")
+    lines.append(f"- 切换条件：{switch_rule}")
+    if stage_line:
+        lines.append(f"- 阶段提醒：{stage_line}")
+    lines.append(f"- 避免：{avoid_line}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_dialogue_advancement_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        dialogue_task = "本轮关键对白至少承担一个明确任务：试探、施压、谈判、套话、摊牌或关系重排，别只做信息搬运。"
+        information_gap = "想清谁知道得更多、谁在隐瞒、谁在误解，让对白自带信息差。"
+        voice_split = "不同角色的句长、措辞、回避方式和情绪爆点要能分开，不要所有人轮流讲道理。"
+        action_support = "对白最好配合停顿、动作、眼神、打断或环境反馈，让潜台词落地。"
+        avoid_line = "不要让整段对白变成背景说明会，也不要每个人都说得完整、正确、体面。"
+        scene_label = "大纲"
+    else:
+        dialogue_task = "本章关键对白要推动局势、关系或选择，不要只是把读者已经知道的信息再说一遍。"
+        information_gap = "对白里要有信息差：有人在试探、有人在藏、有人没听懂、有人故意说半句。"
+        voice_split = "角色说话方式要分得开：句长、词汇、礼貌度、火气、停顿和潜台词都别一样。"
+        action_support = "对白之间穿插动作、表情、环境反应和沉默，让说出口和没说出口的东西一起工作。"
+        avoid_line = "不要一轮对白全是完整长句和总结句，也不要让角色轮流替作者解释世界观。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        dialogue_task = "对白最好一开口就带压力、问题或威胁，让读者立刻感觉有事要炸。"
+    elif normalized_mode == "emotion":
+        information_gap = "情绪型对白重点不在“说清楚”，而在谁嘴硬、谁避重就轻、谁说了反话。"
+        action_support = "动作陪跑优先写停顿、改口、没接住的安慰和说完后的余震。"
+    elif normalized_mode == "suspense":
+        information_gap = "悬念型对白要保留缺口：一句话只揭半层，最好带出新疑点或相互矛盾。"
+    elif normalized_mode == "relationship":
+        dialogue_task = "对白要承担站位试探、边界确认或关系升降温，别只是客观交流信息。"
+        voice_split = "关系越近越敢打断、绕弯、戳痛点；关系越远越讲分寸、试探和保留。"
+    elif normalized_mode == "payoff":
+        dialogue_task = "兑现型对白要让人物对结果作出反应：承认、嘴硬、错愕、反咬或迟来的理解。"
+
+    if normalized_focus == "advance_plot":
+        dialogue_task = "对白结束后应推动行动计划、立场判断或主线下一步，而不是原地聊完。"
+    elif normalized_focus == "deepen_character":
+        voice_split = "对白重点是把人物软肋、执念、教养和惯性露出来，不是统一输出正确答案。"
+    elif normalized_focus == "escalate_conflict":
+        information_gap = "冲突型对白要让误解更深、底牌更露或退路更少，别聊完反而泄压。"
+    elif normalized_focus == "reveal_mystery":
+        dialogue_task = "对白里优先放试探、交叉验证和半真半假的线索，不要直接口述谜底。"
+    elif normalized_focus == "relationship_shift":
+        action_support = "对话结束后最好能看见站位变化、沉默拉长、目光回避或合作条件改变。"
+    elif normalized_focus == "foreshadow_payoff":
+        dialogue_task = "对白可以顺手回收旧台词、旧承诺或旧误会，让熟悉信息产生新含义。"
+
+    stage_line = ""
+    if normalized_stage == "development":
+        stage_line = "发展阶段的对白重点是尽快立清关系、任务和信息差，让后续冲突有抓手。"
+    elif normalized_stage == "climax":
+        stage_line = "高潮阶段对白要短、狠、准，优先服务摊牌、碰撞和底线暴露。"
+        avoid_line = "不要在高潮对白里长篇复盘前情或讲大道理，把碰撞气口拖死。"
+    elif normalized_stage == "ending":
+        stage_line = "结局阶段对白更适合落在承认、告别、没说完的余味或代价后的新关系。"
+        avoid_line = "不要在结局里靠大段解释把所有情绪说穿，留一点人味和余波。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认对白推进"
+    lines = [f"【{scene_label}对白推进卡】本轮请让关键对白真正推动故事（{combo_text}）"]
+    lines.append(f"- 对话任务：{dialogue_task}")
+    lines.append(f"- 信息落差：{information_gap}")
+    lines.append(f"- 声线区分：{voice_split}")
+    lines.append(f"- 动作陪跑：{action_support}")
+    if stage_line:
+        lines.append(f"- 阶段提醒：{stage_line}")
+    lines.append(f"- 避免：{avoid_line}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_scene_density_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        scene_task = "每个关键场景尽量同时承担推进、揭示、冲突、情绪中的两项以上，不让章节只剩单一功能。"
+        live_action = "该现场化的节点尽量现场化：动作发起、受阻、反馈和局面变化要能被看见。"
+        load_mix = "信息、情绪和关系变化尽量压在事件里完成，不把它们拆成单独的大段说明。"
+        rhythm_breath = "推进段更利落，余波段可以稍停，但不要连续多个场景都只有解释或复盘。"
+        avoid_line = "不要把整轮剧情排成“解释场—聊天场—回忆场”串联，却迟迟没有真正局势变化。"
+        scene_label = "大纲"
+    else:
+        scene_task = "本章每个重要场景都要有明确任务：推进局势、抬高压力、揭一层信息或改动关系。"
+        live_action = "关键冲突、破局和兑现尽量写出动作链和现场反馈，不要一笔带过最该看的过程。"
+        load_mix = "把信息、情绪和关系变化嵌进动作与对白里，减少大段静态解释。"
+        rhythm_breath = "短段推进、必要停顿、再继续推进，让读者有气口但不掉线。"
+        avoid_line = "不要连续几段都在讲、想、回忆、解释，却没有动作、反馈和局势移动。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        scene_task = "开场场景尽量尽快入事，让第一个场景就承担抓人和立压任务。"
+    elif normalized_mode == "emotion":
+        load_mix = "情绪密度来自互动、误伤、靠近失败和余波，不是单靠大段抒情。"
+        rhythm_breath = "情绪段可以稍慢，但必须有新的触发、反应或关系变化支撑。"
+    elif normalized_mode == "suspense":
+        scene_task = "悬念型场景最好每场至少多出一个新线索、新反常或新风险。"
+        live_action = "危险与调查尽量现场发生，不要只在事后总结“原来很危险”。"
+    elif normalized_mode == "relationship":
+        load_mix = "关系戏也要有事件支点：试探、合作、冲突、靠近或决裂，而不是纯聊天。"
+    elif normalized_mode == "payoff":
+        live_action = "兑现型场景优先把最值钱的动作、反应和反馈写在台前，不要藏在摘要句里。"
+
+    if normalized_focus == "advance_plot":
+        scene_task = "场景结束后最好能看到主线确实前进了一格，而不是忙完还在原地。"
+    elif normalized_focus == "deepen_character":
+        load_mix = "人物塑形最好落在选择和反应里，不要把场景停下来专门写人物说明书。"
+    elif normalized_focus == "escalate_conflict":
+        live_action = "冲突升级优先靠更难的现场碰撞和更贵的代价，不靠口头宣布升级。"
+    elif normalized_focus == "reveal_mystery":
+        scene_task = "每个关键场景最好都让谜团多推进半步，而不是只在个别节点突然集中补答案。"
+    elif normalized_focus == "relationship_shift":
+        rhythm_breath = "关系变化要有拉扯节奏：试探、误判、碰撞、余波，不要一句话突然完成。"
+    elif normalized_focus == "foreshadow_payoff":
+        scene_task = "尽量让某个场景承担伏笔兑现或预埋，不要全章都没有回报节点。"
+
+    stage_line = ""
+    if normalized_stage == "development":
+        stage_line = "发展阶段重在把场景链铺密：每场都给一点推进，不让中段发空。"
+    elif normalized_stage == "climax":
+        stage_line = "高潮阶段要提高现场化比例，压缩解释和复盘，让动作、决断与后果顶上来。"
+        avoid_line = "不要在高潮章连续堆长段回忆、讲解和心理总结，把冲击拆散。"
+    elif normalized_stage == "ending":
+        stage_line = "结局阶段的场景密度重点是回收与余波并存：既要落地，也要留一丝回味。"
+        avoid_line = "不要在收尾阶段继续用很多过渡场把关键回收往后拖。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认密度"
+    lines = [f"【{scene_label}场景密度卡】本轮请提升每个场景的有效载荷与节奏（{combo_text}）"]
+    lines.append(f"- 场景任务：{scene_task}")
+    lines.append(f"- 现场化：{live_action}")
+    lines.append(f"- 装载方式：{load_mix}")
+    lines.append(f"- 节奏呼吸：{rhythm_breath}")
+    if stage_line:
+        lines.append(f"- 阶段提醒：{stage_line}")
+    lines.append(f"- 避免：{avoid_line}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_payoff_chain_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        seed_point = "这一轮至少承接一个已有铺垫，或埋下一个后续能尽快回收的小钩点，不让整卷只会铺不会收。"
+        payoff_point = "安排一个具体兑现节点：能力见效、关系翻面、计划得手、误判反噬或线索翻正。"
+        feedback_chain = "兑现之后要带出局势变化、关系余震、资源得失或新的行动压力。"
+        reader_reward = "让读者明显感到这轮有收获，不是纯过渡章群。"
+        avoid_line = "不要把所有回收都推到很后面，也不要只在总结句里宣布“某伏笔终于兑现”。"
+        scene_label = "大纲"
+    else:
+        seed_point = "本章最好承接一个前文钩点，或提前挂出一个本章内/近章可回收的小铺垫。"
+        payoff_point = "给读者一个看得见的兑现瞬间：动作打中、关系变位、计划起效、真相掀半层、承诺终于落地。"
+        feedback_chain = "兑现后立刻写反馈和余波，不只报结果，要让人物和局面都跟着变。"
+        reader_reward = "让追更读者在本章拿到一个明确回报，而不是一直被要求耐心等待。"
+        avoid_line = "不要只铺不收，也不要把兑现写成一句轻飘飘的结果播报。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        payoff_point = "钩子型兑现最好来得更快，让读者早一点尝到“这章真的有事发生”的回报。"
+    elif normalized_mode == "emotion":
+        payoff_point = "情绪型兑现可以落在一句没说出口的话被说出、一次误解被捅破，或一次安慰彻底失败。"
+        feedback_chain = "兑现后的余波优先写关系温差、情绪后坐力和人物自我认知变化。"
+    elif normalized_mode == "suspense":
+        payoff_point = "悬念型兑现更适合“揭半层真相 + 打开更危险缺口”，既满足又继续勾人。"
+    elif normalized_mode == "relationship":
+        payoff_point = "关系型兑现优先落在站位变化、信任转移、边界突破或彻底决裂。"
+    elif normalized_mode == "payoff":
+        seed_point = "优先锁定前文明确埋过的承诺、伏笔或能力点，不要再临时找替身回收。"
+        reader_reward = "兑现时让读者清楚感到“前面那些铺垫没有白等”。"
+
+    if normalized_focus == "advance_plot":
+        feedback_chain = "兑现后的反馈必须推动主线进入下一格，别回收完又回到原地。"
+    elif normalized_focus == "deepen_character":
+        payoff_point = "兑现瞬间最好顺便照出人物的底线、成长、执念或迟来的代价感。"
+    elif normalized_focus == "escalate_conflict":
+        feedback_chain = "回收后不要泄压，最好把人物推进更难的冲突层级。"
+    elif normalized_focus == "reveal_mystery":
+        payoff_point = "优先给一个有效答案，但同时暴露更关键的缺口或更大的反常。"
+    elif normalized_focus == "relationship_shift":
+        reader_reward = "读者要能明显看见关系不一样了，而不是只在心理旁白里说“其实变了”。"
+    elif normalized_focus == "foreshadow_payoff":
+        seed_point = "尽量指定哪条旧伏笔要回收，不要泛泛地说“注意前后呼应”。"
+
+    stage_line = ""
+    if normalized_stage == "development":
+        stage_line = "发展阶段也要给小回收，让读者持续获得推进感，别把所有满足感都压后。"
+    elif normalized_stage == "climax":
+        stage_line = "高潮阶段优先回收最值钱的承诺和冲突，不要只继续预热更大的后面。"
+        avoid_line = "不要在高潮里还只会继续铺垫和预告，却不给真正爆发与反馈。"
+    elif normalized_stage == "ending":
+        stage_line = "结局阶段优先回收主承诺、主关系和主谜面，再保留必要余波。"
+        avoid_line = "不要在结局阶段把核心伏笔继续往后拖，削弱收束满足感。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认回收"
+    lines = [f"【{scene_label}爽点回收卡】本轮请形成可感知的“铺垫→兑现→反馈”链条（{combo_text}）"]
+    lines.append(f"- 预埋点：{seed_point}")
+    lines.append(f"- 兑现点：{payoff_point}")
+    lines.append(f"- 反馈链：{feedback_chain}")
+    lines.append(f"- 读者回报：{reader_reward}")
+    if stage_line:
+        lines.append(f"- 阶段提醒：{stage_line}")
+    lines.append(f"- 避免：{avoid_line}")
+    return _compact_prompt_text("\n".join(lines))
+
+
 
 def build_story_creation_brief_block(creation_brief: Optional[str]) -> str:
     brief = _compact_prompt_text(creation_brief)
@@ -1073,6 +2204,92 @@ def build_story_character_arc_card_block(
     lines.append(f"- 内在线：{internal_line}")
     lines.append(f"- 关系线：{relationship_line}")
     lines.append(f"- 落点：{arc_landing}")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_cliffhanger_card_block(
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    *,
+    scene: str,
+    plot_stage: Optional[str] = None,
+) -> str:
+    normalized_mode = normalize_creative_mode(creative_mode)
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+
+    if not (normalized_mode or normalized_focus or normalized_stage):
+        return ""
+
+    if scene == "outline":
+        unresolved_point = "卷尾几章要留一个足够具体的未决点，能自然牵引下一轮主任务，而不是空泛悬着。"
+        next_push = "结尾最好把人物逼到新的行动门槛前，让下一轮一开始就有事可做。"
+        aftertaste = "尾声要保留情绪余波、关系余震、代价阴影或认知反照。"
+        avoid_line = "不要每轮都只靠一句“更大的谜团出现了”来硬卖续读。"
+        scene_label = "大纲"
+    else:
+        unresolved_point = "章尾要留一个具体未决点：一个答案缺口、一个马上要做的选择，或一个刚翻面的新问题。"
+        next_push = "结尾最好把人物逼到下一步动作边缘，让读者自然想看下一章。"
+        aftertaste = "除了钩子，还要留一点情绪余味、代价回响或关系余震。"
+        avoid_line = "不要只靠突然打断、无信息硬切或机械性的“未完待续感”制造悬停。"
+        scene_label = "章节"
+
+    if normalized_mode == "hook":
+        unresolved_point = "未决点优先是迫近选择、倒计时危险或刚被掀开的麻烦，不要只做语气停顿。"
+        next_push = "下一步逼力要明确到人物不得不马上应对，而不是以后再说。"
+    elif normalized_mode == "emotion":
+        aftertaste = "余味最好落在误伤后的沉默、靠近失败后的反弹，或关系未说破的震荡上。"
+        avoid_line = "不要在情绪高点后立刻解释完、说透完，把回响全部冲掉。"
+    elif normalized_mode == "suspense":
+        unresolved_point = "未决点最好是线索翻面、认知裂缝、危险升级或答案只揭开半层。"
+        aftertaste = "余味要让读者感到局势更深、更险，而不是只多了一个名词。"
+    elif normalized_mode == "relationship":
+        unresolved_point = "未决点最好和立场未定、关系悬空、合作破裂或信任临界绑定。"
+        aftertaste = "余味应保留人物之间的温差、敌意、亏欠或迟到的理解。"
+    elif normalized_mode == "payoff":
+        unresolved_point = "兑现之后要留一个新失衡或新代价，说明故事没有在爽点处直接封口。"
+        next_push = "下一步逼力最好来自兑现后的后效，而不是硬塞一个无关新坑。"
+
+    if normalized_focus == "advance_plot":
+        next_push = "结尾逼力必须能接到主线下一步，不要只留下气氛而没有行动方向。"
+    elif normalized_focus == "deepen_character":
+        aftertaste = "余味最好让读者记住人物此刻的新伤口、新认知或新自我怀疑。"
+    elif normalized_focus == "escalate_conflict":
+        unresolved_point = "未决点应落在冲突升级后的更难位置：谁先出手、谁先失控、谁先付代价。"
+        next_push = "下一步逼力要让人物无法轻松退回安全区。"
+    elif normalized_focus == "reveal_mystery":
+        unresolved_point = "未决点最好是刚拿到半个答案，却暴露出更关键的缺口或反常。"
+    elif normalized_focus == "relationship_shift":
+        aftertaste = "余味要落在关系新站位上，让读者感到他们再也回不到原来的相处方式。"
+    elif normalized_focus == "foreshadow_payoff":
+        unresolved_point = "未决点可以是旧伏笔兑现后的新空缺，说明兑现带来了新的问题而非彻底归零。"
+
+    stage_line = ""
+    if normalized_stage == "development":
+        stage_line = "发展阶段的章尾/卷尾要把下一轮任务说得更具体，别总停在模糊愿景。"
+    elif normalized_stage == "climax":
+        stage_line = "高潮阶段的结尾要保持冲击余震与决战逼力，不要突然卸压。"
+        avoid_line = "不要在高潮结尾处仓促复盘、解释一切或切回轻松缓冲，导致气势塌掉。"
+    elif normalized_stage == "ending":
+        stage_line = "结局阶段可以减少硬卖关子，更适合保留余波、代价、阴影或尚未完全愈合的裂口。"
+        avoid_line = "不要为了续作感硬开全新主线；更适合留下收束后的余味和未尽代价。"
+
+    combo_labels: list[str] = []
+    if normalized_mode:
+        combo_labels.append(CREATIVE_MODE_SPECS[normalized_mode]["label"])
+    if normalized_focus:
+        combo_labels.append(STORY_FOCUS_SPECS[normalized_focus]["label"])
+    if normalized_stage:
+        combo_labels.append(PLOT_STAGE_LABELS[normalized_stage])
+
+    combo_text = " / ".join(combo_labels) if combo_labels else "默认悬停"
+    lines = [f"【{scene_label}结尾悬停卡】收尾请留下继续阅读/推进的牵引（{combo_text}）"]
+    lines.append(f"- 未决点：{unresolved_point}")
+    lines.append(f"- 下一步逼力：{next_push}")
+    lines.append(f"- 余味：{aftertaste}")
+    if stage_line:
+        lines.append(f"- 阶段提醒：{stage_line}")
+    lines.append(f"- 避免：{avoid_line}")
     return _compact_prompt_text("\n".join(lines))
 
 
@@ -4901,6 +6118,14 @@ class PromptService:
             kwargs.get("story_creation_brief_block")
             or build_story_creation_brief_block(kwargs.get("story_creation_brief"))
         )
+        quality_preference_block = _compact_prompt_text(
+            kwargs.get("quality_preference_block")
+            or build_quality_preference_block(
+                kwargs.get("quality_preset"),
+                kwargs.get("quality_notes"),
+                scene="chapter",
+            )
+        )
         story_objective_card_block = _compact_prompt_text(
             kwargs.get("story_objective_card_block")
             or build_story_objective_card_block(
@@ -4913,6 +6138,96 @@ class PromptService:
         story_result_card_block = _compact_prompt_text(
             kwargs.get("story_result_card_block")
             or build_story_result_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_payoff_chain_card_block = _compact_prompt_text(
+            kwargs.get("story_payoff_chain_card_block")
+            or build_story_payoff_chain_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_rule_grounding_card_block = _compact_prompt_text(
+            kwargs.get("story_rule_grounding_card_block")
+            or build_story_rule_grounding_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_information_release_card_block = _compact_prompt_text(
+            kwargs.get("story_information_release_card_block")
+            or build_story_information_release_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_emotion_landing_card_block = _compact_prompt_text(
+            kwargs.get("story_emotion_landing_card_block")
+            or build_story_emotion_landing_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_action_rendering_card_block = _compact_prompt_text(
+            kwargs.get("story_action_rendering_card_block")
+            or build_story_action_rendering_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_summary_tone_control_card_block = _compact_prompt_text(
+            kwargs.get("story_summary_tone_control_card_block")
+            or build_story_summary_tone_control_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_repetition_control_card_block = _compact_prompt_text(
+            kwargs.get("story_repetition_control_card_block")
+            or build_story_repetition_control_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_viewpoint_discipline_card_block = _compact_prompt_text(
+            kwargs.get("story_viewpoint_discipline_card_block")
+            or build_story_viewpoint_discipline_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_dialogue_advancement_card_block = _compact_prompt_text(
+            kwargs.get("story_dialogue_advancement_card_block")
+            or build_story_dialogue_advancement_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_opening_hook_card_block = _compact_prompt_text(
+            kwargs.get("story_opening_hook_card_block")
+            or build_story_opening_hook_card_block(
                 kwargs.get("creative_mode"),
                 kwargs.get("story_focus"),
                 scene="chapter",
@@ -4936,6 +6251,24 @@ class PromptService:
                 plot_stage=kwargs.get("plot_stage"),
             )
         )
+        story_scene_anchor_card_block = _compact_prompt_text(
+            kwargs.get("story_scene_anchor_card_block")
+            or build_story_scene_anchor_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_scene_density_card_block = _compact_prompt_text(
+            kwargs.get("story_scene_density_card_block")
+            or build_story_scene_density_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
         story_repetition_risk_block = _compact_prompt_text(
             kwargs.get("story_repetition_risk_block")
             or build_story_repetition_risk_block(
@@ -4948,6 +6281,15 @@ class PromptService:
         story_acceptance_card_block = _compact_prompt_text(
             kwargs.get("story_acceptance_card_block")
             or build_story_acceptance_card_block(
+                kwargs.get("creative_mode"),
+                kwargs.get("story_focus"),
+                scene="chapter",
+                plot_stage=kwargs.get("plot_stage"),
+            )
+        )
+        story_cliffhanger_card_block = _compact_prompt_text(
+            kwargs.get("story_cliffhanger_card_block")
+            or build_story_cliffhanger_card_block(
                 kwargs.get("creative_mode"),
                 kwargs.get("story_focus"),
                 scene="chapter",
@@ -5007,12 +6349,26 @@ class PromptService:
             "story_focus_block": story_focus_block,
             "narrative_blueprint_block": narrative_blueprint_block,
             "story_creation_brief_block": story_creation_brief_block,
+            "quality_preference_block": quality_preference_block,
             "story_objective_card_block": story_objective_card_block,
             "story_result_card_block": story_result_card_block,
+            "story_payoff_chain_card_block": story_payoff_chain_card_block,
+            "story_rule_grounding_card_block": story_rule_grounding_card_block,
+            "story_information_release_card_block": story_information_release_card_block,
+            "story_emotion_landing_card_block": story_emotion_landing_card_block,
+            "story_action_rendering_card_block": story_action_rendering_card_block,
+            "story_summary_tone_control_card_block": story_summary_tone_control_card_block,
+            "story_repetition_control_card_block": story_repetition_control_card_block,
+            "story_viewpoint_discipline_card_block": story_viewpoint_discipline_card_block,
+            "story_dialogue_advancement_card_block": story_dialogue_advancement_card_block,
+            "story_opening_hook_card_block": story_opening_hook_card_block,
             "story_repair_target_block": story_repair_target_block,
             "story_execution_checklist_block": story_execution_checklist_block,
+            "story_scene_anchor_card_block": story_scene_anchor_card_block,
+            "story_scene_density_card_block": story_scene_density_card_block,
             "story_repetition_risk_block": story_repetition_risk_block,
             "story_acceptance_card_block": story_acceptance_card_block,
+            "story_cliffhanger_card_block": story_cliffhanger_card_block,
             "story_character_arc_card_block": story_character_arc_card_block,
         }
 
