@@ -11,6 +11,12 @@ class ProjectBase(BaseModel):
     theme: Optional[str] = Field(None, description="主题")
     genre: Optional[str] = Field(None, description="小说类型")
     target_words: Optional[int] = Field(None, description="目标字数")
+    default_creative_mode: Optional[str] = Field(None, description="默认创作模式")
+    default_story_focus: Optional[str] = Field(None, description="默认结构侧重点")
+    default_plot_stage: Optional[str] = Field(None, description="默认剧情阶段")
+    default_story_creation_brief: Optional[str] = Field(None, description="默认创作总控摘要")
+    default_quality_preset: Optional[str] = Field(None, description="默认质量预设")
+    default_quality_notes: Optional[str] = Field(None, description="默认质量补充偏好")
     outline_mode: Literal["one-to-one", "one-to-many"] = Field(
         default="one-to-many",
         description="大纲章节模式: one-to-one(传统模式,1大纲→1章节) 或 one-to-many(细化模式,1大纲→N章节)"
@@ -38,6 +44,12 @@ class ProjectUpdate(BaseModel):
     chapter_count: Optional[int] = None
     narrative_perspective: Optional[str] = None
     character_count: Optional[int] = None
+    default_creative_mode: Optional[str] = None
+    default_story_focus: Optional[str] = None
+    default_plot_stage: Optional[str] = None
+    default_story_creation_brief: Optional[str] = None
+    default_quality_preset: Optional[str] = None
+    default_quality_notes: Optional[str] = None
     # current_words 由章节内容自动计算，不允许手动修改
 
 

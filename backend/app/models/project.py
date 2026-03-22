@@ -32,7 +32,13 @@ class Project(Base):
     chapter_count = Column(Integer, comment="章节数量")
     narrative_perspective = Column(String(50), comment="叙事视角：first_person/third_person/omniscient")
     character_count = Column(Integer, default=5, comment="角色数量")
-    
+    default_creative_mode = Column(String(50), comment="默认创作模式")
+    default_story_focus = Column(String(50), comment="默认结构侧重点")
+    default_plot_stage = Column(String(20), comment="默认剧情阶段")
+    default_story_creation_brief = Column(Text, comment="默认创作总控摘要")
+    default_quality_preset = Column(String(50), comment="默认质量预设")
+    default_quality_notes = Column(Text, comment="默认质量补充偏好")
+
     created_at = Column(DateTime, server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间")
     

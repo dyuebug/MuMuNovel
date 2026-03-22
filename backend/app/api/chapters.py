@@ -62,6 +62,7 @@ from app.services.chapter_web_research_service import chapter_web_research_servi
 from app.services.foreshadow_service import foreshadow_service
 from app.services.chapter_regenerator import ChapterRegenerator
 from app.services.mcp_tools_loader import mcp_tools_loader
+from app.services.project_generation_defaults import resolve_project_generation_defaults
 from app.services.writing_style_sync_service import sync_low_ai_presets
 from app.logger import get_logger
 from app.api.settings import get_user_ai_service
@@ -97,6 +98,8 @@ def _build_prompt_quality_kwargs(
     story_focus: Optional[str] = None,
     plot_stage: Optional[str] = None,
     story_creation_brief: Optional[str] = None,
+    quality_preset: Optional[str] = None,
+    quality_notes: Optional[str] = None,
     story_repair_summary: Optional[str] = None,
     story_repair_targets: Optional[list[str]] = None,
     story_preserve_strengths: Optional[list[str]] = None,
@@ -120,6 +123,8 @@ def _build_prompt_quality_kwargs(
         "story_focus_block": build_story_focus_block(story_focus, scene="chapter"),
         "plot_stage": plot_stage or "",
         "story_creation_brief": story_creation_brief or "",
+        "quality_preset": quality_preset or "",
+        "quality_notes": quality_notes or "",
         "story_creation_brief_block": build_story_creation_brief_block(story_creation_brief),
         "story_repair_summary": story_repair_summary or "",
         "story_repair_targets": story_repair_targets or [],
@@ -3182,12 +3187,23 @@ async def generate_chapter_content_stream(
                     prefer_project_default_style=not bool(style_id),
                     log_prefix="单章生成",
                 )
-                prompt_quality_kwargs = _build_prompt_quality_kwargs(
-                    quality_profile,
+                generation_defaults = resolve_project_generation_defaults(
+                    project,
                     creative_mode=generate_request.creative_mode,
                     story_focus=generate_request.story_focus,
                     plot_stage=getattr(generate_request, 'plot_stage', None),
                     story_creation_brief=getattr(generate_request, 'story_creation_brief', None),
+                    quality_preset=getattr(generate_request, 'quality_preset', None),
+                    quality_notes=getattr(generate_request, 'quality_notes', None),
+                )
+                prompt_quality_kwargs = _build_prompt_quality_kwargs(
+                    quality_profile,
+                    creative_mode=generation_defaults["creative_mode"],
+                    story_focus=generation_defaults["story_focus"],
+                    plot_stage=generation_defaults["plot_stage"],
+                    story_creation_brief=generation_defaults["story_creation_brief"],
+                    quality_preset=generation_defaults["quality_preset"],
+                    quality_notes=generation_defaults["quality_notes"],
                     story_repair_summary=getattr(generate_request, 'story_repair_summary', None),
                     story_repair_targets=getattr(generate_request, 'story_repair_targets', None),
                     story_preserve_strengths=getattr(generate_request, 'story_preserve_strengths', None),
@@ -3709,6 +3725,15 @@ async def generate_chapter_content_background(
         if hasattr(generate_request, 'plot_stage')
         else None
     )
+    generation_defaults = resolve_project_generation_defaults(
+        project,
+        creative_mode=creative_mode,
+        story_focus=story_focus,
+        plot_stage=plot_stage,
+        story_creation_brief=getattr(generate_request, 'story_creation_brief', None),
+        quality_preset=getattr(generate_request, 'quality_preset', None),
+        quality_notes=getattr(generate_request, 'quality_notes', None),
+    )
 
     single_task_quality_profile = await _resolve_chapter_quality_profile(
         db_session=db,
@@ -3750,10 +3775,12 @@ async def generate_chapter_content_background(
         ai_service=user_ai_service,
         custom_model=custom_model,
         temp_narrative_perspective=temp_narrative_perspective,
-        creative_mode=creative_mode,
-        story_focus=story_focus,
-        plot_stage=plot_stage,
-        story_creation_brief=getattr(generate_request, 'story_creation_brief', None),
+        creative_mode=generation_defaults["creative_mode"],
+        story_focus=generation_defaults["story_focus"],
+        plot_stage=generation_defaults["plot_stage"],
+        story_creation_brief=generation_defaults["story_creation_brief"],
+        quality_preset=generation_defaults["quality_preset"],
+        quality_notes=generation_defaults["quality_notes"],
         enable_web_research=getattr(generate_request, 'enable_web_research', None),
         web_research_query=getattr(generate_request, 'web_research_query', None),
         story_repair_summary=getattr(generate_request, 'story_repair_summary', None),
@@ -4518,6 +4545,15 @@ async def batch_generate_chapters_in_order(
     )
     
     logger.info(f"📦 创建批量生成任务: {batch_id}, 章节: 第{start_number}-{end_number}章, 预估耗时: {estimated_time}分钟")
+    batch_generation_defaults = resolve_project_generation_defaults(
+        project,
+        creative_mode=batch_request.creative_mode,
+        story_focus=batch_request.story_focus,
+        plot_stage=batch_request.plot_stage,
+        story_creation_brief=batch_request.story_creation_brief,
+        quality_preset=getattr(batch_request, 'quality_preset', None),
+        quality_notes=getattr(batch_request, 'quality_notes', None),
+    )
     
     # 启动后台批量生成任务，传递model参数
     background_tasks.add_task(
@@ -4526,10 +4562,12 @@ async def batch_generate_chapters_in_order(
         user_id=user_id,
         ai_service=user_ai_service,
         custom_model=batch_request.model,
-        creative_mode=batch_request.creative_mode,
-        story_focus=batch_request.story_focus,
-        plot_stage=batch_request.plot_stage,
-        story_creation_brief=batch_request.story_creation_brief,
+        creative_mode=batch_generation_defaults["creative_mode"],
+        story_focus=batch_generation_defaults["story_focus"],
+        plot_stage=batch_generation_defaults["plot_stage"],
+        story_creation_brief=batch_generation_defaults["story_creation_brief"],
+        quality_preset=batch_generation_defaults["quality_preset"],
+        quality_notes=batch_generation_defaults["quality_notes"],
         enable_web_research=batch_request.enable_web_research,
         web_research_query=batch_request.web_research_query,
         story_repair_summary=batch_request.story_repair_summary,
@@ -4940,6 +4978,8 @@ async def execute_batch_generation_in_order(
     story_focus: Optional[str] = None,
     plot_stage: Optional[str] = None,
     story_creation_brief: Optional[str] = None,
+    quality_preset: Optional[str] = None,
+    quality_notes: Optional[str] = None,
     enable_web_research: Optional[bool] = None,
     web_research_query: Optional[str] = None,
     story_repair_summary: Optional[str] = None,
@@ -5098,6 +5138,8 @@ async def execute_batch_generation_in_order(
                         story_focus=story_focus,
                         plot_stage=plot_stage,
                         story_creation_brief=story_creation_brief,
+                        quality_preset=quality_preset,
+                        quality_notes=quality_notes,
                         enable_web_research=enable_web_research,
                         web_research_query=web_research_query,
                         story_repair_summary=story_repair_summary,
@@ -5352,6 +5394,8 @@ async def generate_single_chapter_for_batch(
     story_focus: Optional[str] = None,
     plot_stage: Optional[str] = None,
     story_creation_brief: Optional[str] = None,
+    quality_preset: Optional[str] = None,
+    quality_notes: Optional[str] = None,
     enable_web_research: Optional[bool] = None,
     web_research_query: Optional[str] = None,
     story_repair_summary: Optional[str] = None,
@@ -5438,6 +5482,22 @@ async def generate_single_chapter_for_batch(
                 })
 
     # 获取写作风格与统一质量画像
+    generation_defaults = resolve_project_generation_defaults(
+        project,
+        creative_mode=creative_mode,
+        story_focus=story_focus,
+        plot_stage=plot_stage,
+        story_creation_brief=story_creation_brief,
+        quality_preset=quality_preset,
+        quality_notes=quality_notes,
+    )
+    creative_mode = generation_defaults["creative_mode"]
+    story_focus = generation_defaults["story_focus"]
+    plot_stage = generation_defaults["plot_stage"]
+    story_creation_brief = generation_defaults["story_creation_brief"]
+    quality_preset = generation_defaults["quality_preset"]
+    quality_notes = generation_defaults["quality_notes"]
+
     quality_profile = await _resolve_chapter_quality_profile(
         db_session=db_session,
         user_id=user_id,
@@ -5455,6 +5515,8 @@ async def generate_single_chapter_for_batch(
         story_focus=story_focus,
         plot_stage=plot_stage,
         story_creation_brief=story_creation_brief,
+        quality_preset=quality_preset,
+        quality_notes=quality_notes,
         story_repair_summary=story_repair_summary,
         story_repair_targets=story_repair_targets,
         story_preserve_strengths=story_preserve_strengths,

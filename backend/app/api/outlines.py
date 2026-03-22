@@ -30,21 +30,36 @@ from app.services.ai_service import AIService
 from app.services.prompt_service import (
     prompt_service,
     PromptService,
+    build_quality_preference_block,
     build_creative_mode_block,
     build_volume_pacing_block,
     build_story_focus_block,
     build_narrative_blueprint_block,
     build_story_objective_card_block,
     build_story_result_card_block,
+    build_story_payoff_chain_card_block,
+    build_story_rule_grounding_card_block,
+    build_story_information_release_card_block,
+    build_story_emotion_landing_card_block,
+    build_story_action_rendering_card_block,
+    build_story_summary_tone_control_card_block,
+    build_story_repetition_control_card_block,
+    build_story_viewpoint_discipline_card_block,
+    build_story_dialogue_advancement_card_block,
     build_story_execution_checklist_block,
+    build_story_scene_anchor_card_block,
+    build_story_scene_density_card_block,
     build_story_repetition_risk_block,
     build_story_acceptance_card_block,
+    build_story_opening_hook_card_block,
+    build_story_cliffhanger_card_block,
     build_story_character_arc_card_block,
 )
 from app.services.memory_service import memory_service
 from app.services.plot_expansion_service import PlotExpansionService
 from app.services.foreshadow_service import foreshadow_service
 from app.services.memory_service import memory_service
+from app.services.project_generation_defaults import resolve_project_generation_defaults
 from app.logger import get_logger
 from app.api.settings import get_user_ai_service
 from app.utils.sse_response import SSEResponse, create_sse_response, WizardProgressTracker
@@ -100,6 +115,8 @@ def _merge_outline_requirements(
     story_focus: Optional[str] = None,
     plot_stage: Optional[str] = None,
     chapter_count: Optional[int] = None,
+    quality_preset: Optional[str] = None,
+    quality_notes: Optional[str] = None,
 ) -> str:
     """合并自由要求与结构增强要求，避免改动模板本体。"""
     parts: list[str] = []
@@ -107,6 +124,14 @@ def _merge_outline_requirements(
     base_text = str(base_requirements or "").strip()
     if base_text:
         parts.append(base_text)
+
+    quality_preference_block = build_quality_preference_block(
+        quality_preset,
+        quality_notes,
+        scene="outline",
+    ).strip()
+    if quality_preference_block:
+        parts.append(quality_preference_block)
 
     creative_mode_block = build_creative_mode_block(creative_mode, scene="outline").strip()
     if creative_mode_block:
@@ -143,6 +168,96 @@ def _merge_outline_requirements(
     if story_result_card_block:
         parts.append(story_result_card_block)
 
+    story_payoff_chain_card_block = build_story_payoff_chain_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_payoff_chain_card_block:
+        parts.append(story_payoff_chain_card_block)
+
+    story_rule_grounding_card_block = build_story_rule_grounding_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_rule_grounding_card_block:
+        parts.append(story_rule_grounding_card_block)
+
+    story_information_release_card_block = build_story_information_release_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_information_release_card_block:
+        parts.append(story_information_release_card_block)
+
+    story_emotion_landing_card_block = build_story_emotion_landing_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_emotion_landing_card_block:
+        parts.append(story_emotion_landing_card_block)
+
+    story_action_rendering_card_block = build_story_action_rendering_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_action_rendering_card_block:
+        parts.append(story_action_rendering_card_block)
+
+    story_summary_tone_control_card_block = build_story_summary_tone_control_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_summary_tone_control_card_block:
+        parts.append(story_summary_tone_control_card_block)
+
+    story_repetition_control_card_block = build_story_repetition_control_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_repetition_control_card_block:
+        parts.append(story_repetition_control_card_block)
+
+    story_viewpoint_discipline_card_block = build_story_viewpoint_discipline_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_viewpoint_discipline_card_block:
+        parts.append(story_viewpoint_discipline_card_block)
+
+    story_dialogue_advancement_card_block = build_story_dialogue_advancement_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_dialogue_advancement_card_block:
+        parts.append(story_dialogue_advancement_card_block)
+
+    story_opening_hook_card_block = build_story_opening_hook_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_opening_hook_card_block:
+        parts.append(story_opening_hook_card_block)
+
     story_execution_checklist_block = build_story_execution_checklist_block(
         creative_mode,
         story_focus,
@@ -151,6 +266,24 @@ def _merge_outline_requirements(
     ).strip()
     if story_execution_checklist_block:
         parts.append(story_execution_checklist_block)
+
+    story_scene_anchor_card_block = build_story_scene_anchor_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_scene_anchor_card_block:
+        parts.append(story_scene_anchor_card_block)
+
+    story_scene_density_card_block = build_story_scene_density_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_scene_density_card_block:
+        parts.append(story_scene_density_card_block)
 
     story_repetition_risk_block = build_story_repetition_risk_block(
         creative_mode,
@@ -169,6 +302,15 @@ def _merge_outline_requirements(
     ).strip()
     if story_acceptance_card_block:
         parts.append(story_acceptance_card_block)
+
+    story_cliffhanger_card_block = build_story_cliffhanger_card_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if story_cliffhanger_card_block:
+        parts.append(story_cliffhanger_card_block)
 
     story_character_arc_card_block = build_story_character_arc_card_block(
         creative_mode,
@@ -1226,6 +1368,14 @@ async def new_outline_generator(
         # 使用提示词模板
         yield await tracker.preparing("准备AI提示词...")
         template = await PromptService.get_template("OUTLINE_CREATE", user_id_for_mcp, db)
+        generation_defaults = resolve_project_generation_defaults(
+            project,
+            creative_mode=data.get("creative_mode"),
+            story_focus=data.get("story_focus"),
+            plot_stage=data.get("plot_stage"),
+            quality_preset=data.get("quality_preset"),
+            quality_notes=data.get("quality_notes"),
+        )
         prompt = PromptService.format_prompt(
             template,
             title=project.title,
@@ -1240,10 +1390,12 @@ async def new_outline_generator(
             characters_info=characters_info or "暂无角色信息",
             requirements=_merge_outline_requirements(
                 data.get("requirements"),
-                data.get("creative_mode"),
-                data.get("story_focus"),
-                data.get("plot_stage"),
+                generation_defaults["creative_mode"],
+                generation_defaults["story_focus"],
+                generation_defaults["plot_stage"],
                 chapter_count,
+                generation_defaults["quality_preset"],
+                generation_defaults["quality_notes"],
             ),
             mcp_references=""
         )
@@ -1661,6 +1813,14 @@ async def continue_outline_generator(
             
             # 使用标准续写提示词模板（简化版）
             template = await PromptService.get_template("OUTLINE_CONTINUE", user_id, db)
+            generation_defaults = resolve_project_generation_defaults(
+                project,
+                creative_mode=data.get("creative_mode"),
+                story_focus=data.get("story_focus"),
+                plot_stage=data.get("plot_stage"),
+                quality_preset=data.get("quality_preset"),
+                quality_notes=data.get("quality_notes"),
+            )
             prompt = PromptService.format_prompt(
                 template,
                 # 基础信息
@@ -1684,10 +1844,12 @@ async def continue_outline_generator(
                 story_direction=data.get("story_direction", "自然延续"),
                 requirements=_merge_outline_requirements(
                     data.get("requirements"),
-                    data.get("creative_mode"),
-                    data.get("story_focus"),
-                    data.get("plot_stage"),
+                    generation_defaults["creative_mode"],
+                    generation_defaults["story_focus"],
+                    generation_defaults["plot_stage"],
                     current_batch_size,
+                    generation_defaults["quality_preset"],
+                    generation_defaults["quality_notes"],
                 ),
                 mcp_references=""
             )

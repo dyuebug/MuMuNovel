@@ -157,6 +157,10 @@ async def create_project(chapters_session_factory, user_id: str, **overrides) ->
             outline_mode=overrides.get("outline_mode", "one-to-many"),
             current_words=overrides.get("current_words", 0),
             narrative_perspective=overrides.get("narrative_perspective", "third_person"),
+            default_creative_mode=overrides.get("default_creative_mode"),
+            default_story_focus=overrides.get("default_story_focus"),
+            default_plot_stage=overrides.get("default_plot_stage"),
+            default_story_creation_brief=overrides.get("default_story_creation_brief"),
         )
         session.add(project)
         await session.commit()
@@ -649,6 +653,68 @@ async def test_should_forward_creative_mode_to_batch_background_generation(
     assert captured["creative_mode"] == "payoff"
     assert captured["story_focus"] == "foreshadow_payoff"
     assert captured["plot_stage"] == "ending"
+
+
+async def test_should_fallback_to_project_generation_defaults_for_batch_background_generation(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_execute_batch_generation(*args, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(
+        chapters_api,
+        "execute_batch_generation_in_order",
+        fake_execute_batch_generation,
+    )
+
+    project = await create_project(
+        chapters_session_factory,
+        user_id=mock_user.user_id,
+        default_creative_mode="hook",
+        default_story_focus="advance_plot",
+        default_plot_stage="development",
+        default_story_creation_brief="默认要求：保持连载感和推进效率。",
+    )
+
+    await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="第一章",
+        content="前置章节已完成",
+        status="completed",
+    )
+    await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title="第二章",
+        content=None,
+    )
+
+    response = await chapters_client.post(
+        f"/api/chapters/project/{project.id}/batch-generate",
+        json={
+            "start_chapter_number": 2,
+            "count": 1,
+            "target_word_count": 500,
+            "enable_analysis": False,
+            "enable_mcp": False,
+            "max_retries": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["creative_mode"] == "hook"
+    assert captured["story_focus"] == "advance_plot"
+    assert captured["plot_stage"] == "development"
+    assert captured["story_creation_brief"] == "默认要求：保持连载感和推进效率。"
 
 
 async def test_should_expose_runtime_workflow_phase_in_batch_status(
@@ -1222,6 +1288,61 @@ async def test_should_forward_creative_mode_to_single_background_generation(
     assert captured["story_repair_summary"] == "优先补强冲突抬压"
     assert captured["story_repair_targets"] == ["写实受阻", "升级代价"]
     assert captured["story_preserve_strengths"] == ["保留对白辨识度"]
+
+
+async def test_should_fallback_to_project_generation_defaults_for_single_background_generation(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_execute_batch_generation(*args, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(
+        chapters_api,
+        "execute_batch_generation_in_order",
+        fake_execute_batch_generation,
+    )
+
+    project = await create_project(
+        chapters_session_factory,
+        user_id=mock_user.user_id,
+        default_creative_mode="suspense",
+        default_story_focus="reveal_mystery",
+        default_plot_stage="climax",
+        default_story_creation_brief="默认要求：重点写实对撞与悬念收束。",
+    )
+    outline = await create_outline(
+        chapters_session_factory,
+        project_id=project.id,
+        order_index=1,
+        title="单章后台默认值大纲",
+    )
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="待生成章节",
+        content=None,
+        outline_id=outline.id,
+    )
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/generate-background",
+        json={
+            "target_word_count": 1200,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["creative_mode"] == "suspense"
+    assert captured["story_focus"] == "reveal_mystery"
+    assert captured["plot_stage"] == "climax"
+    assert captured["story_creation_brief"] == "默认要求：重点写实对撞与悬念收束。"
 
 
 async def test_should_reuse_active_background_task_for_same_chapter(
