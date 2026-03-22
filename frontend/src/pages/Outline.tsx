@@ -17,7 +17,7 @@ import { backgroundTaskApi, outlineApi, chapterApi, projectApi } from '../servic
 import { hasUsableApiCredentials } from '../utils/apiKey';
 
 
-import type { OutlineExpansionResponse, BatchOutlineExpansionResponse, ChapterPlanItem, ApiError, Character, CreativeMode, StoryFocus } from '../types';
+import type { OutlineExpansionResponse, BatchOutlineExpansionResponse, ChapterPlanItem, ApiError, Character, CreativeMode, PlotStage, StoryFocus } from '../types';
 import {
   buildCreationBlueprint,
   buildStoryExecutionChecklist,
@@ -405,6 +405,10 @@ export default function Outline() {
 
 
   const [manualCreateForm] = Form.useForm();
+
+  const projectDefaultCreativeMode = currentProject?.default_creative_mode as CreativeMode | undefined;
+  const projectDefaultStoryFocus = currentProject?.default_story_focus as StoryFocus | undefined;
+  const projectDefaultPlotStage = currentProject?.default_plot_stage as PlotStage | undefined;
 
   const selectedOutlineChapterCount = Form.useWatch('chapter_count', generateForm) as number | undefined;
   const selectedOutlineCreativeMode = Form.useWatch('creative_mode', generateForm) as CreativeMode | undefined;
@@ -2442,10 +2446,10 @@ export default function Outline() {
         requirements: values.requirements,
 
 
-        creative_mode: values.creative_mode,
+        creative_mode: values.creative_mode ?? projectDefaultCreativeMode,
 
 
-        story_focus: values.story_focus,
+        story_focus: values.story_focus ?? projectDefaultStoryFocus,
 
 
         mode: values.mode || 'auto',
@@ -2454,7 +2458,7 @@ export default function Outline() {
         story_direction: values.story_direction,
 
 
-        plot_stage: values.plot_stage || 'development'
+        plot_stage: values.plot_stage || projectDefaultPlotStage || 'development'
 
 
       };
@@ -2685,7 +2689,13 @@ export default function Outline() {
             narrative_perspective: currentProject.narrative_perspective || '第三人称',
 
 
-            plot_stage: 'development',
+            creative_mode: projectDefaultCreativeMode,
+
+
+            story_focus: projectDefaultStoryFocus,
+
+
+            plot_stage: projectDefaultPlotStage || 'development',
 
 
             keep_existing: true,
@@ -2994,7 +3004,10 @@ export default function Outline() {
                         </Button>
                       ))}
                       <Button
-                        onClick={() => generateForm.setFieldsValue({ creative_mode: undefined, story_focus: undefined })}
+                        onClick={() => generateForm.setFieldsValue({
+                          creative_mode: projectDefaultCreativeMode,
+                          story_focus: projectDefaultStoryFocus,
+                        })}
                       >
                         清空预设
                       </Button>

@@ -1189,6 +1189,10 @@ const removePersistedBatchTaskMeta = (taskId: string): void => {
 export default function Chapters() {
 
   const currentProject = useStore((state) => state.currentProject);
+  const projectDefaultCreativeMode = currentProject?.default_creative_mode;
+  const projectDefaultStoryFocus = currentProject?.default_story_focus;
+  const projectDefaultPlotStage = currentProject?.default_plot_stage;
+  const projectDefaultStoryCreationBrief = currentProject?.default_story_creation_brief?.trim() ?? '';
 
   const chapters = useStore((state) => state.chapters);
 
@@ -1528,28 +1532,39 @@ export default function Chapters() {
     singleStoryBeatPlannerAutoRef.current = { ...EMPTY_STORY_BEAT_PLANNER_DRAFT };
     singleStorySceneOutlineAutoRef.current = { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT };
     setTemporaryNarrativePerspective(undefined);
-    setSelectedCreativeMode(undefined);
-    setSelectedStoryFocus(undefined);
-    setSelectedPlotStage(inferCreationPlotStage({
+    setSelectedCreativeMode(projectDefaultCreativeMode);
+    setSelectedStoryFocus(projectDefaultStoryFocus);
+    setSelectedPlotStage(projectDefaultPlotStage ?? inferCreationPlotStage({
       chapterNumber: chapterNumber ?? undefined,
       totalChapters: knownStructureChapterCount,
     }));
-    setSingleStoryCreationBriefDraft('');
+    setSingleStoryCreationBriefDraft(projectDefaultStoryCreationBrief);
     setSingleStoryBeatPlannerDraft({ ...EMPTY_STORY_BEAT_PLANNER_DRAFT });
     setSingleStorySceneOutlineDraft({ ...EMPTY_STORY_SCENE_OUTLINE_DRAFT });
-  }, [knownStructureChapterCount]);
+  }, [
+    knownStructureChapterCount,
+    projectDefaultCreativeMode,
+    projectDefaultPlotStage,
+    projectDefaultStoryCreationBrief,
+    projectDefaultStoryFocus,
+  ]);
 
   const resetBatchStoryCreationCockpit = useCallback(() => {
     batchStoryCreationAutoBriefRef.current = '';
     batchStoryBeatPlannerAutoRef.current = { ...EMPTY_STORY_BEAT_PLANNER_DRAFT };
     batchStorySceneOutlineAutoRef.current = { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT };
-    setBatchSelectedCreativeMode(undefined);
-    setBatchSelectedStoryFocus(undefined);
-    setBatchSelectedPlotStage(undefined);
-    setBatchStoryCreationBriefDraft('');
+    setBatchSelectedCreativeMode(projectDefaultCreativeMode);
+    setBatchSelectedStoryFocus(projectDefaultStoryFocus);
+    setBatchSelectedPlotStage(projectDefaultPlotStage);
+    setBatchStoryCreationBriefDraft(projectDefaultStoryCreationBrief);
     setBatchStoryBeatPlannerDraft({ ...EMPTY_STORY_BEAT_PLANNER_DRAFT });
     setBatchStorySceneOutlineDraft({ ...EMPTY_STORY_SCENE_OUTLINE_DRAFT });
-  }, []);
+  }, [
+    projectDefaultCreativeMode,
+    projectDefaultPlotStage,
+    projectDefaultStoryCreationBrief,
+    projectDefaultStoryFocus,
+  ]);
 
   const applyInferredSinglePlotStage = useCallback(() => {
     const inferredStage = inferCreationPlotStage({
@@ -1745,6 +1760,10 @@ export default function Chapters() {
 
   const batchSystemStoryCreationBrief = batchStoryCreationControlCard?.promptBrief ?? '';
 
+  const singleDefaultStoryCreationBrief = singleSystemStoryCreationBrief || projectDefaultStoryCreationBrief || '';
+
+  const batchDefaultStoryCreationBrief = batchSystemStoryCreationBrief || projectDefaultStoryCreationBrief || '';
+
   const normalizedSingleStoryCreationBriefDraft = singleStoryCreationBriefDraft.trim();
 
   const normalizedBatchStoryCreationBriefDraft = batchStoryCreationBriefDraft.trim();
@@ -1769,9 +1788,9 @@ export default function Chapters() {
     [batchStorySceneOutlineDraft],
   );
 
-  const singleStoryCreationBaseBrief = normalizedSingleStoryCreationBriefDraft || singleSystemStoryCreationBrief || undefined;
+  const singleStoryCreationBaseBrief = normalizedSingleStoryCreationBriefDraft || singleDefaultStoryCreationBrief || undefined;
 
-  const batchStoryCreationBaseBrief = normalizedBatchStoryCreationBriefDraft || batchSystemStoryCreationBrief || undefined;
+  const batchStoryCreationBaseBrief = normalizedBatchStoryCreationBriefDraft || batchDefaultStoryCreationBrief || undefined;
 
   const resolvedSingleStoryCreationBrief = mergeStoryCreationInstructions(
     singleStoryCreationBaseBrief,
@@ -1813,12 +1832,12 @@ export default function Chapters() {
 
   const isSingleStoryCreationBriefCustomized = Boolean(
     normalizedSingleStoryCreationBriefDraft
-    && normalizedSingleStoryCreationBriefDraft !== singleSystemStoryCreationBrief.trim(),
+    && normalizedSingleStoryCreationBriefDraft !== singleDefaultStoryCreationBrief.trim(),
   );
 
   const isBatchStoryCreationBriefCustomized = Boolean(
     normalizedBatchStoryCreationBriefDraft
-    && normalizedBatchStoryCreationBriefDraft !== batchSystemStoryCreationBrief.trim(),
+    && normalizedBatchStoryCreationBriefDraft !== batchDefaultStoryCreationBrief.trim(),
   );
 
   const isSingleStoryBeatPlannerCustomized = Boolean(
@@ -1927,7 +1946,7 @@ export default function Chapters() {
 
     singleStoryCreationAutoBriefRef.current = persistedDraft.isBriefCustomized
       ? MANUAL_STORY_CREATION_BRIEF_SENTINEL
-      : persistedDraft.storyCreationBriefDraft ?? '';
+      : persistedDraft.storyCreationBriefDraft ?? singleDefaultStoryCreationBrief;
     singleStoryBeatPlannerAutoRef.current = persistedDraft.isBeatPlannerCustomized
       ? { ...EMPTY_STORY_BEAT_PLANNER_DRAFT }
       : normalizeStoryBeatPlannerDraft(persistedDraft.beatPlannerDraft);
@@ -1936,23 +1955,29 @@ export default function Chapters() {
       : normalizeStorySceneOutlineDraft(persistedDraft.sceneOutlineDraft);
 
     setTemporaryNarrativePerspective(persistedDraft.narrativePerspective);
-    setSelectedCreativeMode(persistedDraft.creativeMode);
-    setSelectedStoryFocus(persistedDraft.storyFocus);
+    setSelectedCreativeMode(persistedDraft.creativeMode ?? projectDefaultCreativeMode);
+    setSelectedStoryFocus(persistedDraft.storyFocus ?? projectDefaultStoryFocus);
     setSelectedPlotStage(
       persistedDraft.plotStage
+      ?? projectDefaultPlotStage
       ?? inferCreationPlotStage({
         chapterNumber: currentEditingChapter.chapter_number,
         totalChapters: knownStructureChapterCount,
       }),
     );
-    setSingleStoryCreationBriefDraft(persistedDraft.storyCreationBriefDraft ?? '');
+    setSingleStoryCreationBriefDraft(persistedDraft.storyCreationBriefDraft ?? projectDefaultStoryCreationBrief);
     setSingleStoryBeatPlannerDraft(normalizeStoryBeatPlannerDraft(persistedDraft.beatPlannerDraft));
     setSingleStorySceneOutlineDraft(normalizeStorySceneOutlineDraft(persistedDraft.sceneOutlineDraft));
   }, [
     currentEditingChapter?.chapter_number,
     currentEditingChapter?.id,
     knownStructureChapterCount,
+    projectDefaultCreativeMode,
+    projectDefaultPlotStage,
+    projectDefaultStoryCreationBrief,
+    projectDefaultStoryFocus,
     resetSingleStoryCreationCockpit,
+    singleDefaultStoryCreationBrief,
     singleStoryCreationDraftStorageKey,
   ]);
 
@@ -1971,7 +1996,7 @@ export default function Chapters() {
 
     batchStoryCreationAutoBriefRef.current = persistedDraft.isBriefCustomized
       ? MANUAL_STORY_CREATION_BRIEF_SENTINEL
-      : persistedDraft.storyCreationBriefDraft ?? '';
+      : persistedDraft.storyCreationBriefDraft ?? batchDefaultStoryCreationBrief;
     batchStoryBeatPlannerAutoRef.current = persistedDraft.isBeatPlannerCustomized
       ? { ...EMPTY_STORY_BEAT_PLANNER_DRAFT }
       : normalizeStoryBeatPlannerDraft(persistedDraft.beatPlannerDraft);
@@ -1979,13 +2004,21 @@ export default function Chapters() {
       ? { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT }
       : normalizeStorySceneOutlineDraft(persistedDraft.sceneOutlineDraft);
 
-    setBatchSelectedCreativeMode(persistedDraft.creativeMode);
-    setBatchSelectedStoryFocus(persistedDraft.storyFocus);
-    setBatchSelectedPlotStage(persistedDraft.plotStage);
-    setBatchStoryCreationBriefDraft(persistedDraft.storyCreationBriefDraft ?? '');
+    setBatchSelectedCreativeMode(persistedDraft.creativeMode ?? projectDefaultCreativeMode);
+    setBatchSelectedStoryFocus(persistedDraft.storyFocus ?? projectDefaultStoryFocus);
+    setBatchSelectedPlotStage(persistedDraft.plotStage ?? projectDefaultPlotStage);
+    setBatchStoryCreationBriefDraft(persistedDraft.storyCreationBriefDraft ?? projectDefaultStoryCreationBrief);
     setBatchStoryBeatPlannerDraft(normalizeStoryBeatPlannerDraft(persistedDraft.beatPlannerDraft));
     setBatchStorySceneOutlineDraft(normalizeStorySceneOutlineDraft(persistedDraft.sceneOutlineDraft));
-  }, [batchStoryCreationDraftStorageKey, resetBatchStoryCreationCockpit]);
+  }, [
+    batchDefaultStoryCreationBrief,
+    batchStoryCreationDraftStorageKey,
+    projectDefaultCreativeMode,
+    projectDefaultPlotStage,
+    projectDefaultStoryCreationBrief,
+    projectDefaultStoryFocus,
+    resetBatchStoryCreationCockpit,
+  ]);
 
   useEffect(() => {
     if (!singleStoryCreationDraftStorageKey) {
@@ -2292,7 +2325,7 @@ export default function Chapters() {
   useEffect(() => {
     const previousAutoBrief = singleStoryCreationAutoBriefRef.current;
 
-    if (!singleSystemStoryCreationBrief) {
+    if (!singleDefaultStoryCreationBrief) {
       singleStoryCreationAutoBriefRef.current = '';
       setSingleStoryCreationBriefDraft(prev => (prev ? '' : prev));
       return;
@@ -2300,19 +2333,19 @@ export default function Chapters() {
 
     setSingleStoryCreationBriefDraft(prev => {
       if (!prev.trim() || prev === previousAutoBrief) {
-        return singleSystemStoryCreationBrief;
+        return singleDefaultStoryCreationBrief;
       }
 
       return prev;
     });
 
-    singleStoryCreationAutoBriefRef.current = singleSystemStoryCreationBrief;
-  }, [singleSystemStoryCreationBrief]);
+    singleStoryCreationAutoBriefRef.current = singleDefaultStoryCreationBrief;
+  }, [singleDefaultStoryCreationBrief]);
 
   useEffect(() => {
     const previousAutoBrief = batchStoryCreationAutoBriefRef.current;
 
-    if (!batchSystemStoryCreationBrief) {
+    if (!batchDefaultStoryCreationBrief) {
       batchStoryCreationAutoBriefRef.current = '';
       setBatchStoryCreationBriefDraft(prev => (prev ? '' : prev));
       return;
@@ -2320,14 +2353,14 @@ export default function Chapters() {
 
     setBatchStoryCreationBriefDraft(prev => {
       if (!prev.trim() || prev === previousAutoBrief) {
-        return batchSystemStoryCreationBrief;
+        return batchDefaultStoryCreationBrief;
       }
 
       return prev;
     });
 
-    batchStoryCreationAutoBriefRef.current = batchSystemStoryCreationBrief;
-  }, [batchSystemStoryCreationBrief]);
+    batchStoryCreationAutoBriefRef.current = batchDefaultStoryCreationBrief;
+  }, [batchDefaultStoryCreationBrief]);
 
   useEffect(() => {
     const previousAutoPlanner = singleStoryBeatPlannerAutoRef.current;
@@ -3903,14 +3936,8 @@ export default function Chapters() {
         content: chapter.content,
 
       });
+      resetSingleStoryCreationCockpit(chapter.chapter_number);
       setEditingId(id);
-      setTemporaryNarrativePerspective(undefined); // 闂備焦褰冪粔鍫曟偪閸℃顩查柧蹇撳ⅲ閻愮儤鐒诲璺侯儏椤?
-      setSelectedCreativeMode(undefined);
-      setSelectedStoryFocus(undefined);
-      setSelectedPlotStage(inferCreationPlotStage({
-        chapterNumber: chapter.chapter_number,
-        totalChapters: knownStructureChapterCount,
-      }));
       setIsEditorOpen(true);
       setChapterQualityMetrics(null);
 
@@ -4931,10 +4958,9 @@ export default function Chapters() {
 
 
 
+    resetBatchStoryCreationCockpit();
     setBatchSelectedModel(defaultModel || undefined);
-    setBatchSelectedCreativeMode(undefined);
-    setBatchSelectedStoryFocus(undefined);
-    setBatchSelectedPlotStage(inferCreationPlotStage({
+    setBatchSelectedPlotStage(projectDefaultPlotStage ?? inferCreationPlotStage({
       chapterNumber: firstIncompleteChapter.chapter_number,
       totalChapters: knownStructureChapterCount,
     }));
@@ -7418,8 +7444,8 @@ export default function Chapters() {
               ))}
               <Button
                 onClick={() => {
-                  setSelectedCreativeMode(undefined);
-                  setSelectedStoryFocus(undefined);
+                  setSelectedCreativeMode(projectDefaultCreativeMode);
+                  setSelectedStoryFocus(projectDefaultStoryFocus);
                 }}
               >
                 {"重置选择"}
@@ -8898,8 +8924,8 @@ export default function Chapters() {
                 ))}
                 <Button
                   onClick={() => {
-                    setBatchSelectedCreativeMode(undefined);
-                    setBatchSelectedStoryFocus(undefined);
+                    setBatchSelectedCreativeMode(projectDefaultCreativeMode);
+                    setBatchSelectedStoryFocus(projectDefaultStoryFocus);
                   }}
                 >
                   {"重置选择"}

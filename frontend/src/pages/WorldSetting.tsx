@@ -5,9 +5,47 @@ import { useStore } from '../store';
 import { cardStyles } from '../components/CardStyles';
 import { backgroundTaskApi, projectApi } from '../services/api';
 import { SSELoadingOverlay } from '../components/SSELoadingOverlay';
+import type { CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
 
 const { Title, Paragraph } = Typography;
 const { TextArea } = Input;
+
+const CREATIVE_MODE_OPTIONS: Array<{ value: CreativeMode; label: string; description: string }> = [
+  { value: 'balanced', label: '均衡推进', description: '兼顾钩子、推进、情绪与信息释放。' },
+  { value: 'hook', label: '钩子优先', description: '更强调章尾牵引与追读冲动。' },
+  { value: 'emotion', label: '情绪沉浸', description: '更强调人物情绪波峰与余震。' },
+  { value: 'suspense', label: '悬念加压', description: '更强调危险逼近、信息缺口与不确定。' },
+  { value: 'relationship', label: '关系推进', description: '更强调人物拉扯、羁绊和关系变化。' },
+  { value: 'payoff', label: '爽点回收', description: '更强调铺垫兑现、爆点与回报闭环。' },
+];
+
+const STORY_FOCUS_OPTIONS: Array<{ value: StoryFocus; label: string; description: string }> = [
+  { value: 'advance_plot', label: '主线推进', description: '优先让章节承担推进局势和任务的职责。' },
+  { value: 'deepen_character', label: '人物塑形', description: '优先让章节暴露人物选择、弱点与成长痕迹。' },
+  { value: 'escalate_conflict', label: '冲突升级', description: '优先让矛盾、代价和阻力逐层升高。' },
+  { value: 'reveal_mystery', label: '谜团揭示', description: '优先让章节承担揭线索、修认知、推真相。' },
+  { value: 'relationship_shift', label: '关系转折', description: '优先推动人物关系发生可见变化。' },
+  { value: 'foreshadow_payoff', label: '伏笔回收', description: '优先处理前文埋设并形成结构回报。' },
+];
+
+const PLOT_STAGE_OPTIONS: Array<{ value: PlotStage; label: string; description: string }> = [
+  { value: 'development', label: '发展段', description: '适合铺设矛盾、推进主线、抬升压力。' },
+  { value: 'climax', label: '高潮段', description: '适合正面对撞、揭牌、爆点释放。' },
+  { value: 'ending', label: '收束段', description: '适合回收伏笔、结算代价、收束情绪。' },
+];
+
+const QUALITY_PRESET_OPTIONS: Array<{ value: QualityPreset; label: string; description: string }> = [
+  { value: 'balanced', label: '均衡质感', description: '兼顾推进、情绪、场景和信息释放，适合大多数项目。' },
+  { value: 'plot_drive', label: '强情节回报', description: '更强调抓力、动作桥段、爽点回收和追读牵引。' },
+  { value: 'immersive', label: '沉浸场景感', description: '更强调设定落地、视角稳定、场景密度与现场感。' },
+  { value: 'emotion_drama', label: '情绪关系向', description: '更强调情绪落点、对白张力、关系余波与误伤后效。' },
+  { value: 'clean_prose', label: '克制干净文风', description: '更强调减少总结腔、重复提醒和说明书化表达。' },
+];
+
+const resolveOptionLabel = <T extends string>(
+  options: Array<{ value: T; label: string }>,
+  value?: string | null,
+) => options.find((item) => item.value === value)?.label || value || '未设定';
 
 export default function WorldSetting() {
   const { currentProject, setCurrentProject } = useStore();
@@ -294,6 +332,12 @@ export default function WorldSetting() {
                   genre: currentProject.genre || '',
                   narrative_perspective: currentProject.narrative_perspective || '',
                   target_words: currentProject.target_words || 0,
+                  default_creative_mode: currentProject.default_creative_mode,
+                  default_story_focus: currentProject.default_story_focus,
+                  default_plot_stage: currentProject.default_plot_stage,
+                  default_story_creation_brief: currentProject.default_story_creation_brief || '',
+                  default_quality_preset: currentProject.default_quality_preset,
+                  default_quality_notes: currentProject.default_quality_notes || '',
                 });
                 setIsEditProjectModalVisible(true);
               }}
@@ -350,6 +394,28 @@ export default function WorldSetting() {
             <Descriptions.Item label="叙事视角">{currentProject.narrative_perspective || '未设定'}</Descriptions.Item>
             <Descriptions.Item label="目标字数">
               {currentProject.target_words ? `${currentProject.target_words.toLocaleString()} 字` : '未设定'}
+            </Descriptions.Item>
+            <Descriptions.Item label="默认创作模式">
+              {resolveOptionLabel(CREATIVE_MODE_OPTIONS, currentProject.default_creative_mode)}
+            </Descriptions.Item>
+            <Descriptions.Item label="默认结构侧重点">
+              {resolveOptionLabel(STORY_FOCUS_OPTIONS, currentProject.default_story_focus)}
+            </Descriptions.Item>
+            <Descriptions.Item label="默认剧情阶段">
+              {resolveOptionLabel(PLOT_STAGE_OPTIONS, currentProject.default_plot_stage)}
+            </Descriptions.Item>
+            <Descriptions.Item label="默认质量预设">
+              {resolveOptionLabel(QUALITY_PRESET_OPTIONS, currentProject.default_quality_preset)}
+            </Descriptions.Item>
+            <Descriptions.Item label="默认创作总控摘要">
+              <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
+                {currentProject.default_story_creation_brief?.trim() || '未设定'}
+              </Paragraph>
+            </Descriptions.Item>
+            <Descriptions.Item label="默认质量补充偏好">
+              <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
+                {currentProject.default_quality_notes?.trim() || '未设定'}
+              </Paragraph>
             </Descriptions.Item>
           </Descriptions>
         </Card>
@@ -559,6 +625,12 @@ export default function WorldSetting() {
               genre: values.genre,
               narrative_perspective: values.narrative_perspective,
               target_words: values.target_words,
+              default_creative_mode: values.default_creative_mode,
+              default_story_focus: values.default_story_focus,
+              default_plot_stage: values.default_plot_stage,
+              default_story_creation_brief: values.default_story_creation_brief,
+              default_quality_preset: values.default_quality_preset,
+              default_quality_notes: values.default_quality_notes,
             });
 
             setCurrentProject(updatedProject);
@@ -673,6 +745,112 @@ export default function WorldSetting() {
               addonAfter="字"
             />
           </Form.Item>
+
+          <Card
+            size="small"
+            title="默认生成偏好"
+            style={{ marginBottom: 0, background: 'var(--color-fill-quaternary)' }}
+          >
+            <Form.Item
+              label="默认创作模式"
+              name="default_creative_mode"
+              extra="大纲与章节生成会优先采用这里的偏好，仍可在具体生成时临时覆盖。"
+            >
+              <Select
+                placeholder="未设置时按系统默认均衡推进"
+                allowClear
+                optionLabelProp="label"
+              >
+                {CREATIVE_MODE_OPTIONS.map((option) => (
+                  <Select.Option key={option.value} value={option.value} label={option.label}>
+                    <div>{option.label}</div>
+                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+
+            <Form.Item
+              label="默认结构侧重点"
+              name="default_story_focus"
+            >
+              <Select
+                placeholder="未设置时按系统默认承担多种叙事任务"
+                allowClear
+                optionLabelProp="label"
+              >
+                {STORY_FOCUS_OPTIONS.map((option) => (
+                  <Select.Option key={option.value} value={option.value} label={option.label}>
+                    <div>{option.label}</div>
+                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+
+            <Form.Item
+              label="默认剧情阶段"
+              name="default_plot_stage"
+            >
+              <Select
+                placeholder="未设置时按章节位置自动推断"
+                allowClear
+                optionLabelProp="label"
+              >
+                {PLOT_STAGE_OPTIONS.map((option) => (
+                  <Select.Option key={option.value} value={option.value} label={option.label}>
+                    <div>{option.label}</div>
+                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+
+            <Form.Item
+              label="默认创作总控摘要"
+              name="default_story_creation_brief"
+              extra="用于长期约束章节生成的风格、节奏、禁忌与表达偏好。"
+            >
+              <TextArea
+                rows={4}
+                placeholder="例如：保持连载感与场景感，优先让人物选择推动情节，避免空泛抒情和重复解释。"
+                showCount
+                maxLength={1200}
+              />
+            </Form.Item>
+
+            <Form.Item
+              label="默认质量预设"
+              name="default_quality_preset"
+              extra="用于整体偏向情节回报、沉浸场景、情绪关系或克制文风；仍可被具体生成参数临时覆盖。"
+            >
+              <Select
+                placeholder="未设置时按系统默认均衡质感"
+                allowClear
+                optionLabelProp="label"
+              >
+                {QUALITY_PRESET_OPTIONS.map((option) => (
+                  <Select.Option key={option.value} value={option.value} label={option.label}>
+                    <div>{option.label}</div>
+                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
+                  </Select.Option>
+                ))}
+              </Select>
+            </Form.Item>
+
+            <Form.Item
+              label="默认质量补充偏好"
+              name="default_quality_notes"
+              extra="补充你长期想强调的质量倾向，例如“重点减少总结句”和“动作桥段别一笔带过”。"
+            >
+              <TextArea
+                rows={3}
+                placeholder="例如：优先保持现场感和镜头稳定，减少旁白盖章与同义复述，关键桥段尽量现场化。"
+                showCount
+                maxLength={600}
+              />
+            </Form.Item>
+          </Card>
         </Form>
       </Modal>
 

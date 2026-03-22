@@ -130,6 +130,12 @@ export interface Project {
   chapter_count?: number;
   narrative_perspective?: string;
   character_count?: number;
+  default_creative_mode?: CreativeMode;
+  default_story_focus?: StoryFocus;
+  default_plot_stage?: PlotStage;
+  default_story_creation_brief?: string;
+  default_quality_preset?: QualityPreset;
+  default_quality_notes?: string;
   created_at: string;
   updated_at: string;
 }
@@ -147,6 +153,12 @@ export interface ProjectCreate {
   world_location?: string;
   world_atmosphere?: string;
   world_rules?: string;
+  default_creative_mode?: CreativeMode;
+  default_story_focus?: StoryFocus;
+  default_plot_stage?: PlotStage;
+  default_story_creation_brief?: string;
+  default_quality_preset?: QualityPreset;
+  default_quality_notes?: string;
 }
 
 export interface ProjectUpdate {
@@ -160,6 +172,12 @@ export interface ProjectUpdate {
   world_location?: string;
   world_atmosphere?: string;
   world_rules?: string;
+  default_creative_mode?: CreativeMode;
+  default_story_focus?: StoryFocus;
+  default_plot_stage?: PlotStage;
+  default_story_creation_brief?: string;
+  default_quality_preset?: QualityPreset;
+  default_quality_notes?: string;
   chapter_count?: number;
   narrative_perspective?: string;
   character_count?: number;
@@ -357,6 +375,7 @@ export interface ChapterUpdate {
 export type CreativeMode = 'balanced' | 'hook' | 'emotion' | 'suspense' | 'relationship' | 'payoff';
 export type StoryFocus = 'advance_plot' | 'deepen_character' | 'escalate_conflict' | 'reveal_mystery' | 'relationship_shift' | 'foreshadow_payoff';
 export type PlotStage = 'development' | 'climax' | 'ending';
+export type QualityPreset = 'balanced' | 'plot_drive' | 'immersive' | 'emotion_drama' | 'clean_prose';
 
 export interface ChapterGenerateRequest {
   style_id?: number;
