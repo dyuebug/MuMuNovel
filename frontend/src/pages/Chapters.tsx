@@ -1,6 +1,6 @@
-import { Suspense, lazy, useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { Suspense, lazy, useState, useEffect, useRef, useMemo, useCallback, type CSSProperties, type ReactNode } from 'react';
 
-import { List, Button, Modal, Form, Input, Select, message, Empty, Space, Badge, Tag, Card, InputNumber, Alert, Radio, Descriptions, Collapse, Popconfirm, FloatButton, Tooltip, Progress } from 'antd';
+import { List, Button, Modal, Form, Input, Select, message, Empty, Space, Badge, Tag, Card, InputNumber, Radio, Collapse, Popconfirm, FloatButton, Tooltip, Progress } from 'antd';
 
 import { EditOutlined, FileTextOutlined, ThunderboltOutlined, LockOutlined, DownloadOutlined, SettingOutlined, FundOutlined, SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, RocketOutlined, StopOutlined, InfoCircleOutlined, CaretRightOutlined, DeleteOutlined, BookOutlined, FormOutlined, PlusOutlined, ReadOutlined } from '@ant-design/icons';
 
@@ -46,6 +46,356 @@ import {
 
 
 const { TextArea } = Input;
+
+type CompactSettingHintTone = 'info' | 'success' | 'warning';
+
+const COMPACT_SETTING_HINT_STYLES: Record<CompactSettingHintTone, {
+  background: string;
+  border: string;
+  icon: string;
+}> = {
+  info: {
+    background: '#f7faff',
+    border: '#d6e4ff',
+    icon: '#1677ff',
+  },
+  success: {
+    background: '#f6ffed',
+    border: '#b7eb8f',
+    icon: '#52c41a',
+  },
+  warning: {
+    background: '#fffbe6',
+    border: '#ffe58f',
+    icon: '#faad14',
+  },
+};
+
+const renderCompactSettingHint = (
+  title: string,
+  detail?: string,
+  options: {
+    style?: CSSProperties;
+    tone?: CompactSettingHintTone;
+  } = {},
+) => {
+  const tone = options.tone ?? 'info';
+  const palette = COMPACT_SETTING_HINT_STYLES[tone];
+
+  return (
+    <div
+      style={{
+        marginBottom: 12,
+        padding: '8px 12px',
+        border: `1px solid ${palette.border}`,
+        borderRadius: 8,
+        background: palette.background,
+        ...options.style,
+      }}
+    >
+      <Space size={8} align="start" style={{ width: "100%" }}>
+        <InfoCircleOutlined style={{ color: palette.icon, marginTop: 2 }} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontWeight: 600, lineHeight: 1.5 }}>{title}</div>
+          {detail && (
+            <div
+              style={{
+                color: 'var(--color-text-secondary)',
+                fontSize: 12,
+                lineHeight: 1.5,
+                marginTop: 2,
+              }}
+            >
+              {detail}
+            </div>
+          )}
+        </div>
+      </Space>
+    </div>
+  );
+};
+
+const renderCompactSettingFlow = (
+  summary: string,
+  detail: string,
+  steps: string[],
+  options: {
+    style?: CSSProperties;
+  } = {},
+) => (
+  <div
+    style={{
+      marginBottom: 12,
+      padding: '10px 12px',
+      border: '1px solid #d6e4ff',
+      borderRadius: 8,
+      background: '#fcfdff',
+      ...options.style,
+    }}
+  >
+    <div style={{ fontWeight: 600, lineHeight: 1.5 }}>{summary}</div>
+    <div
+      style={{
+        color: 'var(--color-text-secondary)',
+        fontSize: 12,
+        lineHeight: 1.5,
+        marginTop: 2,
+      }}
+    >
+      {detail}
+    </div>
+    <Space size={[8, 8]} wrap style={{ marginTop: 8 }}>
+      {steps.map((step, index) => (
+        <Tag key={step} color='blue' style={{ marginInlineEnd: 0 }}>
+          {index + 1}. {step}
+        </Tag>
+      ))}
+    </Space>
+  </div>
+);
+
+
+
+
+const renderCompactStoryControlHeader = (
+  title: string,
+  detail: string,
+  options: {
+    tagText?: string;
+    tagColor?: string;
+    action?: ReactNode;
+    style?: CSSProperties;
+  } = {},
+) => (
+  <div
+    style={{
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+      gap: 12,
+      marginBottom: 8,
+      ...options.style,
+    }}
+  >
+    <div style={{ minWidth: 0, flex: 1 }}>
+      <Space size={[8, 6]} wrap>
+        <div style={{ fontWeight: 600 }}>{title}</div>
+        {options.tagText && (
+          <Tag color={options.tagColor ?? 'blue'} style={{ marginInlineEnd: 0 }}>
+            {options.tagText}
+          </Tag>
+        )}
+      </Space>
+      <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 4 }}>
+        {detail}
+      </div>
+    </div>
+    {options.action}
+  </div>
+);
+
+const renderCompactFactCard = (
+  title: string,
+  value: string,
+  options: {
+    style?: CSSProperties;
+  } = {},
+) => (
+  <div
+    style={{
+      padding: '8px 10px',
+      border: '1px solid #f0f0f0',
+      borderRadius: 8,
+      ...options.style,
+    }}
+  >
+    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{title}</div>
+    <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, lineHeight: 1.6 }}>{value}</div>
+  </div>
+);
+
+const renderCompactFactGrid = (
+  items: Array<[string, string]>,
+  options: {
+    minColumnWidth?: number;
+    style?: CSSProperties;
+  } = {},
+) => (
+  <div
+    style={{
+      display: 'grid',
+      gridTemplateColumns: `repeat(auto-fit, minmax(${options.minColumnWidth ?? 220}px, 1fr))`,
+      gap: 8,
+      ...options.style,
+    }}
+  >
+    {items.map(([title, value], index) => (
+      <div key={`${title}-${index}`} style={{ minWidth: 0 }}>
+        {renderCompactFactCard(title, value, { style: { height: '100%' } })}
+      </div>
+    ))}
+  </div>
+);
+const renderCompactSelectionSummary = (
+  items: Array<{ label: string; value: string; color?: string }>,
+  options: {
+    style?: CSSProperties;
+  } = {},
+) => (
+  <Space size={[8, 8]} wrap style={{ marginBottom: 10, ...options.style }}>
+    {items.map((item) => (
+      <Tag key={`${item.label}-${item.value}`} color={item.color ?? "default"} style={{ marginInlineEnd: 0 }}>
+        {item.label}: {item.value}
+      </Tag>
+    ))}
+  </Space>
+);
+
+const getCompactHintToneByAlertType = (
+  tone?: 'success' | 'info' | 'warning' | 'error',
+): CompactSettingHintTone => {
+  if (tone === 'success') return 'success';
+  if (tone === 'warning' || tone === 'error') return 'warning';
+  return 'info';
+};
+
+const renderCompactPresetRecommendationBlock = (
+  recommendations: Array<{ id: CreationPresetId; reason?: string }>,
+  options: {
+    activePresetId?: CreationPresetId | null;
+    applyPreset: (presetId: CreationPresetId) => void;
+    style?: CSSProperties;
+  },
+) => {
+  const items = recommendations
+    .map((item) => {
+      const preset = getCreationPresetById(item.id);
+      if (!preset) return null;
+      return { ...item, label: preset.label };
+    })
+    .filter((item): item is { id: CreationPresetId; reason?: string; label: string } => Boolean(item));
+
+  if (items.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        marginTop: 12,
+        padding: '10px 12px',
+        border: '1px solid #b7eb8f',
+        borderRadius: 8,
+        background: '#f6ffed',
+        ...options.style,
+      }}
+    >
+      {renderCompactStoryControlHeader(
+        '推荐预设',
+        '结合当前质量画像优先试一轮，点一下即可套用。',
+        {
+          tagText: `共 ${items.length} 项`,
+          tagColor: 'green',
+          style: { marginBottom: 10 },
+        },
+      )}
+      <Space size={[8, 8]} wrap>
+        {items.map((item) => (
+          <Button
+            key={item.id}
+            size="small"
+            type={options.activePresetId === item.id ? 'primary' : 'default'}
+            onClick={() => options.applyPreset(item.id)}
+            title={item.reason || item.label}
+          >
+            {item.reason ? `${item.label} · ${item.reason}` : item.label}
+          </Button>
+        ))}
+      </Space>
+    </div>
+  );
+};
+
+const renderCompactMetricGrid = (
+  items: Array<{ key: string; label: string; value: number; tip?: string }>,
+  options: {
+    minColumnWidth?: number;
+    style?: CSSProperties;
+  } = {},
+) => (
+  <div
+    style={{
+      display: 'grid',
+      gridTemplateColumns: `repeat(auto-fit, minmax(${options.minColumnWidth ?? 220}px, 1fr))`,
+      gap: 8,
+      ...options.style,
+    }}
+  >
+    {items.map((item) => (
+      <div
+        key={item.key}
+        style={{
+          padding: '8px 10px',
+          border: '1px solid #f0f0f0',
+          borderRadius: 8,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <Space size={4} wrap>
+            <span style={{ fontWeight: 600, fontSize: 13 }}>{item.label}</span>
+            {item.tip && (
+              <Tooltip title={item.tip}>
+                <InfoCircleOutlined style={{ color: '#8c8c8c' }} />
+              </Tooltip>
+            )}
+          </Space>
+          <Tag color={getMetricRateColor(item.value)} style={{ marginInlineEnd: 0 }}>
+            {item.value}%
+          </Tag>
+        </div>
+        <Progress
+          percent={item.value}
+          showInfo={false}
+          size="small"
+          strokeColor={getMetricStrokeColor(item.value)}
+        />
+      </div>
+    ))}
+  </div>
+);
+
+const renderCompactListCard = (
+  title: string,
+  items: string[],
+  options: {
+    numbered?: boolean;
+    tagText?: string;
+    tagColor?: string;
+    style?: CSSProperties;
+  } = {},
+) => (
+  <div
+    style={{
+      padding: '8px 10px',
+      border: '1px solid #f0f0f0',
+      borderRadius: 8,
+      ...options.style,
+    }}
+  >
+    <Space size={[8, 6]} wrap style={{ marginBottom: items.length > 0 ? 6 : 0 }}>
+      <div style={{ fontWeight: 600, fontSize: 13 }}>{title}</div>
+      <Tag color={options.tagColor ?? 'default'} style={{ marginInlineEnd: 0 }}>
+        {options.tagText ?? `${items.length}项`}
+      </Tag>
+    </Space>
+    <Space direction='vertical' size={3} style={{ display: 'flex' }}>
+      {items.map((item, index) => (
+        <div key={`${title}-${index}-${item}`} style={{ color: 'var(--color-text-secondary)', fontSize: 12, lineHeight: 1.6 }}>
+          {options.numbered ? `${index + 1}. ` : '• '}{item}
+        </div>
+      ))}
+    </Space>
+  </div>
+);
+
 
 interface StoryBeatPlannerDraft {
   openingHook: string;
@@ -965,6 +1315,9 @@ const StoryCreationSnapshotPanel = ({
                     <Tag color={(snapshot.promptCharCount ?? 0) >= STORY_CREATION_PROMPT_WARN_THRESHOLD ? 'gold' : 'blue'}>
                       {`字符：${snapshot.promptCharCount ?? 0}`}
                     </Tag>
+                    <Tag color={snapshot.prompt ? 'cyan' : 'default'}>
+                      {snapshot.prompt ? '含提示词' : '仅参数'}
+                    </Tag>
                   </Space>
                 </div>
                 {snapshot.promptLayerLabels?.length ? (
@@ -981,11 +1334,6 @@ const StoryCreationSnapshotPanel = ({
                     ))}
                   </Space>
                 )}
-                <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginBottom: 8 }}>
-                  {snapshot.prompt
-                    ? '已保存提示词文本，可直接复用。'
-                    : '该快照未保存提示词文本。'}
-                </div>
                 <Space wrap size={[8, 8]}>
                   <Button size="small" onClick={() => onApply(snapshot)}>
                     应用
@@ -1484,6 +1832,7 @@ export default function Chapters() {
   const [batchForm] = Form.useForm();
   const [manualCreateForm] = Form.useForm();
   const batchStartChapterNumber = Form.useWatch('startChapterNumber', batchForm) as number | undefined;
+  const batchEnableAnalysis = Form.useWatch('enableAnalysis', batchForm) as boolean | undefined;
   const [batchProgress, setBatchProgress] = useState<{
     status: string;
 
@@ -1514,6 +1863,7 @@ export default function Chapters() {
     () => chapters.find((chapter) => chapter.id === editingId),
     [chapters, editingId],
   );
+
 
   const singleStoryCreationDraftStorageKey = useMemo(
     () => (currentProject?.id && currentEditingChapter?.id
@@ -1604,12 +1954,54 @@ export default function Chapters() {
     [batchSelectedPlotStage, batchStartChapterNumber, knownStructureChapterCount],
   );
 
+  const selectedCreativeModeLabel = selectedCreativeMode
+    ? (CREATIVE_MODE_OPTIONS.find((item) => item.value === selectedCreativeMode)?.label || selectedCreativeMode)
+    : "默认推荐";
+  const selectedStoryFocusLabel = selectedStoryFocus
+    ? (STORY_FOCUS_OPTIONS.find((item) => item.value === selectedStoryFocus)?.label || selectedStoryFocus)
+    : "默认推荐";
+  const selectedPlotStageLabel = selectedPlotStage
+    ? (CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === selectedPlotStage)?.label || selectedPlotStage)
+    : "自动推断";
+  const selectedModelLabel = selectedModel
+    ? (availableModels.find((item) => item.value === selectedModel)?.label || selectedModel)
+    : "项目默认";
+  const batchSelectedCreativeModeLabel = batchSelectedCreativeMode
+    ? (CREATIVE_MODE_OPTIONS.find((item) => item.value === batchSelectedCreativeMode)?.label || batchSelectedCreativeMode)
+    : "默认推荐";
+  const batchSelectedStoryFocusLabel = batchSelectedStoryFocus
+    ? (STORY_FOCUS_OPTIONS.find((item) => item.value === batchSelectedStoryFocus)?.label || batchSelectedStoryFocus)
+    : "默认推荐";
+  const batchSelectedPlotStageLabel = batchSelectedPlotStage
+    ? (CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === batchSelectedPlotStage)?.label || batchSelectedPlotStage)
+    : "自动推断";
+  const batchSelectedModelLabel = batchSelectedModel
+    ? (availableModels.find((item) => item.value === batchSelectedModel)?.label || batchSelectedModel)
+    : "项目默认";
+  const batchQualityAnalysisLabel = batchEnableAnalysis === false ? "仅生成" : "自动分析";
+
   const singleAfterScorecard = useMemo(
     () => buildStoryAfterScorecard(chapterQualityMetrics, selectedCreativeMode, selectedStoryFocus, {
       plotStage: selectedPlotStage,
     }),
     [chapterQualityMetrics, selectedCreativeMode, selectedStoryFocus, selectedPlotStage],
   );
+
+  const batchRecommendedCreationPresets = useMemo(() => {
+    const summary = batchProgress?.quality_metrics_summary;
+    if (!summary) return [];
+
+    return buildCreationPresetRecommendation({
+      overall_score: summary.avg_overall_score ?? 0,
+      conflict_chain_hit_rate: summary.avg_conflict_chain_hit_rate ?? 0,
+      rule_grounding_hit_rate: summary.avg_rule_grounding_hit_rate ?? 0,
+      outline_alignment_rate: summary.avg_outline_alignment_rate ?? 0,
+      dialogue_naturalness_rate: summary.avg_dialogue_naturalness_rate ?? 0,
+      opening_hook_rate: summary.avg_opening_hook_rate ?? 0,
+      payoff_chain_rate: summary.avg_payoff_chain_rate ?? 0,
+      cliffhanger_rate: summary.avg_cliffhanger_rate ?? 0,
+    });
+  }, [batchProgress?.quality_metrics_summary]);
 
   const batchAfterScorecard = useMemo(
     () => buildBatchStoryAfterScorecard(batchProgress?.quality_metrics_summary ?? null, batchSelectedCreativeMode, batchSelectedStoryFocus, {
@@ -1652,6 +2044,31 @@ export default function Chapters() {
       batchStartChapterNumber,
       knownStructureChapterCount,
     ],
+  );
+
+  const chapterQualityProfileItems = useMemo(
+    () => getQualityProfileDisplayItems(chapterQualityProfileSummary),
+    [chapterQualityProfileSummary],
+  );
+
+  const batchQualityProfileItems = useMemo(
+    () => getQualityProfileDisplayItems(batchProgress?.quality_profile_summary),
+    [batchProgress?.quality_profile_summary],
+  );
+
+  const chapterQualityMetricItems = useMemo(
+    () => (chapterQualityMetrics ? getQualityMetricItems(chapterQualityMetrics) : []),
+    [chapterQualityMetrics],
+  );
+
+  const batchSummaryMetricItems = useMemo(
+    () => getBatchSummaryMetricItems(batchProgress?.quality_metrics_summary ?? undefined),
+    [batchProgress?.quality_metrics_summary],
+  );
+
+  const weakestQualityMetric = useMemo(
+    () => (chapterQualityMetrics ? getWeakestQualityMetric(chapterQualityMetrics) : null),
+    [chapterQualityMetrics],
   );
 
   const singleStoryRepairTargetCard = useMemo(
@@ -3804,6 +4221,12 @@ export default function Chapters() {
     return chapterGenerationStateById[chapter.id]?.disabledReason || '';
 
   };
+  const currentEditingCanGenerate = currentEditingChapter ? canGenerateChapter(currentEditingChapter) : false;
+  const currentEditingGenerateDisabledReason = currentEditingChapter ? getGenerateDisabledReason(currentEditingChapter) : "";
+  const canAnalyzeCurrentChapter = Boolean(currentEditingChapter?.id && currentEditingChapter.content?.trim());
+  const selectedRegenerateCount = selectedTextForRegenerate.trim().length;
+  const hasPartialSelection = selectedRegenerateCount > 0;
+
 
 
 
@@ -5499,377 +5922,101 @@ export default function Chapters() {
 
           <div style={{ marginTop: 16 }}>
 
-            <Descriptions
-
-              column={1}
-
-              size="small"
-
-              bordered
-
-              labelStyle={{
-
-                whiteSpace: 'normal',
-
-                wordBreak: 'break-word',
-
-                width: isMobile ? '80px' : '100px'
-
-              }}
-
-              contentStyle={{
-
-                whiteSpace: 'normal',
-
-                wordBreak: 'break-word',
-
-                overflowWrap: 'break-word'
-
-              }}
-
-            >
-
-              <Descriptions.Item label="章节标题">
-
-                <strong style={{
-
-                  wordBreak: 'break-word',
-
-                  whiteSpace: 'normal',
-
-                  overflowWrap: 'break-word'
-
-                }}>
-
-                  {chapter.title}
-
-                </strong>
-
-              </Descriptions.Item>
-
-              <Descriptions.Item label="情感基调">
-
-                <Tag
-
-                  color="blue"
-
-                  style={{
-
-                    whiteSpace: 'normal',
-
-                    wordBreak: 'break-word',
-
-                    height: 'auto',
-
-                    lineHeight: '1.5',
-
-                    padding: '4px 8px'
-
-                  }}
-
-                >
-
-                  {planData.emotional_tone}
-
-                </Tag>
-
-              </Descriptions.Item>
-
-              <Descriptions.Item label="冲突类型">
-
-                <Tag
-
-                  color="orange"
-
-                  style={{
-
-                    whiteSpace: 'normal',
-
-                    wordBreak: 'break-word',
-
-                    height: 'auto',
-
-                    lineHeight: '1.5',
-
-                    padding: '4px 8px'
-
-                  }}
-
-                >
-
-                  {planData.conflict_type}
-
-                </Tag>
-
-              </Descriptions.Item>
-
-              <Descriptions.Item label="预计字数">
-
-                <Tag color="green">{planData.estimated_words} 字</Tag>
-
-              </Descriptions.Item>
-
-              <Descriptions.Item label="叙事目标">
-
-                <span style={{
-
-                  wordBreak: 'break-word',
-
-                  whiteSpace: 'normal',
-
-                  overflowWrap: 'break-word'
-
-                }}>
-
-                  {planData.narrative_goal}
-
-                </span>
-
-              </Descriptions.Item>
-
-              <Descriptions.Item label="关键事件">
-
+            {renderCompactFactGrid(
+              [
+                ["章节标题", chapter.title || "未命名章节"],
+                ["情感基调", planData.emotional_tone],
+                ["冲突类型", planData.conflict_type],
+                ["预计字数", `${planData.estimated_words} 字`],
+                ["叙事目标", planData.narrative_goal],
+              ],
+              {
+                minColumnWidth: isMobile ? 160 : 220,
+                style: { marginBottom: 12 },
+              },
+            )}
+
+            {renderCompactListCard("关键事件", planData.key_events, {
+              numbered: true,
+              tagText: `${planData.key_events.length} 项`,
+              tagColor: "purple",
+              style: { marginBottom: 12 },
+            })}
+
+            {planData.character_focus.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                {renderCompactStoryControlHeader(
+                  "关注角色",
+                  "这些角色会在本章承担主要戏份。",
+                  {
+                    tagText: `${planData.character_focus.length} 人`,
+                    tagColor: "cyan",
+                    style: { marginBottom: 8 },
+                  },
+                )}
+                {renderCompactSelectionSummary(
+                  planData.character_focus.map((char) => ({ label: "角色", value: char, color: "cyan" })),
+                  { style: { marginBottom: 0 } },
+                )}
+              </div>
+            )}
+
+            {planData.scenes && planData.scenes.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                {renderCompactStoryControlHeader(
+                  "场景列表",
+                  "按场景查看地点、角色与目的，落笔时更容易照着走。",
+                  {
+                    tagText: `${planData.scenes.length} 段`,
+                    tagColor: "purple",
+                    style: { marginBottom: 8 },
+                  },
+                )}
                 <Space direction="vertical" size="small" style={{ width: '100%' }}>
-
-                  {planData.key_events.map((event, idx) => (
-
-                    <div
-
+                  {planData.scenes.map((scene, idx) => (
+                    <Card
                       key={idx}
-
+                      size="small"
                       style={{
-
-                        padding: '4px 0',
-
-                        wordBreak: 'break-word',
-
-                        whiteSpace: 'normal',
-
-                        overflowWrap: 'break-word'
-
+                        backgroundColor: '#fafafa',
+                        maxWidth: '100%',
+                        overflow: 'hidden',
                       }}
-
                     >
-
-                      <Tag color="purple" style={{ flexShrink: 0 }}>{idx + 1}</Tag>{' '}
-
-                      <span style={{
-
-                        wordBreak: 'break-word',
-
-                        whiteSpace: 'normal',
-
-                        overflowWrap: 'break-word'
-
-                      }}>
-
-                        {event}
-
-                      </span>
-
-                    </div>
-
+                      {renderCompactStoryControlHeader(
+                        `场景 ${idx + 1}`,
+                        scene.location || "未填写地点",
+                        {
+                          tagText: scene.characters?.length ? `${scene.characters.length} 人` : undefined,
+                          tagColor: "blue",
+                          style: { marginBottom: 8 },
+                        },
+                      )}
+                      {renderCompactFactGrid(
+                        [
+                          ["场景地点", scene.location || "未填写"],
+                          ["场景目的", scene.purpose || "未填写"],
+                        ],
+                        {
+                          minColumnWidth: isMobile ? 160 : 220,
+                          style: { marginBottom: scene.characters?.length ? 8 : 0 },
+                        },
+                      )}
+                      {scene.characters?.length > 0 && renderCompactSelectionSummary(
+                        scene.characters.map((char) => ({ label: "角色", value: char, color: "cyan" })),
+                        { style: { marginBottom: 0 } },
+                      )}
+                    </Card>
                   ))}
-
                 </Space>
-
-              </Descriptions.Item>
-
-              <Descriptions.Item label="关注角色">
-
-                <Space wrap style={{ maxWidth: '100%' }}>
-
-                  {planData.character_focus.map((char, idx) => (
-
-                    <Tag
-
-                      key={idx}
-
-                      color="cyan"
-
-                      style={{
-
-                        whiteSpace: 'normal',
-
-                        wordBreak: 'break-word',
-
-                        height: 'auto',
-
-                        lineHeight: '1.5'
-
-                      }}
-
-                    >
-
-                      {char}
-
-                    </Tag>
-
-                  ))}
-
-                </Space>
-
-              </Descriptions.Item>
-
-              {planData.scenes && planData.scenes.length > 0 && (
-
-                <Descriptions.Item label="场景列表">
-
-                  <Space direction="vertical" size="small" style={{ width: '100%' }}>
-
-                    {planData.scenes.map((scene, idx) => (
-
-                      <Card
-
-                        key={idx}
-
-                        size="small"
-
-                        style={{
-
-                          backgroundColor: '#fafafa',
-
-                          maxWidth: '100%',
-
-                          overflow: 'hidden'
-
-                        }}
-
-                      >
-
-                        <div style={{
-
-                          marginBottom: 4,
-
-                          wordBreak: 'break-word',
-
-                          whiteSpace: 'normal',
-
-                          overflowWrap: 'break-word'
-
-                        }}>
-
-                          <strong>场景地点：</strong>
-
-                          <span style={{
-
-                            wordBreak: 'break-word',
-
-                            whiteSpace: 'normal',
-
-                            overflowWrap: 'break-word'
-
-                          }}>
-
-                            {scene.location}
-
-                          </span>
-
-                        </div>
-
-                        <div style={{ marginBottom: 4 }}>
-
-                          <strong>涉及角色：</strong>
-
-                          <Space
-
-                            size="small"
-
-                            wrap
-
-                            style={{
-
-                              marginLeft: isMobile ? 0 : 8,
-
-                              marginTop: isMobile ? 4 : 0,
-
-                              display: isMobile ? 'flex' : 'inline-flex'
-
-                            }}
-
-                          >
-
-                            {scene.characters.map((char, charIdx) => (
-
-                              <Tag
-
-                                key={charIdx}
-
-                                style={{
-
-                                  whiteSpace: 'normal',
-
-                                  wordBreak: 'break-word',
-
-                                  height: 'auto'
-
-                                }}
-
-                              >
-
-                                {char}
-
-                              </Tag>
-
-                            ))}
-
-                          </Space>
-
-                        </div>
-
-                        <div style={{
-
-                          wordBreak: 'break-word',
-
-                          whiteSpace: 'normal',
-
-                          overflowWrap: 'break-word'
-
-                        }}>
-
-                          <strong>场景目的：</strong>
-
-                          <span style={{
-
-                            wordBreak: 'break-word',
-
-                            whiteSpace: 'normal',
-
-                            overflowWrap: 'break-word'
-
-                          }}>
-
-                            {scene.purpose}
-
-                          </span>
-
-                        </div>
-
-                      </Card>
-
-                    ))}
-
-                  </Space>
-
-                </Descriptions.Item>
-
-              )}
-
-            </Descriptions>
-
-            <Alert
-
-              message="说明"
-
-              description="扩写计划用于辅助章节创作，建议结合实际写作需要进一步调整场景、冲突与角色目标。"
-
-              type="info"
-
-              showIcon
-
-              style={{ marginTop: 16 }}
-
-            />
+              </div>
+            )}
+
+            {renderCompactSettingHint(
+              "扩写计划只作为写作辅助。",
+              "落笔前建议再核对场景、冲突与角色目标，再按实际需要微调。",
+              { style: { marginTop: 16, marginBottom: 0 } },
+            )}
 
           </div>
 
@@ -7163,20 +7310,47 @@ export default function Chapters() {
 
 
 
-          <Form.Item>
-
-            <Space style={{ float: 'right' }}>
-
-              <Button onClick={() => setIsModalOpen(false)}>取消</Button>
-
-              <Button type="primary" htmlType="submit">
-
-                保存
-
-              </Button>
-
-            </Space>
-
+          <Form.Item style={{ marginBottom: 0 }}>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: isMobile ? "column" : "row",
+                justifyContent: "space-between",
+                alignItems: isMobile ? "stretch" : "center",
+                gap: 12,
+              }}
+            >
+              {renderCompactSelectionSummary(
+                [
+                  {
+                    label: "大纲模式",
+                    value: currentProject.outline_mode === "one-to-one" ? "一对一" : "一对多",
+                    color: "blue",
+                  },
+                  {
+                    label: "标题",
+                    value:
+                      currentProject.outline_mode === "one-to-one"
+                        ? "跟随大纲"
+                        : "可自定义",
+                    color: "green",
+                  },
+                ],
+                { style: { marginBottom: 0, flex: 1, minWidth: 0 } },
+              )}
+              <Space.Compact style={{ width: isMobile ? "100%" : "auto" }} block={isMobile}>
+                <Button
+                  onClick={() => {
+                    setIsModalOpen(false);
+                  }}
+                >
+                  取消
+                </Button>
+                <Button type="primary" htmlType="submit">
+                  {editingId ? "保存章节" : "创建章节"}
+                </Button>
+              </Space.Compact>
+            </div>
           </Form.Item>
 
         </Form>
@@ -7260,45 +7434,30 @@ export default function Chapters() {
 
               </Form.Item>
 
-              {editingId && (() => {
-
-                const currentChapter = chapters.find(c => c.id === editingId);
-
-                const canGenerate = currentChapter ? canGenerateChapter(currentChapter) : false;
-
-                const disabledReason = currentChapter ? getGenerateDisabledReason(currentChapter) : '';
-
-
-
-                return (
-
+              {currentEditingChapter && (
+                <>
                   <Button
-
                     type="primary"
-
-                    icon={canGenerate ? <ThunderboltOutlined /> : <LockOutlined />}
-
-                    onClick={() => currentChapter && showGenerateModal(currentChapter)}
-
+                    icon={currentEditingCanGenerate ? <ThunderboltOutlined /> : <LockOutlined />}
+                    onClick={() => showGenerateModal(currentEditingChapter)}
                     loading={isContinuing}
-
-                    disabled={!canGenerate}
-
-                    danger={!canGenerate}
-
-                    style={{ fontWeight: 'bold' }}
-
-                    title={!canGenerate ? disabledReason : '智能续写当前章节'}
-
+                    disabled={!currentEditingCanGenerate}
+                    danger={!currentEditingCanGenerate}
+                    style={{ fontWeight: "bold" }}
+                    title={!currentEditingCanGenerate ? currentEditingGenerateDisabledReason : "智能续写当前章节"}
                   >
-
-                    {isMobile ? '续写' : '智能续写'}
-
+                    {isMobile ? "续写" : "智能续写"}
                   </Button>
-
-                );
-
-              })()}
+                  <Button
+                    icon={<FundOutlined />}
+                    onClick={() => handleShowAnalysis(currentEditingChapter.id)}
+                    disabled={!canAnalyzeCurrentChapter}
+                    title={canAnalyzeCurrentChapter ? "查看已保存正文的分析结果" : "请先保存正文后再分析"}
+                  >
+                    {isMobile ? "分析" : "查看分析"}
+                  </Button>
+                </>
+              )}
 
             </Space.Compact>
 
@@ -7307,18 +7466,22 @@ export default function Chapters() {
 
 
 
+          {renderCompactSettingFlow(
+            '推荐顺序：先锁基础，再选预设，最后按需展开总控和微调。',
+            '拿不准时，做到快速预设就够了；后两步只在想补准节奏或模型时再展开。',
+            [
+              '基础约束',
+              '快速预设',
+              '故事总控',
+              '补充微调',
+            ],
+          )}
+
           <Card
             size="small"
-            title="第 1 步：基础约束"
+            title="基础约束"
             style={{ marginBottom: 12 }}
           >
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginBottom: 12 }}
-              message="先决定这一章怎么写出来"
-              description="先锁定写作风格、叙事视角和剧情阶段，系统后面的预设与建议才会更贴近你要的章节方向。"
-            />
           <div style={{
 
             display: isMobile ? 'block' : 'flex',
@@ -7443,16 +7606,9 @@ export default function Chapters() {
 
           <Card
             size="small"
-            title="第 2 步：快速预设"
+            title="快速预设"
             style={{ marginBottom: 12 }}
           >
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginBottom: 12 }}
-              message="先点一个预设，再决定要不要继续细调"
-              description="预设会联动调整创作模式与故事聚焦。拿不准时先选预设，通常比逐项微调更省心。"
-            />
             <Space wrap>
               {CREATION_PRESETS.map((preset) => (
                 <Button
@@ -7473,98 +7629,62 @@ export default function Chapters() {
               </Button>
             </Space>
 
-            {activeSingleCreationPreset && (
-              <Alert
-                type="info"
-                showIcon
-                style={{ marginTop: 12 }}
-                message={`当前预设：${activeSingleCreationPreset.label}`}
-                description={activeSingleCreationPreset.description}
-              />
+            {activeSingleCreationPreset && renderCompactSettingHint(
+              `已选预设：${activeSingleCreationPreset.label}`,
+              activeSingleCreationPreset.description,
+              { style: { marginTop: 12 }, tone: 'success' },
             )}
 
-            {recommendedCreationPresets.length > 0 && (
-              <Alert
-                type="success"
-                showIcon
-                style={{ marginTop: 12 }}
-                message={"推荐预设"}
-                description={(
-                  <Space wrap>
-                    {recommendedCreationPresets.map((item) => {
-                      const preset = getCreationPresetById(item.id);
-                      if (!preset) return null;
-                      return (
-                        <Button key={item.id} size="small" onClick={() => applySingleCreationPreset(item.id)}>
-                          {preset.label}{item.reason ? ' - ' + item.reason : ''}
-                        </Button>
-                      );
-                    })}
-                  </Space>
-                )}
-              />
-            )}
+            {renderCompactPresetRecommendationBlock(recommendedCreationPresets, {
+              activePresetId: activeSingleCreationPreset?.id,
+              applyPreset: applySingleCreationPreset,
+            })}
 
             {singleScoreDrivenRecommendationCard && (
               <Card size="small" title={singleScoreDrivenRecommendationCard.title} style={{ marginTop: 12 }}>
                 <Space direction="vertical" size={10} style={{ display: 'flex' }}>
-                  <Alert
-                    type="info"
-                    showIcon
-                    message={singleScoreDrivenRecommendationCard.summary}
-                    description={singleScoreDrivenRecommendationCard.applyHint}
-                  />
-
-                  {singleScoreDrivenRecommendationCard.recommendedPresetLabel && (
-                    <div>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>推荐预设</div>
-                      <Space wrap size={[8, 8]}>
-                        <Tag color={singleScoreDrivenRecommendationCard.recommendedPresetId === activeSingleCreationPreset?.id ? 'blue' : 'processing'}>
-                          {singleScoreDrivenRecommendationCard.recommendedPresetLabel}
-                        </Tag>
-                        {singleScoreDrivenRecommendationCard.recommendedPresetReason && (
-                          <span style={{ color: 'var(--color-text-secondary)' }}>
-                            {singleScoreDrivenRecommendationCard.recommendedPresetReason}
-                          </span>
-                        )}
-                      </Space>
-                    </div>
+                  {renderCompactSettingHint(
+                    singleScoreDrivenRecommendationCard.summary,
+                    singleScoreDrivenRecommendationCard.applyHint,
                   )}
 
-                  <div>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>推荐阶段</div>
-                    <Space wrap size={[8, 8]}>
-                      <Tag color={singleScoreDrivenRecommendationCard.recommendedStage === selectedPlotStage ? 'blue' : 'purple'}>
-                        {singleScoreDrivenRecommendationCard.recommendedStageLabel}
-                      </Tag>
-                      <span style={{ color: 'var(--color-text-secondary)' }}>
-                        {singleScoreDrivenRecommendationCard.stageReason}
-                      </span>
-                    </Space>
-                  </div>
+                  {singleScoreDrivenRecommendationCard.recommendedPresetLabel && renderCompactStoryControlHeader(
+                    '推荐预设',
+                    singleScoreDrivenRecommendationCard.recommendedPresetReason || '优先用这个预设起步。',
+                    {
+                      tagText: singleScoreDrivenRecommendationCard.recommendedPresetLabel,
+                      tagColor: singleScoreDrivenRecommendationCard.recommendedPresetId === activeSingleCreationPreset?.id ? 'blue' : 'processing',
+                    },
+                  )}
+
+                  {renderCompactStoryControlHeader(
+                    '推荐阶段',
+                    singleScoreDrivenRecommendationCard.stageReason,
+                    {
+                      tagText: singleScoreDrivenRecommendationCard.recommendedStageLabel,
+                      tagColor: singleScoreDrivenRecommendationCard.recommendedStage === selectedPlotStage ? 'blue' : 'purple',
+                    },
+                  )}
 
                   {singleScoreDrivenRecommendationCard.alternatives.length > 0 && (
-                    <div>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>备选方案</div>
-                      <Space direction="vertical" size={4} style={{ display: 'flex' }}>
-                        {singleScoreDrivenRecommendationCard.alternatives.map((item) => (
-                          <div key={item.id} style={{ color: 'var(--color-text-secondary)' }}>
-                            - <strong>{item.label}</strong>{item.reason ? ' - ' + item.reason : ''}
-                          </div>
-                        ))}
-                      </Space>
-                    </div>
+                    renderCompactListCard(
+                      '备选方案',
+                      singleScoreDrivenRecommendationCard.alternatives.map((item) => (
+                        item.reason ? `${item.label}：${item.reason}` : item.label
+                      )),
+                      { tagText: `${singleScoreDrivenRecommendationCard.alternatives.length}项` },
+                    )
                   )}
 
                   <Space wrap>
                     {singleScoreDrivenRecommendationCard.recommendedPresetId && (
                       <Button size="small" onClick={() => applySingleCreationPreset(singleScoreDrivenRecommendationCard.recommendedPresetId!)}>
-                        Apply preset
+                        应用预设
                       </Button>
                     )}
                     {singleScoreDrivenRecommendationCard.recommendedStage && (
                       <Button size="small" onClick={() => setSelectedPlotStage(singleScoreDrivenRecommendationCard.recommendedStage)}>
-                        Apply stage
+                        应用阶段
                       </Button>
                     )}
                     {(singleScoreDrivenRecommendationCard.recommendedPresetId || singleScoreDrivenRecommendationCard.recommendedStage) && (
@@ -7580,7 +7700,7 @@ export default function Chapters() {
                           }
                         }}
                       >
-                        Apply recommendations
+                        一键应用
                       </Button>
                     )}
                   </Space>
@@ -7591,7 +7711,7 @@ export default function Chapters() {
             {singleStoryCreationControlCard && (
               <Card
                 size="small"
-                title={`第 3 步：${singleStoryCreationControlCard.title}`}
+                title={singleStoryCreationControlCard.title}
                 extra={(
                   <Space size={8}>
                     <Tag color={isSingleStoryCreationControlCustomized ? 'purple' : 'blue'}>
@@ -7609,27 +7729,21 @@ export default function Chapters() {
                 )}
                 style={{ marginTop: 12 }}
               >
-                <Alert
-                  type="info"
-                  showIcon
-                  style={{ marginBottom: 12 }}
-                  message="第 3 步：只有前面还不够时，再补故事总控"
-                  description="这里适合补节拍、场景提纲、提示词和 guardrails；如果你只是想快速继续生成，保留系统建议即可。"
-                />
 
-                <Alert
-                  type="info"
-                  showIcon
-                  style={{ marginBottom: 12 }}
-                  message={singleStoryCreationControlCard.summary}
-                  description={singleStoryCreationControlCard.directive}
-                />
+                {renderCompactSettingHint(
+                  singleStoryCreationControlCard.summary,
+                  singleStoryCreationControlCard.directive,
+                )}
                 <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>故事简介</div>
-                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginBottom: 8 }}>
-                      提供一段简短说明，帮助引导生成。
-                    </div>
+                    {renderCompactStoryControlHeader(
+                      '故事简介',
+                      '一句话说明本轮方向。',
+                      {
+                        tagText: isSingleStoryCreationBriefCustomized ? '自定义' : '系统建议',
+                        tagColor: isSingleStoryCreationBriefCustomized ? 'purple' : 'blue',
+                      },
+                    )}
                     <TextArea
                       value={singleStoryCreationBriefDraft}
                       onChange={(event) => setSingleStoryCreationBriefDraft(event.target.value)}
@@ -7638,32 +7752,29 @@ export default function Chapters() {
                       showCount
                       placeholder="请简要描述故事..."
                     />
-                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
-                      {isSingleStoryCreationBriefCustomized
-                        ? '当前使用自定义简介。'
-                        : '当前使用系统简介。'
-                      }</div>
                   </div>
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-                      <div>
-                        <div style={{ fontWeight: 600, marginBottom: 4 }}>故事节拍</div>
-                        <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
-                          规划故事的关键节拍。
-                        </div>
-                      </div>
-                      <Button
-                        size="small"
-                        type="link"
-                        onClick={() => setSingleStoryBeatPlannerDraft(singleSystemStoryBeatPlanner)}
-                        disabled={
-                          isStoryBeatPlannerDraftEmpty(singleSystemStoryBeatPlanner)
-                          || areStoryBeatPlannerDraftsEqual(singleStoryBeatPlannerDraft, singleSystemStoryBeatPlanner)
-                        }
-                      >
-                        恢复系统建议
-                      </Button>
-                    </div>
+                    {renderCompactStoryControlHeader(
+                      '故事节拍',
+                      '按五拍锁住节奏。',
+                      {
+                        tagText: isSingleStoryBeatPlannerCustomized ? '自定义' : '系统建议',
+                        tagColor: isSingleStoryBeatPlannerCustomized ? 'purple' : 'blue',
+                        action: (
+                          <Button
+                            size="small"
+                            type="link"
+                            onClick={() => setSingleStoryBeatPlannerDraft(singleSystemStoryBeatPlanner)}
+                            disabled={
+                              isStoryBeatPlannerDraftEmpty(singleSystemStoryBeatPlanner)
+                              || areStoryBeatPlannerDraftsEqual(singleStoryBeatPlannerDraft, singleSystemStoryBeatPlanner)
+                            }
+                          >
+                            恢复系统建议
+                          </Button>
+                        ),
+                      },
+                    )}
                     <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                       {STORY_BEAT_PLANNER_FIELDS.map((field) => (
                         <div key={field.key}>
@@ -7680,32 +7791,29 @@ export default function Chapters() {
                         </div>
                       ))}
                     </Space>
-                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
-                      {isSingleStoryBeatPlannerCustomized
-                        ? '当前使用自定义节拍。'
-                        : '当前使用系统节拍。'
-                      }</div>
                   </div>
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-                      <div>
-                        <div style={{ fontWeight: 600, marginBottom: 4 }}>场景提纲</div>
-                        <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
-                          为这个故事规划场景结构。
-                        </div>
-                      </div>
-                      <Button
-                        size="small"
-                        type="link"
-                        onClick={() => setSingleStorySceneOutlineDraft(singleSuggestedStorySceneOutline)}
-                        disabled={
-                          isStorySceneOutlineDraftEmpty(singleSuggestedStorySceneOutline)
-                          || areStorySceneOutlineDraftsEqual(singleStorySceneOutlineDraft, singleSuggestedStorySceneOutline)
-                        }
-                      >
-                        恢复系统建议
-                      </Button>
-                    </div>
+                    {renderCompactStoryControlHeader(
+                      '场景提纲',
+                      '列出场景链路。',
+                      {
+                        tagText: isSingleStorySceneOutlineCustomized ? '自定义' : '系统建议',
+                        tagColor: isSingleStorySceneOutlineCustomized ? 'purple' : 'blue',
+                        action: (
+                          <Button
+                            size="small"
+                            type="link"
+                            onClick={() => setSingleStorySceneOutlineDraft(singleSuggestedStorySceneOutline)}
+                            disabled={
+                              isStorySceneOutlineDraftEmpty(singleSuggestedStorySceneOutline)
+                              || areStorySceneOutlineDraftsEqual(singleStorySceneOutlineDraft, singleSuggestedStorySceneOutline)
+                            }
+                          >
+                            恢复系统建议
+                          </Button>
+                        ),
+                      },
+                    )}
                     <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                       {STORY_SCENE_OUTLINE_FIELDS.map((field) => (
                         <div key={field.key}>
@@ -7724,29 +7832,24 @@ export default function Chapters() {
                         </div>
                       ))}
                     </Space>
-                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
-                      {isSingleStorySceneOutlineCustomized
-                        ? '当前使用自定义提纲。'
-                        : '当前使用系统提纲。'
-                      }</div>
                   </div>
                   <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
-                      <div>
-                        <div style={{ fontWeight: 600, marginBottom: 4 }}>提示词</div>
-                        <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
-                          根据当前选择生成的提示词。
-                        </div>
-                      </div>
-                      <Button
-                        size="small"
-                        type="link"
-                        disabled={!resolvedSingleStoryCreationBrief}
-                        onClick={() => void copyStoryCreationPrompt(resolvedSingleStoryCreationBrief, 'single')}
-                      >
-                        Copy prompt
-                      </Button>
-                    </div>
+                    {renderCompactStoryControlHeader(
+                      '提示词',
+                      '按当前选择自动拼装。',
+                      {
+                        action: (
+                          <Button
+                            size="small"
+                            type="link"
+                            disabled={!resolvedSingleStoryCreationBrief}
+                            onClick={() => void copyStoryCreationPrompt(resolvedSingleStoryCreationBrief, 'single')}
+                          >
+                            复制提示词
+                          </Button>
+                        ),
+                      },
+                    )}
                     <Space wrap size={[8, 8]} style={{ marginBottom: 8 }}>
                       {singleStoryCreationPromptLayerLabels.map((item) => (
                         <Tag key={item} color="processing">{item}</Tag>
@@ -7755,14 +7858,10 @@ export default function Chapters() {
                         {`${singleStoryCreationPromptCharCount} 字符`}
                       </Tag>
                     </Space>
-                    {isSingleStoryCreationPromptVerbose && (
-                      <Alert
-                        type="warning"
-                        showIcon
-                        style={{ marginBottom: 8 }}
-                        message="已启用详细提示词"
-                        description="提示词包含更多细节，长度可能较长。"
-                      />
+                    {isSingleStoryCreationPromptVerbose && renderCompactSettingHint(
+                      '已启用详细提示词',
+                      '信息更全，但文本会更长。',
+                      { tone: 'warning', style: { marginBottom: 8 } },
                     )}
                     <TextArea
                       value={resolvedSingleStoryCreationBrief ?? ''}
@@ -7773,8 +7872,8 @@ export default function Chapters() {
                   </div>
                   <StoryCreationSnapshotPanel
                     scopeLabel="single"
-                    description="故事创作快照。"
-                    emptyText="暂无快照。"
+                    description="保存当前配置，便于回退。"
+                    emptyText="还没有快照。"
                     snapshots={singleStoryCreationSnapshots}
                     currentDraft={singleStoryCreationCurrentDraft}
                     canSave={canSaveSingleStoryCreationSnapshot}
@@ -7784,29 +7883,16 @@ export default function Chapters() {
                     onCopy={copyStoryCreationPrompt}
                     includeNarrativePerspective
                   />
-                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>执行路径</div>
-                    <Space direction="vertical" size={4} style={{ display: 'flex' }}>
-                      {singleStoryCreationControlCard.executionPath.map((item) => (
-                        <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
-                      ))}
-                    </Space>
-                  </div>
-                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>预期结果</div>
-                    <Space direction="vertical" size={4} style={{ display: 'flex' }}>
-                      {singleStoryCreationControlCard.expectedOutcomes.map((item) => (
-                        <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
-                      ))}
-                    </Space>
-                  </div>
-                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>约束规则</div>
-                    <Space direction="vertical" size={4} style={{ display: 'flex' }}>
-                      {singleStoryCreationControlCard.guardrails.map((item) => (
-                        <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
-                      ))}
-                    </Space>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))',
+                      gap: 8,
+                    }}
+                  >
+                    {renderCompactListCard('执行路径', singleStoryCreationControlCard.executionPath, { numbered: true })}
+                    {renderCompactListCard('预期结果', singleStoryCreationControlCard.expectedOutcomes, { numbered: true })}
+                    {renderCompactListCard('约束规则', singleStoryCreationControlCard.guardrails)}
                   </div>
                 </Space>
               </Card>
@@ -7815,51 +7901,27 @@ export default function Chapters() {
             {singleStoryRepairTargetCard && (
               <Card
                 size="small"
-                title={`第 4 步：${singleStoryRepairTargetCard.title}`}
+                title={singleStoryRepairTargetCard.title}
                 extra={<Tag color="gold">修复重点</Tag>}
                 style={{ marginTop: 12 }}
               >
-                <Alert
-                  type="warning"
-                  showIcon
-                  style={{ marginBottom: 12 }}
-                  message={singleStoryRepairTargetCard.repairSummary}
-                  description={singleStoryRepairTargetCard.applyHint}
-                />
-                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                  {[
-                    ["优先修复项", singleStoryRepairTargetCard.priorityTarget],
-                    ["反模式", singleStoryRepairTargetCard.antiPattern],
-                  ].map(([label, value]) => (
-                    <div
-                      key={label}
-                      style={{
-                        padding: '10px 12px',
-                        border: '1px solid #f0f0f0',
-                        borderRadius: 8,
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
-                    </div>
-                  ))}
-                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>修复目标</div>
-                    <Space direction="vertical" size={4} style={{ display: 'flex' }}>
-                      {singleStoryRepairTargetCard.repairTargets.map((item) => (
-                        <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
-                      ))}
-                    </Space>
-                  </div>
-                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>保留优势</div>
-                    <Space direction="vertical" size={4} style={{ display: 'flex' }}>
-                      {singleStoryRepairTargetCard.preserveStrengths.map((item) => (
-                        <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
-                      ))}
-                    </Space>
-                  </div>
-                </Space>
+                {renderCompactSettingHint(
+                  singleStoryRepairTargetCard.repairSummary,
+                  singleStoryRepairTargetCard.applyHint,
+                  { tone: 'warning' },
+                )}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+                    gap: 8,
+                  }}
+                >
+                  {renderCompactFactCard('优先修复项', singleStoryRepairTargetCard.priorityTarget)}
+                  {renderCompactFactCard('反模式', singleStoryRepairTargetCard.antiPattern)}
+                  {renderCompactListCard('修复目标', singleStoryRepairTargetCard.repairTargets, { tagColor: 'gold' })}
+                  {renderCompactListCard('保留优势', singleStoryRepairTargetCard.preserveStrengths, { tagColor: 'green' })}
+                </div>
               </Card>
             )}
           </Card>
@@ -7869,20 +7931,17 @@ export default function Chapters() {
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleCreationBlueprint.summary}
               </div>
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>推荐节拍</div>
-              <Space direction="vertical" size={6} style={{ display: 'flex' }}>
-                {singleCreationBlueprint.beats.map((beat, index) => (
-                  <div key={beat}>{index + 1}. {beat}</div>
-                ))}
-              </Space>
+              {renderCompactListCard(
+                '推荐节拍',
+                singleCreationBlueprint.beats,
+                { numbered: true, tagText: `${singleCreationBlueprint.beats.length}拍` },
+              )}
               {singleCreationBlueprint.risks.length > 0 && (
-                <Alert
-                  type="warning"
-                  showIcon
-                  style={{ marginTop: 12 }}
-                  message="风险提示"
-                  description={singleCreationBlueprint.risks.join(', ')}
-                />
+                renderCompactSettingHint(
+                  '风险提示',
+                  singleCreationBlueprint.risks.join(', '),
+                  { tone: 'warning', style: { marginTop: 12, marginBottom: 0 } },
+                )
               )}
             </Card>
           )}
@@ -7892,26 +7951,14 @@ export default function Chapters() {
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryObjectiveCard.summary}
               </div>
-              <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                {[
+              {renderCompactFactGrid(
+                [
                   ['目标', singleStoryObjectiveCard.objective],
                   ['阻碍', singleStoryObjectiveCard.obstacle],
                   ['转折', singleStoryObjectiveCard.turn],
                   ['钩子', singleStoryObjectiveCard.hook],
-                ].map(([label, value]) => (
-                  <div
-                    key={label}
-                    style={{
-                      padding: '10px 12px',
-                      border: '1px solid #f0f0f0',
-                      borderRadius: 8,
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                    <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
-                  </div>
-                ))}
-              </Space>
+                ] as Array<[string, string]>,
+              )}
             </Card>
           )}
 
@@ -7920,26 +7967,14 @@ export default function Chapters() {
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryResultCard.summary}
               </div>
-              <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                {[
+              {renderCompactFactGrid(
+                [
                   ['推进结果', singleStoryResultCard.progress],
                   ['揭示信息', singleStoryResultCard.reveal],
                   ['关系变化', singleStoryResultCard.relationship],
                   ['后续影响', singleStoryResultCard.fallout],
-                ].map(([label, value]) => (
-                  <div
-                    key={label}
-                    style={{
-                      padding: '10px 12px',
-                      border: '1px solid #f0f0f0',
-                      borderRadius: 8,
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                    <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
-                  </div>
-                ))}
-              </Space>
+                ] as Array<[string, string]>,
+              )}
             </Card>
           )}
 
@@ -7948,26 +7983,14 @@ export default function Chapters() {
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryExecutionChecklist.summary}
               </div>
-              <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                {[
+              {renderCompactFactGrid(
+                [
                   ['开篇', singleStoryExecutionChecklist.opening],
                   ['压力', singleStoryExecutionChecklist.pressure],
                   ['转折', singleStoryExecutionChecklist.pivot],
                   ['收束', singleStoryExecutionChecklist.closing],
-                ].map(([label, value]) => (
-                  <div
-                    key={label}
-                    style={{
-                      padding: '10px 12px',
-                      border: '1px solid #f0f0f0',
-                      borderRadius: 8,
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                    <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
-                  </div>
-                ))}
-              </Space>
+                ] as Array<[string, string]>,
+              )}
             </Card>
           )}
 
@@ -7976,26 +7999,14 @@ export default function Chapters() {
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryRepetitionRiskCard.summary}
               </div>
-              <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                {[
+              {renderCompactFactGrid(
+                [
                   ['开篇风险', singleStoryRepetitionRiskCard.openingRisk],
                   ['压力风险', singleStoryRepetitionRiskCard.pressureRisk],
                   ['转折风险', singleStoryRepetitionRiskCard.pivotRisk],
                   ['收束风险', singleStoryRepetitionRiskCard.closingRisk],
-                ].map(([label, value]) => (
-                  <div
-                    key={label}
-                    style={{
-                      padding: '10px 12px',
-                      border: '1px solid #f0f0f0',
-                      borderRadius: 8,
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                    <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
-                  </div>
-                ))}
-              </Space>
+                ] as Array<[string, string]>,
+              )}
             </Card>
           )}
 
@@ -8004,26 +8015,14 @@ export default function Chapters() {
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryAcceptanceCard.summary}
               </div>
-              <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                {[
+              {renderCompactFactGrid(
+                [
                   ['目标达成检查', singleStoryAcceptanceCard.missionCheck],
                   ['变化检查', singleStoryAcceptanceCard.changeCheck],
                   ['新鲜度检查', singleStoryAcceptanceCard.freshnessCheck],
                   ['收束检查', singleStoryAcceptanceCard.closingCheck],
-                ].map(([label, value]) => (
-                  <div
-                    key={label}
-                    style={{
-                      padding: '10px 12px',
-                      border: '1px solid #f0f0f0',
-                      borderRadius: 8,
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                    <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
-                  </div>
-                ))}
-              </Space>
+                ] as Array<[string, string]>,
+              )}
             </Card>
           )}
 
@@ -8032,436 +8031,273 @@ export default function Chapters() {
               <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                 {singleStoryCharacterArcCard.summary}
               </div>
-              <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                {[
+              {renderCompactFactGrid(
+                [
                   ['外在线', singleStoryCharacterArcCard.externalLine],
                   ['内在线', singleStoryCharacterArcCard.internalLine],
                   ['关系线', singleStoryCharacterArcCard.relationshipLine],
                   ['弧光落点', singleStoryCharacterArcCard.arcLanding],
-                ].map(([label, value]) => (
-                  <div
-                    key={label}
-                    style={{
-                      padding: '10px 12px',
-                      border: '1px solid #f0f0f0',
-                      borderRadius: 8,
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                    <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
-                  </div>
-                ))}
-              </Space>
+                ] as Array<[string, string]>,
+              )}
             </Card>
           )}
 
           {singleVolumePacingPlan && (
             <Card size="small" title="篇幅节奏规划" style={{ marginBottom: 12 }}>
-              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                {singleVolumePacingPlan.summary}
-              </div>
-              <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                {singleVolumePacingPlan.segments.map((segment) => (
-                  <div key={`${segment.stage}-${segment.startChapter}`}>
-                    <strong>第{segment.startChapter}-{segment.endChapter}章：{segment.label}</strong>
-                    <div style={{ color: 'var(--color-text-secondary)', marginTop: 2 }}>
-                      {segment.mission}
-                    </div>
-                  </div>
-                ))}
-              </Space>
+              {renderCompactSettingHint(
+                `当前阶段：${selectedPlotStageLabel}`,
+                singleVolumePacingPlan.summary,
+                { style: { marginBottom: 10 } },
+              )}
+              {renderCompactListCard(
+                "章节分段",
+                singleVolumePacingPlan.segments.map(
+                  (segment) => `第${segment.startChapter}-${segment.endChapter}章 · ${segment.label}：${segment.mission}`,
+                ),
+                { tagText: `${singleVolumePacingPlan.segments.length}段` },
+              )}
             </Card>
           )}
 
-          <Card
-            size="small"
-            title="补充微调（可选）"
-            style={{ marginBottom: 12 }}
-          >
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginBottom: 12 }}
-              message="这里只做最后微调"
-              description="创作模式、故事聚焦、目标字数和模型更适合在预设确定后再微调；如果你不确定，保持默认往往更稳定。"
-            />
-          <Form.Item
-            label="创作模式"
-            tooltip="选择单章创作的模式"
-            style={{ marginBottom: isMobile ? 16 : 12 }}
-          >
-            <Select
-              placeholder="请选择创作模式"
-              value={selectedCreativeMode}
-              onChange={setSelectedCreativeMode}
-              allowClear
-              optionLabelProp="label"
-            >
-              {CREATIVE_MODE_OPTIONS.map((option) => (
-                <Select.Option key={option.value} value={option.value} label={option.label}>
-                  <div>{option.label}</div>
-                  <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            label="故事聚焦"
-            tooltip="选择本次创作的关注点与重心"
-            style={{ marginBottom: isMobile ? 16 : 12 }}
-          >
-            <Select
-              placeholder="请选择故事聚焦"
-              value={selectedStoryFocus}
-              onChange={setSelectedStoryFocus}
-              allowClear
-              optionLabelProp="label"
-            >
-              {STORY_FOCUS_OPTIONS.map((option) => (
-                <Select.Option key={option.value} value={option.value} label={option.label}>
-                  <div>{option.label}</div>
-                  <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <div style={{
-            display: isMobile ? 'block' : 'flex',
-            gap: isMobile ? 0 : 16,
-            marginBottom: isMobile ? 16 : 12
-
-          }}>
-
-            <Form.Item
-
-              label="目标字数"
-
-              tooltip="设置 生成时的目标字数范围（约）"
-
-              style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
-
-            >
-
-              <InputNumber
-
-                min={500}
-
-                max={10000}
-
-                step={100}
-
-                value={targetWordCount}
-
-                onChange={(value) => {
-
-                  const newValue = value || DEFAULT_WORD_COUNT;
-
-                  setTargetWordCount(newValue);
-
-                  setCachedWordCount(newValue);
-
-                }}
-
-                style={{ width: '100%' }}
-
-                formatter={(value) => (value ? String(value) + ' 字' : '')}
-                parser={(value) => parseInt((value || '').replace(' 字', ''), 10)}
-
-
-              />
-
-            </Form.Item>
-
-
-
-            <Form.Item
-
-              label="AI 模型"
-
-              tooltip="选择用于生成的模型"
-
-              style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
-
-            >
-
-              <Select
-
-                placeholder={selectedModel ? '已选择：' + selectedModel : '请选择模型'}
-
-                value={selectedModel}
-
-                onChange={setSelectedModel}
-
-                allowClear
-
-                showSearch
-
-                optionFilterProp="label"
-
-              >
-
-                {availableModels.map(model => (
-
-                  <Select.Option key={model.value} value={model.value} label={model.label}>
-
-                    {model.label}
-
-                  </Select.Option>
-
-                ))}
-
-              </Select>
-
-            </Form.Item>
-
-          </div>
-          </Card>
-
-
-
-
-          <Card
-
-            size="small"
-
-            title="质量画像"
-
-            style={{ marginBottom: 12 }}
-
-          >
-
-            {getQualityProfileDisplayItems(chapterQualityProfileSummary).length > 0 ? (
-
-              <>
-
-                <Alert
-
-                  type="success"
-
-                  showIcon
-
-                  style={{ marginBottom: 12 }}
-
-                  message="质量画像摘要"
-
-                  description="该画像汇总了质量指标与优化建议。"
-
-                />
-
-                <Descriptions column={1} size="small">
-
-                  {getQualityProfileDisplayItems(chapterQualityProfileSummary).map((item) => (
-
-                    <Descriptions.Item key={item.key} label={item.label}>
-
-                      {item.description}
-
-                    </Descriptions.Item>
-
-                  ))}
-
-                </Descriptions>
-
-              </>
-
-            ) : (
-
-              <Alert
-
-                type="info"
-
-                showIcon
-
-                message="暂无质量画像"
-
-                description="运行分析后可生成质量画像。"
-
-              />
-
+          <Card size="small" title="补充微调（可选）" style={{ marginBottom: 12 }}>
+            {renderCompactSettingHint(
+              "不改则沿用上方推荐；只在你明确想改变生成偏向时再手动调整。",
+              "单章通常优先调整模式与聚焦，模型与字数保持默认即可。",
+              { style: { marginBottom: 10 } },
             )}
+            {renderCompactSelectionSummary(
+              [
+                { label: "模式", value: selectedCreativeModeLabel, color: "blue" },
+                { label: "聚焦", value: selectedStoryFocusLabel, color: "purple" },
+                { label: "字数", value: `${targetWordCount}字`, color: "green" },
+                { label: "模型", value: selectedModelLabel },
+              ],
+            )}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: `repeat(auto-fit, minmax(${isMobile ? 220 : 260}px, 1fr))`,
+                gap: 12,
+              }}
+            >
+              <Form.Item
+                label="创作模式"
+                tooltip="控制这一章的主要写法偏向"
+                style={{ marginBottom: 0 }}
+              >
+                <Select
+                  placeholder="留空=默认推荐"
+                  value={selectedCreativeMode}
+                  onChange={setSelectedCreativeMode}
+                  allowClear
+                  optionLabelProp="label"
+                >
+                  {CREATIVE_MODE_OPTIONS.map((option) => (
+                    <Select.Option key={option.value} value={option.value} label={option.label}>
+                      <div>{option.label}</div>
+                      <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{option.description}</div>
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+              <Form.Item
+                label="故事聚焦"
+                tooltip="控制这一章的主要发力点"
+                style={{ marginBottom: 0 }}
+              >
+                <Select
+                  placeholder="留空=默认推荐"
+                  value={selectedStoryFocus}
+                  onChange={setSelectedStoryFocus}
+                  allowClear
+                  optionLabelProp="label"
+                >
+                  {STORY_FOCUS_OPTIONS.map((option) => (
+                    <Select.Option key={option.value} value={option.value} label={option.label}>
+                      <div>{option.label}</div>
+                      <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{option.description}</div>
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: `repeat(auto-fit, minmax(${isMobile ? 220 : 260}px, 1fr))`,
+                gap: 12,
+                marginTop: 12,
+              }}
+            >
+              <Form.Item
+                label="目标字数"
+                tooltip="留空则沿用默认字数"
+                style={{ marginBottom: 0 }}
+              >
+                <InputNumber
+                  min={500}
+                  max={10000}
+                  step={100}
+                  value={targetWordCount}
+                  onChange={(value) => {
+                    const newValue = value || DEFAULT_WORD_COUNT;
+                    setTargetWordCount(newValue);
+                    setCachedWordCount(newValue);
+                  }}
+                  style={{ width: "100%" }}
+                  formatter={(value) => (value ? String(value) + " 字" : "")}
+                  parser={(value) => parseInt((value || "").replace(" 字", ""), 10)}
+                />
+              </Form.Item>
+              <Form.Item
+                label="AI 模型"
+                tooltip="留空则沿用项目默认模型"
+                style={{ marginBottom: 0 }}
+              >
+                <Select
+                  placeholder={selectedModel ? `已选择：${selectedModelLabel}` : "留空=项目默认"}
+                  value={selectedModel}
+                  onChange={setSelectedModel}
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                >
+                  {availableModels.map((model) => (
+                    <Select.Option key={model.value} value={model.value} label={model.label}>
+                      {model.label}
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </div>
+          </Card>
 
+
+
+
+          <Card
+            size="small"
+            title="质量画像"
+            style={{ marginBottom: 12 }}
+          >
+            {chapterQualityProfileItems.length > 0 ? (
+              <>
+                {renderCompactSettingHint(
+                  "质量画像汇总了风格、维度与主要优化方向。",
+                  "优先关注与当前章节目标不一致的条目。",
+                  { tone: "success", style: { marginBottom: 10 } },
+                )}
+                {renderCompactFactGrid(
+                  chapterQualityProfileItems.map((item) => [item.label, item.description] as [string, string]),
+                )}
+              </>
+            ) : (
+              renderCompactSettingHint(
+                "暂无质量画像",
+                "运行分析后可生成质量画像。",
+                { style: { marginBottom: 0 } },
+              )
+            )}
           </Card>
 
 
 
           <Card
-
             size="small"
-
             title="质量指标"
-
             loading={chapterQualityLoading}
-
             style={{ marginBottom: 12 }}
-
           >
             {chapterQualityMetrics ? (
               <>
                 {singleAfterScorecard && (
-                  <Card size="small" title="优化后评分卡" style={{ marginBottom: 12 }}>
-                    <Alert
-                      type={singleAfterScorecard.verdictColor as 'success' | 'info' | 'warning' | 'error'}
-                      showIcon
-                      style={{ marginBottom: 12 }}
-                      message={singleAfterScorecard.verdict}
-                      description={singleAfterScorecard.summary}
-                    />
-                    <Descriptions column={1} size="small" style={{ marginBottom: 12 }}>
-                      <Descriptions.Item label="焦点检查">
-                        {singleAfterScorecard.focusCheck}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="下一步行动">
-                        {singleAfterScorecard.nextAction}
-                      </Descriptions.Item>
-                    </Descriptions>
-                    <div style={{ marginBottom: 8, fontWeight: 600 }}>Strengths</div>
-                    <Space wrap size={[8, 8]} style={{ marginBottom: 12 }}>
-                      {singleAfterScorecard.strengths.map((item) => (
-                        <Tag key={item} color="success">{item}</Tag>
-                      ))}
-                    </Space>
-                    <div style={{ marginBottom: 8, fontWeight: 600 }}>Gaps</div>
-                    <Space direction="vertical" size={6} style={{ display: 'flex' }}>
-                      {singleAfterScorecard.gaps.map((item) => (
-                        <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
-                      ))}
-                    </Space>
-                  </Card>
-                )}
-
-                <Descriptions column={isMobile ? 1 : 2} size="small">
-                  <Descriptions.Item label="综合得分">
-                    <Tag color={getOverallScoreColor(chapterQualityMetrics.overall_score)}>
-                      {chapterQualityMetrics.overall_score}
-                    </Tag>
-
-                  </Descriptions.Item>
-
-                  <Descriptions.Item label="冲突链命中率">
-
-                    <Tag color={getMetricRateColor(chapterQualityMetrics.conflict_chain_hit_rate)}>{chapterQualityMetrics.conflict_chain_hit_rate}%</Tag>
-
-                  </Descriptions.Item>
-
-                  <Descriptions.Item label="规则锚定命中率">
-
-                    <Tag color={getMetricRateColor(chapterQualityMetrics.rule_grounding_hit_rate)}>{chapterQualityMetrics.rule_grounding_hit_rate}%</Tag>
-
-                  </Descriptions.Item>
-
-                  <Descriptions.Item label="开篇钩子命中率">
-
-                    <Tag color={getMetricRateColor(chapterQualityMetrics.opening_hook_rate)}>{chapterQualityMetrics.opening_hook_rate}%</Tag>
-
-                  </Descriptions.Item>
-
-                  <Descriptions.Item label="回收链命中率">
-
-                    <Tag color={getMetricRateColor(chapterQualityMetrics.payoff_chain_rate)}>{chapterQualityMetrics.payoff_chain_rate}%</Tag>
-
-                  </Descriptions.Item>
-
-                  <Descriptions.Item label="悬念收尾率">
-
-                    <Tag color={getMetricRateColor(chapterQualityMetrics.cliffhanger_rate)}>{chapterQualityMetrics.cliffhanger_rate}%</Tag>
-
-                  </Descriptions.Item>
-
-                  <Descriptions.Item label="对话自然度">
-
-                    <Tag color={getMetricRateColor(chapterQualityMetrics.dialogue_naturalness_rate)}>{chapterQualityMetrics.dialogue_naturalness_rate}%</Tag>
-
-                  </Descriptions.Item>
-
-                  <Descriptions.Item label="大纲贴合度">
-
-                    <Tag color={getMetricRateColor(chapterQualityMetrics.outline_alignment_rate)}>{chapterQualityMetrics.outline_alignment_rate}%</Tag>
-
-                  </Descriptions.Item>
-
-                  <Descriptions.Item label="生成时间">
-
-                    {chapterQualityGeneratedAt ? new Date(chapterQualityGeneratedAt).toLocaleString() : '尚未生成'}
-
-                  </Descriptions.Item>
-
-                </Descriptions>
-
-                <Alert
-
-                  type={getWeakestQualityMetric(chapterQualityMetrics).value >= 60 ? 'info' : 'warning'}
-
-                  showIcon
-
-                  style={{ marginTop: 12 }}
-
-                  message="最弱指标"
-
-                  description="优先改善最弱指标以提升整体质量。"
-
-                />
-
-                <Card size="small" title="指标详情" style={{ marginTop: 12 }}>
-
-                  <Space direction="vertical" style={{ width: '100%' }} size={10}>
-
-                    {getQualityMetricItems(chapterQualityMetrics).map((item) => (
-
-                      <div key={item.key}>
-
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, gap: 12 }}>
-
-                          <Space size={4}>
-
-                            <span>{item.label}</span>
-
-                            <Tooltip title={item.tip}>
-
-                              <InfoCircleOutlined style={{ color: '#8c8c8c' }} />
-
-                            </Tooltip>
-
-                          </Space>
-
-                          <span style={{ color: '#595959' }}>{item.value}%</span>
-
-                        </div>
-
-                        <Progress percent={item.value} showInfo={false} size="small" strokeColor={getMetricStrokeColor(item.value)} />
-
+                  <>
+                    {renderCompactSettingHint(
+                      singleAfterScorecard.verdict,
+                      `${singleAfterScorecard.summary} ${singleAfterScorecard.nextAction}`,
+                      {
+                        tone: getCompactHintToneByAlertType(singleAfterScorecard.verdictColor as "success" | "info" | "warning" | "error"),
+                        style: { marginBottom: 10 },
+                      },
+                    )}
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))",
+                        gap: 8,
+                        marginBottom: 10,
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        {renderCompactListCard(
+                          "优势",
+                          singleAfterScorecard.strengths,
+                          { tagText: `${singleAfterScorecard.strengths.length}项`, tagColor: "green", style: { height: "100%" } },
+                        )}
                       </div>
-
-                    ))}
-
-                  </Space>
-
-                </Card>
-
+                      <div style={{ minWidth: 0 }}>
+                        {renderCompactListCard(
+                          "缺口",
+                          singleAfterScorecard.gaps,
+                          { tagText: `${singleAfterScorecard.gaps.length}项`, tagColor: "gold", style: { height: "100%" } },
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+                {renderCompactSelectionSummary(
+                  [
+                    { label: "综合得分", value: `${chapterQualityMetrics.overall_score}`, color: getOverallScoreColor(chapterQualityMetrics.overall_score) },
+                    ...(weakestQualityMetric
+                      ? [{
+                          label: "最弱项",
+                          value: `${weakestQualityMetric.label} ${weakestQualityMetric.value}%`,
+                          color: getMetricRateColor(weakestQualityMetric.value),
+                        }]
+                      : []),
+                    {
+                      label: "生成时间",
+                      value: chapterQualityGeneratedAt ? new Date(chapterQualityGeneratedAt).toLocaleString() : "尚未生成",
+                    },
+                  ],
+                  { style: { marginBottom: 10 } },
+                )}
+                {renderCompactMetricGrid(chapterQualityMetricItems)}
               </>
-
             ) : (
-
-              <Alert
-
-                type="info"
-
-                showIcon
-
-                message="暂无质量指标。"
-
-                description="运行分析后可生成质量指标。"
-
-              />
-
+              renderCompactSettingHint(
+                "暂无质量指标",
+                "运行分析后可生成质量指标。",
+                { style: { marginBottom: 0 } },
+              )
             )}
-
           </Card>
 
 
 
-          <Form.Item label="章节内容" name="content">
+          {renderCompactStoryControlHeader(
+            "正文编辑",
+            hasPartialSelection
+              ? `已选 ${selectedRegenerateCount} 字，点击右侧即可局部重写。`
+              : "直接改稿即可；选中文字后会浮出局部重写。",
+            {
+              tagText: hasPartialSelection ? `已选 ${selectedRegenerateCount} 字` : "支持局部重写",
+              tagColor: hasPartialSelection ? "blue" : "default",
+              style: { marginBottom: 8 },
+              action: (
+                <Button
+                  size="small"
+                  icon={<FormOutlined />}
+                  onClick={handleOpenPartialRegenerate}
+                  disabled={!hasPartialSelection}
+                  title={hasPartialSelection ? "对选中的正文片段做局部重写" : "请先选中需要重写的正文片段"}
+                >
+                  {isMobile ? "局部重写" : "对选中内容重写"}
+                </Button>
+              ),
+            },
+          )}
+          <Form.Item name="content" style={{ marginBottom: 10 }}>
 
             <TextArea
 
@@ -8506,52 +8342,49 @@ export default function Chapters() {
 
 
 
-          <Form.Item>
-
-            <Space style={{ width: '100%', justifyContent: 'flex-end', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center' }}>
-
-              <Space style={{ width: isMobile ? '100%' : 'auto' }}>
-
+          <Form.Item style={{ marginBottom: 0 }}>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: isMobile ? "column" : "row",
+                justifyContent: "space-between",
+                alignItems: isMobile ? "stretch" : "center",
+                gap: 12,
+              }}
+            >
+              {renderCompactSelectionSummary(
+                [
+                  {
+                    label: "选区",
+                    value: hasPartialSelection
+                      ? `已选 ${selectedRegenerateCount} 字，可局部重写`
+                      : "选中文字后可局部重写",
+                    color: hasPartialSelection ? "blue" : "default",
+                  },
+                  {
+                    label: "提示",
+                    value: "修改后记得保存",
+                    color: "green",
+                  },
+                ],
+                { style: { marginBottom: 0, flex: 1, minWidth: 0 } },
+              )}
+              <Space.Compact style={{ width: isMobile ? "100%" : "auto" }} block={isMobile}>
                 <Button
-
                   onClick={() => {
-
                     setChapterQualityMetrics(null);
-
                     setChapterQualityProfileSummary(null);
-
                     setChapterQualityGeneratedAt(null);
-
                     setIsEditorOpen(false);
-
                   }}
-
-                  block={isMobile}
-
                 >
-
                   取消
-
                 </Button>
-
-                <Button
-
-                  type="primary"
-
-                  htmlType="submit"
-
-                  block={isMobile}
-
-                >
-
+                <Button type="primary" htmlType="submit">
                   保存内容
-
                 </Button>
-
-              </Space>
-
-            </Space>
-
+              </Space.Compact>
+            </div>
           </Form.Item>
 
         </Form>
@@ -8747,17 +8580,12 @@ export default function Chapters() {
 
           >
 
-            <Alert
-
-              message="批量生成会基于当前设置一次生成多个章节。"
-
-              type="info"
-
-              showIcon
-
-              style={{ marginBottom: 16 }}
-
-            />
+            {renderCompactSettingFlow(
+              "批量生成会基于当前设置连续生成多个章节。",
+              "先选起始章和数量，再决定是否附带分析；适合补稿或集中铺量。",
+              ["选择起始章", "设定生成数量", "可选附带分析"],
+              { style: { marginBottom: 16 } },
+            )}
 
 
 
@@ -8825,18 +8653,22 @@ export default function Chapters() {
 
 
 
+            {renderCompactSettingFlow(
+              '批量任务先锁统一方向，再决定要不要展开后两步。',
+              '想省心时，完成基础约束和快速预设即可；故事总控与微调用于统一多章节奏。',
+              [
+                '基础约束',
+                '快速预设',
+                '故事总控',
+                '补充微调',
+              ],
+            )}
+
             <Card
               size="small"
-              title="第 1 步：基础约束"
+              title="基础约束"
               style={{ marginBottom: 12 }}
             >
-              <Alert
-                type="info"
-                showIcon
-                style={{ marginBottom: 12 }}
-                message="先把批量任务的基础方向定下来"
-                description="先锁定写作风格、目标字数和剧情阶段，后面的预设与故事总控才更容易稳定出稿。"
-              />
             <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 0 : 16 }}>
               <Form.Item
                 label="写作风格"
@@ -8966,16 +8798,9 @@ export default function Chapters() {
 
             <Card
               size="small"
-              title="第 2 步：快速预设"
+              title="快速预设"
               style={{ marginBottom: 12 }}
             >
-              <Alert
-                type="info"
-                showIcon
-                style={{ marginBottom: 12 }}
-                message="先点一个预设，再决定要不要继续细调"
-                description="预设会联动调整创作模式与故事聚焦。批量生成时，先用预设锁定方向，比逐项微调更稳。"
-              />
               <Space wrap>
                 {CREATION_PRESETS.map((preset) => (
                   <Button
@@ -8996,61 +8821,51 @@ export default function Chapters() {
                 </Button>
               </Space>
 
-              {activeBatchCreationPreset && (
-                <div style={{ marginTop: 12, color: 'var(--color-text-secondary)' }}>
-                   <strong>{activeBatchCreationPreset.label}</strong>: {activeBatchCreationPreset.description}
-                </div>
+              {activeBatchCreationPreset && renderCompactSettingHint(
+                `已选预设：${activeBatchCreationPreset.label}`,
+                activeBatchCreationPreset.description,
+                { style: { marginTop: 12 }, tone: 'success' },
               )}
+
+              {renderCompactPresetRecommendationBlock(batchRecommendedCreationPresets, {
+                activePresetId: activeBatchCreationPreset?.id,
+                applyPreset: applyBatchCreationPreset,
+              })}
 
               {batchScoreDrivenRecommendationCard && (
                 <Card size="small" title={batchScoreDrivenRecommendationCard.title} style={{ marginTop: 12 }}>
                   <Space direction="vertical" size={10} style={{ display: 'flex' }}>
-                    <Alert
-                      type="info"
-                      showIcon
-                      message={batchScoreDrivenRecommendationCard.summary}
-                      description={batchScoreDrivenRecommendationCard.applyHint}
-                    />
-
-                    {batchScoreDrivenRecommendationCard.recommendedPresetLabel && (
-                      <div>
-                        <div style={{ fontWeight: 600, marginBottom: 6 }}>推荐预设</div>
-                        <Space wrap size={[8, 8]}>
-                          <Tag color={batchScoreDrivenRecommendationCard.recommendedPresetId === activeBatchCreationPreset?.id ? 'blue' : 'processing'}>
-                            {batchScoreDrivenRecommendationCard.recommendedPresetLabel}
-                          </Tag>
-                          {batchScoreDrivenRecommendationCard.recommendedPresetReason && (
-                            <span style={{ color: 'var(--color-text-secondary)' }}>
-                              {batchScoreDrivenRecommendationCard.recommendedPresetReason}
-                            </span>
-                          )}
-                        </Space>
-                      </div>
+                    {renderCompactSettingHint(
+                      batchScoreDrivenRecommendationCard.summary,
+                      batchScoreDrivenRecommendationCard.applyHint,
                     )}
 
-                    <div>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>推荐阶段</div>
-                      <Space wrap size={[8, 8]}>
-                        <Tag color={batchScoreDrivenRecommendationCard.recommendedStage === batchSelectedPlotStage ? 'blue' : 'purple'}>
-                          {batchScoreDrivenRecommendationCard.recommendedStageLabel}
-                        </Tag>
-                        <span style={{ color: 'var(--color-text-secondary)' }}>
-                          {batchScoreDrivenRecommendationCard.stageReason}
-                        </span>
-                      </Space>
-                    </div>
+                    {batchScoreDrivenRecommendationCard.recommendedPresetLabel && renderCompactStoryControlHeader(
+                      '推荐预设',
+                      batchScoreDrivenRecommendationCard.recommendedPresetReason || '优先用这个预设起步。',
+                      {
+                        tagText: batchScoreDrivenRecommendationCard.recommendedPresetLabel,
+                        tagColor: batchScoreDrivenRecommendationCard.recommendedPresetId === activeBatchCreationPreset?.id ? 'blue' : 'processing',
+                      },
+                    )}
+
+                    {renderCompactStoryControlHeader(
+                      '推荐阶段',
+                      batchScoreDrivenRecommendationCard.stageReason,
+                      {
+                        tagText: batchScoreDrivenRecommendationCard.recommendedStageLabel,
+                        tagColor: batchScoreDrivenRecommendationCard.recommendedStage === batchSelectedPlotStage ? 'blue' : 'purple',
+                      },
+                    )}
 
                     {batchScoreDrivenRecommendationCard.alternatives.length > 0 && (
-                      <div>
-                        <div style={{ fontWeight: 600, marginBottom: 6 }}>备选方案</div>
-                        <Space direction="vertical" size={4} style={{ display: 'flex' }}>
-                          {batchScoreDrivenRecommendationCard.alternatives.map((item) => (
-                            <div key={item.id} style={{ color: 'var(--color-text-secondary)' }}>
-                              - <strong>{item.label}</strong>{item.reason ? ' - ' + item.reason : ''}
-                            </div>
-                          ))}
-                        </Space>
-                      </div>
+                      renderCompactListCard(
+                        '备选方案',
+                        batchScoreDrivenRecommendationCard.alternatives.map((item) => (
+                          item.reason ? `${item.label}：${item.reason}` : item.label
+                        )),
+                        { tagText: `${batchScoreDrivenRecommendationCard.alternatives.length}项` },
+                      )
                     )}
 
                     <Space wrap>
@@ -9077,7 +8892,7 @@ export default function Chapters() {
                             }
                           }}
                         >
-                          {"应用建议"}
+                          {"一键应用"}
                         </Button>
                       )}
                     </Space>
@@ -9089,7 +8904,7 @@ export default function Chapters() {
               {batchStoryCreationControlCard && (
                 <Card
                   size="small"
-                  title={`第 3 步：${batchStoryCreationControlCard.title}`}
+                  title={batchStoryCreationControlCard.title}
                   extra={(
                     <Space size={8}>
                       <Tag color={isBatchStoryCreationControlCustomized ? 'purple' : 'blue'}>
@@ -9107,27 +8922,21 @@ export default function Chapters() {
                   )}
                   style={{ marginTop: 12 }}
                 >
-                  <Alert
-                    type="info"
-                    showIcon
-                    style={{ marginBottom: 12 }}
-                    message="第 3 步：只有预设不够时，再补故事总控"
-                    description="这里适合补节拍、场景提纲、提示词和执行约束；如果你只是想稳定出稿，保留系统建议通常就够了。"
-                  />
 
-                  <Alert
-                    type="info"
-                    showIcon
-                    style={{ marginBottom: 12 }}
-                    message={batchStoryCreationControlCard.summary}
-                    description={batchStoryCreationControlCard.directive}
-                  />
+                  {renderCompactSettingHint(
+                    batchStoryCreationControlCard.summary,
+                    batchStoryCreationControlCard.directive,
+                  )}
                   <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                     <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>故事简介</div>
-                      <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginBottom: 8 }}>
-                        提供一段简短说明，帮助引导生成。
-                      </div>
+                      {renderCompactStoryControlHeader(
+                        '故事简介',
+                        '一句话说明本轮方向。',
+                        {
+                          tagText: isBatchStoryCreationBriefCustomized ? '自定义' : '系统建议',
+                          tagColor: isBatchStoryCreationBriefCustomized ? 'purple' : 'blue',
+                        },
+                      )}
                       <TextArea
                         value={batchStoryCreationBriefDraft}
                         onChange={(event) => setBatchStoryCreationBriefDraft(event.target.value)}
@@ -9136,32 +8945,29 @@ export default function Chapters() {
                         showCount
                         placeholder="请简要描述故事..."
                       />
-                      <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
-                        {isBatchStoryCreationBriefCustomized
-                          ? '当前使用自定义简介。'
-                          : '当前使用系统简介。'
-                        }</div>
                     </div>
                     <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-                        <div>
-                          <div style={{ fontWeight: 600, marginBottom: 4 }}>故事节拍</div>
-                          <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
-                            规划故事的关键节拍。
-                          </div>
-                        </div>
-                        <Button
-                          size="small"
-                          type="link"
-                          onClick={() => setBatchStoryBeatPlannerDraft(batchSystemStoryBeatPlanner)}
-                          disabled={
-                            isStoryBeatPlannerDraftEmpty(batchSystemStoryBeatPlanner)
-                            || areStoryBeatPlannerDraftsEqual(batchStoryBeatPlannerDraft, batchSystemStoryBeatPlanner)
-                          }
-                        >
-                          恢复系统建议
-                        </Button>
-                      </div>
+                      {renderCompactStoryControlHeader(
+                        '故事节拍',
+                        '按五拍锁住节奏。',
+                        {
+                          tagText: isBatchStoryBeatPlannerCustomized ? '自定义' : '系统建议',
+                          tagColor: isBatchStoryBeatPlannerCustomized ? 'purple' : 'blue',
+                          action: (
+                            <Button
+                              size="small"
+                              type="link"
+                              onClick={() => setBatchStoryBeatPlannerDraft(batchSystemStoryBeatPlanner)}
+                              disabled={
+                                isStoryBeatPlannerDraftEmpty(batchSystemStoryBeatPlanner)
+                                || areStoryBeatPlannerDraftsEqual(batchStoryBeatPlannerDraft, batchSystemStoryBeatPlanner)
+                              }
+                            >
+                              恢复系统建议
+                            </Button>
+                          ),
+                        },
+                      )}
                       <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                         {STORY_BEAT_PLANNER_FIELDS.map((field) => (
                           <div key={field.key}>
@@ -9178,32 +8984,29 @@ export default function Chapters() {
                           </div>
                         ))}
                       </Space>
-                      <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
-                        {isBatchStoryBeatPlannerCustomized
-                          ? '当前使用自定义节拍。'
-                          : '当前使用系统节拍。'
-                        }</div>
                     </div>
                     <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-                        <div>
-                          <div style={{ fontWeight: 600, marginBottom: 4 }}>场景提纲</div>
-                          <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
-                            为这个故事规划场景结构。
-                          </div>
-                        </div>
-                        <Button
-                          size="small"
-                          type="link"
-                          onClick={() => setBatchStorySceneOutlineDraft(batchSuggestedStorySceneOutline)}
-                          disabled={
-                            isStorySceneOutlineDraftEmpty(batchSuggestedStorySceneOutline)
-                            || areStorySceneOutlineDraftsEqual(batchStorySceneOutlineDraft, batchSuggestedStorySceneOutline)
-                          }
-                        >
-                          恢复系统建议
-                        </Button>
-                      </div>
+                      {renderCompactStoryControlHeader(
+                        '场景提纲',
+                        '列出场景链路。',
+                        {
+                          tagText: isBatchStorySceneOutlineCustomized ? '自定义' : '系统建议',
+                          tagColor: isBatchStorySceneOutlineCustomized ? 'purple' : 'blue',
+                          action: (
+                            <Button
+                              size="small"
+                              type="link"
+                              onClick={() => setBatchStorySceneOutlineDraft(batchSuggestedStorySceneOutline)}
+                              disabled={
+                                isStorySceneOutlineDraftEmpty(batchSuggestedStorySceneOutline)
+                                || areStorySceneOutlineDraftsEqual(batchStorySceneOutlineDraft, batchSuggestedStorySceneOutline)
+                              }
+                            >
+                              恢复系统建议
+                            </Button>
+                          ),
+                        },
+                      )}
                       <Space direction="vertical" size={8} style={{ display: 'flex' }}>
                         {STORY_SCENE_OUTLINE_FIELDS.map((field) => (
                           <div key={field.key}>
@@ -9222,29 +9025,24 @@ export default function Chapters() {
                           </div>
                         ))}
                       </Space>
-                      <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, marginTop: 8 }}>
-                        {isBatchStorySceneOutlineCustomized
-                          ? '当前使用自定义提纲。'
-                          : '当前使用系统提纲。'
-                        }</div>
                     </div>
                     <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
-                        <div>
-                          <div style={{ fontWeight: 600, marginBottom: 4 }}>提示词</div>
-                          <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
-                            根据当前选择生成的提示词。
-                          </div>
-                        </div>
-                        <Button
-                          size="small"
-                          type="link"
-                          disabled={!resolvedBatchStoryCreationBrief}
-                          onClick={() => void copyStoryCreationPrompt(resolvedBatchStoryCreationBrief, 'batch')}
-                        >
-                          复制提示词
-                        </Button>
-                      </div>
+                      {renderCompactStoryControlHeader(
+                        '提示词',
+                        '按当前选择自动拼装。',
+                        {
+                          action: (
+                            <Button
+                              size="small"
+                              type="link"
+                              disabled={!resolvedBatchStoryCreationBrief}
+                              onClick={() => void copyStoryCreationPrompt(resolvedBatchStoryCreationBrief, 'batch')}
+                            >
+                              复制提示词
+                            </Button>
+                          ),
+                        },
+                      )}
                       <Space wrap size={[8, 8]} style={{ marginBottom: 8 }}>
                         {batchStoryCreationPromptLayerLabels.map((item) => (
                           <Tag key={item} color="processing">{item}</Tag>
@@ -9253,14 +9051,10 @@ export default function Chapters() {
                           {batchStoryCreationPromptCharCount + ' 字符'}
                         </Tag>
                       </Space>
-                      {isBatchStoryCreationPromptVerbose && (
-                        <Alert
-                          type="warning"
-                          showIcon
-                          style={{ marginBottom: 8 }}
-                          message="已启用详细提示词"
-                          description="提示词包含更详细的生成指导。"
-                        />
+                      {isBatchStoryCreationPromptVerbose && renderCompactSettingHint(
+                        '已启用详细提示词',
+                        '信息更全，但文本会更长。',
+                        { tone: 'warning', style: { marginBottom: 8 } },
                       )}
                       <TextArea
                         value={resolvedBatchStoryCreationBrief ?? ''}
@@ -9271,8 +9065,8 @@ export default function Chapters() {
                     </div>
                     <StoryCreationSnapshotPanel
                       scopeLabel="batch"
-                      description="保存提示词快照以便复用。"
-                      emptyText="暂无快照。"
+                      description="保存当前配置，便于回退。"
+                      emptyText="还没有快照。"
                       snapshots={batchStoryCreationSnapshots}
                       currentDraft={batchStoryCreationCurrentDraft}
                       canSave={canSaveBatchStoryCreationSnapshot}
@@ -9281,29 +9075,16 @@ export default function Chapters() {
                       onDelete={deleteBatchStoryCreationSnapshot}
                       onCopy={copyStoryCreationPrompt}
                     />
-                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>执行路径</div>
-                      <Space direction="vertical" size={4} style={{ display: 'flex' }}>
-                        {batchStoryCreationControlCard.executionPath.map((item) => (
-                          <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
-                        ))}
-                      </Space>
-                    </div>
-                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>预期结果</div>
-                      <Space direction="vertical" size={4} style={{ display: 'flex' }}>
-                        {batchStoryCreationControlCard.expectedOutcomes.map((item) => (
-                          <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
-                        ))}
-                      </Space>
-                    </div>
-                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>约束规则</div>
-                      <Space direction="vertical" size={4} style={{ display: 'flex' }}>
-                        {batchStoryCreationControlCard.guardrails.map((item) => (
-                          <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
-                        ))}
-                      </Space>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))',
+                        gap: 8,
+                      }}
+                    >
+                      {renderCompactListCard('执行路径', batchStoryCreationControlCard.executionPath, { numbered: true })}
+                      {renderCompactListCard('预期结果', batchStoryCreationControlCard.expectedOutcomes, { numbered: true })}
+                      {renderCompactListCard('约束规则', batchStoryCreationControlCard.guardrails)}
                     </div>
                   </Space>
                 </Card>
@@ -9312,51 +9093,27 @@ export default function Chapters() {
             {batchStoryRepairTargetCard && (
               <Card
                 size="small"
-                title={`第 4 步：${batchStoryRepairTargetCard.title}`}
+                title={batchStoryRepairTargetCard.title}
                 extra={<Tag color="gold">修复重点</Tag>}
                 style={{ marginTop: 12 }}
               >
-                <Alert
-                  type="warning"
-                  showIcon
-                  style={{ marginBottom: 12 }}
-                  message={batchStoryRepairTargetCard.repairSummary}
-                  description={batchStoryRepairTargetCard.applyHint}
-                />
-                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                  {[
-                    ['优先修复项', batchStoryRepairTargetCard.priorityTarget],
-                    ['反模式', batchStoryRepairTargetCard.antiPattern],
-                  ].map(([label, value]) => (
-                    <div
-                      key={label}
-                      style={{
-                        padding: '10px 12px',
-                        border: '1px solid #f0f0f0',
-                        borderRadius: 8,
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
-                    </div>
-                  ))}
-                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>修复目标</div>
-                    <Space direction="vertical" size={4} style={{ display: 'flex' }}>
-                      {batchStoryRepairTargetCard.repairTargets.map((item) => (
-                        <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
-                      ))}
-                    </Space>
-                  </div>
-                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 6 }}>保留优势</div>
-                    <Space direction="vertical" size={4} style={{ display: 'flex' }}>
-                      {batchStoryRepairTargetCard.preserveStrengths.map((item) => (
-                        <div key={item} style={{ color: 'var(--color-text-secondary)' }}>- {item}</div>
-                      ))}
-                    </Space>
-                  </div>
-                </Space>
+                {renderCompactSettingHint(
+                  batchStoryRepairTargetCard.repairSummary,
+                  batchStoryRepairTargetCard.applyHint,
+                  { tone: 'warning' },
+                )}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+                    gap: 8,
+                  }}
+                >
+                  {renderCompactFactCard('优先修复项', batchStoryRepairTargetCard.priorityTarget)}
+                  {renderCompactFactCard('反模式', batchStoryRepairTargetCard.antiPattern)}
+                  {renderCompactListCard('修复目标', batchStoryRepairTargetCard.repairTargets, { tagColor: 'gold' })}
+                  {renderCompactListCard('保留优势', batchStoryRepairTargetCard.preserveStrengths, { tagColor: 'green' })}
+                </div>
               </Card>
             )}
 
@@ -9365,20 +9122,17 @@ export default function Chapters() {
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchCreationBlueprint.summary}
                 </div>
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>关键节拍</div>
-                <Space direction="vertical" size={6} style={{ display: 'flex' }}>
-                  {batchCreationBlueprint.beats.map((beat, index) => (
-                    <div key={beat}>{index + 1}. {beat}</div>
-                  ))}
-                </Space>
+                {renderCompactListCard(
+                  '关键节拍',
+                  batchCreationBlueprint.beats,
+                  { numbered: true, tagText: `${batchCreationBlueprint.beats.length}拍` },
+                )}
                 {batchCreationBlueprint.risks.length > 0 && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    style={{ marginTop: 12 }}
-                    message="风险提示"
-                    description={batchCreationBlueprint.risks.join(', ')}
-                  />
+                  renderCompactSettingHint(
+                    '风险提示',
+                    batchCreationBlueprint.risks.join(', '),
+                    { tone: 'warning', style: { marginTop: 12, marginBottom: 0 } },
+                  )
                 )}
               </Card>
             )}
@@ -9388,26 +9142,14 @@ export default function Chapters() {
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryObjectiveCard.summary}
                 </div>
-                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                  {[
+                {renderCompactFactGrid(
+                  [
                     ['目标', batchStoryObjectiveCard.objective],
                     ['阻碍', batchStoryObjectiveCard.obstacle],
                     ['转折', batchStoryObjectiveCard.turn],
                     ['钩子', batchStoryObjectiveCard.hook],
-                  ].map(([label, value]) => (
-                    <div
-                      key={label}
-                      style={{
-                        padding: '10px 12px',
-                        border: '1px solid #f0f0f0',
-                        borderRadius: 8,
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
-                    </div>
-                  ))}
-                </Space>
+                  ] as Array<[string, string]>,
+                )}
               </Card>
             )}
 
@@ -9416,26 +9158,14 @@ export default function Chapters() {
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryResultCard.summary}
                 </div>
-                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                  {[
+                {renderCompactFactGrid(
+                  [
                     ['推进结果', batchStoryResultCard.progress],
                     ['揭示信息', batchStoryResultCard.reveal],
                     ['关系变化', batchStoryResultCard.relationship],
                     ['后续影响', batchStoryResultCard.fallout],
-                  ].map(([label, value]) => (
-                    <div
-                      key={label}
-                      style={{
-                        padding: '10px 12px',
-                        border: '1px solid #f0f0f0',
-                        borderRadius: 8,
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
-                    </div>
-                  ))}
-                </Space>
+                  ] as Array<[string, string]>,
+                )}
               </Card>
             )}
 
@@ -9444,26 +9174,14 @@ export default function Chapters() {
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryExecutionChecklist.summary}
                 </div>
-                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                  {[
+                {renderCompactFactGrid(
+                  [
                     ['开篇', batchStoryExecutionChecklist.opening],
                     ['压力', batchStoryExecutionChecklist.pressure],
                     ['转折', batchStoryExecutionChecklist.pivot],
                     ['收束', batchStoryExecutionChecklist.closing],
-                  ].map(([label, value]) => (
-                    <div
-                      key={label}
-                      style={{
-                        padding: '10px 12px',
-                        border: '1px solid #f0f0f0',
-                        borderRadius: 8,
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
-                    </div>
-                  ))}
-                </Space>
+                  ] as Array<[string, string]>,
+                )}
               </Card>
             )}
 
@@ -9472,26 +9190,14 @@ export default function Chapters() {
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryRepetitionRiskCard.summary}
                 </div>
-                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                  {[
+                {renderCompactFactGrid(
+                  [
                     ['开篇风险', batchStoryRepetitionRiskCard.openingRisk],
                     ['压力风险', batchStoryRepetitionRiskCard.pressureRisk],
                     ['转折风险', batchStoryRepetitionRiskCard.pivotRisk],
                     ['收束风险', batchStoryRepetitionRiskCard.closingRisk],
-                  ].map(([label, value]) => (
-                    <div
-                      key={label}
-                      style={{
-                        padding: '10px 12px',
-                        border: '1px solid #f0f0f0',
-                        borderRadius: 8,
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
-                    </div>
-                  ))}
-                </Space>
+                  ] as Array<[string, string]>,
+                )}
               </Card>
             )}
 
@@ -9500,26 +9206,14 @@ export default function Chapters() {
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryAcceptanceCard.summary}
                 </div>
-                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                  {[
+                {renderCompactFactGrid(
+                  [
                     ['目标达成检查', batchStoryAcceptanceCard.missionCheck],
                     ['变化检查', batchStoryAcceptanceCard.changeCheck],
                     ['新鲜度检查', batchStoryAcceptanceCard.freshnessCheck],
                     ['收束检查', batchStoryAcceptanceCard.closingCheck],
-                  ].map(([label, value]) => (
-                    <div
-                      key={label}
-                      style={{
-                        padding: '10px 12px',
-                        border: '1px solid #f0f0f0',
-                        borderRadius: 8,
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
-                    </div>
-                  ))}
-                </Space>
+                  ] as Array<[string, string]>,
+                )}
               </Card>
             )}
 
@@ -9528,168 +9222,141 @@ export default function Chapters() {
                 <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                   {batchStoryCharacterArcCard.summary}
                 </div>
-                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                  {[
+                {renderCompactFactGrid(
+                  [
                     ['外在线', batchStoryCharacterArcCard.externalLine],
                     ['内在线', batchStoryCharacterArcCard.internalLine],
                     ['关系线', batchStoryCharacterArcCard.relationshipLine],
                     ['弧光落点', batchStoryCharacterArcCard.arcLanding],
-                  ].map(([label, value]) => (
-                    <div
-                      key={label}
-                      style={{
-                        padding: '10px 12px',
-                        border: '1px solid #f0f0f0',
-                        borderRadius: 8,
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-                      <div style={{ color: 'var(--color-text-secondary)' }}>{value}</div>
-                    </div>
-                  ))}
-                </Space>
+                  ] as Array<[string, string]>,
+                )}
               </Card>
             )}
 
             {batchVolumePacingPlan && (
               <Card size="small" title="篇幅节奏规划" style={{ marginBottom: 12 }}>
-                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                  {batchVolumePacingPlan.summary}
-                </div>
-                <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                  {batchVolumePacingPlan.segments.map((segment) => (
-                    <div key={segment.stage + '-' + segment.startChapter}>
-                      <strong>{'第 ' + segment.startChapter + '-' + segment.endChapter + ' 章：' + segment.label}</strong>
-                      <div style={{ color: 'var(--color-text-secondary)', marginTop: 2 }}>
-                        {segment.mission}
-                      </div>
-                    </div>
-                  ))}
-                </Space>
+                {renderCompactSettingHint(
+                  `当前阶段：${batchSelectedPlotStageLabel}`,
+                  batchVolumePacingPlan.summary,
+                  { style: { marginBottom: 10 } },
+                )}
+                {renderCompactListCard(
+                  "章节分段",
+                  batchVolumePacingPlan.segments.map(
+                    (segment) => `第${segment.startChapter}-${segment.endChapter}章 · ${segment.label}：${segment.mission}`,
+                  ),
+                  { tagText: `${batchVolumePacingPlan.segments.length}段` },
+                )}
               </Card>
             )}
 
-            <Card
-              size="small"
-              title="补充微调（可选）"
-              style={{ marginBottom: 12 }}
-            >
-              <Alert
-                type="info"
-                showIcon
-                style={{ marginBottom: 12 }}
-                message="这一组只做最后微调"
-                description="先确定预设与剧情阶段，再按需要微调创作模式、故事聚焦、模型和质量分析；不确定时保持默认即可。"
-              />
-            <Form.Item
-              label="创作模式"
-              tooltip="选择用于批量创作的模式"
-              style={{ marginBottom: 12 }}
-            >
-              <Select
-                placeholder="请选择创作模式"
-                value={batchSelectedCreativeMode}
-                onChange={setBatchSelectedCreativeMode}
-                allowClear
-                optionLabelProp="label"
+            <Card size="small" title="补充微调（可选）" style={{ marginBottom: 12 }}>
+              {renderCompactSettingHint(
+                "批量通常只建议调整模式、聚焦和模型；质量分析按需开启即可。",
+                "不改则沿用默认推荐，先稳定生成，再根据结果回头细调。",
+                { style: { marginBottom: 10 } },
+              )}
+              {renderCompactSelectionSummary(
+                [
+                  { label: "模式", value: batchSelectedCreativeModeLabel, color: "blue" },
+                  { label: "聚焦", value: batchSelectedStoryFocusLabel, color: "purple" },
+                  { label: "模型", value: batchSelectedModelLabel },
+                  { label: "分析", value: batchQualityAnalysisLabel, color: batchEnableAnalysis === false ? "default" : "green" },
+                ],
+              )}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: `repeat(auto-fit, minmax(${isMobile ? 220 : 260}px, 1fr))`,
+                  gap: 12,
+                }}
               >
-                {CREATIVE_MODE_OPTIONS.map((option) => (
-                  <Select.Option key={option.value} value={option.value} label={option.label}>
-                    <div>{option.label}</div>
-                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
-                  </Select.Option>
-                ))}
-              </Select>
-            </Form.Item>
-
-            <Form.Item
-
-              label="故事聚焦"
-
-              tooltip="选择批量创作的关注点与重心"
-
-              style={{ marginBottom: 12 }}
-
-            >
-
-              <Select
-
-                placeholder="请选择故事聚焦"
-
-
-
-
-                value={batchSelectedStoryFocus}
-                onChange={setBatchSelectedStoryFocus}
-                allowClear
-                optionLabelProp="label"
+                <Form.Item
+                  label="创作模式"
+                  tooltip="控制这一批章节的主要写法偏向"
+                  style={{ marginBottom: 0 }}
+                >
+                  <Select
+                    placeholder="留空=默认推荐"
+                    value={batchSelectedCreativeMode}
+                    onChange={setBatchSelectedCreativeMode}
+                    allowClear
+                    optionLabelProp="label"
+                  >
+                    {CREATIVE_MODE_OPTIONS.map((option) => (
+                      <Select.Option key={option.value} value={option.value} label={option.label}>
+                        <div>{option.label}</div>
+                        <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{option.description}</div>
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+                <Form.Item
+                  label="故事聚焦"
+                  tooltip="控制这一批章节的主要发力点"
+                  style={{ marginBottom: 0 }}
+                >
+                  <Select
+                    placeholder="留空=默认推荐"
+                    value={batchSelectedStoryFocus}
+                    onChange={setBatchSelectedStoryFocus}
+                    allowClear
+                    optionLabelProp="label"
+                  >
+                    {STORY_FOCUS_OPTIONS.map((option) => (
+                      <Select.Option key={option.value} value={option.value} label={option.label}>
+                        <div>{option.label}</div>
+                        <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{option.description}</div>
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: `repeat(auto-fit, minmax(${isMobile ? 220 : 260}px, 1fr))`,
+                  gap: 12,
+                  marginTop: 12,
+                }}
               >
-                {STORY_FOCUS_OPTIONS.map((option) => (
-                  <Select.Option key={option.value} value={option.value} label={option.label}>
-                    <div>{option.label}</div>
-                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
-                  </Select.Option>
-                ))}
-              </Select>
-            </Form.Item>
-
-            <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 0 : 16 }}>
-            <Form.Item
-              label="AI 模型"
-              tooltip="选择用于批量生成的模型。"
-              style={{ flex: 1, marginBottom: 12 }}
-            >
-              <Select
-                placeholder={batchSelectedModel
-                  ? `已选择：${availableModels.find(m => m.value === batchSelectedModel)?.label || batchSelectedModel}`
-                  : '请选择模型'}
-                value={batchSelectedModel}
-                onChange={setBatchSelectedModel}
-                allowClear
-                showSearch
-                optionFilterProp="label"
-              >
-                {availableModels.map(model => (
-                  <Select.Option key={model.value} value={model.value} label={model.label}>
-                    {model.label}
-                  </Select.Option>
-                ))}
-              </Select>
-            </Form.Item>
-
-
-
-              <Form.Item
-
-                label="开启质量分析"
-
-                name="enableAnalysis"
-
-                tooltip="开启后将对生成内容进行质量分析与建议"
-
-                style={{ marginBottom: 12 }}
-
-              >
-
-                <Radio.Group>
-
-                  <Radio value={true}>
-
-                    <span style={{ fontSize: 12, color: '#52c41a' }}>开启（生成后自动分析）</span>
-
-                  </Radio>
-
-                  <Radio value={false}>
-
-                    <span style={{ fontSize: 12, color: '#8c8c8c' }}>关闭（不做分析）</span>
-
-                  </Radio>
-
-                </Radio.Group>
-
-              </Form.Item>
-
-            </div>
+                <Form.Item
+                  label="AI 模型"
+                  tooltip="留空则沿用项目默认模型"
+                  style={{ marginBottom: 0 }}
+                >
+                  <Select
+                    placeholder={batchSelectedModel ? `已选择：${batchSelectedModelLabel}` : "留空=项目默认"}
+                    value={batchSelectedModel}
+                    onChange={setBatchSelectedModel}
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                  >
+                    {availableModels.map((model) => (
+                      <Select.Option key={model.value} value={model.value} label={model.label}>
+                        {model.label}
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+                <Form.Item
+                  label="开启质量分析"
+                  name="enableAnalysis"
+                  tooltip="决定批量生成后是否自动附带质量建议"
+                  style={{ marginBottom: 0 }}
+                >
+                  <div>
+                    <Radio.Group optionType="button" buttonStyle="solid">
+                      <Radio.Button value={true}>开启分析</Radio.Button>
+                      <Radio.Button value={false}>仅生成</Radio.Button>
+                    </Radio.Group>
+                    <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginTop: 6 }}>
+                      关闭后只生成正文，不自动附带质量分析。
+                    </div>
+                  </div>
+                </Form.Item>
+              </div>
             </Card>
 
 
@@ -9699,82 +9366,44 @@ export default function Chapters() {
 
           <div>
 
-            <Alert
-
-              message="批量生成进行中说明"
-
-              description={
-
-                <ul style={{ margin: '8px 0 0 0', paddingLeft: 20 }}>
-
-                  <li>系统会按章节顺序依次生成，并在完成后自动更新状态。</li>
-
-                  <li>生成过程中可以关闭此窗口，任务会继续在后台执行。</li>
-
-                  <li>如需停止任务，可点击下方“取消生成”。</li>
-
-                  {batchProgress?.estimated_time_minutes && batchProgress.completed === 0 && (
-
-                    <li>预计耗时约 {batchProgress.estimated_time_minutes} 分钟。</li>
-
-                  )}
-
-                  {batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined && (
-
-                    <li>
-
-                      当前平均质量分 {batchProgress.quality_metrics_summary.avg_overall_score}，冲突链 / 规则锚定 / 开篇钩子 / 回收链 / 悬念收尾分别为 {batchProgress.quality_metrics_summary.avg_conflict_chain_hit_rate}% / {batchProgress.quality_metrics_summary.avg_rule_grounding_hit_rate}% / {batchProgress.quality_metrics_summary.avg_opening_hook_rate ?? 0}% / {batchProgress.quality_metrics_summary.avg_payoff_chain_rate ?? 0}% / {batchProgress.quality_metrics_summary.avg_cliffhanger_rate ?? 0}%。
-
-                    </li>
-
-                  )}
-
-                </ul>
-
-              }
-
-              type="info"
-
-              showIcon
-
-              style={{ marginBottom: 16 }}
-
-            />
+            {renderCompactSettingHint(
+              `批量生成进行中：${batchProgress?.completed || 0}/${batchProgress?.total || 0} 章`,
+              "可关闭窗口后台继续；需要停止时在下方取消生成。",
+              { style: { marginBottom: 10 } },
+            )}
+            {renderCompactSelectionSummary(
+              [
+                ...(batchProgress?.current_chapter_number
+                  ? [{ label: "当前", value: `第${batchProgress.current_chapter_number}章`, color: "blue" }]
+                  : []),
+                { label: "进度", value: `${batchProgress?.completed || 0}/${batchProgress?.total || 0}`, color: "blue" },
+                ...(batchProgress?.estimated_time_minutes && batchProgress.completed === 0
+                  ? [{ label: "预计", value: `${batchProgress.estimated_time_minutes}分钟` }]
+                  : []),
+                ...(batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined
+                  ? [{
+                      label: "均分",
+                      value: `${batchProgress.quality_metrics_summary.avg_overall_score}`,
+                      color: getOverallScoreColor(batchProgress.quality_metrics_summary.avg_overall_score),
+                    }]
+                  : []),
+              ],
+              { style: { marginBottom: 16 } },
+            )}
 
 
 
             {batchProgress?.quality_profile_summary && getQualityProfileDisplayItems(batchProgress.quality_profile_summary).length > 0 && (
 
               <Card size="small" title="质量画像摘要" style={{ marginBottom: 16 }}>
-
-                <Alert
-
-                  type="success"
-
-                  showIcon
-
-                  style={{ marginBottom: 12 }}
-
-                  message="质量画像摘要"
-
-                  description="请参考以下建议。"
-
-                />
-
-                <Descriptions column={1} size="small">
-
-                  {getQualityProfileDisplayItems(batchProgress.quality_profile_summary).map((item) => (
-
-                    <Descriptions.Item key={item.key} label={item.label}>
-
-                      {item.description}
-
-                    </Descriptions.Item>
-
-                  ))}
-
-                </Descriptions>
-
+                {renderCompactSettingHint(
+                  "质量画像用于概括当前批次的风格、维度与优化方向。",
+                  "优先关注不稳定或偏离目标的条目。",
+                  { tone: "success", style: { marginBottom: 10 } },
+                )}
+                {renderCompactFactGrid(
+                  batchQualityProfileItems.map((item) => [item.label, item.description] as [string, string]),
+                )}
               </Card>
 
             )}
@@ -9784,43 +9413,27 @@ export default function Chapters() {
             {batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined && (
               <Card size="small" title="质量指标摘要" style={{ marginBottom: 16 }}>
                 {batchAfterScorecard && (
-                  <Alert
-                    type={batchAfterScorecard.verdictColor as 'success' | 'info' | 'warning' | 'error'}
-                    showIcon
-                    style={{ marginBottom: 12 }}
-                    message={batchAfterScorecard.verdict}
-                    description={batchAfterScorecard.summary + ' ' + batchAfterScorecard.nextAction}
-                  />
+                  renderCompactSettingHint(
+                    batchAfterScorecard.verdict,
+                    `${batchAfterScorecard.summary} ${batchAfterScorecard.nextAction}`,
+                    {
+                      tone: getCompactHintToneByAlertType(batchAfterScorecard.verdictColor as "success" | "info" | "warning" | "error"),
+                      style: { marginBottom: 10 },
+                    },
+                  )
                 )}
-                <Space direction="vertical" style={{ width: '100%' }} size={10}>
-                  {getBatchSummaryMetricItems(batchProgress.quality_metrics_summary).map((item) => (
-                    <div key={item.key}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, gap: 12 }}>
-
-                        <Space size={4}>
-
-                          <span>{item.label}</span>
-
-                          <Tooltip title={item.tip}>
-
-                            <InfoCircleOutlined style={{ color: '#8c8c8c' }} />
-
-                          </Tooltip>
-
-                        </Space>
-
-                        <span style={{ color: '#595959' }}>{item.value}%</span>
-
-                      </div>
-
-                      <Progress percent={item.value} showInfo={false} size="small" strokeColor={getMetricStrokeColor(item.value)} />
-
-                    </div>
-
-                  ))}
-
-                </Space>
-
+                {renderCompactSelectionSummary(
+                  [
+                    {
+                      label: "平均得分",
+                      value: `${batchProgress?.quality_metrics_summary?.avg_overall_score ?? 0}`,
+                      color: getOverallScoreColor(batchProgress?.quality_metrics_summary?.avg_overall_score),
+                    },
+                    { label: "已完成", value: `${batchProgress?.completed || 0}/${batchProgress?.total || 0}`, color: "blue" },
+                  ],
+                  { style: { marginBottom: 10 } },
+                )}
+                {renderCompactMetricGrid(batchSummaryMetricItems)}
               </Card>
 
             )}
