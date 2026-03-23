@@ -1,4 +1,4 @@
-﻿import axios from 'axios';
+import axios from 'axios';
 import { message } from 'antd';
 import { ssePost } from '../utils/sseClient';
 import type { SSEClientOptions } from '../utils/sseClient';
@@ -26,6 +26,7 @@ import type {
   ChapterUpdate,
   CreativeMode,
   PlotStage,
+  QualityPreset,
   StoryFocus,
   GenerateOutlineRequest,
   GenerateCharacterRequest,
@@ -1073,6 +1074,8 @@ export const chapterBatchTaskApi = {
       story_focus?: StoryFocus;
       plot_stage?: PlotStage;
       story_creation_brief?: string;
+      quality_preset?: QualityPreset;
+      quality_notes?: string;
       story_repair_summary?: string;
       story_repair_targets?: string[];
       story_preserve_strengths?: string[];
@@ -1255,6 +1258,8 @@ export const chapterSingleTaskApi = {
       story_focus?: StoryFocus;
       plot_stage?: PlotStage;
       story_creation_brief?: string;
+      quality_preset?: QualityPreset;
+      quality_notes?: string;
       story_repair_summary?: string;
       story_repair_targets?: string[];
       story_preserve_strengths?: string[];

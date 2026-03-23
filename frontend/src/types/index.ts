@@ -388,6 +388,8 @@ export interface ChapterGenerateRequest {
   story_focus?: StoryFocus;
   plot_stage?: PlotStage;
   story_creation_brief?: string;
+  quality_preset?: QualityPreset;
+  quality_notes?: string;
   story_repair_summary?: string;
   story_repair_targets?: string[];
   story_preserve_strengths?: string[];
@@ -493,13 +495,15 @@ export interface GenerateOutlineRequest {
   requirements?: string;
   provider?: string;
   model?: string;
-  // 续写功能新增字段
+  // ????????
   mode?: 'auto' | 'new' | 'continue';
   story_direction?: string;
   plot_stage?: PlotStage;
   keep_existing?: boolean;
   creative_mode?: CreativeMode;
   story_focus?: StoryFocus;
+  quality_preset?: QualityPreset;
+  quality_notes?: string;
 }
 
 // 大纲重排序请求类型

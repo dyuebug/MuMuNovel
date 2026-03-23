@@ -1,4 +1,4 @@
-﻿import { Card, Descriptions, Empty, Typography, Button, Modal, Form, Input, message, Flex, InputNumber, Select } from 'antd';
+import { Card, Descriptions, Empty, Typography, Button, Modal, Form, Input, message, Flex, InputNumber, Select } from 'antd';
 import { GlobalOutlined, EditOutlined, SyncOutlined, FormOutlined } from '@ant-design/icons';
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
@@ -34,18 +34,59 @@ const PLOT_STAGE_OPTIONS: Array<{ value: PlotStage; label: string; description: 
   { value: 'ending', label: '收束段', description: '适合回收伏笔、结算代价、收束情绪。' },
 ];
 
-const QUALITY_PRESET_OPTIONS: Array<{ value: QualityPreset; label: string; description: string }> = [
-  { value: 'balanced', label: '均衡质感', description: '兼顾推进、情绪、场景和信息释放，适合大多数项目。' },
-  { value: 'plot_drive', label: '强情节回报', description: '更强调抓力、动作桥段、爽点回收和追读牵引。' },
-  { value: 'immersive', label: '沉浸场景感', description: '更强调设定落地、视角稳定、场景密度与现场感。' },
-  { value: 'emotion_drama', label: '情绪关系向', description: '更强调情绪落点、对白张力、关系余波与误伤后效。' },
-  { value: 'clean_prose', label: '克制干净文风', description: '更强调减少总结腔、重复提醒和说明书化表达。' },
+const QUALITY_PRESET_OPTIONS: Array<{
+  value: QualityPreset;
+  label: string;
+  description: string;
+  bestFor: string;
+  caution: string;
+}> = [
+  {
+    value: 'balanced',
+    label: '????',
+    description: '????????????????????????',
+    bestFor: '????????????????????????',
+    caution: '???????????????????????????',
+  },
+  {
+    value: 'plot_drive',
+    label: '?????',
+    description: '?????????????????????',
+    bestFor: '?????????????????????????',
+    caution: '????????????????????????????',
+  },
+  {
+    value: 'immersive',
+    label: '?????',
+    description: '??????????????????????',
+    bestFor: '??????????????????????????????',
+    caution: '???????????????????????????',
+  },
+  {
+    value: 'emotion_drama',
+    label: '?????',
+    description: '???????????????????????',
+    bestFor: '???????????????????????????',
+    caution: '????????????????????????????',
+  },
+  {
+    value: 'clean_prose',
+    label: '??????',
+    description: '?????????????????????',
+    bestFor: '?????????????????????????',
+    caution: '???????????????????????????',
+  },
 ];
 
 const resolveOptionLabel = <T extends string>(
   options: Array<{ value: T; label: string }>,
   value?: string | null,
-) => options.find((item) => item.value === value)?.label || value || '未设定';
+) => options.find((item) => item.value === value)?.label || value || '???';
+
+const resolveOptionDescription = <T extends string>(
+  options: Array<{ value: T; description: string }>,
+  value?: string | null,
+) => options.find((item) => item.value === value)?.description || '';
 
 export default function WorldSetting() {
   const { currentProject, setCurrentProject } = useStore();
@@ -55,6 +96,10 @@ export default function WorldSetting() {
   const [isEditProjectModalVisible, setIsEditProjectModalVisible] = useState(false);
   const [editProjectForm] = Form.useForm();
   const [isSavingProject, setIsSavingProject] = useState(false);
+  const selectedDefaultQualityPreset = Form.useWatch('default_quality_preset', editProjectForm) as QualityPreset | undefined;
+  const selectedDefaultQualityPresetOption = QUALITY_PRESET_OPTIONS.find(
+    (item) => item.value === selectedDefaultQualityPreset,
+  );
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [isCancellingTask, setIsCancellingTask] = useState(false);
   const [regenerateProgress, setRegenerateProgress] = useState(0);
@@ -404,8 +449,15 @@ export default function WorldSetting() {
             <Descriptions.Item label="默认剧情阶段">
               {resolveOptionLabel(PLOT_STAGE_OPTIONS, currentProject.default_plot_stage)}
             </Descriptions.Item>
-            <Descriptions.Item label="默认质量预设">
-              {resolveOptionLabel(QUALITY_PRESET_OPTIONS, currentProject.default_quality_preset)}
+            <Descriptions.Item label="??????">
+              <Flex vertical gap={2}>
+                <span>{resolveOptionLabel(QUALITY_PRESET_OPTIONS, currentProject.default_quality_preset)}</span>
+                {resolveOptionDescription(QUALITY_PRESET_OPTIONS, currentProject.default_quality_preset) && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {resolveOptionDescription(QUALITY_PRESET_OPTIONS, currentProject.default_quality_preset)}
+                  </Typography.Text>
+                )}
+              </Flex>
             </Descriptions.Item>
             <Descriptions.Item label="默认创作总控摘要">
               <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
@@ -748,16 +800,16 @@ export default function WorldSetting() {
 
           <Card
             size="small"
-            title="默认生成偏好"
+            title="??????"
             style={{ marginBottom: 0, background: 'var(--color-fill-quaternary)' }}
           >
             <Form.Item
-              label="默认创作模式"
+              label="??????"
               name="default_creative_mode"
-              extra="大纲与章节生成会优先采用这里的偏好，仍可在具体生成时临时覆盖。"
+              extra="???????????????????????????????"
             >
               <Select
-                placeholder="未设置时按系统默认均衡推进"
+                placeholder="?????????????"
                 allowClear
                 optionLabelProp="label"
               >
@@ -771,11 +823,11 @@ export default function WorldSetting() {
             </Form.Item>
 
             <Form.Item
-              label="默认结构侧重点"
+              label="???????"
               name="default_story_focus"
             >
               <Select
-                placeholder="未设置时按系统默认承担多种叙事任务"
+                placeholder="?????????????????"
                 allowClear
                 optionLabelProp="label"
               >
@@ -789,11 +841,11 @@ export default function WorldSetting() {
             </Form.Item>
 
             <Form.Item
-              label="默认剧情阶段"
+              label="??????"
               name="default_plot_stage"
             >
               <Select
-                placeholder="未设置时按章节位置自动推断"
+                placeholder="?????????????"
                 allowClear
                 optionLabelProp="label"
               >
@@ -807,45 +859,122 @@ export default function WorldSetting() {
             </Form.Item>
 
             <Form.Item
-              label="默认创作总控摘要"
+              label="????????"
               name="default_story_creation_brief"
-              extra="用于长期约束章节生成的风格、节奏、禁忌与表达偏好。"
+              extra="?????????????????????????"
             >
               <TextArea
                 rows={4}
-                placeholder="例如：保持连载感与场景感，优先让人物选择推动情节，避免空泛抒情和重复解释。"
+                placeholder="?????????????????????????????????????"
                 showCount
                 maxLength={1200}
               />
             </Form.Item>
 
             <Form.Item
-              label="默认质量预设"
-              name="default_quality_preset"
-              extra="用于整体偏向情节回报、沉浸场景、情绪关系或克制文风；仍可被具体生成参数临时覆盖。"
+              label="??????"
+              extra="?????????????????????????????"
             >
-              <Select
-                placeholder="未设置时按系统默认均衡质感"
-                allowClear
-                optionLabelProp="label"
+              <Form.Item name="default_quality_preset" hidden>
+                <Input />
+              </Form.Item>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                  gap: 12,
+                }}
               >
-                {QUALITY_PRESET_OPTIONS.map((option) => (
-                  <Select.Option key={option.value} value={option.value} label={option.label}>
-                    <div>{option.label}</div>
-                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
-                  </Select.Option>
-                ))}
-              </Select>
+                <Card
+                  hoverable
+                  onClick={() => editProjectForm.setFieldValue('default_quality_preset', undefined)}
+                  style={{
+                    cursor: 'pointer',
+                    borderStyle: 'dashed',
+                    borderColor: !selectedDefaultQualityPreset ? 'var(--color-primary)' : 'var(--color-border)',
+                    background: !selectedDefaultQualityPreset ? 'var(--color-primary-bg)' : 'var(--color-bg-container)',
+                    boxShadow: !selectedDefaultQualityPreset ? '0 0 0 1px rgba(24, 144, 255, 0.12)' : 'none',
+                  }}
+                >
+                  <Flex vertical gap={8}>
+                    <Typography.Text strong>?????</Typography.Text>
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      ????????????????????????????
+                    </Typography.Text>
+                  </Flex>
+                </Card>
+
+                {QUALITY_PRESET_OPTIONS.map((option) => {
+                  const isActive = selectedDefaultQualityPreset === option.value;
+                  return (
+                    <Card
+                      key={option.value}
+                      hoverable
+                      onClick={() => editProjectForm.setFieldValue('default_quality_preset', isActive ? undefined : option.value)}
+                      style={{
+                        cursor: 'pointer',
+                        borderColor: isActive ? 'var(--color-primary)' : 'var(--color-border)',
+                        background: isActive ? 'var(--color-primary-bg)' : 'var(--color-bg-container)',
+                        boxShadow: isActive ? '0 0 0 1px rgba(24, 144, 255, 0.12)' : 'none',
+                      }}
+                    >
+                      <Flex vertical gap={8}>
+                        <div>
+                          <Typography.Text strong>{option.label}</Typography.Text>
+                          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                            {option.description}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                          ???{option.bestFor}
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
+                          ???{option.caution}
+                        </div>
+                      </Flex>
+                    </Card>
+                  );
+                })}
+              </div>
+
+              <Card
+                size="small"
+                style={{
+                  marginTop: 12,
+                  borderColor: 'var(--color-border-secondary)',
+                  background: 'var(--color-fill-quaternary)',
+                }}
+              >
+                <Flex vertical gap={6}>
+                  <Typography.Text strong>
+                    ?????{selectedDefaultQualityPresetOption?.label || '?????'}
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {selectedDefaultQualityPresetOption?.description || '?????????????????????????????????'}
+                  </Typography.Text>
+                  {selectedDefaultQualityPresetOption && (
+                    <>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        ???{selectedDefaultQualityPresetOption.bestFor}
+                      </Typography.Text>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        ???{selectedDefaultQualityPresetOption.caution}
+                      </Typography.Text>
+                    </>
+                  )}
+                </Flex>
+              </Card>
             </Form.Item>
 
             <Form.Item
-              label="默认质量补充偏好"
+              label="????????"
               name="default_quality_notes"
-              extra="补充你长期想强调的质量倾向，例如“重点减少总结句”和“动作桥段别一笔带过”。"
+              extra="??????????????????????????????????????"
             >
               <TextArea
                 rows={3}
-                placeholder="例如：优先保持现场感和镜头稳定，减少旁白盖章与同义复述，关键桥段尽量现场化。"
+                placeholder="??????????????????????????????????????"
                 showCount
                 maxLength={600}
               />
