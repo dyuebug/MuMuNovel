@@ -1,6 +1,16 @@
 """大纲相关的Pydantic模型"""
-from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Any, Dict, List, Optional
+
+from app.schemas.generation_preferences import (
+    CreativeModeValue,
+    OutlineGenerateModeValue,
+    PlotStageValue,
+    QualityPresetValue,
+    StoryFocusValue,
+    normalize_optional_choice,
+    normalize_optional_text,
+)
 from datetime import datetime
 
 
@@ -43,33 +53,56 @@ class OutlineResponse(BaseModel):
 
 
 class OutlineGenerateRequest(BaseModel):
-    """AI生成大纲的请求模型 - 支持全新生成和智能续写"""
-    project_id: str = Field(..., description="项目ID")
-    genre: Optional[str] = Field(None, description="小说类型，如：玄幻、都市、悬疑等")
-    theme: str = Field(..., description="小说主题")
-    chapter_count: int = Field(..., ge=1, description="章节数量")
-    narrative_perspective: str = Field(..., description="叙事视角")
-    world_context: Optional[dict] = Field(None, description="世界观背景")
-    characters_context: Optional[list] = Field(None, description="角色信息")
-    target_words: int = Field(100000, description="目标字数")
-    requirements: Optional[str] = Field(None, description="其他特殊要求")
-    provider: Optional[str] = Field(None, description="AI提供商")
-    model: Optional[str] = Field(None, description="AI模型")
-    
-    # 续写相关参数
-    mode: str = Field("auto", description="生成模式: auto(自动判断), new(全新生成), continue(续写)")
-    story_direction: Optional[str] = Field(None, description="故事发展方向提示(续写时使用)")
-    plot_stage: str = Field("development", description="情节阶段: development(发展), climax(高潮), ending(结局)")
-    keep_existing: bool = Field(False, description="是否保留现有大纲(续写时)")
-    enable_mcp: bool = Field(True, description="是否启用MCP工具增强（搜索情节设计参考）")
-    creative_mode: Optional[str] = Field(
+    """AI????????? - ???????????"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(..., description="??ID")
+    genre: Optional[str] = Field(None, description="????????????????")
+    theme: str = Field(..., description="????")
+    chapter_count: int = Field(..., ge=1, description="????")
+    narrative_perspective: str = Field(..., description="????")
+    world_context: Optional[dict] = Field(None, description="?????")
+    characters_context: Optional[list] = Field(None, description="????")
+    target_words: int = Field(100000, description="????")
+    requirements: Optional[str] = Field(None, description="??????")
+    provider: Optional[str] = Field(None, description="AI???")
+    model: Optional[str] = Field(None, description="AI??")
+    mode: OutlineGenerateModeValue = Field("auto", description="????: auto(????), new(????), continue(??)")
+    story_direction: Optional[str] = Field(None, description="????????(?????)")
+    plot_stage: PlotStageValue = Field("development", description="????: development(??), climax(??), ending(??)")
+    keep_existing: bool = Field(False, description="????????(???)")
+    enable_mcp: bool = Field(True, description="????MCP??????????????")
+    creative_mode: Optional[CreativeModeValue] = Field(
         None,
-        description="创作模式：balanced/hook/emotion/suspense/relationship/payoff，可选",
+        description="?????balanced/hook/emotion/suspense/relationship/payoff???",
     )
-    story_focus: Optional[str] = Field(
+    story_focus: Optional[StoryFocusValue] = Field(
         None,
-        description="结构侧重点：advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff，可选",
+        description="??????advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff???",
     )
+    quality_preset: Optional[QualityPresetValue] = Field(
+        None,
+        description="?????balanced/plot_drive/immersive/emotion_drama/clean_prose???",
+    )
+    quality_notes: Optional[str] = Field(None, description="?????????", max_length=600)
+
+    @field_validator(
+        "mode",
+        "creative_mode",
+        "story_focus",
+        "plot_stage",
+        "quality_preset",
+        mode="before",
+    )
+    @classmethod
+    def normalize_generation_choices(cls, value):
+        return normalize_optional_choice(value)
+
+    @field_validator("requirements", "story_direction", "quality_notes", mode="before")
+    @classmethod
+    def normalize_generation_texts(cls, value):
+        return normalize_optional_text(value)
 
 
 class ChapterOutlineGenerateRequest(BaseModel):

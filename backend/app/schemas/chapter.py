@@ -1,6 +1,15 @@
 """章节相关的Pydantic模型"""
-from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Any, Dict, List, Optional
+
+from app.schemas.generation_preferences import (
+    CreativeModeValue,
+    PlotStageValue,
+    QualityPresetValue,
+    StoryFocusValue,
+    normalize_optional_choice,
+    normalize_optional_text,
+)
 from datetime import datetime
 
 
@@ -111,79 +120,135 @@ class BatchAnalyzeUnanalyzedResponse(BaseModel):
 
 
 class ChapterGenerateRequest(BaseModel):
-    """AI生成章节内容的请求模型"""
-    style_id: Optional[int] = Field(None, description="写作风格ID，不提供则不使用任何风格")
+    """AI???????????"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    style_id: Optional[int] = Field(None, description="????ID????????????")
     target_word_count: Optional[int] = Field(
         3000,
-        description="目标字数，默认3000字",
-        ge=500,   # 最小500字
-        le=10000  # 最大10000字
+        description="???????3000?",
+        ge=500,
+        le=10000,
     )
-    enable_analysis: bool = Field(True, description="是否启用同步分析")
-    enable_mcp: bool = Field(True, description="是否启用MCP工具增强（搜索参考资料）")
+    enable_analysis: bool = Field(True, description="????????")
+    enable_mcp: bool = Field(True, description="????MCP????????????")
     enable_web_research: Optional[bool] = Field(
         None,
-        description="是否在章节生成前执行 Exa/Grok 网络检索；不传则跟随后端全局配置",
+        description="?????????? Exa/Grok ????????????????",
     )
-    web_research_query: Optional[str] = Field(None, description="可选，自定义生成前网络检索 query")
-    model: Optional[str] = Field(None, description="指定使用的AI模型，不提供则使用用户默认模型")
-    narrative_perspective: Optional[str] = Field(None, description="临时人称视角：first_person/third_person/omniscient，不提供则使用项目默认")
-    creative_mode: Optional[str] = Field(
+    web_research_query: Optional[str] = Field(None, description="????????????? query")
+    model: Optional[str] = Field(None, description="?????AI???????????????")
+    narrative_perspective: Optional[str] = Field(None, description="???????first_person/third_person/omniscient???????????")
+    creative_mode: Optional[CreativeModeValue] = Field(
         None,
-        description="创作模式：balanced/hook/emotion/suspense/relationship/payoff，可选",
+        description="?????balanced/hook/emotion/suspense/relationship/payoff???",
     )
-    story_focus: Optional[str] = Field(
+    story_focus: Optional[StoryFocusValue] = Field(
         None,
-        description="结构侧重点：advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff，可选",
+        description="??????advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff???",
     )
-    plot_stage: Optional[str] = Field(
+    plot_stage: Optional[PlotStageValue] = Field(
         None,
-        description="情节阶段：development/climax/ending，可选",
+        description="?????development/climax/ending???",
     )
-    story_creation_brief: Optional[str] = Field(None, description="创作总控摘要，可选")
-    story_repair_summary: Optional[str] = Field(None, description="后验评分提炼出的修复摘要，可选")
-    story_repair_targets: Optional[list[str]] = Field(None, description="后验评分提炼出的修复动作列表，可选")
-    story_preserve_strengths: Optional[list[str]] = Field(None, description="生成时需保留的已有优势列表，可选")
+    story_creation_brief: Optional[str] = Field(None, description="?????????", max_length=1200)
+    quality_preset: Optional[QualityPresetValue] = Field(
+        None,
+        description="?????balanced/plot_drive/immersive/emotion_drama/clean_prose???",
+    )
+    quality_notes: Optional[str] = Field(None, description="?????????", max_length=600)
+    story_repair_summary: Optional[str] = Field(None, description="???????????????")
+    story_repair_targets: Optional[list[str]] = Field(None, description="?????????????????")
+    story_preserve_strengths: Optional[list[str]] = Field(None, description="????????????????")
+
+    @field_validator(
+        "creative_mode",
+        "story_focus",
+        "plot_stage",
+        "quality_preset",
+        mode="before",
+    )
+    @classmethod
+    def normalize_generation_choices(cls, value):
+        return normalize_optional_choice(value)
+
+    @field_validator(
+        "story_creation_brief",
+        "quality_notes",
+        "story_repair_summary",
+        mode="before",
+    )
+    @classmethod
+    def normalize_generation_texts(cls, value):
+        return normalize_optional_text(value)
 
 
 class BatchGenerateRequest(BaseModel):
-    """批量生成章节的请求模型"""
-    start_chapter_number: int = Field(..., description="起始章节序号")
-    count: int = Field(..., description="生成章节数量", ge=1, le=20)
-    style_id: Optional[int] = Field(None, description="写作风格ID")
+    """???????????"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start_chapter_number: int = Field(..., description="??????")
+    count: int = Field(..., description="??????", ge=1, le=20)
+    style_id: Optional[int] = Field(None, description="????ID")
     target_word_count: Optional[int] = Field(
         3000,
-        description="目标字数，默认3000字",
+        description="???????3000?",
         ge=500,
-        le=10000
+        le=10000,
     )
-    enable_analysis: bool = Field(False, description="是否启用同步分析")
-    enable_mcp: bool = Field(True, description="是否启用MCP工具增强（搜索参考资料）")
+    enable_analysis: bool = Field(False, description="????????")
+    enable_mcp: bool = Field(True, description="????MCP????????????")
     enable_web_research: Optional[bool] = Field(
         None,
-        description="是否在章节生成前执行 Exa/Grok 网络检索；不传则跟随后端全局配置",
+        description="?????????? Exa/Grok ????????????????",
     )
-    web_research_query: Optional[str] = Field(None, description="可选，自定义生成前网络检索 query")
-    max_retries: int = Field(3, description="每个章节的最大重试次数", ge=0, le=5)
-    model: Optional[str] = Field(None, description="指定使用的AI模型，不提供则使用用户默认模型")
+    web_research_query: Optional[str] = Field(None, description="????????????? query")
+    max_retries: int = Field(3, description="???????????", ge=0, le=5)
+    model: Optional[str] = Field(None, description="?????AI???????????????")
+    creative_mode: Optional[CreativeModeValue] = Field(
+        None,
+        description="?????balanced/hook/emotion/suspense/relationship/payoff???",
+    )
+    story_focus: Optional[StoryFocusValue] = Field(
+        None,
+        description="??????advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff???",
+    )
+    plot_stage: Optional[PlotStageValue] = Field(
+        None,
+        description="?????development/climax/ending???",
+    )
+    story_creation_brief: Optional[str] = Field(None, description="?????????", max_length=1200)
+    quality_preset: Optional[QualityPresetValue] = Field(
+        None,
+        description="?????balanced/plot_drive/immersive/emotion_drama/clean_prose???",
+    )
+    quality_notes: Optional[str] = Field(None, description="?????????", max_length=600)
+    story_repair_summary: Optional[str] = Field(None, description="???????????????")
+    story_repair_targets: Optional[list[str]] = Field(None, description="?????????????????")
+    story_preserve_strengths: Optional[list[str]] = Field(None, description="????????????????")
 
+    @field_validator(
+        "creative_mode",
+        "story_focus",
+        "plot_stage",
+        "quality_preset",
+        mode="before",
+    )
+    @classmethod
+    def normalize_generation_choices(cls, value):
+        return normalize_optional_choice(value)
 
-    creative_mode: Optional[str] = Field(
-        None,
-        description="创作模式：balanced/hook/emotion/suspense/relationship/payoff，可选",
+    @field_validator(
+        "story_creation_brief",
+        "quality_notes",
+        "story_repair_summary",
+        mode="before",
     )
-    story_focus: Optional[str] = Field(
-        None,
-        description="结构侧重点：advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff，可选",
-    )
-    plot_stage: Optional[str] = Field(
-        None,
-        description="情节阶段：development/climax/ending，可选",
-    )
-    story_creation_brief: Optional[str] = Field(None, description="创作总控摘要，可选")
-    story_repair_summary: Optional[str] = Field(None, description="后验评分提炼出的修复摘要，可选")
-    story_repair_targets: Optional[list[str]] = Field(None, description="后验评分提炼出的修复动作列表，可选")
-    story_preserve_strengths: Optional[list[str]] = Field(None, description="生成时需保留的已有优势列表，可选")
+    @classmethod
+    def normalize_generation_texts(cls, value):
+        return normalize_optional_text(value)
 
 
 class BatchGenerateResponse(BaseModel):

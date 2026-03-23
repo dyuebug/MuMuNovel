@@ -1323,7 +1323,7 @@ async def _save_outlines(
 
 
 async def new_outline_generator(
-    data: Dict[str, Any],
+    data: OutlineGenerateRequest,
     db: AsyncSession,
     user_ai_service: AIService
 ) -> AsyncGenerator[str, None]:
@@ -2076,73 +2076,75 @@ async def continue_outline_generator(
         yield await tracker.error(f"续写失败: {str(e)}")
 
 
-@router.post("/generate-stream", summary="AI生成/续写大纲(SSE流式)")
+@router.post("/generate-stream", summary="AI??/????(SSE??)")
 async def generate_outline_stream(
-    data: Dict[str, Any],
+    data: OutlineGenerateRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
     user_ai_service: AIService = Depends(get_user_ai_service)
 ):
     """
-    使用SSE流式生成或续写小说大纲，实时推送批次进度
+    ??SSE????????????????????
     
-    支持模式：
-    - auto: 自动判断（无大纲→新建，有大纲→续写）
-    - new: 全新生成
-    - continue: 续写模式
+    ?????
+    - auto: ???????????????????
+    - new: ????
+    - continue: ????
     
-    请求体示例：
+    ??????
     {
-        "project_id": "项目ID",
-        "chapter_count": 5,  // 章节数
+        "project_id": "??ID",
+        "chapter_count": 5,  // ???
         "mode": "auto",  // auto/new/continue
-        "theme": "故事主题",  // new模式必需
-        "story_direction": "故事发展方向",  // continue模式可选
-        "plot_stage": "development",  // continue模式：development/climax/ending
-        "narrative_perspective": "第三人称",
-        "requirements": "其他要求",
-        "provider": "openai",  // 可选
-        "model": "gpt-4"  // 可选
+        "theme": "????",  // new????
+        "story_direction": "??????",  // continue????
+        "plot_stage": "development",  // continue???development/climax/ending
+        "narrative_perspective": "????",
+        "requirements": "????",
+        "provider": "openai",  // ??
+        "model": "gpt-4"  // ??
     }
     """
-    # 验证用户权限
+    payload = data.model_dump(exclude_none=False)
+
+    # ??????
     user_id = getattr(request.state, 'user_id', None)
-    project = await verify_project_access(data.get("project_id"), user_id, db)
-    
-    # 判断模式
-    mode = data.get("mode", "auto")
-    
-    # 获取现有大纲
+    await verify_project_access(payload.get("project_id"), user_id, db)
+
+    # ????
+    mode = payload.get("mode", "auto")
+
+    # ??????
     existing_result = await db.execute(
         select(Outline)
-        .where(Outline.project_id == data.get("project_id"))
+        .where(Outline.project_id == payload.get("project_id"))
         .order_by(Outline.order_index)
     )
     existing_outlines = existing_result.scalars().all()
-    
-    # 自动判断模式
+
+    # ??????
     if mode == "auto":
         mode = "continue" if existing_outlines else "new"
-        logger.info(f"自动判断模式：{'续写' if existing_outlines else '新建'}")
-    
-    # 获取用户ID
+        logger.info(f"???????{'??' if existing_outlines else '??'}")
+
+    # ????ID
     user_id = getattr(request.state, "user_id", "system")
-    
-    # 根据模式选择生成器
+
+    # ?????????
     if mode == "new":
-        return create_sse_response(new_outline_generator(data, db, user_ai_service))
-    elif mode == "continue":
+        return create_sse_response(new_outline_generator(payload, db, user_ai_service))
+    if mode == "continue":
         if not existing_outlines:
             raise HTTPException(
                 status_code=400,
-                detail="续写模式需要已有大纲，当前项目没有大纲"
+                detail="???????????????????"
             )
-        return create_sse_response(continue_outline_generator(data, db, user_ai_service, user_id))
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"不支持的模式: {mode}"
-        )
+        return create_sse_response(continue_outline_generator(payload, db, user_ai_service, user_id))
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"??????: {mode}"
+    )
 
 
 async def expand_outline_generator(
