@@ -1243,9 +1243,96 @@ const buildBatchStoryCreationDraftStorageKey = (projectId: string): string => (
   `${projectId}::batch`
 );
 
+const renderCompactPromptPreviewPanel = (
+  prompt: string | undefined,
+  promptLayerLabels: string[],
+  promptCharCount: number,
+  isVerbose: boolean,
+  onCopy: () => void,
+  options: {
+    placeholder: string;
+    style?: CSSProperties;
+  },
+) => (
+  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8, ...options.style }}>
+    {renderCompactStoryControlHeader(
+      '提示词',
+      isVerbose ? '当前属于详细提示词，信息更全，文本也会更长。' : '按当前选择自动拼装，可直接复制给生成链路使用。',
+      {
+        tagText: isVerbose ? '详细提示' : '标准提示',
+        tagColor: isVerbose ? 'gold' : 'blue',
+        action: (
+          <Button size="small" onClick={onCopy} disabled={!prompt}>
+            复制提示词
+          </Button>
+        ),
+        style: { marginBottom: 8 },
+      },
+    )}
+    {renderCompactSelectionSummary(
+      [
+        { label: '字符', value: `${promptCharCount}`, color: isVerbose ? 'gold' : 'blue' },
+        { label: '层级', value: `${promptLayerLabels.length} 项`, color: 'processing' },
+      ],
+      { style: { marginBottom: promptLayerLabels.length > 0 ? 8 : 10 } },
+    )}
+    {promptLayerLabels.length > 0 && (
+      <Space wrap size={[8, 8]} style={{ marginBottom: 8 }}>
+        {promptLayerLabels.map((item) => (
+          <Tag key={item} color="processing">{item}</Tag>
+        ))}
+      </Space>
+    )}
+    <TextArea
+      value={prompt ?? ''}
+      autoSize={{ minRows: 6, maxRows: 12 }}
+      readOnly
+      placeholder={options.placeholder}
+    />
+  </div>
+);
+
+type CompactInsightGridCard = {
+  key: string;
+  title: string;
+  summary: string;
+  items: Array<[string, string]>;
+};
+
+const renderCompactInsightCardGrid = (
+  cards: CompactInsightGridCard[],
+  isMobile: boolean,
+  options: {
+    style?: CSSProperties;
+  } = {},
+) => {
+  if (cards.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+        gap: 12,
+        ...options.style,
+      }}
+    >
+      {cards.map((card) => (
+        <div key={card.key} style={{ minWidth: 0 }}>
+          <Card size="small" title={card.title} style={{ height: '100%' }}>
+            <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>
+              {card.summary}
+            </div>
+            {renderCompactFactGrid(card.items, { minColumnWidth: isMobile ? 140 : 170 })}
+          </Card>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 type StoryCreationSnapshotPanelProps = {
   scopeLabel: 'single' | 'batch';
-  description: string;
   emptyText: string;
   snapshots: StoryCreationSnapshot[];
   currentDraft: PersistedStoryCreationDraft;
@@ -1259,7 +1346,6 @@ type StoryCreationSnapshotPanelProps = {
 
 const StoryCreationSnapshotPanel = ({
   scopeLabel,
-  description,
   emptyText,
   snapshots,
   currentDraft,
@@ -1274,18 +1360,22 @@ const StoryCreationSnapshotPanel = ({
 
   return (
     <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
-        <div>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>{'快照'}</div>
-          <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>{description}</div>
-        </div>
-        <Space size={[8, 8]} wrap>
-          {snapshots.length > 0 && <Tag color="purple">{`总数：${snapshots.length}`}</Tag>}
-          <Button size="small" onClick={onSave} disabled={!canSave}>
-            保存快照
-          </Button>
-        </Space>
-      </div>
+      {renderCompactStoryControlHeader(
+        '快照',
+        recentSnapshots.length > 0
+          ? `${scopeLabel === 'single' ? '单章' : '批量'}配置已保留最近版本，需要时可快速回退或复制当时提示词。`
+          : '当前还没有可回退的配置版本。',
+        {
+          tagText: snapshots.length > 0 ? `共 ${snapshots.length} 条` : '尚无记录',
+          tagColor: snapshots.length > 0 ? 'purple' : 'default',
+          action: (
+            <Button size="small" onClick={onSave} disabled={!canSave}>
+              保存快照
+            </Button>
+          ),
+          style: { marginBottom: 10 },
+        },
+      )}
       {recentSnapshots.length > 0 ? (
         <Space direction="vertical" size={8} style={{ display: 'flex' }}>
           {recentSnapshots.map((snapshot) => {
@@ -1301,25 +1391,36 @@ const StoryCreationSnapshotPanel = ({
                   background: '#fafafa',
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
-                  <div>
-                    <div style={{ fontWeight: 600 }}>{snapshot.label}</div>
-                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 12 }}>
-                      {new Date(snapshot.createdAt).toLocaleString()}
-                    </div>
-                  </div>
-                  <Space wrap size={[6, 6]}>
-                    <Tag color={snapshot.reason === 'manual' ? 'green' : 'purple'}>
-                      {snapshot.reason === 'manual' ? '手动' : '自动'}
-                    </Tag>
-                    <Tag color={(snapshot.promptCharCount ?? 0) >= STORY_CREATION_PROMPT_WARN_THRESHOLD ? 'gold' : 'blue'}>
-                      {`字符：${snapshot.promptCharCount ?? 0}`}
-                    </Tag>
-                    <Tag color={snapshot.prompt ? 'cyan' : 'default'}>
-                      {snapshot.prompt ? '含提示词' : '仅参数'}
-                    </Tag>
-                  </Space>
-                </div>
+                {renderCompactStoryControlHeader(
+                  snapshot.label,
+                  new Date(snapshot.createdAt).toLocaleString(),
+                  {
+                    tagText: snapshot.reason === 'manual' ? '手动' : '自动',
+                    tagColor: snapshot.reason === 'manual' ? 'green' : 'purple',
+                    style: { marginBottom: 8 },
+                  },
+                )}
+                {renderCompactSelectionSummary(
+                  [
+                    {
+                      label: '字符',
+                      value: `${snapshot.promptCharCount ?? 0}`,
+                      color: (snapshot.promptCharCount ?? 0) >= STORY_CREATION_PROMPT_WARN_THRESHOLD ? 'gold' : 'blue',
+                    },
+                    {
+                      label: '提示词',
+                      value: snapshot.prompt ? '已保存' : '仅参数',
+                      color: snapshot.prompt ? 'cyan' : 'default',
+                    },
+                    ...(snapshot.promptLayerLabels?.length
+                      ? [{ label: '层级', value: `${snapshot.promptLayerLabels.length} 项`, color: 'processing' }]
+                      : []),
+                    ...(diffLabels.length > 0
+                      ? [{ label: '差异', value: `${diffLabels.length} 项`, color: 'orange' }]
+                      : []),
+                  ],
+                  { style: { marginBottom: 8 } },
+                )}
                 {snapshot.promptLayerLabels?.length ? (
                   <Space wrap size={[6, 6]} style={{ marginBottom: 8 }}>
                     {snapshot.promptLayerLabels.map((item) => (
@@ -1334,13 +1435,12 @@ const StoryCreationSnapshotPanel = ({
                     ))}
                   </Space>
                 )}
-                <Space wrap size={[8, 8]}>
+                <Space.Compact>
                   <Button size="small" onClick={() => onApply(snapshot)}>
                     应用
                   </Button>
                   <Button
                     size="small"
-                    type="link"
                     disabled={!snapshot.prompt}
                     onClick={() => void onCopy(snapshot.prompt, scopeLabel)}
                   >
@@ -1352,11 +1452,11 @@ const StoryCreationSnapshotPanel = ({
                     cancelText="取消"
                     onConfirm={() => onDelete(snapshot.id)}
                   >
-                    <Button size="small" type="link" danger>
+                    <Button size="small" danger>
                       删除
                     </Button>
                   </Popconfirm>
-                </Space>
+                </Space.Compact>
               </div>
             );
           })}
@@ -2142,6 +2242,182 @@ export default function Chapters() {
       knownStructureChapterCount,
     ],
   );
+  const singleStoryInsightCards = useMemo<CompactInsightGridCard[]>(() => ([
+    singleStoryObjectiveCard
+      ? {
+          key: 'single-objective',
+          title: '故事目标',
+          summary: singleStoryObjectiveCard.summary,
+          items: [
+            ['目标', singleStoryObjectiveCard.objective],
+            ['阻碍', singleStoryObjectiveCard.obstacle],
+            ['转折', singleStoryObjectiveCard.turn],
+            ['钩子', singleStoryObjectiveCard.hook],
+          ],
+        }
+      : null,
+    singleStoryResultCard
+      ? {
+          key: 'single-result',
+          title: '故事结果',
+          summary: singleStoryResultCard.summary,
+          items: [
+            ['推进结果', singleStoryResultCard.progress],
+            ['揭示信息', singleStoryResultCard.reveal],
+            ['关系变化', singleStoryResultCard.relationship],
+            ['后续影响', singleStoryResultCard.fallout],
+          ],
+        }
+      : null,
+    singleStoryExecutionChecklist
+      ? {
+          key: 'single-execution',
+          title: '执行清单',
+          summary: singleStoryExecutionChecklist.summary,
+          items: [
+            ['开篇', singleStoryExecutionChecklist.opening],
+            ['压力', singleStoryExecutionChecklist.pressure],
+            ['转折', singleStoryExecutionChecklist.pivot],
+            ['收束', singleStoryExecutionChecklist.closing],
+          ],
+        }
+      : null,
+    singleStoryRepetitionRiskCard
+      ? {
+          key: 'single-repetition',
+          title: '重复风险',
+          summary: singleStoryRepetitionRiskCard.summary,
+          items: [
+            ['开篇风险', singleStoryRepetitionRiskCard.openingRisk],
+            ['压力风险', singleStoryRepetitionRiskCard.pressureRisk],
+            ['转折风险', singleStoryRepetitionRiskCard.pivotRisk],
+            ['收束风险', singleStoryRepetitionRiskCard.closingRisk],
+          ],
+        }
+      : null,
+    singleStoryAcceptanceCard
+      ? {
+          key: 'single-acceptance',
+          title: '验收检查',
+          summary: singleStoryAcceptanceCard.summary,
+          items: [
+            ['目标达成检查', singleStoryAcceptanceCard.missionCheck],
+            ['变化检查', singleStoryAcceptanceCard.changeCheck],
+            ['新鲜度检查', singleStoryAcceptanceCard.freshnessCheck],
+            ['收束检查', singleStoryAcceptanceCard.closingCheck],
+          ],
+        }
+      : null,
+    singleStoryCharacterArcCard
+      ? {
+          key: 'single-character-arc',
+          title: '人物弧光',
+          summary: singleStoryCharacterArcCard.summary,
+          items: [
+            ['外在线', singleStoryCharacterArcCard.externalLine],
+            ['内在线', singleStoryCharacterArcCard.internalLine],
+            ['关系线', singleStoryCharacterArcCard.relationshipLine],
+            ['弧光落点', singleStoryCharacterArcCard.arcLanding],
+          ],
+        }
+      : null,
+  ].filter((item): item is CompactInsightGridCard => Boolean(item))), [
+    singleStoryAcceptanceCard,
+    singleStoryCharacterArcCard,
+    singleStoryExecutionChecklist,
+    singleStoryObjectiveCard,
+    singleStoryRepetitionRiskCard,
+    singleStoryResultCard,
+  ]);
+
+  const batchStoryInsightCards = useMemo<CompactInsightGridCard[]>(() => ([
+    batchStoryObjectiveCard
+      ? {
+          key: 'batch-objective',
+          title: '故事目标',
+          summary: batchStoryObjectiveCard.summary,
+          items: [
+            ['目标', batchStoryObjectiveCard.objective],
+            ['阻碍', batchStoryObjectiveCard.obstacle],
+            ['转折', batchStoryObjectiveCard.turn],
+            ['钩子', batchStoryObjectiveCard.hook],
+          ],
+        }
+      : null,
+    batchStoryResultCard
+      ? {
+          key: 'batch-result',
+          title: '故事结果',
+          summary: batchStoryResultCard.summary,
+          items: [
+            ['推进结果', batchStoryResultCard.progress],
+            ['揭示信息', batchStoryResultCard.reveal],
+            ['关系变化', batchStoryResultCard.relationship],
+            ['后续影响', batchStoryResultCard.fallout],
+          ],
+        }
+      : null,
+    batchStoryExecutionChecklist
+      ? {
+          key: 'batch-execution',
+          title: '执行清单',
+          summary: batchStoryExecutionChecklist.summary,
+          items: [
+            ['开篇', batchStoryExecutionChecklist.opening],
+            ['压力', batchStoryExecutionChecklist.pressure],
+            ['转折', batchStoryExecutionChecklist.pivot],
+            ['收束', batchStoryExecutionChecklist.closing],
+          ],
+        }
+      : null,
+    batchStoryRepetitionRiskCard
+      ? {
+          key: 'batch-repetition',
+          title: '重复风险',
+          summary: batchStoryRepetitionRiskCard.summary,
+          items: [
+            ['开篇风险', batchStoryRepetitionRiskCard.openingRisk],
+            ['压力风险', batchStoryRepetitionRiskCard.pressureRisk],
+            ['转折风险', batchStoryRepetitionRiskCard.pivotRisk],
+            ['收束风险', batchStoryRepetitionRiskCard.closingRisk],
+          ],
+        }
+      : null,
+    batchStoryAcceptanceCard
+      ? {
+          key: 'batch-acceptance',
+          title: '验收清单',
+          summary: batchStoryAcceptanceCard.summary,
+          items: [
+            ['目标达成检查', batchStoryAcceptanceCard.missionCheck],
+            ['变化检查', batchStoryAcceptanceCard.changeCheck],
+            ['新鲜度检查', batchStoryAcceptanceCard.freshnessCheck],
+            ['收束检查', batchStoryAcceptanceCard.closingCheck],
+          ],
+        }
+      : null,
+    batchStoryCharacterArcCard
+      ? {
+          key: 'batch-character-arc',
+          title: '人物弧光',
+          summary: batchStoryCharacterArcCard.summary,
+          items: [
+            ['外在线', batchStoryCharacterArcCard.externalLine],
+            ['内在线', batchStoryCharacterArcCard.internalLine],
+            ['关系线', batchStoryCharacterArcCard.relationshipLine],
+            ['弧光落点', batchStoryCharacterArcCard.arcLanding],
+          ],
+        }
+      : null,
+  ].filter((item): item is CompactInsightGridCard => Boolean(item))), [
+    batchStoryAcceptanceCard,
+    batchStoryCharacterArcCard,
+    batchStoryExecutionChecklist,
+    batchStoryObjectiveCard,
+    batchStoryRepetitionRiskCard,
+    batchStoryResultCard,
+  ]);
+
 
   const singleSystemStoryBeatPlanner = useMemo<StoryBeatPlannerDraft>(() => ({
     openingHook: singleStoryObjectiveCard?.hook || singleStoryExecutionChecklist?.opening || '',
@@ -7707,6 +7983,7 @@ export default function Chapters() {
                 </Space>
               </Card>
             )}
+          </Card>
 
             {singleStoryCreationControlCard && (
               <Card
@@ -7833,46 +8110,16 @@ export default function Chapters() {
                       ))}
                     </Space>
                   </div>
-                  <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                    {renderCompactStoryControlHeader(
-                      '提示词',
-                      '按当前选择自动拼装。',
-                      {
-                        action: (
-                          <Button
-                            size="small"
-                            type="link"
-                            disabled={!resolvedSingleStoryCreationBrief}
-                            onClick={() => void copyStoryCreationPrompt(resolvedSingleStoryCreationBrief, 'single')}
-                          >
-                            复制提示词
-                          </Button>
-                        ),
-                      },
-                    )}
-                    <Space wrap size={[8, 8]} style={{ marginBottom: 8 }}>
-                      {singleStoryCreationPromptLayerLabels.map((item) => (
-                        <Tag key={item} color="processing">{item}</Tag>
-                      ))}
-                      <Tag color={isSingleStoryCreationPromptVerbose ? 'gold' : 'blue'}>
-                        {`${singleStoryCreationPromptCharCount} 字符`}
-                      </Tag>
-                    </Space>
-                    {isSingleStoryCreationPromptVerbose && renderCompactSettingHint(
-                      '已启用详细提示词',
-                      '信息更全，但文本会更长。',
-                      { tone: 'warning', style: { marginBottom: 8 } },
-                    )}
-                    <TextArea
-                      value={resolvedSingleStoryCreationBrief ?? ''}
-                      autoSize={{ minRows: 6, maxRows: 12 }}
-                      readOnly
-                      placeholder="提示词将显示在此"
-                    />
-                  </div>
+                  {renderCompactPromptPreviewPanel(
+                    resolvedSingleStoryCreationBrief,
+                    singleStoryCreationPromptLayerLabels,
+                    singleStoryCreationPromptCharCount,
+                    isSingleStoryCreationPromptVerbose,
+                    () => void copyStoryCreationPrompt(resolvedSingleStoryCreationBrief, 'single'),
+                    { placeholder: '提示词将显示在此' },
+                  )}
                   <StoryCreationSnapshotPanel
                     scopeLabel="single"
-                    description="保存当前配置，便于回退。"
                     emptyText="还没有快照。"
                     snapshots={singleStoryCreationSnapshots}
                     currentDraft={singleStoryCreationCurrentDraft}
@@ -7898,149 +8145,66 @@ export default function Chapters() {
               </Card>
             )}
 
-            {singleStoryRepairTargetCard && (
-              <Card
-                size="small"
-                title={singleStoryRepairTargetCard.title}
-                extra={<Tag color="gold">修复重点</Tag>}
-                style={{ marginTop: 12 }}
-              >
-                {renderCompactSettingHint(
-                  singleStoryRepairTargetCard.repairSummary,
-                  singleStoryRepairTargetCard.applyHint,
-                  { tone: 'warning' },
-                )}
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
-                    gap: 8,
-                  }}
+            {(singleStoryRepairTargetCard || singleCreationBlueprint) && (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+                gap: 12,
+                marginBottom: 12,
+              }}
+            >
+              {singleStoryRepairTargetCard && (
+                <Card
+                  size="small"
+                  title={singleStoryRepairTargetCard.title}
+                  extra={<Tag color="gold">修复重点</Tag>}
+                  style={{ height: '100%' }}
                 >
-                  {renderCompactFactCard('优先修复项', singleStoryRepairTargetCard.priorityTarget)}
-                  {renderCompactFactCard('反模式', singleStoryRepairTargetCard.antiPattern)}
-                  {renderCompactListCard('修复目标', singleStoryRepairTargetCard.repairTargets, { tagColor: 'gold' })}
-                  {renderCompactListCard('保留优势', singleStoryRepairTargetCard.preserveStrengths, { tagColor: 'green' })}
-                </div>
-              </Card>
-            )}
-          </Card>
+                  {renderCompactSettingHint(
+                    singleStoryRepairTargetCard.repairSummary,
+                    singleStoryRepairTargetCard.applyHint,
+                    { tone: 'warning' },
+                  )}
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+                      gap: 8,
+                    }}
+                  >
+                    {renderCompactFactCard('优先修复项', singleStoryRepairTargetCard.priorityTarget)}
+                    {renderCompactFactCard('反模式', singleStoryRepairTargetCard.antiPattern)}
+                    {renderCompactListCard('修复目标', singleStoryRepairTargetCard.repairTargets, { tagColor: 'gold' })}
+                    {renderCompactListCard('保留优势', singleStoryRepairTargetCard.preserveStrengths, { tagColor: 'green' })}
+                  </div>
+                </Card>
+              )}
 
-          {singleCreationBlueprint && (
-            <Card size="small" title="创作蓝图" style={{ marginBottom: 12 }}>
-              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                {singleCreationBlueprint.summary}
-              </div>
-              {renderCompactListCard(
-                '推荐节拍',
-                singleCreationBlueprint.beats,
-                { numbered: true, tagText: `${singleCreationBlueprint.beats.length}拍` },
+              {singleCreationBlueprint && (
+                <Card size="small" title="创作蓝图" style={{ height: '100%' }}>
+                  <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                    {singleCreationBlueprint.summary}
+                  </div>
+                  {renderCompactListCard(
+                    '推荐节拍',
+                    singleCreationBlueprint.beats,
+                    { numbered: true, tagText: `${singleCreationBlueprint.beats.length}拍` },
+                  )}
+                  {singleCreationBlueprint.risks.length > 0 && (
+                    renderCompactSettingHint(
+                      '风险提示',
+                      singleCreationBlueprint.risks.join(', '),
+                      { tone: 'warning', style: { marginTop: 12, marginBottom: 0 } },
+                    )
+                  )}
+                </Card>
               )}
-              {singleCreationBlueprint.risks.length > 0 && (
-                renderCompactSettingHint(
-                  '风险提示',
-                  singleCreationBlueprint.risks.join(', '),
-                  { tone: 'warning', style: { marginTop: 12, marginBottom: 0 } },
-                )
-              )}
-            </Card>
+            </div>
           )}
 
-          {singleStoryObjectiveCard && (
-            <Card size="small" title="故事目标" style={{ marginBottom: 12 }}>
-              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                {singleStoryObjectiveCard.summary}
-              </div>
-              {renderCompactFactGrid(
-                [
-                  ['目标', singleStoryObjectiveCard.objective],
-                  ['阻碍', singleStoryObjectiveCard.obstacle],
-                  ['转折', singleStoryObjectiveCard.turn],
-                  ['钩子', singleStoryObjectiveCard.hook],
-                ] as Array<[string, string]>,
-              )}
-            </Card>
-          )}
+          {renderCompactInsightCardGrid(singleStoryInsightCards, isMobile, { style: { marginBottom: 12 } })}
 
-          {singleStoryResultCard && (
-            <Card size="small" title="故事结果" style={{ marginBottom: 12 }}>
-              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                {singleStoryResultCard.summary}
-              </div>
-              {renderCompactFactGrid(
-                [
-                  ['推进结果', singleStoryResultCard.progress],
-                  ['揭示信息', singleStoryResultCard.reveal],
-                  ['关系变化', singleStoryResultCard.relationship],
-                  ['后续影响', singleStoryResultCard.fallout],
-                ] as Array<[string, string]>,
-              )}
-            </Card>
-          )}
-
-          {singleStoryExecutionChecklist && (
-            <Card size="small" title="执行清单" style={{ marginBottom: 12 }}>
-              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                {singleStoryExecutionChecklist.summary}
-              </div>
-              {renderCompactFactGrid(
-                [
-                  ['开篇', singleStoryExecutionChecklist.opening],
-                  ['压力', singleStoryExecutionChecklist.pressure],
-                  ['转折', singleStoryExecutionChecklist.pivot],
-                  ['收束', singleStoryExecutionChecklist.closing],
-                ] as Array<[string, string]>,
-              )}
-            </Card>
-          )}
-
-          {singleStoryRepetitionRiskCard && (
-            <Card size="small" title="重复风险" style={{ marginBottom: 12 }}>
-              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                {singleStoryRepetitionRiskCard.summary}
-              </div>
-              {renderCompactFactGrid(
-                [
-                  ['开篇风险', singleStoryRepetitionRiskCard.openingRisk],
-                  ['压力风险', singleStoryRepetitionRiskCard.pressureRisk],
-                  ['转折风险', singleStoryRepetitionRiskCard.pivotRisk],
-                  ['收束风险', singleStoryRepetitionRiskCard.closingRisk],
-                ] as Array<[string, string]>,
-              )}
-            </Card>
-          )}
-
-          {singleStoryAcceptanceCard && (
-            <Card size="small" title="验收检查" style={{ marginBottom: 12 }}>
-              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                {singleStoryAcceptanceCard.summary}
-              </div>
-              {renderCompactFactGrid(
-                [
-                  ['目标达成检查', singleStoryAcceptanceCard.missionCheck],
-                  ['变化检查', singleStoryAcceptanceCard.changeCheck],
-                  ['新鲜度检查', singleStoryAcceptanceCard.freshnessCheck],
-                  ['收束检查', singleStoryAcceptanceCard.closingCheck],
-                ] as Array<[string, string]>,
-              )}
-            </Card>
-          )}
-
-          {singleStoryCharacterArcCard && (
-            <Card size="small" title="人物弧光" style={{ marginBottom: 12 }}>
-              <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                {singleStoryCharacterArcCard.summary}
-              </div>
-              {renderCompactFactGrid(
-                [
-                  ['外在线', singleStoryCharacterArcCard.externalLine],
-                  ['内在线', singleStoryCharacterArcCard.internalLine],
-                  ['关系线', singleStoryCharacterArcCard.relationshipLine],
-                  ['弧光落点', singleStoryCharacterArcCard.arcLanding],
-                ] as Array<[string, string]>,
-              )}
-            </Card>
-          )}
 
           {singleVolumePacingPlan && (
             <Card size="small" title="篇幅节奏规划" style={{ marginBottom: 12 }}>
@@ -9026,46 +9190,16 @@ export default function Chapters() {
                         ))}
                       </Space>
                     </div>
-                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      {renderCompactStoryControlHeader(
-                        '提示词',
-                        '按当前选择自动拼装。',
-                        {
-                          action: (
-                            <Button
-                              size="small"
-                              type="link"
-                              disabled={!resolvedBatchStoryCreationBrief}
-                              onClick={() => void copyStoryCreationPrompt(resolvedBatchStoryCreationBrief, 'batch')}
-                            >
-                              复制提示词
-                            </Button>
-                          ),
-                        },
-                      )}
-                      <Space wrap size={[8, 8]} style={{ marginBottom: 8 }}>
-                        {batchStoryCreationPromptLayerLabels.map((item) => (
-                          <Tag key={item} color="processing">{item}</Tag>
-                        ))}
-                        <Tag color={isBatchStoryCreationPromptVerbose ? 'gold' : 'blue'}>
-                          {batchStoryCreationPromptCharCount + ' 字符'}
-                        </Tag>
-                      </Space>
-                      {isBatchStoryCreationPromptVerbose && renderCompactSettingHint(
-                        '已启用详细提示词',
-                        '信息更全，但文本会更长。',
-                        { tone: 'warning', style: { marginBottom: 8 } },
-                      )}
-                      <TextArea
-                        value={resolvedBatchStoryCreationBrief ?? ''}
-                        autoSize={{ minRows: 6, maxRows: 12 }}
-                        readOnly
-                        placeholder="提示词预览将显示在此。"
-                      />
-                    </div>
+                    {renderCompactPromptPreviewPanel(
+                      resolvedBatchStoryCreationBrief,
+                      batchStoryCreationPromptLayerLabels,
+                      batchStoryCreationPromptCharCount,
+                      isBatchStoryCreationPromptVerbose,
+                      () => void copyStoryCreationPrompt(resolvedBatchStoryCreationBrief, 'batch'),
+                      { placeholder: '提示词预览将显示在此。' },
+                    )}
                     <StoryCreationSnapshotPanel
                       scopeLabel="batch"
-                      description="保存当前配置，便于回退。"
                       emptyText="还没有快照。"
                       snapshots={batchStoryCreationSnapshots}
                       currentDraft={batchStoryCreationCurrentDraft}
@@ -9090,148 +9224,66 @@ export default function Chapters() {
                 </Card>
               )}
 
-            {batchStoryRepairTargetCard && (
-              <Card
-                size="small"
-                title={batchStoryRepairTargetCard.title}
-                extra={<Tag color="gold">修复重点</Tag>}
-                style={{ marginTop: 12 }}
+            {(batchStoryRepairTargetCard || batchCreationBlueprint) && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+                  gap: 12,
+                  marginBottom: 12,
+                }}
               >
-                {renderCompactSettingHint(
-                  batchStoryRepairTargetCard.repairSummary,
-                  batchStoryRepairTargetCard.applyHint,
-                  { tone: 'warning' },
+                {batchStoryRepairTargetCard && (
+                  <Card
+                    size="small"
+                    title={batchStoryRepairTargetCard.title}
+                    extra={<Tag color="gold">修复重点</Tag>}
+                    style={{ height: '100%' }}
+                  >
+                    {renderCompactSettingHint(
+                      batchStoryRepairTargetCard.repairSummary,
+                      batchStoryRepairTargetCard.applyHint,
+                      { tone: 'warning' },
+                    )}
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+                        gap: 8,
+                      }}
+                    >
+                      {renderCompactFactCard('优先修复项', batchStoryRepairTargetCard.priorityTarget)}
+                      {renderCompactFactCard('反模式', batchStoryRepairTargetCard.antiPattern)}
+                      {renderCompactListCard('修复目标', batchStoryRepairTargetCard.repairTargets, { tagColor: 'gold' })}
+                      {renderCompactListCard('保留优势', batchStoryRepairTargetCard.preserveStrengths, { tagColor: 'green' })}
+                    </div>
+                  </Card>
                 )}
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
-                    gap: 8,
-                  }}
-                >
-                  {renderCompactFactCard('优先修复项', batchStoryRepairTargetCard.priorityTarget)}
-                  {renderCompactFactCard('反模式', batchStoryRepairTargetCard.antiPattern)}
-                  {renderCompactListCard('修复目标', batchStoryRepairTargetCard.repairTargets, { tagColor: 'gold' })}
-                  {renderCompactListCard('保留优势', batchStoryRepairTargetCard.preserveStrengths, { tagColor: 'green' })}
-                </div>
-              </Card>
+
+                {batchCreationBlueprint && (
+                  <Card size="small" title="批量创作蓝图" style={{ height: '100%' }}>
+                    <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+                      {batchCreationBlueprint.summary}
+                    </div>
+                    {renderCompactListCard(
+                      '关键节拍',
+                      batchCreationBlueprint.beats,
+                      { numbered: true, tagText: `${batchCreationBlueprint.beats.length}拍` },
+                    )}
+                    {batchCreationBlueprint.risks.length > 0 && (
+                      renderCompactSettingHint(
+                        '风险提示',
+                        batchCreationBlueprint.risks.join(', '),
+                        { tone: 'warning', style: { marginTop: 12, marginBottom: 0 } },
+                      )
+                    )}
+                  </Card>
+                )}
+              </div>
             )}
 
-            {batchCreationBlueprint && (
-              <Card size="small" title="批量创作蓝图" style={{ marginBottom: 12 }}>
-                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                  {batchCreationBlueprint.summary}
-                </div>
-                {renderCompactListCard(
-                  '关键节拍',
-                  batchCreationBlueprint.beats,
-                  { numbered: true, tagText: `${batchCreationBlueprint.beats.length}拍` },
-                )}
-                {batchCreationBlueprint.risks.length > 0 && (
-                  renderCompactSettingHint(
-                    '风险提示',
-                    batchCreationBlueprint.risks.join(', '),
-                    { tone: 'warning', style: { marginTop: 12, marginBottom: 0 } },
-                  )
-                )}
-              </Card>
-            )}
+            {renderCompactInsightCardGrid(batchStoryInsightCards, isMobile, { style: { marginBottom: 12 } })}
 
-            {batchStoryObjectiveCard && (
-              <Card size="small" title="故事目标" style={{ marginBottom: 12 }}>
-                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                  {batchStoryObjectiveCard.summary}
-                </div>
-                {renderCompactFactGrid(
-                  [
-                    ['目标', batchStoryObjectiveCard.objective],
-                    ['阻碍', batchStoryObjectiveCard.obstacle],
-                    ['转折', batchStoryObjectiveCard.turn],
-                    ['钩子', batchStoryObjectiveCard.hook],
-                  ] as Array<[string, string]>,
-                )}
-              </Card>
-            )}
-
-            {batchStoryResultCard && (
-              <Card size="small" title="故事结果" style={{ marginBottom: 12 }}>
-                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                  {batchStoryResultCard.summary}
-                </div>
-                {renderCompactFactGrid(
-                  [
-                    ['推进结果', batchStoryResultCard.progress],
-                    ['揭示信息', batchStoryResultCard.reveal],
-                    ['关系变化', batchStoryResultCard.relationship],
-                    ['后续影响', batchStoryResultCard.fallout],
-                  ] as Array<[string, string]>,
-                )}
-              </Card>
-            )}
-
-            {batchStoryExecutionChecklist && (
-              <Card size="small" title="执行清单" style={{ marginBottom: 12 }}>
-                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                  {batchStoryExecutionChecklist.summary}
-                </div>
-                {renderCompactFactGrid(
-                  [
-                    ['开篇', batchStoryExecutionChecklist.opening],
-                    ['压力', batchStoryExecutionChecklist.pressure],
-                    ['转折', batchStoryExecutionChecklist.pivot],
-                    ['收束', batchStoryExecutionChecklist.closing],
-                  ] as Array<[string, string]>,
-                )}
-              </Card>
-            )}
-
-            {batchStoryRepetitionRiskCard && (
-              <Card size="small" title="重复风险" style={{ marginBottom: 12 }}>
-                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                  {batchStoryRepetitionRiskCard.summary}
-                </div>
-                {renderCompactFactGrid(
-                  [
-                    ['开篇风险', batchStoryRepetitionRiskCard.openingRisk],
-                    ['压力风险', batchStoryRepetitionRiskCard.pressureRisk],
-                    ['转折风险', batchStoryRepetitionRiskCard.pivotRisk],
-                    ['收束风险', batchStoryRepetitionRiskCard.closingRisk],
-                  ] as Array<[string, string]>,
-                )}
-              </Card>
-            )}
-
-            {batchStoryAcceptanceCard && (
-              <Card size="small" title="验收清单" style={{ marginBottom: 12 }}>
-                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                  {batchStoryAcceptanceCard.summary}
-                </div>
-                {renderCompactFactGrid(
-                  [
-                    ['目标达成检查', batchStoryAcceptanceCard.missionCheck],
-                    ['变化检查', batchStoryAcceptanceCard.changeCheck],
-                    ['新鲜度检查', batchStoryAcceptanceCard.freshnessCheck],
-                    ['收束检查', batchStoryAcceptanceCard.closingCheck],
-                  ] as Array<[string, string]>,
-                )}
-              </Card>
-            )}
-
-            {batchStoryCharacterArcCard && (
-              <Card size="small" title="人物弧光" style={{ marginBottom: 12 }}>
-                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                  {batchStoryCharacterArcCard.summary}
-                </div>
-                {renderCompactFactGrid(
-                  [
-                    ['外在线', batchStoryCharacterArcCard.externalLine],
-                    ['内在线', batchStoryCharacterArcCard.internalLine],
-                    ['关系线', batchStoryCharacterArcCard.relationshipLine],
-                    ['弧光落点', batchStoryCharacterArcCard.arcLanding],
-                  ] as Array<[string, string]>,
-                )}
-              </Card>
-            )}
 
             {batchVolumePacingPlan && (
               <Card size="small" title="篇幅节奏规划" style={{ marginBottom: 12 }}>
