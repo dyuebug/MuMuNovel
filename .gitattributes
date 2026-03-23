@@ -1,1 +1,12 @@
 # LFS tracking removed - models downloaded from HuggingFace at runtime
+
+# Normalize text files to LF in the repository to avoid CRLF-only diffs.
+* text=auto eol=lf
+
+# Keep Windows scripts with CRLF in working trees for local execution.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Keep POSIX shell scripts with LF.
+*.sh text eol=lf
