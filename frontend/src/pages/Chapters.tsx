@@ -7307,13 +7307,25 @@ export default function Chapters() {
 
 
 
+          <Card
+            size="small"
+            title="第 1 步：基础约束"
+            style={{ marginBottom: 12 }}
+          >
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="先决定这一章怎么写出来"
+              description="先锁定写作风格、叙事视角和剧情阶段，系统后面的预设与建议才会更贴近你要的章节方向。"
+            />
           <div style={{
 
             display: isMobile ? 'block' : 'flex',
 
             gap: isMobile ? 0 : 16,
 
-            marginBottom: isMobile ? 0 : 12
+            marginBottom: isMobile ? 0 : 0
 
           }}>
 
@@ -7426,12 +7438,21 @@ export default function Chapters() {
               </Space>
             </Form.Item>
           </div>
+          </Card>
+
 
           <Card
             size="small"
-            title="创作预设"
+            title="第 2 步：快速预设"
             style={{ marginBottom: 12 }}
           >
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="先点一个预设，再决定要不要继续细调"
+              description="预设会联动调整创作模式与故事聚焦。拿不准时先选预设，通常比逐项微调更省心。"
+            />
             <Space wrap>
               {CREATION_PRESETS.map((preset) => (
                 <Button
@@ -7570,7 +7591,7 @@ export default function Chapters() {
             {singleStoryCreationControlCard && (
               <Card
                 size="small"
-                title={singleStoryCreationControlCard.title}
+                title={`第 3 步：${singleStoryCreationControlCard.title}`}
                 extra={(
                   <Space size={8}>
                     <Tag color={isSingleStoryCreationControlCustomized ? 'purple' : 'blue'}>
@@ -7588,6 +7609,14 @@ export default function Chapters() {
                 )}
                 style={{ marginTop: 12 }}
               >
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message="第 3 步：只有前面还不够时，再补故事总控"
+                  description="这里适合补节拍、场景提纲、提示词和 guardrails；如果你只是想快速继续生成，保留系统建议即可。"
+                />
+
                 <Alert
                   type="info"
                   showIcon
@@ -7786,7 +7815,7 @@ export default function Chapters() {
             {singleStoryRepairTargetCard && (
               <Card
                 size="small"
-                title={singleStoryRepairTargetCard.title}
+                title={`第 4 步：${singleStoryRepairTargetCard.title}`}
                 extra={<Tag color="gold">修复重点</Tag>}
                 style={{ marginTop: 12 }}
               >
@@ -8044,6 +8073,18 @@ export default function Chapters() {
             </Card>
           )}
 
+          <Card
+            size="small"
+            title="补充微调（可选）"
+            style={{ marginBottom: 12 }}
+          >
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="这里只做最后微调"
+              description="创作模式、故事聚焦、目标字数和模型更适合在预设确定后再微调；如果你不确定，保持默认往往更稳定。"
+            />
           <Form.Item
             label="创作模式"
             tooltip="选择单章创作的模式"
@@ -8176,6 +8217,8 @@ export default function Chapters() {
             </Form.Item>
 
           </div>
+          </Card>
+
 
 
 
@@ -8782,6 +8825,18 @@ export default function Chapters() {
 
 
 
+            <Card
+              size="small"
+              title="第 1 步：基础约束"
+              style={{ marginBottom: 12 }}
+            >
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="先把批量任务的基础方向定下来"
+                description="先锁定写作风格、目标字数和剧情阶段，后面的预设与故事总控才更容易稳定出稿。"
+              />
             <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 0 : 16 }}>
               <Form.Item
                 label="写作风格"
@@ -8906,12 +8961,21 @@ export default function Chapters() {
                 )}
               </Space>
             </Form.Item>
+            </Card>
+
 
             <Card
               size="small"
-              title="创作预设"
+              title="第 2 步：快速预设"
               style={{ marginBottom: 12 }}
             >
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="先点一个预设，再决定要不要继续细调"
+                description="预设会联动调整创作模式与故事聚焦。批量生成时，先用预设锁定方向，比逐项微调更稳。"
+              />
               <Space wrap>
                 {CREATION_PRESETS.map((preset) => (
                   <Button
@@ -9025,7 +9089,7 @@ export default function Chapters() {
               {batchStoryCreationControlCard && (
                 <Card
                   size="small"
-                  title={batchStoryCreationControlCard.title}
+                  title={`第 3 步：${batchStoryCreationControlCard.title}`}
                   extra={(
                     <Space size={8}>
                       <Tag color={isBatchStoryCreationControlCustomized ? 'purple' : 'blue'}>
@@ -9043,6 +9107,14 @@ export default function Chapters() {
                   )}
                   style={{ marginTop: 12 }}
                 >
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message="第 3 步：只有预设不够时，再补故事总控"
+                    description="这里适合补节拍、场景提纲、提示词和执行约束；如果你只是想稳定出稿，保留系统建议通常就够了。"
+                  />
+
                   <Alert
                     type="info"
                     showIcon
@@ -9240,7 +9312,7 @@ export default function Chapters() {
             {batchStoryRepairTargetCard && (
               <Card
                 size="small"
-                title={batchStoryRepairTargetCard.title}
+                title={`第 4 步：${batchStoryRepairTargetCard.title}`}
                 extra={<Tag color="gold">修复重点</Tag>}
                 style={{ marginTop: 12 }}
               >
@@ -9497,6 +9569,18 @@ export default function Chapters() {
               </Card>
             )}
 
+            <Card
+              size="small"
+              title="补充微调（可选）"
+              style={{ marginBottom: 12 }}
+            >
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="这一组只做最后微调"
+                description="先确定预设与剧情阶段，再按需要微调创作模式、故事聚焦、模型和质量分析；不确定时保持默认即可。"
+              />
             <Form.Item
               label="创作模式"
               tooltip="选择用于批量创作的模式"
@@ -9606,6 +9690,8 @@ export default function Chapters() {
               </Form.Item>
 
             </div>
+            </Card>
+
 
           </Form>
 
