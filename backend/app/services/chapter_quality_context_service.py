@@ -109,8 +109,10 @@ def _format_story_repair_metric_value(value: Any) -> Optional[str]:
     return f"{numeric:.1f}"
 
 
-def _build_story_repair_diagnostic_context(
+def build_story_repair_diagnostic_context(
     active_story_repair_payload: Optional[Mapping[str, Any]],
+    *,
+    scene: str = "chapter",
 ) -> Dict[str, Any]:
     empty = {
         "story_repair_source": "",
@@ -136,6 +138,7 @@ def _build_story_repair_diagnostic_context(
     weakest_metric_text = _format_story_repair_metric_value(weakest_metric_value)
     summary = str(active_story_repair_payload.get("summary") or "").strip()
 
+    closing_line = "先把最弱项拆成每章的目标、阻力、回报与章尾牵引，再统一分配节拍。" if scene == "outline" else "先修最弱项对应的事件、动作与后果，再统一润色语言。"
     diagnostic_block = ""
     if weakest_metric_label or focus_areas or source in STORY_REPAIR_QUALITY_SIGNAL_SOURCES:
         lines = ["【诊断优先级卡】"]
@@ -147,10 +150,10 @@ def _build_story_repair_diagnostic_context(
                 metric_line = f"{metric_line}（当前值：{weakest_metric_text}）"
             lines.append(f"- 当前最弱项：{metric_line}")
         if focus_areas:
-            lines.append(f"- 优先修复维度：{' / '.join(focus_areas)}")
+            lines.append("- 优先修复维度：" + " / ".join(focus_areas))
         if summary:
             lines.append(f"- 诊断结论：{summary}")
-        lines.append("- 先修最弱项对应的事件、动作与后果，再统一润色语言。")
+        lines.append(f"- {closing_line}")
         diagnostic_block = "\n".join(lines)
 
     return {
@@ -161,6 +164,14 @@ def _build_story_repair_diagnostic_context(
         "story_repair_weakest_metric_value": weakest_metric_value,
         "story_repair_diagnostic_block": diagnostic_block,
     }
+
+
+def _build_story_repair_diagnostic_context(
+    active_story_repair_payload: Optional[Mapping[str, Any]],
+    *,
+    scene: str = "chapter",
+) -> Dict[str, Any]:
+    return build_story_repair_diagnostic_context(active_story_repair_payload, scene=scene)
 
 
 def resolve_story_generation_guidance(
@@ -209,7 +220,7 @@ def build_prompt_quality_kwargs(
     active_guidance = guidance or StoryGenerationGuidance()
     external_assets = source.get("external_assets") or ()
     reference_assets = source.get("reference_assets") or external_assets or ()
-    repair_diagnostic_context = _build_story_repair_diagnostic_context(active_story_repair_payload)
+    repair_diagnostic_context = build_story_repair_diagnostic_context(active_story_repair_payload, scene=scene)
 
     return {
         "genre": source.get("genre") or "未设定",

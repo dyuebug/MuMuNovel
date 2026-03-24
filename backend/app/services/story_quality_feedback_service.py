@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional
+import json
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 
 @dataclass(frozen=True)
@@ -141,6 +142,69 @@ def _build_empty_guidance() -> Dict[str, Any]:
     }
 
 
+def extract_quality_metrics_from_history_payload(
+    generated_content: Optional[str],
+    *,
+    scope: str = "chapter",
+) -> Optional[Dict[str, Any]]:
+    """? generation_history.generated_content ????????"""
+    if not generated_content:
+        return None
+
+    try:
+        payload = json.loads(generated_content)
+    except Exception:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    metrics = payload.get("quality_metrics")
+    if not isinstance(metrics, Mapping):
+        return None
+
+    normalized_metrics = dict(metrics)
+    if not isinstance(normalized_metrics.get("repair_guidance"), dict):
+        normalized_metrics["repair_guidance"] = build_story_repair_guidance(normalized_metrics, scope=scope)
+    return normalized_metrics
+
+
+def build_quality_metrics_summary(
+    history: Sequence[Mapping[str, Any]],
+    *,
+    scope: str = "batch",
+) -> Optional[Dict[str, Any]]:
+    """?????????????????????"""
+    normalized_history = [dict(item) for item in history if isinstance(item, Mapping) and item]
+    if not normalized_history:
+        return None
+
+    overall_list = [item.get("overall_score", 0.0) for item in normalized_history]
+    conflict_list = [item.get("conflict_chain_hit_rate", 0.0) for item in normalized_history]
+    rule_list = [item.get("rule_grounding_hit_rate", 0.0) for item in normalized_history]
+    outline_alignment_list = [item.get("outline_alignment_rate", 0.0) for item in normalized_history]
+    dialogue_list = [item.get("dialogue_naturalness_rate", 0.0) for item in normalized_history]
+    opening_list = [item.get("opening_hook_rate", 0.0) for item in normalized_history]
+    payoff_list = [item.get("payoff_chain_rate", 0.0) for item in normalized_history]
+    cliffhanger_list = [item.get("cliffhanger_rate", 0.0) for item in normalized_history]
+    pacing_values = [item.get("pacing_score") for item in normalized_history if item.get("pacing_score") is not None]
+
+    summary = {
+        "avg_overall_score": round(sum(overall_list) / max(len(overall_list), 1), 1),
+        "avg_conflict_chain_hit_rate": round(sum(conflict_list) / max(len(conflict_list), 1), 1),
+        "avg_rule_grounding_hit_rate": round(sum(rule_list) / max(len(rule_list), 1), 1),
+        "avg_outline_alignment_rate": round(sum(outline_alignment_list) / max(len(outline_alignment_list), 1), 1),
+        "avg_dialogue_naturalness_rate": round(sum(dialogue_list) / max(len(dialogue_list), 1), 1),
+        "avg_opening_hook_rate": round(sum(opening_list) / max(len(opening_list), 1), 1),
+        "avg_payoff_chain_rate": round(sum(payoff_list) / max(len(payoff_list), 1), 1),
+        "avg_cliffhanger_rate": round(sum(cliffhanger_list) / max(len(cliffhanger_list), 1), 1),
+        "avg_pacing_score": round(sum(pacing_values) / len(pacing_values), 1) if pacing_values else None,
+        "chapter_count": len(normalized_history),
+    }
+    summary["repair_guidance"] = build_story_repair_guidance(summary, scope=scope)
+    return summary
+
+
 def build_story_repair_guidance(
     metrics: Mapping[str, Any],
     *,
@@ -182,7 +246,12 @@ def build_story_repair_guidance(
         if item["normalized_value"] >= item["preserve_threshold"]
     ][:2]
 
-    scope_label = "这一批章节" if scope == "batch" else "当前章节"
+    scope_label_map = {
+        "chapter": "当前章节",
+        "batch": "这一批章节",
+        "outline": "最近章节",
+    }
+    scope_label = scope_label_map.get(scope, "当前章节")
 
     repair_targets = [item["repair_target"] for item in low_items]
     if not repair_targets:

@@ -23,6 +23,7 @@ import {
 } from './storyCreationQualityUi';
 import { buildCreationBlueprint, buildVolumePacingPlan } from '../utils/creationPresetsStory';
 import {
+  formatRepairWeakestMetricHint,
   getQualityMetricItems,
   getQualityProfileDisplayItems,
   getRepairGuidanceDisplay,
@@ -216,6 +217,11 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
     const chapterRepairGuidance = useMemo(
       () => getRepairGuidanceDisplay(chapterQualityMetrics?.repair_guidance),
       [chapterQualityMetrics],
+    );
+
+    const chapterRepairWeakestMetricHint = useMemo(
+      () => formatRepairWeakestMetricHint(chapterRepairGuidance),
+      [chapterRepairGuidance],
     );
 
     const singleScoreDrivenRecommendationCard = useMemo(
@@ -659,6 +665,7 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                   }}
                 >
                   {renderCompactFactCard('优先修复项', singleStoryRepairTargetCard.priorityTarget)}
+                  {chapterRepairWeakestMetricHint && renderCompactFactCard('当前最弱项', chapterRepairWeakestMetricHint)}
                   {renderCompactFactCard('反模式', singleStoryRepairTargetCard.antiPattern)}
                   {renderCompactListCard('修复目标', singleStoryRepairTargetCard.repairTargets, { tagColor: 'gold' })}
                   {renderCompactListCard('保留优势', singleStoryRepairTargetCard.preserveStrengths, { tagColor: 'green' })}
@@ -918,11 +925,12 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                     chapterRepairGuidance.summary,
                     { style: { marginBottom: 10 } },
                   )}
-                  {(chapterRepairGuidance.repairTargets.length > 0 || chapterRepairGuidance.preserveStrengths.length > 0) && (
+                  {chapterRepairWeakestMetricHint && renderCompactFactCard("当前最弱项", chapterRepairWeakestMetricHint)}
+                  {(chapterRepairGuidance.repairTargets.length > 0 || chapterRepairGuidance.preserveStrengths.length > 0 || chapterRepairGuidance.focusAreas.length > 0) && (
                     <div
                       style={{
                         display: "grid",
-                        gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
                         gap: 8,
                         marginBottom: 10,
                       }}
@@ -939,6 +947,13 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                           "保留优势",
                           chapterRepairGuidance.preserveStrengths,
                           { tagText: `${chapterRepairGuidance.preserveStrengths.length}项`, tagColor: "green", style: { height: "100%" } },
+                        )}
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        {chapterRepairGuidance.focusAreas.length > 0 && renderCompactListCard(
+                          "关注重点",
+                          chapterRepairGuidance.focusAreas,
+                          { tagText: `${chapterRepairGuidance.focusAreas.length}项`, tagColor: "blue", style: { height: "100%" } },
                         )}
                       </div>
                     </div>

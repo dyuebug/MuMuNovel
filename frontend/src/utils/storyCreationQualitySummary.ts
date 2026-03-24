@@ -155,6 +155,19 @@ export const getRepairGuidanceDisplay = (
   };
 };
 
+export const formatRepairWeakestMetricHint = (
+  guidance?: QualityRepairGuidanceDisplay | null,
+): string => {
+  if (!guidance?.weakestMetricLabel) {
+    return "";
+  }
+  const value = typeof guidance.weakestMetricValue === "number"
+    ? `（当前值：${Number.isInteger(guidance.weakestMetricValue) ? guidance.weakestMetricValue : guidance.weakestMetricValue.toFixed(1)}）`
+    : "";
+  return `${guidance.weakestMetricLabel}${value}`;
+};
+
+
 export const getQualityProfileDisplayItems = (
   summary?: ChapterQualityProfileSummary | null,
 ): QualityProfileDisplayItem[] => {

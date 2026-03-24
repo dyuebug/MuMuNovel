@@ -59,7 +59,14 @@ from app.services.prompt_service import (
 from app.services.memory_service import memory_service
 from app.services.plot_expansion_service import PlotExpansionService
 from app.services.foreshadow_service import foreshadow_service
-from app.services.chapter_quality_context_service import resolve_story_generation_guidance
+from app.services.chapter_quality_context_service import (
+    build_story_repair_diagnostic_context,
+    resolve_story_generation_guidance,
+)
+from app.services.story_quality_feedback_service import (
+    build_quality_metrics_summary,
+    extract_quality_metrics_from_history_payload,
+)
 from app.logger import get_logger
 from app.api.settings import get_user_ai_service
 from app.utils.sse_response import SSEResponse, create_sse_response, WizardProgressTracker
@@ -119,6 +126,7 @@ def _merge_outline_requirements(
     quality_preset: Optional[str] = None,
     quality_notes: Optional[str] = None,
     memory_guidance: Optional[str] = None,
+    quality_repair_guidance: Optional[str] = None,
 ) -> str:
     """合并自由要求与结构增强要求，避免改动模板本体。"""
     parts: list[str] = []
@@ -134,6 +142,10 @@ def _merge_outline_requirements(
     memory_guidance_text = str(memory_guidance or "").strip()
     if memory_guidance_text:
         parts.append(memory_guidance_text)
+
+    quality_repair_guidance_text = str(quality_repair_guidance or "").strip()
+    if quality_repair_guidance_text:
+        parts.append(quality_repair_guidance_text)
 
     quality_preference_block = build_quality_preference_block(
         quality_preset,
@@ -359,6 +371,60 @@ def _build_outline_memory_guidance(memory_context: Optional[Dict[str, Any]]) -> 
         return ""
 
     return "【连载记忆与伏笔约束】\n" + "\n\n".join(parts)
+
+
+async def _build_outline_quality_repair_guidance(
+    db: AsyncSession,
+    project_id: str,
+    *,
+    chapter_limit: int = 3,
+) -> str:
+    chapter_rows = await db.execute(
+        select(Chapter.id, Chapter.chapter_number)
+        .where(Chapter.project_id == project_id)
+        .order_by(Chapter.chapter_number.desc())
+        .limit(chapter_limit)
+    )
+    recent_chapters = chapter_rows.all()
+    chapter_ids = [row.id for row in recent_chapters if getattr(row, "id", None)]
+    if not chapter_ids:
+        return ""
+
+    history_result = await db.execute(
+        select(GenerationHistory)
+        .where(
+            GenerationHistory.project_id == project_id,
+            GenerationHistory.chapter_id.in_(chapter_ids),
+        )
+        .order_by(GenerationHistory.created_at.desc())
+    )
+
+    metrics_by_chapter: Dict[str, Dict[str, Any]] = {}
+    for history in history_result.scalars():
+        chapter_id = history.chapter_id
+        if not chapter_id or chapter_id in metrics_by_chapter:
+            continue
+        metrics = extract_quality_metrics_from_history_payload(history.generated_content, scope="chapter")
+        if metrics:
+            metrics_by_chapter[chapter_id] = metrics
+        if len(metrics_by_chapter) >= len(chapter_ids):
+            break
+
+    metrics_history = [metrics_by_chapter[chapter_id] for chapter_id in chapter_ids if chapter_id in metrics_by_chapter]
+    summary = build_quality_metrics_summary(metrics_history, scope="outline")
+    if not summary:
+        return ""
+
+    repair_guidance = summary.get("repair_guidance")
+    if not isinstance(repair_guidance, dict):
+        return ""
+
+    chapter_count = int(summary.get("chapter_count") or len(metrics_history) or len(chapter_ids))
+    repair_payload = dict(repair_guidance)
+    repair_payload.setdefault("source", "recent_chapter_quality_summary")
+    repair_payload.setdefault("source_label", f"最近{chapter_count}章质量汇总")
+    diagnostic_context = build_story_repair_diagnostic_context(repair_payload, scene="outline")
+    return str(diagnostic_context.get("story_repair_diagnostic_block") or "").strip()
 
 
 def _build_outline_content_from_item(chapter_data: Dict[str, Any]) -> str:
@@ -850,12 +916,14 @@ async def _build_outline_continue_context(
         'recent_outlines': '',
         'characters_info': '',
         'memory_guidance': '',
+        'quality_repair_guidance': '',
         'user_input': '',
         'stats': {
             'total_outlines': len(latest_outlines),
             'recent_outlines_count': 0,
             'characters_count': len(characters),
             'memory_guidance_length': 0,
+            'quality_repair_guidance_length': 0,
         }
     }
     
@@ -1076,6 +1144,15 @@ async def _build_outline_continue_context(
             logger.warning(f"⚠️ 构建大纲续写记忆摘要失败，已回退为空: {memory_error}")
             context['memory_guidance'] = ''
 
+        try:
+            context['quality_repair_guidance'] = await _build_outline_quality_repair_guidance(
+                db,
+                project.id,
+            )
+        except Exception as repair_error:
+            logger.warning(f"⚠️ 构建大纲续写质量修复提示失败，已回退为空: {repair_error}")
+            context['quality_repair_guidance'] = ''
+
         # 5. 用户输入
         user_input_parts = [
             "【用户输入】",
@@ -1094,9 +1171,11 @@ async def _build_outline_continue_context(
             len(context['recent_outlines']),
             len(context['characters_info']),
             len(context['memory_guidance']),
+            len(context['quality_repair_guidance']),
             len(context['user_input'])
         ])
         context['stats']['memory_guidance_length'] = len(context['memory_guidance'])
+        context['stats']['quality_repair_guidance_length'] = len(context['quality_repair_guidance'])
         context['stats']['total_length'] = total_length
         logger.info(f"📊 大纲续写上下文总长度: {total_length} 字符")
         
@@ -1914,6 +1993,7 @@ async def continue_outline_generator(
                     generation_guidance.quality_preset,
                     generation_guidance.quality_notes,
                     context.get('memory_guidance'),
+                    context.get('quality_repair_guidance'),
                 ),
                 mcp_references=""
             )

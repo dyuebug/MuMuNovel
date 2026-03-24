@@ -1000,3 +1000,16 @@ def test_should_inject_story_repair_diagnostic_block_into_chapter_quality_contra
 
     assert "\u3010\u8bca\u65ad\u4f18\u5148\u7ea7\u5361\u3011" in blocks["story_repair_diagnostic_block"]
     assert "\u56de\u62a5\u5151\u73b0" in blocks["quality_contract_block"]
+
+
+def test_should_merge_outline_quality_repair_guidance_into_requirements():
+    merged = _merge_outline_requirements(
+        "保持主要人物关系线清晰",
+        "hook",
+        story_focus="advance_plot",
+        quality_repair_guidance="【诊断优先级卡】\n- 当前最弱项：章尾牵引（当前值：61）",
+    )
+
+    assert "保持主要人物关系线清晰" in merged
+    assert "【诊断优先级卡】" in merged
+    assert "当前最弱项：章尾牵引（当前值：61）" in merged

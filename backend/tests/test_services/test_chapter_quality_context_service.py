@@ -3,6 +3,7 @@ from app.services.chapter_quality_context_service import (
     StoryGenerationGuidance,
     build_analysis_quality_kwargs,
     build_prompt_quality_kwargs,
+    build_story_repair_diagnostic_context,
     resolve_story_generation_guidance,
 )
 
@@ -138,3 +139,22 @@ def test_should_build_prompt_quality_kwargs_with_story_repair_diagnostic_context
     assert "【诊断优先级卡】" in kwargs["story_repair_diagnostic_block"]
     assert "当前最弱项：回报兑现（当前值：58）" in kwargs["story_repair_diagnostic_block"]
     assert "优先修复维度：冲突链推进 / 回报兑现" in kwargs["story_repair_diagnostic_block"]
+
+
+def test_should_build_outline_story_repair_diagnostic_context():
+    diagnostic = build_story_repair_diagnostic_context(
+        {
+            "source": "recent_chapter_quality_summary",
+            "source_label": "最近3章质量汇总",
+            "summary": "最近章节优先修复「章尾牵引 / 大纲贴合」，先让推进、约束与结果真正落地，再做表面润色。",
+            "focus_areas": ["cliffhanger", "outline"],
+            "weakest_metric_label": "章尾牵引",
+            "weakest_metric_value": 61.5,
+        },
+        scene="outline",
+    )
+
+    assert diagnostic["story_repair_source_label"] == "最近3章质量汇总"
+    assert diagnostic["story_repair_focus_areas"] == ["章尾牵引", "大纲贴合"]
+    assert "当前最弱项：章尾牵引（当前值：61.5）" in diagnostic["story_repair_diagnostic_block"]
+    assert "先把最弱项拆成每章的目标、阻力、回报与章尾牵引，再统一分配节拍。" in diagnostic["story_repair_diagnostic_block"]

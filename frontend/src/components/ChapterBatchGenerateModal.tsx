@@ -22,11 +22,11 @@ import {
   renderCompactMetricGrid,
 } from './storyCreationQualityUi';
 import {
+  formatRepairWeakestMetricHint,
   getBatchSummaryMetricItems,
   getQualityProfileDisplayItems,
   getRepairGuidanceDisplay,
 } from '../utils/storyCreationQualitySummary';
-import type { QualityRepairGuidanceDisplay } from '../utils/storyCreationQualitySummary';
 import { getCachedWordCount, setCachedWordCount } from '../utils/storyCreationWordCount';
 import {
   areStoryBeatPlannerDraftsEqual,
@@ -68,17 +68,7 @@ const noopRenderDiagnostics = (...args: [string, () => Record<string, unknown>])
   void args;
 };
 
-const formatRepairWeakestMetricHint = (
-  guidance?: QualityRepairGuidanceDisplay | null,
-): string => {
-  if (!guidance?.weakestMetricLabel) {
-    return '';
-  }
-  const value = typeof guidance.weakestMetricValue === 'number'
-    ? `（当前值：${Number.isInteger(guidance.weakestMetricValue) ? guidance.weakestMetricValue : guidance.weakestMetricValue.toFixed(1)}）`
-    : '';
-  return `${guidance.weakestMetricLabel}${value}`;
-};
+
 
 function useActiveRenderDiagnostics(componentName: string, getSnapshot: () => Record<string, unknown>): void {
   const renderCountRef = useRef(0);
