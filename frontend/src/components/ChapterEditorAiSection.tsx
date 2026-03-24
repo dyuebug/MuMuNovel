@@ -25,6 +25,7 @@ import { buildCreationBlueprint, buildVolumePacingPlan } from '../utils/creation
 import {
   getQualityMetricItems,
   getQualityProfileDisplayItems,
+  getRepairGuidanceDisplay,
   getWeakestQualityMetric,
 } from '../utils/storyCreationQualitySummary';
 import { DEFAULT_WORD_COUNT, setCachedWordCount } from '../utils/storyCreationWordCount';
@@ -209,6 +210,11 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
 
     const weakestQualityMetric = useMemo(
       () => (chapterQualityMetrics ? getWeakestQualityMetric(chapterQualityMetrics) : null),
+      [chapterQualityMetrics],
+    );
+
+    const chapterRepairGuidance = useMemo(
+      () => getRepairGuidanceDisplay(chapterQualityMetrics?.repair_guidance),
       [chapterQualityMetrics],
     );
 
@@ -904,6 +910,40 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                   },
                 ],
                 { style: { marginBottom: 10 } },
+              )}
+              {chapterRepairGuidance && (
+                <>
+                  {chapterRepairGuidance.summary && renderCompactSettingHint(
+                    "自动修复建议",
+                    chapterRepairGuidance.summary,
+                    { style: { marginBottom: 10 } },
+                  )}
+                  {(chapterRepairGuidance.repairTargets.length > 0 || chapterRepairGuidance.preserveStrengths.length > 0) && (
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))",
+                        gap: 8,
+                        marginBottom: 10,
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        {chapterRepairGuidance.repairTargets.length > 0 && renderCompactListCard(
+                          "下一轮修复",
+                          chapterRepairGuidance.repairTargets,
+                          { tagText: `${chapterRepairGuidance.repairTargets.length}项`, tagColor: "gold", style: { height: "100%" } },
+                        )}
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        {chapterRepairGuidance.preserveStrengths.length > 0 && renderCompactListCard(
+                          "保留优势",
+                          chapterRepairGuidance.preserveStrengths,
+                          { tagText: `${chapterRepairGuidance.preserveStrengths.length}项`, tagColor: "green", style: { height: "100%" } },
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
               {renderCompactMetricGrid(chapterQualityMetricItems)}
             </>

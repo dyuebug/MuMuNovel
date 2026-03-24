@@ -409,6 +409,16 @@ export interface ChapterCanGenerateResponse {
   chapter_number: number;
 }
 
+export interface StoryRepairGuidance {
+  summary?: string;
+  repair_targets?: string[];
+  preserve_strengths?: string[];
+  focus_areas?: string[];
+  weakest_metric_key?: string | null;
+  weakest_metric_label?: string | null;
+  weakest_metric_value?: number | null;
+}
+
 export interface ChapterQualityMetrics {
   overall_score: number;
   conflict_chain_hit_rate: number;
@@ -418,6 +428,7 @@ export interface ChapterQualityMetrics {
   opening_hook_rate: number;
   payoff_chain_rate: number;
   cliffhanger_rate: number;
+  repair_guidance?: StoryRepairGuidance | null;
 }
 
 export interface ChapterLatestQualityMetrics {
@@ -429,9 +440,11 @@ export interface ChapterLatestQualityMetrics {
   opening_hook_rate?: number;
   payoff_chain_rate?: number;
   cliffhanger_rate?: number;
+  pacing_score?: number;
   chapter_id?: string;
   history_id?: string | null;
   generated_at?: string | null;
+  repair_guidance?: StoryRepairGuidance | null;
 }
 
 export interface ChapterQualityMetricsSummary {
@@ -443,9 +456,12 @@ export interface ChapterQualityMetricsSummary {
   avg_opening_hook_rate?: number;
   avg_payoff_chain_rate?: number;
   avg_cliffhanger_rate?: number;
+  avg_pacing_score?: number | null;
+  chapter_count?: number;
   total_chapters?: number;
   analyzed_chapters?: number;
   last_generated_at?: string | null;
+  repair_guidance?: StoryRepairGuidance | null;
 }
 
 export interface ChapterQualityProfileBlockSummary {

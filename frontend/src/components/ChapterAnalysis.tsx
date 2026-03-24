@@ -1074,7 +1074,8 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
           chapterTitle={chapterInfo.title}
           chapterNumber={chapterInfo.chapter_number}
           suggestions={convertSuggestionsForRegeneration()}
-          hasAnalysis={true}
+          hasAnalysis={Boolean(analysis)}
+          repairGuidance={analysis?.quality_metrics?.repair_guidance ?? analysis?.quality_metrics_summary?.repair_guidance ?? null}
         />
       )}
 

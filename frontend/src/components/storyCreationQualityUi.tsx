@@ -9,6 +9,7 @@ type CompactMetricItem = {
   label: string;
   value: number;
   tip?: string;
+  displayValue?: string;
 };
 
 export const getCompactHintToneByAlertType = (
@@ -71,7 +72,7 @@ export const renderCompactMetricGrid = (
             )}
           </Space>
           <Tag color={getMetricRateColor(item.value)} style={{ marginInlineEnd: 0 }}>
-            {item.value}%
+            {item.displayValue ?? `${item.value}%`}
           </Tag>
         </div>
         <Progress

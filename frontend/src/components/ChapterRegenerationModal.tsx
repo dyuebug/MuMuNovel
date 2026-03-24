@@ -20,11 +20,30 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined
 } from '@ant-design/icons';
+import type { StoryRepairGuidance } from '../types';
 import { ssePost } from '../utils/sseClient';
+import { getRepairGuidanceDisplay } from '../utils/storyCreationQualitySummary';
 import { SSEProgressModal } from './SSEProgressModal';
 
 const { TextArea } = Input;
 const { Panel } = Collapse;
+
+const FOCUS_AREA_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'pacing', label: '节奏把控' },
+  { value: 'emotion', label: '情感渲染' },
+  { value: 'description', label: '场景描写' },
+  { value: 'dialogue', label: '对话质量' },
+  { value: 'conflict', label: '冲突强度' },
+  { value: 'outline', label: '大纲贴合' },
+  { value: 'rule_grounding', label: '规则落地' },
+  { value: 'opening', label: '开场钩子' },
+  { value: 'payoff', label: '回报兑现' },
+  { value: 'cliffhanger', label: '章尾牵引' },
+];
+
+const getFocusAreaLabel = (value: string): string => {
+  return FOCUS_AREA_OPTIONS.find((item) => item.value === value)?.label || value;
+};
 
 interface Suggestion {
   category: string;
@@ -41,6 +60,7 @@ interface ChapterRegenerationModalProps {
   chapterNumber: number;
   suggestions?: Suggestion[];
   hasAnalysis: boolean;
+  repairGuidance?: StoryRepairGuidance | null;
 }
 
 
@@ -52,7 +72,8 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
   chapterTitle,
   chapterNumber,
   suggestions = [],
-  hasAnalysis
+  hasAnalysis,
+  repairGuidance = null,
 }) => {
   const [form] = Form.useForm();
   const [modal, contextHolder] = Modal.useModal();
@@ -63,6 +84,17 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
   const [wordCount, setWordCount] = useState(0);
   const [selectedSuggestions, setSelectedSuggestions] = useState<number[]>([]);
   const [modificationSource, setModificationSource] = useState<'custom' | 'analysis_suggestions' | 'mixed'>('custom');
+
+  const repairGuidanceDisplay = getRepairGuidanceDisplay(repairGuidance);
+  const recommendedFocusAreas = (repairGuidanceDisplay?.focusAreas || []).filter((item) =>
+    FOCUS_AREA_OPTIONS.some((option) => option.value === item),
+  );
+  const recommendedFocusAreasKey = recommendedFocusAreas.join(',');
+  const hasRepairGuidance = Boolean(
+    repairGuidanceDisplay?.summary
+      || repairGuidanceDisplay?.repairTargets.length
+      || repairGuidanceDisplay?.preserveStrengths.length,
+  );
 
   useEffect(() => {
     if (visible) {
@@ -86,18 +118,21 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
         target_word_count: 3000,
         preserve_structure: false,
         preserve_character_traits: true,
-        focus_areas: []
+        focus_areas: recommendedFocusAreas,
       });
     }
-  }, [visible, hasAnalysis, suggestions.length, form]);
+  }, [visible, hasAnalysis, suggestions.length, form, recommendedFocusAreasKey]);
 
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
       
-      // 验证至少提供一种修改指令
-      if (values.modification_source === 'custom' && !values.custom_instructions?.trim()) {
-        message.error('请输入自定义修改要求');
+      // ?????????????
+      const hasCustomInstructions = Boolean(values.custom_instructions?.trim());
+      const hasFocusAreas = Array.isArray(values.focus_areas) && values.focus_areas.length > 0;
+
+      if (values.modification_source === 'custom' && !hasCustomInstructions && !hasFocusAreas && !hasRepairGuidance) {
+        message.error('请输入自定义修改要求，或直接使用自动修复建议 / 重点优化方向');
         return;
       }
       
@@ -108,10 +143,13 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
       
       if (values.modification_source === 'mixed' && 
           selectedSuggestions.length === 0 && 
-          !values.custom_instructions?.trim()) {
-        message.error('请至少选择一条建议或输入自定义要求');
+          !hasCustomInstructions &&
+          !hasFocusAreas &&
+          !hasRepairGuidance) {
+        message.error('请至少选择一条建议、输入自定义要求，或直接使用自动修复建议 / 重点优化方向');
         return;
       }
+
 
       setLoading(true);
       setStatus('generating');
@@ -132,6 +170,9 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
         style_id?: string;
         target_word_count: number;
         focus_areas: string[];
+        story_repair_summary?: string;
+        story_repair_targets?: string[];
+        story_preserve_strengths?: string[];
       }
 
       const requestData: RegenerationRequest = {
@@ -146,7 +187,14 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
         },
         style_id: values.style_id,
         target_word_count: values.target_word_count,
-        focus_areas: values.focus_areas || []
+        focus_areas: values.focus_areas || [],
+        story_repair_summary: repairGuidanceDisplay?.summary || undefined,
+        story_repair_targets: repairGuidanceDisplay?.repairTargets.length
+          ? repairGuidanceDisplay.repairTargets.slice(0, 3)
+          : undefined,
+        story_preserve_strengths: repairGuidanceDisplay?.preserveStrengths.length
+          ? repairGuidanceDisplay.preserveStrengths.slice(0, 2)
+          : undefined,
       };
 
       let accumulatedContent = '';
@@ -285,6 +333,61 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
         />
       )}
 
+      {repairGuidanceDisplay && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="已加载自动修复建议"
+          description={(
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              {repairGuidanceDisplay.summary && <span>{repairGuidanceDisplay.summary}</span>}
+              {repairGuidanceDisplay.weakestMetricLabel && (
+                <div>
+                  <Tag color="orange">当前短板</Tag>
+                  <span>
+                    {repairGuidanceDisplay.weakestMetricLabel}
+                    {typeof repairGuidanceDisplay.weakestMetricValue === 'number'
+                      ? ` ${repairGuidanceDisplay.weakestMetricValue.toFixed(1)}分`
+                      : ''}
+                  </span>
+                </div>
+              )}
+              {repairGuidanceDisplay.repairTargets.length > 0 && (
+                <div>
+                  <strong>下一轮修复：</strong>
+                  <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {repairGuidanceDisplay.repairTargets.map((item) => (
+                      <Tag key={item} color="blue">{item}</Tag>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {repairGuidanceDisplay.preserveStrengths.length > 0 && (
+                <div>
+                  <strong>保留优势：</strong>
+                  <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {repairGuidanceDisplay.preserveStrengths.map((item) => (
+                      <Tag key={item} color="green">{item}</Tag>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {recommendedFocusAreas.length > 0 && (
+                <div>
+                  <strong>已预选重点方向：</strong>
+                  <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {recommendedFocusAreas.map((area) => (
+                      <Tag key={area}>{getFocusAreaLabel(area)}</Tag>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </Space>
+          )}
+        />
+      )}
+
       <Form
         form={form}
         layout="vertical"
@@ -341,6 +444,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
             name="custom_instructions"
             label="自定义修改要求"
             tooltip="描述你希望如何改进这个章节"
+            extra={repairGuidanceDisplay ? '如果不填写，将默认结合自动修复建议和重点方向进行重生成。' : undefined}
           >
             <TextArea
               rows={4}
@@ -360,13 +464,13 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
               label="重点优化方向"
             >
               <Checkbox.Group>
-                <Space direction="vertical">
-                  <Checkbox value="pacing">节奏把控</Checkbox>
-                  <Checkbox value="emotion">情感渲染</Checkbox>
-                  <Checkbox value="description">场景描写</Checkbox>
-                  <Checkbox value="dialogue">对话质量</Checkbox>
-                  <Checkbox value="conflict">冲突强度</Checkbox>
-                </Space>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8 }}>
+                  {FOCUS_AREA_OPTIONS.map((option) => (
+                    <Checkbox key={option.value} value={option.value}>
+                      {option.label}
+                    </Checkbox>
+                  ))}
+                </div>
               </Checkbox.Group>
             </Form.Item>
 

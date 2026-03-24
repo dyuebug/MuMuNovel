@@ -24,6 +24,7 @@ import {
 import {
   getBatchSummaryMetricItems,
   getQualityProfileDisplayItems,
+  getRepairGuidanceDisplay,
 } from '../utils/storyCreationQualitySummary';
 import { getCachedWordCount, setCachedWordCount } from '../utils/storyCreationWordCount';
 import {
@@ -330,7 +331,7 @@ const batchCreationBlueprint = useMemo(
 
 const batchSelectedCreativeModeLabel = batchSelectedCreativeMode
   ? (CREATIVE_MODE_OPTIONS.find((item: any) => item.value === batchSelectedCreativeMode)?.label || batchSelectedCreativeMode)
-  : '????';
+  : "批量保留优势";
 const batchSelectedStoryFocusLabel = batchSelectedStoryFocus
   ? (STORY_FOCUS_OPTIONS.find((item: any) => item.value === batchSelectedStoryFocus)?.label || batchSelectedStoryFocus)
   : '????';
@@ -349,6 +350,11 @@ const batchQualityProfileItems = useMemo(
 
 const batchSummaryMetricItems = useMemo(
   () => getBatchSummaryMetricItems(batchQualityMetricsSummary),
+  [batchQualityMetricsSummary],
+);
+
+const batchRepairGuidance = useMemo(
+  () => getRepairGuidanceDisplay(batchQualityMetricsSummary?.repair_guidance),
   [batchQualityMetricsSummary],
 );
 
@@ -1209,6 +1215,40 @@ const batchStoryInsightCards = useMemo(
                     { label: "已完成", value: `${batchProgress?.completed || 0}/${batchProgress?.total || 0}`, color: "blue" },
                   ],
                   { style: { marginBottom: 10 } },
+                )}
+                {batchRepairGuidance && (
+                  <>
+                    {batchRepairGuidance.summary && renderCompactSettingHint(
+                      "自动修复建议",
+                      batchRepairGuidance.summary,
+                      { style: { marginBottom: 10 } },
+                    )}
+                    {(batchRepairGuidance.repairTargets.length > 0 || batchRepairGuidance.preserveStrengths.length > 0) && (
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                          gap: 8,
+                          marginBottom: 10,
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          {batchRepairGuidance.repairTargets.length > 0 && renderCompactListCard(
+                            "下一轮批量修复",
+                            batchRepairGuidance.repairTargets,
+                            { tagText: `${batchRepairGuidance.repairTargets.length}项`, tagColor: 'gold', style: { height: '100%' } },
+                          )}
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          {batchRepairGuidance.preserveStrengths.length > 0 && renderCompactListCard(
+                            "自动修复建议",
+                            batchRepairGuidance.preserveStrengths,
+                            { tagText: `${batchRepairGuidance.preserveStrengths.length}项`, tagColor: 'green', style: { height: '100%' } },
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
                 {renderCompactMetricGrid(batchSummaryMetricItems)}
               </Card>

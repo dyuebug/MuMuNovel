@@ -1,4 +1,4 @@
-import type { ChapterQualityMetrics, ChapterQualityMetricsSummary, CreativeMode, StoryFocus } from '../types';
+import type { ChapterQualityMetrics, ChapterQualityMetricsSummary, CreativeMode, StoryFocus, StoryRepairGuidance } from '../types';
 import {
   type CreationPlotStage,
   type CreationPresetId,
@@ -426,6 +426,44 @@ export function buildBatchScoreDrivenRecommendationCard(
 }
 
 
+function buildStoryRepairTargetCardFromGuidance(
+  guidance?: StoryRepairGuidance | null,
+  options?: {
+    scope?: 'chapter' | 'batch';
+    activePresetId?: CreationPresetId | null;
+  },
+): StoryRepairTargetCard | undefined {
+  if (!guidance) return undefined;
+
+  const repairSummary = (guidance.summary || '').trim();
+  const repairTargets = dedupeItems(guidance.repair_targets || []).slice(0, 3);
+  const preserveStrengths = dedupeItems(guidance.preserve_strengths || []).slice(0, 2);
+  const focusAreas = dedupeItems(guidance.focus_areas || []).slice(0, 3);
+
+  if (!repairSummary && repairTargets.length === 0 && preserveStrengths.length === 0) {
+    return undefined;
+  }
+
+  const scopeLabel = options?.scope === 'batch' ? '????' : '????';
+  const priorityTarget = repairTargets[0] || guidance.weakest_metric_label || `${scopeLabel}???`;
+  const focusHint = focusAreas.length > 0 ? `?????${focusAreas.join(' / ')}?` : '';
+  const applyHint = focusAreas.length > 0
+    ? `???${focusAreas.join(' / ')}??????????????????????`
+    : '????????????????????';
+
+  return {
+    title: options?.scope === 'batch' ? '???????' : '???????',
+    summary: [repairSummary, focusHint, preserveStrengths[0] ? `?????${preserveStrengths[0]}` : ''].filter(Boolean).join(' '),
+    repairSummary: repairSummary || `${scopeLabel}?????${priorityTarget}???????????`,
+    priorityTarget,
+    repairTargets,
+    preserveStrengths: preserveStrengths.length > 0 ? preserveStrengths : ['???????????????????????'],
+    antiPattern: buildRepairAntiPattern(options?.activePresetId ?? undefined),
+    applyHint,
+  };
+}
+
+
 function buildRepairAntiPattern(presetId?: CreationPresetId): string {
   switch (presetId) {
     case 'hook_drive':
@@ -508,6 +546,14 @@ export function buildStoryRepairTargetCard(
     activePresetId?: CreationPresetId | null;
   },
 ): StoryRepairTargetCard | undefined {
+  const guidanceCard = buildStoryRepairTargetCardFromGuidance(metrics?.repair_guidance, {
+    scope: 'chapter',
+    activePresetId: options?.activePresetId,
+  });
+  if (guidanceCard) {
+    return guidanceCard;
+  }
+
   return buildStoryRepairTargetCardFromSnapshot(
     normalizeChapterQualitySnapshot(metrics),
     creativeMode,
@@ -534,6 +580,14 @@ export function buildBatchStoryRepairTargetCard(
     activePresetId?: CreationPresetId | null;
   },
 ): StoryRepairTargetCard | undefined {
+  const guidanceCard = buildStoryRepairTargetCardFromGuidance(summary?.repair_guidance, {
+    scope: 'batch',
+    activePresetId: options?.activePresetId,
+  });
+  if (guidanceCard) {
+    return guidanceCard;
+  }
+
   return buildStoryRepairTargetCardFromSnapshot(
     normalizeBatchQualitySnapshot(summary),
     creativeMode,
