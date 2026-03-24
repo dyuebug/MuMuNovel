@@ -6,6 +6,28 @@ import LoadingScreen from './components/LoadingScreen';
 import { loadOutlinePage, loadCharactersPage, loadChaptersPage } from './routes/projectPageLoaders';
 import './App.css';
 
+
+type RenderDebugGlobal = typeof globalThis & {
+  __NOVEL_RENDER_DEBUG__?: boolean;
+  __NOVEL_RENDER_DEBUG_FILTER__?: string[];
+  enableNovelRenderDebug?: (filters?: string[]) => void;
+  disableNovelRenderDebug?: () => void;
+};
+
+if (import.meta.env.DEV) {
+  const renderDebugGlobal = globalThis as RenderDebugGlobal;
+  renderDebugGlobal.enableNovelRenderDebug = (filters?: string[]) => {
+    renderDebugGlobal.__NOVEL_RENDER_DEBUG__ = true;
+    renderDebugGlobal.__NOVEL_RENDER_DEBUG_FILTER__ = Array.isArray(filters) && filters.length > 0
+      ? [...filters]
+      : undefined;
+  };
+  renderDebugGlobal.disableNovelRenderDebug = () => {
+    renderDebugGlobal.__NOVEL_RENDER_DEBUG__ = false;
+    renderDebugGlobal.__NOVEL_RENDER_DEBUG_FILTER__ = undefined;
+  };
+}
+
 const AppFooter = lazy(() => import('./components/AppFooter'));
 const SpringFestival = lazy(() => import('./components/SpringFestival'));
 const BackgroundTaskCenter = lazy(() => import('./components/BackgroundTaskCenter'));

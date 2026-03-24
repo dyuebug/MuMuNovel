@@ -42,6 +42,34 @@ const getChunkGzipSize = (chunk: OutputChunk) =>
 const createManualChunkName = (id: string) => {
   const normalizedId = normalizeModuleId(id)
 
+  if (normalizedId.endsWith('/src/utils/creationPresetsCore.ts')) {
+    return 'creationPresetsCore'
+  }
+
+  if (normalizedId.endsWith('/src/utils/creationPresetsStory.ts')) {
+    return 'creationPresetsStory'
+  }
+
+  if (normalizedId.endsWith('/src/utils/creationPresetsQuality.ts')) {
+    return 'creationPresetsQuality'
+  }
+
+  if (normalizedId.endsWith('/src/utils/creationPresetsBatch.ts')) {
+    return 'creationPresetsBatch'
+  }
+
+  if (normalizedId.endsWith('/src/utils/storyCreationPrompt.ts')) {
+    return 'storyCreationPrompt'
+  }
+
+  if (normalizedId.endsWith('/src/utils/storyCreationPersistence.ts')) {
+    return 'storyCreationPersistence'
+  }
+
+  if (normalizedId.endsWith('/src/utils/storyCreationDraft.ts')) {
+    return 'storyCreationDraft'
+  }
+
   if (!normalizedId.includes('/node_modules/')) {
     return undefined
   }
