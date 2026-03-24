@@ -1,4 +1,5 @@
 from app.api.outlines import _build_outline_memory_guidance, _merge_outline_requirements
+from app.api.wizard_stream import _merge_wizard_outline_requirements
 from app.schemas.outline import OutlineGenerateRequest
 
 
@@ -48,3 +49,23 @@ def test_should_build_outline_memory_guidance_from_memory_context():
     assert "女主对主角仍存戒备" in guidance
     assert "神秘钥匙尚未回收" in guidance
     assert "皇城宴会将成为转折点" in guidance
+
+def test_should_merge_wizard_outline_requirements_with_generation_guidance():
+    merged = _merge_wizard_outline_requirements(
+        "保留双线并进",
+        outline_count=3,
+        creative_mode="hook",
+        story_focus="advance_plot",
+        plot_stage="development",
+        story_creation_brief="突出代价和抉择",
+        quality_preset="plot_drive",
+        quality_notes="减少说明句",
+    )
+
+    assert "保留双线并进" in merged
+    assert "突出代价和抉择" in merged
+    assert "减少说明句" in merged
+    assert "钩子优先" in merged
+    assert "主线推进" in merged
+    assert "发展阶段" in merged
+    assert "开局部分" in merged

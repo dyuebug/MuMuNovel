@@ -2,7 +2,7 @@ import { useCallback, useMemo } from 'react';
 import { Button, Card, Form, Input, Radio, Select, Space } from 'antd';
 import type { FormInstance } from 'antd';
 
-import type { CreativeMode, PlotStage, StoryFocus } from '../types';
+import type { CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
 import {
   CREATION_PRESETS,
   getCreationPresetById,
@@ -19,26 +19,13 @@ import {
   buildStoryCharacterArcCard,
   buildVolumePacingPlan,
 } from '../utils/creationPresetsStory';
+import {
+  CREATIVE_MODE_OPTIONS,
+  QUALITY_PRESET_OPTIONS,
+  STORY_FOCUS_OPTIONS,
+} from '../utils/generationPreferenceOptions';
 
 const { TextArea } = Input;
-
-const CREATIVE_MODE_OPTIONS: Array<{ value: CreativeMode; label: string; description: string }> = [
-  { value: 'balanced', label: '????', description: '????????????????' },
-  { value: 'hook', label: '????', description: '?????????????' },
-  { value: 'emotion', label: '????', description: '?????????????' },
-  { value: 'suspense', label: '????', description: '?????????????????' },
-  { value: 'relationship', label: '????', description: '????????????????' },
-  { value: 'payoff', label: '????', description: '????????????????' },
-];
-
-const STORY_FOCUS_OPTIONS: Array<{ value: StoryFocus; label: string; description: string }> = [
-  { value: 'advance_plot', label: '????', description: '??????????????????' },
-  { value: 'deepen_character', label: '????', description: '????????????????????' },
-  { value: 'escalate_conflict', label: '????', description: '????????????????' },
-  { value: 'reveal_mystery', label: '????', description: '???????????????????' },
-  { value: 'relationship_shift', label: '????', description: '???????????????' },
-  { value: 'foreshadow_payoff', label: '????', description: '????????????????' },
-];
 
 type OutlineGenerateFormValues = {
   mode?: 'auto' | 'new' | 'continue';
@@ -50,6 +37,9 @@ type OutlineGenerateFormValues = {
   plot_stage?: PlotStage;
   creative_mode?: CreativeMode;
   story_focus?: StoryFocus;
+  story_creation_brief?: string;
+  quality_preset?: QualityPreset;
+  quality_notes?: string;
   requirements?: string;
   model?: string;
   keep_existing?: boolean;
@@ -74,6 +64,9 @@ type OutlineGenerateModalContentProps = {
   projectDefaultCreativeMode?: CreativeMode;
   projectDefaultStoryFocus?: StoryFocus;
   projectDefaultPlotStage?: PlotStage;
+  projectDefaultStoryCreationBrief?: string;
+  projectDefaultQualityPreset?: QualityPreset;
+  projectDefaultQualityNotes?: string;
 };
 
 export default function OutlineGenerateModalContent({
@@ -85,6 +78,9 @@ export default function OutlineGenerateModalContent({
   projectDefaultCreativeMode,
   projectDefaultStoryFocus,
   projectDefaultPlotStage,
+  projectDefaultStoryCreationBrief,
+  projectDefaultQualityPreset,
+  projectDefaultQualityNotes,
 }: OutlineGenerateModalContentProps) {
   const hasOutlines = outlinesCount > 0;
   const initialMode = hasOutlines ? 'continue' : 'new';
@@ -203,6 +199,15 @@ export default function OutlineGenerateModalContent({
 
 
             plot_stage: projectDefaultPlotStage || 'development',
+
+
+            story_creation_brief: projectDefaultStoryCreationBrief,
+
+
+            quality_preset: projectDefaultQualityPreset,
+
+
+            quality_notes: projectDefaultQualityNotes,
 
 
             keep_existing: true,
@@ -514,9 +519,13 @@ export default function OutlineGenerateModalContent({
                         onClick={() => generateForm.setFieldsValue({
                           creative_mode: projectDefaultCreativeMode,
                           story_focus: projectDefaultStoryFocus,
+                          plot_stage: projectDefaultPlotStage || 'development',
+                          story_creation_brief: projectDefaultStoryCreationBrief,
+                          quality_preset: projectDefaultQualityPreset,
+                          quality_notes: projectDefaultQualityNotes,
                         })}
                       >
-                        清空预设
+                        恢复项目默认
                       </Button>
                     </Space>
 
@@ -815,6 +824,48 @@ export default function OutlineGenerateModalContent({
 
                   </Form.Item>
 
+
+                  <Form.Item
+                    label="创作总控摘要"
+                    name="story_creation_brief"
+                    tooltip="用几句话告诉系统这轮大纲最该守住的创作目标、节奏与约束"
+                  >
+                    <TextArea
+                      rows={3}
+                      placeholder="例如：开篇先立目标和代价，再用钩子推动角色被迫做出选择。"
+                      showCount
+                      maxLength={600}
+                    />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="质量预设"
+                    name="quality_preset"
+                    tooltip="为这轮大纲施加统一的质量偏好，控制更偏推进、氛围、情绪或干净表达"
+                  >
+                    <Select allowClear placeholder="默认沿用项目偏好" optionLabelProp="label">
+                      {QUALITY_PRESET_OPTIONS.map((option) => (
+                        <Select.Option key={option.value} value={option.value} label={option.label}>
+                          <div>{option.label}</div>
+                          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{option.description}</div>
+                          <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>适合：{option.bestFor}</div>
+                        </Select.Option>
+                      ))}
+                    </Select>
+                  </Form.Item>
+
+                  <Form.Item
+                    label="额外质量要求"
+                    name="quality_notes"
+                    tooltip="补充这轮大纲要特别强化或压制的表达习惯"
+                  >
+                    <TextArea
+                      rows={3}
+                      placeholder="例如：减少解释性旁白，优先让冲突、选择和章尾牵引落在剧情动作里。"
+                      showCount
+                      maxLength={600}
+                    />
+                  </Form.Item>
 
                   <Form.Item label="其他要求" name="requirements">
 

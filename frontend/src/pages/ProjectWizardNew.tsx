@@ -9,6 +9,12 @@ import {
 } from '@ant-design/icons';
 import { AIProjectGenerator, type GenerationConfig } from '../components/AIProjectGenerator';
 import type { WizardBasicInfo } from '../types';
+import {
+  CREATIVE_MODE_OPTIONS,
+  PLOT_STAGE_OPTIONS,
+  QUALITY_PRESET_OPTIONS,
+  STORY_FOCUS_OPTIONS,
+} from '../utils/generationPreferenceOptions';
 
 const { TextArea } = Input;
 const { Title, Paragraph } = Typography;
@@ -63,6 +69,12 @@ export default function ProjectWizardNew() {
         target_words: project.target_words || 100000,
         chapter_count: 3,
         character_count: project.character_count || 5,
+        default_creative_mode: project.default_creative_mode,
+        default_story_focus: project.default_story_focus,
+        default_plot_stage: project.default_plot_stage,
+        default_story_creation_brief: project.default_story_creation_brief || '',
+        default_quality_preset: project.default_quality_preset,
+        default_quality_notes: project.default_quality_notes || '',
       };
 
       try {
@@ -103,6 +115,12 @@ export default function ProjectWizardNew() {
       chapter_count: 3, // 默认生成3章大纲
       character_count: values.character_count || 5,
       outline_mode: values.outline_mode || 'one-to-many', // 添加大纲模式
+      default_creative_mode: values.default_creative_mode,
+      default_story_focus: values.default_story_focus,
+      default_plot_stage: values.default_plot_stage,
+      default_story_creation_brief: values.default_story_creation_brief,
+      default_quality_preset: values.default_quality_preset,
+      default_quality_notes: values.default_quality_notes,
       enable_web_research: values.enable_web_research,
       web_research_query: values.web_research_query,
       world_building_research_query: values.world_building_research_query,
@@ -147,6 +165,7 @@ export default function ProjectWizardNew() {
           character_count: 5,
           target_words: 100000,
           outline_mode: 'one-to-one', // 默认为传统模式（1-1）
+          default_plot_stage: 'development',
           enable_web_research: false,
         }}
       >
@@ -319,6 +338,95 @@ export default function ProjectWizardNew() {
             placeholder="整部小说的目标字数"
           />
         </Form.Item>
+
+        <Card size="small" title="默认创作偏好" style={{ marginBottom: 24 }}>
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="这些偏好会写入项目默认值，并自动作用于首次大纲与后续章节生成；创建后仍可在世界设定中继续调整。"
+          />
+
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item label="默认创作模式" name="default_creative_mode" tooltip="控制整体更偏钩子、情绪、悬念、关系或爽点回收">
+                <Select allowClear placeholder="不额外偏置，保持均衡" optionLabelProp="label">
+                  {CREATIVE_MODE_OPTIONS.map((option) => (
+                    <Select.Option key={option.value} value={option.value} label={option.label}>
+                      <div>{option.label}</div>
+                      <div style={{ fontSize: 12, color: token.colorTextTertiary }}>{option.description}</div>
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="默认结构侧重点" name="default_story_focus" tooltip="控制整体更偏主线推进、人物塑形、冲突升级等叙事任务">
+                <Select allowClear placeholder="不额外偏置，保持均衡" optionLabelProp="label">
+                  {STORY_FOCUS_OPTIONS.map((option) => (
+                    <Select.Option key={option.value} value={option.value} label={option.label}>
+                      <div>{option.label}</div>
+                      <div style={{ fontSize: 12, color: token.colorTextTertiary }}>{option.description}</div>
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item label="默认情节阶段" name="default_plot_stage" tooltip="帮助系统判断当前项目默认处于发展、高潮还是收束阶段">
+                <Select allowClear placeholder="留空时按具体场景判断" optionLabelProp="label">
+                  {PLOT_STAGE_OPTIONS.map((option) => (
+                    <Select.Option key={option.value} value={option.value} label={option.label}>
+                      <div>{option.label}</div>
+                      <div style={{ fontSize: 12, color: token.colorTextTertiary }}>{option.description}</div>
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="默认质量预设" name="default_quality_preset" tooltip="为大纲与章节生成施加统一的质量偏好">
+                <Select allowClear placeholder="默认不额外施压" optionLabelProp="label">
+                  {QUALITY_PRESET_OPTIONS.map((option) => (
+                    <Select.Option key={option.value} value={option.value} label={option.label}>
+                      <div>{option.label}</div>
+                      <div style={{ fontSize: 12, color: token.colorTextTertiary }}>{option.description}</div>
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item
+            label="默认创作总控"
+            name="default_story_creation_brief"
+            tooltip="用几句话定义这个项目长期遵循的创作重心、推进节奏或核心约束"
+          >
+            <TextArea
+              rows={3}
+              placeholder="例如：始终围绕主角的目标、阻力与代价推进，优先保证钩子和回报闭环。"
+              showCount
+              maxLength={600}
+            />
+          </Form.Item>
+
+          <Form.Item
+            label="默认额外质量要求"
+            name="default_quality_notes"
+            tooltip="补充你长期想保留或压制的写作倾向，例如减少说明句、加强动作反馈等"
+          >
+            <TextArea
+              rows={3}
+              placeholder="例如：减少解释性旁白，优先用动作和对话推进信息；章尾必须保留牵引。"
+              showCount
+              maxLength={600}
+            />
+          </Form.Item>
+        </Card>
 
         <Card size="small" title="生成前网络检索" style={{ marginBottom: 24 }}>
           <Alert

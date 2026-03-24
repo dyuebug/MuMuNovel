@@ -1801,6 +1801,12 @@ export const wizardStreamApi = {
       chapter_count?: number;
       character_count?: number;
       outline_mode?: 'one-to-one' | 'one-to-many';  // 添加大纲模式参数
+      default_creative_mode?: CreativeMode;
+      default_story_focus?: StoryFocus;
+      default_plot_stage?: PlotStage;
+      default_story_creation_brief?: string;
+      default_quality_preset?: QualityPreset;
+      default_quality_notes?: string;
       provider?: string;
       model?: string;
       enable_web_research?: boolean;
@@ -1876,6 +1882,10 @@ export const wizardStreamApi = {
       model?: string;
       creative_mode?: CreativeMode;
       story_focus?: StoryFocus;
+      plot_stage?: PlotStage;
+      story_creation_brief?: string;
+      quality_preset?: QualityPreset;
+      quality_notes?: string;
       enable_web_research?: boolean;
       web_research_query?: string;
     },

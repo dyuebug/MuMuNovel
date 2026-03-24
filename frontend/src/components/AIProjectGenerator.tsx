@@ -4,7 +4,7 @@ import { Card, Button, Space, Typography, message, Progress } from 'antd';
 import { CheckCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import { backgroundTaskApi, wizardStreamApi } from '../services/api';
 import type { SSEClientOptions } from '../utils/sseClient';
-import type { ApiError, ResearchAssetSummary } from '../types';
+import type { ApiError, CreativeMode, PlotStage, QualityPreset, ResearchAssetSummary, StoryFocus } from '../types';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -18,6 +18,12 @@ export interface GenerationConfig {
   chapter_count: number;
   character_count: number;
   outline_mode?: 'one-to-one' | 'one-to-many';
+  default_creative_mode?: CreativeMode;
+  default_story_focus?: StoryFocus;
+  default_plot_stage?: PlotStage;
+  default_story_creation_brief?: string;
+  default_quality_preset?: QualityPreset;
+  default_quality_notes?: string;
   enable_web_research?: boolean;
   web_research_query?: string;
   world_building_research_query?: string;
@@ -146,6 +152,12 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       chapter_count: data.chapter_count,
       character_count: data.character_count,
       outline_mode: data.outline_mode || 'one-to-many',
+      default_creative_mode: data.default_creative_mode,
+      default_story_focus: data.default_story_focus,
+      default_plot_stage: data.default_plot_stage,
+      default_story_creation_brief: data.default_story_creation_brief,
+      default_quality_preset: data.default_quality_preset,
+      default_quality_notes: data.default_quality_notes,
       ...buildResearchFields(data, 'worldBuilding'),
     };
   };
@@ -177,6 +189,12 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     chapter_count: data.chapter_count,
     narrative_perspective: data.narrative_perspective,
     target_words: data.target_words,
+    creative_mode: data.default_creative_mode,
+    story_focus: data.default_story_focus,
+    plot_stage: data.default_plot_stage || 'development',
+    story_creation_brief: data.default_story_creation_brief,
+    quality_preset: data.default_quality_preset,
+    quality_notes: data.default_quality_notes,
     ...buildResearchFields(data, 'outline'),
   });
 

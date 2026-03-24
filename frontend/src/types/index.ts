@@ -200,6 +200,12 @@ export interface ProjectWizardRequest {
   character_count?: number;
   target_words?: number;
   outline_mode?: 'one-to-one' | 'one-to-many';  // 大纲章节模式
+  default_creative_mode?: CreativeMode;
+  default_story_focus?: StoryFocus;
+  default_plot_stage?: PlotStage;
+  default_story_creation_brief?: string;
+  default_quality_preset?: QualityPreset;
+  default_quality_notes?: string;
   world_building?: {
     time_period: string;
     location: string;
@@ -726,6 +732,12 @@ export interface WizardBasicInfo {
   character_count?: number;
   target_words?: number;
   outline_mode?: 'one-to-one' | 'one-to-many';  // 大纲章节模式
+  default_creative_mode?: CreativeMode;
+  default_story_focus?: StoryFocus;
+  default_plot_stage?: PlotStage;
+  default_story_creation_brief?: string;
+  default_quality_preset?: QualityPreset;
+  default_quality_notes?: string;
   enable_web_research?: boolean;
   web_research_query?: string;
   world_building_research_query?: string;

@@ -1,4 +1,4 @@
-﻿import { Suspense, lazy, useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Suspense, lazy, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 
 
 import { Button, List, Modal, Form, Input, message, Empty, Space, Popconfirm, Card, Select, Radio, Tag, InputNumber } from 'antd';
@@ -17,7 +17,7 @@ import { backgroundTaskApi, outlineApi, chapterApi, projectApi } from '../servic
 import { hasUsableApiCredentials } from '../utils/apiKey';
 
 
-import type { OutlineExpansionResponse, BatchOutlineExpansionResponse, ChapterPlanItem, ApiError, Character, CreativeMode, PlotStage, StoryFocus } from '../types';
+import type { OutlineExpansionResponse, BatchOutlineExpansionResponse, ChapterPlanItem, ApiError, Character, CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
 
 
 // 大纲生成请求数据类型
@@ -53,7 +53,7 @@ interface OutlineGenerateRequestData {
   story_direction?: string;
 
 
-  plot_stage: 'development' | 'climax' | 'ending';
+  plot_stage: PlotStage;
 
 
   model?: string;
@@ -66,6 +66,15 @@ interface OutlineGenerateRequestData {
 
 
   story_focus?: StoryFocus;
+
+
+  story_creation_brief?: string;
+
+
+  quality_preset?: QualityPreset;
+
+
+  quality_notes?: string;
 
 
 }
@@ -375,6 +384,9 @@ export default function Outline() {
   const projectDefaultCreativeMode = currentProject?.default_creative_mode as CreativeMode | undefined;
   const projectDefaultStoryFocus = currentProject?.default_story_focus as StoryFocus | undefined;
   const projectDefaultPlotStage = currentProject?.default_plot_stage as PlotStage | undefined;
+  const projectDefaultStoryCreationBrief = currentProject?.default_story_creation_brief || undefined;
+  const projectDefaultQualityPreset = currentProject?.default_quality_preset as QualityPreset | undefined;
+  const projectDefaultQualityNotes = currentProject?.default_quality_notes || undefined;
 
 
 
@@ -2247,6 +2259,15 @@ export default function Outline() {
     story_focus?: StoryFocus;
 
 
+    story_creation_brief?: string;
+
+
+    quality_preset?: QualityPreset;
+
+
+    quality_notes?: string;
+
+
     mode?: 'auto' | 'new' | 'continue';
 
 
@@ -2329,6 +2350,15 @@ export default function Outline() {
 
 
         story_focus: values.story_focus ?? projectDefaultStoryFocus,
+
+
+        story_creation_brief: values.story_creation_brief ?? projectDefaultStoryCreationBrief,
+
+
+        quality_preset: values.quality_preset ?? projectDefaultQualityPreset,
+
+
+        quality_notes: values.quality_notes ?? projectDefaultQualityNotes,
 
 
         mode: values.mode || 'auto',
@@ -2551,6 +2581,9 @@ export default function Outline() {
             projectDefaultCreativeMode={projectDefaultCreativeMode}
             projectDefaultStoryFocus={projectDefaultStoryFocus}
             projectDefaultPlotStage={projectDefaultPlotStage}
+            projectDefaultStoryCreationBrief={projectDefaultStoryCreationBrief}
+            projectDefaultQualityPreset={projectDefaultQualityPreset}
+            projectDefaultQualityNotes={projectDefaultQualityNotes}
           />
         </Suspense>
       ),

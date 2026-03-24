@@ -17,9 +17,18 @@ from app.models.relationship import CharacterRelationship, Organization, Organiz
 from app.models.writing_style import WritingStyle
 from app.models.project_default_style import ProjectDefaultStyle
 from app.services.ai_service import AIService
-from app.services.prompt_service import prompt_service, PromptService
+from app.services.prompt_service import (
+    PromptService,
+    build_creative_mode_block,
+    build_narrative_blueprint_block,
+    build_quality_preference_block,
+    build_story_creation_brief_block,
+    build_story_focus_block,
+    prompt_service,
+)
 from app.services.plot_expansion_service import PlotExpansionService
 from app.services.chapter_web_research_service import chapter_web_research_service
+from app.services.chapter_quality_context_service import resolve_story_generation_guidance
 from app.logger import get_logger
 from app.utils.sse_response import SSEResponse, create_sse_response, WizardProgressTracker
 from app.api.settings import get_user_ai_service
@@ -34,6 +43,74 @@ def _pick_outline_field(data: Dict[str, Any], keys: list[str]) -> Any:
         if value:
             return value
     return None
+
+
+def _normalize_optional_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _merge_wizard_outline_requirements(
+    base_requirements: Optional[str],
+    *,
+    outline_count: int,
+    creative_mode: Optional[str],
+    story_focus: Optional[str],
+    plot_stage: Optional[str],
+    story_creation_brief: Optional[str],
+    quality_preset: Optional[str],
+    quality_notes: Optional[str],
+) -> str:
+    parts: list[str] = []
+
+    base_text = str(base_requirements or "").strip()
+    if base_text:
+        parts.append(base_text)
+
+    story_creation_brief_block = build_story_creation_brief_block(story_creation_brief).strip()
+    if story_creation_brief_block:
+        parts.append(story_creation_brief_block)
+
+    quality_preference_block = build_quality_preference_block(
+        quality_preset,
+        quality_notes,
+        scene="outline",
+    ).strip()
+    if quality_preference_block:
+        parts.append(quality_preference_block)
+
+    creative_mode_block = build_creative_mode_block(creative_mode, scene="outline").strip()
+    if creative_mode_block:
+        parts.append(creative_mode_block)
+
+    story_focus_block = build_story_focus_block(story_focus, scene="outline").strip()
+    if story_focus_block:
+        parts.append(story_focus_block)
+
+    narrative_blueprint_block = build_narrative_blueprint_block(
+        creative_mode,
+        story_focus,
+        scene="outline",
+        plot_stage=plot_stage,
+    ).strip()
+    if narrative_blueprint_block:
+        parts.append(narrative_blueprint_block)
+
+    parts.append(
+        f"【开局大纲约束】这是小说的开局部分，请生成{outline_count}个大纲节点，重点关注：\n"
+        "1. 引入主要角色和世界观设定\n"
+        "2. 建立主线冲突和故事钩子\n"
+        "3. 展开初期情节，为后续发展埋下伏笔\n"
+        "4. 若包含第1-3章，尽量体现黄金三章节奏（钩子→升级→小高潮）\n"
+        "5. 每章至少一个小爽点与一个章尾钩子，避免平推\n"
+        "6. 不要试图完结故事，这只是开始部分\n"
+        "7. 不要在JSON字符串值中使用中文引号（\"\"''），请使用【】或《》标记"
+    )
+
+    return "\n\n".join(part for part in parts if part)
 
 
 def _format_outline_value(value: Any, max_items: int = 3) -> str:
@@ -212,6 +289,12 @@ async def world_building_generator(
         chapter_count = data.get("chapter_count")
         character_count = data.get("character_count")
         outline_mode = data.get("outline_mode", "one-to-many")  # 大纲模式，默认一对多
+        default_creative_mode = data.get("default_creative_mode")
+        default_story_focus = data.get("default_story_focus")
+        default_plot_stage = data.get("default_plot_stage")
+        default_story_creation_brief = _normalize_optional_text(data.get("default_story_creation_brief"))
+        default_quality_preset = data.get("default_quality_preset")
+        default_quality_notes = _normalize_optional_text(data.get("default_quality_notes"))
         provider = data.get("provider")
         model = data.get("model")
         enable_mcp = data.get("enable_mcp", True)  # 默认启用MCP
@@ -392,6 +475,12 @@ async def world_building_generator(
             chapter_count=chapter_count,
             character_count=character_count,
             outline_mode=outline_mode,  # 设置大纲模式
+            default_creative_mode=default_creative_mode,
+            default_story_focus=default_story_focus,
+            default_plot_stage=default_plot_stage,
+            default_story_creation_brief=default_story_creation_brief,
+            default_quality_preset=default_quality_preset,
+            default_quality_notes=default_quality_notes,
             wizard_status="incomplete",
             wizard_step=1,
             status="planning"
@@ -822,7 +911,13 @@ async def characters_generator(
         world_context = data.get("world_context")
         theme = data.get("theme", "")
         genre = data.get("genre", "")
-        requirements = data.get("requirements", "")
+        requirements = _normalize_optional_text(data.get("requirements")) or ""
+        creative_mode = data.get("creative_mode")
+        story_focus = data.get("story_focus")
+        plot_stage = data.get("plot_stage")
+        story_creation_brief = _normalize_optional_text(data.get("story_creation_brief"))
+        quality_preset = data.get("quality_preset")
+        quality_notes = _normalize_optional_text(data.get("quality_notes"))
         provider = data.get("provider")
         model = data.get("model")
         enable_mcp = data.get("enable_mcp", True)  # 默认启用MCP
@@ -1538,7 +1633,13 @@ async def outline_generator(
             target_words = int(data.get("target_words", 100000) or 100000)
         except (TypeError, ValueError):
             target_words = 100000
-        requirements = data.get("requirements", "")
+        requirements = _normalize_optional_text(data.get("requirements")) or ""
+        creative_mode = data.get("creative_mode")
+        story_focus = data.get("story_focus")
+        plot_stage = data.get("plot_stage")
+        story_creation_brief = _normalize_optional_text(data.get("story_creation_brief"))
+        quality_preset = data.get("quality_preset")
+        quality_notes = _normalize_optional_text(data.get("quality_notes"))
         provider = data.get("provider")
         model = data.get("model")
         enable_mcp = data.get("enable_mcp", True)  # 默认启用MCP
@@ -1571,14 +1672,25 @@ async def outline_generator(
         # 准备提示词
         yield await tracker.preparing(f"准备生成{outline_count}个大纲节点...")
         
-        outline_requirements = f"{requirements}\n\n【重要说明】这是小说的开局部分，请生成{outline_count}个大纲节点，重点关注：\n"
-        outline_requirements += "1. 引入主要角色和世界观设定\n"
-        outline_requirements += "2. 建立主线冲突和故事钩子\n"
-        outline_requirements += "3. 展开初期情节，为后续发展埋下伏笔\n"
-        outline_requirements += "4. 若包含第1-3章，尽量体现黄金三章节奏（钩子→升级→小高潮）\n"
-        outline_requirements += "5. 每章至少一个小爽点与一个章尾钩子，避免平推\n"
-        outline_requirements += "6. 不要试图完结故事，这只是开始部分\n"
-        outline_requirements += "7. 不要在JSON字符串值中使用中文引号（\"\"''），请使用【】或《》标记\n"
+        generation_guidance = resolve_story_generation_guidance(
+            project,
+            creative_mode=creative_mode,
+            story_focus=story_focus,
+            plot_stage=plot_stage,
+            story_creation_brief=story_creation_brief,
+            quality_preset=quality_preset,
+            quality_notes=quality_notes,
+        )
+        outline_requirements = _merge_wizard_outline_requirements(
+            requirements,
+            outline_count=outline_count,
+            creative_mode=generation_guidance.creative_mode,
+            story_focus=generation_guidance.story_focus,
+            plot_stage=generation_guidance.plot_stage,
+            story_creation_brief=generation_guidance.story_creation_brief,
+            quality_preset=generation_guidance.quality_preset,
+            quality_notes=generation_guidance.quality_notes,
+        )
         
         # 获取自定义提示词模板
         outline_research_bundle = await chapter_web_research_service.collect_assets(
@@ -1617,6 +1729,12 @@ async def outline_generator(
             rules=project.world_rules or "未设定",
             characters_info=characters_info or "暂无角色信息",
             mcp_references="",
+            creative_mode=generation_guidance.creative_mode or "",
+            story_focus=generation_guidance.story_focus or "",
+            plot_stage=generation_guidance.plot_stage or "",
+            story_creation_brief=generation_guidance.story_creation_brief or "",
+            quality_preset=generation_guidance.quality_preset or "",
+            quality_notes=generation_guidance.quality_notes or "",
             requirements=outline_requirements,
             external_assets=outline_research_assets,
             reference_assets=outline_research_assets,
