@@ -15,8 +15,153 @@ from app.models.memory import StoryMemory
 from app.models.foreshadow import Foreshadow
 from app.models.relationship import CharacterRelationship, Organization, OrganizationMember
 from app.logger import get_logger
+from app.services.memory_ranking import rank_memories_for_generation
 
 logger = get_logger(__name__)
+
+
+CHARACTER_STATUS_LABELS = {
+    "active": "活跃",
+    "deceased": "死亡",
+    "missing": "失踪",
+    "retired": "退场",
+    "destroyed": "覆灭",
+}
+
+CHARACTER_ROLE_PRIORITIES = {
+    "protagonist": 3,
+    "antagonist": 2,
+    "supporting": 1,
+}
+
+
+def _preview_text(text: Any, max_length: int = 120) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    return value[:max_length] if len(value) <= max_length else f"{value[:max_length]}..."
+
+
+def _normalize_related_character_refs(values: Any) -> set[str]:
+    if values is None:
+        return set()
+    if isinstance(values, str):
+        text = values.strip()
+        return {text.lower()} if text else set()
+    if isinstance(values, (list, tuple, set)):
+        return {str(value).strip().lower() for value in values if str(value).strip()}
+    text = str(values).strip()
+    return {text.lower()} if text else set()
+
+
+def _story_memory_matches_character(memory: StoryMemory, character: Character) -> bool:
+    related_refs = _normalize_related_character_refs(memory.related_characters)
+    if character.id.lower() in related_refs or character.name.lower() in related_refs:
+        return True
+
+    combined_text = " ".join(
+        part for part in [memory.title or "", memory.content or ""] if part
+    ).lower()
+    return character.name.lower() in combined_text
+
+
+def _append_character_state_lines(info_lines: List[str], character: Character) -> None:
+    if character.status and character.status != "active":
+        status_label = CHARACTER_STATUS_LABELS.get(character.status, character.status)
+        chapter_hint = f"（第{character.status_changed_chapter}章）" if character.status_changed_chapter else ""
+        info_lines.append(f"  生存状态{chapter_hint}: {status_label}")
+
+    state_preview = _preview_text(character.current_state, max_length=100)
+    if state_preview:
+        update_hint = f"（第{character.state_updated_chapter}章更新）" if character.state_updated_chapter else ""
+        info_lines.append(f"  当前状态{update_hint}: {state_preview}")
+
+
+def _merge_reference_blocks(*blocks: Optional[str]) -> Optional[str]:
+    merged: List[str] = []
+    seen: set[str] = set()
+    for block in blocks:
+        text = str(block or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        merged.append(text)
+    return "\n\n".join(merged) if merged else None
+
+
+def build_character_arc_snapshot(
+    characters: List[Character],
+    memories: List[StoryMemory],
+    current_chapter: int,
+    max_characters: int = 5,
+    max_memories_per_character: int = 2,
+) -> Optional[str]:
+    """将角色当前状态与最近轨迹压缩成适合续写提示词的摘要。"""
+    if not characters:
+        return None
+
+    sorted_memories = sorted(
+        memories,
+        key=lambda item: ((item.story_timeline or 0), float(item.importance_score or 0.0)),
+        reverse=True,
+    )
+
+    ranked_characters: List[tuple[int, int, int, Character, List[StoryMemory]]] = []
+    for character in characters:
+        matched_memories = [
+            memory for memory in sorted_memories
+            if _story_memory_matches_character(memory, character)
+        ]
+        has_state = 1 if _preview_text(character.current_state, max_length=60) else 0
+        has_non_active_status = 1 if character.status and character.status != "active" else 0
+        if not has_state and not has_non_active_status and not matched_memories:
+            continue
+
+        ranked_characters.append(
+            (
+                has_state + has_non_active_status + (1 if matched_memories else 0),
+                int(character.state_updated_chapter or 0),
+                CHARACTER_ROLE_PRIORITIES.get(character.role_type or "", 0),
+                character,
+                matched_memories,
+            )
+        )
+
+    ranked_characters.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    lines: List[str] = []
+    for _, _, _, character, matched_memories in ranked_characters[:max_characters]:
+        summary_parts: List[str] = []
+
+        state_preview = _preview_text(character.current_state, max_length=36)
+        if state_preview:
+            summary_parts.append(f"当前状态「{state_preview}」")
+
+        if character.status and character.status != "active":
+            status_label = CHARACTER_STATUS_LABELS.get(character.status, character.status)
+            if character.status_changed_chapter and character.status_changed_chapter < current_chapter:
+                summary_parts.append(f"生存状态={status_label}(第{character.status_changed_chapter}章)")
+            else:
+                summary_parts.append(f"生存状态={status_label}")
+
+        if character.state_updated_chapter:
+            summary_parts.append(f"状态更新时间=第{character.state_updated_chapter}章")
+
+        memory_fragments: List[str] = []
+        for memory in matched_memories[:max_memories_per_character]:
+            chapter_prefix = f"第{memory.story_timeline}章" if memory.story_timeline else "近期"
+            snippet = _preview_text(memory.title or memory.content, max_length=28)
+            if snippet:
+                memory_fragments.append(f"{chapter_prefix}{snippet}")
+        if memory_fragments:
+            summary_parts.append(f"近期轨迹={'；'.join(memory_fragments)}")
+
+        if summary_parts:
+            lines.append(f"- {character.name}：{'；'.join(summary_parts)}")
+
+    if not lines:
+        return None
+
+    return "【角色弧光快照】\n" + "\n".join(lines)
 
 
 def _to_brief_lines(value: Any, max_items: int = 5) -> List[str]:
@@ -150,6 +295,7 @@ class OneToManyContext:
     # === P2-参考信息 ===
     relevant_memories: Optional[str] = None  # 始终启用（相关度>0.6）
     foreshadow_reminders: Optional[str] = None
+    character_arc_snapshot: Optional[str] = None
     
     # === 元信息 ===
     context_stats: Dict[str, Any] = field(default_factory=dict)
@@ -158,9 +304,9 @@ class OneToManyContext:
         """计算总上下文长度"""
         total = 0
         for field_name in ['chapter_outline', 'recent_chapters_context', 'continuation_point',
-                          'chapter_characters', 'chapter_careers',
-                          'relevant_memories', 'foreshadow_reminders',
-                          'previous_chapter_summary']:
+                           'chapter_characters', 'chapter_careers',
+                           'relevant_memories', 'foreshadow_reminders', 'character_arc_snapshot',
+                           'previous_chapter_summary']:
             value = getattr(self, field_name, None)
             if value:
                 total += len(value)
@@ -203,6 +349,7 @@ class OneToOneContext:
     # === P2-参考信息 ===
     foreshadow_reminders: Optional[str] = None
     relevant_memories: Optional[str] = None  # 相关度>0.6
+    character_arc_snapshot: Optional[str] = None
     
     # === 元信息 ===
     context_stats: Dict[str, Any] = field(default_factory=dict)
@@ -211,8 +358,8 @@ class OneToOneContext:
         """计算总上下文长度"""
         total = 0
         for field_name in ['chapter_outline', 'continuation_point', 'previous_chapter_summary',
-                          'chapter_characters', 'chapter_careers', 'foreshadow_reminders',
-                          'relevant_memories']:
+                           'chapter_characters', 'chapter_careers', 'foreshadow_reminders',
+                           'relevant_memories', 'character_arc_snapshot']:
             value = getattr(self, field_name, None)
             if value:
                 total += len(value)
@@ -250,6 +397,42 @@ class OneToManyContextBuilder:
         """
         self.memory_service = memory_service
         self.foreshadow_service = foreshadow_service
+
+    async def _get_character_arc_snapshot(
+        self,
+        project_id: str,
+        chapter_number: int,
+        db: AsyncSession,
+        filter_character_names: Optional[List[str]] = None,
+    ) -> Optional[str]:
+        """聚合角色当前状态与最近轨迹，形成续写友好的压缩提示。"""
+        character_query = (
+            select(Character)
+            .where(Character.project_id == project_id)
+            .where(Character.is_organization.is_(False))
+        )
+        if filter_character_names:
+            character_query = character_query.where(Character.name.in_(filter_character_names[:10]))
+
+        characters_result = await db.execute(character_query)
+        characters = characters_result.scalars().all()
+        if not characters:
+            return None
+
+        memory_result = await db.execute(
+            select(StoryMemory)
+            .where(StoryMemory.project_id == project_id)
+            .where(StoryMemory.story_timeline < chapter_number)
+            .where(StoryMemory.memory_type.in_(['character_event', 'plot_point']))
+            .order_by(StoryMemory.story_timeline.desc(), StoryMemory.importance_score.desc())
+            .limit(80)
+        )
+        memories = memory_result.scalars().all()
+        return build_character_arc_snapshot(
+            characters=characters,
+            memories=memories,
+            current_chapter=chapter_number,
+        )
     
     async def build(
         self,
@@ -325,6 +508,8 @@ class OneToManyContextBuilder:
             context.previous_chapter_summary = ending_info.get('summary')
             context.previous_chapter_events = ending_info.get('key_events')
             logger.info(f"  ✅ 衔接锚点: {len(context.continuation_point or '')}字符")
+
+        focus_character_names = self._extract_character_focus_names_from_expansion_plan(chapter)
         
         # === P1-重要信息 ===
         # 角色信息（完整版：含年龄、外貌、背景、关系、组织、职业）+ 独立职业详情
@@ -336,14 +521,28 @@ class OneToManyContextBuilder:
         context.emotional_tone = self._extract_emotional_tone(chapter, outline)
         logger.info(f"  ✅ 角色信息: {len(context.chapter_characters)}字符")
         logger.info(f"  ✅ 职业信息: {len(context.chapter_careers or '')}字符")
+
+        context.character_arc_snapshot = await self._get_character_arc_snapshot(
+            project_id=project.id,
+            chapter_number=chapter_number,
+            db=db,
+            filter_character_names=focus_character_names,
+        )
+        if context.character_arc_snapshot:
+            logger.info(f"  ✅ 角色弧光快照: {len(context.character_arc_snapshot)}字符")
         
         # === P2-参考信息（始终启用）===
         if self.memory_service:
             context.relevant_memories = await self._get_relevant_memories_enhanced(
                 user_id, project.id, chapter_number,
-                context.chapter_outline, db
+                context.chapter_outline, db,
+                related_names=focus_character_names,
             )
-            logger.info(f"  ✅ 相关记忆: {len(context.relevant_memories or '')}字符")
+        context.relevant_memories = _merge_reference_blocks(
+            context.relevant_memories,
+            context.character_arc_snapshot,
+        )
+        logger.info(f"  ✅ 相关记忆: {len(context.relevant_memories or '')}字符")
         
         # === P2-伏笔提醒===
         if self.foreshadow_service:
@@ -362,6 +561,7 @@ class OneToManyContextBuilder:
             "characters_length": len(context.chapter_characters),
             "careers_length": len(context.chapter_careers or ""),
             "recent_context_length": len(context.recent_chapters_context or ""),
+            "character_arc_length": len(context.character_arc_snapshot or ""),
             "memories_length": len(context.relevant_memories or ""),
             "foreshadow_length": len(context.foreshadow_reminders or ""),
             "total_length": context.get_total_context_length()
@@ -370,6 +570,56 @@ class OneToManyContextBuilder:
         logger.info(f"📊 [1-N模式] 上下文构建完成: 总长度 {context.context_stats['total_length']} 字符")
         
         return context
+
+    def _extract_character_focus_names_from_expansion_plan(self, chapter: Chapter) -> List[str]:
+        """从扩写计划中提取本章角色焦点名称。"""
+        if not chapter.expansion_plan:
+            return []
+
+        try:
+            plan = json.loads(chapter.expansion_plan)
+        except json.JSONDecodeError:
+            return []
+
+        focus_names = plan.get('character_focus', []) or []
+        return [str(name).strip() for name in focus_names if str(name).strip()]
+
+    async def _get_character_arc_snapshot(
+        self,
+        project_id: str,
+        chapter_number: int,
+        db: AsyncSession,
+        filter_character_names: Optional[List[str]] = None,
+    ) -> Optional[str]:
+        """聚合角色当前状态与最近轨迹，形成续写友好的压缩提示。"""
+        character_query = (
+            select(Character)
+            .where(Character.project_id == project_id)
+            .where(Character.is_organization.is_(False))
+        )
+        if filter_character_names:
+            character_query = character_query.where(Character.name.in_(filter_character_names[:10]))
+
+        characters_result = await db.execute(character_query)
+        characters = characters_result.scalars().all()
+        if not characters:
+            return None
+
+        memory_result = await db.execute(
+            select(StoryMemory)
+            .where(StoryMemory.project_id == project_id)
+            .where(StoryMemory.story_timeline < chapter_number)
+            .where(StoryMemory.memory_type.in_(['character_event', 'plot_point']))
+            .order_by(StoryMemory.story_timeline.desc(), StoryMemory.importance_score.desc())
+            .limit(80)
+        )
+        memories = memory_result.scalars().all()
+        return build_character_arc_snapshot(
+            characters=characters,
+            memories=memories,
+            current_chapter=chapter_number,
+        )
+
     
     def _build_chapter_outline_1n(
         self,
@@ -439,13 +689,7 @@ class OneToManyContextBuilder:
         all_char_map = {c.id: c.name for c in all_characters}
         
         # 从expansion_plan中提取角色焦点
-        filter_character_names = None
-        if chapter.expansion_plan:
-            try:
-                plan = json.loads(chapter.expansion_plan)
-                filter_character_names = plan.get('character_focus', [])
-            except json.JSONDecodeError:
-                pass
+        filter_character_names = self._extract_character_focus_names_from_expansion_plan(chapter)
         
         # 筛选角色
         characters = all_characters
@@ -581,6 +825,7 @@ class OneToManyContextBuilder:
             if c.background:
                 background_preview = c.background[:150] if len(c.background) > 150 else c.background
                 info_lines.append(f"  背景: {background_preview}")
+            _append_character_state_lines(info_lines, c)
             
             # 职业信息
             if c.id in char_career_relations:
@@ -743,7 +988,8 @@ class OneToManyContextBuilder:
         project_id: str,
         chapter_number: int,
         chapter_outline: str,
-        db: AsyncSession
+        db: AsyncSession,
+        related_names: Optional[List[str]] = None,
     ) -> Optional[str]:
         """获取相关记忆（始终启用，相关度>0.6）"""
         if not self.memory_service:
@@ -756,8 +1002,16 @@ class OneToManyContextBuilder:
                 user_id=user_id,
                 project_id=project_id,
                 query=query_text,
-                limit=15,
+                limit=24,
                 min_importance=0.0
+            )
+
+            relevant_memories = rank_memories_for_generation(
+                memories=relevant_memories,
+                current_chapter=chapter_number,
+                preferred_types=['plot_point', 'character_event', 'hook', 'world_detail'],
+                related_names=related_names,
+                limit=15,
             )
             
             # 过滤相关度>0.6
@@ -1234,6 +1488,15 @@ class OneToOneContextBuilder:
             context.chapter_characters = "暂无角色信息"
             context.chapter_careers = None
             logger.info(f"  ⚠️ P1-角色信息: 无")
+
+        context.character_arc_snapshot = await self._get_character_arc_snapshot(
+            project_id=project.id,
+            chapter_number=chapter_number,
+            db=db,
+            filter_character_names=character_names,
+        )
+        if context.character_arc_snapshot:
+            logger.info(f"  ✅ P1-角色弧光: {len(context.character_arc_snapshot)}字符")
         
         # === P2-参考信息 ===
         # 1. 伏笔提醒
@@ -1257,8 +1520,16 @@ class OneToOneContextBuilder:
                     user_id=user_id,
                     project_id=project.id,
                     query=query_text,
-                    limit=15,
+                    limit=24,
                     min_importance=0.0
+                )
+
+                relevant_memories = rank_memories_for_generation(
+                    memories=relevant_memories,
+                    current_chapter=chapter_number,
+                    preferred_types=['plot_point', 'character_event', 'hook', 'world_detail'],
+                    related_names=character_names,
+                    limit=15,
                 )
                 
                 # 过滤相关度阈值为0.6
@@ -1286,6 +1557,11 @@ class OneToOneContextBuilder:
         else:
             context.relevant_memories = None
             logger.info(f"  ⚠️ P2-相关记忆: 无大纲内容或记忆服务不可用")
+
+        context.relevant_memories = _merge_reference_blocks(
+            context.relevant_memories,
+            context.character_arc_snapshot,
+        )
         
         # === 统计信息 ===
         context.context_stats = {
@@ -1297,6 +1573,7 @@ class OneToOneContextBuilder:
             "outline_length": len(context.chapter_outline),
             "characters_length": len(context.chapter_characters),
             "careers_length": len(context.chapter_careers or ""),
+            "character_arc_length": len(context.character_arc_snapshot or ""),
             "foreshadow_length": len(context.foreshadow_reminders or ""),
             "memories_length": len(context.relevant_memories or ""),
             "total_length": context.get_total_context_length()
@@ -1444,6 +1721,7 @@ class OneToOneContextBuilder:
             if c.background:
                 background_preview = c.background[:150] if len(c.background) > 150 else c.background
                 info_lines.append(f"  背景: {background_preview}")
+            _append_character_state_lines(info_lines, c)
             
             # === 职业信息（完整数据）===
             if char_id in char_career_relations:

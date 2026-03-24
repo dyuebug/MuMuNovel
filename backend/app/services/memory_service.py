@@ -7,6 +7,7 @@ from datetime import datetime
 from app.logger import get_logger
 import os
 import hashlib
+from app.services.memory_ranking import rank_memories_for_generation
 
 logger = get_logger(__name__)
 
@@ -385,6 +386,7 @@ class MemoryService:
                     "chapter_number": int(metadata.get("chapter_number", 0)),
                     "importance": float(metadata.get("importance_score", 0.5)),
                     "tags": json.dumps(metadata.get("tags", []), ensure_ascii=False),
+                    "related_characters": json.dumps(metadata.get("related_characters", []), ensure_ascii=False)[:500],
                     "title": str(metadata.get("title", ""))[:200],
                     "is_foreshadow": int(metadata.get("is_foreshadow", 0)),
                     "created_at": datetime.now().isoformat()
@@ -636,7 +638,7 @@ class MemoryService:
             user_id=user_id,
             project_id=project_id,
             query=chapter_outline,
-            limit=10,
+            limit=18,
             min_importance=0.4
         )
         
@@ -654,7 +656,7 @@ class MemoryService:
                 project_id=project_id,
                 query=character_query,
                 memory_types=["character_event", "plot_point"],
-                limit=8
+                limit=12
             )
         
         # 5. 获取重要情节点
@@ -665,7 +667,7 @@ class MemoryService:
                 project_id=project_id,
                 query="重要 转折 高潮 关键",
                 memory_types=["plot_point", "hook"],
-                limit=5,
+                limit=10,
                 min_importance=0.7
             )
         except Exception as e:
@@ -678,17 +680,53 @@ class MemoryService:
                     project_id=project_id,
                     query="重要 转折 高潮 关键",
                     memory_types=["plot_point", "hook"],
-                    limit=5
+                    limit=10
                 )
             except Exception as e2:
                 logger.warning(f"⚠️ 降级查询也失败: {str(e2)}")
                 plot_points = []
+
+        recent = self.rank_memories_for_generation(
+            recent,
+            current_chapter=current_chapter,
+            preferred_types=["chapter_summary", "plot_point", "character_event"],
+            related_names=character_names,
+            limit=12,
+        )
+        relevant = self.rank_memories_for_generation(
+            relevant,
+            current_chapter=current_chapter,
+            preferred_types=["plot_point", "character_event", "hook", "world_detail"],
+            related_names=character_names,
+            limit=10,
+        )
+        foreshadows = self.rank_memories_for_generation(
+            foreshadows,
+            current_chapter=current_chapter,
+            preferred_types=["foreshadow", "hook", "plot_point"],
+            related_names=character_names,
+            limit=5,
+        )
+        character_memories = self.rank_memories_for_generation(
+            character_memories,
+            current_chapter=current_chapter,
+            preferred_types=["character_event", "plot_point"],
+            related_names=character_names,
+            limit=8,
+        )
+        plot_points = self.rank_memories_for_generation(
+            plot_points,
+            current_chapter=current_chapter,
+            preferred_types=["plot_point", "hook"],
+            related_names=character_names,
+            limit=5,
+        )
         
         context = {
             "recent_context": self._format_memories(recent, "最近章节记忆"),
             "relevant_memories": self._format_memories(relevant, "语义相关记忆"),
             "character_states": self._format_memories(character_memories, "角色相关记忆"),
-            "foreshadows": self._format_memories(foreshadows[:5], "未完结伏笔"),
+            "foreshadows": self._format_memories(foreshadows, "未完结伏笔"),
             "plot_points": self._format_memories(plot_points, "重要情节点"),
             "stats": {
                 "recent_count": len(recent),
@@ -701,6 +739,24 @@ class MemoryService:
         
         logger.info(f"✅ 上下文构建完成: 最近{len(recent)}条, 相关{len(relevant)}条, 伏笔{len(foreshadows)}个")
         return context
+
+    def rank_memories_for_generation(
+        self,
+        memories: List[Dict[str, Any]],
+        current_chapter: int,
+        preferred_types: Optional[List[str]] = None,
+        related_names: Optional[List[str]] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """对生成上下文候选记忆做混合重排，提升稳定性与角色聚焦。"""
+        return rank_memories_for_generation(
+            memories=memories,
+            current_chapter=current_chapter,
+            preferred_types=preferred_types,
+            related_names=related_names,
+            limit=limit,
+        )
+
     def _format_memories(self, memories: List[Dict], section_title: str = "记忆") -> str:
         """
         格式化记忆列表为文本

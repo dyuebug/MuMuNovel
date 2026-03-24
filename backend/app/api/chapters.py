@@ -1054,17 +1054,23 @@ async def _record_task_quality_metrics(task_id: str, metrics_event: Dict[str, An
         overall_list = [item.get("overall_score", 0.0) for item in history]
         conflict_list = [item.get("conflict_chain_hit_rate", 0.0) for item in history]
         rule_list = [item.get("rule_grounding_hit_rate", 0.0) for item in history]
+        outline_alignment_list = [item.get("outline_alignment_rate", 0.0) for item in history]
+        dialogue_list = [item.get("dialogue_naturalness_rate", 0.0) for item in history]
         opening_list = [item.get("opening_hook_rate", 0.0) for item in history]
         payoff_list = [item.get("payoff_chain_rate", 0.0) for item in history]
         cliffhanger_list = [item.get("cliffhanger_rate", 0.0) for item in history]
+        pacing_values = [item.get("pacing_score") for item in history if item.get("pacing_score") is not None]
 
         current["summary"] = {
             "avg_overall_score": round(sum(overall_list) / max(len(overall_list), 1), 1),
             "avg_conflict_chain_hit_rate": round(sum(conflict_list) / max(len(conflict_list), 1), 1),
             "avg_rule_grounding_hit_rate": round(sum(rule_list) / max(len(rule_list), 1), 1),
+            "avg_outline_alignment_rate": round(sum(outline_alignment_list) / max(len(outline_alignment_list), 1), 1),
+            "avg_dialogue_naturalness_rate": round(sum(dialogue_list) / max(len(dialogue_list), 1), 1),
             "avg_opening_hook_rate": round(sum(opening_list) / max(len(opening_list), 1), 1),
             "avg_payoff_chain_rate": round(sum(payoff_list) / max(len(payoff_list), 1), 1),
             "avg_cliffhanger_rate": round(sum(cliffhanger_list) / max(len(cliffhanger_list), 1), 1),
+            "avg_pacing_score": round(sum(pacing_values) / len(pacing_values), 1) if pacing_values else None,
             "chapter_count": len(history),
         }
         task_quality_metrics_cache[task_id] = current

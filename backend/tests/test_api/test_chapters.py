@@ -2135,9 +2135,12 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
             "overall_score": 88.0,
             "conflict_chain_hit_rate": 80.0,
             "rule_grounding_hit_rate": 84.0,
+            "outline_alignment_rate": 86.0,
+            "dialogue_naturalness_rate": 78.0,
             "opening_hook_rate": 90.0,
             "payoff_chain_rate": 76.0,
             "cliffhanger_rate": 92.0,
+            "pacing_score": 8.1,
         },
     )
 
@@ -2149,6 +2152,9 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     assert status_body["latest_quality_metrics"]["overall_score"] == 88.0
     assert status_body["quality_metrics_summary"]["chapter_count"] == 1
     assert status_body["quality_metrics_summary"]["avg_overall_score"] == 88.0
+    assert status_body["quality_metrics_summary"]["avg_outline_alignment_rate"] == 86.0
+    assert status_body["quality_metrics_summary"]["avg_dialogue_naturalness_rate"] == 78.0
+    assert status_body["quality_metrics_summary"]["avg_pacing_score"] == 8.1
 
     active_response = await chapters_client.get(
         f"/api/chapters/project/{project.id}/batch-generate/active"
@@ -2160,6 +2166,7 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     assert active_body["task"]["checkpoint"]["progress_phase"] == "parsing"
     assert active_body["task"]["latest_quality_metrics"]["overall_score"] == 88.0
     assert active_body["task"]["quality_metrics_summary"]["avg_cliffhanger_rate"] == 92.0
+    assert active_body["task"]["quality_metrics_summary"]["avg_pacing_score"] == 8.1
 
     can_generate_response = await chapters_client.get(f"/api/chapters/{chapter.id}/can-generate")
     assert can_generate_response.status_code == 200
