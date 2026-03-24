@@ -1714,11 +1714,22 @@ async def test_should_return_analysis_checker_and_auto_revision_payloads(
         "priority_issue_count": 1,
         "applied_critical_count": 1,
         "applied_issue_count": 1,
-        "change_summary": "补足心理与动作承接",
-        "revised_text": "修订后正文，门后异响逼近，他终于承认自己在害怕。",
-        "revised_text_preview": "修订后正文，门后异响逼近",
+        "change_summary": "bridge the emotional and action transition",
+        "revised_text": "Revised chapter text with the approaching noise behind the door.",
+        "revised_text_preview": "Revised chapter text",
         "revised_word_count": 28,
         "unresolved_issues": [],
+    }
+    quality_metrics = {
+        "overall_score": 82.4,
+        "conflict_chain_hit_rate": 76.0,
+        "rule_grounding_hit_rate": 88.0,
+        "outline_alignment_rate": 81.0,
+        "dialogue_naturalness_rate": 79.0,
+        "opening_hook_rate": 92.0,
+        "payoff_chain_rate": 74.0,
+        "cliffhanger_rate": 83.0,
+        "pacing_score": 8.2,
     }
 
     async with chapters_session_factory() as session:
@@ -1739,6 +1750,16 @@ async def test_should_return_analysis_checker_and_auto_revision_payloads(
                 text_length=5,
                 is_foreshadow=0,
                 vector_id=f"vec-{chapter.id}",
+            )
+        )
+        session.add(
+            GenerationHistory(
+                project_id=project.id,
+                chapter_id=chapter.id,
+                prompt="chapter_generation",
+                generated_content=chapters_api._build_generation_history_payload("generated body", quality_metrics),
+                model="chapter_generator_v1",
+                created_at=datetime.utcnow() - timedelta(minutes=3),
             )
         )
         session.add(
@@ -1776,6 +1797,12 @@ async def test_should_return_analysis_checker_and_auto_revision_payloads(
     assert body["auto_revision_draft"]["applied_issue_count"] == 1
     assert body["auto_revision_draft"]["is_stale"] is True
     assert body["auto_revision_draft"].get("revised_text") is None
+    assert body["quality_metrics"]["overall_score"] == 82.4
+    assert body["quality_metrics"]["repair_guidance"]["summary"]
+    assert body["quality_metrics"]["repair_guidance"]["focus_areas"]
+    assert body["quality_metrics_summary"]["chapter_count"] == 1
+    assert body["quality_metrics_summary"]["avg_pacing_score"] == 8.2
+    assert body["quality_metrics_summary"]["repair_guidance"]["summary"]
 
     full_response = await chapters_client.get(f"/api/chapters/{chapter.id}/analysis?include_full_draft=true")
     assert full_response.status_code == 200
