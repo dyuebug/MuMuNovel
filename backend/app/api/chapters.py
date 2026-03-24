@@ -221,6 +221,22 @@ async def _update_task_workflow_runtime_state(task_id: str, event: Dict[str, Any
         task_workflow_state_cache[task_id] = snapshot
 
 
+async def _set_task_active_story_repair_payload(
+    task_id: str,
+    payload: Optional[Dict[str, Any]],
+):
+    async with task_workflow_lock:
+        current = dict(task_workflow_state_cache.get(task_id) or {})
+        if isinstance(payload, dict):
+            snapshot = dict(payload)
+            snapshot["updated_at"] = str(snapshot.get("updated_at") or datetime.now().isoformat())
+            current["active_story_repair_payload"] = snapshot
+        else:
+            current.pop("active_story_repair_payload", None)
+        current["updated_at"] = datetime.now().isoformat()
+        task_workflow_state_cache[task_id] = current
+
+
 async def publish_task_stream_event(task_id: str, event: Dict[str, Any]):
     """向任务流订阅者广播事件（不阻塞主流程）"""
     await _update_task_workflow_runtime_state(task_id, event)
@@ -1155,10 +1171,12 @@ async def _build_batch_task_workflow_snapshot(task: BatchGenerationTask) -> Dict
         "last_event": runtime.get("last_event"),
         "last_message": runtime.get("last_message"),
     }
+    active_story_repair_payload = runtime.get("active_story_repair_payload")
     return {
         "stage_code": stage_code,
         "execution_mode": "interactive",
         "checkpoint": checkpoint,
+        "active_story_repair_payload": dict(active_story_repair_payload) if isinstance(active_story_repair_payload, dict) else None,
     }
 
 
@@ -1190,6 +1208,98 @@ def _story_repair_payload_to_prompt_kwargs(payload: Optional[StoryRepairPayload]
             "story_preserve_strengths": None,
         }
     return payload.to_prompt_kwargs()
+
+
+STORY_REPAIR_SOURCE_LABELS: Dict[str, str] = {
+    "manual_request": "Manual request",
+    "current_chapter_quality": "Current chapter quality",
+    "recent_history_summary": "Recent history summary",
+    "manual_plus_current_chapter_quality": "Manual + current chapter quality",
+    "manual_plus_recent_history_summary": "Manual + recent history summary",
+}
+
+
+def _normalize_story_repair_guidance_items(values: Any, *, limit: int = 4) -> List[str]:
+    if not isinstance(values, list):
+        return []
+
+    items: List[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        items.append(text)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _resolve_story_repair_guidance_from_metrics(
+    metrics: Optional[Dict[str, Any]],
+    *,
+    scope: str,
+    prefer_embedded_guidance: bool = True,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(metrics, dict):
+        return None
+
+    guidance = metrics.get("repair_guidance") if prefer_embedded_guidance else None
+    if not isinstance(guidance, dict):
+        derived_guidance = build_story_repair_guidance(metrics, scope=scope)
+        guidance = derived_guidance if isinstance(derived_guidance, dict) else None
+
+    return dict(guidance) if isinstance(guidance, dict) else None
+
+
+def _resolve_story_repair_runtime_source(
+    *,
+    explicit_payload: Optional[StoryRepairPayload],
+    derived_payload: Optional[StoryRepairPayload],
+    derived_source: Optional[str],
+) -> Optional[str]:
+    if explicit_payload and derived_payload:
+        if derived_source == "current_chapter_quality":
+            return "manual_plus_current_chapter_quality"
+        if derived_source == "recent_history_summary":
+            return "manual_plus_recent_history_summary"
+    if explicit_payload:
+        return "manual_request"
+    if derived_payload:
+        return derived_source
+    return None
+
+
+def _build_story_repair_runtime_snapshot(
+    payload: Optional[StoryRepairPayload],
+    *,
+    scope: str,
+    source: Optional[str],
+    guidance: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    if payload is None or not source:
+        return None
+
+    guidance_payload = guidance if isinstance(guidance, dict) else {}
+    summary = payload.summary or str(guidance_payload.get("summary") or "").strip() or None
+    weakest_metric_key = guidance_payload.get("weakest_metric_key")
+    weakest_metric_label = guidance_payload.get("weakest_metric_label")
+    weakest_metric_value = guidance_payload.get("weakest_metric_value")
+
+    return {
+        "summary": summary,
+        "repair_targets": list(payload.targets),
+        "preserve_strengths": list(payload.strengths),
+        "focus_areas": _normalize_story_repair_guidance_items(guidance_payload.get("focus_areas"), limit=4),
+        "weakest_metric_key": weakest_metric_key if isinstance(weakest_metric_key, str) and weakest_metric_key else None,
+        "weakest_metric_label": weakest_metric_label if isinstance(weakest_metric_label, str) and weakest_metric_label else None,
+        "weakest_metric_value": weakest_metric_value if isinstance(weakest_metric_value, (int, float)) else None,
+        "source": source,
+        "source_label": STORY_REPAIR_SOURCE_LABELS.get(source, source),
+        "scope": scope,
+        "updated_at": datetime.now().isoformat(),
+    }
 
 
 async def _load_latest_quality_metrics_for_chapter_ids(
@@ -1238,7 +1348,7 @@ async def _load_recent_previous_chapter_ids(
     return list(result.scalars().all())
 
 
-async def _resolve_generation_story_repair_payload_for_batch(
+async def _resolve_generation_story_repair_state_for_batch(
     db_session: AsyncSession,
     *,
     project_id: str,
@@ -1246,7 +1356,7 @@ async def _resolve_generation_story_repair_payload_for_batch(
     story_repair_summary: Optional[str] = None,
     story_repair_targets: Optional[List[str]] = None,
     story_preserve_strengths: Optional[List[str]] = None,
-) -> Optional[StoryRepairPayload]:
+) -> Dict[str, Any]:
     explicit_payload = normalize_story_repair_payload(
         story_repair_summary,
         story_repair_targets,
@@ -1261,7 +1371,19 @@ async def _resolve_generation_story_repair_payload_for_batch(
     )
     previous_metrics = await _load_latest_quality_metrics_for_chapter_ids(db_session, previous_chapter_ids)
     if not previous_metrics:
-        return explicit_payload
+        source = _resolve_story_repair_runtime_source(
+            explicit_payload=explicit_payload,
+            derived_payload=None,
+            derived_source=None,
+        )
+        return {
+            "payload": explicit_payload,
+            "active_story_repair_payload": _build_story_repair_runtime_snapshot(
+                explicit_payload,
+                scope="batch",
+                source=source,
+            ),
+        }
 
     summary_metrics = _build_quality_metrics_summary(previous_metrics)
     derived_payload = build_story_repair_payload_from_metrics(
@@ -1269,7 +1391,130 @@ async def _resolve_generation_story_repair_payload_for_batch(
         scope="batch",
         prefer_embedded_guidance=False,
     ) if summary_metrics else None
-    return merge_story_repair_payload(explicit_payload, derived_payload)
+    derived_guidance = _resolve_story_repair_guidance_from_metrics(
+        summary_metrics,
+        scope="batch",
+        prefer_embedded_guidance=False,
+    ) if summary_metrics else None
+    payload = merge_story_repair_payload(explicit_payload, derived_payload)
+    source = _resolve_story_repair_runtime_source(
+        explicit_payload=explicit_payload,
+        derived_payload=derived_payload,
+        derived_source="recent_history_summary",
+    )
+    return {
+        "payload": payload,
+        "active_story_repair_payload": _build_story_repair_runtime_snapshot(
+            payload,
+            scope="batch",
+            source=source,
+            guidance=derived_guidance,
+        ),
+    }
+
+
+async def _resolve_generation_story_repair_state_for_chapter(
+    db_session: AsyncSession,
+    *,
+    chapter: Chapter,
+    story_repair_summary: Optional[str] = None,
+    story_repair_targets: Optional[List[str]] = None,
+    story_preserve_strengths: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    explicit_payload = normalize_story_repair_payload(
+        story_repair_summary,
+        story_repair_targets,
+        story_preserve_strengths,
+    )
+
+    current_metrics = await _load_latest_quality_metrics_for_chapter_ids(db_session, [chapter.id])
+    if current_metrics:
+        derived_payload = build_story_repair_payload_from_metrics(current_metrics[0], scope="chapter")
+        derived_guidance = _resolve_story_repair_guidance_from_metrics(current_metrics[0], scope="chapter")
+        payload = merge_story_repair_payload(explicit_payload, derived_payload)
+        source = _resolve_story_repair_runtime_source(
+            explicit_payload=explicit_payload,
+            derived_payload=derived_payload,
+            derived_source="current_chapter_quality",
+        )
+        return {
+            "payload": payload,
+            "active_story_repair_payload": _build_story_repair_runtime_snapshot(
+                payload,
+                scope="chapter",
+                source=source,
+                guidance=derived_guidance,
+            ),
+        }
+
+    previous_chapter_ids = await _load_recent_previous_chapter_ids(
+        db_session,
+        project_id=chapter.project_id,
+        before_chapter_number=chapter.chapter_number,
+        limit=3,
+    )
+    previous_metrics = await _load_latest_quality_metrics_for_chapter_ids(db_session, previous_chapter_ids)
+    if not previous_metrics:
+        source = _resolve_story_repair_runtime_source(
+            explicit_payload=explicit_payload,
+            derived_payload=None,
+            derived_source=None,
+        )
+        return {
+            "payload": explicit_payload,
+            "active_story_repair_payload": _build_story_repair_runtime_snapshot(
+                explicit_payload,
+                scope="chapter",
+                source=source,
+            ),
+        }
+
+    summary_metrics = _build_quality_metrics_summary(previous_metrics)
+    derived_payload = build_story_repair_payload_from_metrics(
+        summary_metrics,
+        scope="chapter",
+        prefer_embedded_guidance=False,
+    ) if summary_metrics else None
+    derived_guidance = _resolve_story_repair_guidance_from_metrics(
+        summary_metrics,
+        scope="chapter",
+        prefer_embedded_guidance=False,
+    ) if summary_metrics else None
+    payload = merge_story_repair_payload(explicit_payload, derived_payload)
+    source = _resolve_story_repair_runtime_source(
+        explicit_payload=explicit_payload,
+        derived_payload=derived_payload,
+        derived_source="recent_history_summary",
+    )
+    return {
+        "payload": payload,
+        "active_story_repair_payload": _build_story_repair_runtime_snapshot(
+            payload,
+            scope="chapter",
+            source=source,
+            guidance=derived_guidance,
+        ),
+    }
+
+
+async def _resolve_generation_story_repair_payload_for_batch(
+    db_session: AsyncSession,
+    *,
+    project_id: str,
+    before_chapter_number: int,
+    story_repair_summary: Optional[str] = None,
+    story_repair_targets: Optional[List[str]] = None,
+    story_preserve_strengths: Optional[List[str]] = None,
+) -> Optional[StoryRepairPayload]:
+    state = await _resolve_generation_story_repair_state_for_batch(
+        db_session,
+        project_id=project_id,
+        before_chapter_number=before_chapter_number,
+        story_repair_summary=story_repair_summary,
+        story_repair_targets=story_repair_targets,
+        story_preserve_strengths=story_preserve_strengths,
+    )
+    return state.get("payload")
 
 
 async def _resolve_generation_story_repair_payload_for_chapter(
@@ -1280,34 +1525,14 @@ async def _resolve_generation_story_repair_payload_for_chapter(
     story_repair_targets: Optional[List[str]] = None,
     story_preserve_strengths: Optional[List[str]] = None,
 ) -> Optional[StoryRepairPayload]:
-    explicit_payload = normalize_story_repair_payload(
-        story_repair_summary,
-        story_repair_targets,
-        story_preserve_strengths,
-    )
-
-    current_metrics = await _load_latest_quality_metrics_for_chapter_ids(db_session, [chapter.id])
-    if current_metrics:
-        derived_payload = build_story_repair_payload_from_metrics(current_metrics[0], scope="chapter")
-        return merge_story_repair_payload(explicit_payload, derived_payload)
-
-    previous_chapter_ids = await _load_recent_previous_chapter_ids(
+    state = await _resolve_generation_story_repair_state_for_chapter(
         db_session,
-        project_id=chapter.project_id,
-        before_chapter_number=chapter.chapter_number,
-        limit=3,
+        chapter=chapter,
+        story_repair_summary=story_repair_summary,
+        story_repair_targets=story_repair_targets,
+        story_preserve_strengths=story_preserve_strengths,
     )
-    previous_metrics = await _load_latest_quality_metrics_for_chapter_ids(db_session, previous_chapter_ids)
-    if not previous_metrics:
-        return explicit_payload
-
-    summary_metrics = _build_quality_metrics_summary(previous_metrics)
-    derived_payload = build_story_repair_payload_from_metrics(
-        summary_metrics,
-        scope="chapter",
-        prefer_embedded_guidance=False,
-    ) if summary_metrics else None
-    return merge_story_repair_payload(explicit_payload, derived_payload)
+    return state.get("payload")
 
 
 def _classify_analysis_error_code(error_message: Optional[str]) -> Optional[str]:
@@ -4624,7 +4849,7 @@ async def batch_generate_chapters_in_order(
     )
     
     logger.info(f"📦 创建批量生成任务: {batch_id}, 章节: 第{start_number}-{end_number}章, 预估耗时: {estimated_time}分钟")
-    batch_story_repair_payload = await _resolve_generation_story_repair_payload_for_batch(
+    batch_story_repair_state = await _resolve_generation_story_repair_state_for_batch(
         db,
         project_id=project_id,
         before_chapter_number=start_number,
@@ -4632,6 +4857,7 @@ async def batch_generate_chapters_in_order(
         story_repair_targets=batch_request.story_repair_targets,
         story_preserve_strengths=batch_request.story_preserve_strengths,
     )
+    batch_story_repair_payload = batch_story_repair_state.get("payload")
 
     batch_generation_guidance = resolve_story_generation_guidance(
         project,
@@ -4659,6 +4885,10 @@ async def batch_generate_chapters_in_order(
         enable_web_research=batch_request.enable_web_research,
         web_research_query=batch_request.web_research_query,
         **_story_repair_payload_to_prompt_kwargs(batch_story_repair_payload),
+    )
+    await _set_task_active_story_repair_payload(
+        batch_id,
+        batch_story_repair_state.get("active_story_repair_payload"),
     )
     
     return BatchGenerateResponse(
@@ -4711,7 +4941,8 @@ async def get_batch_generation_status(
         completed_at=task.completed_at.isoformat() if task.completed_at else None,
         error_message=task.error_message,
         latest_quality_metrics=quality_snapshot.get("latest"),
-        quality_metrics_summary=quality_snapshot.get("summary")
+        quality_metrics_summary=quality_snapshot.get("summary"),
+        active_story_repair_payload=workflow_snapshot.get("active_story_repair_payload"),
     )
 
 
@@ -4826,6 +5057,7 @@ async def get_active_batch_generation(
             "checkpoint": workflow_snapshot["checkpoint"],
             "latest_quality_metrics": quality_snapshot.get("latest"),
             "quality_metrics_summary": quality_snapshot.get("summary"),
+            "active_story_repair_payload": workflow_snapshot.get("active_story_repair_payload"),
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "started_at": task.started_at.isoformat() if task.started_at else None
         }
@@ -4879,6 +5111,7 @@ async def list_active_batch_generation_tasks(
                 "checkpoint": workflow_snapshot["checkpoint"],
                 "latest_quality_metrics": quality_snapshot.get("latest"),
                 "quality_metrics_summary": quality_snapshot.get("summary"),
+                "active_story_repair_payload": workflow_snapshot.get("active_story_repair_payload"),
                 "created_at": task.created_at.isoformat() if task.created_at else None,
                 "started_at": task.started_at.isoformat() if task.started_at else None,
                 "completed_at": task.completed_at.isoformat() if task.completed_at else None,
@@ -4981,6 +5214,12 @@ async def resume_batch_generation(
     if not can_generate:
         raise HTTPException(status_code=400, detail=f"Resume blocked by prerequisites: {error_msg}")
 
+    resumed_story_repair_state = await _resolve_generation_story_repair_state_for_batch(
+        db,
+        project_id=source_task.project_id,
+        before_chapter_number=first_chapter.chapter_number,
+    )
+
     resumed_task = BatchGenerationTask(
         project_id=source_task.project_id,
         user_id=user_id,
@@ -5013,6 +5252,7 @@ async def resume_batch_generation(
             "current_retry_count": 0,
             "max_retries": resumed_task.max_retries,
             "resume_from_batch_id": source_task.id,
+            "active_story_repair_payload": resumed_story_repair_state.get("active_story_repair_payload"),
             "updated_at": datetime.now().isoformat(),
         }
 
@@ -5122,13 +5362,18 @@ async def execute_batch_generation_in_order(
         # 维护上一章的摘要，用于传递给下一章（防重复上下文）
         last_generated_summary = None
         stream_chunks = bool(task.total_chapters == 1)
-        active_story_repair_payload = await _resolve_generation_story_repair_payload_for_batch(
+        active_story_repair_state = await _resolve_generation_story_repair_state_for_batch(
             db_session,
             project_id=task.project_id,
             before_chapter_number=task.start_chapter_number,
             story_repair_summary=story_repair_summary,
             story_repair_targets=story_repair_targets,
             story_preserve_strengths=story_preserve_strengths,
+        )
+        active_story_repair_payload = active_story_repair_state.get("payload")
+        await _set_task_active_story_repair_payload(
+            batch_id,
+            active_story_repair_state.get("active_story_repair_payload"),
         )
 
 
@@ -5256,13 +5501,18 @@ async def execute_batch_generation_in_order(
                         last_generated_summary = f"第{chapter.chapter_number}章《{chapter.title}》：{generated_summary}"
                         logger.info(f"📝 已更新上一章摘要上下文: {last_generated_summary[:50]}...")
                     
-                    active_story_repair_payload = await _resolve_generation_story_repair_payload_for_batch(
+                    active_story_repair_state = await _resolve_generation_story_repair_state_for_batch(
                         db_session,
                         project_id=task.project_id,
                         before_chapter_number=chapter.chapter_number + 1,
                         story_repair_summary=story_repair_summary,
                         story_repair_targets=story_repair_targets,
                         story_preserve_strengths=story_preserve_strengths,
+                    )
+                    active_story_repair_payload = active_story_repair_state.get("payload")
+                    await _set_task_active_story_repair_payload(
+                        batch_id,
+                        active_story_repair_state.get("active_story_repair_payload"),
                     )
                     
                     logger.info(f"✅ 章节生成完成: 第{chapter.chapter_number}章")

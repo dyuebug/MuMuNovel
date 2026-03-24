@@ -279,6 +279,7 @@ class BatchGenerateStatusResponse(BaseModel):
     checkpoint: Optional[Dict[str, Any]] = None
     latest_quality_metrics: Optional[Dict[str, Any]] = None
     quality_metrics_summary: Optional[Dict[str, Any]] = None
+    active_story_repair_payload: Optional[Dict[str, Any]] = None
 
 
 class SceneData(BaseModel):

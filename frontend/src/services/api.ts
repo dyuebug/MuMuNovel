@@ -949,6 +949,7 @@ export interface ChapterBatchGenerateStatusResponse {
   latest_quality_metrics?: import('../types').ChapterLatestQualityMetrics | null;
   quality_metrics_summary?: import('../types').ChapterQualityMetricsSummary | null;
   quality_profile_summary?: import('../types').ChapterQualityProfileSummary | null;
+  active_story_repair_payload?: import('../types').ActiveStoryRepairPayload | null;
 }
 
 export interface ChapterBatchActiveTask {
@@ -964,6 +965,7 @@ export interface ChapterBatchActiveTask {
   latest_quality_metrics?: import('../types').ChapterLatestQualityMetrics | null;
   quality_metrics_summary?: import('../types').ChapterQualityMetricsSummary | null;
   quality_profile_summary?: import('../types').ChapterQualityProfileSummary | null;
+  active_story_repair_payload?: import('../types').ActiveStoryRepairPayload | null;
   created_at?: string | null;
   started_at?: string | null;
 }
@@ -1044,6 +1046,7 @@ const upsertChapterTaskToStore = (data: {
   stageCode?: string | null;
   executionMode?: 'interactive' | 'auto' | null;
   checkpoint?: Record<string, unknown> | null;
+  activeStoryRepairPayload?: import('../types').ActiveStoryRepairPayload | null;
   createdAt?: string | null;
   completedAt?: string | null;
 }) => {
@@ -1068,6 +1071,7 @@ const upsertChapterTaskToStore = (data: {
     stage_code: data.stageCode ?? undefined,
     execution_mode: data.executionMode ?? undefined,
     checkpoint: data.checkpoint ?? undefined,
+    active_story_repair_payload: data.activeStoryRepairPayload ?? undefined,
     created_at: data.createdAt ?? now,
     updated_at: now,
     completed_at: data.completedAt ?? null,
@@ -1129,6 +1133,7 @@ export const chapterBatchTaskApi = {
       stageCode: status.stage_code ?? '6.writing',
       executionMode: status.execution_mode ?? 'interactive',
       checkpoint: status.checkpoint ?? undefined,
+      activeStoryRepairPayload: status.active_story_repair_payload ?? undefined,
       createdAt: status.created_at,
       completedAt: status.completed_at,
     });
@@ -1151,6 +1156,7 @@ export const chapterBatchTaskApi = {
         stageCode: active.task.stage_code ?? '6.writing',
         executionMode: active.task.execution_mode ?? 'interactive',
         checkpoint: active.task.checkpoint ?? undefined,
+        activeStoryRepairPayload: active.task.active_story_repair_payload ?? undefined,
         createdAt: active.task.created_at,
       });
     }
@@ -1179,6 +1185,7 @@ export const chapterBatchTaskApi = {
           completed: number;
           current_chapter_number?: number | null;
           checkpoint?: Record<string, unknown> | null;
+          active_story_repair_payload?: import('../types').ActiveStoryRepairPayload | null;
           error_message?: string | null;
           created_at?: string | null;
           completed_at?: string | null;
@@ -1218,6 +1225,7 @@ export const chapterBatchTaskApi = {
         stageCode: task.stage_code ?? '6.writing',
         executionMode: task.execution_mode ?? 'interactive',
         checkpoint: task.checkpoint ?? undefined,
+        activeStoryRepairPayload: task.active_story_repair_payload ?? undefined,
         createdAt: task.created_at,
         completedAt: task.completed_at,
       });

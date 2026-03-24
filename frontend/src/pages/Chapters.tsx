@@ -7,7 +7,7 @@ import { DownloadOutlined, RocketOutlined, CaretRightOutlined, BookOutlined, Plu
 import { useStore } from '../store';
 import { useChapterSync } from '../store/hooks';
 import { projectApi, writingStyleApi, chapterApi, chapterBatchTaskApi } from '../services/api';
-import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterLatestQualityMetrics, ChapterQualityMetrics, ChapterQualityMetricsSummary, ChapterQualityProfileSummary, CreativeMode, PlotStage, StoryFocus } from '../types';
+import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterLatestQualityMetrics, ChapterQualityMetrics, ChapterQualityMetricsSummary, ChapterQualityProfileSummary, ActiveStoryRepairPayload, CreativeMode, PlotStage, StoryFocus } from '../types';
 import { hasUsableApiCredentials } from '../utils/apiKey';
 import ChapterListItem from '../components/ChapterListItem';
 
@@ -641,6 +641,7 @@ export default function Chapters() {
     latest_quality_metrics?: ChapterLatestQualityMetrics | null;
     quality_metrics_summary?: ChapterQualityMetricsSummary | null;
     quality_profile_summary?: ChapterQualityProfileSummary | null;
+    active_story_repair_payload?: ActiveStoryRepairPayload | null;
   } | null>(null);
 
   const maxKnownChapterNumber = useMemo(
@@ -2371,6 +2372,8 @@ export default function Chapters() {
 
             quality_profile_summary: task.quality_profile_summary ?? null,
 
+            active_story_repair_payload: task.active_story_repair_payload ?? null,
+
           });
 
           setBatchGenerating(true);
@@ -3219,6 +3222,8 @@ export default function Chapters() {
 
         quality_profile_summary: null,
 
+        active_story_repair_payload: undefined,
+
       });
 
 
@@ -3324,6 +3329,8 @@ export default function Chapters() {
           } | null | undefined) ?? undefined,
 
           quality_profile_summary: status.quality_profile_summary ?? null,
+
+          active_story_repair_payload: status.active_story_repair_payload ?? null,
 
         });
 
@@ -4542,31 +4549,18 @@ export default function Chapters() {
             progress={batchProgress ? Math.round((batchProgress.completed / batchProgress.total) * 100) : 0}
 
             message={
-
               batchProgress?.current_chapter_number
-
-                ? `正在生成第 ${batchProgress.current_chapter_number} 章... (${batchProgress.completed}/${batchProgress.total})${
-
+                ? `Generating chapter ${batchProgress.current_chapter_number}... (${batchProgress.completed}/${batchProgress.total})${
                     batchProgress.latest_quality_metrics?.overall_score !== undefined
-
-                      ? ` 质量分：${batchProgress.latest_quality_metrics.overall_score}`
-
+                      ? ` Score: ${batchProgress.latest_quality_metrics.overall_score}`
                       : ''
-
-                  }`
-
-                : `批量生成进行中... (${batchProgress?.completed || 0}/${batchProgress?.total || 0})${
-
+                  }${batchProgress.active_story_repair_payload?.source_label ? ` Current strategy: ${batchProgress.active_story_repair_payload.source_label}` : ''}`
+                : `Batch generation in progress... (${batchProgress?.completed || 0}/${batchProgress?.total || 0})${
                     batchProgress?.latest_quality_metrics?.overall_score !== undefined
-
-                      ? ` 质量分：${batchProgress.latest_quality_metrics.overall_score}`
-
+                      ? ` Score: ${batchProgress.latest_quality_metrics.overall_score}`
                       : ''
-
-                  }`
-
+                  }${batchProgress?.active_story_repair_payload?.source_label ? ` Current strategy: ${batchProgress.active_story_repair_payload.source_label}` : ''}`
             }
-
             title="批量生成进度"
 
             onCancel={() => {

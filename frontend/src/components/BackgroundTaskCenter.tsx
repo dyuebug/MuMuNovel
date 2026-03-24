@@ -874,6 +874,12 @@ export default function BackgroundTaskCenter() {
             </Text>
           ) : null}
 
+          {task.activeStoryRepairPayload?.source_label || task.activeStoryRepairPayload?.summary ? (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {`Current strategy: ${task.activeStoryRepairPayload?.source_label || task.activeStoryRepairPayload?.summary}`}
+            </Text>
+          ) : null}
+
           {hasError ? (
             <Space direction="vertical" size={6} style={{ width: '100%' }}>
               {failureReasonTags.length > 0 ? (

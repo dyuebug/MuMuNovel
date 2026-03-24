@@ -357,6 +357,33 @@ const batchRepairGuidance = useMemo(
   () => getRepairGuidanceDisplay(batchQualityMetricsSummary?.repair_guidance),
   [batchQualityMetricsSummary],
 );
+const activeBatchRepairPayload = batchProgress?.active_story_repair_payload ?? null;
+const activeBatchRepairGuidance = useMemo(
+  () => getRepairGuidanceDisplay(activeBatchRepairPayload),
+  [activeBatchRepairPayload],
+);
+const activeBatchRepairMetaItems = useMemo(() => {
+  if (!activeBatchRepairPayload) {
+    return [] as Array<[string, string]>;
+  }
+
+  const items: Array<[string, string]> = [];
+  if (activeBatchRepairPayload.source_label) {
+    items.push(['Source', activeBatchRepairPayload.source_label]);
+  }
+  if (activeBatchRepairPayload.scope) {
+    items.push(['Scope', String(activeBatchRepairPayload.scope)]);
+  }
+  if (activeBatchRepairPayload.updated_at) {
+    const updatedAt = new Date(activeBatchRepairPayload.updated_at);
+    items.push([
+      'Updated',
+      Number.isNaN(updatedAt.getTime()) ? activeBatchRepairPayload.updated_at : updatedAt.toLocaleString(),
+    ]);
+  }
+  return items;
+}, [activeBatchRepairPayload]);
+
 
 const batchVolumePacingPlan = useMemo(
   () => buildVolumePacingPlan(knownStructureChapterCount, {
@@ -1193,6 +1220,48 @@ const batchStoryInsightCards = useMemo(
 
 
 
+            {(activeBatchRepairPayload || activeBatchRepairGuidance) && (
+              <Card size="small" title="Active Repair Strategy" style={{ marginBottom: 16 }}>
+                {activeBatchRepairMetaItems.length > 0 && renderCompactFactGrid(activeBatchRepairMetaItems)}
+                {activeBatchRepairGuidance?.summary && renderCompactSettingHint(
+                  "Current Prompt Basis",
+                  activeBatchRepairGuidance.summary,
+                  { style: { marginBottom: 10 } },
+                )}
+                {(activeBatchRepairGuidance?.repairTargets?.length || activeBatchRepairGuidance?.preserveStrengths?.length || activeBatchRepairGuidance?.focusAreas?.length) ? (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                      gap: 8,
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      {activeBatchRepairGuidance?.repairTargets?.length ? renderCompactListCard(
+                        "Repair Targets",
+                        activeBatchRepairGuidance.repairTargets,
+                        { tagText: `${activeBatchRepairGuidance.repairTargets.length} items`, tagColor: 'gold', style: { height: '100%' } },
+                      ) : null}
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      {activeBatchRepairGuidance?.preserveStrengths?.length ? renderCompactListCard(
+                        "Keep Strengths",
+                        activeBatchRepairGuidance.preserveStrengths,
+                        { tagText: `${activeBatchRepairGuidance.preserveStrengths.length} items`, tagColor: 'green', style: { height: '100%' } },
+                      ) : null}
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      {activeBatchRepairGuidance?.focusAreas?.length ? renderCompactListCard(
+                        "Focus Areas",
+                        activeBatchRepairGuidance.focusAreas,
+                        { tagText: `${activeBatchRepairGuidance.focusAreas.length} items`, tagColor: 'blue', style: { height: '100%' } },
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </Card>
+            )}
+
             {batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined && (
               <Card size="small" title="质量指标摘要" style={{ marginBottom: 16 }}>
                 {batchAfterScorecard && (
@@ -1219,7 +1288,7 @@ const batchStoryInsightCards = useMemo(
                 {batchRepairGuidance && (
                   <>
                     {batchRepairGuidance.summary && renderCompactSettingHint(
-                      "自动修复建议",
+                      "Summary-derived Guidance",
                       batchRepairGuidance.summary,
                       { style: { marginBottom: 10 } },
                     )}
@@ -1241,7 +1310,7 @@ const batchStoryInsightCards = useMemo(
                         </div>
                         <div style={{ minWidth: 0 }}>
                           {batchRepairGuidance.preserveStrengths.length > 0 && renderCompactListCard(
-                            "自动修复建议",
+                            "Keep Strengths",
                             batchRepairGuidance.preserveStrengths,
                             { tagText: `${batchRepairGuidance.preserveStrengths.length}项`, tagColor: 'green', style: { height: '100%' } },
                           )}

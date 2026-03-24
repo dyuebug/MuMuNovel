@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { ActiveStoryRepairPayload } from '../types';
 
 export type BackgroundTaskRuntimeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -15,6 +16,7 @@ export interface TrackedBackgroundTask {
   executionMode?: 'interactive' | 'auto';
   workflowScope?: string;
   checkpoint?: Record<string, unknown> | null;
+  activeStoryRepairPayload?: ActiveStoryRepairPayload | null;
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
@@ -32,6 +34,7 @@ interface UpsertTaskPayload {
   execution_mode?: 'interactive' | 'auto' | null;
   workflow_scope?: string | null;
   checkpoint?: Record<string, unknown> | null;
+  active_story_repair_payload?: ActiveStoryRepairPayload | null;
   created_at?: string | null;
   updated_at?: string | null;
   completed_at?: string | null;
@@ -125,6 +128,7 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
           executionMode: task.execution_mode ?? existing?.executionMode ?? 'interactive',
           workflowScope: task.workflow_scope ?? existing?.workflowScope,
           checkpoint: task.checkpoint ?? existing?.checkpoint ?? null,
+          activeStoryRepairPayload: task.active_story_repair_payload ?? existing?.activeStoryRepairPayload ?? null,
           createdAt,
           updatedAt,
           completedAt,

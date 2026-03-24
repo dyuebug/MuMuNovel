@@ -584,6 +584,7 @@ async def test_should_create_batch_generation_task_and_query_status(
     assert status_body["checkpoint"]["current_chapter_number"] is None
     assert status_body["latest_quality_metrics"] is None
     assert status_body["quality_metrics_summary"] is None
+    assert status_body["active_story_repair_payload"] is None
 
     async with chapters_session_factory() as session:
         task = await session.get(BatchGenerationTask, batch_id)
@@ -1698,6 +1699,7 @@ async def test_should_list_active_batch_generation_tasks_for_current_user(
     assert items_by_id[user_batch_task.id]["stage_code"] == "6.writing.loading"
     assert items_by_id[user_batch_task.id]["execution_mode"] == "interactive"
     assert items_by_id[user_batch_task.id]["checkpoint"]["current_chapter_number"] is None
+    assert items_by_id[user_batch_task.id]["active_story_repair_payload"] is None
     assert items_by_id[user_batch_task.id]["project_id"] == project.id
 
 
@@ -2419,6 +2421,19 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
             "pacing_score": 8.1,
         },
     )
+    await chapters_api._set_task_active_story_repair_payload(
+        task_id,
+        {
+            "summary": "Favor concrete scene pressure and emotional payoff.",
+            "repair_targets": ["Raise external pressure", "Tighten chapter payoff"],
+            "preserve_strengths": ["Keep character voice stable"],
+            "focus_areas": ["pressure", "payoff"],
+            "source": "manual_plus_recent_history_summary",
+            "source_label": "Manual + recent quality trend",
+            "scope": "batch",
+            "updated_at": "2026-03-25T10:00:00",
+        },
+    )
 
     status_response = await chapters_client.get(f"/api/chapters/batch-generate/{task_id}/status")
     assert status_response.status_code == 200
@@ -2433,6 +2448,8 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     assert status_body["quality_metrics_summary"]["avg_dialogue_naturalness_rate"] == 78.0
     assert status_body["quality_metrics_summary"]["avg_pacing_score"] == 8.1
     assert status_body["quality_metrics_summary"]["repair_guidance"]["summary"]
+    assert status_body["active_story_repair_payload"]["source"] == "manual_plus_recent_history_summary"
+    assert status_body["active_story_repair_payload"]["source_label"] == "Manual + recent quality trend"
 
     active_response = await chapters_client.get(
         f"/api/chapters/project/{project.id}/batch-generate/active"
@@ -2447,6 +2464,13 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     assert active_body["task"]["quality_metrics_summary"]["avg_cliffhanger_rate"] == 92.0
     assert active_body["task"]["quality_metrics_summary"]["avg_pacing_score"] == 8.1
     assert active_body["task"]["quality_metrics_summary"]["repair_guidance"]["focus_areas"]
+    assert active_body["task"]["active_story_repair_payload"]["source"] == "manual_plus_recent_history_summary"
+
+    active_tasks_response = await chapters_client.get("/api/chapters/batch-generate/active-tasks?limit=10")
+    assert active_tasks_response.status_code == 200
+    active_tasks_body = active_tasks_response.json()
+    active_task_item = next(item for item in active_tasks_body["items"] if item["batch_id"] == task_id)
+    assert active_task_item["active_story_repair_payload"]["source"] == "manual_plus_recent_history_summary"
 
     can_generate_response = await chapters_client.get(f"/api/chapters/{chapter.id}/can-generate")
     assert can_generate_response.status_code == 200

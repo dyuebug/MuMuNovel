@@ -419,6 +419,13 @@ export interface StoryRepairGuidance {
   weakest_metric_value?: number | null;
 }
 
+export interface ActiveStoryRepairPayload extends StoryRepairGuidance {
+  source?: 'manual_request' | 'current_chapter_quality' | 'recent_history_summary' | 'manual_plus_current_chapter_quality' | 'manual_plus_recent_history_summary' | string;
+  source_label?: string | null;
+  scope?: 'chapter' | 'batch' | string | null;
+  updated_at?: string | null;
+}
+
 export interface ChapterQualityMetrics {
   overall_score: number;
   conflict_chain_hit_rate: number;
