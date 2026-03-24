@@ -1,24 +1,24 @@
-import { useState, useMemo } from 'react';
-import { Drawer, Input, List, Typography, Empty, Tag, theme } from 'antd';
+import { memo, useCallback, useMemo, useState } from 'react';
+import { Drawer, Empty, Input, List, Tag, Typography, theme } from 'antd';
 import { SearchOutlined } from '@ant-design/icons';
 import type { Chapter } from '../types';
 
 const { Link } = Typography;
 
-interface GroupedChapters {
+type GroupedChapters = {
   outlineId: string | null;
   outlineTitle: string;
   chapters: Chapter[];
-}
+};
 
-interface FloatingIndexPanelProps {
+type FloatingIndexPanelProps = {
   visible: boolean;
   onClose: () => void;
   groupedChapters: GroupedChapters[];
   onChapterSelect: (chapterId: string) => void;
-}
+};
 
-export default function FloatingIndexPanel({
+function FloatingIndexPanel({
   visible,
   onClose,
   groupedChapters,
@@ -27,28 +27,29 @@ export default function FloatingIndexPanel({
   const { token } = theme.useToken();
   const [searchTerm, setSearchTerm] = useState('');
 
+  const normalizedSearchTerm = useMemo(() => searchTerm.trim().toLowerCase(), [searchTerm]);
+
   const filteredGroups = useMemo(() => {
-    if (!searchTerm) {
+    if (!normalizedSearchTerm) {
       return groupedChapters;
     }
-    return groupedChapters
-      .map(group => {
-        const filteredChapters = group.chapters.filter(chapter =>
-          chapter.title.toLowerCase().includes(searchTerm.toLowerCase())
-        );
-        return { ...group, chapters: filteredChapters };
-      })
-      .filter(group => group.chapters.length > 0);
-  }, [searchTerm, groupedChapters]);
 
-  const handleChapterClick = (chapterId: string) => {
+    return groupedChapters
+      .map((group) => ({
+        ...group,
+        chapters: group.chapters.filter((chapter) => chapter.title.toLowerCase().includes(normalizedSearchTerm)),
+      }))
+      .filter((group) => group.chapters.length > 0);
+  }, [groupedChapters, normalizedSearchTerm]);
+
+  const handleChapterClick = useCallback((chapterId: string) => {
     onChapterSelect(chapterId);
     onClose();
-  };
+  }, [onChapterSelect, onClose]);
 
   return (
     <Drawer
-      title="章节目录"
+      title="????"
       placement="right"
       onClose={onClose}
       open={visible}
@@ -59,18 +60,19 @@ export default function FloatingIndexPanel({
     >
       <div style={{ padding: '16px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
         <Input
-          placeholder="搜索章节标题"
+          placeholder="??????"
           prefix={<SearchOutlined />}
           value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+          onChange={(event) => setSearchTerm(event.target.value)}
           allowClear
         />
       </div>
 
       {filteredGroups.length > 0 ? (
         <List
+          rowKey={(group) => group.outlineId ?? 'uncategorized'}
           dataSource={filteredGroups}
-          renderItem={group => (
+          renderItem={(group) => (
             <List.Item style={{ padding: '0 16px', flexDirection: 'column', alignItems: 'flex-start' }}>
               <div style={{ padding: '12px 0', fontWeight: 'bold' }}>
                 <Tag color={group.outlineId ? 'blue' : 'default'}>
@@ -78,12 +80,13 @@ export default function FloatingIndexPanel({
                 </Tag>
               </div>
               <List
+                rowKey="id"
                 size="small"
                 dataSource={group.chapters}
-                renderItem={chapter => (
+                renderItem={(chapter) => (
                   <List.Item style={{ paddingLeft: 16, borderBlockStart: 'none' }}>
                     <Link onClick={() => handleChapterClick(chapter.id)}>
-                      {`第${chapter.chapter_number}章: ${chapter.title}`}
+                      {`?${chapter.chapter_number}? ${chapter.title}`}
                     </Link>
                   </List.Item>
                 )}
@@ -94,8 +97,10 @@ export default function FloatingIndexPanel({
           style={{ height: 'calc(100vh - 120px)', overflowY: 'auto' }}
         />
       ) : (
-        <Empty description="没有找到匹配的章节" style={{ marginTop: 48 }} />
+        <Empty description="?????????" style={{ marginTop: 48 }} />
       )}
     </Drawer>
   );
 }
+
+export default memo(FloatingIndexPanel);

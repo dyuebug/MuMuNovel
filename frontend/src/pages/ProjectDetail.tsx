@@ -22,7 +22,7 @@ import {
 } from '@ant-design/icons';
 import { useStore } from '../store';
 import { useCharacterSync, useOutlineSync, useChapterSync, loadProjectCharacters, loadProjectOutlines, loadProjectChapters, isProjectCollectionFresh } from '../store/hooks';
-import { preloadProjectNavigationPages, preloadProjectPage, shouldSkipProjectNavigationPreload } from '../routes/projectPageLoaders';
+import { preloadProjectPage } from '../routes/projectPageLoaders';
 import type { ProjectNavigationPageKey } from '../routes/projectPageLoaders';
 import { projectApi } from '../services/api';
 import { preloadProjectCareers } from '../services/projectCareers';
@@ -37,8 +37,6 @@ const isMobile = () => window.innerWidth <= 768;
 
 const projectLoadPromises = new Map<string, Promise<void>>();
 const PROJECT_COLLECTION_HYDRATION_DELAY_MS = 1000;
-const PROJECT_NAVIGATION_PRELOAD_DELAY_MS = 600;
-const PROJECT_OUTLINE_PRELOAD_DELAY_MS = 120;
 
 const shouldHydrateProjectCollectionsForPath = (pathname: string) => {
   return !(
@@ -163,71 +161,6 @@ export default function ProjectDetail() {
     }
   }, [projectId]);
 
-  useEffect(() => {
-    if (!projectId) {
-      return;
-    }
-
-    const outlinePath = `/project/${projectId}/outline`;
-    if (location.pathname === outlinePath) {
-      return;
-    }
-
-    const outlinePreloadTimer = window.setTimeout(() => {
-      prefetchProjectNavigationTarget('outline', outlinePath);
-    }, PROJECT_OUTLINE_PRELOAD_DELAY_MS);
-
-    return () => {
-      window.clearTimeout(outlinePreloadTimer);
-    };
-  }, [location.pathname, prefetchProjectNavigationTarget, projectId]);
-
-  useEffect(() => {
-    const windowWithIdleCallback = window as Window & typeof globalThis & {
-      cancelIdleCallback?: (handle: number) => void;
-      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
-    };
-
-    let cancelled = false;
-    let navigationIdleHandle: number | null = null;
-    const navigationPreloadTimer = window.setTimeout(() => {
-      const isProjectLandingPage = Boolean(projectId) && (
-        location.pathname === `/project/${projectId}` || location.pathname.endsWith('/sponsor')
-      );
-      if (!isProjectLandingPage || shouldSkipProjectNavigationPreload()) {
-        return;
-      }
-
-      const startPreload = () => {
-        if (cancelled) {
-          return;
-        }
-
-        void preloadProjectNavigationPages({
-          delayMs: 120,
-          pages: ['characters', 'chapters', 'careers'],
-        });
-      };
-
-      if (typeof windowWithIdleCallback.requestIdleCallback === 'function') {
-        navigationIdleHandle = windowWithIdleCallback.requestIdleCallback(() => {
-          navigationIdleHandle = null;
-          startPreload();
-        }, { timeout: 1500 });
-        return;
-      }
-
-      startPreload();
-    }, PROJECT_NAVIGATION_PRELOAD_DELAY_MS);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(navigationPreloadTimer);
-      if (navigationIdleHandle !== null && typeof windowWithIdleCallback.cancelIdleCallback === 'function') {
-        windowWithIdleCallback.cancelIdleCallback(navigationIdleHandle);
-      }
-    };
-  }, [location.pathname, projectId]);
   const currentProject = useStore((state) => state.currentProject);
   const setCurrentProject = useStore((state) => state.setCurrentProject);
   const clearProjectData = useStore((state) => state.clearProjectData);
@@ -253,6 +186,7 @@ export default function ProjectDetail() {
     return (
       <Link
         to={path}
+        onMouseEnter={handleIntentPrefetch}
         onFocus={handleIntentPrefetch}
         onPointerDown={handleIntentPrefetch}
         onTouchStart={handleIntentPrefetch}

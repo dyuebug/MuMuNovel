@@ -19,6 +19,49 @@ interface PartialRegenerateModalProps {
 
 type LengthMode = 'similar' | 'expand' | 'condense' | 'custom';
 
+
+type RenderDebugGlobal = typeof globalThis & {
+  __NOVEL_RENDER_DEBUG__?: boolean;
+  __NOVEL_RENDER_DEBUG_FILTER__?: string[];
+};
+
+const noopRenderDiagnostics = (...args: [string, () => Record<string, unknown>]): void => {
+  void args;
+};
+
+function useActiveRenderDiagnostics(componentName: string, getSnapshot: () => Record<string, unknown>): void {
+  const renderCountRef = useRef(0);
+  const previousSnapshotRef = useRef<Record<string, unknown> | null>(null);
+
+  useEffect(() => {
+    const renderDebugGlobal = globalThis as RenderDebugGlobal;
+    if (!renderDebugGlobal.__NOVEL_RENDER_DEBUG__) {
+      return;
+    }
+
+    const filters = renderDebugGlobal.__NOVEL_RENDER_DEBUG_FILTER__;
+    if (Array.isArray(filters) && filters.length > 0 && !filters.includes(componentName)) {
+      return;
+    }
+
+    renderCountRef.current += 1;
+    const nextSnapshot = getSnapshot();
+    const previousSnapshot = previousSnapshotRef.current;
+    const changedKeys = previousSnapshot
+      ? Object.keys(nextSnapshot).filter((key) => !Object.is(previousSnapshot[key], nextSnapshot[key]))
+      : Object.keys(nextSnapshot);
+
+    console.debug(`[render-debug] ${componentName} #${renderCountRef.current}`, {
+      changedKeys,
+      snapshot: nextSnapshot,
+    });
+
+    previousSnapshotRef.current = nextSnapshot;
+  });
+}
+
+const useLocalRenderDiagnostics = import.meta.env.DEV ? useActiveRenderDiagnostics : noopRenderDiagnostics;
+
 /**
  * 局部重写弹窗组件
  * 用于配置和执行选中文本的AI重写
@@ -44,6 +87,17 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
   const [progressMessage, setProgressMessage] = useState('');
   const abortControllerRef = useRef<AbortController | null>(null);
   const generatedTextRef = useRef<HTMLDivElement>(null);
+
+  useLocalRenderDiagnostics('PartialRegenerateModal', () => ({
+    visible,
+    chapterId,
+    selectedTextLength: selectedText.length,
+    generatedTextLength: generatedText.length,
+    isGenerating,
+    hasGenerated,
+    progress,
+    progressMessage,
+  }));
 
   // 重置状态
   useEffect(() => {

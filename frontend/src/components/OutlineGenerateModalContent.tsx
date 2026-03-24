@@ -4,6 +4,12 @@ import type { FormInstance } from 'antd';
 
 import type { CreativeMode, PlotStage, StoryFocus } from '../types';
 import {
+  CREATION_PRESETS,
+  getCreationPresetById,
+  getCreationPresetByModes,
+  type CreationPresetId,
+} from '../utils/creationPresetsCore';
+import {
   buildCreationBlueprint,
   buildStoryExecutionChecklist,
   buildStoryObjectiveCard,
@@ -12,11 +18,7 @@ import {
   buildStoryAcceptanceCard,
   buildStoryCharacterArcCard,
   buildVolumePacingPlan,
-  CREATION_PRESETS,
-  getCreationPresetById,
-  getCreationPresetByModes,
-  type CreationPresetId,
-} from '../utils/creationPresets';
+} from '../utils/creationPresetsStory';
 
 const { TextArea } = Input;
 

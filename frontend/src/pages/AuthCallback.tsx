@@ -1,9 +1,10 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Spin, Result, Button, message, theme } from 'antd';
+import { Spin, message, theme } from 'antd';
 import { authApi } from '../services/api';
 const LazyAnnouncementModal = lazy(() => import('../components/AnnouncementModal'));
 const LazyPasswordSetupModal = lazy(() => import('../components/PasswordSetupModal'));
+const LazyAuthCallbackResult = lazy(() => import('../components/AuthCallbackResult'));
 
 
 export default function AuthCallback() {
@@ -13,7 +14,6 @@ export default function AuthCallback() {
   const [showAnnouncement, setShowAnnouncement] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const { token } = theme.useToken();
-  const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
   interface PasswordStatus {
     has_password: boolean;
     has_custom_password: boolean;
@@ -110,25 +110,13 @@ export default function AuthCallback() {
 
   if (status === 'error') {
     return (
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        minHeight: '100vh',
-        background: `linear-gradient(135deg, ${token.colorPrimary} 0%, ${token.colorPrimaryHover} 100%)`,
-      }}>
-        <Result
+      <Suspense fallback={null}>
+        <LazyAuthCallbackResult
           status="error"
-          title="登录失败"
-          subTitle={errorMessage}
-          extra={
-            <Button type="primary" onClick={() => navigate('/login')}>
-              返回登录
-            </Button>
-          }
-          style={{ background: token.colorBgContainer, padding: 40, borderRadius: 8 }}
+          errorMessage={errorMessage}
+          onBackToLogin={() => navigate('/login')}
         />
-      </div>
+      </Suspense>
     );
   }
 
@@ -268,20 +256,13 @@ export default function AuthCallback() {
         </Suspense>
       ) : null}
 
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        minHeight: '100vh',
-        background: `linear-gradient(135deg, ${token.colorPrimary} 0%, ${token.colorPrimaryHover} 100%)`,
-      }}>
-        <Result
+      <Suspense fallback={null}>
+        <LazyAuthCallbackResult
           status="success"
-          title="登录成功"
-          subTitle={showPasswordModal ? "请设置账号密码..." : (showAnnouncement ? "欢迎使用..." : "正在跳转...")}
-          style={{ background: alphaColor(token.colorBgContainer, 0.96), padding: 40, borderRadius: 8 }}
+          showAnnouncement={showAnnouncement}
+          showPasswordModal={showPasswordModal}
         />
-      </div>
+      </Suspense>
     </>
   );
 }

@@ -1,25 +1,20 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Alert,
   Button,
   Card,
   Col,
-  Empty,
   message,
   Popconfirm,
-  Progress,
   Row,
   Space,
   Spin,
   Steps,
   Tag,
   Typography,
-  Upload,
   theme,
 } from 'antd';
-import type { UploadFile } from 'antd/es/upload/interface';
-import { InboxOutlined, PlayCircleOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
+import { InboxOutlined, ReloadOutlined } from '@ant-design/icons';
 import { bookImportApi } from '../services/api';
 import type {
   BookImportApplyPayload,
@@ -31,8 +26,9 @@ import type {
 } from '../types';
 
 const { Text, Title } = Typography;
-const { Dragger } = Upload;
 
+const LazyBookImportUploadStep = lazy(() => import('../components/BookImportUploadStep'));
+const LazyBookImportTaskStatusStep = lazy(() => import('../components/BookImportTaskStatusStep'));
 const LazyBookImportPreviewStep = lazy(() => import('../components/BookImportPreviewStep'));
 const LazyBookImportProgressStep = lazy(() => import('../components/BookImportProgressStep'));
 
@@ -660,100 +656,32 @@ export default function BookImport() {
           </Card>
         </Card>
 
-      {currentStep === 0 && (
-      <Card title="上传 TXT 并开始解析" style={{ marginBottom: 16 }}>
-        <Space direction="vertical" style={{ width: '100%' }} size={16}>
-          <Dragger
-            accept=".txt"
-            multiple={false}
-            beforeUpload={(f) => {
-              setFile(f);
-              return false;
-            }}
-            onRemove={() => {
-              setFile(null);
-            }}
-            fileList={
-              file
-                ? [
-                    {
-                      uid: 'selected-txt',
-                      name: file.name,
-                      status: 'done',
-                    } as UploadFile,
-                  ]
-                : []
-            }
-            style={{ padding: '8px 0' }}
-          >
-            <p className="ant-upload-drag-icon">
-              <InboxOutlined />
-            </p>
-            <p className="ant-upload-text">点击或拖拽 TXT 文件到此区域</p>
-            <p className="ant-upload-hint">首版仅支持 .txt，建议不超过 50MB</p>
-          </Dragger>
 
-          <Space>
-            <Button
-              type="primary"
-              icon={<PlayCircleOutlined />}
-              loading={creatingTask}
-              onClick={startTask}
-            >
-              开始解析
-            </Button>
-            {taskId && (
-              <Tag color="blue">任务ID: {taskId}</Tag>
-            )}
-          </Space>
-        </Space>
-      </Card>
-      )}
+{currentStep === 0 ? (
+  <Suspense fallback={bookImportLazyFallback}>
+    <LazyBookImportUploadStep
+      file={file}
+      creatingTask={creatingTask}
+      taskId={taskId}
+      onFileSelect={setFile}
+      onFileRemove={() => {
+        setFile(null);
+      }}
+      onStartTask={startTask}
+    />
+  </Suspense>
+) : null}
 
-      {currentStep === 1 && (
-      <Card title="解析任务状态" style={{ marginBottom: 16 }}>
-        {!taskId ? (
-          <Empty description="尚未创建任务" />
-        ) : (
-          <div style={{ textAlign: 'center', padding: '24px 0' }}>
-            <Progress
-              type="circle"
-              percent={taskStatus?.progress || 0}
-              status={
-                taskStatus?.status === 'failed' ? 'exception' :
-                taskStatus?.status === 'completed' ? 'success' :
-                'active'
-              }
-            />
-            <div style={{ marginTop: 24 }}>
-              <Text strong style={{ fontSize: 16 }}>
-                {taskStatus?.status === 'pending' && '等待调度...'}
-                {taskStatus?.status === 'running' && '正在解析TXT文件...'}
-                {taskStatus?.status === 'completed' && '解析完成！正在生成预览...'}
-                {taskStatus?.status === 'failed' && '解析失败'}
-                {taskStatus?.status === 'cancelled' && '已取消'}
-              </Text>
-              {taskStatus?.message && (
-                <div style={{ marginTop: 8 }}>
-                  <Text type="secondary">{taskStatus.message}</Text>
-                </div>
-              )}
-            </div>
-
-            {taskStatus?.error && (
-              <Alert type="error" message={taskStatus.error} showIcon style={{ marginTop: 16, textAlign: 'left' }} />
-            )}
-
-            <Space style={{ marginTop: 24 }}>
-              <Button icon={<ReloadOutlined />} onClick={refreshStatus}>刷新状态</Button>
-              {taskStatus && ['pending', 'running'].includes(taskStatus.status) && (
-                <Button danger icon={<StopOutlined />} onClick={cancelTask}>取消任务</Button>
-              )}
-            </Space>
-          </div>
-        )}
-      </Card>
-      )}
+{currentStep === 1 ? (
+  <Suspense fallback={bookImportLazyFallback}>
+    <LazyBookImportTaskStatusStep
+      taskId={taskId}
+      taskStatus={taskStatus}
+      onRefreshStatus={refreshStatus}
+      onCancelTask={cancelTask}
+    />
+  </Suspense>
+) : null}
 
       {currentStep === 2 ? (
         <Suspense fallback={bookImportLazyFallback}>

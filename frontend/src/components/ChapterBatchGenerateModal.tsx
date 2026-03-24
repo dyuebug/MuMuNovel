@@ -1,97 +1,206 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { ComponentType } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { Button, Card, Form, Input, InputNumber, Modal, Radio, Select, Space, Tag } from 'antd';
 import type { FormInstance } from 'antd';
 import { RocketOutlined, StopOutlined } from '@ant-design/icons';
+import CompactPromptPreviewPanel from './CompactPromptPreviewPanel';
+import StoryCreationSnapshotPanel from './StoryCreationSnapshotPanel';
+import { renderCompactPresetRecommendationBlock } from './storyCreationPresetUi';
+import { renderCompactInsightCardGrid } from './storyCreationInsightUi';
+import {
+  renderCompactFactCard,
+  renderCompactFactGrid,
+  renderCompactListCard,
+  renderCompactSelectionSummary,
+  renderCompactSettingFlow,
+  renderCompactSettingHint,
+  renderCompactStoryControlHeader,
+} from './storyCreationCommonUi';
+import {
+  getCompactHintToneByAlertType,
+  getOverallScoreColor,
+  renderCompactMetricGrid,
+} from './storyCreationQualityUi';
+import {
+  getBatchSummaryMetricItems,
+  getQualityProfileDisplayItems,
+} from '../utils/storyCreationQualitySummary';
+import { getCachedWordCount, setCachedWordCount } from '../utils/storyCreationWordCount';
+import {
+  areStoryBeatPlannerDraftsEqual,
+  areStorySceneOutlineDraftsEqual,
+  isStoryBeatPlannerDraftEmpty,
+  isStorySceneOutlineDraftEmpty,
+  STORY_BEAT_PLANNER_FIELDS,
+  STORY_SCENE_OUTLINE_FIELDS,
+} from '../utils/storyCreationDraft';
+import {
+  buildBatchCreationPresetRecommendation,
+  buildBatchScoreDrivenRecommendationCardFromSummary,
+  buildBatchStoryAfterScorecardFromSummary,
+  buildBatchStoryCreationControlCardFromSummary,
+  buildBatchStoryInsightCards,
+  buildBatchStoryRepairTargetCardFromSummary,
+} from '../utils/creationPresetsBatch';
+import { buildCreationBlueprint, buildVolumePacingPlan } from '../utils/creationPresetsStory';
+import { CREATION_PLOT_STAGE_OPTIONS, CREATION_PRESETS, getCreationPresetByModes } from '../utils/creationPresetsCore';
 
 const { TextArea } = Input;
 
 type ChapterBatchGenerateModalProps = {
-  StoryCreationSnapshotPanel: ComponentType<any>;
   batchForm: FormInstance;
   [key: string]: any;
 };
 
-export default function ChapterBatchGenerateModal(props: ChapterBatchGenerateModalProps) {
+type RenderDebugGlobal = typeof globalThis & {
+  __NOVEL_RENDER_DEBUG__?: boolean;
+  __NOVEL_RENDER_DEBUG_FILTER__?: string[];
+};
+
+const noopRenderDiagnostics = (...args: [string, () => Record<string, unknown>]): void => {
+  void args;
+};
+
+function useActiveRenderDiagnostics(componentName: string, getSnapshot: () => Record<string, unknown>): void {
+  const renderCountRef = useRef(0);
+  const previousSnapshotRef = useRef<Record<string, unknown> | null>(null);
+
+  useEffect(() => {
+    const renderDebugGlobal = globalThis as RenderDebugGlobal;
+    if (!renderDebugGlobal.__NOVEL_RENDER_DEBUG__) {
+      return;
+    }
+
+    const filters = renderDebugGlobal.__NOVEL_RENDER_DEBUG_FILTER__;
+    if (Array.isArray(filters) && filters.length > 0 && !filters.includes(componentName)) {
+      return;
+    }
+
+    renderCountRef.current += 1;
+    const nextSnapshot = getSnapshot();
+    const previousSnapshot = previousSnapshotRef.current;
+    const changedKeys = previousSnapshot
+      ? Object.keys(nextSnapshot).filter((key) => !Object.is(previousSnapshot[key], nextSnapshot[key]))
+      : Object.keys(nextSnapshot);
+
+    console.debug(`[render-debug] ${componentName} #${renderCountRef.current}`, {
+      changedKeys,
+      snapshot: nextSnapshot,
+    });
+
+    previousSnapshotRef.current = nextSnapshot;
+  });
+}
+
+const useLocalRenderDiagnostics = import.meta.env.DEV ? useActiveRenderDiagnostics : noopRenderDiagnostics;
+
+const normalizeAvailableModelOptions = (models: any[]): Array<{ value: string; label: string }> => {
+  const seenValues = new Set<string>();
+  return models.reduce((options: Array<{ value: string; label: string }>, model: any) => {
+    const value = typeof model?.value === 'string' ? model.value.trim() : '';
+    if (!value || seenValues.has(value)) {
+      return options;
+    }
+
+    seenValues.add(value);
+    options.push({
+      value,
+      label: typeof model?.label === 'string' && model.label.trim() ? model.label.trim() : value,
+    });
+    return options;
+  }, []);
+};
+
+const normalizeWritingStyleOptions = (styles: any[]): any[] => {
+  const seenStyleIds = new Set<number>();
+  return styles.filter((style) => {
+    if (typeof style?.id !== 'number' || seenStyleIds.has(style.id)) {
+      return false;
+    }
+
+    seenStyleIds.add(style.id);
+    return true;
+  });
+};
+
+const normalizeBatchStartChapterOptions = (chapters: any[]): any[] => {
+  const seenChapterNumbers = new Set<number>();
+  return chapters.filter((chapter) => {
+    if (typeof chapter?.chapter_number !== 'number' || seenChapterNumbers.has(chapter.chapter_number)) {
+      return false;
+    }
+
+    seenChapterNumbers.add(chapter.chapter_number);
+    return true;
+  });
+};
+
+const BATCH_MODAL_IGNORED_PROP_KEYS = new Set([
+  'handleBatchGenerate',
+  'handleCancelBatchGenerate',
+  'selectedModel',
+  'selectedStyleId',
+  'sortedChapters',
+]);
+
+const areBatchGenerateModalPropsEqual = (previousProps: ChapterBatchGenerateModalProps, nextProps: ChapterBatchGenerateModalProps): boolean => {
+  const previousKeys = Object.keys(previousProps);
+  const nextKeys = Object.keys(nextProps);
+
+  if (previousKeys.length !== nextKeys.length) {
+    return false;
+  }
+
+  return previousKeys.every((key) => (
+    BATCH_MODAL_IGNORED_PROP_KEYS.has(key)
+      ? true
+      : previousProps[key] === nextProps[key]
+  ));
+};
+
+function ChapterBatchGenerateModal(props: ChapterBatchGenerateModalProps) {
   const {
-    StoryCreationSnapshotPanel,
-    activeBatchCreationPreset,
     applyBatchCreationPreset,
     applyBatchStoryCreationSnapshot,
     applyInferredBatchPlotStage,
-    areStoryBeatPlannerDraftsEqual,
-    areStorySceneOutlineDraftsEqual,
     availableModels,
-    batchAfterScorecard,
-    batchCreationBlueprint,
     batchEnableAnalysis,
     batchForm,
     batchGenerateVisible,
     batchGenerating,
     batchProgress,
-    batchQualityAnalysisLabel,
-    batchQualityProfileItems,
-    batchRecommendedCreationPresets,
-    batchScoreDrivenRecommendationCard,
     batchSelectedCreativeMode,
-    batchSelectedCreativeModeLabel,
     batchSelectedModel,
-    batchSelectedModelLabel,
     batchSelectedPlotStage,
-    batchSelectedPlotStageLabel,
     batchSelectedStoryFocus,
-    batchSelectedStoryFocusLabel,
     batchStartChapterOptions,
     batchStoryBeatPlannerDraft,
     batchStoryCreationBriefDraft,
-    batchStoryCreationControlCard,
     batchStoryCreationCurrentDraft,
-    batchStoryCreationPromptCharCount,
-    batchStoryCreationPromptLayerLabels,
     batchStoryCreationSnapshots,
-    batchStoryInsightCards,
-    batchStoryRepairTargetCard,
     batchStorySceneOutlineDraft,
     batchSuggestedStorySceneOutline,
-    batchSummaryMetricItems,
     batchSystemStoryBeatPlanner,
-    batchSystemStoryCreationBrief,
-    batchVolumePacingPlan,
     canSaveBatchStoryCreationSnapshot,
     copyStoryCreationPrompt,
-    CREATION_PLOT_STAGE_OPTIONS,
-    CREATION_PRESETS,
     CREATIVE_MODE_OPTIONS,
     deleteBatchStoryCreationSnapshot,
-    getCachedWordCount,
-    getCompactHintToneByAlertType,
-    getOverallScoreColor,
-    getQualityProfileDisplayItems,
     handleBatchGenerate,
     handleCancelBatchGenerate,
     isBatchStoryBeatPlannerCustomized,
     isBatchStoryCreationBriefCustomized,
     isBatchStoryCreationControlCustomized,
-    isBatchStoryCreationPromptVerbose,
     isBatchStorySceneOutlineCustomized,
     isMobile,
-    isStoryBeatPlannerDraftEmpty,
-    isStorySceneOutlineDraftEmpty,
     modal,
+    knownStructureChapterCount,
     projectDefaultCreativeMode,
     projectDefaultStoryFocus,
-    renderCompactFactCard,
-    renderCompactFactGrid,
-    renderCompactInsightCardGrid,
-    renderCompactListCard,
-    renderCompactMetricGrid,
-    renderCompactPresetRecommendationBlock,
-    renderCompactPromptPreviewPanel,
-    renderCompactSelectionSummary,
-    renderCompactSettingFlow,
-    renderCompactSettingHint,
-    renderCompactStoryControlHeader,
     resolvedBatchStoryCreationBrief,
+    batchStoryCreationPromptLayerLabels,
+    batchStoryCreationPromptCharCount,
+    isBatchStoryCreationPromptVerbose,
+    STORY_CREATION_PROMPT_WARN_THRESHOLD,
     saveBatchStoryCreationSnapshot,
     selectedModel,
     selectedStyleId,
@@ -103,13 +212,160 @@ export default function ChapterBatchGenerateModal(props: ChapterBatchGenerateMod
     setBatchStoryBeatPlannerDraft,
     setBatchStoryCreationBriefDraft,
     setBatchStorySceneOutlineDraft,
-    setCachedWordCount,
     sortedChapters,
-    STORY_BEAT_PLANNER_FIELDS,
     STORY_FOCUS_OPTIONS,
-    STORY_SCENE_OUTLINE_FIELDS,
     writingStyles
   } = props;
+
+
+const batchStartChapterNumber = Form.useWatch('startChapterNumber', batchForm) as number | undefined;
+useLocalRenderDiagnostics('ChapterBatchGenerateModal', () => ({
+  visible: batchGenerateVisible,
+  generating: batchGenerating,
+  enableAnalysis: batchEnableAnalysis,
+  creativeMode: batchSelectedCreativeMode,
+  storyFocus: batchSelectedStoryFocus,
+  plotStage: batchSelectedPlotStage,
+  model: batchSelectedModel,
+  startChapterNumber: batchStartChapterNumber,
+  progressPercent: batchProgress?.progress_percent,
+}));
+const normalizedAvailableModels = useMemo(
+  () => normalizeAvailableModelOptions(availableModels),
+  [availableModels],
+);
+const normalizedWritingStyles = useMemo(
+  () => normalizeWritingStyleOptions(writingStyles),
+  [writingStyles],
+);
+const normalizedBatchStartChapterOptions = useMemo(
+  () => normalizeBatchStartChapterOptions(batchStartChapterOptions),
+  [batchStartChapterOptions],
+);
+const activeBatchCreationPreset = useMemo(
+  () => getCreationPresetByModes(batchSelectedCreativeMode, batchSelectedStoryFocus),
+  [batchSelectedCreativeMode, batchSelectedStoryFocus],
+);
+const batchQualityMetricsSummary = batchProgress?.quality_metrics_summary ?? null;
+const batchRecommendedCreationPresets = useMemo(
+  () => buildBatchCreationPresetRecommendation(batchQualityMetricsSummary),
+  [batchQualityMetricsSummary],
+);
+
+const batchAfterScorecard = useMemo(
+  () => buildBatchStoryAfterScorecardFromSummary(batchQualityMetricsSummary, batchSelectedCreativeMode, batchSelectedStoryFocus, {
+    plotStage: batchSelectedPlotStage,
+  }),
+  [batchQualityMetricsSummary, batchSelectedCreativeMode, batchSelectedPlotStage, batchSelectedStoryFocus],
+);
+
+const batchScoreDrivenRecommendationCard = useMemo(
+  () => buildBatchScoreDrivenRecommendationCardFromSummary(
+    batchQualityMetricsSummary,
+    batchSelectedCreativeMode,
+    batchSelectedStoryFocus,
+    {
+      plotStage: batchSelectedPlotStage,
+      chapterNumber: batchStartChapterNumber,
+      totalChapters: knownStructureChapterCount,
+      activePresetId: activeBatchCreationPreset?.id,
+    },
+  ),
+  [
+    activeBatchCreationPreset?.id,
+    batchQualityMetricsSummary,
+    batchSelectedCreativeMode,
+    batchSelectedPlotStage,
+    batchSelectedStoryFocus,
+    batchStartChapterNumber,
+    knownStructureChapterCount,
+  ],
+);
+
+const batchStoryRepairTargetCard = useMemo(
+  () => buildBatchStoryRepairTargetCardFromSummary(batchQualityMetricsSummary, batchSelectedCreativeMode, batchSelectedStoryFocus, {
+    plotStage: batchSelectedPlotStage,
+    chapterNumber: batchStartChapterNumber,
+    totalChapters: knownStructureChapterCount,
+    activePresetId: activeBatchCreationPreset?.id,
+  }),
+  [
+    activeBatchCreationPreset?.id,
+    batchQualityMetricsSummary,
+    batchSelectedCreativeMode,
+    batchSelectedPlotStage,
+    batchSelectedStoryFocus,
+    batchStartChapterNumber,
+    knownStructureChapterCount,
+  ],
+);
+
+const batchStoryCreationControlCard = useMemo(
+  () => buildBatchStoryCreationControlCardFromSummary(batchQualityMetricsSummary, batchSelectedCreativeMode, batchSelectedStoryFocus, {
+    plotStage: batchSelectedPlotStage,
+    chapterNumber: batchStartChapterNumber,
+    totalChapters: knownStructureChapterCount,
+    activePresetId: activeBatchCreationPreset?.id,
+  }),
+  [
+    activeBatchCreationPreset?.id,
+    batchQualityMetricsSummary,
+    batchSelectedCreativeMode,
+    batchSelectedPlotStage,
+    batchSelectedStoryFocus,
+    batchStartChapterNumber,
+    knownStructureChapterCount,
+  ],
+);
+
+const batchSystemStoryCreationBrief = batchStoryCreationControlCard?.promptBrief ?? '';
+
+const batchCreationBlueprint = useMemo(
+  () => buildCreationBlueprint(batchSelectedCreativeMode, batchSelectedStoryFocus, {
+    scene: 'chapter',
+    plotStage: batchSelectedPlotStage,
+  }),
+  [batchSelectedCreativeMode, batchSelectedPlotStage, batchSelectedStoryFocus],
+);
+
+const batchSelectedCreativeModeLabel = batchSelectedCreativeMode
+  ? (CREATIVE_MODE_OPTIONS.find((item: any) => item.value === batchSelectedCreativeMode)?.label || batchSelectedCreativeMode)
+  : '????';
+const batchSelectedStoryFocusLabel = batchSelectedStoryFocus
+  ? (STORY_FOCUS_OPTIONS.find((item: any) => item.value === batchSelectedStoryFocus)?.label || batchSelectedStoryFocus)
+  : '????';
+const batchSelectedPlotStageLabel = batchSelectedPlotStage
+  ? (CREATION_PLOT_STAGE_OPTIONS.find((item: any) => item.value === batchSelectedPlotStage)?.label || batchSelectedPlotStage)
+  : '????';
+const batchSelectedModelLabel = batchSelectedModel
+  ? (normalizedAvailableModels.find((item) => item.value === batchSelectedModel)?.label || batchSelectedModel)
+  : '????';
+const batchQualityAnalysisLabel = batchEnableAnalysis === false ? '???' : '????';
+
+const batchQualityProfileItems = useMemo(
+  () => getQualityProfileDisplayItems(batchProgress?.quality_profile_summary),
+  [batchProgress?.quality_profile_summary],
+);
+
+const batchSummaryMetricItems = useMemo(
+  () => getBatchSummaryMetricItems(batchQualityMetricsSummary),
+  [batchQualityMetricsSummary],
+);
+
+const batchVolumePacingPlan = useMemo(
+  () => buildVolumePacingPlan(knownStructureChapterCount, {
+    preferredStage: batchSelectedPlotStage,
+    currentChapterNumber: batchStartChapterNumber,
+  }),
+  [batchSelectedPlotStage, batchStartChapterNumber, knownStructureChapterCount],
+);
+
+const batchStoryInsightCards = useMemo(
+  () => buildBatchStoryInsightCards(batchSelectedCreativeMode, batchSelectedStoryFocus, {
+    plotStage: batchSelectedPlotStage,
+  }),
+  [batchSelectedCreativeMode, batchSelectedPlotStage, batchSelectedStoryFocus],
+);
 
   return (
       <Modal
@@ -237,9 +493,9 @@ export default function ChapterBatchGenerateModal(props: ChapterBatchGenerateMod
 
                 <Select placeholder="请选择章节">
 
-                  {batchStartChapterOptions.map((ch: any) => (
+                  {normalizedBatchStartChapterOptions.map((ch: any) => (
 
-                    <Select.Option key={ch.id} value={ch.chapter_number}>
+                    <Select.Option key={ch.id ?? `chapter-${ch.chapter_number}`} value={ch.chapter_number}>
 
                       {'第' + ch.chapter_number + '章：' + ch.title}
 
@@ -328,7 +584,7 @@ export default function ChapterBatchGenerateModal(props: ChapterBatchGenerateMod
 
                 >
 
-                  {writingStyles.map((style: any) => (
+                  {normalizedWritingStyles.map((style: any) => (
 
                     <Select.Option key={style.id} value={style.id}>
 
@@ -461,7 +717,7 @@ export default function ChapterBatchGenerateModal(props: ChapterBatchGenerateMod
               {renderCompactPresetRecommendationBlock(batchRecommendedCreationPresets, {
                 activePresetId: activeBatchCreationPreset?.id,
                 applyPreset: applyBatchCreationPreset,
-              })}
+                          })}
 
               {batchScoreDrivenRecommendationCard && (
                 <Card size="small" title={batchScoreDrivenRecommendationCard.title} style={{ marginTop: 12 }}>
@@ -657,14 +913,15 @@ export default function ChapterBatchGenerateModal(props: ChapterBatchGenerateMod
                         ))}
                       </Space>
                     </div>
-                    {renderCompactPromptPreviewPanel(
-                      resolvedBatchStoryCreationBrief,
-                      batchStoryCreationPromptLayerLabels,
-                      batchStoryCreationPromptCharCount,
-                      isBatchStoryCreationPromptVerbose,
-                      () => void copyStoryCreationPrompt(resolvedBatchStoryCreationBrief, 'batch'),
-                      { placeholder: '提示词预览将显示在此。' },
-                    )}
+
+<CompactPromptPreviewPanel
+  prompt={resolvedBatchStoryCreationBrief}
+  promptLayerLabels={batchStoryCreationPromptLayerLabels}
+  promptCharCount={batchStoryCreationPromptCharCount}
+  isVerbose={isBatchStoryCreationPromptVerbose}
+  onCopy={() => void copyStoryCreationPrompt(resolvedBatchStoryCreationBrief, 'batch')}
+  placeholder="???????????"
+/>
                     <StoryCreationSnapshotPanel
                       scopeLabel="batch"
                       emptyText="还没有快照。"
@@ -675,6 +932,7 @@ export default function ChapterBatchGenerateModal(props: ChapterBatchGenerateMod
                       onApply={applyBatchStoryCreationSnapshot}
                       onDelete={deleteBatchStoryCreationSnapshot}
                       onCopy={copyStoryCreationPrompt}
+                      promptWarnThreshold={STORY_CREATION_PROMPT_WARN_THRESHOLD}
                     />
                     <div
                       style={{
@@ -846,13 +1104,13 @@ export default function ChapterBatchGenerateModal(props: ChapterBatchGenerateMod
                 >
                   <Select
                     placeholder={batchSelectedModel ? `已选择：${batchSelectedModelLabel}` : "留空=项目默认"}
-                    value={batchSelectedModel}
+                    value={batchSelectedModel ?? undefined}
                     onChange={setBatchSelectedModel}
                     allowClear
                     showSearch
                     optionFilterProp="label"
                   >
-                    {availableModels.map((model: any) => (
+                    {normalizedAvailableModels.map((model) => (
                       <Select.Option key={model.value} value={model.value} label={model.label}>
                         {model.label}
                       </Select.Option>
@@ -912,7 +1170,7 @@ export default function ChapterBatchGenerateModal(props: ChapterBatchGenerateMod
 
 
 
-            {batchProgress?.quality_profile_summary && getQualityProfileDisplayItems(batchProgress.quality_profile_summary).length > 0 && (
+            {batchProgress?.quality_profile_summary && batchQualityProfileItems.length > 0 && (
 
               <Card size="small" title="质量画像摘要" style={{ marginBottom: 16 }}>
                 {renderCompactSettingHint(
@@ -1002,3 +1260,5 @@ export default function ChapterBatchGenerateModal(props: ChapterBatchGenerateMod
       </Modal>
   );
 }
+
+export default memo(ChapterBatchGenerateModal, areBatchGenerateModalPropsEqual);
