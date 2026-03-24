@@ -1,7 +1,7 @@
 """添加API兼容性字段
 
 Revision ID: 20260222_api_compat
-Revises: d4d253e3f4c6
+Revises: d887fd1a30a6
 Create Date: 2026-02-22 10:00:00.000000
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '20260222_api_compat'
-down_revision: Union[str, None] = 'd4d253e3f4c6'
+down_revision: Union[str, None] = 'd887fd1a30a6'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -1,7 +1,7 @@
 """新增项目默认质量预设字段
 
-Revision ID: 20260323_project_quality_preferences
-Revises: 20260322_project_generation_defaults
+Revision ID: 20260323_proj_quality_prefs
+Revises: 20260322_proj_gen_defaults
 Create Date: 2026-03-23 10:30:00.000000
 
 """
@@ -13,8 +13,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '20260323_project_quality_preferences'
-down_revision: Union[str, None] = '20260322_project_generation_defaults'
+revision: str = '20260323_proj_quality_prefs'
+down_revision: Union[str, None] = '20260322_proj_gen_defaults'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -1,6 +1,6 @@
 """新增项目默认生成偏好字段
 
-Revision ID: 20260322_project_generation_defaults
+Revision ID: 20260322_proj_gen_defaults
 Revises: e8b4d6c1f2a7
 Create Date: 2026-03-22 12:00:00.000000
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '20260322_project_generation_defaults'
+revision: str = '20260322_proj_gen_defaults'
 down_revision: Union[str, None] = 'e8b4d6c1f2a7'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
