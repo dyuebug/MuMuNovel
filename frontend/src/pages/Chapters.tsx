@@ -52,6 +52,7 @@ import {
   type StoryCreationSnapshotReason,
   type StorySceneOutlineDraft,
 } from '../utils/storyCreationDraft';
+import { formatActiveStoryRepairLabel } from '../utils/activeStoryRepair';
 
 
 type SingleStoryPresetState = {
@@ -643,6 +644,10 @@ export default function Chapters() {
     quality_profile_summary?: ChapterQualityProfileSummary | null;
     active_story_repair_payload?: ActiveStoryRepairPayload | null;
   } | null>(null);
+  const batchProgressRepairLabel = useMemo(
+    () => formatActiveStoryRepairLabel(batchProgress?.active_story_repair_payload),
+    [batchProgress?.active_story_repair_payload],
+  );
 
   const maxKnownChapterNumber = useMemo(
     () => chapters.reduce((maxValue, chapter) => Math.max(maxValue, chapter.chapter_number || 0), 0),
@@ -2830,7 +2835,7 @@ export default function Chapters() {
 
       setSingleChapterProgress(0);
 
-      setSingleChapterProgressMessage('Generating chapter...');
+      setSingleChapterProgressMessage('正在生成章节...');
 
 
 
@@ -4550,16 +4555,16 @@ export default function Chapters() {
 
             message={
               batchProgress?.current_chapter_number
-                ? `Generating chapter ${batchProgress.current_chapter_number}... (${batchProgress.completed}/${batchProgress.total})${
+                ? `正在生成第 ${batchProgress.current_chapter_number} 章... (${batchProgress.completed}/${batchProgress.total})${
                     batchProgress.latest_quality_metrics?.overall_score !== undefined
-                      ? ` Score: ${batchProgress.latest_quality_metrics.overall_score}`
+                      ? ` 评分：${batchProgress.latest_quality_metrics.overall_score}`
                       : ''
-                  }${batchProgress.active_story_repair_payload?.source_label ? ` Current strategy: ${batchProgress.active_story_repair_payload.source_label}` : ''}`
-                : `Batch generation in progress... (${batchProgress?.completed || 0}/${batchProgress?.total || 0})${
+                  }${batchProgressRepairLabel ? ` | ${batchProgressRepairLabel}` : ''}`
+                : `批量生成进行中... (${batchProgress?.completed || 0}/${batchProgress?.total || 0})${
                     batchProgress?.latest_quality_metrics?.overall_score !== undefined
-                      ? ` Score: ${batchProgress.latest_quality_metrics.overall_score}`
+                      ? ` 评分：${batchProgress.latest_quality_metrics.overall_score}`
                       : ''
-                  }${batchProgress?.active_story_repair_payload?.source_label ? ` Current strategy: ${batchProgress.active_story_repair_payload.source_label}` : ''}`
+                  }${batchProgressRepairLabel ? ` | ${batchProgressRepairLabel}` : ''}`
             }
             title="批量生成进度"
 

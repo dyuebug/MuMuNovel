@@ -27,6 +27,7 @@ import type {
   GenerateOutlineRequest,
   GenerateCharacterRequest
 } from '../types';
+import { formatActiveStoryRepairLabel } from '../utils/activeStoryRepair';
 
 type CharacterCreatePayload = Parameters<typeof characterApi.createCharacter>[0];
 
@@ -555,10 +556,11 @@ export function useChapterSync() {
           }
 
           const taskStatus = await chapterSingleTaskApi.getSingleGenerateTaskStatus(taskId, currentProject?.id);
+          const activeRepairStrategyLabel = formatActiveStoryRepairLabel(taskStatus.active_story_repair_payload);
 
           if (taskStatus.status === 'pending') {
             if (onProgressUpdate) {
-              onProgressUpdate('后台排队中，可继续其他操作...', 15);
+              onProgressUpdate(`后台排队中，可继续其他操作...${activeRepairStrategyLabel ? ` | ${activeRepairStrategyLabel}` : ''}`, 15);
             }
             continue;
           }
@@ -568,9 +570,9 @@ export function useChapterSync() {
               const retrySuffix = taskStatus.current_retry_count ? `（重试${taskStatus.current_retry_count}）` : '';
               const qualityMessage = formatQualityMessage(taskStatus.latest_quality_metrics);
               if (qualityMessage) {
-                onProgressUpdate(`${qualityMessage}｜后台生成中${retrySuffix}`, 70);
+                onProgressUpdate(`${qualityMessage} | 后台生成中${retrySuffix}${activeRepairStrategyLabel ? ` | ${activeRepairStrategyLabel}` : ''}`, 70);
               } else {
-                onProgressUpdate(`后台生成中${retrySuffix}，可并行执行其他任务...`, 65);
+                onProgressUpdate(`后台生成中${retrySuffix}, 可并行执行其他任务...${activeRepairStrategyLabel ? ` | ${activeRepairStrategyLabel}` : ''}`, 65);
               }
             }
             continue;

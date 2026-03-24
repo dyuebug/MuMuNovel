@@ -1003,6 +1003,7 @@ export interface ChapterSingleGenerateResponse {
   status: string;
   message: string;
   estimated_time_minutes?: number;
+  active_story_repair_payload?: import('../types').ActiveStoryRepairPayload | null;
 }
 
 type ChapterGenerationTaskType = 'chapters_batch_generate' | 'chapter_single_generate';
@@ -1301,6 +1302,7 @@ export const chapterSingleTaskApi = {
       stage_code: '6.writing',
       execution_mode: 'interactive',
       message: created.message || '单章后台任务已创建',
+      active_story_repair_payload: created.active_story_repair_payload ?? undefined,
     });
     return created;
   },
@@ -1322,6 +1324,7 @@ export const chapterSingleTaskApi = {
       stageCode: status.stage_code ?? '6.writing',
       executionMode: status.execution_mode ?? 'interactive',
       checkpoint: status.checkpoint ?? undefined,
+      activeStoryRepairPayload: status.active_story_repair_payload ?? undefined,
       createdAt: status.created_at,
       completedAt: status.completed_at,
     });
@@ -1540,6 +1543,7 @@ export interface BackgroundTaskStatus {
   execution_mode?: 'interactive' | 'auto' | null;
   workflow_scope?: string | null;
   checkpoint?: Record<string, unknown> | null;
+  active_story_repair_payload?: import('../types').ActiveStoryRepairPayload | null;
   created_at?: string | null;
   updated_at?: string | null;
   started_at?: string | null;

@@ -1357,10 +1357,21 @@ async def test_should_auto_fill_story_repair_payload_from_chapter_quality_histor
     )
 
     assert response.status_code == 200
+    body = response.json()
+    assert body["active_story_repair_payload"]["source"] == "current_chapter_quality"
+    assert body["active_story_repair_payload"]["scope"] == "chapter"
     assert captured["story_repair_summary"]
     assert captured["story_repair_summary"].count(" / ") >= 1
     assert captured["story_repair_targets"]
     assert captured["story_preserve_strengths"]
+
+    status_response = await chapters_client.get(
+        f"/api/chapters/batch-generate/{body['task_id']}/status",
+    )
+    assert status_response.status_code == 200
+    status_body = status_response.json()
+    assert status_body["active_story_repair_payload"]["source"] == "current_chapter_quality"
+    assert status_body["active_story_repair_payload"]["scope"] == "chapter"
 
 
 async def test_should_merge_manual_story_repair_summary_with_history_fallback_for_single_background_generation(
@@ -1430,6 +1441,9 @@ async def test_should_merge_manual_story_repair_summary_with_history_fallback_fo
     )
 
     assert response.status_code == 200
+    body = response.json()
+    assert body["active_story_repair_payload"]["source"] == "manual_plus_current_chapter_quality"
+    assert body["active_story_repair_payload"]["scope"] == "chapter"
     assert captured["story_repair_summary"] == "MANUAL: focus on concrete pressure and emotional reactions"
     assert captured["story_repair_targets"]
     assert captured["story_preserve_strengths"]

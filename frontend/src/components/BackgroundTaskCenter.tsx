@@ -34,6 +34,7 @@ import {
   useBackgroundTaskStore,
   type TrackedBackgroundTask,
 } from '../store/backgroundTasks';
+import { formatActiveStoryRepairLabel } from '../utils/activeStoryRepair';
 
 const { Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -874,9 +875,9 @@ export default function BackgroundTaskCenter() {
             </Text>
           ) : null}
 
-          {task.activeStoryRepairPayload?.source_label || task.activeStoryRepairPayload?.summary ? (
+          {formatActiveStoryRepairLabel(task.activeStoryRepairPayload) ? (
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {`Current strategy: ${task.activeStoryRepairPayload?.source_label || task.activeStoryRepairPayload?.summary}`}
+              {formatActiveStoryRepairLabel(task.activeStoryRepairPayload)}
             </Text>
           ) : null}
 

@@ -45,6 +45,11 @@ import {
 } from '../utils/creationPresetsBatch';
 import { buildCreationBlueprint, buildVolumePacingPlan } from '../utils/creationPresetsStory';
 import { CREATION_PLOT_STAGE_OPTIONS, CREATION_PRESETS, getCreationPresetByModes } from '../utils/creationPresetsCore';
+import {
+  formatActiveStoryRepairUpdatedAt,
+  getActiveStoryRepairScopeLabel,
+  getActiveStoryRepairSourceLabel,
+} from '../utils/activeStoryRepair';
 
 const { TextArea } = Input;
 
@@ -368,18 +373,18 @@ const activeBatchRepairMetaItems = useMemo(() => {
   }
 
   const items: Array<[string, string]> = [];
-  if (activeBatchRepairPayload.source_label) {
-    items.push(['Source', activeBatchRepairPayload.source_label]);
+  const sourceLabel = getActiveStoryRepairSourceLabel(activeBatchRepairPayload);
+  const scopeLabel = getActiveStoryRepairScopeLabel(activeBatchRepairPayload);
+  const updatedAtLabel = formatActiveStoryRepairUpdatedAt(activeBatchRepairPayload);
+
+  if (sourceLabel) {
+    items.push(['来源', sourceLabel]);
   }
-  if (activeBatchRepairPayload.scope) {
-    items.push(['Scope', String(activeBatchRepairPayload.scope)]);
+  if (scopeLabel) {
+    items.push(['范围', scopeLabel]);
   }
-  if (activeBatchRepairPayload.updated_at) {
-    const updatedAt = new Date(activeBatchRepairPayload.updated_at);
-    items.push([
-      'Updated',
-      Number.isNaN(updatedAt.getTime()) ? activeBatchRepairPayload.updated_at : updatedAt.toLocaleString(),
-    ]);
+  if (updatedAtLabel) {
+    items.push(['更新时间', updatedAtLabel]);
   }
   return items;
 }, [activeBatchRepairPayload]);
@@ -1221,10 +1226,10 @@ const batchStoryInsightCards = useMemo(
 
 
             {(activeBatchRepairPayload || activeBatchRepairGuidance) && (
-              <Card size="small" title="Active Repair Strategy" style={{ marginBottom: 16 }}>
+              <Card size="small" title="当前修复策略" style={{ marginBottom: 16 }}>
                 {activeBatchRepairMetaItems.length > 0 && renderCompactFactGrid(activeBatchRepairMetaItems)}
                 {activeBatchRepairGuidance?.summary && renderCompactSettingHint(
-                  "Current Prompt Basis",
+                  "当前提示依据",
                   activeBatchRepairGuidance.summary,
                   { style: { marginBottom: 10 } },
                 )}
@@ -1238,23 +1243,23 @@ const batchStoryInsightCards = useMemo(
                   >
                     <div style={{ minWidth: 0 }}>
                       {activeBatchRepairGuidance?.repairTargets?.length ? renderCompactListCard(
-                        "Repair Targets",
+                        "修复目标",
                         activeBatchRepairGuidance.repairTargets,
-                        { tagText: `${activeBatchRepairGuidance.repairTargets.length} items`, tagColor: 'gold', style: { height: '100%' } },
+                        { tagText: `${activeBatchRepairGuidance.repairTargets.length}项`, tagColor: 'gold', style: { height: '100%' } },
                       ) : null}
                     </div>
                     <div style={{ minWidth: 0 }}>
                       {activeBatchRepairGuidance?.preserveStrengths?.length ? renderCompactListCard(
-                        "Keep Strengths",
+                        "保留优势",
                         activeBatchRepairGuidance.preserveStrengths,
-                        { tagText: `${activeBatchRepairGuidance.preserveStrengths.length} items`, tagColor: 'green', style: { height: '100%' } },
+                        { tagText: `${activeBatchRepairGuidance.preserveStrengths.length}项`, tagColor: 'green', style: { height: '100%' } },
                       ) : null}
                     </div>
                     <div style={{ minWidth: 0 }}>
                       {activeBatchRepairGuidance?.focusAreas?.length ? renderCompactListCard(
-                        "Focus Areas",
+                        "关注重点",
                         activeBatchRepairGuidance.focusAreas,
-                        { tagText: `${activeBatchRepairGuidance.focusAreas.length} items`, tagColor: 'blue', style: { height: '100%' } },
+                        { tagText: `${activeBatchRepairGuidance.focusAreas.length}项`, tagColor: 'blue', style: { height: '100%' } },
                       ) : null}
                     </div>
                   </div>
@@ -1288,7 +1293,7 @@ const batchStoryInsightCards = useMemo(
                 {batchRepairGuidance && (
                   <>
                     {batchRepairGuidance.summary && renderCompactSettingHint(
-                      "Summary-derived Guidance",
+                      "质量摘要推导建议",
                       batchRepairGuidance.summary,
                       { style: { marginBottom: 10 } },
                     )}
@@ -1310,7 +1315,7 @@ const batchStoryInsightCards = useMemo(
                         </div>
                         <div style={{ minWidth: 0 }}>
                           {batchRepairGuidance.preserveStrengths.length > 0 && renderCompactListCard(
-                            "Keep Strengths",
+                            "保留优势",
                             batchRepairGuidance.preserveStrengths,
                             { tagText: `${batchRepairGuidance.preserveStrengths.length}项`, tagColor: 'green', style: { height: '100%' } },
                           )}

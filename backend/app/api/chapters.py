@@ -3894,6 +3894,7 @@ async def generate_chapter_content_background(
     for task in active_tasks:
         chapter_ids = task.chapter_ids or []
         if chapter_id in chapter_ids:
+            workflow_snapshot = await _build_batch_task_workflow_snapshot(task)
             return {
                 "task_id": task.id,
                 "chapter_id": chapter_id,
@@ -3903,7 +3904,8 @@ async def generate_chapter_content_background(
                     chapter_count=1,
                     target_word_count=task.target_word_count or 3000,
                     enable_analysis=bool(task.enable_analysis)
-                )
+                ),
+                "active_story_repair_payload": workflow_snapshot.get("active_story_repair_payload"),
             }
 
     style_id = generate_request.style_id
@@ -3951,13 +3953,14 @@ async def generate_chapter_content_background(
     )
     resolved_style_id = single_task_quality_profile.get("resolved_style_id")
 
-    story_repair_payload = await _resolve_generation_story_repair_payload_for_chapter(
+    story_repair_state = await _resolve_generation_story_repair_state_for_chapter(
         db,
         chapter=chapter,
         story_repair_summary=getattr(generate_request, 'story_repair_summary', None),
         story_repair_targets=getattr(generate_request, 'story_repair_targets', None),
         story_preserve_strengths=getattr(generate_request, 'story_preserve_strengths', None),
     )
+    story_repair_payload = story_repair_state.get("payload")
 
     # 单章节后台任务默认关闭同步分析，优先保证生成速度
     task = BatchGenerationTask(
@@ -3979,6 +3982,10 @@ async def generate_chapter_content_background(
     db.add(task)
     await db.commit()
     await db.refresh(task)
+    await _set_task_active_story_repair_payload(
+        task.id,
+        story_repair_state.get("active_story_repair_payload"),
+    )
 
     # 启动后台执行
     background_tasks.add_task(
@@ -4014,7 +4021,8 @@ async def generate_chapter_content_background(
         "chapter_id": chapter_id,
         "status": "pending",
         "message": "后台生成任务已创建，可并行执行其他任务",
-        "estimated_time_minutes": estimated_time
+        "estimated_time_minutes": estimated_time,
+        "active_story_repair_payload": story_repair_state.get("active_story_repair_payload"),
     }
 
 
