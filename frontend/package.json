@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:analyze": "tsc -b && node ./scripts/build-analyze.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
   },
