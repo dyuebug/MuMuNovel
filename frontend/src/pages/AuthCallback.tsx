@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Spin, Result, Button, Modal, Input, message, theme } from 'antd';
+import { Spin, Result, Button, message, theme } from 'antd';
 import { authApi } from '../services/api';
-import AnnouncementModal from '../components/AnnouncementModal';
+const LazyAnnouncementModal = lazy(() => import('../components/AnnouncementModal'));
+const LazyPasswordSetupModal = lazy(() => import('../components/PasswordSetupModal'));
+
 
 export default function AuthCallback() {
   const navigate = useNavigate();
@@ -236,67 +238,35 @@ export default function AuthCallback() {
 
   return (
     <>
-      <AnnouncementModal
-        visible={showAnnouncement}
-        onClose={handleAnnouncementClose}
-        onDoNotShowToday={handleDoNotShowToday}
-        onNeverShow={handleNeverShow}
-      />
+      {showAnnouncement ? (
+        <Suspense fallback={null}>
+          <LazyAnnouncementModal
+            visible={showAnnouncement}
+            onClose={handleAnnouncementClose}
+            onDoNotShowToday={handleDoNotShowToday}
+            onNeverShow={handleNeverShow}
+          />
+        </Suspense>
+      ) : null}
 
-      <Modal
-        title="设置账号密码"
-        open={showPasswordModal}
-        centered
-        onOk={handleSetPassword}
-        onCancel={handleSkipPasswordSetting}
-        confirmLoading={settingPassword}
-        okText="设置密码"
-        cancelText="暂不设置"
-        width={500}
-      >
-        <div style={{ marginBottom: 20 }}>
-          <p>您已成功通过 Linux DO 授权登录！</p>
-          <p>系统已为您自动生成默认密码，您可以选择设置自定义密码或继续使用默认密码。</p>
-          {passwordStatus?.default_password && (
-            <div style={{
-              background: token.colorFillTertiary,
-              padding: 12,
-              borderRadius: 4,
-              marginTop: 12
-            }}>
-              <strong>账号：</strong>{passwordStatus.username}<br />
-              <strong>默认密码：</strong><code style={{
-                background: token.colorBgContainer,
-                padding: '2px 8px',
-                borderRadius: 3,
-                color: token.colorPrimary,
-                fontSize: 14
-              }}>{passwordStatus.default_password}</code>
-            </div>
-          )}
-        </div>
-
-        <div style={{ marginTop: 20 }}>
-          <div style={{ marginBottom: 12 }}>
-            <label>新密码（至少6个字符）：</label>
-            <Input.Password
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="请输入新密码"
-              style={{ marginTop: 4 }}
-            />
-          </div>
-          <div>
-            <label>确认密码：</label>
-            <Input.Password
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="请再次输入密码"
-              style={{ marginTop: 4 }}
-            />
-          </div>
-        </div>
-      </Modal>
+      {showPasswordModal ? (
+        <Suspense fallback={null}>
+          <LazyPasswordSetupModal
+            open={showPasswordModal}
+            settingPassword={settingPassword}
+            passwordStatus={passwordStatus ? {
+              username: passwordStatus.username,
+              default_password: passwordStatus.default_password,
+            } : null}
+            newPassword={newPassword}
+            confirmPassword={confirmPassword}
+            onNewPasswordChange={setNewPassword}
+            onConfirmPasswordChange={setConfirmPassword}
+            onOk={handleSetPassword}
+            onCancel={handleSkipPasswordSetting}
+          />
+        </Suspense>
+      ) : null}
 
       <div style={{
         display: 'flex',

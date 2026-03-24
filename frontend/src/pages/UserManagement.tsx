@@ -1,7 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
+import { Suspense, lazy, useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Table,
   Button,
   Modal,
   Form,
@@ -37,8 +36,11 @@ import {
 import { adminApi } from '../services/api';
 import type { User } from '../types';
 import UserMenu from '../components/UserMenu';
+import { useDeferredMount } from '../hooks/useDeferredMount';
 
 const { Title, Text } = Typography;
+
+const LazyDeferredAntdTable = lazy(() => import('../components/DeferredAntdTable'));
 
 interface UserWithStatus extends User {
   is_active?: boolean;
@@ -74,6 +76,7 @@ export default function UserManagement() {
   const [editForm] = Form.useForm();
   const [modal, contextHolder] = Modal.useModal();
   const { token } = theme.useToken();
+  const userTableReady = useDeferredMount();
   const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
 
   // 过滤用户列表
@@ -651,29 +654,37 @@ export default function UserManagement() {
             overflow: 'auto',
             padding: '16px 24px 0 24px',
           }}>
-            <Table
-              columns={columns}
-              dataSource={sortedUsers.slice((currentPage - 1) * pageSize, currentPage * pageSize)}
-              rowKey="user_id"
-              loading={loading}
-              scroll={{
-                x: 1400,
-                y: 'calc(100vh - 410px)'
-              }}
-              pagination={false}
-              onChange={(_pagination, _filters, sorter) => {
-                const currentSorter = Array.isArray(sorter) ? sorter[0] : sorter;
-                setCurrentPage(1);
+            {userTableReady ? (
+              <Suspense fallback={null}>
+                <LazyDeferredAntdTable
+                  columns={columns}
+                  dataSource={sortedUsers.slice((currentPage - 1) * pageSize, currentPage * pageSize)}
+                  rowKey="user_id"
+                  loading={loading}
+                  scroll={{
+                    x: 1400,
+                    y: 'calc(100vh - 410px)'
+                  }}
+                  pagination={false}
+                  onChange={(_pagination: unknown, _filters: unknown, sorter: { field?: string | number | symbol; order?: SortOrder | null } | Array<{ field?: string | number | symbol; order?: SortOrder | null }>) => {
+                    const currentSorter = Array.isArray(sorter) ? sorter[0] : sorter;
+                    setCurrentPage(1);
 
-                if (currentSorter && currentSorter.field && currentSorter.order) {
-                  setSortField(currentSorter.field as SortField);
-                  setSortOrder(currentSorter.order as SortOrder);
-                } else {
-                  setSortField(null);
-                  setSortOrder(null);
-                }
-              }}
-            />
+                    if (currentSorter && currentSorter.field && currentSorter.order) {
+                      setSortField(currentSorter.field as SortField);
+                      setSortOrder(currentSorter.order as SortOrder);
+                    } else {
+                      setSortField(null);
+                      setSortOrder(null);
+                    }
+                  }}
+                />
+              </Suspense>
+            ) : (
+              <div style={{ padding: '32px 0', textAlign: 'center', color: token.colorTextTertiary }}>
+                正在加载用户列表...
+              </div>
+            )}
           </div>
 
           {/* 固定分页控件 */}

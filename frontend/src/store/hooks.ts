@@ -20,6 +20,7 @@ import type {
   OutlineUpdate,
   ChapterCreate,
   ChapterUpdate,
+  CharacterUpdate,
   CreativeMode,
   PlotStage,
   StoryFocus,
@@ -27,15 +28,35 @@ import type {
   GenerateCharacterRequest
 } from '../types';
 
+type CharacterCreatePayload = Parameters<typeof characterApi.createCharacter>[0];
+
 const characterRefreshPromises = new Map<string, Promise<Character[]>>();
 const outlineRefreshPromises = new Map<string, Promise<Outline[]>>();
 const chapterRefreshPromises = new Map<string, Promise<Chapter[]>>();
+const collectionLoadedAt = {
+  characters: new Map<string, number>(),
+  outlines: new Map<string, number>(),
+  chapters: new Map<string, number>(),
+};
 
 interface RefreshCollectionOptions {
   silent?: boolean;
 }
 
 const resolveProjectId = (projectId?: string) => projectId || useStore.getState().currentProject?.id;
+
+const markCollectionLoaded = (collection: keyof typeof collectionLoadedAt, projectId: string) => {
+  collectionLoadedAt[collection].set(projectId, Date.now());
+};
+
+export const isProjectCollectionFresh = (
+  collection: keyof typeof collectionLoadedAt,
+  projectId: string,
+  maxAgeMs = 5000,
+) => {
+  const loadedAt = collectionLoadedAt[collection].get(projectId);
+  return typeof loadedAt === 'number' && Date.now() - loadedAt <= maxAgeMs;
+};
 
 export async function loadProjectCharacters(projectId?: string, options: RefreshCollectionOptions = {}) {
   const id = resolveProjectId(projectId);
@@ -51,6 +72,7 @@ export async function loadProjectCharacters(projectId?: string, options: Refresh
       const data = await characterApi.getCharacters(id);
       const characters = Array.isArray(data) ? data : (data as PaginationResponse<Character>).items || [];
       useStore.getState().setCharacters(characters);
+      markCollectionLoaded('characters', id);
       return characters;
     } catch (error) {
       console.error('刷新角色列表失败:', error);
@@ -84,6 +106,7 @@ export async function loadProjectOutlines(projectId?: string, options: RefreshCo
       const data = await outlineApi.getOutlines(id);
       const outlines = Array.isArray(data) ? data : (data as PaginationResponse<Outline>).items || [];
       useStore.getState().setOutlines(outlines);
+      markCollectionLoaded('outlines', id);
       return outlines;
     } catch (error) {
       console.error('刷新大纲列表失败:', error);
@@ -100,6 +123,40 @@ export async function loadProjectOutlines(projectId?: string, options: RefreshCo
     return await refreshPromise;
   } finally {
     outlineRefreshPromises.delete(id);
+  }
+}
+
+export async function loadProjectChapters(projectId?: string, options: RefreshCollectionOptions = {}) {
+  const id = resolveProjectId(projectId);
+  if (!id) return [];
+
+  const existingRefresh = chapterRefreshPromises.get(id);
+  if (existingRefresh) {
+    return existingRefresh;
+  }
+
+  const refreshPromise = (async () => {
+    try {
+      const data = await chapterApi.getChapters(id);
+      const chapters = Array.isArray(data) ? data : (data as PaginationResponse<Chapter>).items || [];
+      useStore.getState().setChapters(chapters);
+      markCollectionLoaded('chapters', id);
+      return chapters;
+    } catch (error) {
+      console.error('????????:', error);
+      if (!options.silent) {
+        message.error('????????');
+      }
+      return [];
+    }
+  })();
+
+  chapterRefreshPromises.set(id, refreshPromise);
+
+  try {
+    return await refreshPromise;
+  } finally {
+    chapterRefreshPromises.delete(id);
   }
 }
 
@@ -129,7 +186,7 @@ export function useProjectSync() {
     } finally {
       setLoading(false);
     }
-  }, [setProjects, setLoading]);
+  }, [setProjects, setLoading, setCurrentProject]);
 
   // 创建项目（带同步）
   const createProject = useCallback(async (data: ProjectCreate) => {
@@ -180,12 +237,37 @@ export function useProjectSync() {
  */
 export function useCharacterSync() {
   const addCharacter = useStore((state) => state.addCharacter);
+  const updateCharacter = useStore((state) => state.updateCharacter);
   const removeCharacter = useStore((state) => state.removeCharacter);
 
   // 刷新角色
   const refreshCharacters = useCallback(async (projectId?: string) => {
     return loadProjectCharacters(projectId);
   }, []);
+
+  // 创建角色/组织（带同步）
+  const createCharacter = useCallback(async (data: CharacterCreatePayload) => {
+    try {
+      const created = await characterApi.createCharacter(data);
+      addCharacter(created);
+      return created;
+    } catch (error) {
+      console.error('创建角色失败:', error);
+      throw error;
+    }
+  }, [addCharacter]);
+
+  // 更新角色/组织（带同步）
+  const updateCharacterSync = useCallback(async (id: string, data: CharacterUpdate) => {
+    try {
+      const updated = await characterApi.updateCharacter(id, data);
+      updateCharacter(id, updated);
+      return updated;
+    } catch (error) {
+      console.error('更新角色失败:', error);
+      throw error;
+    }
+  }, [updateCharacter]);
 
   // 删除角色（带同步）
   const deleteCharacter = useCallback(async (id: string) => {
@@ -212,6 +294,8 @@ export function useCharacterSync() {
 
   return {
     refreshCharacters,
+    createCharacter,
+    updateCharacter: updateCharacterSync,
     deleteCharacter,
     generateCharacter,
   };
@@ -286,42 +370,14 @@ export function useOutlineSync() {
 
 export function useChapterSync() {
   const currentProject = useStore((state) => state.currentProject);
-  const setChapters = useStore((state) => state.setChapters);
   const addChapter = useStore((state) => state.addChapter);
   const updateChapter = useStore((state) => state.updateChapter);
   const removeChapter = useStore((state) => state.removeChapter);
 
-  // 刷新章节列表
+  // ??????
   const refreshChapters = useCallback(async (projectId?: string) => {
-    const id = projectId || useStore.getState().currentProject?.id;
-    if (!id) return [];
-
-    const existingRefresh = chapterRefreshPromises.get(id);
-    if (existingRefresh) {
-      return existingRefresh;
-    }
-
-    const refreshPromise = (async () => {
-      try {
-        const data = await chapterApi.getChapters(id);
-        const chapters = Array.isArray(data) ? data : (data as PaginationResponse<Chapter>).items || [];
-        setChapters(chapters);
-        return chapters;
-      } catch (error) {
-        console.error('刷新章节列表失败:', error);
-        message.error('刷新章节列表失败');
-        return [];
-      }
-    })();
-
-    chapterRefreshPromises.set(id, refreshPromise);
-
-    try {
-      return await refreshPromise;
-    } finally {
-      chapterRefreshPromises.delete(id);
-    }
-  }, [setChapters]);
+    return loadProjectChapters(projectId);
+  }, []);
 
   const createChapter = useCallback(async (data: ChapterCreate) => {
     try {
@@ -374,8 +430,12 @@ export function useChapterSync() {
     storyRepairTargets?: string[],
     storyPreserveStrengths?: string[],
   ) => {
-    const formatQualityMessage = (metrics: any): string | null => {
-      if (!metrics || typeof metrics !== 'object') return null;
+    const formatQualityMessage = (metrics: {
+      overall_score?: unknown;
+      conflict_chain_hit_rate?: unknown;
+      rule_grounding_hit_rate?: unknown;
+    } | null | undefined): string | null => {
+      if (!metrics) return null;
       const overall = Number(metrics.overall_score ?? 0).toFixed(1);
       const conflict = Number(metrics.conflict_chain_hit_rate ?? 0).toFixed(1);
       const rule = Number(metrics.rule_grounding_hit_rate ?? 0).toFixed(1);

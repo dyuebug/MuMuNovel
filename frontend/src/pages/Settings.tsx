@@ -1,12 +1,9 @@
-import { useState, useEffect } from 'react';
-import { Card, Form, Input, Button, Select, Slider, InputNumber, message, Space, Typography, Spin, Modal, Alert, Grid, Tabs, List, Tag, Popconfirm, Empty, Row, Col, Radio, Segmented, Switch } from 'antd';
-import { SaveOutlined, DeleteOutlined, ReloadOutlined, InfoCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, ThunderboltOutlined, PlusOutlined, EditOutlined, CopyOutlined, WarningOutlined } from '@ant-design/icons';
+import { Suspense, lazy, useEffect, useState } from 'react';
+import { Card, Form, Input, Button, Select, Slider, InputNumber, message, Space, Typography, Spin, Modal, Alert, Grid, Tabs, Tag, Row, Col, Radio, Segmented, Switch } from 'antd';
+import { SaveOutlined, DeleteOutlined, ReloadOutlined, InfoCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, ThunderboltOutlined, WarningOutlined } from '@ant-design/icons';
 import { settingsApi, mcpPluginApi } from '../services/api';
 import type { SettingsUpdate, APIKeyPreset, PresetCreateRequest, APIKeyPresetConfig } from '../types';
 import { eventBus, EventNames } from '../store/eventBus';
-import ProviderSelector from '../components/ProviderSelector';
-import EndpointListEditor from '../components/EndpointListEditor';
-import AzureConfigGuide from '../components/AzureConfigGuide';
 import { hasUsableApiCredentials, isPlaceholderApiKey } from '../utils/apiKey';
 
 const { Title, Text } = Typography;
@@ -37,6 +34,18 @@ const buildModelSelectOptions = (
     ...options,
   ];
 };
+
+const LazyProviderSelector = lazy(() => import('../components/ProviderSelector'));
+const LazyEndpointListEditor = lazy(() => import('../components/EndpointListEditor'));
+const LazyAzureConfigGuide = lazy(() => import('../components/AzureConfigGuide'));
+const LazySettingsPresetModal = lazy(() => import('../components/SettingsPresetModal'));
+const LazySettingsPresetsTab = lazy(() => import('../components/SettingsPresetsTab'));
+
+const settingsLazyFallback = (
+  <div style={{ padding: '12px 0', textAlign: 'center' }}>
+    <Spin size="small" />
+  </div>
+);
 
 export default function SettingsPage() {
   const screens = useBreakpoint();
@@ -250,10 +259,9 @@ export default function SettingsPage() {
         setIsDefaultSettings(false);
         setHasSettings(true);
       }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (error: any) {
+    } catch (error) {
       // 如果404表示还没有设置，使用默认值
-      if (error?.response?.status === 404) {
+      if ((error as { response?: { status?: number } } | undefined)?.response?.status === 404) {
         setHasSettings(false);
         setIsDefaultSettings(true);
         form.setFieldsValue({
@@ -631,8 +639,10 @@ export default function SettingsPage() {
       } else {
         message.error(`${provider.toUpperCase()} 检索测试失败`);
       }
-    } catch (error: any) {
-      const errorMsg = error?.response?.data?.detail || '检索测试请求失败';
+    } catch (error) {
+      const errorMsg = (
+        error as { response?: { data?: { detail?: string } } } | undefined
+      )?.response?.data?.detail || '????????';
       setWebResearchTestResult({
         success: false,
         provider,
@@ -746,6 +756,28 @@ export default function SettingsPage() {
   const handlePresetModelSelectFocus = () => {
     if (!presetModelsFetched && !fetchingPresetModels) {
       handleFetchPresetModels(true);
+    }
+  };
+
+  const handlePresetModelSearchChange = (value: string) => {
+    setPresetModelSearchText(value);
+  };
+
+  const handlePresetModelChange = () => {
+    setPresetModelSearchText('');
+  };
+
+  const handlePresetModelCommit = () => {
+    const customModel = presetModelSearchText.trim();
+    if (customModel) {
+      presetForm.setFieldValue('llm_model', customModel);
+    }
+  };
+
+  const handlePresetModelReload = () => {
+    if (!fetchingPresetModels) {
+      setPresetModelsFetched(false);
+      handleFetchPresetModels(false);
     }
   };
 
@@ -1048,160 +1080,10 @@ export default function SettingsPage() {
     setIsPresetModalVisible(true);
   };
 
-  const getProviderColor = (provider: string) => {
-    switch (provider) {
-      case 'openai':
-        return 'blue';
-      case 'openai_responses':
-        return 'geekblue';
-      case 'anthropic':
-        return 'volcano';
-      case 'azure':
-        return 'cyan';
-      case 'newapi':
-        return 'orange';
-      case 'custom':
-        return 'purple';
-      case 'sub2api':
-        return 'magenta';
-      case 'gemini':
-        return 'green';
-      default:
-        return 'default';
-    }
-  };
-
   const mergedModelOptions = buildModelSelectOptions(modelOptions, modelSearchText);
   const mergedPresetModelOptions = buildModelSelectOptions(
     presetModelOptions,
     presetModelSearchText
-  );
-
-  // ========== 渲染预设列表 ==========
-
-  const renderPresetsList = () => (
-    <Spin spinning={presetsLoading}>
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Text type="secondary">管理你的API配置预设，快速切换不同的配置</Text>
-          <Space>
-            <Button icon={<CopyOutlined />} onClick={handleCreateFromCurrent}>
-              从当前创建
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => showPresetModal()}>
-              新建预设
-            </Button>
-          </Space>
-        </div>
-
-        {presets.length === 0 ? (
-          <Empty
-            description="暂无预设配置"
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            style={{ margin: '40px 0' }}
-          >
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => showPresetModal()}>
-              创建第一个预设
-            </Button>
-          </Empty>
-        ) : (
-          <List
-            dataSource={presets}
-            renderItem={(preset) => {
-              const isActive = preset.id === activePresetId;
-              return (
-                <List.Item
-                  key={preset.id}
-                  style={{
-                    background: isActive ? '#f0f5ff' : 'transparent',
-                    padding: '16px',
-                    marginBottom: '8px',
-                    border: isActive ? '2px solid #1890ff' : '1px solid #f0f0f0',
-                    borderRadius: '8px',
-                  }}
-                  actions={[
-                    !isActive && (
-                      <Button
-                        type="link"
-                        onClick={() => handlePresetActivate(preset.id, preset.name)}
-                      >
-                        激活
-                      </Button>
-                    ),
-                    <Button
-                      key="test"
-                      type="link"
-                      icon={<ThunderboltOutlined />}
-                      loading={testingPresetId === preset.id}
-                      onClick={() => handlePresetTest(preset.id)}
-                    >
-                      测试
-                    </Button>,
-                    <Button
-                      type="link"
-                      icon={<EditOutlined />}
-                      onClick={() => showPresetModal(preset)}
-                    >
-                      编辑
-                    </Button>,
-                    <Popconfirm
-                      title="确定删除此预设吗？"
-                      onConfirm={() => handlePresetDelete(preset.id)}
-                      disabled={isActive}
-                      okText="确定"
-                      cancelText="取消"
-                    >
-                      <Button
-                        type="link"
-                        danger
-                        icon={<DeleteOutlined />}
-                        disabled={isActive}
-                      >
-                        删除
-                      </Button>
-                    </Popconfirm>,
-                  ].filter(Boolean)}
-                >
-                  <List.Item.Meta
-                    avatar={
-                      isActive && (
-                        <CheckCircleOutlined
-                          style={{ fontSize: '24px', color: '#52c41a' }}
-                        />
-                      )
-                    }
-                    title={
-                      <Space>
-                        <span style={{ fontWeight: 'bold' }}>{preset.name}</span>
-                        {isActive && <Tag color="success">激活中</Tag>}
-                      </Space>
-                    }
-                    description={
-                      <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                        {preset.description && (
-                          <div style={{ color: '#666' }}>{preset.description}</div>
-                        )}
-                        <Space wrap>
-                          <Tag color={getProviderColor(preset.config.api_provider)}>
-                            {preset.config.api_provider.toUpperCase()}
-                          </Tag>
-                          <Tag>{preset.config.llm_model}</Tag>
-                          <Tag>温度: {preset.config.temperature}</Tag>
-                          <Tag>Tokens: {preset.config.max_tokens}</Tag>
-                        </Space>
-                        <div style={{ fontSize: '12px', color: '#999' }}>
-                          创建于: {new Date(preset.created_at).toLocaleString()}
-                        </div>
-                      </Space>
-                    }
-                  />
-                </List.Item>
-              );
-            }}
-          />
-        )}
-      </Space>
-    </Spin>
   );
 
   return (
@@ -1441,7 +1323,7 @@ export default function SettingsPage() {
                             </Space>
                           </Card>
 
-                          <div style={{ display: activeSettingsSection === 'provider' ? 'block' : 'none' }}>
+                          {activeSettingsSection === 'provider' ? (
                           <Card
                             size="small"
                             title={renderSectionTitle('供应商与凭证', '先确定服务提供商，再填写 API Key 与主地址。', '基础接入', 'blue')}
@@ -1469,20 +1351,24 @@ export default function SettingsPage() {
                                     rules={[{ required: true, message: '请选择API提供商' }]}
                                     style={{ marginBottom: 0 }}
                                   >
-                                    <ProviderSelector
-                                      value={selectedProvider}
-                                      onChange={(value) => {
-                                        handleProviderChange(value);
-                                        form.setFieldValue('api_provider', value);
-                                      }}
-                                    />
+                                    <Suspense fallback={settingsLazyFallback}>
+                                      <LazyProviderSelector
+                                        value={selectedProvider}
+                                        onChange={(value) => {
+                                          handleProviderChange(value);
+                                          form.setFieldValue('api_provider', value);
+                                        }}
+                                      />
+                                    </Suspense>
                                   </Form.Item>
                                 </div>
                               </Col>
 
                               {selectedProvider === 'azure' && (
                                 <Col xs={24}>
-                                  <AzureConfigGuide visible />
+                                  <Suspense fallback={settingsLazyFallback}>
+                                    <LazyAzureConfigGuide visible />
+                                  </Suspense>
                                 </Col>
                               )}
 
@@ -1554,9 +1440,9 @@ export default function SettingsPage() {
                               </Col>
                             </Row>
                           </Card>
-                          </div>
+                          ) : null}
 
-                          <div style={{ display: activeSettingsSection === 'network' ? 'block' : 'none' }}>
+                          {activeSettingsSection === 'network' ? (
                           <Card
                             size="small"
                             title={renderSectionTitle('网络与容灾', '配置主备端点与切换策略，提升稳定性与可恢复性。', '高可用', 'cyan')}
@@ -1582,11 +1468,15 @@ export default function SettingsPage() {
                                     }
                                     style={{ marginBottom: 0 }}
                                   >
-                                    <EndpointListEditor
-                                      endpoints={endpoints}
-                                      onChange={setEndpoints}
-                                      loading={testingApi}
-                                    />
+                                    {activeSettingsSection === 'network' ? (
+                                      <Suspense fallback={settingsLazyFallback}>
+                                        <LazyEndpointListEditor
+                                          endpoints={endpoints}
+                                          onChange={setEndpoints}
+                                          loading={testingApi}
+                                        />
+                                      </Suspense>
+                                    ) : null}
                                   </Form.Item>
                                 </div>
                               </Col>
@@ -1637,9 +1527,9 @@ export default function SettingsPage() {
                               </Col>
                             </Row>
                           </Card>
-                          </div>
+                          ) : null}
 
-                          <div style={{ display: activeSettingsSection === 'model' ? 'block' : 'none' }}>
+                          {activeSettingsSection === 'model' ? (
                           <Card
                             size="small"
                             title={renderSectionTitle('模型与生成参数', '调节模型、温度、Token 与系统提示词，控制输出风格与成本。', '生成策略', 'purple')}
@@ -1886,9 +1776,9 @@ export default function SettingsPage() {
                               </Col>
                             </Row>
                           </Card>
-                          </div>
+                          ) : null}
 
-                          <div style={{ display: activeSettingsSection === 'research' ? 'block' : 'none' }}>
+                          {activeSettingsSection === 'research' ? (
                           <Card
                             size="small"
                             title={renderSectionTitle('生成前网络检索', '将 Exa 与 Grok 的外部检索能力拆分管理，适合分别配置来源抓取与趋势摘要。', '增强信息', 'gold')}
@@ -2093,7 +1983,7 @@ export default function SettingsPage() {
                               />
                             )}
                           </Card>
-                          </div>
+                          ) : null}
 
                           {/* 测试结果展示 */}
                           {showTestResult && testResult && (
@@ -2321,271 +2211,49 @@ export default function SettingsPage() {
                 {
                   key: 'presets',
                   label: '配置预设',
-                  children: renderPresetsList(),
+                  children: activeTab === 'presets' ? (
+                    <Suspense fallback={settingsLazyFallback}>
+                      <LazySettingsPresetsTab
+                        presetsLoading={presetsLoading}
+                        presets={presets}
+                        activePresetId={activePresetId}
+                        testingPresetId={testingPresetId}
+                        onCreateFromCurrent={handleCreateFromCurrent}
+                        onCreatePreset={() => showPresetModal()}
+                        onActivatePreset={handlePresetActivate}
+                        onTestPreset={handlePresetTest}
+                        onEditPreset={showPresetModal}
+                        onDeletePreset={handlePresetDelete}
+                      />
+                    </Suspense>
+                  ) : null,
                 },
               ]}
             />
           </Card>
         </div>
 
-        {/* 预设编辑对话框 */}
-        <Modal
-          title={editingPreset ? '编辑预设' : '创建预设'}
-          open={isPresetModalVisible}
-          onOk={handlePresetSave}
-          onCancel={handlePresetCancel}
-          width={isMobile ? '95%' : 640}
-          centered
-          okText="保存"
-          cancelText="取消"
-          styles={{
-            body: {
-              padding: isMobile ? '16px' : '20px 24px'
-            }
-          }}
-        >
-          <Form
-            form={presetForm}
-            layout="vertical"
-            size={isMobile ? 'middle' : 'large'}
-          >
-            {/* 基本信息 */}
-            <Row gutter={16}>
-              <Col xs={24} sm={16}>
-                <Form.Item
-                  name="name"
-                  label="预设名称"
-                  rules={[
-                    { required: true, message: '请输入预设名称' },
-                    { max: 50, message: '名称不能超过50个字符' },
-                  ]}
-                  style={{ marginBottom: 16 }}
-                >
-                  <Input placeholder="例如：工作账号-GPT4" />
-                </Form.Item>
-              </Col>
-              <Col xs={24} sm={8}>
-                <Form.Item
-                  name="api_provider"
-                  label="API 提供商"
-                  rules={[{ required: true, message: '请选择' }]}
-                  style={{ marginBottom: 16 }}
-                >
-                    <Select placeholder="选择提供商" onChange={handlePresetProviderChange}>
-                      <Select.Option value="openai">OpenAI</Select.Option>
-                      <Select.Option value="openai_responses">OpenAI Responses</Select.Option>
-                      <Select.Option value="anthropic">Claude (Anthropic)</Select.Option>
-                      <Select.Option value="azure">Azure OpenAI</Select.Option>
-                      <Select.Option value="newapi">NewAPI</Select.Option>
-                      <Select.Option value="custom">自定义</Select.Option>
-                      <Select.Option value="sub2api">Sub2API</Select.Option>
-                      <Select.Option value="gemini">Google Gemini</Select.Option>
-                    </Select>
-                </Form.Item>
-              </Col>
-            </Row>
-
-            <Form.Item
-              name="description"
-              label="预设描述"
-              rules={[{ max: 200, message: '描述不能超过200个字符' }]}
-              style={{ marginBottom: 16 }}
-            >
-              <Input placeholder="例如：用于日常写作任务（可选）" />
-            </Form.Item>
-
-            {/* API 配置 */}
-            <Row gutter={16}>
-              <Col xs={24} sm={12}>
-                <Form.Item
-                  name="api_key"
-                  label="API Key"
-                  rules={[{ required: true, message: '请输入API Key' }]}
-                  style={{ marginBottom: 16 }}
-                >
-                  <Input.Password placeholder="sk-..." />
-                </Form.Item>
-              </Col>
-              <Col xs={24} sm={12}>
-                <Form.Item
-                  name="api_base_url"
-                  label="API Base URL"
-                  style={{ marginBottom: 16 }}
-                >
-                  <Input placeholder="https://api.openai.com/v1" />
-                </Form.Item>
-              </Col>
-            </Row>
-
-            {/* 模型配置 */}
-            <Row gutter={16}>
-              <Col xs={24} sm={12}>
-                <Form.Item
-                  name="llm_model"
-                  label={
-                    <Space size={4}>
-                      <span>模型名称</span>
-                      <InfoCircleOutlined
-                        title="AI模型的名称，点击下拉框自动获取可用模型"
-                        style={{ color: 'var(--color-text-secondary)', fontSize: '12px' }}
-                      />
-                    </Space>
-                  }
-                  rules={[{ required: true, message: '请选择或输入模型名称' }]}
-                  style={{ marginBottom: 16 }}
-                >
-                  <Select
-                    showSearch
-                    placeholder="点击获取模型列表或直接输入"
-                    optionFilterProp="label"
-                    loading={fetchingPresetModels}
-                    onFocus={handlePresetModelSelectFocus}
-                    onSearch={(value) => setPresetModelSearchText(value)}
-                    onChange={() => setPresetModelSearchText('')}
-                    onBlur={() => {
-                      const customModel = presetModelSearchText.trim();
-                      if (customModel) {
-                        presetForm.setFieldValue('llm_model', customModel);
-                      }
-                    }}
-                    onInputKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        const customModel = presetModelSearchText.trim();
-                        if (customModel) {
-                          presetForm.setFieldValue('llm_model', customModel);
-                        }
-                      }
-                    }}
-                    filterOption={(input, option) =>
-                      (option?.label ?? '').toLowerCase().includes(input.toLowerCase()) ||
-                      (option?.description ?? '').toLowerCase().includes(input.toLowerCase())
-                    }
-                    dropdownRender={(menu) => (
-                      <>
-                        {menu}
-                        {fetchingPresetModels && (
-                          <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: '12px' }}>
-                            <Spin size="small" /> 正在获取模型列表...
-                          </div>
-                        )}
-                        {!fetchingPresetModels && presetModelOptions.length === 0 && presetModelsFetched && (
-                          <div style={{ padding: '8px 12px', color: '#ff4d4f', textAlign: 'center', fontSize: '12px' }}>
-                            未能获取到模型列表，请检查 API 配置
-                          </div>
-                        )}
-                        {!fetchingPresetModels && presetModelOptions.length === 0 && !presetModelsFetched && (
-                          <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: '12px' }}>
-                            点击输入框自动获取模型列表
-                          </div>
-                        )}
-                      </>
-                    )}
-                    notFoundContent={
-                      fetchingPresetModels ? (
-                        <div style={{ padding: '8px 12px', textAlign: 'center', fontSize: '12px' }}>
-                          <Spin size="small" /> 加载中...
-                        </div>
-                      ) : (
-                        <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: '12px' }}>
-                          未找到匹配的模型，可直接输入后按回车
-                        </div>
-                      )
-                    }
-                    suffixIcon={
-                      <div
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (!fetchingPresetModels) {
-                            setPresetModelsFetched(false);
-                            handleFetchPresetModels(false);
-                          }
-                        }}
-                        style={{
-                          cursor: fetchingPresetModels ? 'not-allowed' : 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          padding: '0 4px',
-                          height: '100%',
-                          marginRight: -8
-                        }}
-                        title="获取模型列表"
-                      >
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<ReloadOutlined />}
-                          loading={fetchingPresetModels}
-                          style={{ pointerEvents: 'none' }}
-                        >
-                          获取
-                        </Button>
-                      </div>
-                    }
-                    options={mergedPresetModelOptions.map(model => ({
-                      value: model.value,
-                      label: model.label,
-                      description: model.description
-                    }))}
-                    optionRender={(option) => (
-                      <div>
-                        <div style={{ fontWeight: 500, fontSize: '13px' }}>{option.data.label}</div>
-                        {option.data.description && (
-                          <div style={{ fontSize: '11px', color: '#8c8c8c', marginTop: '2px' }}>
-                            {option.data.description}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  />
-                </Form.Item>
-              </Col>
-              <Col xs={12} sm={6}>
-                <Form.Item
-                  name="temperature"
-                  label="温度"
-                  rules={[{ required: true, message: '必填' }]}
-                  style={{ marginBottom: 16 }}
-                >
-                  <InputNumber
-                    min={0}
-                    max={2}
-                    step={0.1}
-                    style={{ width: '100%' }}
-                    placeholder="0.7"
-                  />
-                </Form.Item>
-              </Col>
-              <Col xs={12} sm={6}>
-                <Form.Item
-                  name="max_tokens"
-                  label="最大Tokens"
-                  rules={[{ required: true, message: '必填' }]}
-                  style={{ marginBottom: 16 }}
-                >
-                  <InputNumber
-                    min={1}
-                    max={100000}
-                    style={{ width: '100%' }}
-                    placeholder="2000"
-                  />
-                </Form.Item>
-              </Col>
-            </Row>
-
-            <Form.Item
-              name="system_prompt"
-              label="系统提示词"
-              style={{ marginBottom: 0 }}
-            >
-              <TextArea
-                rows={isMobile ? 2 : 3}
-                placeholder="例如：你是一个专业的小说创作助手...（可选）"
-                maxLength={10000}
-                showCount
-              />
-            </Form.Item>
-          </Form>
-        </Modal>
+        {isPresetModalVisible ? (
+          <Suspense fallback={null}>
+            <LazySettingsPresetModal
+              open={isPresetModalVisible}
+              isMobile={isMobile}
+              editingPreset={editingPreset}
+              form={presetForm}
+              fetchingPresetModels={fetchingPresetModels}
+              presetModelsFetched={presetModelsFetched}
+              mergedPresetModelOptions={mergedPresetModelOptions}
+              onOk={handlePresetSave}
+              onCancel={handlePresetCancel}
+              onProviderChange={handlePresetProviderChange}
+              onModelSelectFocus={handlePresetModelSelectFocus}
+              onModelSearchChange={handlePresetModelSearchChange}
+              onModelChange={handlePresetModelChange}
+              onModelCommit={handlePresetModelCommit}
+              onModelReload={handlePresetModelReload}
+            />
+          </Suspense>
+        ) : null}
       </div>
     </>
   );

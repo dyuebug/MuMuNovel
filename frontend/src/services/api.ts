@@ -58,6 +58,7 @@ import type {
   PresetUpdateRequest,
   PresetListResponse,
   ChapterPlanItem,
+  BatchAnalysisStatusResponse,
   BookImportTask,
   BookImportPreview,
   BookImportApplyPayload,
@@ -814,6 +815,19 @@ export const chapterApi = {
     status.error_message = formatChapterAnalysisError(status.error_code, status.error_message);
     chapterApi.upsertChapterAnalysisTaskToStore(status, projectId);
     return status;
+  },
+
+  getBatchChapterAnalysisStatus: async (chapterIds: string[], projectId?: string) => {
+    const response = await api.post<unknown, BatchAnalysisStatusResponse>(
+      '/chapters/analysis/status/batch',
+      { chapter_ids: chapterIds },
+      silentRequestConfig()
+    );
+    Object.values(response.items).forEach((status) => {
+      status.error_message = formatChapterAnalysisError(status.error_code, status.error_message);
+      chapterApi.upsertChapterAnalysisTaskToStore(status, projectId);
+    });
+    return response;
   },
 
   triggerChapterAnalysis: async (chapterId: string, projectId?: string) => {

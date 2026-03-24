@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { Alert, Button, Card, Col, Divider, Form, Input, Layout, Row, Space, Spin, Tag, Typography, message, theme } from 'antd';
 import { BookOutlined, LockOutlined, RobotOutlined, SafetyCertificateOutlined, TeamOutlined, ThunderboltOutlined, UserOutlined } from '@ant-design/icons';
 import { authApi } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import AnnouncementModal from '../components/AnnouncementModal';
+const LazyAnnouncementModal = lazy(() => import('../components/AnnouncementModal'));
+
 
 import ThemeSwitch from '../components/ThemeSwitch';
 
@@ -257,12 +258,16 @@ export default function Login() {
 
   return (
     <>
-      <AnnouncementModal
-        visible={showAnnouncement}
-        onClose={handleAnnouncementClose}
-        onDoNotShowToday={handleDoNotShowToday}
-        onNeverShow={handleNeverShow}
-      />
+      {showAnnouncement ? (
+        <Suspense fallback={null}>
+          <LazyAnnouncementModal
+            visible={showAnnouncement}
+            onClose={handleAnnouncementClose}
+            onDoNotShowToday={handleDoNotShowToday}
+            onNeverShow={handleNeverShow}
+          />
+        </Suspense>
+      ) : null}
       <Layout style={{ minHeight: '100vh', background: token.colorBgLayout }}>
         <div
           style={{

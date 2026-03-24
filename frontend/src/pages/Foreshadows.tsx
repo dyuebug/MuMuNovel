@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { Suspense, lazy, useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import {
-  Card, Table, Button, Tag, Space, Modal, Form, Input, Select,
+  Card, Button, Tag, Space, Modal, Form, Input, Select,
   InputNumber, Switch, message, Tooltip, Popconfirm, Statistic,
   Row, Col, Empty, Divider, Badge, Alert, Pagination, Dropdown, theme
 } from 'antd';
@@ -17,9 +17,12 @@ import type {
   Foreshadow, ForeshadowCreate, ForeshadowUpdate, ForeshadowStats,
   ForeshadowStatus, ForeshadowCategory, Chapter, Character
 } from '../types';
+import { useDeferredMount } from '../hooks/useDeferredMount';
 
 const { TextArea } = Input;
 const { Option } = Select;
+
+const LazyDeferredAntdTable = lazy(() => import('../components/DeferredAntdTable'));
 
 // 状态配置
 const STATUS_CONFIG: Record<ForeshadowStatus, { label: string; color: string; icon: React.ReactNode }> = {
@@ -74,6 +77,7 @@ export default function Foreshadows() {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const [tableScrollY, setTableScrollY] = useState<number>(400);
   const { token } = theme.useToken();
+  const foreshadowsTableReady = useDeferredMount();
 
   // 加载伏笔列表
   const loadForeshadows = useCallback(async () => {
@@ -644,17 +648,25 @@ export default function Foreshadows() {
           minHeight: 0, // 重要：让 flex 子元素可以收缩
         }}
       >
-        <Table
-          dataSource={foreshadows}
-          columns={columns}
-          rowKey="id"
-          loading={loading}
-          pagination={false}
-          scroll={{ y: tableScrollY }}
-          locale={{
-            emptyText: <Empty description="暂无伏笔，点击右上角添加" />,
-          }}
-        />
+        {foreshadowsTableReady ? (
+          <Suspense fallback={null}>
+            <LazyDeferredAntdTable
+              dataSource={foreshadows}
+              columns={columns}
+              rowKey="id"
+              loading={loading}
+              pagination={false}
+              scroll={{ y: tableScrollY }}
+              locale={{
+                emptyText: <Empty description="暂无伏笔，点击右上角添加" />,
+              }}
+            />
+          </Suspense>
+        ) : (
+          <div style={{ padding: '32px 0', textAlign: 'center', color: token.colorTextTertiary }}>
+            正在加载伏笔列表...
+          </div>
+        )}
       </div>
 
       {/* 分页器 - 固定在底部居中 */}

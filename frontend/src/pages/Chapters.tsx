@@ -1,8 +1,8 @@
 import { Suspense, lazy, useState, useEffect, useRef, useMemo, useCallback, type CSSProperties, type ReactNode } from 'react';
 
-import { List, Button, Modal, Form, Input, Select, message, Empty, Space, Badge, Tag, Card, InputNumber, Radio, Collapse, Popconfirm, FloatButton, Tooltip, Progress } from 'antd';
+import { List, Button, Modal, Form, Input, Select, message, Empty, Space, Badge, Tag, Card, InputNumber, Collapse, Popconfirm, FloatButton, Tooltip, Progress } from 'antd';
 
-import { EditOutlined, FileTextOutlined, ThunderboltOutlined, LockOutlined, DownloadOutlined, SettingOutlined, FundOutlined, SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, RocketOutlined, StopOutlined, InfoCircleOutlined, CaretRightOutlined, DeleteOutlined, BookOutlined, FormOutlined, PlusOutlined, ReadOutlined } from '@ant-design/icons';
+import { EditOutlined, FileTextOutlined, ThunderboltOutlined, LockOutlined, DownloadOutlined, SettingOutlined, FundOutlined, SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, RocketOutlined, InfoCircleOutlined, CaretRightOutlined, DeleteOutlined, BookOutlined, FormOutlined, PlusOutlined, ReadOutlined } from '@ant-design/icons';
 
 import { useStore } from '../store';
 import { useChapterSync } from '../store/hooks';
@@ -11,12 +11,7 @@ import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, Expa
 import { hasUsableApiCredentials } from '../utils/apiKey';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 
-import ExpansionPlanEditor from '../components/ExpansionPlanEditor';
-
-import FloatingIndexPanel from '../components/FloatingIndexPanel';
-import ChapterReader from '../components/ChapterReader';
 import PartialRegenerateToolbar from '../components/PartialRegenerateToolbar';
-import PartialRegenerateModal from '../components/PartialRegenerateModal';
 import {
   buildCreationBlueprint,
   buildBatchScoreDrivenRecommendationCard,
@@ -649,7 +644,19 @@ const batchTaskRestorePromises = new Map<string, Promise<void>>();
 
 
 
+const LazyChapterBasicModal = lazy(() => import('../components/ChapterBasicModal'));
+
+const LazyChapterBatchGenerateModal = lazy(() => import('../components/ChapterBatchGenerateModal'));
+
 const LazyChapterAnalysis = lazy(() => import('../components/ChapterAnalysis'));
+
+const LazyExpansionPlanEditor = lazy(() => import('../components/ExpansionPlanEditor'));
+
+const LazyFloatingIndexPanel = lazy(() => import('../components/FloatingIndexPanel'));
+
+const LazyChapterReader = lazy(() => import('../components/ChapterReader'));
+
+const LazyPartialRegenerateModal = lazy(() => import('../components/PartialRegenerateModal'));
 
 
 
@@ -1847,38 +1854,71 @@ export default function Chapters() {
 
 
   const [analysisTasksMap, setAnalysisTasksMap] = useState<Record<string, AnalysisTask>>({});
+  const analysisTasksMapRef = useRef<Record<string, AnalysisTask>>({});
+  const currentProjectIdRef = useRef<string | null>(null);
+  const pollingIntervalsRef = useRef<Set<string>>(new Set());
+  const analysisPollingIntervalRef = useRef<number | null>(null);
 
-  const pollingIntervalsRef = useRef<Record<string, number>>({});
-
-  const updateAnalysisTasksMap = useCallback((
-
-    updater: Record<string, AnalysisTask> | ((prev: Record<string, AnalysisTask>) => Record<string, AnalysisTask>)
-
+  const areAnalysisTasksEqual = (
+    left: Record<string, AnalysisTask>,
+    right: Record<string, AnalysisTask>
   ) => {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
 
-    setAnalysisTasksMap((prev) => {
+    if (leftKeys.length !== rightKeys.length) {
+      return false;
+    }
 
-      const next = typeof updater === 'function'
+    return leftKeys.every((key) => {
+      const leftTask = left[key];
+      const rightTask = right[key];
 
-        ? (updater as (prev: Record<string, AnalysisTask>) => Record<string, AnalysisTask>)(prev)
-
-        : updater;
-
-
-
-      if (currentProject?.id) {
-
-        chapterAnalysisTasksCache.set(currentProject.id, next);
-
+      if (!rightTask) {
+        return false;
       }
 
+      return (
+        leftTask.has_task === rightTask.has_task
+        && leftTask.task_id === rightTask.task_id
+        && leftTask.chapter_id === rightTask.chapter_id
+        && leftTask.status === rightTask.status
+        && leftTask.progress === rightTask.progress
+        && leftTask.error_message === rightTask.error_message
+        && leftTask.error_code === rightTask.error_code
+        && leftTask.auto_recovered === rightTask.auto_recovered
+        && leftTask.created_at === rightTask.created_at
+        && leftTask.started_at === rightTask.started_at
+        && leftTask.completed_at === rightTask.completed_at
+        && JSON.stringify(leftTask.latest_quality_metrics ?? null) === JSON.stringify(rightTask.latest_quality_metrics ?? null)
+        && JSON.stringify(leftTask.quality_metrics_summary ?? null) === JSON.stringify(rightTask.quality_metrics_summary ?? null)
+        && JSON.stringify(leftTask.quality_profile_summary ?? null) === JSON.stringify(rightTask.quality_profile_summary ?? null)
+      );
+    });
+  };
 
+  const updateAnalysisTasksMap = useCallback((
+    updater: Record<string, AnalysisTask> | ((prev: Record<string, AnalysisTask>) => Record<string, AnalysisTask>)
+  ) => {
+    setAnalysisTasksMap((prev) => {
+      const next = typeof updater === 'function'
+        ? (updater as (prev: Record<string, AnalysisTask>) => Record<string, AnalysisTask>)(prev)
+        : updater;
+
+      if (areAnalysisTasksEqual(prev, next)) {
+        return prev;
+      }
+
+      analysisTasksMapRef.current = next;
+
+      const projectId = currentProjectIdRef.current;
+      if (projectId) {
+        chapterAnalysisTasksCache.set(projectId, next);
+      }
 
       return next;
-
     });
-
-  }, [currentProject?.id]);
+  }, []);
 
   const [isIndexPanelVisible, setIsIndexPanelVisible] = useState(false);
 
@@ -3580,254 +3620,238 @@ export default function Chapters() {
 
 
 
+  const stopAnalysisPolling = useCallback((clearTrackedChapterIds = true) => {
+    if (analysisPollingIntervalRef.current) {
+      clearInterval(analysisPollingIntervalRef.current);
+      analysisPollingIntervalRef.current = null;
+    }
+
+    if (clearTrackedChapterIds) {
+      pollingIntervalsRef.current.clear();
+    }
+  }, []);
+
+  const syncAnalysisTasksFromBatch = useCallback((
+    items: Record<string, AnalysisTask>,
+    options?: {
+      reset?: boolean;
+      notifyOnTerminalTransitions?: boolean;
+    }
+  ) => {
+    const previousTasks = analysisTasksMapRef.current;
+    const nextTasks = options?.reset ? {} : { ...previousTasks };
+
+    Object.entries(items).forEach(([chapterId, task]) => {
+      nextTasks[chapterId] = task;
+
+      if (options?.notifyOnTerminalTransitions && previousTasks[chapterId]?.status !== task.status) {
+        if (task.status === 'completed') {
+          message.success('????????');
+        } else if (task.status === 'failed') {
+          message.error(`???????${task.error_message || '????'}`);
+        }
+      }
+    });
+
+    updateAnalysisTasksMap(nextTasks);
+    return nextTasks;
+  }, [updateAnalysisTasksMap]);
+
+  const pollAnalysisTasksBatch = useCallback(async (projectId: string) => {
+    const chapterIds = Array.from(pollingIntervalsRef.current);
+    if (!projectId || chapterIds.length === 0) {
+      stopAnalysisPolling(false);
+      return;
+    }
+
+    try {
+      const response = await chapterApi.getBatchChapterAnalysisStatus(chapterIds, projectId);
+      if (currentProjectIdRef.current !== projectId) {
+        return;
+      }
+
+      syncAnalysisTasksFromBatch(response.items, { notifyOnTerminalTransitions: true });
+
+      pollingIntervalsRef.current = new Set(
+        chapterIds.filter((chapterId) => {
+          const task = response.items[chapterId];
+          return task?.status === 'pending' || task?.status === 'running';
+        })
+      );
+
+      if (pollingIntervalsRef.current.size === 0) {
+        stopAnalysisPolling(false);
+      }
+    } catch (error) {
+      console.error('Failed to poll analysis tasks.', error);
+    }
+  }, [stopAnalysisPolling, syncAnalysisTasksFromBatch]);
+
+  const ensureAnalysisPolling = useCallback((projectId: string) => {
+    if (!projectId || pollingIntervalsRef.current.size === 0) {
+      stopAnalysisPolling(false);
+      return;
+    }
+
+    if (analysisPollingIntervalRef.current) {
+      return;
+    }
+
+    const poll = () => {
+      void pollAnalysisTasksBatch(projectId);
+    };
+
+    poll();
+    analysisPollingIntervalRef.current = window.setInterval(poll, 2000);
+  }, [pollAnalysisTasksBatch, stopAnalysisPolling]);
+
   useEffect(() => {
+    const projectId = currentProject?.id ?? null;
+    currentProjectIdRef.current = projectId;
+    stopAnalysisPolling();
+    updateAnalysisTasksMap(projectId ? (chapterAnalysisTasksCache.get(projectId) ?? {}) : {});
 
-    if (currentProject?.id) {
-
+    if (projectId) {
       if (chapters.length === 0) {
-
         refreshChapters();
-
       }
 
       loadWritingStyles();
-
       loadAnalysisTasks();
-
       checkAndRestoreBatchTask();
-
     }
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-
-  }, [currentProject?.id]);
-
-
-
-
-  useEffect(() => {
-
-    const pollingIntervals = pollingIntervalsRef.current;
-
-    const batchPollingInterval = batchPollingIntervalRef.current;
 
     return () => {
-
-      Object.values(pollingIntervals).forEach(interval => {
-
-        clearInterval(interval);
-
-      });
-
-      if (batchPollingInterval) {
-
-        clearInterval(batchPollingInterval);
-
-      }
-
+      stopAnalysisPolling();
     };
 
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProject?.id]);
 
+  useEffect(() => {
+    return () => {
+      stopAnalysisPolling();
 
-
-
+      if (batchPollingIntervalRef.current) {
+        clearInterval(batchPollingIntervalRef.current);
+      }
+    };
+  }, [stopAnalysisPolling]);
 
   const loadAnalysisTasks = async (chaptersToLoad?: typeof chapters) => {
-
+    const projectId = currentProject?.id;
     const targetChapters = chaptersToLoad || chapters;
 
-    if (!targetChapters || targetChapters.length === 0) return;
-
-
-
-
-
-    if (currentProject?.id && !chaptersToLoad) {
-
-      const cachedTasks = chapterAnalysisTasksCache.get(currentProject.id);
-
-      if (cachedTasks) {
-
-        updateAnalysisTasksMap(cachedTasks);
-
-        return;
-
-      }
-
+    if (!projectId) {
+      stopAnalysisPolling();
+      return;
     }
 
-    const taskEntries = await Promise.all(
+    currentProjectIdRef.current = projectId;
 
-      targetChapters
+    if (!targetChapters || targetChapters.length === 0) {
+      if (!chaptersToLoad) {
+        updateAnalysisTasksMap({});
+      }
+      stopAnalysisPolling();
+      return;
+    }
 
-        .filter((chapter) => chapter.content && chapter.content.trim() !== '')
+    if (!chaptersToLoad) {
+      const cachedTasks = chapterAnalysisTasksCache.get(projectId);
+      if (cachedTasks) {
+        updateAnalysisTasksMap(cachedTasks);
+        pollingIntervalsRef.current = new Set(
+          Object.entries(cachedTasks)
+            .filter(([, task]) => task.status === 'pending' || task.status === 'running')
+            .map(([chapterId]) => chapterId)
+        );
 
-        .map(async (chapter) => {
-
-          try {
-
-            const task = await chapterApi.getChapterAnalysisStatus(chapter.id, currentProject?.id);
-
-            return [chapter.id, task] as const;
-
-          } catch {
-
-            console.debug(`No analysis task for chapter ${chapter.id}`);
-
-            return null;
-
-          }
-
-        })
-
-    );
-
-
-
-    const tasksMap: Record<string, AnalysisTask> = {};
-
-
-
-    taskEntries.forEach((entry) => {
-
-      if (!entry) {
-
+        if (pollingIntervalsRef.current.size > 0) {
+          ensureAnalysisPolling(projectId);
+        } else {
+          stopAnalysisPolling(false);
+        }
         return;
+      }
+    }
 
+    const targetChapterIds = targetChapters
+      .filter((chapter) => chapter.content && chapter.content.trim() !== '')
+      .map((chapter) => chapter.id);
+
+    if (targetChapterIds.length === 0) {
+      updateAnalysisTasksMap(chaptersToLoad ? { ...analysisTasksMapRef.current } : {});
+      stopAnalysisPolling();
+      return;
+    }
+
+    try {
+      const response = await chapterApi.getBatchChapterAnalysisStatus(targetChapterIds, projectId);
+      if (currentProjectIdRef.current !== projectId) {
+        return;
       }
 
+      const tasksMap = chaptersToLoad ? { ...analysisTasksMapRef.current } : {};
+      targetChapterIds.forEach((chapterId) => {
+        const task = response.items[chapterId];
+        if (task) {
+          tasksMap[chapterId] = task;
+        }
+      });
 
+      pollingIntervalsRef.current = new Set(
+        Object.entries(tasksMap)
+          .filter(([, task]) => task.status === 'pending' || task.status === 'running')
+          .map(([chapterId]) => chapterId)
+      );
 
-      const [chapterId, task] = entry;
+      syncAnalysisTasksFromBatch(tasksMap, { reset: !chaptersToLoad });
 
-      tasksMap[chapterId] = task;
-
-
-
-      if (task.status === 'pending' || task.status === 'running') {
-
-        startPollingTask(chapterId);
-
+      if (pollingIntervalsRef.current.size > 0) {
+        ensureAnalysisPolling(projectId);
+      } else {
+        stopAnalysisPolling(false);
       }
-
-    });
-
-
-
-    updateAnalysisTasksMap(tasksMap);
-
+    } catch (error) {
+      console.error('Failed to load chapter analysis tasks.', error);
+    }
   };
-
-
-
 
   const startPollingTask = (chapterId: string) => {
+    pollingIntervalsRef.current.add(chapterId);
 
-
-    if (pollingIntervalsRef.current[chapterId]) {
-
-      clearInterval(pollingIntervalsRef.current[chapterId]);
-
+    const projectId = currentProjectIdRef.current ?? currentProject?.id;
+    if (!projectId) {
+      return;
     }
 
-
-
-    const interval = window.setInterval(async () => {
-
-      try {
-
-        const task = await chapterApi.getChapterAnalysisStatus(chapterId, currentProject?.id);
-
-
-
-        updateAnalysisTasksMap(prev => ({
-
-          ...prev,
-
-          [chapterId]: task
-
-        }));
-
-
-
-        // Stop polling once the task finishes.
-
-        if (task.status === 'completed' || task.status === 'failed') {
-
-          clearInterval(pollingIntervalsRef.current[chapterId]);
-
-          delete pollingIntervalsRef.current[chapterId];
-
-
-
-          if (task.status === 'completed') {
-
-            message.success('章节分析已完成。');
-
-          } else if (task.status === 'failed') {
-
-            message.error(`章节分析失败：${task.error_message || '未知错误'}`);
-
-          }
-
-        }
-
-      } catch (error) {
-
-        console.error('Failed to poll analysis task.', error);
-
-      }
-
-    }, 2000);
-
-
-
-    pollingIntervalsRef.current[chapterId] = interval;
-
-
-
-    // Stop polling after 5 minutes to avoid runaway timers.
-
-    setTimeout(() => {
-
-      if (pollingIntervalsRef.current[chapterId]) {
-
-        clearInterval(pollingIntervalsRef.current[chapterId]);
-
-        delete pollingIntervalsRef.current[chapterId];
-
-      }
-
-    }, 300000);
-
+    ensureAnalysisPolling(projectId);
   };
-
-
 
   const refreshChapterAnalysisTask = async (chapterId: string) => {
-
-    const task = await chapterApi.getChapterAnalysisStatus(chapterId, currentProject?.id);
-
-    updateAnalysisTasksMap(prev => ({
-
-      ...prev,
-
-      [chapterId]: task
-
-    }));
-
-
-
-    if (task.status === 'pending' || task.status === 'running') {
-
-      startPollingTask(chapterId);
-
+    const projectId = currentProjectIdRef.current ?? currentProject?.id;
+    if (!projectId) {
+      return;
     }
 
+    const task = await chapterApi.getChapterAnalysisStatus(chapterId, projectId);
+    if (currentProjectIdRef.current !== projectId) {
+      return;
+    }
+
+    syncAnalysisTasksFromBatch({ [chapterId]: task }, { notifyOnTerminalTransitions: true });
+
+    if (task.status === 'pending' || task.status === 'running') {
+      startPollingTask(chapterId);
+      return;
+    }
+
+    pollingIntervalsRef.current.delete(chapterId);
+    if (pollingIntervalsRef.current.size === 0) {
+      stopAnalysisPolling(false);
+    }
   };
-
-
 
   const triggerDeferredBatchAnalysis = async (
 
@@ -3911,8 +3935,9 @@ export default function Chapters() {
 
         }
 
-      } catch {
+      } catch (error) {
 
+        console.debug(`No analysis task for chapter ${chapter.id}`, error);
 
       }
 
@@ -4483,6 +4508,12 @@ export default function Chapters() {
   }, [chapters]);
 
 
+  const sortedOutlines = useMemo(
+    () => [...outlines].sort((a, b) => a.order_index - b.order_index),
+    [outlines]
+  );
+
+
 
   const canGenerateChapter = (chapter: Chapter): boolean => {
 
@@ -4907,11 +4938,11 @@ export default function Chapters() {
 
   const showGenerateModal = (chapter: Chapter) => {
 
-    const previousChapters = chapters.filter(
+    const previousChapters = sortedChapters.filter(
 
       c => c.chapter_number < chapter.chapter_number
 
-    ).sort((a, b) => a.chapter_number - b.chapter_number);
+    );
 
 
 
@@ -5779,11 +5810,7 @@ export default function Chapters() {
             <Select placeholder="请选择大纲">
 
 
-              {[...outlines]
-
-                .sort((a, b) => a.order_index - b.order_index)
-
-                .map(outline => (
+              {sortedOutlines.map(outline => (
 
                   <Select.Option key={outline.id} value={outline.id}>
 
@@ -7463,179 +7490,23 @@ export default function Chapters() {
 
 
 
-      <Modal
-
-        title={editingId ? '编辑章节' : '创建章节'}
-
-        open={isModalOpen}
-
-        onCancel={() => setIsModalOpen(false)}
-
-        footer={null}
-
-        centered
-
-        width={isMobile ? 'calc(100vw - 32px)' : 520}
-
-        style={isMobile ? {
-
-          maxWidth: 'calc(100vw - 32px)',
-
-          margin: '0 auto',
-
-          padding: '0 16px'
-
-        } : undefined}
-
-        styles={{
-
-          body: {
-
-            maxHeight: isMobile ? 'calc(100vh - 200px)' : 'calc(80vh - 110px)',
-
-            overflowY: 'auto'
-
-          }
-
-        }}
-
-      >
-
-        <Form form={form} layout="vertical" onFinish={handleSubmit}>
-
-          <Form.Item
-
-            label="章节标题"
-
-            name="title"
-
-            tooltip={
-
-              currentProject.outline_mode === 'one-to-one'
-
-                ? "一对一模式下标题固定。"
-
-                : "一对多模式下必须填写标题。"
-
-            }
-
-            rules={
-
-              currentProject.outline_mode === 'one-to-many'
-
-                ? [{ required: true, message: '请输入章节标题' }]
-
-                : undefined
-
-            }
-
-          >
-
-            <Input
-
-
-
-              placeholder="请输入章节标题"
-
-
-
-              disabled={currentProject.outline_mode === 'one-to-one'}
-
-
-
-            />
-
-
-
-
-
-
-          </Form.Item>
-
-
-
-          <Form.Item
-
-            label="章节编号"
-
-            name="chapter_number"
-
-            tooltip="用于章节排序"
-
-          >
-
-            <Input type="number" placeholder="请输入章节编号" />
-
-          </Form.Item>
-
-
-
-          <Form.Item label="状态" name="status">
-
-            <Select placeholder="请选择状态">
-
-              <Select.Option value="draft">草稿</Select.Option>
-
-              <Select.Option value="writing">写作中</Select.Option>
-
-              <Select.Option value="completed">已完成</Select.Option>
-
-            </Select>
-
-          </Form.Item>
-
-
-
-          <Form.Item style={{ marginBottom: 0 }}>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: isMobile ? "column" : "row",
-                justifyContent: "space-between",
-                alignItems: isMobile ? "stretch" : "center",
-                gap: 12,
-              }}
-            >
-              {renderCompactSelectionSummary(
-                [
-                  {
-                    label: "大纲模式",
-                    value: currentProject.outline_mode === "one-to-one" ? "一对一" : "一对多",
-                    color: "blue",
-                  },
-                  {
-                    label: "标题",
-                    value:
-                      currentProject.outline_mode === "one-to-one"
-                        ? "跟随大纲"
-                        : "可自定义",
-                    color: "green",
-                  },
-                ],
-                { style: { marginBottom: 0, flex: 1, minWidth: 0 } },
-              )}
-              <Space.Compact style={{ width: isMobile ? "100%" : "auto" }} block={isMobile}>
-                <Button
-                  onClick={() => {
-                    setIsModalOpen(false);
-                  }}
-                >
-                  取消
-                </Button>
-                <Button type="primary" htmlType="submit">
-                  {editingId ? "保存章节" : "创建章节"}
-                </Button>
-              </Space.Compact>
-            </div>
-          </Form.Item>
-
-        </Form>
-
-      </Modal>
-
-
-
-      <Modal
+      {isModalOpen ? (
+        <Suspense fallback={null}>
+          <LazyChapterBasicModal
+            open={isModalOpen}
+            title={editingId ? '????' : '????'}
+            isMobile={isMobile}
+            outlineMode={currentProject.outline_mode}
+            submitText={editingId ? '????' : '????'}
+            form={form}
+            onCancel={() => setIsModalOpen(false)}
+            onFinish={handleSubmit}
+          />
+        </Suspense>
+      ) : null}
+
+      {isEditorOpen ? (
+        <Modal
 
         title="编辑章节内容"
 
@@ -8554,6 +8425,8 @@ export default function Chapters() {
         </Form>
 
       </Modal>
+      ) : null}
+
 
 
 
@@ -8643,898 +8516,107 @@ export default function Chapters() {
 
 
 
-
-      <Modal
-
-        title={
-
-          <Space>
-
-            <RocketOutlined style={{ color: '#722ed1' }} />
-
-            <span>批量生成章节</span>
-
-          </Space>
-
-        }
-
-        open={batchGenerateVisible}
-
-        onCancel={() => setBatchGenerateVisible(false)}
-
-        footer={!batchGenerating ? (
-
-          <Space style={{ width: '100%', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-
-            <Button onClick={() => setBatchGenerateVisible(false)}>
-
-              取消
-
-            </Button>
-
-            <Button type="primary" icon={<RocketOutlined />} onClick={() => batchForm.submit()}>
-
-              开始批量生成
-
-            </Button>
-
-          </Space>
-
-        ) : null}
-
-        width={isMobile ? 'calc(100vw - 32px)' : 700}
-
-        centered
-
-        closable
-
-        maskClosable
-
-        style={isMobile ? {
-
-          maxWidth: 'calc(100vw - 32px)',
-
-          margin: '0 auto',
-
-          padding: '0 16px'
-
-        } : undefined}
-
-        styles={{
-
-          body: {
-
-            maxHeight: isMobile ? 'calc(100vh - 200px)' : 'calc(100vh - 260px)',
-
-            overflowY: 'auto',
-
-            overflowX: 'hidden'
-
-          }
-
-        }}
-
-      >
-
-        {!batchGenerating ? (
-
-          <Form
-
-            form={batchForm}
-
-            layout="vertical"
-
-            onFinish={handleBatchGenerate}
-
-            initialValues={{
-
-              startChapterNumber: sortedChapters.find(ch => !ch.content || ch.content.trim() === '')?.chapter_number || 1,
-
-              count: 5,
-
-              enableAnalysis: true,
-
-              styleId: selectedStyleId,
-
-              targetWordCount: getCachedWordCount(),
-
-              model: selectedModel,
-
-            }}
-
-          >
-
-            {renderCompactSettingFlow(
-              "批量生成会基于当前设置连续生成多个章节。",
-              "先选起始章和数量，再决定是否附带分析；适合补稿或集中铺量。",
-              ["选择起始章", "设定生成数量", "可选附带分析"],
-              { style: { marginBottom: 16 } },
-            )}
-
-
-
-
-            <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 0 : 16 }}>
-
-              <Form.Item
-
-                label="起始章节"
-
-                name="startChapterNumber"
-
-                rules={[{ required: true, message: '请选择起始章节' }]}
-
-                style={{ flex: 1, marginBottom: 12 }}
-
-              >
-
-                <Select placeholder="请选择章节">
-
-                  {batchStartChapterOptions.map(ch => (
-
-                    <Select.Option key={ch.id} value={ch.chapter_number}>
-
-                      {'第' + ch.chapter_number + '章：' + ch.title}
-
-                    </Select.Option>
-
-                  ))}
-
-                </Select>
-
-              </Form.Item>
-
-
-
-              <Form.Item
-
-                label="章节数量"
-
-                name="count"
-
-                rules={[{ required: true, message: '请选择章节数量' }]}
-
-                style={{ marginBottom: 12 }}
-
-              >
-
-                <Radio.Group buttonStyle="solid" size={isMobile ? 'small' : 'middle'}>
-
-                  <Radio.Button value={5}>5章</Radio.Button>
-
-                  <Radio.Button value={10}>10章</Radio.Button>
-
-                  <Radio.Button value={15}>15章</Radio.Button>
-
-                  <Radio.Button value={20}>20章</Radio.Button>
-
-                </Radio.Group>
-
-              </Form.Item>
-
-            </div>
-
-
-
-
-            {renderCompactSettingFlow(
-              '批量任务先锁统一方向，再决定要不要展开后两步。',
-              '想省心时，完成基础约束和快速预设即可；故事总控与微调用于统一多章节奏。',
-              [
-                '基础约束',
-                '快速预设',
-                '故事总控',
-                '补充微调',
-              ],
-            )}
-
-            <Card
-              size="small"
-              title="基础约束"
-              style={{ marginBottom: 12 }}
-            >
-            <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 0 : 16 }}>
-              <Form.Item
-                label="写作风格"
-                name="styleId"
-                rules={[{ required: true, message: '请选择写作风格' }]}
-
-                style={{ flex: 1, marginBottom: 12 }}
-
-              >
-
-
-
-                <Select
-
-
-
-                  placeholder="请选择写作风格"
-
-
-
-
-
-                  showSearch
-
-                  optionFilterProp="children"
-
-                >
-
-                  {writingStyles.map(style => (
-
-                    <Select.Option key={style.id} value={style.id}>
-
-                      {style.name}{style.is_default && ' (默认)'}
-
-                    </Select.Option>
-
-                  ))}
-
-                </Select>
-
-              </Form.Item>
-
-
-
-              <Form.Item
-
-                label="目标字数"
-
-                name="targetWordCount"
-
-                rules={[{ required: true, message: '请输入目标字数' }]}
-
-                tooltip="用于控制批量生成的篇幅。"
-
-                style={{ flex: 1, marginBottom: 12 }}
-
-              >
-
-                <InputNumber<number>
-
-                  min={500}
-
-                  max={10000}
-
-                  step={100}
-
-                  style={{ width: '100%' }}
-
-                  formatter={(value) => (value ? String(value) + ' 字' : '')}
-
-                  parser={(value) => parseInt((value || '').replace(' 字', ''), 10)}
-
-                  onChange={(value) => {
-
-                    if (value) {
-
-                      setCachedWordCount(value);
-
-                    }
-
-                  }}
-
-                />
-              </Form.Item>
-            </div>
-
-            <Form.Item
-              label="剧情阶段"
-
-
-
-              tooltip="选择用于批量创作的剧情阶段"
-
-              style={{ marginBottom: 12 }}
-
-            >
-
-              <Select
-
-                placeholder="请选择剧情阶段"
-
-
-
-                value={batchSelectedPlotStage}
-                onChange={setBatchSelectedPlotStage}
-                allowClear
-                optionLabelProp="label"
-              >
-                {CREATION_PLOT_STAGE_OPTIONS.map((option) => (
-                  <Select.Option key={option.value} value={option.value} label={option.label}>
-                    <div>{option.label}</div>
-                    <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
-                  </Select.Option>
-                ))}
-              </Select>
-              <Space size={8} style={{ marginTop: 8 }}>
-                <Button size="small" onClick={applyInferredBatchPlotStage}>应用推断阶段</Button>
-                {batchSelectedPlotStage && (
-                  <span style={{ color: 'var(--color-success)', fontSize: 12 }}>
-                    已选择： {CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === batchSelectedPlotStage)?.label || batchSelectedPlotStage}
-                  </span>
-                )}
-              </Space>
-            </Form.Item>
-            </Card>
-
-
-            <Card
-              size="small"
-              title="快速预设"
-              style={{ marginBottom: 12 }}
-            >
-              <Space wrap>
-                {CREATION_PRESETS.map((preset) => (
-                  <Button
-                    key={preset.id}
-                    type={activeBatchCreationPreset?.id === preset.id ? 'primary' : 'default'}
-                    onClick={() => applyBatchCreationPreset(preset.id)}
-                  >
-                    {preset.label}
-                  </Button>
-                ))}
-                <Button
-                  onClick={() => {
-                    setBatchSelectedCreativeMode(projectDefaultCreativeMode);
-                    setBatchSelectedStoryFocus(projectDefaultStoryFocus);
-                  }}
-                >
-                  {"重置选择"}
-                </Button>
-              </Space>
-
-              {activeBatchCreationPreset && renderCompactSettingHint(
-                `已选预设：${activeBatchCreationPreset.label}`,
-                activeBatchCreationPreset.description,
-                { style: { marginTop: 12 }, tone: 'success' },
-              )}
-
-              {renderCompactPresetRecommendationBlock(batchRecommendedCreationPresets, {
-                activePresetId: activeBatchCreationPreset?.id,
-                applyPreset: applyBatchCreationPreset,
-              })}
-
-              {batchScoreDrivenRecommendationCard && (
-                <Card size="small" title={batchScoreDrivenRecommendationCard.title} style={{ marginTop: 12 }}>
-                  <Space direction="vertical" size={10} style={{ display: 'flex' }}>
-                    {renderCompactSettingHint(
-                      batchScoreDrivenRecommendationCard.summary,
-                      batchScoreDrivenRecommendationCard.applyHint,
-                    )}
-
-                    {batchScoreDrivenRecommendationCard.recommendedPresetLabel && renderCompactStoryControlHeader(
-                      '推荐预设',
-                      batchScoreDrivenRecommendationCard.recommendedPresetReason || '优先用这个预设起步。',
-                      {
-                        tagText: batchScoreDrivenRecommendationCard.recommendedPresetLabel,
-                        tagColor: batchScoreDrivenRecommendationCard.recommendedPresetId === activeBatchCreationPreset?.id ? 'blue' : 'processing',
-                      },
-                    )}
-
-                    {renderCompactStoryControlHeader(
-                      '推荐阶段',
-                      batchScoreDrivenRecommendationCard.stageReason,
-                      {
-                        tagText: batchScoreDrivenRecommendationCard.recommendedStageLabel,
-                        tagColor: batchScoreDrivenRecommendationCard.recommendedStage === batchSelectedPlotStage ? 'blue' : 'purple',
-                      },
-                    )}
-
-                    {batchScoreDrivenRecommendationCard.alternatives.length > 0 && (
-                      renderCompactListCard(
-                        '备选方案',
-                        batchScoreDrivenRecommendationCard.alternatives.map((item) => (
-                          item.reason ? `${item.label}：${item.reason}` : item.label
-                        )),
-                        { tagText: `${batchScoreDrivenRecommendationCard.alternatives.length}项` },
-                      )
-                    )}
-
-                    <Space wrap>
-                      {batchScoreDrivenRecommendationCard.recommendedPresetId && (
-                        <Button size="small" onClick={() => applyBatchCreationPreset(batchScoreDrivenRecommendationCard.recommendedPresetId!)}>
-                          {"应用预设"}
-                        </Button>
-                      )}
-                      {batchScoreDrivenRecommendationCard.recommendedStage && (
-                        <Button size="small" onClick={() => setBatchSelectedPlotStage(batchScoreDrivenRecommendationCard.recommendedStage)}>
-                          {"应用阶段"}
-                        </Button>
-                      )}
-                      {(batchScoreDrivenRecommendationCard.recommendedPresetId || batchScoreDrivenRecommendationCard.recommendedStage) && (
-                        <Button
-                          type="primary"
-                          size="small"
-                          onClick={() => {
-                            if (batchScoreDrivenRecommendationCard.recommendedPresetId) {
-                              applyBatchCreationPreset(batchScoreDrivenRecommendationCard.recommendedPresetId!);
-                            }
-                            if (batchScoreDrivenRecommendationCard.recommendedStage) {
-                              setBatchSelectedPlotStage(batchScoreDrivenRecommendationCard.recommendedStage);
-                            }
-                          }}
-                        >
-                          {"一键应用"}
-                        </Button>
-                      )}
-                    </Space>
-                  </Space>
-                </Card>
-              )}
-            </Card>
-
-              {batchStoryCreationControlCard && (
-                <Card
-                  size="small"
-                  title={batchStoryCreationControlCard.title}
-                  extra={(
-                    <Space size={8}>
-                      <Tag color={isBatchStoryCreationControlCustomized ? 'purple' : 'blue'}>
-                        {isBatchStoryCreationControlCustomized ? '自定义' : '系统'}
-                      </Tag>
-                      <Button
-                        size="small"
-                        type="link"
-                        onClick={() => setBatchStoryCreationBriefDraft(batchSystemStoryCreationBrief)}
-                        disabled={!batchSystemStoryCreationBrief || batchStoryCreationBriefDraft === batchSystemStoryCreationBrief}
-                      >
-                        恢复系统建议
-                      </Button>
-                    </Space>
-                  )}
-                  style={{ marginTop: 12 }}
-                >
-
-                  {renderCompactSettingHint(
-                    batchStoryCreationControlCard.summary,
-                    batchStoryCreationControlCard.directive,
-                  )}
-                  <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      {renderCompactStoryControlHeader(
-                        '故事简介',
-                        '一句话说明本轮方向。',
-                        {
-                          tagText: isBatchStoryCreationBriefCustomized ? '自定义' : '系统建议',
-                          tagColor: isBatchStoryCreationBriefCustomized ? 'purple' : 'blue',
-                        },
-                      )}
-                      <TextArea
-                        value={batchStoryCreationBriefDraft}
-                        onChange={(event) => setBatchStoryCreationBriefDraft(event.target.value)}
-                        autoSize={{ minRows: 4, maxRows: 8 }}
-                        maxLength={600}
-                        showCount
-                        placeholder="请简要描述故事..."
-                      />
-                    </div>
-                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      {renderCompactStoryControlHeader(
-                        '故事节拍',
-                        '按五拍锁住节奏。',
-                        {
-                          tagText: isBatchStoryBeatPlannerCustomized ? '自定义' : '系统建议',
-                          tagColor: isBatchStoryBeatPlannerCustomized ? 'purple' : 'blue',
-                          action: (
-                            <Button
-                              size="small"
-                              type="link"
-                              onClick={() => setBatchStoryBeatPlannerDraft(batchSystemStoryBeatPlanner)}
-                              disabled={
-                                isStoryBeatPlannerDraftEmpty(batchSystemStoryBeatPlanner)
-                                || areStoryBeatPlannerDraftsEqual(batchStoryBeatPlannerDraft, batchSystemStoryBeatPlanner)
-                              }
-                            >
-                              恢复系统建议
-                            </Button>
-                          ),
-                        },
-                      )}
-                      <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                        {STORY_BEAT_PLANNER_FIELDS.map((field) => (
-                          <div key={field.key}>
-                            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{field.label}</div>
-                            <Input
-                              value={batchStoryBeatPlannerDraft[field.key]}
-                              onChange={(event) => setBatchStoryBeatPlannerDraft((prev) => ({
-                                ...prev,
-                                [field.key]: event.target.value,
-                              }))}
-                              placeholder={field.placeholder}
-                              maxLength={120}
-                            />
-                          </div>
-                        ))}
-                      </Space>
-                    </div>
-                    <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
-                      {renderCompactStoryControlHeader(
-                        '场景提纲',
-                        '列出场景链路。',
-                        {
-                          tagText: isBatchStorySceneOutlineCustomized ? '自定义' : '系统建议',
-                          tagColor: isBatchStorySceneOutlineCustomized ? 'purple' : 'blue',
-                          action: (
-                            <Button
-                              size="small"
-                              type="link"
-                              onClick={() => setBatchStorySceneOutlineDraft(batchSuggestedStorySceneOutline)}
-                              disabled={
-                                isStorySceneOutlineDraftEmpty(batchSuggestedStorySceneOutline)
-                                || areStorySceneOutlineDraftsEqual(batchStorySceneOutlineDraft, batchSuggestedStorySceneOutline)
-                              }
-                            >
-                              恢复系统建议
-                            </Button>
-                          ),
-                        },
-                      )}
-                      <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                        {STORY_SCENE_OUTLINE_FIELDS.map((field) => (
-                          <div key={field.key}>
-                            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{field.label}</div>
-                            <TextArea
-                              value={batchStorySceneOutlineDraft[field.key]}
-                              onChange={(event) => setBatchStorySceneOutlineDraft((prev) => ({
-                                ...prev,
-                                [field.key]: event.target.value,
-                              }))}
-                              autoSize={{ minRows: 2, maxRows: 4 }}
-                              maxLength={220}
-                              showCount
-                              placeholder={field.placeholder}
-                            />
-                          </div>
-                        ))}
-                      </Space>
-                    </div>
-                    {renderCompactPromptPreviewPanel(
-                      resolvedBatchStoryCreationBrief,
-                      batchStoryCreationPromptLayerLabels,
-                      batchStoryCreationPromptCharCount,
-                      isBatchStoryCreationPromptVerbose,
-                      () => void copyStoryCreationPrompt(resolvedBatchStoryCreationBrief, 'batch'),
-                      { placeholder: '提示词预览将显示在此。' },
-                    )}
-                    <StoryCreationSnapshotPanel
-                      scopeLabel="batch"
-                      emptyText="还没有快照。"
-                      snapshots={batchStoryCreationSnapshots}
-                      currentDraft={batchStoryCreationCurrentDraft}
-                      canSave={canSaveBatchStoryCreationSnapshot}
-                      onSave={() => void saveBatchStoryCreationSnapshot('manual')}
-                      onApply={applyBatchStoryCreationSnapshot}
-                      onDelete={deleteBatchStoryCreationSnapshot}
-                      onCopy={copyStoryCreationPrompt}
-                    />
-                    <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))',
-                        gap: 8,
-                      }}
-                    >
-                      {renderCompactListCard('执行路径', batchStoryCreationControlCard.executionPath, { numbered: true })}
-                      {renderCompactListCard('预期结果', batchStoryCreationControlCard.expectedOutcomes, { numbered: true })}
-                      {renderCompactListCard('约束规则', batchStoryCreationControlCard.guardrails)}
-                    </div>
-                  </Space>
-                </Card>
-              )}
-
-            {(batchStoryRepairTargetCard || batchCreationBlueprint) && (
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
-                  gap: 12,
-                  marginBottom: 12,
-                }}
-              >
-                {batchStoryRepairTargetCard && (
-                  <Card
-                    size="small"
-                    title={batchStoryRepairTargetCard.title}
-                    extra={<Tag color="gold">修复重点</Tag>}
-                    style={{ height: '100%' }}
-                  >
-                    {renderCompactSettingHint(
-                      batchStoryRepairTargetCard.repairSummary,
-                      batchStoryRepairTargetCard.applyHint,
-                      { tone: 'warning' },
-                    )}
-                    <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
-                        gap: 8,
-                      }}
-                    >
-                      {renderCompactFactCard('优先修复项', batchStoryRepairTargetCard.priorityTarget)}
-                      {renderCompactFactCard('反模式', batchStoryRepairTargetCard.antiPattern)}
-                      {renderCompactListCard('修复目标', batchStoryRepairTargetCard.repairTargets, { tagColor: 'gold' })}
-                      {renderCompactListCard('保留优势', batchStoryRepairTargetCard.preserveStrengths, { tagColor: 'green' })}
-                    </div>
-                  </Card>
-                )}
-
-                {batchCreationBlueprint && (
-                  <Card size="small" title="批量创作蓝图" style={{ height: '100%' }}>
-                    <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
-                      {batchCreationBlueprint.summary}
-                    </div>
-                    {renderCompactListCard(
-                      '关键节拍',
-                      batchCreationBlueprint.beats,
-                      { numbered: true, tagText: `${batchCreationBlueprint.beats.length}拍` },
-                    )}
-                    {batchCreationBlueprint.risks.length > 0 && (
-                      renderCompactSettingHint(
-                        '风险提示',
-                        batchCreationBlueprint.risks.join(', '),
-                        { tone: 'warning', style: { marginTop: 12, marginBottom: 0 } },
-                      )
-                    )}
-                  </Card>
-                )}
-              </div>
-            )}
-
-            {renderCompactInsightCardGrid(batchStoryInsightCards, isMobile, { style: { marginBottom: 12 } })}
-
-
-            {batchVolumePacingPlan && (
-              <Card size="small" title="篇幅节奏规划" style={{ marginBottom: 12 }}>
-                {renderCompactSettingHint(
-                  `当前阶段：${batchSelectedPlotStageLabel}`,
-                  batchVolumePacingPlan.summary,
-                  { style: { marginBottom: 10 } },
-                )}
-                {renderCompactListCard(
-                  "章节分段",
-                  batchVolumePacingPlan.segments.map(
-                    (segment) => `第${segment.startChapter}-${segment.endChapter}章 · ${segment.label}：${segment.mission}`,
-                  ),
-                  { tagText: `${batchVolumePacingPlan.segments.length}段` },
-                )}
-              </Card>
-            )}
-
-            <Card size="small" title="补充微调（可选）" style={{ marginBottom: 12 }}>
-              {renderCompactSettingHint(
-                "批量通常只建议调整模式、聚焦和模型；质量分析按需开启即可。",
-                "不改则沿用默认推荐，先稳定生成，再根据结果回头细调。",
-                { style: { marginBottom: 10 } },
-              )}
-              {renderCompactSelectionSummary(
-                [
-                  { label: "模式", value: batchSelectedCreativeModeLabel, color: "blue" },
-                  { label: "聚焦", value: batchSelectedStoryFocusLabel, color: "purple" },
-                  { label: "模型", value: batchSelectedModelLabel },
-                  { label: "分析", value: batchQualityAnalysisLabel, color: batchEnableAnalysis === false ? "default" : "green" },
-                ],
-              )}
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: `repeat(auto-fit, minmax(${isMobile ? 220 : 260}px, 1fr))`,
-                  gap: 12,
-                }}
-              >
-                <Form.Item
-                  label="创作模式"
-                  tooltip="控制这一批章节的主要写法偏向"
-                  style={{ marginBottom: 0 }}
-                >
-                  <Select
-                    placeholder="留空=默认推荐"
-                    value={batchSelectedCreativeMode}
-                    onChange={setBatchSelectedCreativeMode}
-                    allowClear
-                    optionLabelProp="label"
-                  >
-                    {CREATIVE_MODE_OPTIONS.map((option) => (
-                      <Select.Option key={option.value} value={option.value} label={option.label}>
-                        <div>{option.label}</div>
-                        <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{option.description}</div>
-                      </Select.Option>
-                    ))}
-                  </Select>
-                </Form.Item>
-                <Form.Item
-                  label="故事聚焦"
-                  tooltip="控制这一批章节的主要发力点"
-                  style={{ marginBottom: 0 }}
-                >
-                  <Select
-                    placeholder="留空=默认推荐"
-                    value={batchSelectedStoryFocus}
-                    onChange={setBatchSelectedStoryFocus}
-                    allowClear
-                    optionLabelProp="label"
-                  >
-                    {STORY_FOCUS_OPTIONS.map((option) => (
-                      <Select.Option key={option.value} value={option.value} label={option.label}>
-                        <div>{option.label}</div>
-                        <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{option.description}</div>
-                      </Select.Option>
-                    ))}
-                  </Select>
-                </Form.Item>
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: `repeat(auto-fit, minmax(${isMobile ? 220 : 260}px, 1fr))`,
-                  gap: 12,
-                  marginTop: 12,
-                }}
-              >
-                <Form.Item
-                  label="AI 模型"
-                  tooltip="留空则沿用项目默认模型"
-                  style={{ marginBottom: 0 }}
-                >
-                  <Select
-                    placeholder={batchSelectedModel ? `已选择：${batchSelectedModelLabel}` : "留空=项目默认"}
-                    value={batchSelectedModel}
-                    onChange={setBatchSelectedModel}
-                    allowClear
-                    showSearch
-                    optionFilterProp="label"
-                  >
-                    {availableModels.map((model) => (
-                      <Select.Option key={model.value} value={model.value} label={model.label}>
-                        {model.label}
-                      </Select.Option>
-                    ))}
-                  </Select>
-                </Form.Item>
-                <Form.Item
-                  label="开启质量分析"
-                  name="enableAnalysis"
-                  tooltip="决定批量生成后是否自动附带质量建议"
-                  style={{ marginBottom: 0 }}
-                >
-                  <div>
-                    <Radio.Group optionType="button" buttonStyle="solid">
-                      <Radio.Button value={true}>开启分析</Radio.Button>
-                      <Radio.Button value={false}>仅生成</Radio.Button>
-                    </Radio.Group>
-                    <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginTop: 6 }}>
-                      关闭后只生成正文，不自动附带质量分析。
-                    </div>
-                  </div>
-                </Form.Item>
-              </div>
-            </Card>
-
-
-          </Form>
-
-        ) : (
-
-          <div>
-
-            {renderCompactSettingHint(
-              `批量生成进行中：${batchProgress?.completed || 0}/${batchProgress?.total || 0} 章`,
-              "可关闭窗口后台继续；需要停止时在下方取消生成。",
-              { style: { marginBottom: 10 } },
-            )}
-            {renderCompactSelectionSummary(
-              [
-                ...(batchProgress?.current_chapter_number
-                  ? [{ label: "当前", value: `第${batchProgress.current_chapter_number}章`, color: "blue" }]
-                  : []),
-                { label: "进度", value: `${batchProgress?.completed || 0}/${batchProgress?.total || 0}`, color: "blue" },
-                ...(batchProgress?.estimated_time_minutes && batchProgress.completed === 0
-                  ? [{ label: "预计", value: `${batchProgress.estimated_time_minutes}分钟` }]
-                  : []),
-                ...(batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined
-                  ? [{
-                      label: "均分",
-                      value: `${batchProgress.quality_metrics_summary.avg_overall_score}`,
-                      color: getOverallScoreColor(batchProgress.quality_metrics_summary.avg_overall_score),
-                    }]
-                  : []),
-              ],
-              { style: { marginBottom: 16 } },
-            )}
-
-
-
-            {batchProgress?.quality_profile_summary && getQualityProfileDisplayItems(batchProgress.quality_profile_summary).length > 0 && (
-
-              <Card size="small" title="质量画像摘要" style={{ marginBottom: 16 }}>
-                {renderCompactSettingHint(
-                  "质量画像用于概括当前批次的风格、维度与优化方向。",
-                  "优先关注不稳定或偏离目标的条目。",
-                  { tone: "success", style: { marginBottom: 10 } },
-                )}
-                {renderCompactFactGrid(
-                  batchQualityProfileItems.map((item) => [item.label, item.description] as [string, string]),
-                )}
-              </Card>
-
-            )}
-
-
-
-            {batchProgress?.quality_metrics_summary?.avg_overall_score !== undefined && (
-              <Card size="small" title="质量指标摘要" style={{ marginBottom: 16 }}>
-                {batchAfterScorecard && (
-                  renderCompactSettingHint(
-                    batchAfterScorecard.verdict,
-                    `${batchAfterScorecard.summary} ${batchAfterScorecard.nextAction}`,
-                    {
-                      tone: getCompactHintToneByAlertType(batchAfterScorecard.verdictColor as "success" | "info" | "warning" | "error"),
-                      style: { marginBottom: 10 },
-                    },
-                  )
-                )}
-                {renderCompactSelectionSummary(
-                  [
-                    {
-                      label: "平均得分",
-                      value: `${batchProgress?.quality_metrics_summary?.avg_overall_score ?? 0}`,
-                      color: getOverallScoreColor(batchProgress?.quality_metrics_summary?.avg_overall_score),
-                    },
-                    { label: "已完成", value: `${batchProgress?.completed || 0}/${batchProgress?.total || 0}`, color: "blue" },
-                  ],
-                  { style: { marginBottom: 10 } },
-                )}
-                {renderCompactMetricGrid(batchSummaryMetricItems)}
-              </Card>
-
-            )}
-
-
-
-            <div style={{ textAlign: 'center' }}>
-
-              <Button
-
-                danger
-
-                icon={<StopOutlined />}
-
-                onClick={() => {
-
-                  modal.confirm({
-
-                    title: '确认取消批量生成？',
-
-                    content: '取消后当前批量生成任务将停止，已生成的章节会保留。确定要取消吗？',
-
-                    okText: '确认取消',
-
-                    cancelText: '继续生成',
-
-                    okButtonProps: { danger: true },
-
-                    onOk: handleCancelBatchGenerate,
-
-                  });
-
-                }}
-
-              >
-
-                取消批量生成
-
-              </Button>
-
-            </div>
-
-          </div>
-
-        )}
-
-      </Modal>
-
-
+      {batchGenerateVisible || batchGenerating ? (
+        <Suspense fallback={null}>
+          <LazyChapterBatchGenerateModal
+            StoryCreationSnapshotPanel={StoryCreationSnapshotPanel}
+            activeBatchCreationPreset={activeBatchCreationPreset}
+            applyBatchCreationPreset={applyBatchCreationPreset}
+            applyBatchStoryCreationSnapshot={applyBatchStoryCreationSnapshot}
+            applyInferredBatchPlotStage={applyInferredBatchPlotStage}
+            areStoryBeatPlannerDraftsEqual={areStoryBeatPlannerDraftsEqual}
+            areStorySceneOutlineDraftsEqual={areStorySceneOutlineDraftsEqual}
+            availableModels={availableModels}
+            batchAfterScorecard={batchAfterScorecard}
+            batchCreationBlueprint={batchCreationBlueprint}
+            batchEnableAnalysis={batchEnableAnalysis}
+            batchForm={batchForm}
+            batchGenerateVisible={batchGenerateVisible}
+            batchGenerating={batchGenerating}
+            batchProgress={batchProgress}
+            batchQualityAnalysisLabel={batchQualityAnalysisLabel}
+            batchQualityProfileItems={batchQualityProfileItems}
+            batchRecommendedCreationPresets={batchRecommendedCreationPresets}
+            batchScoreDrivenRecommendationCard={batchScoreDrivenRecommendationCard}
+            batchSelectedCreativeMode={batchSelectedCreativeMode}
+            batchSelectedCreativeModeLabel={batchSelectedCreativeModeLabel}
+            batchSelectedModel={batchSelectedModel}
+            batchSelectedModelLabel={batchSelectedModelLabel}
+            batchSelectedPlotStage={batchSelectedPlotStage}
+            batchSelectedPlotStageLabel={batchSelectedPlotStageLabel}
+            batchSelectedStoryFocus={batchSelectedStoryFocus}
+            batchSelectedStoryFocusLabel={batchSelectedStoryFocusLabel}
+            batchStartChapterOptions={batchStartChapterOptions}
+            batchStoryBeatPlannerDraft={batchStoryBeatPlannerDraft}
+            batchStoryCreationBriefDraft={batchStoryCreationBriefDraft}
+            batchStoryCreationControlCard={batchStoryCreationControlCard}
+            batchStoryCreationCurrentDraft={batchStoryCreationCurrentDraft}
+            batchStoryCreationPromptCharCount={batchStoryCreationPromptCharCount}
+            batchStoryCreationPromptLayerLabels={batchStoryCreationPromptLayerLabels}
+            batchStoryCreationSnapshots={batchStoryCreationSnapshots}
+            batchStoryInsightCards={batchStoryInsightCards}
+            batchStoryRepairTargetCard={batchStoryRepairTargetCard}
+            batchStorySceneOutlineDraft={batchStorySceneOutlineDraft}
+            batchSuggestedStorySceneOutline={batchSuggestedStorySceneOutline}
+            batchSummaryMetricItems={batchSummaryMetricItems}
+            batchSystemStoryBeatPlanner={batchSystemStoryBeatPlanner}
+            batchSystemStoryCreationBrief={batchSystemStoryCreationBrief}
+            batchVolumePacingPlan={batchVolumePacingPlan}
+            canSaveBatchStoryCreationSnapshot={canSaveBatchStoryCreationSnapshot}
+            copyStoryCreationPrompt={copyStoryCreationPrompt}
+            CREATION_PLOT_STAGE_OPTIONS={CREATION_PLOT_STAGE_OPTIONS}
+            CREATION_PRESETS={CREATION_PRESETS}
+            CREATIVE_MODE_OPTIONS={CREATIVE_MODE_OPTIONS}
+            deleteBatchStoryCreationSnapshot={deleteBatchStoryCreationSnapshot}
+            getCachedWordCount={getCachedWordCount}
+            getCompactHintToneByAlertType={getCompactHintToneByAlertType}
+            getOverallScoreColor={getOverallScoreColor}
+            getQualityProfileDisplayItems={getQualityProfileDisplayItems}
+            handleBatchGenerate={handleBatchGenerate}
+            handleCancelBatchGenerate={handleCancelBatchGenerate}
+            isBatchStoryBeatPlannerCustomized={isBatchStoryBeatPlannerCustomized}
+            isBatchStoryCreationBriefCustomized={isBatchStoryCreationBriefCustomized}
+            isBatchStoryCreationControlCustomized={isBatchStoryCreationControlCustomized}
+            isBatchStoryCreationPromptVerbose={isBatchStoryCreationPromptVerbose}
+            isBatchStorySceneOutlineCustomized={isBatchStorySceneOutlineCustomized}
+            isMobile={isMobile}
+            isStoryBeatPlannerDraftEmpty={isStoryBeatPlannerDraftEmpty}
+            isStorySceneOutlineDraftEmpty={isStorySceneOutlineDraftEmpty}
+            modal={modal}
+            projectDefaultCreativeMode={projectDefaultCreativeMode}
+            projectDefaultStoryFocus={projectDefaultStoryFocus}
+            renderCompactFactCard={renderCompactFactCard}
+            renderCompactFactGrid={renderCompactFactGrid}
+            renderCompactInsightCardGrid={renderCompactInsightCardGrid}
+            renderCompactListCard={renderCompactListCard}
+            renderCompactMetricGrid={renderCompactMetricGrid}
+            renderCompactPresetRecommendationBlock={renderCompactPresetRecommendationBlock}
+            renderCompactPromptPreviewPanel={renderCompactPromptPreviewPanel}
+            renderCompactSelectionSummary={renderCompactSelectionSummary}
+            renderCompactSettingFlow={renderCompactSettingFlow}
+            renderCompactSettingHint={renderCompactSettingHint}
+            renderCompactStoryControlHeader={renderCompactStoryControlHeader}
+            resolvedBatchStoryCreationBrief={resolvedBatchStoryCreationBrief}
+            saveBatchStoryCreationSnapshot={saveBatchStoryCreationSnapshot}
+            selectedModel={selectedModel}
+            selectedStyleId={selectedStyleId}
+            setBatchGenerateVisible={setBatchGenerateVisible}
+            setBatchSelectedCreativeMode={setBatchSelectedCreativeMode}
+            setBatchSelectedModel={setBatchSelectedModel}
+            setBatchSelectedPlotStage={setBatchSelectedPlotStage}
+            setBatchSelectedStoryFocus={setBatchSelectedStoryFocus}
+            setBatchStoryBeatPlannerDraft={setBatchStoryBeatPlannerDraft}
+            setBatchStoryCreationBriefDraft={setBatchStoryCreationBriefDraft}
+            setBatchStorySceneOutlineDraft={setBatchStorySceneOutlineDraft}
+            setCachedWordCount={setCachedWordCount}
+            sortedChapters={sortedChapters}
+            STORY_BEAT_PLANNER_FIELDS={STORY_BEAT_PLANNER_FIELDS}
+            STORY_FOCUS_OPTIONS={STORY_FOCUS_OPTIONS}
+            STORY_SCENE_OUTLINE_FIELDS={STORY_SCENE_OUTLINE_FIELDS}
+            writingStyles={writingStyles}
+          />
+        </Suspense>
+      ) : null}
 
 
       {isGenerating ? (
@@ -9648,74 +8730,90 @@ export default function Chapters() {
 
 
 
-      <FloatingIndexPanel
+      {isIndexPanelVisible ? (
 
-        visible={isIndexPanelVisible}
+        <Suspense fallback={null}>
 
-        onClose={() => setIsIndexPanelVisible(false)}
+          <LazyFloatingIndexPanel
 
-        groupedChapters={groupedChapters}
+            visible={isIndexPanelVisible}
 
-        onChapterSelect={handleChapterSelect}
+            onClose={() => setIsIndexPanelVisible(false)}
 
-      />
+            groupedChapters={groupedChapters}
 
+            onChapterSelect={handleChapterSelect}
 
+          />
 
+        </Suspense>
 
-      {readingChapter && (
-
-        <ChapterReader
-
-          visible={readerVisible}
-
-          chapter={readingChapter}
-
-          onClose={() => {
-
-            setReaderVisible(false);
-
-            setReadingChapter(null);
-
-          }}
-
-          onChapterChange={handleReaderChapterChange}
-
-        />
-
-      )}
+      ) : null}
 
 
 
 
-      {editingId && (
+      {readerVisible && readingChapter ? (
 
-        <PartialRegenerateModal
+        <Suspense fallback={null}>
 
-          visible={partialRegenerateModalVisible}
+          <LazyChapterReader
 
-          chapterId={editingId}
+            visible={readerVisible}
 
-          selectedText={selectedTextForRegenerate}
+            chapter={readingChapter}
 
-          startPosition={selectionStartPosition}
+            onClose={() => {
 
-          endPosition={selectionEndPosition}
+              setReaderVisible(false);
 
-          styleId={selectedStyleId}
+              setReadingChapter(null);
 
-          onClose={() => setPartialRegenerateModalVisible(false)}
+            }}
 
-          onApply={handleApplyPartialRegenerate}
+            onChapterChange={handleReaderChapterChange}
 
-        />
+          />
 
-      )}
+        </Suspense>
+
+      ) : null}
 
 
 
 
-      {editingPlanChapter && currentProject && (() => {
+      {partialRegenerateModalVisible && editingId ? (
+
+        <Suspense fallback={null}>
+
+          <LazyPartialRegenerateModal
+
+            visible={partialRegenerateModalVisible}
+
+            chapterId={editingId}
+
+            selectedText={selectedTextForRegenerate}
+
+            startPosition={selectionStartPosition}
+
+            endPosition={selectionEndPosition}
+
+            styleId={selectedStyleId}
+
+            onClose={() => setPartialRegenerateModalVisible(false)}
+
+            onApply={handleApplyPartialRegenerate}
+
+          />
+
+        </Suspense>
+
+      ) : null}
+
+
+
+
+      {planEditorVisible && editingPlanChapter && currentProject && (() => {
 
         let parsedPlanData = null;
 
@@ -9737,27 +8835,31 @@ export default function Chapters() {
 
         return (
 
-          <ExpansionPlanEditor
+          <Suspense fallback={null}>
 
-            visible={planEditorVisible}
+            <LazyExpansionPlanEditor
 
-            planData={parsedPlanData}
+              visible={planEditorVisible}
 
-            chapterSummary={editingPlanChapter.summary || null}
+              planData={parsedPlanData}
 
-            projectId={currentProject.id}
+              chapterSummary={editingPlanChapter.summary || null}
 
-            onSave={handleSavePlan}
+              projectId={currentProject.id}
 
-            onCancel={() => {
+              onSave={handleSavePlan}
 
-              setPlanEditorVisible(false);
+              onCancel={() => {
 
-              setEditingPlanChapter(null);
+                setPlanEditorVisible(false);
 
-            }}
+                setEditingPlanChapter(null);
 
-          />
+              }}
+
+            />
+
+          </Suspense>
 
         );
 

@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { FloatButton, Grid } from 'antd';
 import { FileTextOutlined } from '@ant-design/icons';
-import ChangelogModal from './ChangelogModal';
+const LazyChangelogModal = lazy(() => import('./ChangelogModal'));
 
 const { useBreakpoint } = Grid;
 
@@ -29,10 +29,14 @@ export default function ChangelogFloatingButton() {
         onClick={() => setShowChangelog(true)}
       />
 
-      <ChangelogModal
-        visible={showChangelog}
-        onClose={() => setShowChangelog(false)}
-      />
+      {showChangelog ? (
+        <Suspense fallback={null}>
+          <LazyChangelogModal
+            visible={showChangelog}
+            onClose={() => setShowChangelog(false)}
+          />
+        </Suspense>
+      ) : null}
     </>
   );
 }

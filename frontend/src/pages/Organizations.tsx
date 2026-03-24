@@ -1,10 +1,13 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { Card, Table, Tag, Button, Space, message, Modal, Form, Select, InputNumber, Input, Descriptions, Drawer, theme } from 'antd';
+import { Card, Tag, Button, Space, message, Modal, Form, Select, InputNumber, Input, Descriptions, Drawer, theme } from 'antd';
 import { PlusOutlined, UserOutlined, EditOutlined, DeleteOutlined, UnorderedListOutlined, BankOutlined } from '@ant-design/icons';
 import { useStore } from '../store';
 import { useCharacterSync } from '../store/hooks';
 import axios from 'axios';
+import { useDeferredMount } from '../hooks/useDeferredMount';
+
+const LazyDeferredAntdTable = lazy(() => import('../components/DeferredAntdTable'));
 
 interface Organization {
   id: string;
@@ -53,6 +56,7 @@ export default function Organizations() {
   const [modal, contextHolder] = Modal.useModal();
   const [orgListVisible, setOrgListVisible] = useState(false);
   const selectedOrgIdRef = useRef<string | null>(null);
+  const membersTableReady = useDeferredMount(!!selectedOrg);
   const { token } = theme.useToken();
 
   useEffect(() => {
@@ -98,7 +102,6 @@ export default function Organizations() {
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   useEffect(() => {
@@ -549,29 +552,37 @@ export default function Organizations() {
                     </Button>
                   }
                 >
-                  <Table
-                    columns={memberColumns}
-                    dataSource={members}
-                    rowKey="id"
-                    pagination={
-                      members.length > 5
-                        ? {
-                          defaultPageSize: 5,
-                          showSizeChanger: true,
-                          showQuickJumper: !isMobile,
-                          showTotal: (total) => `共 ${total} 名成员`,
-                          pageSizeOptions: [5, 10, 20],
-                          simple: isMobile,
-                          position: ['bottomCenter'],
+                  {membersTableReady ? (
+                    <Suspense fallback={null}>
+                      <LazyDeferredAntdTable
+                        columns={memberColumns}
+                        dataSource={members}
+                        rowKey="id"
+                        pagination={
+                          members.length > 5
+                            ? {
+                              defaultPageSize: 5,
+                              showSizeChanger: true,
+                              showQuickJumper: !isMobile,
+                              showTotal: (total: number) => `共 ${total} 名成员`,
+                              pageSizeOptions: [5, 10, 20],
+                              simple: isMobile,
+                              position: ['bottomCenter'],
+                            }
+                            : false
                         }
-                        : false
-                    }
-                    size="small"
-                    scroll={{
-                      x: isMobile ? 'max-content' : undefined,
-                      y: members.length > 10 ? 500 : undefined,
-                    }}
-                  />
+                        size="small"
+                        scroll={{
+                          x: isMobile ? 'max-content' : undefined,
+                          y: members.length > 10 ? 500 : undefined,
+                        }}
+                      />
+                    </Suspense>
+                  ) : (
+                    <div style={{ padding: '24px 0', textAlign: 'center', color: token.colorTextTertiary }}>
+                      正在加载组织成员...
+                    </div>
+                  )}
                 </Card>
                 </Space>
               </Card>

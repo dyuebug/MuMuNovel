@@ -1,6 +1,6 @@
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { Suspense, lazy, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Card, Button, Modal, message, Spin, Space, Tag, Typography, Upload, Checkbox, Tooltip, Drawer, Menu, theme } from 'antd';
+import { Button, Drawer, Menu, Modal, message, Space, Spin, Tag, theme } from 'antd';
 import { EditOutlined, BookOutlined, CalendarOutlined, FileTextOutlined, TrophyOutlined, SettingOutlined, UploadOutlined, ApiOutlined, FileSearchOutlined, MenuUnfoldOutlined, MenuFoldOutlined, BulbOutlined, MoonOutlined, DesktopOutlined } from '@ant-design/icons';
 import { projectApi } from '../services/api';
 import { useStore } from '../store';
@@ -9,17 +9,19 @@ import { eventBus, EventNames } from '../store/eventBus';
 import type { ReactNode } from 'react';
 import type { Project } from '../types';
 import UserMenu from '../components/UserMenu';
-import ChangelogFloatingButton from '../components/ChangelogFloatingButton';
 import ThemeSwitch from '../components/ThemeSwitch';
 import { useThemeMode } from '../theme/useThemeMode';
-import SettingsPage from './Settings';
-import MCPPluginsPage from './MCPPlugins';
-import PromptTemplates from './PromptTemplates';
-import BookImport from './BookImport';
-import BookshelfPage from './BookshelfPage';
 import { getStoredSidebarCollapsed, setStoredSidebarCollapsed } from '../utils/sidebarState';
 
-const { Text } = Typography;
+const LazyChangelogFloatingButton = lazy(() => import('../components/ChangelogFloatingButton'));
+const LazySettingsPage = lazy(() => import('./Settings'));
+const LazyMCPPluginsPage = lazy(() => import('./MCPPlugins'));
+const LazyPromptTemplates = lazy(() => import('./PromptTemplates'));
+const LazyBookImport = lazy(() => import('./BookImport'));
+const LazyBookshelfPage = lazy(() => import('./BookshelfPage'));
+const LazyProjectImportModal = lazy(() => import('../components/ProjectImportModal'));
+const LazyProjectExportModal = lazy(() => import('../components/ProjectExportModal'));
+
 
 /**
  * 格式化字数显示
@@ -797,206 +799,105 @@ export default function ProjectList() {
               : token.colorBgLayout,
           }}
         >
-          {activeView === 'settings' && <SettingsPage />}
-          {activeView === 'mcp' && <MCPPluginsPage />}
-          {activeView === 'prompts' && <PromptTemplates />}
+          {activeView === 'settings' ? (
+            <Suspense fallback={<div style={{ padding: 32, textAlign: 'center' }}><Spin /></div>}>
+              <LazySettingsPage />
+            </Suspense>
+          ) : null}
+          {activeView === 'mcp' ? (
+            <Suspense fallback={<div style={{ padding: 32, textAlign: 'center' }}><Spin /></div>}>
+              <LazyMCPPluginsPage />
+            </Suspense>
+          ) : null}
+          {activeView === 'prompts' ? (
+            <Suspense fallback={<div style={{ padding: 32, textAlign: 'center' }}><Spin /></div>}>
+              <LazyPromptTemplates />
+            </Suspense>
+          ) : null}
           
-          {activeView === 'book-import' && <BookImport />}
+          {activeView === 'book-import' ? (
+            <Suspense fallback={<div style={{ padding: 32, textAlign: 'center' }}><Spin /></div>}>
+              <LazyBookImport />
+            </Suspense>
+          ) : null}
 
-          {activeView === 'projects' && (
-            <BookshelfPage
-              isMobile={isMobile}
-              loading={loading}
-              projects={projects}
-              showApiTip={showApiTip}
-              setShowApiTip={setShowApiTip}
-              exportableProjectsCount={exportableProjects.length}
-              onOpenImportModal={() => setImportModalVisible(true)}
-              onOpenExportModal={handleOpenExportModal}
-              onGoSettings={() => changeView('settings')}
-              onStartWizard={() => navigate('/wizard')}
-              onOpenInspiration={() => navigate('/inspiration')}
-              onEnterProject={handleEnterProject}
-              onDeleteProject={handleDelete}
-              formatWordCount={formatWordCount}
-              getProgress={getProgress}
-              getProgressColor={getProgressColor}
-              getDisplayStatus={getDisplayStatus}
-              getStatusTag={getStatusTag}
-              formatDate={formatDate}
-            />
-          )}
+          {activeView === 'projects' ? (
+            <Suspense fallback={<div style={{ padding: 32, textAlign: 'center' }}><Spin /></div>}>
+              <LazyBookshelfPage
+                isMobile={isMobile}
+                loading={loading}
+                projects={projects}
+                showApiTip={showApiTip}
+                setShowApiTip={setShowApiTip}
+                exportableProjectsCount={exportableProjects.length}
+                onOpenImportModal={() => setImportModalVisible(true)}
+                onOpenExportModal={handleOpenExportModal}
+                onGoSettings={() => changeView('settings')}
+                onStartWizard={() => navigate('/wizard')}
+                onOpenInspiration={() => navigate('/inspiration')}
+                onEnterProject={handleEnterProject}
+                onDeleteProject={handleDelete}
+                formatWordCount={formatWordCount}
+                getProgress={getProgress}
+                getProgressColor={getProgressColor}
+                getDisplayStatus={getDisplayStatus}
+                getStatusTag={getStatusTag}
+                formatDate={formatDate}
+              />
+            </Suspense>
+          ) : null}
         
-        <ChangelogFloatingButton />
+          <Suspense fallback={null}>
+            <LazyChangelogFloatingButton />
+          </Suspense>
         </div>
       </div>
 
-      {/* 导入项目对话框 */}
-      <Modal
-        title="导入项目"
-        open={importModalVisible}
-        onOk={handleImport}
-        onCancel={handleCloseImportModal}
-        confirmLoading={importing}
-        okText="导入"
-        cancelText="取消"
-        width={isMobile ? '90%' : 500}
-        centered
-        okButtonProps={{ disabled: !validationResult?.valid }}
-      >
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          <div>
-            <p style={{ marginBottom: '12px', color: token.colorTextSecondary }}>
-              选择之前导出的 JSON 格式项目文件
-            </p>
-            <Upload
-              accept=".json"
-              beforeUpload={handleFileSelect}
-              maxCount={1}
-              onRemove={() => {
-                setSelectedFile(null);
-                setValidationResult(null);
-              }}
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              fileList={selectedFile ? [{ uid: '-1', name: selectedFile.name, status: 'done' }] as any : []}
-            >
-              <Button icon={<UploadOutlined />} block>选择文件</Button>
-            </Upload>
-          </div>
+      {importModalVisible ? (
+        <Suspense fallback={null}>
+          <LazyProjectImportModal
+            open={importModalVisible}
+            isMobile={isMobile}
+            importing={importing}
+            validating={validating}
+            selectedFile={selectedFile}
+            validationResult={validationResult}
+            token={token}
+            onOk={handleImport}
+            onCancel={handleCloseImportModal}
+            onFileSelect={handleFileSelect}
+            onRemoveFile={() => {
+              setSelectedFile(null);
+              setValidationResult(null);
+            }}
+          />
+        </Suspense>
+      ) : null}
 
-          {validating && (
-            <div style={{ textAlign: 'center', padding: '20px' }}>
-              <Spin tip="验证文件中..." />
-            </div>
-          )}
-
-          {validationResult && (
-            <Card size="small" style={{ background: validationResult.valid ? token.colorSuccessBg : token.colorErrorBg }}>
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <div>
-                  <Text strong style={{ color: validationResult.valid ? token.colorSuccess : token.colorError }}>
-                    {validationResult.valid ? '✓ 文件验证通过' : '✗ 文件验证失败'}
-                  </Text>
-                </div>
-                {validationResult.project_name && (
-                  <div>
-                    <Text type="secondary">项目名称：</Text>
-                    <Text strong>{validationResult.project_name}</Text>
-                  </div>
-                )}
-                {validationResult.statistics && (
-                   <div style={{ marginTop: 8 }}>
-                      <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>数据统计：</Text>
-                      <Space size={[6, 6]} wrap>
-                        {validationResult.statistics.chapters > 0 && <Tag color="blue">章节: {validationResult.statistics.chapters}</Tag>}
-                        {validationResult.statistics.characters > 0 && <Tag color="green">角色: {validationResult.statistics.characters}</Tag>}
-                        {validationResult.statistics.outlines > 0 && <Tag color="cyan">大纲: {validationResult.statistics.outlines}</Tag>}
-                        {validationResult.statistics.relationships > 0 && <Tag color="purple">关系: {validationResult.statistics.relationships}</Tag>}
-                        {validationResult.statistics.organizations > 0 && <Tag color="orange">组织: {validationResult.statistics.organizations}</Tag>}
-                        {validationResult.statistics.careers > 0 && <Tag color="magenta">职业: {validationResult.statistics.careers}</Tag>}
-                        {validationResult.statistics.character_careers > 0 && <Tag color="geekblue">职业关联: {validationResult.statistics.character_careers}</Tag>}
-                        {validationResult.statistics.writing_styles > 0 && <Tag color="lime">写作风格: {validationResult.statistics.writing_styles}</Tag>}
-                        {validationResult.statistics.story_memories > 0 && <Tag color="gold">故事记忆: {validationResult.statistics.story_memories}</Tag>}
-                        {validationResult.statistics.plot_analysis > 0 && <Tag color="volcano">剧情分析: {validationResult.statistics.plot_analysis}</Tag>}
-                        {validationResult.statistics.generation_history > 0 && <Tag>生成历史: {validationResult.statistics.generation_history}</Tag>}
-                        {validationResult.statistics.has_default_style && <Tag color="success">含默认风格</Tag>}
-                      </Space>
-                   </div>
-                )}
-                {validationResult.warnings?.length > 0 && (
-                   <div style={{ marginTop: 8 }}>
-                     <Text type="warning" strong style={{ fontSize: 12 }}>提示：</Text>
-                     <ul style={{ margin: '4px 0 0 0', paddingLeft: 20, color: token.colorWarning, fontSize: 12 }}>
-                       {validationResult.warnings.map((w: string, i: number) => <li key={i}>{w}</li>)}
-                     </ul>
-                   </div>
-                )}
-                {validationResult.errors?.length > 0 && (
-                   <div>
-                     <Text type="danger" strong>错误：</Text>
-                     <ul style={{ margin: '4px 0 0 0', paddingLeft: 20, color: token.colorError, fontSize: 13 }}>
-                       {validationResult.errors.map((e: string, i: number) => <li key={i}>{e}</li>)}
-                     </ul>
-                   </div>
-                )}
-              </Space>
-            </Card>
-          )}
-        </Space>
-      </Modal>
-
-      {/* 导出项目对话框 */}
-      <Modal
-        title="导出项目"
-        open={exportModalVisible}
-        onOk={handleExport}
-        onCancel={handleCloseExportModal}
-        confirmLoading={exporting}
-        okText={selectedProjectIds.length > 0 ? `导出 (${selectedProjectIds.length})` : '导出'}
-        cancelText="取消"
-        width={isMobile ? '90%' : 700}
-        centered
-        okButtonProps={{ disabled: selectedProjectIds.length === 0 }}
-      >
-         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Card size="small" style={{ background: token.colorFillTertiary }}>
-              <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                <Text strong>导出选项</Text>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 24px' }}>
-                  <Checkbox checked={exportOptions.includeWritingStyles} onChange={e => setExportOptions(prev => ({...prev, includeWritingStyles: e.target.checked}))}>写作风格</Checkbox>
-                  <Checkbox checked={exportOptions.includeCareers} onChange={e => setExportOptions(prev => ({...prev, includeCareers: e.target.checked}))}>职业系统</Checkbox>
-                  <Tooltip title="包含生成历史记录，文件可能较大">
-                    <Checkbox checked={exportOptions.includeGenerationHistory} onChange={e => setExportOptions(prev => ({...prev, includeGenerationHistory: e.target.checked}))}>生成历史</Checkbox>
-                  </Tooltip>
-                  <Tooltip title="包含故事记忆数据，文件可能较大">
-                    <Checkbox checked={exportOptions.includeMemories} onChange={e => setExportOptions(prev => ({...prev, includeMemories: e.target.checked}))}>故事记忆</Checkbox>
-                  </Tooltip>
-                  <Tooltip title="包含AI剧情分析数据">
-                    <Checkbox checked={exportOptions.includePlotAnalysis} onChange={e => setExportOptions(prev => ({...prev, includePlotAnalysis: e.target.checked}))}>剧情分析</Checkbox>
-                  </Tooltip>
-                </div>
-              </Space>
-            </Card>
-
-            <div>
-               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <Text>选择项目 ({exportableProjects.length})</Text>
-                  <Checkbox 
-                    checked={selectedProjectIds.length === exportableProjects.length && exportableProjects.length > 0}
-                    indeterminate={selectedProjectIds.length > 0 && selectedProjectIds.length < exportableProjects.length}
-                    onChange={handleToggleAll}
-                  >
-                    全选
-                  </Checkbox>
-               </div>
-               <div style={{ maxHeight: 300, overflowY: 'auto', border: `1px solid ${token.colorBorderSecondary}`, borderRadius: 8, padding: 8 }}>
-                  <Space direction="vertical" style={{ width: '100%' }}>
-                    {exportableProjects.map(p => (
-                      <div 
-                        key={p.id}
-                        style={{ 
-                          padding: '8px 12px', 
-                          background: selectedProjectIds.includes(p.id) ? token.colorPrimaryBg : token.colorBgContainer,
-                          borderRadius: 6,
-                          cursor: 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 12
-                        }}
-                        onClick={() => handleToggleProject(p.id)}
-                      >
-                        <Checkbox checked={selectedProjectIds.includes(p.id)} />
-                        <div style={{ flex: 1 }}>
-                           <div>{p.title}</div>
-                           <div style={{ fontSize: 12, color: token.colorTextTertiary }}>{formatWordCount(p.current_words || 0)} 字 · {getStatusTag(getDisplayStatus(p.status, getProgress(p.current_words || 0, p.target_words || 0)))}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </Space>
-               </div>
-            </div>
-         </Space>
-      </Modal>
+      {exportModalVisible ? (
+        <Suspense fallback={null}>
+          <LazyProjectExportModal
+            open={exportModalVisible}
+            isMobile={isMobile}
+            exporting={exporting}
+            exportableProjects={exportableProjects}
+            selectedProjectIds={selectedProjectIds}
+            exportOptions={exportOptions}
+            setExportOptions={setExportOptions}
+            token={token}
+            formatWordCount={formatWordCount}
+            renderProjectStatus={(project) =>
+              getStatusTag(
+                getDisplayStatus(project.status, getProgress(project.current_words || 0, project.target_words || 0))
+              )
+            }
+            onOk={handleExport}
+            onCancel={handleCloseExportModal}
+            onToggleAll={handleToggleAll}
+            onToggleProject={handleToggleProject}
+          />
+        </Suspense>
+      ) : null}
 
     </div>
   );

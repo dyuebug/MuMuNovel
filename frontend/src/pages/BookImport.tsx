@@ -1,20 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Alert,
   Button,
   Card,
   Col,
-  Collapse,
   Empty,
-  Input,
-  InputNumber,
-  List,
   message,
   Popconfirm,
   Progress,
   Row,
-  Select,
   Space,
   Spin,
   Steps,
@@ -24,7 +19,7 @@ import {
   theme,
 } from 'antd';
 import type { UploadFile } from 'antd/es/upload/interface';
-import { InboxOutlined, PlayCircleOutlined, ReloadOutlined, StopOutlined, WarningOutlined, RedoOutlined } from '@ant-design/icons';
+import { InboxOutlined, PlayCircleOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
 import { bookImportApi } from '../services/api';
 import type {
   BookImportApplyPayload,
@@ -37,7 +32,15 @@ import type {
 
 const { Text, Title } = Typography;
 const { Dragger } = Upload;
-const { TextArea } = Input;
+
+const LazyBookImportPreviewStep = lazy(() => import('../components/BookImportPreviewStep'));
+const LazyBookImportProgressStep = lazy(() => import('../components/BookImportProgressStep'));
+
+const bookImportLazyFallback = (
+  <div style={{ padding: 16, textAlign: 'center' }}>
+    <Spin />
+  </div>
+);
 
 const BOOK_IMPORT_CACHE_KEY = 'book_import_page_cache_v1';
 
@@ -752,314 +755,36 @@ export default function BookImport() {
       </Card>
       )}
 
-      {currentStep === 2 && (
-      <>
-      <Card
-        title="预览修正"
-        extra={
-          <Button
-            type="primary"
-            loading={applying}
-            disabled={!preview}
-            onClick={applyImport}
-          >
-            确认导入
-          </Button>
-        }
-        style={{ marginBottom: 16 }}
-      >
-        <Spin spinning={loadingPreview}>
-          {!preview ? (
-            <Empty description="解析完成后将显示预览数据" />
-          ) : (
-            <div style={{ maxHeight: '60vh', overflowY: 'auto', paddingRight: 8 }}>
-              <Space direction="vertical" style={{ width: '100%' }} size={16}>
-              {preview.warnings.length > 0 && (
-                <Alert
-                  type="warning"
-                  showIcon
-                  message="检测到告警"
-                  description={
-                    <ul style={{ margin: 0, paddingLeft: 20 }}>
-                      {preview.warnings.map((w, idx) => (
-                        <li key={`${w.code}-${idx}`}>[{w.level}] {w.message}</li>
-                      ))}
-                    </ul>
-                  }
-                />
-              )}
-
-              <Card
-                size="small"
-                title="项目信息"
-              >
-                <Row gutter={12}>
-                  <Col xs={24} md={12}>
-                    <Text>标题</Text>
-                    <Input
-                      value={preview.project_suggestion.title}
-                      onChange={(e) =>
-                        setPreview(prev => prev ? ({
-                          ...prev,
-                          project_suggestion: { ...prev.project_suggestion, title: e.target.value },
-                        }) : prev)
-                      }
-                    />
-                  </Col>
-                  <Col xs={24} md={12}>
-                    <Text>类型</Text>
-                    <Input
-                      value={preview.project_suggestion.genre}
-                      onChange={(e) =>
-                        setPreview(prev => prev ? ({
-                          ...prev,
-                          project_suggestion: { ...prev.project_suggestion, genre: e.target.value },
-                        }) : prev)
-                      }
-                    />
-                  </Col>
-                  <Col xs={24}>
-                    <Text>主题</Text>
-                    <TextArea
-                      rows={3}
-                      value={preview.project_suggestion.theme}
-                      onChange={(e) =>
-                        setPreview(prev => prev ? ({
-                          ...prev,
-                          project_suggestion: { ...prev.project_suggestion, theme: e.target.value },
-                        }) : prev)
-                      }
-                    />
-                  </Col>
-                  <Col xs={24}>
-                    <Text>简介</Text>
-                    <TextArea
-                      rows={3}
-                      value={preview.project_suggestion.description}
-                      onChange={(e) =>
-                        setPreview(prev => prev ? ({
-                          ...prev,
-                          project_suggestion: { ...prev.project_suggestion, description: e.target.value },
-                        }) : prev)
-                      }
-                    />
-                  </Col>
-                  <Col xs={24} md={12}>
-                    <Text>叙事角度</Text>
-                    <Select
-                      style={{ width: '100%' }}
-                      value={preview.project_suggestion.narrative_perspective}
-                      onChange={(v) =>
-                        setPreview(prev => prev ? ({
-                          ...prev,
-                          project_suggestion: { ...prev.project_suggestion, narrative_perspective: v },
-                        }) : prev)
-                      }
-                      options={[
-                        { value: '第一人称', label: '第一人称' },
-                        { value: '第三人称', label: '第三人称' },
-                        { value: '全知视角', label: '全知视角' },
-                      ]}
-                    />
-                  </Col>
-                  <Col xs={24} md={12}>
-                    <Text>目标字数</Text>
-                    <InputNumber
-                      style={{ width: '100%' }}
-                      min={1000}
-                      step={1000}
-                      value={preview.project_suggestion.target_words}
-                      onChange={(v) =>
-                        setPreview(prev => prev ? ({
-                          ...prev,
-                          project_suggestion: {
-                            ...prev.project_suggestion,
-                            target_words: Number(v || 100000),
-                          },
-                        }) : prev)
-                      }
-                    />
-                  </Col>
-                </Row>
-              </Card>
-
-              <Card size="small" title={`章节（${preview.chapters.length}）`}>
-                <Collapse
-                  items={preview.chapters.map((ch, idx) => ({
-                    key: String(idx),
-                    label: `第 ${ch.chapter_number} 章 · ${ch.title}`,
-                    children: (
-                      <Space direction="vertical" style={{ width: '100%' }}>
-                        <Input
-                          value={ch.title}
-                          addonBefore="标题"
-                          onChange={(e) => updateChapter(idx, { title: e.target.value })}
-                        />
-                        <TextArea
-                          rows={2}
-                          value={ch.summary}
-                          placeholder="章节摘要"
-                          onChange={(e) => updateChapter(idx, { summary: e.target.value })}
-                        />
-                        <TextArea
-                          rows={8}
-                          value={ch.content}
-                          placeholder="章节正文"
-                          onChange={(e) => updateChapter(idx, { content: e.target.value })}
-                        />
-                      </Space>
-                    ),
-                  }))}
-                />
-              </Card>
-
-              </Space>
-            </div>
-          )}
-        </Spin>
-      </Card>
-
-      </>
-      )}
-
-      {currentStep === 3 && (
-      <Card title="生成导入进度" style={{ marginBottom: 16 }}>
-        <div style={{ textAlign: 'center', padding: '40px 20px', maxWidth: 600, margin: '0 auto' }}>
-          <Typography.Title level={4} style={{ marginBottom: 32 }}>
-            {retrying ? '正在重试失败的生成步骤' : (failedSteps.length > 0 && isApplyComplete ? '导入完成，部分步骤需要重试' : '正在为您生成并导入项目内容')}
-          </Typography.Title>
-
-          <Progress
-            percent={retrying ? retryProgress : applyProgress}
-            status={
-              applyError ? 'exception' :
-              (failedSteps.length > 0 && isApplyComplete && !retrying) ? 'exception' :
-              (isApplyComplete && failedSteps.length === 0) ? 'success' :
-              'active'
-            }
-            strokeColor={{
-              '0%': 'var(--color-primary)',
-              '100%': failedSteps.length > 0 ? '#faad14' : 'var(--color-primary-active)',
-            }}
-            style={{ marginBottom: 24 }}
+      {currentStep === 2 ? (
+        <Suspense fallback={bookImportLazyFallback}>
+          <LazyBookImportPreviewStep
+            applying={applying}
+            loadingPreview={loadingPreview}
+            preview={preview}
+            setPreview={setPreview}
+            updateChapter={updateChapter}
+            onApplyImport={applyImport}
           />
+        </Suspense>
+      ) : null}
 
-          <Typography.Paragraph
-            style={{
-              fontSize: 16,
-              marginBottom: 32,
-              color: applyError ? 'var(--color-error)' :
-                (failedSteps.length > 0 && isApplyComplete && !retrying) ? '#faad14' :
-                'var(--color-text-secondary)'
-            }}
-          >
-            {retrying ? retryMessage : (applyError || applyMessage)}
-          </Typography.Paragraph>
+      {currentStep === 3 ? (
+        <Suspense fallback={bookImportLazyFallback}>
+          <LazyBookImportProgressStep
+            applyProgress={applyProgress}
+            applyMessage={applyMessage}
+            applyError={applyError}
+            failedSteps={failedSteps}
+            isApplyComplete={isApplyComplete}
+            retryProgress={retryProgress}
+            retrying={retrying}
+            retryMessage={retryMessage}
+            onRetryFailedSteps={retryFailedSteps}
+            onSkipFailedSteps={skipFailedSteps}
+          />
+        </Suspense>
+      ) : null}
 
-          {applyError && (
-            <Alert
-              type="error"
-              message="导入出错"
-              description={applyError}
-              showIcon
-              style={{ textAlign: 'left', marginBottom: 24 }}
-            />
-          )}
-
-          {/* 步骤失败提示与重试UI */}
-          {failedSteps.length > 0 && isApplyComplete && !retrying && (
-            <div style={{ textAlign: 'left', marginBottom: 24 }}>
-              <Alert
-                type="warning"
-                icon={<WarningOutlined />}
-                showIcon
-                message={`${failedSteps.length} 个生成步骤失败`}
-                description={
-                  <div>
-                    <Typography.Paragraph style={{ marginBottom: 12, color: 'rgba(0,0,0,0.65)' }}>
-                      以下智能补全步骤未能完成，但基础数据（章节、大纲）已成功导入。您可以选择重试或跳过。
-                    </Typography.Paragraph>
-                    <List
-                      size="small"
-                      bordered
-                      dataSource={failedSteps}
-                      renderItem={(item) => (
-                        <List.Item
-                          style={{ padding: '8px 12px' }}
-                        >
-                          <List.Item.Meta
-                            title={
-                              <Space>
-                                <Tag color="error">{item.step_label}</Tag>
-                                {(item.retry_count ?? 0) > 0 && (
-                                  <Tag color="orange">已重试 {item.retry_count} 次</Tag>
-                                )}
-                              </Space>
-                            }
-                            description={
-                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                                {item.error.length > 120 ? item.error.slice(0, 120) + '...' : item.error}
-                              </Typography.Text>
-                            }
-                          />
-                        </List.Item>
-                      )}
-                    />
-                    <Space style={{ marginTop: 16, display: 'flex', justifyContent: 'center' }}>
-                      <Button
-                        type="primary"
-                        icon={<RedoOutlined />}
-                        onClick={retryFailedSteps}
-                        loading={retrying}
-                      >
-                        智能重试全部失败步骤
-                      </Button>
-                      <Button onClick={skipFailedSteps}>
-                        跳过，直接进入项目
-                      </Button>
-                    </Space>
-                  </div>
-                }
-                style={{ marginBottom: 16 }}
-              />
-            </div>
-          )}
-
-          {/* 重试进行中 */}
-          {retrying && (
-            <div style={{ marginBottom: 24 }}>
-              <Spin spinning={retrying}>
-                <Alert
-                  type="info"
-                  showIcon
-                  message="正在重试..."
-                  description={retryMessage}
-                  style={{ textAlign: 'left' }}
-                />
-              </Spin>
-            </div>
-          )}
-
-          {!failedSteps.length && !retrying && (
-            <div style={{
-              background: 'var(--color-bg-layout)',
-              padding: 16,
-              borderRadius: 8,
-              textAlign: 'left',
-              marginTop: 32
-            }}>
-              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                导入过程中，系统会自动帮您补全：<br />
-                • 世界观设定（时间、地点、氛围、规则）<br />
-                • 职业体系（主职业与副职业）<br />
-                • 核心角色与相关组织<br />
-                {isApplyComplete ? '所有步骤已完成，即将自动跳转。' : '请耐心等待，完成后将自动跳转。'}
-              </Typography.Text>
-            </div>
-          )}
-        </div>
-      </Card>
-      )}
 
       </div>
     </div>

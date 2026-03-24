@@ -1,12 +1,15 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { Suspense, lazy, useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Table, Tag, Button, Space, message, Modal, Form, Select, Slider, Input, Tabs, AutoComplete, theme } from 'antd';
+import { Card, Tag, Button, Space, message, Modal, Form, Select, Slider, Input, Tabs, AutoComplete, theme } from 'antd';
 import { PlusOutlined, ApartmentOutlined, UserOutlined, EditOutlined } from '@ant-design/icons';
 import { useStore } from '../store';
 import { useCharacterSync } from '../store/hooks';
 import axios from 'axios';
+import { useDeferredMount } from '../hooks/useDeferredMount';
 
 const { TextArea } = Input;
+
+const LazyDeferredAntdTable = lazy(() => import('../components/DeferredAntdTable'));
 
 interface Relationship {
   id: string;
@@ -27,6 +30,13 @@ interface RelationshipType {
   icon?: string;
 }
 
+const categoryLabels: Record<string, string> = {
+  family: '????',
+  social: '????',
+  professional: '????',
+  hostile: '????'
+};
+
 export default function Relationships() {
   const { projectId } = useParams<{ projectId: string }>();
   const currentProject = useStore((state) => state.currentProject);
@@ -45,6 +55,8 @@ export default function Relationships() {
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [pageSize, setPageSize] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const [activeTabKey, setActiveTabKey] = useState('list');
+  const relationshipListReady = useDeferredMount(activeTabKey === 'list');
 
   useEffect(() => {
     const handleResize = () => {
@@ -174,13 +186,6 @@ export default function Relationships() {
       }
     });
   }, [loadData, modal]);
-
-  const categoryLabels: Record<string, string> = {
-    family: '家族关系',
-    social: '社交关系',
-    professional: '职业关系',
-    hostile: '敌对关系'
-  };
 
   const characterNameMap = useMemo(() => new Map(storeCharacters.map((character) => [character.id, character.name])), [storeCharacters]);
 
@@ -348,44 +353,52 @@ export default function Relationships() {
         }
       >
         <Tabs
+          activeKey={activeTabKey}
+          onChange={setActiveTabKey}
           items={[
             {
               key: 'list',
               label: `关系列表 (${relationships.length})`,
-              children: (
-                <Table
-                  columns={columns}
-                  dataSource={relationships}
-                  rowKey="id"
-                  loading={loading}
-                  pagination={{
-                    current: currentPage,
-                    pageSize: isMobile ? 10 : pageSize,
-                    pageSizeOptions: ['10', '20', '50', '100'],
-                    position: ['bottomCenter'],
-                    showSizeChanger: !isMobile,
-                    showQuickJumper: !isMobile,
-                    showTotal: (total) => `共 ${total} 条`,
-                    simple: isMobile,
-                    onChange: (page, size) => {
-                      setCurrentPage(page);
-                      if (size !== pageSize) {
-                        setPageSize(size);
-                        setCurrentPage(1);
-                      }
-                    },
-                    onShowSizeChange: (_, size) => {
-                      setPageSize(size);
-                      setCurrentPage(1);
-                    }
-                  }}
-                  scroll={{
-                    x: 700,
-                    y: isMobile ? 'calc(100vh - 360px)' : 'calc(100vh - 440px)'
-                  }}
-                  size={isMobile ? 'small' : 'middle'}
-                />
-              ),
+              children: relationshipListReady ? (
+                  <Suspense fallback={null}>
+                    <LazyDeferredAntdTable
+                      columns={columns}
+                      dataSource={relationships}
+                      rowKey="id"
+                      loading={loading}
+                      pagination={{
+                        current: currentPage,
+                        pageSize: isMobile ? 10 : pageSize,
+                        pageSizeOptions: ['10', '20', '50', '100'],
+                        position: ['bottomCenter'],
+                        showSizeChanger: !isMobile,
+                        showQuickJumper: !isMobile,
+                        showTotal: (total: number) => `共 ${total} 条`,
+                        simple: isMobile,
+                        onChange: (page: number, size: number) => {
+                          setCurrentPage(page);
+                          if (size !== pageSize) {
+                            setPageSize(size);
+                            setCurrentPage(1);
+                          }
+                        },
+                        onShowSizeChange: (_: number, size: number) => {
+                          setPageSize(size);
+                          setCurrentPage(1);
+                        }
+                      }}
+                      scroll={{
+                        x: 700,
+                        y: isMobile ? 'calc(100vh - 360px)' : 'calc(100vh - 440px)'
+                      }}
+                      size={isMobile ? 'small' : 'middle'}
+                    />
+                  </Suspense>
+                ) : (
+                  <div style={{ padding: '24px 0', textAlign: 'center', color: token.colorTextTertiary }}>
+                    正在加载关系列表...
+                  </div>
+                ),
             },
             {
               key: 'types',

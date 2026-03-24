@@ -21,8 +21,8 @@ import {
   MoonOutlined,
 } from '@ant-design/icons';
 import { useStore } from '../store';
-import { useCharacterSync, useOutlineSync, useChapterSync, loadProjectCharacters, loadProjectOutlines } from '../store/hooks';
-import { preloadProjectNavigationPages, preloadProjectPage } from '../routes/projectPageLoaders';
+import { useCharacterSync, useOutlineSync, useChapterSync, loadProjectCharacters, loadProjectOutlines, loadProjectChapters, isProjectCollectionFresh } from '../store/hooks';
+import { preloadProjectNavigationPages, preloadProjectPage, shouldSkipProjectNavigationPreload } from '../routes/projectPageLoaders';
 import type { ProjectNavigationPageKey } from '../routes/projectPageLoaders';
 import { projectApi } from '../services/api';
 import { preloadProjectCareers } from '../services/projectCareers';
@@ -132,17 +132,31 @@ export default function ProjectDetail() {
       return;
     }
 
-    prefetchedNavigationTargetsRef.current.add(dataPrefetchKey);
-
     if (pageKey === 'outline') {
-      void loadProjectOutlines(projectId, { silent: true });
+      if (!isProjectCollectionFresh('outlines', projectId)) {
+        prefetchedNavigationTargetsRef.current.add(dataPrefetchKey);
+        void loadProjectOutlines(projectId, { silent: true });
+      }
       return;
     }
 
     if (pageKey === 'characters' || pageKey === 'organizations' || pageKey === 'relationships') {
-      void loadProjectCharacters(projectId, { silent: true });
+      if (!isProjectCollectionFresh('characters', projectId)) {
+        prefetchedNavigationTargetsRef.current.add(dataPrefetchKey);
+        void loadProjectCharacters(projectId, { silent: true });
+      }
       return;
     }
+
+    if (pageKey === 'chapters') {
+      if (!isProjectCollectionFresh('chapters', projectId)) {
+        prefetchedNavigationTargetsRef.current.add(dataPrefetchKey);
+        void loadProjectChapters(projectId, { silent: true });
+      }
+      return;
+    }
+
+    prefetchedNavigationTargetsRef.current.add(dataPrefetchKey);
 
     if (pageKey === 'careers') {
       void preloadProjectCareers(projectId);
@@ -169,19 +183,49 @@ export default function ProjectDetail() {
   }, [location.pathname, prefetchProjectNavigationTarget, projectId]);
 
   useEffect(() => {
+    const windowWithIdleCallback = window as Window & typeof globalThis & {
+      cancelIdleCallback?: (handle: number) => void;
+      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+    };
+
+    let cancelled = false;
+    let navigationIdleHandle: number | null = null;
     const navigationPreloadTimer = window.setTimeout(() => {
       const isProjectLandingPage = Boolean(projectId) && (
         location.pathname === `/project/${projectId}` || location.pathname.endsWith('/sponsor')
       );
-      if (!isProjectLandingPage) {
+      if (!isProjectLandingPage || shouldSkipProjectNavigationPreload()) {
         return;
       }
 
-      void preloadProjectNavigationPages();
+      const startPreload = () => {
+        if (cancelled) {
+          return;
+        }
+
+        void preloadProjectNavigationPages({
+          delayMs: 120,
+          pages: ['characters', 'chapters', 'careers'],
+        });
+      };
+
+      if (typeof windowWithIdleCallback.requestIdleCallback === 'function') {
+        navigationIdleHandle = windowWithIdleCallback.requestIdleCallback(() => {
+          navigationIdleHandle = null;
+          startPreload();
+        }, { timeout: 1500 });
+        return;
+      }
+
+      startPreload();
     }, PROJECT_NAVIGATION_PRELOAD_DELAY_MS);
 
     return () => {
+      cancelled = true;
       window.clearTimeout(navigationPreloadTimer);
+      if (navigationIdleHandle !== null && typeof windowWithIdleCallback.cancelIdleCallback === 'function') {
+        windowWithIdleCallback.cancelIdleCallback(navigationIdleHandle);
+      }
     };
   }, [location.pathname, projectId]);
   const currentProject = useStore((state) => state.currentProject);
@@ -235,13 +279,24 @@ export default function ProjectDetail() {
         return;
       }
 
+      const pendingLoads: Promise<unknown>[] = [];
+      if (!isProjectCollectionFresh('outlines', id)) {
+        pendingLoads.push(refreshOutlines(id));
+      }
+      if (!isProjectCollectionFresh('characters', id)) {
+        pendingLoads.push(refreshCharacters(id));
+      }
+      if (!isProjectCollectionFresh('chapters', id)) {
+        pendingLoads.push(refreshChapters(id));
+      }
+
+      if (pendingLoads.length === 0) {
+        return;
+      }
+
       setIsProjectDataHydrating(true);
       try {
-        await Promise.all([
-          refreshOutlines(id),
-          refreshCharacters(id),
-          refreshChapters(id),
-        ]);
+        await Promise.all(pendingLoads);
       } catch (error) {
         console.error('Background project detail hydration failed:', error);
       } finally {
