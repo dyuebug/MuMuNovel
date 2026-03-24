@@ -1,5 +1,5 @@
 """章节重新生成服务"""
-from typing import Dict, Any, AsyncGenerator, Optional, List
+from typing import Dict, Any, AsyncGenerator, Optional, List, Iterable
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.ai_service import AIService
 from app.services.prompt_service import prompt_service, PromptService
@@ -10,6 +10,87 @@ from app.logger import get_logger
 import difflib
 
 logger = get_logger(__name__)
+
+
+FOCUS_AREA_LABELS: Dict[str, str] = {
+    "pacing": "节奏把控 - 调整叙事速度，避免拖沓或过快",
+    "emotion": "情感渲染 - 深化人物情感表达，增强感染力",
+    "description": "场景描写 - 丰富环境细节，增强画面感",
+    "dialogue": "对话质量 - 让对话更自然真实，推动剧情",
+    "conflict": "冲突强度 - 强化矛盾冲突，提升戏剧张力",
+    "outline": "大纲贴合 - 确保当前章节命中本轮目标、变化与收束",
+    "rule_grounding": "规则落地 - 把设定限制、代价与结果写进动作链",
+    "opening": "开场钩子 - 开头尽快出现目标、异常或受阻",
+    "payoff": "回报兑现 - 回收承诺、伏笔或阶段性爽点",
+    "cliffhanger": "章尾钩子 - 章末保留更尖锐的未决问题或新失衡",
+}
+
+FOCUS_AREA_REPAIR_TARGETS: Dict[str, str] = {
+    "pacing": "调整场景节拍，让推进、停顿和转折更均衡。",
+    "emotion": "补强角色情绪触发与外露的连续变化。",
+    "description": "用场景细节和动作反馈承载信息。",
+    "dialogue": "删掉解释型对白，改成带潜台词和立场碰撞的说话方式。",
+    "conflict": "补强正面冲突与升级代价，让人物付出真实后果。",
+    "outline": "回扣本轮大纲关键任务、变化与收束。",
+    "rule_grounding": "把规则限制、风险代价和结果反馈落到动作链里。",
+    "opening": "把开头改成更快入场的异常 / 目标 / 受阻起手。",
+    "payoff": "回收前文承诺、伏笔或阶段性期待。",
+    "cliffhanger": "章尾保留未决选择、新失衡或更高一级的问题。",
+}
+
+AUTO_FOCUS_KEYWORDS: Dict[str, tuple[str, ...]] = {
+    "pacing": ("节奏", "拖沓", "过快", "冗长", "跳切"),
+    "emotion": ("情感", "情绪", "感染力", "共鸣"),
+    "description": ("描写", "场景", "画面", "环境细节"),
+    "dialogue": ("对白", "对话", "台词", "说话"),
+    "conflict": ("冲突", "矛盾", "对抗", "张力", "代价"),
+    "outline": ("大纲", "主线", "偏离", "跑题", "结构"),
+    "rule_grounding": ("规则", "设定", "世界观", "逻辑", "约束"),
+    "opening": ("开头", "开场", "起手", "前300字"),
+    "payoff": ("回收", "回报", "兑现", "爽点", "伏笔回收"),
+    "cliffhanger": ("章尾", "结尾", "悬念", "收束", "牵引"),
+}
+
+
+def _dedupe_text_items(items: Iterable[str], *, limit: int | None = None) -> List[str]:
+    normalized_items: List[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized_items.append(text)
+        if limit and len(normalized_items) >= limit:
+            break
+    return normalized_items
+
+
+def _normalize_focus_areas(areas: Iterable[str]) -> List[str]:
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for area in areas:
+        value = str(area or "").strip().lower()
+        if not value or value not in FOCUS_AREA_LABELS or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def _infer_focus_areas_from_texts(texts: Iterable[str]) -> List[str]:
+    combined = "\n".join(str(text or "").strip().lower() for text in texts if str(text or "").strip())
+    if not combined:
+        return []
+
+    inferred: List[str] = []
+    for area, keywords in AUTO_FOCUS_KEYWORDS.items():
+        if any(keyword in combined for keyword in keywords):
+            inferred.append(area)
+    return _normalize_focus_areas(inferred)
 
 
 class ChapterRegenerator:
@@ -127,72 +208,109 @@ class ChapterRegenerator:
         analysis: Optional[PlotAnalysis],
         regenerate_request: ChapterRegenerateRequest
     ) -> str:
-        """构建修改指令"""
-        
-        instructions = []
-        
-        # 标题
-        instructions.append("# 章节修改指令\n")
-        
-        # 1. 来自分析的建议
-        if (analysis and 
-            regenerate_request.selected_suggestion_indices and 
-            analysis.suggestions):
-            
-            instructions.append("## 📋 需要改进的问题（来自AI分析）：\n")
+        """??????"""
+
+        instructions: List[str] = []
+        instructions.append("# ??????\n")
+
+        selected_suggestions: List[str] = []
+        if analysis and regenerate_request.selected_suggestion_indices and analysis.suggestions:
             for idx in regenerate_request.selected_suggestion_indices:
                 if 0 <= idx < len(analysis.suggestions):
-                    suggestion = analysis.suggestions[idx]
-                    instructions.append(f"{idx + 1}. {suggestion}")
+                    selected_suggestions.append(str(analysis.suggestions[idx]).strip())
+
+        custom_instructions = str(regenerate_request.custom_instructions or "").strip()
+        explicit_focus_areas = _normalize_focus_areas(regenerate_request.focus_areas)
+        inferred_focus_areas = _infer_focus_areas_from_texts([
+            *selected_suggestions,
+            custom_instructions,
+        ])
+
+        if analysis:
+            if getattr(analysis, "conflict_level", None) is not None and (analysis.conflict_level or 0) < 6:
+                inferred_focus_areas.append("conflict")
+            if getattr(analysis, "pacing_score", None) is not None and (analysis.pacing_score or 0) < 6.5:
+                inferred_focus_areas.append("pacing")
+            if getattr(analysis, "coherence_score", None) is not None and (analysis.coherence_score or 0) < 6.5:
+                inferred_focus_areas.append("outline")
+            if getattr(analysis, "dialogue_ratio", None) is not None and (analysis.dialogue_ratio or 0) < 0.18:
+                inferred_focus_areas.append("dialogue")
+
+        effective_focus_areas = _normalize_focus_areas([*explicit_focus_areas, *inferred_focus_areas])
+        auto_added_focus_areas = [area for area in effective_focus_areas if area not in explicit_focus_areas]
+
+        repair_summary = str(getattr(regenerate_request, "story_repair_summary", "") or "").strip()
+        repair_targets = _dedupe_text_items(getattr(regenerate_request, "story_repair_targets", []) or [], limit=3)
+        preserve_strengths = _dedupe_text_items(getattr(regenerate_request, "story_preserve_strengths", []) or [], limit=2)
+
+        if not repair_targets and auto_added_focus_areas:
+            repair_targets = [
+                FOCUS_AREA_REPAIR_TARGETS[area]
+                for area in auto_added_focus_areas
+                if area in FOCUS_AREA_REPAIR_TARGETS
+            ][:3]
+
+        if not repair_summary and repair_targets:
+            repair_summary = f"本轮优先修复：{repair_targets[0]}，不要只做表面润色。"
+
+        if selected_suggestions:
+            instructions.append("## ?? ??????????AI????\n")
+            for idx, suggestion in enumerate(selected_suggestions, start=1):
+                instructions.append(f"{idx}. {suggestion}")
             instructions.append("")
-        
-        # 2. 用户自定义指令
-        if regenerate_request.custom_instructions:
-            instructions.append("## ✍️ 用户自定义修改要求：\n")
-            instructions.append(regenerate_request.custom_instructions)
+
+        if custom_instructions:
+            instructions.append("## ?? ??????????\n")
+            instructions.append(custom_instructions)
             instructions.append("")
-        
-        # 3. 重点优化方向
-        if regenerate_request.focus_areas:
-            instructions.append("## 🎯 重点优化方向：\n")
-            focus_map = {
-                "pacing": "节奏把控 - 调整叙事速度，避免拖沓或过快",
-                "emotion": "情感渲染 - 深化人物情感表达，增强感染力",
-                "description": "场景描写 - 丰富环境细节，增强画面感",
-                "dialogue": "对话质量 - 让对话更自然真实，推动剧情",
-                "conflict": "冲突强度 - 强化矛盾冲突，提升戏剧张力"
-            }
-            
-            for area in regenerate_request.focus_areas:
-                if area in focus_map:
-                    instructions.append(f"- {focus_map[area]}")
+
+        if repair_summary or repair_targets or preserve_strengths:
+            instructions.append("## 🩺 剧情质量修复目标：\n")
+            if repair_summary:
+                instructions.append(f"- 修复摘要：{repair_summary}")
+            if repair_targets:
+                instructions.append("- 本轮优先修复：")
+                for target in repair_targets:
+                    instructions.append(f"  * {target}")
+            if preserve_strengths:
+                instructions.append("- 需要保留的优势：")
+                for strength in preserve_strengths:
+                    instructions.append(f"  * {strength}")
             instructions.append("")
-        
-        # 4. 保留要求
+
+        if effective_focus_areas:
+            section_title = "## 🎯 重点优化方向（含自动补充）：\n" if auto_added_focus_areas else "## 🎯 重点优化方向：\n"
+            instructions.append(section_title)
+            for area in effective_focus_areas:
+                focus_label = FOCUS_AREA_LABELS.get(area)
+                if focus_label:
+                    instructions.append(f"- {focus_label}")
+            instructions.append("")
+
         if regenerate_request.preserve_elements:
             preserve = regenerate_request.preserve_elements
-            instructions.append("## 🔒 必须保留的元素：\n")
-            
+            instructions.append("## ?? ????????\n")
+
             if preserve.preserve_structure:
-                instructions.append("- 保持原章节的整体结构和情节框架")
-            
+                instructions.append("- ???????????????")
+
             if preserve.preserve_dialogues:
-                instructions.append("- 必须保留以下关键对话：")
+                instructions.append("- ???????????")
                 for dialogue in preserve.preserve_dialogues:
                     instructions.append(f"  * {dialogue}")
-            
+
             if preserve.preserve_plot_points:
-                instructions.append("- 必须保留以下关键情节点：")
+                instructions.append("- ????????????")
                 for plot in preserve.preserve_plot_points:
                     instructions.append(f"  * {plot}")
-            
+
             if preserve.preserve_character_traits:
-                instructions.append("- 保持所有角色的性格特征和行为模式一致")
-            
+                instructions.append("- ??????????????????")
+
             instructions.append("")
-        
+
         return "\n".join(instructions)
-    
+
     async def _build_regeneration_prompt(
         self,
         chapter: Chapter,

@@ -64,6 +64,7 @@ from app.services.memory_service import memory_service
 from app.services.chapter_web_research_service import chapter_web_research_service
 from app.services.foreshadow_service import foreshadow_service
 from app.services.chapter_regenerator import ChapterRegenerator
+from app.services.story_quality_feedback_service import build_story_repair_guidance
 from app.services.writing_style_sync_service import sync_low_ai_presets
 from app.logger import get_logger
 from app.api.settings import get_user_ai_service
@@ -620,7 +621,7 @@ def compute_story_quality_metrics(
         cliffhanger["hit_rate"] * 0.05
     )
 
-    return {
+    metrics = {
         "overall_score": round(overall * 100, 1),
         "conflict_chain_hit_rate": round(conflict["hit_rate"] * 100, 1),
         "rule_grounding_hit_rate": round(rule_grounding["hit_rate"] * 100, 1),
@@ -639,14 +640,20 @@ def compute_story_quality_metrics(
             "cliffhanger": cliffhanger,
         }
     }
+    metrics["repair_guidance"] = build_story_repair_guidance(metrics, scope="chapter")
+    return metrics
 
 
 def _build_generation_history_payload(content: str, metrics: Dict[str, Any]) -> str:
     """构建生成历史的结构化日志文本。"""
+    normalized_metrics = dict(metrics or {})
+    if normalized_metrics and not isinstance(normalized_metrics.get("repair_guidance"), dict):
+        normalized_metrics["repair_guidance"] = build_story_repair_guidance(normalized_metrics, scope="chapter")
+
     payload = {
         "log_type": "chapter_generation_quality_v1",
         "preview": content[:500] if len(content) > 500 else content,
-        "quality_metrics": metrics,
+        "quality_metrics": normalized_metrics,
         "generated_at": datetime.now().isoformat()
     }
     return json.dumps(payload, ensure_ascii=False)
@@ -1044,9 +1051,13 @@ async def _record_task_quality_metrics(task_id: str, metrics_event: Dict[str, An
             "history": [],
             "summary": None,
         }
-        current["latest"] = metrics_event
+        normalized_event = dict(metrics_event or {})
+        if normalized_event and not isinstance(normalized_event.get("repair_guidance"), dict):
+            normalized_event["repair_guidance"] = build_story_repair_guidance(normalized_event, scope="chapter")
+
+        current["latest"] = normalized_event
         history = current.get("history") or []
-        history.append(metrics_event)
+        history.append(normalized_event)
         if len(history) > 20:
             history = history[-20:]
         current["history"] = history
@@ -1061,7 +1072,7 @@ async def _record_task_quality_metrics(task_id: str, metrics_event: Dict[str, An
         cliffhanger_list = [item.get("cliffhanger_rate", 0.0) for item in history]
         pacing_values = [item.get("pacing_score") for item in history if item.get("pacing_score") is not None]
 
-        current["summary"] = {
+        summary = {
             "avg_overall_score": round(sum(overall_list) / max(len(overall_list), 1), 1),
             "avg_conflict_chain_hit_rate": round(sum(conflict_list) / max(len(conflict_list), 1), 1),
             "avg_rule_grounding_hit_rate": round(sum(rule_list) / max(len(rule_list), 1), 1),
@@ -1073,6 +1084,8 @@ async def _record_task_quality_metrics(task_id: str, metrics_event: Dict[str, An
             "avg_pacing_score": round(sum(pacing_values) / len(pacing_values), 1) if pacing_values else None,
             "chapter_count": len(history),
         }
+        summary["repair_guidance"] = build_story_repair_guidance(summary, scope="batch")
+        current["summary"] = summary
         task_quality_metrics_cache[task_id] = current
 
 
@@ -1145,9 +1158,12 @@ def _parse_quality_metrics_from_history(generated_content: Optional[str]) -> Opt
         if isinstance(payload, dict):
             metrics = payload.get("quality_metrics")
             if isinstance(metrics, dict):
-                return metrics
+                normalized_metrics = dict(metrics)
+                if not isinstance(normalized_metrics.get("repair_guidance"), dict):
+                    normalized_metrics["repair_guidance"] = build_story_repair_guidance(normalized_metrics, scope="chapter")
+                return normalized_metrics
     except Exception:
-        # 兼容旧数据：generated_content 为纯文本
+        # ??????generated_content ????
         return None
     return None
 

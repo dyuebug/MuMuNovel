@@ -1016,6 +1016,8 @@ async def test_should_return_latest_chapter_quality_metrics(
     assert body["latest_metrics"]["overall_score"] == 78.5
     assert body["latest_metrics"]["conflict_chain_hit_rate"] == 70.0
     assert body["latest_metrics"]["rule_grounding_hit_rate"] == 82.0
+    assert body["latest_metrics"]["repair_guidance"]["summary"]
+    assert body["latest_metrics"]["repair_guidance"]["focus_areas"]
     assert body["generated_at"] is not None
 
 
@@ -2150,11 +2152,13 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     assert status_body["stage_code"] == "6.writing.parsing"
     assert status_body["checkpoint"]["last_event"] == "analysis_started"
     assert status_body["latest_quality_metrics"]["overall_score"] == 88.0
+    assert status_body["latest_quality_metrics"]["repair_guidance"]["summary"]
     assert status_body["quality_metrics_summary"]["chapter_count"] == 1
     assert status_body["quality_metrics_summary"]["avg_overall_score"] == 88.0
     assert status_body["quality_metrics_summary"]["avg_outline_alignment_rate"] == 86.0
     assert status_body["quality_metrics_summary"]["avg_dialogue_naturalness_rate"] == 78.0
     assert status_body["quality_metrics_summary"]["avg_pacing_score"] == 8.1
+    assert status_body["quality_metrics_summary"]["repair_guidance"]["summary"]
 
     active_response = await chapters_client.get(
         f"/api/chapters/project/{project.id}/batch-generate/active"
@@ -2165,8 +2169,10 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     assert active_body["task"]["batch_id"] == task_id
     assert active_body["task"]["checkpoint"]["progress_phase"] == "parsing"
     assert active_body["task"]["latest_quality_metrics"]["overall_score"] == 88.0
+    assert active_body["task"]["latest_quality_metrics"]["repair_guidance"]["focus_areas"]
     assert active_body["task"]["quality_metrics_summary"]["avg_cliffhanger_rate"] == 92.0
     assert active_body["task"]["quality_metrics_summary"]["avg_pacing_score"] == 8.1
+    assert active_body["task"]["quality_metrics_summary"]["repair_guidance"]["focus_areas"]
 
     can_generate_response = await chapters_client.get(f"/api/chapters/{chapter.id}/can-generate")
     assert can_generate_response.status_code == 200
