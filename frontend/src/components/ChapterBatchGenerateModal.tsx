@@ -26,6 +26,7 @@ import {
   getQualityProfileDisplayItems,
   getRepairGuidanceDisplay,
 } from '../utils/storyCreationQualitySummary';
+import type { QualityRepairGuidanceDisplay } from '../utils/storyCreationQualitySummary';
 import { getCachedWordCount, setCachedWordCount } from '../utils/storyCreationWordCount';
 import {
   areStoryBeatPlannerDraftsEqual,
@@ -65,6 +66,18 @@ type RenderDebugGlobal = typeof globalThis & {
 
 const noopRenderDiagnostics = (...args: [string, () => Record<string, unknown>]): void => {
   void args;
+};
+
+const formatRepairWeakestMetricHint = (
+  guidance?: QualityRepairGuidanceDisplay | null,
+): string => {
+  if (!guidance?.weakestMetricLabel) {
+    return '';
+  }
+  const value = typeof guidance.weakestMetricValue === 'number'
+    ? `（当前值：${Number.isInteger(guidance.weakestMetricValue) ? guidance.weakestMetricValue : guidance.weakestMetricValue.toFixed(1)}）`
+    : '';
+  return `${guidance.weakestMetricLabel}${value}`;
 };
 
 function useActiveRenderDiagnostics(componentName: string, getSnapshot: () => Record<string, unknown>): void {
@@ -366,6 +379,15 @@ const activeBatchRepairPayload = batchProgress?.active_story_repair_payload ?? n
 const activeBatchRepairGuidance = useMemo(
   () => getRepairGuidanceDisplay(activeBatchRepairPayload),
   [activeBatchRepairPayload],
+);
+
+const batchRepairWeakestMetricHint = useMemo(
+  () => formatRepairWeakestMetricHint(batchRepairGuidance),
+  [batchRepairGuidance],
+);
+const activeBatchRepairWeakestMetricHint = useMemo(
+  () => formatRepairWeakestMetricHint(activeBatchRepairGuidance),
+  [activeBatchRepairGuidance],
 );
 const activeBatchRepairMetaItems = useMemo(() => {
   if (!activeBatchRepairPayload) {
@@ -1008,6 +1030,7 @@ const batchStoryInsightCards = useMemo(
                       batchStoryRepairTargetCard.applyHint,
                       { tone: 'warning' },
                     )}
+                    {batchRepairWeakestMetricHint && renderCompactFactCard('\u5f53\u524d\u6700\u5f31\u9879', batchRepairWeakestMetricHint)}
                     <div
                       style={{
                         display: 'grid',
@@ -1233,6 +1256,7 @@ const batchStoryInsightCards = useMemo(
                   activeBatchRepairGuidance.summary,
                   { style: { marginBottom: 10 } },
                 )}
+                {activeBatchRepairWeakestMetricHint && renderCompactFactCard('\u5f53\u524d\u6700\u5f31\u9879', activeBatchRepairWeakestMetricHint)}
                 {(activeBatchRepairGuidance?.repairTargets?.length || activeBatchRepairGuidance?.preserveStrengths?.length || activeBatchRepairGuidance?.focusAreas?.length) ? (
                   <div
                     style={{

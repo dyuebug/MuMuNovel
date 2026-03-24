@@ -883,8 +883,8 @@ def test_should_merge_outline_requirements_with_quality_preference_block():
         "deepen_character",
         "development",
         12,
-        "emotion_drama",
-        notes,
+        quality_preset="emotion_drama",
+        quality_notes=notes,
     )
 
     assert expected_block in merged
@@ -987,3 +987,16 @@ def test_should_build_volume_pacing_block_with_stage_hint():
     assert "【卷级节奏】" in block
     assert "第1-" in block
     assert "结局阶段" in block
+
+
+
+
+
+def test_should_inject_story_repair_diagnostic_block_into_chapter_quality_contract():
+    blocks = PromptService._build_quality_runtime_blocks(
+        "CHAPTER_GENERATION_ONE_TO_ONE",
+        story_repair_diagnostic_block="\u3010\u8bca\u65ad\u4f18\u5148\u7ea7\u5361\u3011\n- \u5f53\u524d\u6700\u5f31\u9879\uff1a\u56de\u62a5\u5151\u73b0\uff08\u5f53\u524d\u503c\uff1a58\uff09",
+    )
+
+    assert "\u3010\u8bca\u65ad\u4f18\u5148\u7ea7\u5361\u3011" in blocks["story_repair_diagnostic_block"]
+    assert "\u56de\u62a5\u5151\u73b0" in blocks["quality_contract_block"]

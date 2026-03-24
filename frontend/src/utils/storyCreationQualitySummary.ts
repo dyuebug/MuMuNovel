@@ -39,6 +39,18 @@ const QUALITY_METRIC_TIPS: Record<string, string> = {
   pacing: '来自章节分析的节奏评分，满分 10 分。',
 };
 
+
+const QUALITY_FOCUS_AREA_LABELS: Record<string, string> = {
+  conflict: '冲突链推进',
+  rule_grounding: '规则落地',
+  outline: '大纲贴合',
+  dialogue: '对白自然度',
+  opening: '开场钩子',
+  payoff: '回报兑现',
+  cliffhanger: '章尾牵引',
+  pacing: '节奏稳定度',
+};
+
 const QUALITY_PROFILE_BLOCK_ORDER: Array<keyof Pick<ChapterQualityProfileSummary, 'generation' | 'checker' | 'reviser' | 'mcp_guard' | 'external_assets_block'>> = [
   'generation',
   'checker',
@@ -120,9 +132,16 @@ export const getRepairGuidanceDisplay = (
   const summary = guidance.summary?.trim() || '';
   const repairTargets = (guidance.repair_targets || []).map((item) => item.trim()).filter(Boolean);
   const preserveStrengths = (guidance.preserve_strengths || []).map((item) => item.trim()).filter(Boolean);
-  const focusAreas = (guidance.focus_areas || []).map((item) => item.trim()).filter(Boolean);
+  const focusAreas = (guidance.focus_areas || []).map((item) => item.trim()).filter(Boolean).map((item) => QUALITY_FOCUS_AREA_LABELS[item] || item);
 
-  if (!summary && repairTargets.length === 0 && preserveStrengths.length === 0) {
+  if (
+    !summary
+    && repairTargets.length === 0
+    && preserveStrengths.length === 0
+    && focusAreas.length === 0
+    && !guidance.weakest_metric_label
+    && guidance.weakest_metric_value == null
+  ) {
     return null;
   }
 

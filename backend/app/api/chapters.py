@@ -1513,6 +1513,7 @@ async def _resolve_generation_story_repair_payload_for_batch(
         story_repair_summary=story_repair_summary,
         story_repair_targets=story_repair_targets,
         story_preserve_strengths=story_preserve_strengths,
+        active_story_repair_payload=active_story_repair_snapshot,
     )
     return state.get("payload")
 
@@ -3401,16 +3402,18 @@ async def generate_chapter_content_stream(
                     quality_preset=getattr(generate_request, 'quality_preset', None),
                     quality_notes=getattr(generate_request, 'quality_notes', None),
                 )
-                story_repair_payload = await _resolve_generation_story_repair_payload_for_chapter(
+                story_repair_state = await _resolve_generation_story_repair_state_for_chapter(
                     db_session,
                     chapter=current_chapter,
                     story_repair_summary=getattr(generate_request, 'story_repair_summary', None),
                     story_repair_targets=getattr(generate_request, 'story_repair_targets', None),
                     story_preserve_strengths=getattr(generate_request, 'story_preserve_strengths', None),
                 )
+                story_repair_payload = story_repair_state.get("payload")
                 prompt_quality_kwargs = build_prompt_quality_kwargs(
                     quality_profile,
                     guidance=generation_guidance,
+                    active_story_repair_payload=story_repair_state.get("active_story_repair_payload"),
                     **_story_repair_payload_to_prompt_kwargs(story_repair_payload),
                 )
                 resolved_style_id = quality_profile.get("resolved_style_id")
@@ -5500,6 +5503,7 @@ async def execute_batch_generation_in_order(
                         enable_web_research=enable_web_research,
                         web_research_query=web_research_query,
                         **_story_repair_payload_to_prompt_kwargs(active_story_repair_payload),
+                        active_story_repair_snapshot=active_story_repair_state.get("active_story_repair_payload"),
                         stream_task_id=batch_id,
                         stream_chunks=stream_chunks
                     )
@@ -5771,6 +5775,7 @@ async def generate_single_chapter_for_batch(
     story_repair_summary: Optional[str] = None,
     story_repair_targets: Optional[list[str]] = None,
     story_preserve_strengths: Optional[list[str]] = None,
+    active_story_repair_snapshot: Optional[Dict[str, Any]] = None,
     stream_task_id: Optional[str] = None,
     stream_chunks: bool = False
 ) -> Optional[str]:
@@ -5879,6 +5884,7 @@ async def generate_single_chapter_for_batch(
         story_repair_summary=story_repair_summary,
         story_repair_targets=story_repair_targets,
         story_preserve_strengths=story_preserve_strengths,
+        active_story_repair_payload=active_story_repair_snapshot,
     )
     style_id = quality_profile.get("resolved_style_id")
     style_content = quality_profile.get("style_content") or ""

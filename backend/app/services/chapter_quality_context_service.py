@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,6 +51,118 @@ def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
     return normalized or None
 
 
+STORY_REPAIR_SOURCE_PROMPT_LABELS: Dict[str, str] = {
+    "manual_request": "手动要求",
+    "current_chapter_quality": "当前章节质量",
+    "recent_history_summary": "近期质量趋势",
+    "manual_plus_current_chapter_quality": "手动要求 + 当前章节质量",
+    "manual_plus_recent_history_summary": "手动要求 + 近期质量趋势",
+}
+STORY_REPAIR_FOCUS_PROMPT_LABELS: Dict[str, str] = {
+    "conflict": "冲突链推进",
+    "rule_grounding": "规则落地",
+    "outline": "大纲贴合",
+    "dialogue": "对白自然度",
+    "opening": "开场钩子",
+    "payoff": "回报兑现",
+    "cliffhanger": "章尾牵引",
+    "pacing": "节奏稳定度",
+}
+STORY_REPAIR_QUALITY_SIGNAL_SOURCES = {
+    "current_chapter_quality",
+    "recent_history_summary",
+    "manual_plus_current_chapter_quality",
+    "manual_plus_recent_history_summary",
+}
+
+
+def _normalize_story_repair_prompt_items(
+    values: Optional[Sequence[str]],
+    *,
+    limit: int = 4,
+) -> List[str]:
+    if not values:
+        return []
+
+    items: List[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        label = STORY_REPAIR_FOCUS_PROMPT_LABELS.get(text, text)
+        if label in seen:
+            continue
+        seen.add(label)
+        items.append(label)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _format_story_repair_metric_value(value: Any) -> Optional[str]:
+    if not isinstance(value, (int, float)):
+        return None
+    numeric = float(value)
+    if numeric.is_integer():
+        return str(int(numeric))
+    return f"{numeric:.1f}"
+
+
+def _build_story_repair_diagnostic_context(
+    active_story_repair_payload: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    empty = {
+        "story_repair_source": "",
+        "story_repair_source_label": "",
+        "story_repair_focus_areas": [],
+        "story_repair_weakest_metric_label": "",
+        "story_repair_weakest_metric_value": None,
+        "story_repair_diagnostic_block": "",
+    }
+    if not isinstance(active_story_repair_payload, Mapping):
+        return empty
+
+    source = str(active_story_repair_payload.get("source") or "").strip()
+    fallback_source_label = str(active_story_repair_payload.get("source_label") or source or "").strip()
+    source_label = STORY_REPAIR_SOURCE_PROMPT_LABELS.get(source, fallback_source_label)
+    focus_areas = _normalize_story_repair_prompt_items(active_story_repair_payload.get("focus_areas"), limit=4)
+    weakest_metric_label = str(active_story_repair_payload.get("weakest_metric_label") or "").strip()
+    weakest_metric_value = (
+        active_story_repair_payload.get("weakest_metric_value")
+        if isinstance(active_story_repair_payload.get("weakest_metric_value"), (int, float))
+        else None
+    )
+    weakest_metric_text = _format_story_repair_metric_value(weakest_metric_value)
+    summary = str(active_story_repair_payload.get("summary") or "").strip()
+
+    diagnostic_block = ""
+    if weakest_metric_label or focus_areas or source in STORY_REPAIR_QUALITY_SIGNAL_SOURCES:
+        lines = ["【诊断优先级卡】"]
+        if source_label:
+            lines.append(f"- 诊断来源：{source_label}")
+        if weakest_metric_label:
+            metric_line = weakest_metric_label
+            if weakest_metric_text:
+                metric_line = f"{metric_line}（当前值：{weakest_metric_text}）"
+            lines.append(f"- 当前最弱项：{metric_line}")
+        if focus_areas:
+            lines.append(f"- 优先修复维度：{' / '.join(focus_areas)}")
+        if summary:
+            lines.append(f"- 诊断结论：{summary}")
+        lines.append("- 先修最弱项对应的事件、动作与后果，再统一润色语言。")
+        diagnostic_block = "\n".join(lines)
+
+    return {
+        "story_repair_source": source,
+        "story_repair_source_label": source_label,
+        "story_repair_focus_areas": focus_areas,
+        "story_repair_weakest_metric_label": weakest_metric_label,
+        "story_repair_weakest_metric_value": weakest_metric_value,
+        "story_repair_diagnostic_block": diagnostic_block,
+    }
+
+
 def resolve_story_generation_guidance(
     project: Optional[Project],
     *,
@@ -91,11 +203,13 @@ def build_prompt_quality_kwargs(
     story_repair_summary: Optional[str] = None,
     story_repair_targets: Optional[List[str]] = None,
     story_preserve_strengths: Optional[List[str]] = None,
+    active_story_repair_payload: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     source = profile or {}
     active_guidance = guidance or StoryGenerationGuidance()
     external_assets = source.get("external_assets") or ()
     reference_assets = source.get("reference_assets") or external_assets or ()
+    repair_diagnostic_context = _build_story_repair_diagnostic_context(active_story_repair_payload)
 
     return {
         "genre": source.get("genre") or "未设定",
@@ -123,6 +237,7 @@ def build_prompt_quality_kwargs(
             story_repair_targets,
             story_preserve_strengths,
         ),
+        **repair_diagnostic_context,
         "narrative_blueprint_block": build_narrative_blueprint_block(
             active_guidance.creative_mode,
             active_guidance.story_focus,

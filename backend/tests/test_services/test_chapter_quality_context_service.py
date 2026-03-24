@@ -102,3 +102,39 @@ def test_should_build_analysis_quality_kwargs_with_guidance_fields():
     assert kwargs["quality_preset"] == "clean_prose"
     assert kwargs["quality_notes"] == "减少重复抒情"
     assert kwargs["mcp_references"] == "世界观摘要"
+
+
+
+
+
+def test_should_build_prompt_quality_kwargs_with_story_repair_diagnostic_context():
+    kwargs = build_prompt_quality_kwargs(
+        {"genre": "玄幻"},
+        guidance=StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="climax",
+            story_creation_brief="优先兑现前文埋下的回报点",
+            quality_preset="tight_prose",
+            quality_notes="减少解释性旁白",
+        ),
+        story_repair_summary="本章需要优先补强冲突升级与回报兑现。",
+        story_repair_targets=["把主冲突推到不可回避的阶段"],
+        story_preserve_strengths=["保留角色对峙时的压迫感"],
+        active_story_repair_payload={
+            "source": "manual_plus_current_chapter_quality",
+            "summary": "当前章节的回报兑现不足，冲突升级也不够扎实。",
+            "focus_areas": ["conflict", "payoff"],
+            "weakest_metric_label": "回报兑现",
+            "weakest_metric_value": 58.0,
+        },
+    )
+
+    assert kwargs["story_repair_source"] == "manual_plus_current_chapter_quality"
+    assert kwargs["story_repair_source_label"] == "手动要求 + 当前章节质量"
+    assert kwargs["story_repair_focus_areas"] == ["冲突链推进", "回报兑现"]
+    assert kwargs["story_repair_weakest_metric_label"] == "回报兑现"
+    assert kwargs["story_repair_weakest_metric_value"] == 58.0
+    assert "【诊断优先级卡】" in kwargs["story_repair_diagnostic_block"]
+    assert "当前最弱项：回报兑现（当前值：58）" in kwargs["story_repair_diagnostic_block"]
+    assert "优先修复维度：冲突链推进 / 回报兑现" in kwargs["story_repair_diagnostic_block"]

@@ -18,11 +18,11 @@ except Exception:
 QUALITY_RUNTIME_TRACKING_TAG = "rule_v3_quality_block_20260307"
 QUALITY_TEMPLATE_MARKER_PATTERN = re.compile(r"^<prompt_template_key value=\"(?P<key>[A-Z0-9_]+)\" />\n?", re.MULTILINE)
 
-QUALITY_BLOCK_SECTION_GENERATION = """<quality_contract priority=\"P0\">\n{quality_generation_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{quality_preference_block}\n{story_objective_card_block}\n{story_result_card_block}\n{story_payoff_chain_card_block}\n{story_rule_grounding_card_block}\n{story_information_release_card_block}\n{story_emotion_landing_card_block}\n{story_action_rendering_card_block}\n{story_summary_tone_control_card_block}\n{story_repetition_control_card_block}\n{story_viewpoint_discipline_card_block}\n{story_dialogue_advancement_card_block}\n{story_opening_hook_card_block}\n{story_repair_target_block}\n{story_execution_checklist_block}\n{story_scene_anchor_card_block}\n{story_scene_density_card_block}\n{story_repetition_risk_block}\n{story_acceptance_card_block}\n{story_cliffhanger_card_block}\n{story_character_arc_card_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_GENERATION = """<quality_contract priority=\"P0\">\n{quality_generation_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{quality_preference_block}\n{story_objective_card_block}\n{story_result_card_block}\n{story_payoff_chain_card_block}\n{story_rule_grounding_card_block}\n{story_information_release_card_block}\n{story_emotion_landing_card_block}\n{story_action_rendering_card_block}\n{story_summary_tone_control_card_block}\n{story_repetition_control_card_block}\n{story_viewpoint_discipline_card_block}\n{story_dialogue_advancement_card_block}\n{story_opening_hook_card_block}\n{story_repair_target_block}\n{story_repair_diagnostic_block}\n{story_execution_checklist_block}\n{story_scene_anchor_card_block}\n{story_scene_density_card_block}\n{story_repetition_risk_block}\n{story_acceptance_card_block}\n{story_cliffhanger_card_block}\n{story_character_arc_card_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
 QUALITY_BLOCK_SECTION_ANALYSIS = """<quality_contract priority=\"P0\">\n{quality_analysis_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{quality_preference_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
 QUALITY_BLOCK_SECTION_CHECKER = """<quality_contract priority=\"P0\">\n{quality_checker_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{quality_preference_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
 QUALITY_BLOCK_SECTION_REVISER = """<quality_contract priority=\"P0\">\n{quality_reviser_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{quality_preference_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
-QUALITY_BLOCK_SECTION_REGENERATION = """<quality_contract priority=\"P0\">\n{quality_regeneration_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{quality_preference_block}\n{story_objective_card_block}\n{story_result_card_block}\n{story_payoff_chain_card_block}\n{story_rule_grounding_card_block}\n{story_information_release_card_block}\n{story_emotion_landing_card_block}\n{story_action_rendering_card_block}\n{story_summary_tone_control_card_block}\n{story_repetition_control_card_block}\n{story_viewpoint_discipline_card_block}\n{story_dialogue_advancement_card_block}\n{story_opening_hook_card_block}\n{story_repair_target_block}\n{story_execution_checklist_block}\n{story_scene_anchor_card_block}\n{story_scene_density_card_block}\n{story_repetition_risk_block}\n{story_acceptance_card_block}\n{story_cliffhanger_card_block}\n{story_character_arc_card_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_REGENERATION = """<quality_contract priority=\"P0\">\n{quality_regeneration_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{quality_preference_block}\n{story_objective_card_block}\n{story_result_card_block}\n{story_payoff_chain_card_block}\n{story_rule_grounding_card_block}\n{story_information_release_card_block}\n{story_emotion_landing_card_block}\n{story_action_rendering_card_block}\n{story_summary_tone_control_card_block}\n{story_repetition_control_card_block}\n{story_viewpoint_discipline_card_block}\n{story_dialogue_advancement_card_block}\n{story_opening_hook_card_block}\n{story_repair_target_block}\n{story_repair_diagnostic_block}\n{story_execution_checklist_block}\n{story_scene_anchor_card_block}\n{story_scene_density_card_block}\n{story_repetition_risk_block}\n{story_acceptance_card_block}\n{story_cliffhanger_card_block}\n{story_character_arc_card_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
 
 QUALITY_TEMPLATE_INSERTIONS = {
     "CHAPTER_GENERATION_ONE_TO_MANY": QUALITY_BLOCK_SECTION_GENERATION,
@@ -6053,6 +6053,7 @@ class PromptService:
             "story_repair_targets",
             "story_preserve_strengths",
             "story_repair_target_block",
+            "story_repair_diagnostic_block",
             "external_assets",
             "reference_assets",
             "quality_generation_block",
@@ -6242,6 +6243,9 @@ class PromptService:
                 kwargs.get("story_preserve_strengths"),
             )
         )
+        story_repair_diagnostic_block = _compact_prompt_text(
+            kwargs.get("story_repair_diagnostic_block")
+        )
         story_execution_checklist_block = _compact_prompt_text(
             kwargs.get("story_execution_checklist_block")
             or build_story_execution_checklist_block(
@@ -6363,6 +6367,7 @@ class PromptService:
             "story_dialogue_advancement_card_block": story_dialogue_advancement_card_block,
             "story_opening_hook_card_block": story_opening_hook_card_block,
             "story_repair_target_block": story_repair_target_block,
+            "story_repair_diagnostic_block": story_repair_diagnostic_block,
             "story_execution_checklist_block": story_execution_checklist_block,
             "story_scene_anchor_card_block": story_scene_anchor_card_block,
             "story_scene_density_card_block": story_scene_density_card_block,
