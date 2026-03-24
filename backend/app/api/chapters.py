@@ -65,6 +65,12 @@ from app.services.chapter_web_research_service import chapter_web_research_servi
 from app.services.foreshadow_service import foreshadow_service
 from app.services.chapter_regenerator import ChapterRegenerator
 from app.services.story_quality_feedback_service import build_story_repair_guidance
+from app.services.story_repair_payload_service import (
+    StoryRepairPayload,
+    build_story_repair_payload_from_metrics,
+    merge_story_repair_payload,
+    normalize_story_repair_payload,
+)
 from app.services.writing_style_sync_service import sync_low_ai_presets
 from app.logger import get_logger
 from app.api.settings import get_user_ai_service
@@ -1174,6 +1180,134 @@ def _parse_quality_metrics_from_history(generated_content: Optional[str]) -> Opt
         # ??????generated_content ????
         return None
     return None
+
+
+def _story_repair_payload_to_prompt_kwargs(payload: Optional[StoryRepairPayload]) -> Dict[str, Any]:
+    if payload is None:
+        return {
+            "story_repair_summary": None,
+            "story_repair_targets": None,
+            "story_preserve_strengths": None,
+        }
+    return payload.to_prompt_kwargs()
+
+
+async def _load_latest_quality_metrics_for_chapter_ids(
+    db_session: AsyncSession,
+    chapter_ids: List[str],
+) -> List[Dict[str, Any]]:
+    normalized_ids = [chapter_id for chapter_id in chapter_ids if chapter_id]
+    if not normalized_ids:
+        return []
+
+    result = await db_session.execute(
+        select(GenerationHistory)
+        .where(GenerationHistory.chapter_id.in_(normalized_ids))
+        .order_by(GenerationHistory.created_at.desc())
+    )
+
+    metrics_by_chapter: Dict[str, Dict[str, Any]] = {}
+    for history in result.scalars():
+        chapter_id = history.chapter_id
+        if not chapter_id or chapter_id in metrics_by_chapter:
+            continue
+        metrics = _parse_quality_metrics_from_history(history.generated_content)
+        if not metrics:
+            continue
+        metrics_by_chapter[chapter_id] = metrics
+        if len(metrics_by_chapter) >= len(normalized_ids):
+            break
+
+    return [metrics_by_chapter[chapter_id] for chapter_id in normalized_ids if chapter_id in metrics_by_chapter]
+
+
+async def _load_recent_previous_chapter_ids(
+    db_session: AsyncSession,
+    *,
+    project_id: str,
+    before_chapter_number: int,
+    limit: int = 3,
+) -> List[str]:
+    result = await db_session.execute(
+        select(Chapter.id)
+        .where(Chapter.project_id == project_id)
+        .where(Chapter.chapter_number < before_chapter_number)
+        .order_by(Chapter.chapter_number.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def _resolve_generation_story_repair_payload_for_batch(
+    db_session: AsyncSession,
+    *,
+    project_id: str,
+    before_chapter_number: int,
+    story_repair_summary: Optional[str] = None,
+    story_repair_targets: Optional[List[str]] = None,
+    story_preserve_strengths: Optional[List[str]] = None,
+) -> Optional[StoryRepairPayload]:
+    explicit_payload = normalize_story_repair_payload(
+        story_repair_summary,
+        story_repair_targets,
+        story_preserve_strengths,
+    )
+
+    previous_chapter_ids = await _load_recent_previous_chapter_ids(
+        db_session,
+        project_id=project_id,
+        before_chapter_number=before_chapter_number,
+        limit=3,
+    )
+    previous_metrics = await _load_latest_quality_metrics_for_chapter_ids(db_session, previous_chapter_ids)
+    if not previous_metrics:
+        return explicit_payload
+
+    summary_metrics = _build_quality_metrics_summary(previous_metrics)
+    derived_payload = build_story_repair_payload_from_metrics(
+        summary_metrics,
+        scope="batch",
+        prefer_embedded_guidance=False,
+    ) if summary_metrics else None
+    return merge_story_repair_payload(explicit_payload, derived_payload)
+
+
+async def _resolve_generation_story_repair_payload_for_chapter(
+    db_session: AsyncSession,
+    *,
+    chapter: Chapter,
+    story_repair_summary: Optional[str] = None,
+    story_repair_targets: Optional[List[str]] = None,
+    story_preserve_strengths: Optional[List[str]] = None,
+) -> Optional[StoryRepairPayload]:
+    explicit_payload = normalize_story_repair_payload(
+        story_repair_summary,
+        story_repair_targets,
+        story_preserve_strengths,
+    )
+
+    current_metrics = await _load_latest_quality_metrics_for_chapter_ids(db_session, [chapter.id])
+    if current_metrics:
+        derived_payload = build_story_repair_payload_from_metrics(current_metrics[0], scope="chapter")
+        return merge_story_repair_payload(explicit_payload, derived_payload)
+
+    previous_chapter_ids = await _load_recent_previous_chapter_ids(
+        db_session,
+        project_id=chapter.project_id,
+        before_chapter_number=chapter.chapter_number,
+        limit=3,
+    )
+    previous_metrics = await _load_latest_quality_metrics_for_chapter_ids(db_session, previous_chapter_ids)
+    if not previous_metrics:
+        return explicit_payload
+
+    summary_metrics = _build_quality_metrics_summary(previous_metrics)
+    derived_payload = build_story_repair_payload_from_metrics(
+        summary_metrics,
+        scope="chapter",
+        prefer_embedded_guidance=False,
+    ) if summary_metrics else None
+    return merge_story_repair_payload(explicit_payload, derived_payload)
 
 
 def _classify_analysis_error_code(error_message: Optional[str]) -> Optional[str]:
@@ -3042,12 +3176,17 @@ async def generate_chapter_content_stream(
                     quality_preset=getattr(generate_request, 'quality_preset', None),
                     quality_notes=getattr(generate_request, 'quality_notes', None),
                 )
-                prompt_quality_kwargs = build_prompt_quality_kwargs(
-                    quality_profile,
-                    guidance=generation_guidance,
+                story_repair_payload = await _resolve_generation_story_repair_payload_for_chapter(
+                    db_session,
+                    chapter=current_chapter,
                     story_repair_summary=getattr(generate_request, 'story_repair_summary', None),
                     story_repair_targets=getattr(generate_request, 'story_repair_targets', None),
                     story_preserve_strengths=getattr(generate_request, 'story_preserve_strengths', None),
+                )
+                prompt_quality_kwargs = build_prompt_quality_kwargs(
+                    quality_profile,
+                    guidance=generation_guidance,
+                    **_story_repair_payload_to_prompt_kwargs(story_repair_payload),
                 )
                 resolved_style_id = quality_profile.get("resolved_style_id")
                 style_content = quality_profile.get("style_content") or ""
@@ -3587,6 +3726,14 @@ async def generate_chapter_content_background(
     )
     resolved_style_id = single_task_quality_profile.get("resolved_style_id")
 
+    story_repair_payload = await _resolve_generation_story_repair_payload_for_chapter(
+        db,
+        chapter=chapter,
+        story_repair_summary=getattr(generate_request, 'story_repair_summary', None),
+        story_repair_targets=getattr(generate_request, 'story_repair_targets', None),
+        story_preserve_strengths=getattr(generate_request, 'story_preserve_strengths', None),
+    )
+
     # 单章节后台任务默认关闭同步分析，优先保证生成速度
     task = BatchGenerationTask(
         project_id=chapter.project_id,
@@ -3624,9 +3771,7 @@ async def generate_chapter_content_background(
         quality_notes=generation_guidance.quality_notes,
         enable_web_research=getattr(generate_request, 'enable_web_research', None),
         web_research_query=getattr(generate_request, 'web_research_query', None),
-        story_repair_summary=getattr(generate_request, 'story_repair_summary', None),
-        story_repair_targets=getattr(generate_request, 'story_repair_targets', None),
-        story_preserve_strengths=getattr(generate_request, 'story_preserve_strengths', None),
+        **_story_repair_payload_to_prompt_kwargs(story_repair_payload),
     )
 
     estimated_time = calculate_estimated_time(
@@ -4479,6 +4624,15 @@ async def batch_generate_chapters_in_order(
     )
     
     logger.info(f"📦 创建批量生成任务: {batch_id}, 章节: 第{start_number}-{end_number}章, 预估耗时: {estimated_time}分钟")
+    batch_story_repair_payload = await _resolve_generation_story_repair_payload_for_batch(
+        db,
+        project_id=project_id,
+        before_chapter_number=start_number,
+        story_repair_summary=batch_request.story_repair_summary,
+        story_repair_targets=batch_request.story_repair_targets,
+        story_preserve_strengths=batch_request.story_preserve_strengths,
+    )
+
     batch_generation_guidance = resolve_story_generation_guidance(
         project,
         creative_mode=batch_request.creative_mode,
@@ -4504,9 +4658,7 @@ async def batch_generate_chapters_in_order(
         quality_notes=batch_generation_guidance.quality_notes,
         enable_web_research=batch_request.enable_web_research,
         web_research_query=batch_request.web_research_query,
-        story_repair_summary=batch_request.story_repair_summary,
-        story_repair_targets=batch_request.story_repair_targets,
-        story_preserve_strengths=batch_request.story_preserve_strengths,
+        **_story_repair_payload_to_prompt_kwargs(batch_story_repair_payload),
     )
     
     return BatchGenerateResponse(
@@ -4970,6 +5122,15 @@ async def execute_batch_generation_in_order(
         # 维护上一章的摘要，用于传递给下一章（防重复上下文）
         last_generated_summary = None
         stream_chunks = bool(task.total_chapters == 1)
+        active_story_repair_payload = await _resolve_generation_story_repair_payload_for_batch(
+            db_session,
+            project_id=task.project_id,
+            before_chapter_number=task.start_chapter_number,
+            story_repair_summary=story_repair_summary,
+            story_repair_targets=story_repair_targets,
+            story_preserve_strengths=story_preserve_strengths,
+        )
+
 
         # 按顺序生成每个章节
         for idx, chapter_id in enumerate(task.chapter_ids, 1):
@@ -5085,9 +5246,7 @@ async def execute_batch_generation_in_order(
                         quality_notes=quality_notes,
                         enable_web_research=enable_web_research,
                         web_research_query=web_research_query,
-                        story_repair_summary=story_repair_summary,
-                        story_repair_targets=story_repair_targets,
-                        story_preserve_strengths=story_preserve_strengths,
+                        **_story_repair_payload_to_prompt_kwargs(active_story_repair_payload),
                         stream_task_id=batch_id,
                         stream_chunks=stream_chunks
                     )
@@ -5096,6 +5255,15 @@ async def execute_batch_generation_in_order(
                     if generated_summary:
                         last_generated_summary = f"第{chapter.chapter_number}章《{chapter.title}》：{generated_summary}"
                         logger.info(f"📝 已更新上一章摘要上下文: {last_generated_summary[:50]}...")
+                    
+                    active_story_repair_payload = await _resolve_generation_story_repair_payload_for_batch(
+                        db_session,
+                        project_id=task.project_id,
+                        before_chapter_number=chapter.chapter_number + 1,
+                        story_repair_summary=story_repair_summary,
+                        story_repair_targets=story_repair_targets,
+                        story_preserve_strengths=story_preserve_strengths,
+                    )
                     
                     logger.info(f"✅ 章节生成完成: 第{chapter.chapter_number}章")
                     await publish_task_stream_event(batch_id, {

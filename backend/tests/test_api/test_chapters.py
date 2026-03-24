@@ -1292,6 +1292,253 @@ async def test_should_forward_creative_mode_to_single_background_generation(
     assert captured["story_preserve_strengths"] == ["保留对白辨识度"]
 
 
+async def test_should_auto_fill_story_repair_payload_from_chapter_quality_history_for_single_background_generation(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_execute_batch_generation(*args, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(
+        chapters_api,
+        "execute_batch_generation_in_order",
+        fake_execute_batch_generation,
+    )
+
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    outline = await create_outline(
+        chapters_session_factory,
+        project_id=project.id,
+        order_index=1,
+        title="????????",
+    )
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="????????????",
+        content=None,
+        outline_id=outline.id,
+    )
+    quality_metrics = {
+        "overall_score": 71.2,
+        "conflict_chain_hit_rate": 58.0,
+        "rule_grounding_hit_rate": 80.0,
+        "outline_alignment_rate": 60.0,
+        "dialogue_naturalness_rate": 77.0,
+        "opening_hook_rate": 74.0,
+        "payoff_chain_rate": 55.0,
+        "cliffhanger_rate": 78.0,
+        "pacing_score": 6.8,
+    }
+
+    async with chapters_session_factory() as session:
+        session.add(
+            GenerationHistory(
+                project_id=project.id,
+                chapter_id=chapter.id,
+                prompt="chapter_generation",
+                generated_content=chapters_api._build_generation_history_payload("generated body", quality_metrics),
+                model="chapter_generator_v1",
+                created_at=datetime.utcnow() - timedelta(minutes=3),
+            )
+        )
+        await session.commit()
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/generate-background",
+        json={"target_word_count": 1200},
+    )
+
+    assert response.status_code == 200
+    assert captured["story_repair_summary"]
+    assert captured["story_repair_summary"].count(" / ") >= 1
+    assert captured["story_repair_targets"]
+    assert captured["story_preserve_strengths"]
+
+
+async def test_should_merge_manual_story_repair_summary_with_history_fallback_for_single_background_generation(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_execute_batch_generation(*args, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(
+        chapters_api,
+        "execute_batch_generation_in_order",
+        fake_execute_batch_generation,
+    )
+
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    outline = await create_outline(
+        chapters_session_factory,
+        project_id=project.id,
+        order_index=1,
+        title="????????",
+    )
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="?????????????",
+        content=None,
+        outline_id=outline.id,
+    )
+    quality_metrics = {
+        "overall_score": 73.0,
+        "conflict_chain_hit_rate": 61.0,
+        "rule_grounding_hit_rate": 82.0,
+        "outline_alignment_rate": 62.0,
+        "dialogue_naturalness_rate": 79.0,
+        "opening_hook_rate": 75.0,
+        "payoff_chain_rate": 57.0,
+        "cliffhanger_rate": 80.0,
+        "pacing_score": 7.0,
+    }
+
+    async with chapters_session_factory() as session:
+        session.add(
+            GenerationHistory(
+                project_id=project.id,
+                chapter_id=chapter.id,
+                prompt="chapter_generation",
+                generated_content=chapters_api._build_generation_history_payload("generated body", quality_metrics),
+                model="chapter_generator_v1",
+                created_at=datetime.utcnow() - timedelta(minutes=2),
+            )
+        )
+        await session.commit()
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/generate-background",
+        json={
+            "target_word_count": 1200,
+            "story_repair_summary": "MANUAL: focus on concrete pressure and emotional reactions",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["story_repair_summary"] == "MANUAL: focus on concrete pressure and emotional reactions"
+    assert captured["story_repair_targets"]
+    assert captured["story_preserve_strengths"]
+
+
+async def test_should_auto_fill_story_repair_payload_from_previous_chapter_history_for_batch_background_generation(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_execute_batch_generation(*args, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(
+        chapters_api,
+        "execute_batch_generation_in_order",
+        fake_execute_batch_generation,
+    )
+
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    outline1 = await create_outline(
+        chapters_session_factory,
+        project_id=project.id,
+        order_index=1,
+        title="????",
+    )
+    outline2 = await create_outline(
+        chapters_session_factory,
+        project_id=project.id,
+        order_index=2,
+        title="??????",
+    )
+    outline3 = await create_outline(
+        chapters_session_factory,
+        project_id=project.id,
+        order_index=3,
+        title="??????",
+    )
+    previous_chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="???",
+        content="???????",
+        outline_id=outline1.id,
+    )
+    await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title="???",
+        content=None,
+        outline_id=outline2.id,
+    )
+    await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=3,
+        title="???",
+        content=None,
+        outline_id=outline3.id,
+    )
+    quality_metrics = {
+        "overall_score": 74.5,
+        "conflict_chain_hit_rate": 63.0,
+        "rule_grounding_hit_rate": 79.0,
+        "outline_alignment_rate": 59.0,
+        "dialogue_naturalness_rate": 81.0,
+        "opening_hook_rate": 77.0,
+        "payoff_chain_rate": 54.0,
+        "cliffhanger_rate": 83.0,
+        "pacing_score": 7.1,
+    }
+
+    async with chapters_session_factory() as session:
+        session.add(
+            GenerationHistory(
+                project_id=project.id,
+                chapter_id=previous_chapter.id,
+                prompt="chapter_generation",
+                generated_content=chapters_api._build_generation_history_payload("generated body", quality_metrics),
+                model="chapter_generator_v1",
+                created_at=datetime.utcnow() - timedelta(minutes=4),
+            )
+        )
+        await session.commit()
+
+    response = await chapters_client.post(
+        f"/api/chapters/project/{project.id}/batch-generate",
+        json={
+            "start_chapter_number": 2,
+            "count": 2,
+            "target_word_count": 800,
+            "enable_analysis": False,
+            "enable_mcp": False,
+            "max_retries": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["story_repair_summary"]
+    assert captured["story_repair_summary"].count(" / ") >= 1
+    assert captured["story_repair_targets"]
+    assert captured["story_preserve_strengths"]
+
+
 async def test_should_fallback_to_project_generation_defaults_for_single_background_generation(
     chapters_client,
     chapters_session_factory,
