@@ -1,4 +1,4 @@
-﻿"""章节管理API"""
+"""章节管理API"""
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -51,19 +51,19 @@ from app.services.prompt_service import (
     prompt_service,
     PromptService,
     WritingStyleManager,
-    build_creative_mode_block,
-    build_narrative_blueprint_block,
-    build_story_creation_brief_block,
-    build_story_focus_block,
-    build_story_repair_target_block,
+)
+from app.services.chapter_quality_context_service import (
+    StoryGenerationGuidance,
+    build_analysis_quality_kwargs,
+    build_prompt_quality_kwargs,
+    resolve_chapter_quality_profile,
+    resolve_story_generation_guidance,
 )
 from app.services.plot_analyzer import PlotAnalyzer
 from app.services.memory_service import memory_service
 from app.services.chapter_web_research_service import chapter_web_research_service
 from app.services.foreshadow_service import foreshadow_service
 from app.services.chapter_regenerator import ChapterRegenerator
-from app.services.mcp_tools_loader import mcp_tools_loader
-from app.services.project_generation_defaults import resolve_project_generation_defaults
 from app.services.writing_style_sync_service import sync_low_ai_presets
 from app.logger import get_logger
 from app.api.settings import get_user_ai_service
@@ -94,193 +94,6 @@ async def get_db_write_lock(user_id: str) -> Lock:
         db_write_locks[user_id] = Lock()
         logger.debug(f"🔒 为用户 {user_id} 创建数据库写入锁")
     return db_write_locks[user_id]
-
-
-def _build_prompt_quality_kwargs(
-    profile: Optional[Dict[str, Any]],
-    *,
-    creative_mode: Optional[str] = None,
-    story_focus: Optional[str] = None,
-    plot_stage: Optional[str] = None,
-    story_creation_brief: Optional[str] = None,
-    quality_preset: Optional[str] = None,
-    quality_notes: Optional[str] = None,
-    story_repair_summary: Optional[str] = None,
-    story_repair_targets: Optional[list[str]] = None,
-    story_preserve_strengths: Optional[list[str]] = None,
-) -> Dict[str, Any]:
-    """提取可直接传给 PromptService.format_prompt 的统一质量画像参数。"""
-    source = profile or {}
-    external_assets = source.get("external_assets") or ()
-    reference_assets = source.get("reference_assets") or external_assets or ()
-    return {
-        "genre": source.get("genre") or "未设定",
-        "style_name": source.get("style_name") or "",
-        "style_preset_id": source.get("style_preset_id") or "",
-        "style_content": source.get("style_content") or "",
-        "external_assets": external_assets,
-        "reference_assets": reference_assets,
-        "mcp_guard": source.get("mcp_guard") or "",
-        "mcp_references": source.get("mcp_references") or "",
-        "creative_mode": creative_mode or "",
-        "creative_mode_block": build_creative_mode_block(creative_mode, scene="chapter"),
-        "story_focus": story_focus or "",
-        "story_focus_block": build_story_focus_block(story_focus, scene="chapter"),
-        "plot_stage": plot_stage or "",
-        "story_creation_brief": story_creation_brief or "",
-        "quality_preset": quality_preset or "",
-        "quality_notes": quality_notes or "",
-        "story_creation_brief_block": build_story_creation_brief_block(story_creation_brief),
-        "story_repair_summary": story_repair_summary or "",
-        "story_repair_targets": story_repair_targets or [],
-        "story_preserve_strengths": story_preserve_strengths or [],
-        "story_repair_target_block": build_story_repair_target_block(
-            story_repair_summary,
-            story_repair_targets,
-            story_preserve_strengths,
-        ),
-        "narrative_blueprint_block": build_narrative_blueprint_block(
-            creative_mode,
-            story_focus,
-            scene="chapter",
-            plot_stage=plot_stage,
-        ),
-    }
-
-
-def _build_analysis_quality_kwargs(profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """提取可直接传给 PlotAnalyzer.analyze_chapter 的统一质量画像参数。"""
-    source = profile or {}
-    external_assets = source.get("external_assets") or ()
-    reference_assets = source.get("reference_assets") or external_assets or ()
-    return {
-        "genre": source.get("genre") or "未设定",
-        "style_name": source.get("style_name") or "",
-        "style_preset_id": source.get("style_preset_id") or "",
-        "style_content": source.get("style_content") or "",
-        "external_assets": external_assets,
-        "reference_assets": reference_assets,
-        "mcp_references": source.get("mcp_references") or "",
-    }
-
-
-async def _resolve_project_default_style_id(
-    db_session: AsyncSession,
-    project_id: str,
-) -> Optional[int]:
-    """解析项目默认写作风格ID。"""
-    from app.models.project_default_style import ProjectDefaultStyle
-
-    result = await db_session.execute(
-        select(ProjectDefaultStyle.style_id)
-        .where(ProjectDefaultStyle.project_id == project_id)
-    )
-    return result.scalar_one_or_none()
-
-
-async def _resolve_effective_style_context(
-    *,
-    db_session: AsyncSession,
-    user_id: str,
-    project_id: str,
-    style_id: Optional[int],
-    prefer_project_default_style: bool = False,
-    log_prefix: str = "章节",
-) -> Dict[str, Any]:
-    """统一解析章节链路可用的写作风格上下文。"""
-    await sync_low_ai_presets(db_session)
-
-    resolved_style_id = style_id
-    if prefer_project_default_style and not resolved_style_id:
-        resolved_style_id = await _resolve_project_default_style_id(db_session, project_id)
-        if resolved_style_id:
-            logger.info(f"📝 {log_prefix} - 使用项目默认写作风格: {resolved_style_id}")
-
-    context = {
-        "resolved_style_id": resolved_style_id,
-        "style_name": "",
-        "style_preset_id": "",
-        "style_content": "",
-    }
-    if not resolved_style_id:
-        return context
-
-    style_result = await db_session.execute(
-        select(WritingStyle).where(WritingStyle.id == resolved_style_id)
-    )
-    style = style_result.scalar_one_or_none()
-    if not style:
-        logger.warning(f"⚠️ {log_prefix} - 未找到风格 {resolved_style_id}")
-        return context
-
-    if style.user_id is not None and style.user_id != user_id:
-        logger.warning(f"⚠️ {log_prefix} - 风格 {resolved_style_id} 不属于当前用户，跳过")
-        return context
-
-    context.update(
-        {
-            "resolved_style_id": resolved_style_id,
-            "style_name": style.name or "",
-            "style_preset_id": style.preset_id or "",
-            "style_content": style.prompt_content or "",
-        }
-    )
-    style_type = "全局预设" if style.user_id is None else "用户自定义"
-    logger.info(f"✅ {log_prefix} - 使用写作风格: {style.name} ({style_type})")
-    return context
-
-
-async def _resolve_chapter_quality_profile(
-    *,
-    db_session: AsyncSession,
-    user_id: str,
-    project: Optional[Project],
-    style_id: Optional[int],
-    enable_mcp: bool,
-    prefer_project_default_style: bool = False,
-    external_assets: Optional[List[Dict[str, Any]]] = None,
-    reference_assets: Optional[List[Dict[str, Any]]] = None,
-    log_prefix: str = "章节",
-) -> Dict[str, Any]:
-    """统一解析章节链路使用的质量画像来源。"""
-    normalized_external_assets = tuple(external_assets or ())
-    normalized_reference_assets = tuple(reference_assets or normalized_external_assets or ())
-    profile: Dict[str, Any] = {
-        "genre": (project.genre if project else None) or "",
-        "resolved_style_id": style_id,
-        "style_name": "",
-        "style_preset_id": "",
-        "style_content": "",
-        "external_assets": normalized_external_assets,
-        "reference_assets": normalized_reference_assets,
-        "mcp_guard": "",
-        "mcp_references": "",
-    }
-
-    if project:
-        profile.update(
-            await _resolve_effective_style_context(
-                db_session=db_session,
-                user_id=user_id,
-                project_id=project.id,
-                style_id=style_id,
-                prefer_project_default_style=prefer_project_default_style,
-                log_prefix=log_prefix,
-            )
-        )
-
-    if enable_mcp and user_id:
-        try:
-            prompt_blocks = await mcp_tools_loader.get_prompt_reference_blocks(
-                user_id=user_id,
-                db_session=db_session,
-            )
-            profile["mcp_guard"] = prompt_blocks.get("mcp_guard") or ""
-            profile["mcp_references"] = prompt_blocks.get("mcp_references") or ""
-        except Exception as mcp_error:
-            logger.warning(f"⚠️ {log_prefix} - 获取MCP参考块失败，已回退为空: {mcp_error}")
-
-    return profile
 
 
 async def subscribe_task_stream(task_id: str) -> Queue:
@@ -1072,6 +885,7 @@ async def _run_chapter_text_checker(
     characters_info: str,
     world_rules: str,
     quality_profile: Optional[Dict[str, Any]] = None,
+    generation_guidance: Optional[StoryGenerationGuidance] = None,
 ) -> Optional[Dict[str, Any]]:
     """运行第三版正文质检。失败时返回None，不阻断主流程。"""
     try:
@@ -1088,7 +902,7 @@ async def _run_chapter_text_checker(
             characters_info=(characters_info or "（无角色信息）")[:4000],
             world_rules=(world_rules or "（无世界规则）")[:1500],
             _template_key="CHAPTER_TEXT_CHECKER",
-            **_build_prompt_quality_kwargs(quality_profile),
+            **build_prompt_quality_kwargs(quality_profile, guidance=generation_guidance),
         )
 
         result = await ai_service.call_with_json_retry(
@@ -1126,6 +940,7 @@ async def _run_chapter_text_reviser(
     chapter_content: str,
     checker_result: Dict[str, Any],
     quality_profile: Optional[Dict[str, Any]] = None,
+    generation_guidance: Optional[StoryGenerationGuidance] = None,
 ) -> Optional[Dict[str, Any]]:
     """根据质检结果生成自动修订草稿，仅建议，不覆盖正文。"""
     counts = (checker_result or {}).get("severity_counts") or {}
@@ -1149,7 +964,7 @@ async def _run_chapter_text_reviser(
             critical_issues_text=_build_reviser_priority_issues_text(checker_result),
             checker_result_json=checker_json[:12000],
             _template_key="CHAPTER_TEXT_REVISER",
-            **_build_prompt_quality_kwargs(quality_profile),
+            **build_prompt_quality_kwargs(quality_profile, guidance=generation_guidance),
         )
 
         result = await ai_service.call_with_json_retry(
@@ -2440,6 +2255,7 @@ async def analyze_chapter_background(
     task_id: str,
     ai_service: AIService,
     quality_profile: Optional[Dict[str, Any]] = None,
+    generation_guidance: Optional[StoryGenerationGuidance] = None,
 ) -> bool:
     """
     后台异步分析章节（支持并发，使用锁保护数据库写入）
@@ -2582,7 +2398,7 @@ async def analyze_chapter_background(
         )
         logger.info(f"📋 后台分析 - 已获取{len(project_characters)}个角色信息用于分析")
 
-        analysis_quality_profile = quality_profile or await _resolve_chapter_quality_profile(
+        analysis_quality_profile = quality_profile or await resolve_chapter_quality_profile(
             db_session=db_session,
             user_id=user_id,
             project=project,
@@ -2591,6 +2407,7 @@ async def analyze_chapter_background(
             prefer_project_default_style=True,
             log_prefix="章节分析",
         )
+        analysis_guidance = generation_guidance or resolve_story_generation_guidance(project)
 
         # 定义重试回调函数，用于在重试时更新任务状态
         async def on_retry_callback(attempt: int, max_retries: int, wait_time: int, error_reason: str):
@@ -2623,7 +2440,7 @@ async def analyze_chapter_background(
             existing_foreshadows=existing_foreshadows,
             on_retry=on_retry_callback,
             characters_info=characters_info,
-            **_build_analysis_quality_kwargs(analysis_quality_profile),
+            **build_analysis_quality_kwargs(analysis_quality_profile, guidance=analysis_guidance),
         )
         
         if not analysis_result:
@@ -2647,6 +2464,7 @@ async def analyze_chapter_background(
             characters_info=characters_info,
             world_rules=project.world_rules or "",
             quality_profile=analysis_quality_profile,
+            generation_guidance=analysis_guidance,
         )
         reviser_result = await _run_chapter_text_reviser(
             ai_service=ai_service,
@@ -2657,6 +2475,7 @@ async def analyze_chapter_background(
             chapter_content=chapter.content or "",
             checker_result=checker_result or {},
             quality_profile=analysis_quality_profile,
+            generation_guidance=analysis_guidance,
         )
 
         analysis_report_text = analyzer.generate_analysis_summary(analysis_result)
@@ -3175,7 +2994,7 @@ async def generate_chapter_content_stream(
                     )
                 outline = outline_result.scalar_one_or_none()
 
-                quality_profile = await _resolve_chapter_quality_profile(
+                quality_profile = await resolve_chapter_quality_profile(
                     db_session=db_session,
                     user_id=current_user_id,
                     project=project,
@@ -3184,7 +3003,7 @@ async def generate_chapter_content_stream(
                     prefer_project_default_style=not bool(style_id),
                     log_prefix="单章生成",
                 )
-                generation_defaults = resolve_project_generation_defaults(
+                generation_guidance = resolve_story_generation_guidance(
                     project,
                     creative_mode=generate_request.creative_mode,
                     story_focus=generate_request.story_focus,
@@ -3193,19 +3012,13 @@ async def generate_chapter_content_stream(
                     quality_preset=getattr(generate_request, 'quality_preset', None),
                     quality_notes=getattr(generate_request, 'quality_notes', None),
                 )
-                prompt_quality_kwargs = _build_prompt_quality_kwargs(
+                prompt_quality_kwargs = build_prompt_quality_kwargs(
                     quality_profile,
-                    creative_mode=generation_defaults["creative_mode"],
-                    story_focus=generation_defaults["story_focus"],
-                    plot_stage=generation_defaults["plot_stage"],
-                    story_creation_brief=generation_defaults["story_creation_brief"],
-                    quality_preset=generation_defaults["quality_preset"],
-                    quality_notes=generation_defaults["quality_notes"],
+                    guidance=generation_guidance,
                     story_repair_summary=getattr(generate_request, 'story_repair_summary', None),
                     story_repair_targets=getattr(generate_request, 'story_repair_targets', None),
                     story_preserve_strengths=getattr(generate_request, 'story_preserve_strengths', None),
                 )
-                analysis_quality_kwargs = _build_analysis_quality_kwargs(quality_profile)
                 resolved_style_id = quality_profile.get("resolved_style_id")
                 style_content = quality_profile.get("style_content") or ""
                 style_name = quality_profile.get("style_name") or ""
@@ -3557,6 +3370,7 @@ async def generate_chapter_content_stream(
                         task_id=task_id,
                         ai_service=user_ai_service,
                         quality_profile=quality_profile,
+                        generation_guidance=generation_guidance,
                     )
                 else:
                     logger.info("⏭️ 已关闭自动分析，跳过分析任务创建")
@@ -3722,7 +3536,7 @@ async def generate_chapter_content_background(
         if hasattr(generate_request, 'plot_stage')
         else None
     )
-    generation_defaults = resolve_project_generation_defaults(
+    generation_guidance = resolve_story_generation_guidance(
         project,
         creative_mode=creative_mode,
         story_focus=story_focus,
@@ -3732,7 +3546,7 @@ async def generate_chapter_content_background(
         quality_notes=getattr(generate_request, 'quality_notes', None),
     )
 
-    single_task_quality_profile = await _resolve_chapter_quality_profile(
+    single_task_quality_profile = await resolve_chapter_quality_profile(
         db_session=db,
         user_id=user_id,
         project=project,
@@ -3772,12 +3586,12 @@ async def generate_chapter_content_background(
         ai_service=user_ai_service,
         custom_model=custom_model,
         temp_narrative_perspective=temp_narrative_perspective,
-        creative_mode=generation_defaults["creative_mode"],
-        story_focus=generation_defaults["story_focus"],
-        plot_stage=generation_defaults["plot_stage"],
-        story_creation_brief=generation_defaults["story_creation_brief"],
-        quality_preset=generation_defaults["quality_preset"],
-        quality_notes=generation_defaults["quality_notes"],
+        creative_mode=generation_guidance.creative_mode,
+        story_focus=generation_guidance.story_focus,
+        plot_stage=generation_guidance.plot_stage,
+        story_creation_brief=generation_guidance.story_creation_brief,
+        quality_preset=generation_guidance.quality_preset,
+        quality_notes=generation_guidance.quality_notes,
         enable_web_research=getattr(generate_request, 'enable_web_research', None),
         web_research_query=getattr(generate_request, 'web_research_query', None),
         story_repair_summary=getattr(generate_request, 'story_repair_summary', None),
@@ -4454,7 +4268,7 @@ async def trigger_chapter_analysis(
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
     
-    analysis_quality_profile = await _resolve_chapter_quality_profile(
+    analysis_quality_profile = await resolve_chapter_quality_profile(
         db_session=db,
         user_id=user_id,
         project=project,
@@ -4463,6 +4277,7 @@ async def trigger_chapter_analysis(
         prefer_project_default_style=True,
         log_prefix="手动分析",
     )
+    analysis_generation_guidance = resolve_story_generation_guidance(project)
 
     # 创建分析任务
     analysis_task = AnalysisTask(
@@ -4493,6 +4308,7 @@ async def trigger_chapter_analysis(
         task_id=task_id,
         ai_service=user_ai_service,
         quality_profile=analysis_quality_profile,
+        generation_guidance=analysis_generation_guidance,
     )
     
     return {
@@ -4579,7 +4395,7 @@ async def batch_generate_chapters_in_order(
     if not can_generate:
         raise HTTPException(status_code=400, detail=f"起始章节无法生成：{error_msg}")
     
-    batch_quality_profile = await _resolve_chapter_quality_profile(
+    batch_quality_profile = await resolve_chapter_quality_profile(
         db_session=db,
         user_id=user_id,
         project=project,
@@ -4620,7 +4436,7 @@ async def batch_generate_chapters_in_order(
     )
     
     logger.info(f"📦 创建批量生成任务: {batch_id}, 章节: 第{start_number}-{end_number}章, 预估耗时: {estimated_time}分钟")
-    batch_generation_defaults = resolve_project_generation_defaults(
+    batch_generation_guidance = resolve_story_generation_guidance(
         project,
         creative_mode=batch_request.creative_mode,
         story_focus=batch_request.story_focus,
@@ -4637,12 +4453,12 @@ async def batch_generate_chapters_in_order(
         user_id=user_id,
         ai_service=user_ai_service,
         custom_model=batch_request.model,
-        creative_mode=batch_generation_defaults["creative_mode"],
-        story_focus=batch_generation_defaults["story_focus"],
-        plot_stage=batch_generation_defaults["plot_stage"],
-        story_creation_brief=batch_generation_defaults["story_creation_brief"],
-        quality_preset=batch_generation_defaults["quality_preset"],
-        quality_notes=batch_generation_defaults["quality_notes"],
+        creative_mode=batch_generation_guidance.creative_mode,
+        story_focus=batch_generation_guidance.story_focus,
+        plot_stage=batch_generation_guidance.plot_stage,
+        story_creation_brief=batch_generation_guidance.story_creation_brief,
+        quality_preset=batch_generation_guidance.quality_preset,
+        quality_notes=batch_generation_guidance.quality_notes,
         enable_web_research=batch_request.enable_web_research,
         web_research_query=batch_request.web_research_query,
         story_repair_summary=batch_request.story_repair_summary,
@@ -5184,9 +5000,18 @@ async def execute_batch_generation_in_order(
                     if not can_generate:
                         raise Exception(f"前置条件不满足: {error_msg}")
 
-                    analysis_quality_kwargs = None
+                    analysis_quality_profile = None
+                    analysis_generation_guidance = resolve_story_generation_guidance(
+                        project,
+                        creative_mode=creative_mode,
+                        story_focus=story_focus,
+                        plot_stage=plot_stage,
+                        story_creation_brief=story_creation_brief,
+                        quality_preset=quality_preset,
+                        quality_notes=quality_notes,
+                    )
                     if task.enable_analysis:
-                        analysis_quality_kwargs = await _resolve_chapter_quality_profile(
+                        analysis_quality_profile = await resolve_chapter_quality_profile(
                             db_session=db_session,
                             user_id=user_id,
                             project=project,
@@ -5283,7 +5108,8 @@ async def execute_batch_generation_in_order(
                                     project_id=task.project_id,
                                     task_id=analysis_task.id,
                                     ai_service=ai_service,
-                                    quality_profile=analysis_quality_kwargs,
+                                    quality_profile=analysis_quality_profile,
+                                    generation_guidance=analysis_generation_guidance,
                                 )
                                 
                                 # 直接根据返回值判断
@@ -5557,7 +5383,7 @@ async def generate_single_chapter_for_batch(
                 })
 
     # 获取写作风格与统一质量画像
-    generation_defaults = resolve_project_generation_defaults(
+    generation_guidance = resolve_story_generation_guidance(
         project,
         creative_mode=creative_mode,
         story_focus=story_focus,
@@ -5566,14 +5392,8 @@ async def generate_single_chapter_for_batch(
         quality_preset=quality_preset,
         quality_notes=quality_notes,
     )
-    creative_mode = generation_defaults["creative_mode"]
-    story_focus = generation_defaults["story_focus"]
-    plot_stage = generation_defaults["plot_stage"]
-    story_creation_brief = generation_defaults["story_creation_brief"]
-    quality_preset = generation_defaults["quality_preset"]
-    quality_notes = generation_defaults["quality_notes"]
 
-    quality_profile = await _resolve_chapter_quality_profile(
+    quality_profile = await resolve_chapter_quality_profile(
         db_session=db_session,
         user_id=user_id,
         project=project,
@@ -5584,19 +5404,13 @@ async def generate_single_chapter_for_batch(
         prefer_project_default_style=not bool(style_id),
         log_prefix="批量单章生成",
     )
-    prompt_quality_kwargs = _build_prompt_quality_kwargs(
+    prompt_quality_kwargs = build_prompt_quality_kwargs(
         quality_profile,
-        creative_mode=creative_mode,
-        story_focus=story_focus,
-        plot_stage=plot_stage,
-        story_creation_brief=story_creation_brief,
-        quality_preset=quality_preset,
-        quality_notes=quality_notes,
+        guidance=generation_guidance,
         story_repair_summary=story_repair_summary,
         story_repair_targets=story_repair_targets,
         story_preserve_strengths=story_preserve_strengths,
     )
-    analysis_quality_kwargs = _build_analysis_quality_kwargs(quality_profile)
     style_id = quality_profile.get("resolved_style_id")
     style_content = quality_profile.get("style_content") or ""
     style_name = quality_profile.get("style_name") or ""
@@ -6023,7 +5837,7 @@ async def regenerate_chapter_stream(
             outline = outline_result.scalar_one_or_none()
             
             # 获取统一质量画像与写作风格
-            quality_profile = await _resolve_chapter_quality_profile(
+            quality_profile = await resolve_chapter_quality_profile(
                 db_session=temp_db,
                 user_id=user_id,
                 project=project,

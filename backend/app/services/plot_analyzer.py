@@ -25,6 +25,12 @@ def build_chapter_quality_prompt_context(
     external_assets: Optional[List[Dict[str, Any]]] = None,
     reference_assets: Optional[List[Dict[str, Any]]] = None,
     mcp_references: str = "",
+    creative_mode: Optional[str] = None,
+    story_focus: Optional[str] = None,
+    plot_stage: Optional[str] = None,
+    story_creation_brief: Optional[str] = None,
+    quality_preset: Optional[str] = None,
+    quality_notes: Optional[str] = None,
 ) -> Dict[str, Any]:
     """构建分析、质检、修订共用的质量画像上下文。"""
     resolved_assets = external_assets or reference_assets or ()
@@ -44,6 +50,12 @@ def build_chapter_quality_prompt_context(
         "external_assets": resolved_assets,
         "reference_assets": resolved_assets,
         "mcp_references": mcp_references or "",
+        "creative_mode": creative_mode or "",
+        "story_focus": story_focus or "",
+        "plot_stage": plot_stage or "",
+        "story_creation_brief": story_creation_brief or "",
+        "quality_preset": quality_preset or "",
+        "quality_notes": quality_notes or "",
         "quality_profile": profile,
     }
 
@@ -99,6 +111,12 @@ class PlotAnalyzer:
         external_assets: Optional[List[Dict[str, Any]]] = None,
         reference_assets: Optional[List[Dict[str, Any]]] = None,
         mcp_references: str = "",
+        creative_mode: Optional[str] = None,
+        story_focus: Optional[str] = None,
+        plot_stage: Optional[str] = None,
+        story_creation_brief: Optional[str] = None,
+        quality_preset: Optional[str] = None,
+        quality_notes: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         分析单章内容（带重试机制）
@@ -153,6 +171,12 @@ class PlotAnalyzer:
             external_assets=external_assets,
             reference_assets=reference_assets,
             mcp_references=mcp_references,
+            creative_mode=creative_mode,
+            story_focus=story_focus,
+            plot_stage=plot_stage,
+            story_creation_brief=story_creation_brief,
+            quality_preset=quality_preset,
+            quality_notes=quality_notes,
         )
         prompt = PromptService.format_prompt(
             template,
