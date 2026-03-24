@@ -32,6 +32,7 @@ from app.services.prompt_service import (
     PromptService,
     build_quality_preference_block,
     build_creative_mode_block,
+    build_story_creation_brief_block,
     build_volume_pacing_block,
     build_story_focus_block,
     build_narrative_blueprint_block,
@@ -58,8 +59,7 @@ from app.services.prompt_service import (
 from app.services.memory_service import memory_service
 from app.services.plot_expansion_service import PlotExpansionService
 from app.services.foreshadow_service import foreshadow_service
-from app.services.memory_service import memory_service
-from app.services.project_generation_defaults import resolve_project_generation_defaults
+from app.services.chapter_quality_context_service import resolve_story_generation_guidance
 from app.logger import get_logger
 from app.api.settings import get_user_ai_service
 from app.utils.sse_response import SSEResponse, create_sse_response, WizardProgressTracker
@@ -115,8 +115,10 @@ def _merge_outline_requirements(
     story_focus: Optional[str] = None,
     plot_stage: Optional[str] = None,
     chapter_count: Optional[int] = None,
+    story_creation_brief: Optional[str] = None,
     quality_preset: Optional[str] = None,
     quality_notes: Optional[str] = None,
+    memory_guidance: Optional[str] = None,
 ) -> str:
     """合并自由要求与结构增强要求，避免改动模板本体。"""
     parts: list[str] = []
@@ -124,6 +126,14 @@ def _merge_outline_requirements(
     base_text = str(base_requirements or "").strip()
     if base_text:
         parts.append(base_text)
+
+    story_creation_brief_block = build_story_creation_brief_block(story_creation_brief).strip()
+    if story_creation_brief_block:
+        parts.append(story_creation_brief_block)
+
+    memory_guidance_text = str(memory_guidance or "").strip()
+    if memory_guidance_text:
+        parts.append(memory_guidance_text)
 
     quality_preference_block = build_quality_preference_block(
         quality_preset,
@@ -326,6 +336,29 @@ def _merge_outline_requirements(
         parts.append(volume_pacing_block)
 
     return "\n\n".join(parts)
+
+
+def _truncate_outline_memory_block(text: str, limit: int = 800) -> str:
+    normalized = str(text or "").strip()
+    if not normalized or "暂无相关记忆" in normalized:
+        return ""
+    return normalized if len(normalized) <= limit else normalized[:limit].rstrip() + "..."
+
+
+def _build_outline_memory_guidance(memory_context: Optional[Dict[str, Any]]) -> str:
+    if not memory_context:
+        return ""
+
+    parts: list[str] = []
+    for key in ["recent_context", "character_states", "foreshadows", "plot_points"]:
+        block = _truncate_outline_memory_block(memory_context.get(key) or "")
+        if block:
+            parts.append(block)
+
+    if not parts:
+        return ""
+
+    return "【连载记忆与伏笔约束】\n" + "\n\n".join(parts)
 
 
 def _build_outline_content_from_item(chapter_data: Dict[str, Any]) -> str:
@@ -779,9 +812,11 @@ async def delete_outline(
 
 
 async def _build_outline_continue_context(
+    user_id: str,
     project: Project,
     latest_outlines: List[Outline],
     characters: List[Character],
+    current_chapter: int,
     chapter_count: int,
     plot_stage: str,
     story_direction: str,
@@ -814,11 +849,13 @@ async def _build_outline_continue_context(
         'project_info': '',
         'recent_outlines': '',
         'characters_info': '',
+        'memory_guidance': '',
         'user_input': '',
         'stats': {
             'total_outlines': len(latest_outlines),
             'recent_outlines_count': 0,
-            'characters_count': len(characters)
+            'characters_count': len(characters),
+            'memory_guidance_length': 0,
         }
     }
     
@@ -1021,7 +1058,25 @@ async def _build_outline_continue_context(
         else:
             context['characters_info'] = "【角色信息】\n暂无角色信息"
         
-        # 4. 用户输入
+        # 4. 记忆与伏笔摘要
+        try:
+            memory_query = "\n".join(
+                part for part in [story_direction or "", requirements or "", _build_chapters_brief(latest_outlines, max_recent=5)] if part
+            )
+            character_names = [char.name for char in characters[:8] if getattr(char, 'name', None)]
+            memory_context = await memory_service.build_context_for_generation(
+                user_id=user_id,
+                project_id=project.id,
+                current_chapter=current_chapter,
+                chapter_outline=memory_query or project.theme or project.title,
+                character_names=character_names,
+            )
+            context['memory_guidance'] = _build_outline_memory_guidance(memory_context)
+        except Exception as memory_error:
+            logger.warning(f"⚠️ 构建大纲续写记忆摘要失败，已回退为空: {memory_error}")
+            context['memory_guidance'] = ''
+
+        # 5. 用户输入
         user_input_parts = [
             "【用户输入】",
             f"要生成章节数：{chapter_count}章",
@@ -1038,8 +1093,10 @@ async def _build_outline_continue_context(
             len(context['project_info']),
             len(context['recent_outlines']),
             len(context['characters_info']),
+            len(context['memory_guidance']),
             len(context['user_input'])
         ])
+        context['stats']['memory_guidance_length'] = len(context['memory_guidance'])
         context['stats']['total_length'] = total_length
         logger.info(f"📊 大纲续写上下文总长度: {total_length} 字符")
         
@@ -1368,11 +1425,12 @@ async def new_outline_generator(
         # 使用提示词模板
         yield await tracker.preparing("准备AI提示词...")
         template = await PromptService.get_template("OUTLINE_CREATE", user_id_for_mcp, db)
-        generation_defaults = resolve_project_generation_defaults(
+        generation_guidance = resolve_story_generation_guidance(
             project,
             creative_mode=data.get("creative_mode"),
             story_focus=data.get("story_focus"),
             plot_stage=data.get("plot_stage"),
+            story_creation_brief=data.get("story_creation_brief"),
             quality_preset=data.get("quality_preset"),
             quality_notes=data.get("quality_notes"),
         )
@@ -1390,12 +1448,13 @@ async def new_outline_generator(
             characters_info=characters_info or "暂无角色信息",
             requirements=_merge_outline_requirements(
                 data.get("requirements"),
-                generation_defaults["creative_mode"],
-                generation_defaults["story_focus"],
-                generation_defaults["plot_stage"],
+                generation_guidance.creative_mode,
+                generation_guidance.story_focus,
+                generation_guidance.plot_stage,
                 chapter_count,
-                generation_defaults["quality_preset"],
-                generation_defaults["quality_notes"],
+                generation_guidance.story_creation_brief,
+                generation_guidance.quality_preset,
+                generation_guidance.quality_notes,
             ),
             mcp_references=""
         )
@@ -1783,9 +1842,11 @@ async def continue_outline_generator(
             
             # 🚀 使用新的简化上下文构建
             context = await _build_outline_continue_context(
+                user_id=user_id,
                 project=project,
                 latest_outlines=latest_outlines,
                 characters=characters,
+                current_chapter=current_start_chapter,
                 chapter_count=current_batch_size,
                 plot_stage=data.get("plot_stage", "development"),
                 story_direction=data.get("story_direction", "自然延续"),
@@ -1813,11 +1874,12 @@ async def continue_outline_generator(
             
             # 使用标准续写提示词模板（简化版）
             template = await PromptService.get_template("OUTLINE_CONTINUE", user_id, db)
-            generation_defaults = resolve_project_generation_defaults(
+            generation_guidance = resolve_story_generation_guidance(
                 project,
                 creative_mode=data.get("creative_mode"),
                 story_focus=data.get("story_focus"),
                 plot_stage=data.get("plot_stage"),
+                story_creation_brief=data.get("story_creation_brief"),
                 quality_preset=data.get("quality_preset"),
                 quality_notes=data.get("quality_notes"),
             )
@@ -1844,12 +1906,14 @@ async def continue_outline_generator(
                 story_direction=data.get("story_direction", "自然延续"),
                 requirements=_merge_outline_requirements(
                     data.get("requirements"),
-                    generation_defaults["creative_mode"],
-                    generation_defaults["story_focus"],
-                    generation_defaults["plot_stage"],
+                    generation_guidance.creative_mode,
+                    generation_guidance.story_focus,
+                    generation_guidance.plot_stage,
                     current_batch_size,
-                    generation_defaults["quality_preset"],
-                    generation_defaults["quality_notes"],
+                    generation_guidance.story_creation_brief,
+                    generation_guidance.quality_preset,
+                    generation_guidance.quality_notes,
+                    context.get('memory_guidance'),
                 ),
                 mcp_references=""
             )

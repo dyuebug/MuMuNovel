@@ -81,6 +81,7 @@ class OutlineGenerateRequest(BaseModel):
         None,
         description="??????advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff???",
     )
+    story_creation_brief: Optional[str] = Field(None, description="?????????", max_length=1200)
     quality_preset: Optional[QualityPresetValue] = Field(
         None,
         description="?????balanced/plot_drive/immersive/emotion_drama/clean_prose???",
@@ -99,7 +100,7 @@ class OutlineGenerateRequest(BaseModel):
     def normalize_generation_choices(cls, value):
         return normalize_optional_choice(value)
 
-    @field_validator("requirements", "story_direction", "quality_notes", mode="before")
+    @field_validator("requirements", "story_direction", "story_creation_brief", "quality_notes", mode="before")
     @classmethod
     def normalize_generation_texts(cls, value):
         return normalize_optional_text(value)
