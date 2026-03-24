@@ -1,0 +1,34 @@
+name: Alembic Revision Health
+
+on:
+  push:
+    paths:
+      - 'backend/alembic/**'
+      - 'backend/tools/check_alembic_revision_health.py'
+      - 'check-alembic-health.ps1'
+      - 'check-alembic-health.bat'
+      - '.github/workflows/alembic-revision-health.yml'
+  pull_request:
+    paths:
+      - 'backend/alembic/**'
+      - 'backend/tools/check_alembic_revision_health.py'
+      - 'check-alembic-health.ps1'
+      - 'check-alembic-health.bat'
+      - '.github/workflows/alembic-revision-health.yml'
+  workflow_dispatch:
+
+jobs:
+  alembic-revision-health:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run Alembic revision health check
+        run: python backend/tools/check_alembic_revision_health.py

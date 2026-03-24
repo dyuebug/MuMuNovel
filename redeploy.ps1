@@ -17,11 +17,97 @@ Set-Location -Path $PSScriptRoot
 
 $AppService = "mumuainovel"
 $AppContainerName = "mumuainovel-new"
+$LogFilePath = Join-Path $PSScriptRoot "redeploy.log"
+$Utf8NoBomEncoding = [System.Text.UTF8Encoding]::new($false)
+
+function Initialize-LogFile {
+    $header = @(
+        "=== Redeploy started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ===",
+        "Workspace: $PSScriptRoot",
+        "CommandLine: $([Environment]::CommandLine)",
+        ""
+    ) -join [Environment]::NewLine
+
+    [System.IO.File]::WriteAllText($LogFilePath, $header, $Utf8NoBomEncoding)
+}
+
+function Write-LogLine {
+    param([string]$Message)
+
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    [System.IO.File]::AppendAllText(
+        $LogFilePath,
+        "[$timestamp] $Message$([Environment]::NewLine)",
+        $Utf8NoBomEncoding
+    )
+}
+
+function Write-LogBlock {
+    param([string]$Message)
+
+    if ([string]::IsNullOrWhiteSpace($Message)) {
+        return
+    }
+
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $normalizedMessage = $Message -replace "`r?`n", [Environment]::NewLine
+    [System.IO.File]::AppendAllText(
+        $LogFilePath,
+        "[$timestamp] $normalizedMessage$([Environment]::NewLine)",
+        $Utf8NoBomEncoding
+    )
+}
 
 function Write-Step {
     param([string]$Message)
     Write-Host ""
     Write-Host "==> $Message" -ForegroundColor Cyan
+    Write-LogLine "==> $Message"
+}
+
+function Get-RepoRelativePath {
+    param([string]$Path)
+
+    $repoRoot = [System.IO.Path]::GetFullPath($PSScriptRoot)
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    if ($fullPath.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $fullPath.Substring($repoRoot.Length).TrimStart('\', '/')
+    }
+
+    return $fullPath
+}
+
+function Test-AlembicRevisionIds {
+    $scriptPath = Join-Path $PSScriptRoot "backend/tools/check_alembic_revision_health.py"
+    if (-not (Test-Path -Path $scriptPath)) {
+        $errorMessage = "Alembic revision health check script not found: $(Get-RepoRelativePath -Path $scriptPath)"
+        Write-LogBlock $errorMessage
+        throw $errorMessage
+    }
+
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $pythonCommand) {
+        $errorMessage = "python command not found. Please install Python 3 or add it to PATH before running redeploy."
+        Write-LogBlock $errorMessage
+        throw $errorMessage
+    }
+
+    $commandOutput = & $pythonCommand.Source $scriptPath 2>&1
+    $commandExitCode = $LASTEXITCODE
+    $outputText = ($commandOutput | Out-String).Trim()
+
+    if (-not [string]::IsNullOrWhiteSpace($outputText)) {
+        Write-Host $outputText
+        Write-LogBlock $outputText
+    }
+
+    if ($commandExitCode -ne 0) {
+        $errorMessage = "Alembic revision health check failed. Run 'python backend/tools/check_alembic_revision_health.py' for details."
+        Write-LogBlock $errorMessage
+        throw $errorMessage
+    }
+
+    Write-LogLine "Alembic revision health check passed."
 }
 
 function Get-AppPort {
@@ -92,13 +178,137 @@ function Get-LocalIndexAssetPath {
     return $match.Value
 }
 
+function Invoke-CommandLineCapture {
+    param([string]$CommandLine)
+
+    $output = & cmd.exe /d /c "$CommandLine 2>&1"
+    return [pscustomobject]@{
+        ExitCode = $LASTEXITCODE
+        Output = ($output | Out-String).Trim()
+    }
+}
+
+function Get-DockerContextSummary {
+    try {
+        $result = Invoke-CommandLineCapture -CommandLine 'docker context ls'
+        if ([string]::IsNullOrWhiteSpace($result.Output)) {
+            return "docker context ls returned no output."
+        }
+
+        return $result.Output
+    }
+    catch {
+        return "docker context ls failed: $($_.Exception.Message)"
+    }
+}
+
+function Get-DockerServiceSummary {
+    try {
+        $service = Get-Service -Name "com.docker.service" -ErrorAction SilentlyContinue
+        if (-not $service) {
+            return "com.docker.service not found."
+        }
+
+        return "com.docker.service: $($service.Status)"
+    }
+    catch {
+        return "Unable to query com.docker.service: $($_.Exception.Message)"
+    }
+}
+
+function Get-WslStatusSummary {
+    if (-not (Get-Command wsl -ErrorAction SilentlyContinue)) {
+        return "wsl command not found."
+    }
+
+    try {
+        $result = Invoke-CommandLineCapture -CommandLine 'wsl -l -v'
+        if ([string]::IsNullOrWhiteSpace($result.Output)) {
+            return "wsl -l -v returned no output."
+        }
+
+        return $result.Output
+    }
+    catch {
+        return "wsl -l -v failed: $($_.Exception.Message)"
+    }
+}
+
+function Test-DockerDaemon {
+    $dockerInfoResult = Invoke-CommandLineCapture -CommandLine 'docker info'
+    if ($dockerInfoResult.ExitCode -eq 0) {
+        Write-LogLine "Docker daemon is available."
+        return
+    }
+
+    $details = $dockerInfoResult.Output
+    $dockerContextSummary = Get-DockerContextSummary
+    $dockerServiceSummary = Get-DockerServiceSummary
+    $wslStatusSummary = Get-WslStatusSummary
+
+    if ($details -match 'dockerDesktopLinuxEngine') {
+        $errorMessage = @"
+Docker daemon is not running.
+
+请先启动 Docker Desktop，并确认：
+1. Docker Desktop 状态为 Engine running
+2. 当前使用的是 Linux containers
+3. 如仍失败，可执行 `wsl --shutdown` 后重启 Docker Desktop
+
+附加诊断：
+- $dockerServiceSummary
+
+docker context ls:
+$dockerContextSummary
+
+wsl -l -v:
+$wslStatusSummary
+
+原始错误：
+$details
+"@
+        Write-LogBlock $errorMessage
+        throw $errorMessage
+    }
+
+    $errorMessage = @"
+Unable to connect to Docker daemon.
+
+附加诊断：
+- $dockerServiceSummary
+
+docker context ls:
+$dockerContextSummary
+
+wsl -l -v:
+$wslStatusSummary
+
+原始错误：
+$details
+"@
+    Write-LogBlock $errorMessage
+    throw $errorMessage
+}
+
+Initialize-LogFile
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw "docker command not found. Please install and start Docker Desktop."
+    $errorMessage = "docker command not found. Please install and start Docker Desktop."
+    Write-LogBlock $errorMessage
+    throw $errorMessage
 }
 
 if (-not (Test-Path -Path "docker-compose.yml")) {
-    throw "docker-compose.yml not found in: $PSScriptRoot"
+    $errorMessage = "docker-compose.yml not found in: $PSScriptRoot"
+    Write-LogBlock $errorMessage
+    throw $errorMessage
 }
+
+Write-Step "Checking Alembic revision health"
+Test-AlembicRevisionIds
+
+Write-Step "Checking Docker daemon"
+Test-DockerDaemon
 
 if ([string]::IsNullOrWhiteSpace($HealthUrl)) {
     $appPort = Get-AppPort
@@ -153,6 +363,7 @@ while ((Get-Date) -lt $deadline) {
         $response = Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 5
         if ($response.StatusCode -eq 200) {
             Write-Host "Health response: $($response.Content)" -ForegroundColor Green
+            Write-LogLine "Health response: $($response.Content)"
             $isHealthy = $true
             break
         }
@@ -165,8 +376,11 @@ while ((Get-Date) -lt $deadline) {
 if (-not $isHealthy) {
     Write-Host ""
     Write-Host "Health check timed out. Printing recent logs..." -ForegroundColor Yellow
+    Write-LogLine "Health check timed out. Printing recent logs..."
     docker compose logs --tail=120 mumuainovel
-    throw "Redeploy finished but health check failed: $HealthUrl"
+    $errorMessage = "Redeploy finished but health check failed: $HealthUrl"
+    Write-LogBlock $errorMessage
+    throw $errorMessage
 }
 
 Write-Step "Verifying backend build stamp"
@@ -174,13 +388,16 @@ try {
     $backendStamp = Get-ContainerBackendStamp
     if ($backendStamp) {
         Write-Host "Backend stamp (UTC + sha12): $backendStamp" -ForegroundColor DarkCyan
+        Write-LogLine "Backend stamp (UTC + sha12): $backendStamp"
     }
     else {
         Write-Host "Backend stamp unavailable (empty response)." -ForegroundColor Yellow
+        Write-LogLine "Backend stamp unavailable (empty response)."
     }
 }
 catch {
     Write-Host "Backend stamp lookup failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-LogLine "Backend stamp lookup failed: $($_.Exception.Message)"
 }
 
 if (-not $SkipAssetVerification) {
@@ -200,21 +417,28 @@ if (-not $SkipAssetVerification) {
         if ($expectedAssetPath) {
             $expectedSource = "workspace"
             Write-Host "Container asset lookup failed, fallback to workspace static asset verification." -ForegroundColor Yellow
+            Write-LogLine "Container asset lookup failed, fallback to workspace static asset verification."
         }
         else {
             Write-Host "Container/workspace asset lookup unavailable, only verifying live asset exists." -ForegroundColor Yellow
+            Write-LogLine "Container/workspace asset lookup unavailable, only verifying live asset exists."
         }
     }
 
     Write-Host "Live asset:      $liveAssetPath" -ForegroundColor DarkCyan
+    Write-LogLine "Live asset: $liveAssetPath"
     if ($expectedAssetPath) {
         Write-Host "Expected asset ($expectedSource): $expectedAssetPath" -ForegroundColor DarkCyan
+        Write-LogLine "Expected asset ($expectedSource): $expectedAssetPath"
     }
 
     if ($expectedAssetPath -and $liveAssetPath -ne $expectedAssetPath) {
-        throw "Redeploy finished but frontend asset mismatch detected. Live=$liveAssetPath Expected[$expectedSource]=$expectedAssetPath"
+        $errorMessage = "Redeploy finished but frontend asset mismatch detected. Live=$liveAssetPath Expected[$expectedSource]=$expectedAssetPath"
+        Write-LogBlock $errorMessage
+        throw $errorMessage
     }
 }
 
 Write-Host ""
 Write-Host "Redeploy succeeded. App is reachable at: $HealthUrl" -ForegroundColor Green
+Write-LogLine "Redeploy succeeded. App is reachable at: $HealthUrl"
