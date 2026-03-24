@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -15,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.common import verify_project_access
 from app.api.settings import read_env_defaults
-from app.database import get_db, get_engine
+from app.database import get_db, get_session_factory
 from app.logger import get_logger
 from app.models.mcp_plugin import MCPPlugin
 from app.models.settings import Settings
@@ -24,6 +25,9 @@ from app.services.background_task_manager import background_task_manager
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/background-tasks", tags=["后台任务"])
+
+USER_AI_SERVICE_CONFIG_TTL_SECONDS = 30.0
+_user_ai_service_config_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
 
 
 TaskType = Literal[
@@ -99,6 +103,10 @@ def _extract_workflow_payload(
 
 
 async def _build_user_ai_service(user_id: str, db: AsyncSession) -> AIService:
+    cache_deadline, cached_config = _user_ai_service_config_cache.get(user_id, (0.0, {}))
+    if cache_deadline > time.monotonic() and cached_config:
+        return create_user_ai_service_with_mcp(db_session=db, **cached_config)
+
     result = await db.execute(select(Settings).where(Settings.user_id == user_id))
     user_settings = result.scalar_one_or_none()
 
@@ -124,20 +132,25 @@ async def _build_user_ai_service(user_id: str, db: AsyncSession) -> AIService:
         except (TypeError, json.JSONDecodeError):
             backup_urls = None
 
-    return create_user_ai_service_with_mcp(
-        api_provider=user_settings.api_provider,
-        api_key=user_settings.api_key,
-        api_base_url=user_settings.api_base_url or "",
-        model_name=user_settings.llm_model,
-        temperature=user_settings.temperature,
-        max_tokens=user_settings.max_tokens,
-        user_id=user_id,
-        db_session=db,
-        system_prompt=user_settings.system_prompt,
-        enable_mcp=enable_mcp,
-        backup_urls=backup_urls,
-        fallback_strategy=user_settings.fallback_strategy,
+    service_config = {
+        "api_provider": user_settings.api_provider,
+        "api_key": user_settings.api_key,
+        "api_base_url": user_settings.api_base_url or "",
+        "model_name": user_settings.llm_model,
+        "temperature": user_settings.temperature,
+        "max_tokens": user_settings.max_tokens,
+        "user_id": user_id,
+        "system_prompt": user_settings.system_prompt,
+        "enable_mcp": enable_mcp,
+        "backup_urls": list(backup_urls) if isinstance(backup_urls, list) else backup_urls,
+        "fallback_strategy": user_settings.fallback_strategy,
+    }
+    _user_ai_service_config_cache[user_id] = (
+        time.monotonic() + USER_AI_SERVICE_CONFIG_TTL_SECONDS,
+        service_config,
     )
+
+    return create_user_ai_service_with_mcp(db_session=db, **service_config)
 
 
 def _build_fake_request(user_id: str) -> SimpleNamespace:
@@ -152,8 +165,7 @@ async def _run_generation_task(
     project_id: str,
     payload: Dict[str, Any],
 ) -> None:
-    engine = await get_engine(user_id)
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    session_factory = await get_session_factory(user_id)
 
     async with session_factory() as db:
         user_ai_service = await _build_user_ai_service(user_id, db)

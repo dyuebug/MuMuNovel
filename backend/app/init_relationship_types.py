@@ -2,7 +2,7 @@
 import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.database import AsyncSessionLocal
+from app.database import get_session_factory
 from app.models.relationship import RelationshipType
 from app.logger import get_logger
 
@@ -44,7 +44,9 @@ async def init_relationship_types():
         {"name": "宿敌", "category": "hostile", "reverse_name": "宿敌", "intimacy_range": "low", "icon": "⚡"},
     ]
     
-    async with AsyncSessionLocal() as session:
+    session_factory = await get_session_factory("_system_init_")
+
+    async with session_factory() as session:
         try:
             # 检查是否已经有数据
             result = await session.execute(select(RelationshipType))

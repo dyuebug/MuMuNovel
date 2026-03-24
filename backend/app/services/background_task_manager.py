@@ -141,7 +141,22 @@ class BackgroundTaskManager:
         self._persistence_path = Path(
             persistence_path or "data/runtime/background_tasks.json"
         )
-        self._load_from_disk()
+        self._cleanup_interval_seconds = 30
+        self._progress_persist_interval_seconds = 1.5
+        self._last_cleanup_at: Optional[datetime] = None
+        self._last_persisted_at: Optional[datetime] = None
+        self._persistence_dirty = False
+        self._loaded = False
+
+    async def ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+
+        async with self._lock:
+            if self._loaded:
+                return
+            self._load_from_disk()
+            self._loaded = True
 
     @staticmethod
     def _touch_checkpoint(
@@ -297,10 +312,17 @@ class BackgroundTaskManager:
             record.updated_at = now
             changed = True
         if changed:
-            self._persist_locked()
+            self._persist_locked(force=True)
 
-    def _persist_locked(self) -> None:
+    def _persist_locked(self, *, force: bool = False) -> None:
         """Persist task snapshots for recovery and cross-page sync."""
+        self._persistence_dirty = True
+        now = datetime.now(timezone.utc)
+        if not force and self._last_persisted_at is not None:
+            elapsed = (now - self._last_persisted_at).total_seconds()
+            if elapsed < self._progress_persist_interval_seconds:
+                return
+
         try:
             self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
             items = [
@@ -313,13 +335,15 @@ class BackgroundTaskManager:
             ]
             payload = {
                 "version": 1,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": now.isoformat(),
                 "items": items,
             }
             self._persistence_path.write_text(
                 json.dumps(payload, ensure_ascii=False),
                 encoding="utf-8",
             )
+            self._last_persisted_at = now
+            self._persistence_dirty = False
         except Exception as exc:
             logger.warning(f"Failed to persist background tasks: {exc}")
 
@@ -335,6 +359,7 @@ class BackgroundTaskManager:
         workflow_scope: Optional[str] = None,
         checkpoint: Optional[Dict[str, Any]] = None,
     ) -> BackgroundTaskRecord:
+        await self.ensure_loaded()
         async with self._lock:
             self._cleanup_locked()
             if len(self._tasks) >= self._max_tasks:
@@ -354,12 +379,12 @@ class BackgroundTaskManager:
                 checkpoint=checkpoint,
             )
             self._tasks[task_id] = record
-            self._persist_locked()
+            self._persist_locked(force=True)
             return record
 
     async def get_task(self, task_id: str, user_id: str) -> Optional[BackgroundTaskRecord]:
+        await self.ensure_loaded()
         async with self._lock:
-            self._cleanup_locked()
             record = self._tasks.get(task_id)
             if not record or record.user_id != user_id:
                 return None
@@ -374,6 +399,7 @@ class BackgroundTaskManager:
         limit: int = 20,
     ) -> list[BackgroundTaskRecord]:
         """List tasks for user with optional project/status filters."""
+        await self.ensure_loaded()
         normalized_limit = max(1, min(int(limit), 200))
         allowed_statuses = {str(item).strip() for item in (statuses or []) if str(item).strip()}
 
@@ -384,16 +410,17 @@ class BackgroundTaskManager:
                 for record in self._tasks.values()
                 if record.user_id == user_id
             ]
-            if project_id:
-                records = [record for record in records if record.project_id == project_id]
-            if allowed_statuses:
-                records = [record for record in records if record.status in allowed_statuses]
 
-            records.sort(
-                key=lambda item: item.updated_at or item.created_at,
-                reverse=True,
-            )
-            return records[:normalized_limit]
+        if project_id:
+            records = [record for record in records if record.project_id == project_id]
+        if allowed_statuses:
+            records = [record for record in records if record.status in allowed_statuses]
+
+        records.sort(
+            key=lambda item: item.updated_at or item.created_at,
+            reverse=True,
+        )
+        return records[:normalized_limit]
 
     async def update_workflow_state(
         self,
@@ -408,6 +435,7 @@ class BackgroundTaskManager:
         progress: Optional[int] = None,
     ) -> Optional[BackgroundTaskRecord]:
         """Update workflow-oriented metadata for a task."""
+        await self.ensure_loaded()
         async with self._lock:
             record = self._tasks.get(task_id)
             if not record or record.user_id != user_id:
@@ -436,8 +464,8 @@ class BackgroundTaskManager:
 
     async def cancel_task(self, task_id: str, user_id: str) -> Optional[BackgroundTaskRecord]:
         runner_task: Optional[asyncio.Task[None]] = None
+        await self.ensure_loaded()
         async with self._lock:
-            self._cleanup_locked()
             record = self._tasks.get(task_id)
             if not record or record.user_id != user_id:
                 return None
@@ -460,7 +488,7 @@ class BackgroundTaskManager:
             )
 
             runner_task = self._runner_tasks.get(task_id)
-            self._persist_locked()
+            self._persist_locked(force=True)
 
         if runner_task and not runner_task.done():
             runner_task.cancel()
@@ -537,7 +565,7 @@ class BackgroundTaskManager:
                 message=record.message,
                 extra={"has_result": True},
             )
-            self._persist_locked()
+            self._persist_locked(force=True)
 
     async def mark_completed(self, task_id: str, message: Optional[str] = None) -> None:
         async with self._lock:
@@ -564,7 +592,7 @@ class BackgroundTaskManager:
                 if record.stage_code
                 else {"progress_phase": "complete"},
             )
-            self._persist_locked()
+            self._persist_locked(force=True)
 
     async def mark_failed(self, task_id: str, error: str, message: Optional[str] = None) -> None:
         async with self._lock:
@@ -585,7 +613,7 @@ class BackgroundTaskManager:
                 message=record.message,
                 extra={"error": error, "stage_code": record.stage_code},
             )
-            self._persist_locked()
+            self._persist_locked(force=True)
 
     async def run_job(self, task_id: str, job: Awaitable[None]) -> None:
         await self.mark_running(task_id, "后台任务执行中")
@@ -608,7 +636,7 @@ class BackgroundTaskManager:
                         if record.stage_code
                         else {"progress_phase": "complete"},
                     )
-                    self._persist_locked()
+                    self._persist_locked(force=True)
         except asyncio.CancelledError:
             async with self._lock:
                 record = self._tasks.get(task_id)
@@ -620,7 +648,7 @@ class BackgroundTaskManager:
                         record.started_at = now
                     record.completed_at = now
                     record.updated_at = now
-                    self._persist_locked()
+                    self._persist_locked(force=True)
             return
         except Exception as exc:
             logger.error(f"Background task failed: task_id={task_id}, error={exc}")
@@ -671,6 +699,12 @@ class BackgroundTaskManager:
 
     def _cleanup_locked(self, force: bool = False) -> None:
         now = datetime.now(timezone.utc)
+        if not force and self._last_cleanup_at is not None:
+            elapsed = (now - self._last_cleanup_at).total_seconds()
+            if elapsed < self._cleanup_interval_seconds:
+                return
+
+        self._last_cleanup_at = now
         ttl = timedelta(seconds=self._ttl_seconds)
         changed = False
 
@@ -696,7 +730,7 @@ class BackgroundTaskManager:
             changed = True
 
         if changed:
-            self._persist_locked()
+            self._persist_locked(force=True)
 
     @staticmethod
     def _normalize_chunk(raw_chunk: Any) -> str:

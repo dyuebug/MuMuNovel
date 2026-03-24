@@ -13,6 +13,7 @@ from app.logger import setup_logging, get_logger
 from app.middleware import RequestIDMiddleware
 from app.middleware.auth_middleware import AuthMiddleware
 from app.mcp import mcp_client, register_status_sync
+from app.services.background_task_manager import background_task_manager
 
 setup_logging(
     level=config_settings.log_level,
@@ -29,7 +30,8 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 注册MCP状态同步服务
     register_status_sync()
-    
+    await background_task_manager.ensure_loaded()
+
     logger.info("应用启动完成")
     
     yield
@@ -157,7 +159,6 @@ app.include_router(changelog.router, prefix="/api")  # 更新日志API
 app.include_router(prompt_workshop.router, prefix="/api")  # 提示词工坊API
 app.include_router(background_tasks.router, prefix="/api")  # Background task API
 app.include_router(book_import.router, prefix="/api")  # 拆书导入API
-app.include_router(background_tasks.router, prefix="/api")  # Background task API
 
 static_dir = Path(__file__).parent.parent / "static"
 if static_dir.exists():

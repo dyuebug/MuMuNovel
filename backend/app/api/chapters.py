@@ -9,8 +9,9 @@ import re
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 from asyncio import Queue, Lock
+from pydantic import BaseModel
 
-from app.database import get_db
+from app.database import get_db, get_session_factory
 from app.api.common import verify_project_access
 from app.services.chapter_context_service import (
     OneToManyContextBuilder,
@@ -81,6 +82,10 @@ task_quality_metrics_cache: dict[str, Dict[str, Any]] = {}
 task_quality_lock = Lock()
 task_workflow_state_cache: dict[str, Dict[str, Any]] = {}
 task_workflow_lock = Lock()
+
+
+class BatchAnalysisStatusRequest(BaseModel):
+    chapter_ids: List[str]
 
 
 async def get_db_write_lock(user_id: str) -> Lock:
@@ -2456,15 +2461,7 @@ async def analyze_chapter_background(
         logger.info(f"🔍 开始分析章节: {chapter_id}, 任务ID: {task_id}")
         
         # 创建独立数据库会话
-        from app.database import get_engine
-        from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
-        
-        engine = await get_engine(user_id)
-        AsyncSessionLocal = async_sessionmaker(
-            engine,
-            class_=AsyncSession,
-            expire_on_commit=False
-        )
+        AsyncSessionLocal = await get_session_factory(user_id)
         db_session = AsyncSessionLocal()
         
         # 1. 获取任务（读操作）
@@ -3807,6 +3804,75 @@ async def generate_chapter_content_background(
     }
 
 
+def _build_empty_analysis_task_status(chapter_id: str) -> Dict[str, Any]:
+    return {
+        "has_task": False,
+        "chapter_id": chapter_id,
+        "status": "none",
+        "progress": 0,
+        "error_message": None,
+        "auto_recovered": False,
+        "task_id": None,
+        "created_at": None,
+        "started_at": None,
+        "completed_at": None,
+    }
+
+
+def _recover_analysis_task_if_needed(task: AnalysisTask) -> bool:
+    from datetime import timedelta
+
+    current_time = datetime.now()
+    auto_recovered = False
+
+    if task.status == 'running':
+        is_retrying = task.error_message and '重试' in task.error_message
+        timeout_minutes = 15 if is_retrying else 10
+
+        if task.started_at and (current_time - task.started_at) > timedelta(minutes=timeout_minutes):
+            task.status = 'failed'
+            task.error_message = f'任务超时（超过{timeout_minutes}分钟未完成，已自动恢复）'
+            task.completed_at = current_time
+            task.progress = 0
+            auto_recovered = True
+            logger.warning(f"🔄 自动恢复卡住的任务: {task.id}, 章节: {task.chapter_id}")
+
+    elif task.status == 'pending':
+        if task.created_at and (current_time - task.created_at) > timedelta(minutes=3):
+            task.status = 'failed'
+            task.error_message = '任务启动超时（超过3分钟未启动，已自动恢复）'
+            task.completed_at = current_time
+            task.progress = 0
+            auto_recovered = True
+            logger.warning(f"🔄 自动恢复未启动的任务: {task.id}, 章节: {task.chapter_id}")
+
+    return auto_recovered
+
+
+def _serialize_analysis_task_status(
+    chapter_id: str,
+    task: Optional[AnalysisTask],
+    *,
+    auto_recovered: bool = False,
+) -> Dict[str, Any]:
+    if not task:
+        return _build_empty_analysis_task_status(chapter_id)
+
+    return {
+        "has_task": True,
+        "task_id": task.id,
+        "chapter_id": task.chapter_id,
+        "status": task.status,
+        "progress": task.progress,
+        "error_message": task.error_message,
+        "error_code": _classify_analysis_error_code(task.error_message),
+        "auto_recovered": auto_recovered,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "started_at": task.started_at.isoformat() if task.started_at else None,
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+    }
+
+
 @router.get("/{chapter_id}/analysis/status", summary="查询章节分析任务状态")
 async def get_analysis_task_status(
     chapter_id: str,
@@ -3832,8 +3898,6 @@ async def get_analysis_task_status(
     
     注意：当章节不存在或无权访问时返回404，当没有分析任务时返回has_task=false
     """
-    from datetime import timedelta
-    
     # 先获取章节以验证存在性和权限
     chapter_result = await db.execute(
         select(Chapter).where(Chapter.id == chapter_id)
@@ -3855,70 +3919,81 @@ async def get_analysis_task_status(
         .limit(1)
     )
     task = result.scalar_one_or_none()
-    
+
     if not task:
-        # 返回无任务状态，而不是抛出404错误
-        return {
-            "has_task": False,
-            "chapter_id": chapter_id,
-            "status": "none",
-            "progress": 0,
-            "error_message": None,
-            "auto_recovered": False,
-            "task_id": None,
-            "created_at": None,
-            "started_at": None,
-            "completed_at": None
-        }
-    
-    auto_recovered = False
-    current_time = datetime.now()
-    
-    # 对分析任务做超时兜底恢复
-    # 进入 running 且 progress=20 后，通常已进入 PlotAnalyzer 调用 AI 的分析阶段
-    # 此时网络请求或重试耗时更长，需要放宽自动恢复超时阈值
-    if task.status == 'running':
-        # 通过错误信息里是否包含“重试”来判断当前是否处于重试阶段
-        is_retrying = task.error_message and '重试' in task.error_message
-        # running 状态下的章节分析可能触发 AI 最多 3 轮重试
-        # 因此这里比任务刚启动阶段使用更宽松的超时窗口
-        timeout_minutes = 15 if is_retrying else 10
-        
-        # 如果任务在running状态超过超时时间，标记为失败
-        if task.started_at and (current_time - task.started_at) > timedelta(minutes=timeout_minutes):
-            task.status = 'failed'
-            task.error_message = f'任务超时（超过{timeout_minutes}分钟未完成，已自动恢复）'
-            task.completed_at = current_time
-            task.progress = 0
-            auto_recovered = True
-            await db.commit()
-            await db.refresh(task)
-            logger.warning(f"🔄 自动恢复卡住的任务: {task.id}, 章节: {chapter_id}")
-    
-    elif task.status == 'pending':
-        # 如果任务在pending状态超过3分钟仍未开始，标记为失败
-        if task.created_at and (current_time - task.created_at) > timedelta(minutes=3):
-            task.status = 'failed'
-            task.error_message = '任务启动超时（超过3分钟未启动，已自动恢复）'
-            task.completed_at = current_time
-            task.progress = 0
-            auto_recovered = True
-            await db.commit()
-            await db.refresh(task)
-            logger.warning(f"🔄 自动恢复未启动的任务: {task.id}, 章节: {chapter_id}")
-    
+        return _build_empty_analysis_task_status(chapter_id)
+
+    auto_recovered = _recover_analysis_task_if_needed(task)
+    if auto_recovered:
+        await db.commit()
+
+    return _serialize_analysis_task_status(chapter_id, task, auto_recovered=auto_recovered)
+
+
+@router.post("/analysis/status/batch", summary="批量查询章节分析任务状态")
+async def get_batch_analysis_task_status(
+    data: BatchAnalysisStatusRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    chapter_ids: List[str] = []
+    seen_chapter_ids: set[str] = set()
+    for raw_chapter_id in data.chapter_ids:
+        chapter_id = str(raw_chapter_id).strip()
+        if not chapter_id or chapter_id in seen_chapter_ids:
+            continue
+        seen_chapter_ids.add(chapter_id)
+        chapter_ids.append(chapter_id)
+        if len(chapter_ids) >= 200:
+            break
+
+    if not chapter_ids:
+        return {"project_id": "", "total": 0, "items": {}}
+
+    chapter_result = await db.execute(
+        select(Chapter).where(Chapter.id.in_(chapter_ids))
+    )
+    chapters = chapter_result.scalars().all()
+    chapter_map = {chapter.id: chapter for chapter in chapters}
+
+    user_id = getattr(request.state, 'user_id', None)
+    for project_id in {chapter.project_id for chapter in chapters}:
+        await verify_project_access(project_id, user_id, db)
+
+    latest_tasks_by_chapter_id: Dict[str, AnalysisTask] = {}
+    if chapter_map:
+        task_result = await db.execute(
+            select(AnalysisTask)
+            .where(AnalysisTask.chapter_id.in_(list(chapter_map.keys())))
+            .order_by(AnalysisTask.chapter_id.asc(), AnalysisTask.created_at.desc())
+        )
+        for task in task_result.scalars().all():
+            if task.chapter_id not in latest_tasks_by_chapter_id:
+                latest_tasks_by_chapter_id[task.chapter_id] = task
+
+    items: Dict[str, Dict[str, Any]] = {}
+    changed = False
+    response_project_id = next(iter({chapter.project_id for chapter in chapters}), "")
+
+    for chapter_id in chapter_ids:
+        task = latest_tasks_by_chapter_id.get(chapter_id)
+        auto_recovered = False
+        if task is not None:
+            auto_recovered = _recover_analysis_task_if_needed(task)
+            changed = changed or auto_recovered
+        items[chapter_id] = _serialize_analysis_task_status(
+            chapter_id,
+            task,
+            auto_recovered=auto_recovered,
+        )
+
+    if changed:
+        await db.commit()
+
     return {
-        "has_task": True,
-        "task_id": task.id,
-        "chapter_id": task.chapter_id,
-        "status": task.status,
-        "progress": task.progress,
-        "error_message": task.error_message,
-        "error_code": _classify_analysis_error_code(task.error_message),
-        "auto_recovered": auto_recovered,
-        "created_at": task.created_at.isoformat() if task.created_at else None,
-        "started_at": task.started_at.isoformat() if task.started_at else None,
-        "completed_at": task.completed_at.isoformat() if task.completed_at else None
+        "project_id": response_project_id,
+        "total": len(items),
+        "items": items,
     }
 
 
