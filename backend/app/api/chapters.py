@@ -1510,6 +1510,96 @@ async def _resolve_generation_story_repair_state_for_chapter(
     }
 
 
+def _resolve_quality_gate_execution_plan(
+    quality_metrics: Optional[Dict[str, Any]],
+    *,
+    retry_count: int,
+    max_retries: int,
+    current_story_repair_payload: Optional[StoryRepairPayload],
+    scope: str,
+) -> Dict[str, Any]:
+    quality_gate = _resolve_quality_gate_from_metrics(quality_metrics, scope=scope)
+    if not quality_gate:
+        return {
+            "action": "continue",
+            "message": None,
+            "repair_payload": current_story_repair_payload,
+            "active_story_repair_payload": None,
+            "quality_gate": None,
+        }
+
+    derived_payload = build_story_repair_payload_from_metrics(quality_metrics, scope=scope) if quality_metrics else None
+    derived_guidance = _resolve_story_repair_guidance_from_metrics(quality_metrics, scope=scope) if quality_metrics else None
+    repair_payload = merge_story_repair_payload(current_story_repair_payload, derived_payload)
+    source = _resolve_story_repair_runtime_source(
+        explicit_payload=current_story_repair_payload,
+        derived_payload=derived_payload,
+        derived_source="current_chapter_quality",
+    )
+    active_story_repair_payload = _build_story_repair_runtime_snapshot(
+        repair_payload,
+        scope=scope,
+        source=source,
+        guidance=derived_guidance,
+        quality_gate=quality_gate,
+    )
+
+    decision = str(quality_gate.get("decision") or "").strip()
+    label = str(quality_gate.get("label") or "Quality gate").strip()
+    summary = str(quality_gate.get("summary") or "").strip()
+    reason = str(quality_gate.get("reason") or "").strip()
+    weakest_metric_label = str(quality_gate.get("weakest_metric_label") or "").strip()
+    weakest_metric_value = quality_gate.get("weakest_metric_value")
+
+    weakest_metric_hint = f"Weakest metric: {weakest_metric_label}" if weakest_metric_label else ""
+    if weakest_metric_hint and isinstance(weakest_metric_value, (int, float)):
+        weakest_metric_hint = f"{weakest_metric_hint} ({weakest_metric_value:.1f})"
+
+    if decision == "manual_review":
+        message = f"{label}: {summary or 'Manual review is required for this chapter.'}"
+        if reason:
+            message = f"{message} Reason: {reason}"
+        return {
+            "action": "manual_review",
+            "message": message,
+            "repair_payload": repair_payload,
+            "active_story_repair_payload": active_story_repair_payload,
+            "quality_gate": quality_gate,
+        }
+
+    if decision == "auto_repair":
+        if retry_count < max_retries:
+            message = f"{label}: {summary or 'Repairable weaknesses detected; retrying with stronger repair guidance.'}"
+            if weakest_metric_hint:
+                message = f"{message} {weakest_metric_hint}"
+            return {
+                "action": "retry",
+                "message": message,
+                "repair_payload": repair_payload,
+                "active_story_repair_payload": active_story_repair_payload,
+                "quality_gate": quality_gate,
+            }
+
+        message = f"{label}: {summary or 'Repairable weaknesses remain, but retry budget is exhausted.'}"
+        if weakest_metric_hint:
+            message = f"{message} {weakest_metric_hint}"
+        return {
+            "action": "manual_review",
+            "message": message,
+            "repair_payload": repair_payload,
+            "active_story_repair_payload": active_story_repair_payload,
+            "quality_gate": quality_gate,
+        }
+
+    return {
+        "action": "continue",
+        "message": summary or None,
+        "repair_payload": repair_payload,
+        "active_story_repair_payload": active_story_repair_payload,
+        "quality_gate": quality_gate,
+    }
+
+
 async def _resolve_generation_story_repair_payload_for_batch(
     db_session: AsyncSession,
     *,
@@ -3705,35 +3795,59 @@ async def generate_chapter_content_stream(
                 # 更新项目字数
                 project.current_words = project.current_words - old_word_count + new_word_count
 
-                # 计算剧情质量指标并记录日志
+                # ?????????????
                 quality_metrics = compute_story_quality_metrics(
                     content=full_content,
                     chapter_outline=chapter_context.chapter_outline,
                     world_rules=project.world_rules
                 )
                 logger.info(
-                    f"📊 剧情评分 - overall={quality_metrics['overall_score']}, "
+                    f"?? ???? - overall={quality_metrics['overall_score']}, "
                     f"conflict={quality_metrics['conflict_chain_hit_rate']}, "
                     f"rule={quality_metrics['rule_grounding_hit_rate']}"
                 )
-                
-                # 记录生成历史
+                quality_gate_plan = _resolve_quality_gate_execution_plan(
+                    quality_metrics if isinstance(quality_metrics, dict) else None,
+                    retry_count=0,
+                    max_retries=1,
+                    current_story_repair_payload=story_repair_state.get("payload"),
+                    scope="chapter",
+                )
+                quality_gate_action = str(quality_gate_plan.get("action") or "continue")
+                quality_gate_requires_followup = quality_gate_action in {"retry", "manual_review"}
+                quality_gate_message = quality_gate_plan.get("message")
+                quality_gate_snapshot = quality_gate_plan.get("quality_gate")
+                if isinstance(quality_metrics, dict) and isinstance(quality_gate_snapshot, dict):
+                    quality_metrics = {
+                        **quality_metrics,
+                        "quality_gate": quality_gate_snapshot,
+                    }
+                if quality_gate_requires_followup:
+                    quality_gate_decision = None
+                    if isinstance(quality_gate_snapshot, dict):
+                        quality_gate_decision = quality_gate_snapshot.get("decision")
+                    logger.info(
+                        f"??? ????????????: chapter_id={chapter_id}, "
+                        f"action={quality_gate_action}, decision={quality_gate_decision}"
+                    )
+
+                # ??????
                 history = GenerationHistory(
                     project_id=current_chapter.project_id,
                     chapter_id=current_chapter.id,
-                    prompt=f"创作章节: 第{current_chapter.chapter_number}章 {current_chapter.title}",
+                    prompt=f"????: ?{current_chapter.chapter_number}? {current_chapter.title}",
                     generated_content=_build_generation_history_payload(full_content, quality_metrics),
                     model="default"
                 )
                 db_session.add(history)
-                
+
                 await db_session.commit()
                 db_committed = True
                 await db_session.refresh(current_chapter)
-                
-                logger.info(f"成功创作章节 {chapter_id}，共 {new_word_count} 字")
-                
-                # 🔮 章节生成后自动标记计划在本章埋入的伏笔
+
+                logger.info(f"?????? {chapter_id}?? {new_word_count} ?")
+
+                # ?? ???????????????????
                 try:
                     plant_result = await foreshadow_service.auto_plant_pending_foreshadows(
                         db=db_session,
@@ -3743,13 +3857,20 @@ async def generate_chapter_content_stream(
                         chapter_content=full_content
                     )
                     if plant_result.get('planted_count', 0) > 0:
-                        logger.info(f"🔮 自动标记伏笔已埋入: {plant_result['planted_count']}个")
+                        logger.info(f"?? ?????????: {plant_result['planted_count']}?")
                 except Exception as plant_error:
-                    logger.warning(f"⚠️ 自动标记伏笔埋入失败: {str(plant_error)}")
-                
+                    logger.warning(f"?? ??????????: {str(plant_error)}")
+
                 task_id = None
-                if enable_analysis:
-                    # 创建分析任务
+                should_schedule_analysis = enable_analysis or quality_gate_requires_followup
+                if should_schedule_analysis:
+                    analysis_reason = "manual_analysis" if enable_analysis else "quality_gate_followup"
+                    if quality_gate_action == "retry":
+                        analysis_reason = "quality_gate_auto_repair"
+                    elif quality_gate_action == "manual_review":
+                        analysis_reason = "quality_gate_manual_review"
+
+                    # ??????
                     analysis_task = AnalysisTask(
                         chapter_id=chapter_id,
                         user_id=current_user_id,
@@ -3762,12 +3883,12 @@ async def generate_chapter_content_stream(
                     await db_session.refresh(analysis_task)
 
                     task_id = analysis_task.id
-                    logger.info(f"📋 已创建分析任务: {task_id}")
+                    logger.info(f"?? ???????: {task_id} (reason={analysis_reason})")
 
-                    # 短暂延迟确保SQLite WAL完成写入
+                    # ??????SQLite WAL????
                     await asyncio.sleep(0.05)
 
-                    # 直接启动后台分析（并发执行）
+                    # ??????????????
                     background_tasks.add_task(
                         analyze_chapter_background,
                         chapter_id=chapter_id,
@@ -3779,10 +3900,8 @@ async def generate_chapter_content_stream(
                         generation_guidance=generation_guidance,
                     )
                 else:
-                    logger.info("⏭️ 已关闭自动分析，跳过分析任务创建")
-                
-                yield await tracker.saving("章节保存完成", 0.8)
-                
+                    logger.info("?? ???????????????????????????")
+
                 # === 完成阶段 ===
                 yield await tracker.complete("创作完成！")
 
@@ -3794,20 +3913,27 @@ async def generate_chapter_content_stream(
                     **quality_metrics
                 })
                 
-                # 发送结果数据
+                # ??????
                 yield await tracker.result({
                     'word_count': new_word_count,
                     'analysis_task_id': task_id,
-                    'quality_metrics': quality_metrics
+                    'quality_metrics': quality_metrics,
+                    'quality_gate_action': quality_gate_action,
+                    'quality_gate_message': quality_gate_message,
                 })
                 
-                # 发送分析开始事件（使用自定义事件）
+                # ?????????????????
                 if task_id:
+                    analysis_started_message = '???????'
+                    if quality_gate_action == 'retry':
+                        analysis_started_message = '????????????????????????'
+                    elif quality_gate_action == 'manual_review':
+                        analysis_started_message = '????????????????????????'
                     yield await SSEResponse.send_event(
                         event='analysis_started',
                         data={
                             'task_id': task_id,
-                            'message': '章节分析已开始'
+                            'message': analysis_started_message
                         }
                     )
                 
@@ -5477,7 +5603,7 @@ async def execute_batch_generation_in_order(
 
                     # 生成章节内容（复用现有流式生成逻辑的核心部分），传递model参数
                     # 并获取生成后的摘要（如果生成函数支持返回）
-                    generated_summary = await generate_single_chapter_for_batch(
+                    generation_result = await generate_single_chapter_for_batch(
                         db_session=db_session,
                         chapter=chapter,
                         user_id=user_id,
@@ -5501,12 +5627,124 @@ async def execute_batch_generation_in_order(
                         stream_task_id=batch_id,
                         stream_chunks=stream_chunks
                     )
-                    
-                    # 更新上一章摘要，供下一章使用
+                    generated_summary = str(generation_result.get("summary_preview") or "").strip()
+                    generation_quality_metrics = generation_result.get("quality_metrics")
+                    quality_gate_plan = _resolve_quality_gate_execution_plan(
+                        generation_quality_metrics if isinstance(generation_quality_metrics, dict) else None,
+                        retry_count=retry_count,
+                        max_retries=task.max_retries,
+                        current_story_repair_payload=active_story_repair_payload,
+                        scope="batch",
+                    )
+
+                    if quality_gate_plan["action"] == "retry":
+                        active_story_repair_payload = quality_gate_plan.get("repair_payload") or active_story_repair_payload
+                        active_story_repair_state = {
+                            "payload": active_story_repair_payload,
+                            "active_story_repair_payload": quality_gate_plan.get("active_story_repair_payload"),
+                        }
+                        await _set_task_active_story_repair_payload(
+                            batch_id,
+                            quality_gate_plan.get("active_story_repair_payload"),
+                        )
+
+                        next_retry_count = retry_count + 1
+                        async with write_lock:
+                            task.current_retry_count = next_retry_count
+                            await db_session.commit()
+
+                        retry_message = quality_gate_plan.get("message") or f"Chapter {chapter.chapter_number} triggered a quality-gate retry."
+                        await publish_task_stream_event(batch_id, {
+                            "type": "quality_gate_retry",
+                            "chapter_id": chapter_id,
+                            "chapter_number": chapter.chapter_number,
+                            "message": retry_message,
+                            "progress": 74,
+                            "status": "running",
+                            "phase": "generating",
+                            "current_retry_count": next_retry_count,
+                            "max_retries": task.max_retries,
+                            "quality_gate": quality_gate_plan.get("quality_gate"),
+                            "active_story_repair_payload": quality_gate_plan.get("active_story_repair_payload"),
+                        })
+
+                        wait_time = min(2 ** next_retry_count, 10)
+                        logger.info(
+                            f"Quality-gate retry for chapter {chapter.chapter_number}; waiting {wait_time}s before retry #{next_retry_count}"
+                        )
+                        await asyncio.sleep(wait_time)
+                        retry_count = next_retry_count
+                        continue
+
+                    if quality_gate_plan["action"] == "manual_review":
+                        active_story_repair_payload = quality_gate_plan.get("repair_payload") or active_story_repair_payload
+                        active_story_repair_state = {
+                            "payload": active_story_repair_payload,
+                            "active_story_repair_payload": quality_gate_plan.get("active_story_repair_payload"),
+                        }
+                        await _set_task_active_story_repair_payload(
+                            batch_id,
+                            quality_gate_plan.get("active_story_repair_payload"),
+                        )
+
+                        quality_gate = quality_gate_plan.get("quality_gate") or {}
+                        failed_metric_labels = [
+                            item.get("label")
+                            for item in (quality_gate.get("failed_metrics") or [])
+                            if isinstance(item, dict) and isinstance(item.get("label"), str) and item.get("label")
+                        ]
+                        error_message = quality_gate_plan.get("message") or f"Chapter {chapter.chapter_number} is blocked by the quality gate and requires manual review."
+                        failed_info = {
+                            'chapter_id': chapter_id,
+                            'chapter_number': chapter.chapter_number,
+                            'title': chapter.title,
+                            'error': error_message,
+                            'retry_count': retry_count,
+                            'phase': 'quality_blocked',
+                            'quality_gate_status': quality_gate.get('status'),
+                            'quality_gate_decision': quality_gate.get('decision'),
+                            'quality_gate_label': quality_gate.get('label'),
+                            'quality_gate_failed_metrics': failed_metric_labels,
+                        }
+
+                        async with write_lock:
+                            if task.failed_chapters is None:
+                                task.failed_chapters = []
+                            task.failed_chapters.append(failed_info)
+                            task.status = 'failed'
+                            task.error_message = error_message[:500]
+                            task.completed_at = datetime.now()
+                            task.current_retry_count = 0
+                            await db_session.commit()
+
+                        logger.error(f"Quality gate blocked chapter {chapter.chapter_number}: {error_message}")
+                        await publish_task_stream_event(batch_id, {
+                            "type": "quality_gate_blocked",
+                            "chapter_id": chapter_id,
+                            "chapter_number": chapter.chapter_number,
+                            "message": error_message,
+                            "progress": 90,
+                            "status": "failed",
+                            "phase": "quality_blocked",
+                            "current_retry_count": retry_count,
+                            "max_retries": task.max_retries,
+                            "quality_gate": quality_gate,
+                            "active_story_repair_payload": quality_gate_plan.get("active_story_repair_payload"),
+                        })
+                        await publish_task_stream_event(batch_id, {
+                            "type": "error",
+                            "error": task.error_message or error_message,
+                            "code": 422,
+                            "phase": "quality_blocked",
+                        })
+                        await publish_task_stream_event(batch_id, {"type": "done"})
+                        return
+
+                    # Update the previous-chapter summary only after the gate allows continuation
                     if generated_summary:
-                        last_generated_summary = f"第{chapter.chapter_number}章《{chapter.title}》：{generated_summary}"
-                        logger.info(f"📝 已更新上一章摘要上下文: {last_generated_summary[:50]}...")
-                    
+                        last_generated_summary = f"Chapter {chapter.chapter_number} ({chapter.title}): {generated_summary}"
+                        logger.info(f"Updated previous chapter summary context: {last_generated_summary[:50]}...")
+
                     active_story_repair_state = await _resolve_generation_story_repair_state_for_batch(
                         db_session,
                         project_id=task.project_id,
@@ -5520,8 +5758,8 @@ async def execute_batch_generation_in_order(
                         batch_id,
                         active_story_repair_state.get("active_story_repair_payload"),
                     )
-                    
-                    logger.info(f"✅ 章节生成完成: 第{chapter.chapter_number}章")
+
+                    logger.info(f"Chapter generation completed: #{chapter.chapter_number}")
                     await publish_task_stream_event(batch_id, {
                         "type": "progress",
                         "message": f"章节生成完成：第{chapter.chapter_number}章",
@@ -5772,7 +6010,7 @@ async def generate_single_chapter_for_batch(
     active_story_repair_snapshot: Optional[Dict[str, Any]] = None,
     stream_task_id: Optional[str] = None,
     stream_chunks: bool = False
-) -> Optional[str]:
+) -> Dict[str, Any]:
     """
     为批量生成执行单个章节的生成（非流式）
     复用现有生成逻辑的核心部分
@@ -6170,7 +6408,10 @@ async def generate_single_chapter_for_batch(
     except Exception as plant_error:
         logger.warning(f"⚠️ 批量生成 - 自动标记伏笔埋入失败: {str(plant_error)}")
         
-    return summary_preview
+    return {
+        "summary_preview": summary_preview,
+        "quality_metrics": quality_metrics,
+    }
 
 
 
@@ -6316,17 +6557,28 @@ async def regenerate_chapter_stream(
                 prefer_project_default_style=not bool(regenerate_request.style_id),
                 log_prefix="章节重生成",
             )
+            story_repair_state = await _resolve_generation_story_repair_state_for_chapter(
+                temp_db,
+                chapter=chapter,
+                story_repair_summary=getattr(regenerate_request, 'story_repair_summary', None),
+                story_repair_targets=getattr(regenerate_request, 'story_repair_targets', None),
+                story_preserve_strengths=getattr(regenerate_request, 'story_preserve_strengths', None),
+            )
+            story_repair_payload = story_repair_state.get("payload")
+            effective_regenerate_request = regenerate_request.model_copy(
+                update=_story_repair_payload_to_prompt_kwargs(story_repair_payload),
+                deep=True,
+            )
             regeneration_story_packet = build_story_generation_packet(
                 project,
-                source=regenerate_request,
+                source=effective_regenerate_request,
                 source_label="chapter-regenerate-request",
             )
             generation_guidance = regeneration_story_packet.guidance
             prompt_quality_kwargs = regeneration_story_packet.build_prompt_quality_kwargs(
                 quality_profile,
-                story_repair_summary=getattr(regenerate_request, 'story_repair_summary', None),
-                story_repair_targets=getattr(regenerate_request, 'story_repair_targets', None),
-                story_preserve_strengths=getattr(regenerate_request, 'story_preserve_strengths', None),
+                active_story_repair_payload=story_repair_state.get("active_story_repair_payload"),
+                **_story_repair_payload_to_prompt_kwargs(story_repair_payload),
             )
             style_content = quality_profile.get("style_content") or ""
             style_id = quality_profile.get("resolved_style_id")
@@ -6418,7 +6670,7 @@ async def regenerate_chapter_stream(
                 async for event in regenerator.regenerate_with_feedback(
                     chapter=chapter,
                     analysis=analysis,
-                    regenerate_request=regenerate_request,
+                    regenerate_request=effective_regenerate_request,
                     project_context=project_context,
                     style_content=style_content,
                     user_id=user_id,

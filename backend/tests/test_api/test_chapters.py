@@ -416,6 +416,126 @@ async def test_should_build_context_with_expected_builder_during_generate_stream
         assert saved_chapter.content == "段落甲段落乙"
 
 
+@pytest.mark.parametrize(
+    ("quality_metrics", "expected_action", "expected_decision"),
+    [
+        (
+            {
+                "overall_score": 80.5,
+                "conflict_chain_hit_rate": 78.0,
+                "rule_grounding_hit_rate": 82.0,
+                "outline_alignment_rate": 84.0,
+                "dialogue_naturalness_rate": 79.0,
+                "opening_hook_rate": 83.0,
+                "payoff_chain_rate": 77.0,
+                "cliffhanger_rate": 81.0,
+                "pacing_score": 7.8,
+            },
+            "retry",
+            "auto_repair",
+        ),
+        (
+            {
+                "overall_score": 66.0,
+                "conflict_chain_hit_rate": 48.0,
+                "rule_grounding_hit_rate": 52.0,
+                "outline_alignment_rate": 50.0,
+                "dialogue_naturalness_rate": 75.0,
+                "opening_hook_rate": 70.0,
+                "payoff_chain_rate": 46.0,
+                "cliffhanger_rate": 68.0,
+                "pacing_score": 6.1,
+            },
+            "manual_review",
+            "manual_review",
+        ),
+    ],
+)
+async def test_should_schedule_followup_analysis_when_generate_stream_hits_quality_gate(
+    chapters_client,
+    chapters_session_factory,
+    fake_ai_service,
+    mock_user,
+    monkeypatch,
+    quality_metrics,
+    expected_action,
+    expected_decision,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="??????",
+    )
+
+    calls: list[dict[str, Any]] = []
+
+    class FakeContext:
+        chapter_outline = "????"
+        continuation_point = None
+        previous_chapter_summary = ""
+        chapter_characters = "??A"
+        chapter_careers = "??A"
+        foreshadow_reminders = ""
+        relevant_memories = ""
+        recent_chapters_context = ""
+        context_stats = {}
+
+    class FakeOneToManyBuilder:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def build(self, **kwargs):
+            return FakeContext()
+
+    async def fake_get_template(*args, **kwargs):
+        return "??"
+
+    def fake_format_prompt(template, **kwargs):
+        return "mock-generate-prompt"
+
+    def fake_compute_story_quality_metrics(**kwargs):
+        return dict(quality_metrics)
+
+    async def fake_analyze_chapter_background(**kwargs):
+        calls.append(kwargs)
+        return True
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(chapters_api, "OneToManyContextBuilder", FakeOneToManyBuilder)
+    monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
+    monkeypatch.setattr(chapters_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
+    monkeypatch.setattr(chapters_api, "analyze_chapter_background", fake_analyze_chapter_background)
+    monkeypatch.setattr(chapters_api.asyncio, "sleep", fake_sleep)
+
+    fake_ai_service.calls.clear()
+    fake_ai_service.chunks = ["???", "???"]
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/generate-stream",
+        json={"target_word_count": 500, "enable_analysis": False},
+    )
+    assert response.status_code == 200
+
+    events = parse_sse_data(response.text)
+    result_event = next(event for event in events if event.get("type") == "result")
+    result_data = result_event["data"]
+
+    assert result_data["analysis_task_id"]
+    assert result_data["quality_gate_action"] == expected_action
+    assert result_data["quality_metrics"]["quality_gate"]["decision"] == expected_decision
+    assert result_data["quality_metrics"]["quality_gate"]["status"]
+
+    assert calls
+    assert calls[0]["chapter_id"] == chapter.id
+    assert calls[0]["project_id"] == project.id
+    assert calls[0]["task_id"] == result_data["analysis_task_id"]
+
+
 async def test_should_stream_partial_regenerate_with_mock_ai_response(
     chapters_client,
     chapters_session_factory,
@@ -1891,6 +2011,83 @@ async def test_should_apply_project_story_packet_defaults_in_regeneration_prompt
     assert prompt_kwargs["quality_notes"] == "Reduce exposition."
 
 
+async def test_should_merge_quality_gate_snapshot_into_regeneration_prompt_context(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="quality-gate-regeneration",
+        content="legacy content",
+        status="completed",
+    )
+    quality_metrics = {
+        "overall_score": 74.5,
+        "conflict_chain_hit_rate": 63.0,
+        "rule_grounding_hit_rate": 79.0,
+        "outline_alignment_rate": 59.0,
+        "dialogue_naturalness_rate": 81.0,
+        "opening_hook_rate": 77.0,
+        "payoff_chain_rate": 54.0,
+        "cliffhanger_rate": 83.0,
+        "pacing_score": 7.1,
+    }
+
+    async with chapters_session_factory() as session:
+        session.add(
+            GenerationHistory(
+                project_id=project.id,
+                chapter_id=chapter.id,
+                prompt="chapter_generation",
+                generated_content=chapters_api._build_generation_history_payload("generated body", quality_metrics),
+                model="chapter_generator_v1",
+                created_at=datetime.utcnow() - timedelta(minutes=2),
+            )
+        )
+        await session.commit()
+
+    class FakeRegenerator:
+        def __init__(self, ai_service):
+            self.ai_service = ai_service
+
+        async def regenerate_with_feedback(self, **kwargs):
+            captured.update(kwargs)
+            yield {"type": "progress", "progress": 30, "message": "preparing"}
+            yield {"type": "chunk", "content": "new content"}
+
+        def calculate_content_diff(self, original_content, new_content):
+            return {"similarity": 8.0, "difference": 92.0}
+
+    monkeypatch.setattr(chapters_api, "ChapterRegenerator", FakeRegenerator)
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/regenerate-stream",
+        json={
+            "modification_source": "custom",
+            "custom_instructions": "tighten the chapter",
+            "target_word_count": 500,
+            "focus_areas": [],
+            "auto_apply": False,
+        },
+    )
+    assert response.status_code == 200
+
+    events = parse_sse_data(response.text)
+    assert any(event.get("type") == "result" for event in events)
+
+    prompt_kwargs = captured["project_context"]["prompt_quality_kwargs"]
+    assert prompt_kwargs["story_repair_diagnostic_block"]
+    assert prompt_kwargs["story_repair_target_block"]
+    assert captured["regenerate_request"].story_repair_summary
+    assert captured["regenerate_request"].story_repair_targets
+    assert captured["regenerate_request"].story_preserve_strengths
+
 
 async def test_should_sanitize_regenerated_content_before_persisting_task(
     chapters_client,
@@ -2441,6 +2638,82 @@ async def test_should_trigger_manual_analysis_task_creation(
     assert calls[0]["chapter_id"] == chapter.id
     assert calls[0]["project_id"] == project.id
     assert calls[0]["task_id"] == body["task_id"]
+
+
+def test_should_retry_when_quality_gate_is_repairable_and_retry_budget_available():
+    current_payload = chapters_api.normalize_story_repair_payload(
+        "Manual summary",
+        ["Keep scene pressure tangible"],
+        ["Preserve character voice"],
+    )
+    metrics = {
+        "overall_score": 80.5,
+        "conflict_chain_hit_rate": 78.0,
+        "rule_grounding_hit_rate": 82.0,
+        "outline_alignment_rate": 84.0,
+        "dialogue_naturalness_rate": 79.0,
+        "opening_hook_rate": 83.0,
+        "payoff_chain_rate": 77.0,
+        "cliffhanger_rate": 81.0,
+        "pacing_score": 7.8,
+    }
+
+    plan = chapters_api._resolve_quality_gate_execution_plan(
+        metrics,
+        retry_count=0,
+        max_retries=2,
+        current_story_repair_payload=current_payload,
+        scope="batch",
+    )
+
+    assert plan["action"] == "retry"
+    assert plan["quality_gate"]["decision"] == "auto_repair"
+    assert plan["repair_payload"] is not None
+    assert plan["active_story_repair_payload"]["quality_gate_decision"] == "auto_repair"
+
+
+def test_should_switch_to_manual_review_when_quality_gate_blocks_or_retry_budget_is_exhausted():
+    blocked_metrics = {
+        "overall_score": 66.0,
+        "conflict_chain_hit_rate": 48.0,
+        "rule_grounding_hit_rate": 52.0,
+        "outline_alignment_rate": 50.0,
+        "dialogue_naturalness_rate": 75.0,
+        "opening_hook_rate": 70.0,
+        "payoff_chain_rate": 46.0,
+        "cliffhanger_rate": 68.0,
+        "pacing_score": 6.1,
+    }
+    blocked_plan = chapters_api._resolve_quality_gate_execution_plan(
+        blocked_metrics,
+        retry_count=0,
+        max_retries=2,
+        current_story_repair_payload=None,
+        scope="batch",
+    )
+
+    exhausted_plan = chapters_api._resolve_quality_gate_execution_plan(
+        {
+            "overall_score": 79.0,
+            "conflict_chain_hit_rate": 77.0,
+            "rule_grounding_hit_rate": 81.0,
+            "outline_alignment_rate": 80.0,
+            "dialogue_naturalness_rate": 79.0,
+            "opening_hook_rate": 82.0,
+            "payoff_chain_rate": 78.0,
+            "cliffhanger_rate": 80.0,
+            "pacing_score": 7.5,
+        },
+        retry_count=1,
+        max_retries=1,
+        current_story_repair_payload=None,
+        scope="batch",
+    )
+
+    assert blocked_plan["action"] == "manual_review"
+    assert blocked_plan["quality_gate"]["decision"] == "manual_review"
+    assert exhausted_plan["action"] == "manual_review"
+    assert exhausted_plan["quality_gate"]["decision"] == "auto_repair"
 
 
 async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneration_compatibility(
