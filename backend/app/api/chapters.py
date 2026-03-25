@@ -3832,16 +3832,15 @@ async def generate_chapter_content_stream(
 
                 candidate_word_count = len(full_content)
 
-                # ??????
-                history = GenerationHistory(
-                    project_id=current_chapter.project_id,
-                    chapter_id=current_chapter.id,
-                    prompt=f"????: ?{current_chapter.chapter_number}? {current_chapter.title}",
-                    generated_content=_build_generation_history_payload(full_content, quality_metrics),
-                    model="default"
-                )
-                db_session.add(history)
-
+                if content_applied:
+                    history = GenerationHistory(
+                        project_id=current_chapter.project_id,
+                        chapter_id=current_chapter.id,
+                        prompt=f"????: ?{current_chapter.chapter_number}? {current_chapter.title}",
+                        generated_content=_build_generation_history_payload(full_content, quality_metrics),
+                        model="default"
+                    )
+                    db_session.add(history)
                 await db_session.commit()
                 db_committed = True
                 await db_session.refresh(current_chapter)
@@ -5652,6 +5651,8 @@ async def execute_batch_generation_in_order(
                         stream_chunks=stream_chunks
                     )
                     generated_summary = str(generation_result.get("summary_preview") or "").strip()
+                    generated_content = str(generation_result.get("full_content") or "")
+                    generated_word_count = int(generation_result.get("word_count") or len(generated_content))
                     generation_quality_metrics = generation_result.get("quality_metrics")
                     quality_gate_plan = _resolve_quality_gate_execution_plan(
                         generation_quality_metrics if isinstance(generation_quality_metrics, dict) else None,
@@ -5660,8 +5661,32 @@ async def execute_batch_generation_in_order(
                         current_story_repair_payload=active_story_repair_payload,
                         scope="batch",
                     )
+                    quality_gate_snapshot = quality_gate_plan.get("quality_gate")
+                    if isinstance(generation_quality_metrics, dict) and isinstance(quality_gate_snapshot, dict):
+                        generation_quality_metrics = {
+                            **generation_quality_metrics,
+                            "quality_gate": quality_gate_snapshot,
+                        }
+                    elif isinstance(quality_gate_snapshot, dict):
+                        generation_quality_metrics = {
+                            "quality_gate": quality_gate_snapshot,
+                        }
 
-                    if quality_gate_plan["action"] == "retry":
+                    if isinstance(generation_quality_metrics, dict):
+                        metrics_event = {
+                            "type": "quality_metrics",
+                            "chapter_id": chapter.id,
+                            "chapter_number": chapter.chapter_number,
+                            **generation_quality_metrics,
+                        }
+                        await publish_task_stream_event(batch_id, metrics_event)
+                        await _record_task_quality_metrics(batch_id, metrics_event)
+
+                    quality_gate_action = quality_gate_plan["action"]
+                    quality_gate_requires_followup = quality_gate_action in {"retry", "manual_review"}
+                    should_run_analysis = task.enable_analysis or quality_gate_requires_followup
+
+                    if quality_gate_action == "retry":
                         active_story_repair_payload = quality_gate_plan.get("repair_payload") or active_story_repair_payload
                         active_story_repair_state = {
                             "payload": active_story_repair_payload,
@@ -5688,19 +5713,10 @@ async def execute_batch_generation_in_order(
                             "phase": "generating",
                             "current_retry_count": next_retry_count,
                             "max_retries": task.max_retries,
-                            "quality_gate": quality_gate_plan.get("quality_gate"),
+                            "quality_gate": quality_gate_snapshot,
                             "active_story_repair_payload": quality_gate_plan.get("active_story_repair_payload"),
                         })
-
-                        wait_time = min(2 ** next_retry_count, 10)
-                        logger.info(
-                            f"Quality-gate retry for chapter {chapter.chapter_number}; waiting {wait_time}s before retry #{next_retry_count}"
-                        )
-                        await asyncio.sleep(wait_time)
-                        retry_count = next_retry_count
-                        continue
-
-                    if quality_gate_plan["action"] == "manual_review":
+                    elif quality_gate_action == "manual_review":
                         active_story_repair_payload = quality_gate_plan.get("repair_payload") or active_story_repair_payload
                         active_story_repair_state = {
                             "payload": active_story_repair_payload,
@@ -5711,7 +5727,119 @@ async def execute_batch_generation_in_order(
                             quality_gate_plan.get("active_story_repair_payload"),
                         )
 
-                        quality_gate = quality_gate_plan.get("quality_gate") or {}
+                        error_message = quality_gate_plan.get("message") or f"Chapter {chapter.chapter_number} is blocked by the quality gate and requires manual review."
+                        await publish_task_stream_event(batch_id, {
+                            "type": "quality_gate_blocked",
+                            "chapter_id": chapter_id,
+                            "chapter_number": chapter.chapter_number,
+                            "message": error_message,
+                            "progress": 90,
+                            "status": "running",
+                            "phase": "quality_blocked",
+                            "current_retry_count": retry_count,
+                            "max_retries": task.max_retries,
+                            "quality_gate": quality_gate_snapshot,
+                            "active_story_repair_payload": quality_gate_plan.get("active_story_repair_payload"),
+                        })
+                    else:
+                        await _apply_generated_batch_chapter_candidate(
+                            db_session=db_session,
+                            chapter=chapter,
+                            project=project,
+                            write_lock=write_lock,
+                            full_content=generated_content,
+                            word_count=generated_word_count,
+                            quality_metrics=generation_quality_metrics,
+                        )
+
+                        if generated_summary:
+                            last_generated_summary = f"Chapter {chapter.chapter_number} ({chapter.title}): {generated_summary}"
+                            logger.info(f"Updated previous chapter summary context: {last_generated_summary[:50]}...")
+
+                        active_story_repair_state = await _resolve_generation_story_repair_state_for_batch(
+                            db_session,
+                            project_id=task.project_id,
+                            before_chapter_number=chapter.chapter_number + 1,
+                            story_repair_summary=story_repair_summary,
+                            story_repair_targets=story_repair_targets,
+                            story_preserve_strengths=story_preserve_strengths,
+                        )
+                        active_story_repair_payload = active_story_repair_state.get("payload")
+                        await _set_task_active_story_repair_payload(
+                            batch_id,
+                            active_story_repair_state.get("active_story_repair_payload"),
+                        )
+
+                        logger.info(f"Chapter generation completed: #{chapter.chapter_number}")
+                        await publish_task_stream_event(batch_id, {
+                            "type": "progress",
+                            "message": f"????????{chapter.chapter_number}?",
+                            "progress": 80 if not should_run_analysis else 70,
+                            "status": "running",
+                            "phase": "saving" if not should_run_analysis else "generating",
+                            "current_retry_count": retry_count,
+                            "max_retries": task.max_retries,
+                        })
+
+                    if should_run_analysis:
+                        analysis_success, analysis_error = await _run_batch_chapter_analysis(
+                            db_session=db_session,
+                            write_lock=write_lock,
+                            batch_id=batch_id,
+                            chapter=chapter,
+                            user_id=user_id,
+                            project_id=task.project_id,
+                            retry_count=retry_count,
+                            max_retries=task.max_retries,
+                            ai_service=ai_service,
+                            quality_profile=analysis_quality_profile,
+                            generation_guidance=analysis_generation_guidance,
+                            chapter_content_override=generated_content,
+                            chapter_word_count_override=generated_word_count,
+                        )
+                        if not analysis_success:
+                            failed_info = {
+                                'chapter_id': chapter_id,
+                                'chapter_number': chapter.chapter_number,
+                                'title': chapter.title,
+                                'error': f"????(??3?): {analysis_error}",
+                                'retry_count': 3,
+                            }
+
+                            async with write_lock:
+                                task.failed_chapters = [
+                                    *(task.failed_chapters or []),
+                                    failed_info,
+                                ]
+
+                                task.status = 'failed'
+                                task.error_message = f"?{chapter.chapter_number}?????(??3?): {analysis_error}"[:500]
+                                task.completed_at = datetime.now()
+                                task.current_retry_count = 0
+                                await db_session.commit()
+
+                            logger.error(f"?? ??????: ?{chapter.chapter_number}?????")
+                            await publish_task_stream_event(batch_id, {
+                                "type": "error",
+                                "error": task.error_message or "??????",
+                                "code": 500,
+                                "phase": "failed",
+                            })
+                            await publish_task_stream_event(batch_id, {"type": "done"})
+                            return
+
+                    if quality_gate_action == "retry":
+                        next_retry_count = retry_count + 1
+                        wait_time = min(2 ** next_retry_count, 10)
+                        logger.info(
+                            f"Quality-gate retry for chapter {chapter.chapter_number}; waiting {wait_time}s before retry #{next_retry_count}"
+                        )
+                        await asyncio.sleep(wait_time)
+                        retry_count = next_retry_count
+                        continue
+
+                    if quality_gate_action == "manual_review":
+                        quality_gate = quality_gate_snapshot or {}
                         failed_metric_labels = [
                             item.get("label")
                             for item in (quality_gate.get("failed_metrics") or [])
@@ -5732,9 +5860,10 @@ async def execute_batch_generation_in_order(
                         }
 
                         async with write_lock:
-                            if task.failed_chapters is None:
-                                task.failed_chapters = []
-                            task.failed_chapters.append(failed_info)
+                            task.failed_chapters = [
+                                *(task.failed_chapters or []),
+                                failed_info,
+                            ]
                             task.status = 'failed'
                             task.error_message = error_message[:500]
                             task.completed_at = datetime.now()
@@ -5742,19 +5871,6 @@ async def execute_batch_generation_in_order(
                             await db_session.commit()
 
                         logger.error(f"Quality gate blocked chapter {chapter.chapter_number}: {error_message}")
-                        await publish_task_stream_event(batch_id, {
-                            "type": "quality_gate_blocked",
-                            "chapter_id": chapter_id,
-                            "chapter_number": chapter.chapter_number,
-                            "message": error_message,
-                            "progress": 90,
-                            "status": "failed",
-                            "phase": "quality_blocked",
-                            "current_retry_count": retry_count,
-                            "max_retries": task.max_retries,
-                            "quality_gate": quality_gate,
-                            "active_story_repair_payload": quality_gate_plan.get("active_story_repair_payload"),
-                        })
                         await publish_task_stream_event(batch_id, {
                             "type": "error",
                             "error": task.error_message or error_message,
@@ -5764,144 +5880,13 @@ async def execute_batch_generation_in_order(
                         await publish_task_stream_event(batch_id, {"type": "done"})
                         return
 
-                    # Update the previous-chapter summary only after the gate allows continuation
-                    if generated_summary:
-                        last_generated_summary = f"Chapter {chapter.chapter_number} ({chapter.title}): {generated_summary}"
-                        logger.info(f"Updated previous chapter summary context: {last_generated_summary[:50]}...")
-
-                    active_story_repair_state = await _resolve_generation_story_repair_state_for_batch(
-                        db_session,
-                        project_id=task.project_id,
-                        before_chapter_number=chapter.chapter_number + 1,
-                        story_repair_summary=story_repair_summary,
-                        story_repair_targets=story_repair_targets,
-                        story_preserve_strengths=story_preserve_strengths,
-                    )
-                    active_story_repair_payload = active_story_repair_state.get("payload")
-                    await _set_task_active_story_repair_payload(
-                        batch_id,
-                        active_story_repair_state.get("active_story_repair_payload"),
-                    )
-
-                    logger.info(f"Chapter generation completed: #{chapter.chapter_number}")
-                    await publish_task_stream_event(batch_id, {
-                        "type": "progress",
-                        "message": f"章节生成完成：第{chapter.chapter_number}章",
-                        "progress": 80 if not task.enable_analysis else 70,
-                        "status": "running",
-                        "phase": "saving" if not task.enable_analysis else "generating",
-                        "current_retry_count": retry_count,
-                        "max_retries": task.max_retries,
-                    })
-                    
-                    # 如果启用同步分析
-                    if task.enable_analysis:
-                        logger.info(f"🔍 开始同步分析章节: 第{chapter.chapter_number}章")
-                        await publish_task_stream_event(batch_id, {
-                            "type": "analysis_started",
-                            "chapter_id": chapter_id,
-                            "chapter_number": chapter.chapter_number,
-                            "message": "章节分析开始",
-                            "progress": 85,
-                            "phase": "parsing",
-                            "current_retry_count": retry_count,
-                            "max_retries": task.max_retries,
-                        })
-                        
-                        # 分析重试机制（最多3次）
-                        analysis_retry_count = 0
-                        analysis_success = False
-                        last_analysis_error = None
-                        
-                        while analysis_retry_count < 3 and not analysis_success:
-                            try:
-                                if analysis_retry_count > 0:
-                                    logger.info(f"🔄 重试分析章节 (第{analysis_retry_count}次): 第{chapter.chapter_number}章")
-                                
-                                async with write_lock:
-                                    analysis_task = AnalysisTask(
-                                        chapter_id=chapter_id,
-                                        user_id=user_id,
-                                        project_id=task.project_id,
-                                        status='pending',
-                                        progress=0
-                                    )
-                                    db_session.add(analysis_task)
-                                    await db_session.commit()
-                                    await db_session.refresh(analysis_task)
-                                
-                                # 同步执行分析，直接使用返回值判断成功/失败
-                                analysis_result = await analyze_chapter_background(
-                                    chapter_id=chapter_id,
-                                    user_id=user_id,
-                                    project_id=task.project_id,
-                                    task_id=analysis_task.id,
-                                    ai_service=ai_service,
-                                    quality_profile=analysis_quality_profile,
-                                    generation_guidance=analysis_generation_guidance,
-                                )
-                                
-                                # 直接根据返回值判断
-                                if not analysis_result:
-                                    last_analysis_error = "分析函数返回失败"
-                                    logger.error(f"❌ 章节分析失败: 第{chapter.chapter_number}章")
-                                    raise Exception(f"章节分析失败")
-                                
-                                # 分析成功
-                                analysis_success = True
-                                logger.info(f"✅ 章节分析成功: 第{chapter.chapter_number}章")
-                                
-                            except Exception as analysis_error:
-                                last_analysis_error = str(analysis_error)
-                                analysis_retry_count += 1
-                                
-                                if analysis_retry_count < 3:
-                                    # 还有重试机会，等待后重试
-                                    wait_time = min(2 ** analysis_retry_count, 10)
-                                    logger.warning(f"⏳ 分析失败，等待 {wait_time} 秒后重试...")
-                                    await asyncio.sleep(wait_time)
-                                else:
-                                    # 达到最大重试次数，必须终止整个批量任务
-                                    logger.error(f"❌ 章节分析失败，已达最大重试次数(3次): 第{chapter.chapter_number}章")
-                                    
-                                    # 记录失败信息
-                                    failed_info = {
-                                        'chapter_id': chapter_id,
-                                        'chapter_number': chapter.chapter_number,
-                                        'title': chapter.title,
-                                        'error': f"分析失败(重试3次): {last_analysis_error}",
-                                        'retry_count': 3
-                                    }
-                                    
-                                    async with write_lock:
-                                        if task.failed_chapters is None:
-                                            task.failed_chapters = []
-                                        task.failed_chapters.append(failed_info)
-                                        
-                                        # 标记任务失败并终止
-                                        task.status = 'failed'
-                                        task.error_message = f"第{chapter.chapter_number}章分析失败(重试3次): {last_analysis_error}"[:500]
-                                        task.completed_at = datetime.now()
-                                        task.current_retry_count = 0
-                                        await db_session.commit()
-                                    
-                                    logger.error(f"🛑 批量生成中断: 第{chapter.chapter_number}章分析失败")
-                                    await publish_task_stream_event(batch_id, {
-                                        "type": "error",
-                                        "error": task.error_message or "章节分析失败",
-                                        "code": 500,
-                                        "phase": "failed",
-                                    })
-                                    await publish_task_stream_event(batch_id, {"type": "done"})
-                                    return  # 立即终止整个批量生成任务
-                    
-                    # 标记成功
+                    # ????
                     chapter_success = True
-                    
-                    # 更新完成数
+
+                    # ?????
                     async with write_lock:
                         task.completed_chapters += 1
-                        task.current_retry_count = 0  # 重置重试计数
+                        task.current_retry_count = 0  # ??????
                         await db_session.commit()
 
                     logger.info(f"✅ 进度: {task.completed_chapters}/{task.total_chapters}")
@@ -5941,11 +5926,12 @@ async def execute_batch_generation_in_order(
                         }
                         
                         async with write_lock:
-                            if task.failed_chapters is None:
-                                task.failed_chapters = []
-                            task.failed_chapters.append(failed_info)
+                            task.failed_chapters = [
+                                *(task.failed_chapters or []),
+                                failed_info,
+                            ]
                             
-                            # 标记任务失败并终止
+                            # ?????????
                             task.status = 'failed'
                             task.error_message = f"第{chapter.chapter_number}章生成失败(重试{retry_count-1}次): {last_error}"[:500]
                             task.completed_at = datetime.now()
@@ -6040,7 +6026,7 @@ async def generate_single_chapter_for_batch(
     复用现有生成逻辑的核心部分
     
     Returns:
-        生成章节的摘要（前200字）
+        候选章节文本、字数、摘要预览与质量指标，不直接落库
     """
     # 获取项目信息
     project_result = await db_session.execute(
@@ -6384,40 +6370,61 @@ async def generate_single_chapter_for_batch(
             world_rules=project.world_rules
         )
         
-        # 记录生成历史
-        history = GenerationHistory(
-            project_id=chapter.project_id,
-            chapter_id=chapter.id,
-            prompt=f"批量生成: 第{chapter.chapter_number}章 {chapter.title}",
-            generated_content=_build_generation_history_payload(full_content, quality_metrics),
-            model="default"
-        )
-        db_session.add(history)
-        
-        await db_session.commit()
-        await db_session.refresh(chapter)
-    
-    logger.info(f"✅ 单章节生成完成: 第{chapter.chapter_number}章，共 {new_word_count} 字")
+    candidate_word_count = len(full_content)
+    quality_metrics = compute_story_quality_metrics(
+        content=full_content,
+        chapter_outline=chapter_context.chapter_outline,
+        world_rules=project.world_rules
+    )
+
+    logger.info(f"✅ 单章节生成候选稿完成: 第{chapter.chapter_number}章，共 {candidate_word_count} 字")
     logger.info(
         f"📊 批量章节剧情评分 - overall={quality_metrics['overall_score']}, "
         f"conflict={quality_metrics['conflict_chain_hit_rate']}, "
         f"rule={quality_metrics['rule_grounding_hit_rate']}"
     )
 
-    if stream_task_id:
-        metrics_event = {
-            "type": "quality_metrics",
-            "chapter_id": chapter.id,
-            "chapter_number": chapter.chapter_number,
-            **quality_metrics
-        }
-        await publish_task_stream_event(stream_task_id, metrics_event)
-        await _record_task_quality_metrics(stream_task_id, metrics_event)
-    
-    # 生成简短摘要返回
     summary_preview = full_content[:300].replace('\n', ' ') if full_content else ""
-    
-    # 🔮 批量生成后自动标记计划在本章埋入的伏笔
+    return {
+        "full_content": full_content,
+        "word_count": candidate_word_count,
+        "summary_preview": summary_preview,
+        "quality_metrics": quality_metrics,
+    }
+async def _apply_generated_batch_chapter_candidate(
+    db_session: AsyncSession,
+    chapter: Chapter,
+    project: Project,
+    write_lock: Lock,
+    full_content: str,
+    word_count: int,
+    quality_metrics: Optional[Dict[str, Any]] = None,
+) -> None:
+    """将批量生成候选稿写回章节，仅在质量门禁放行后调用。"""
+    async with write_lock:
+        old_word_count = chapter.word_count or 0
+        chapter.content = full_content
+        chapter.word_count = word_count
+        chapter.status = "completed"
+        project.current_words = (project.current_words or 0) - old_word_count + word_count
+
+        history = GenerationHistory(
+            project_id=chapter.project_id,
+            chapter_id=chapter.id,
+            prompt=f"批量生成: 第{chapter.chapter_number}章 {chapter.title}",
+            generated_content=_build_generation_history_payload(
+                full_content,
+                quality_metrics if isinstance(quality_metrics, dict) else None,
+            ),
+            model="default"
+        )
+        db_session.add(history)
+
+        await db_session.commit()
+        await db_session.refresh(chapter)
+
+    logger.info(f"✅ 单章节生成完成: 第{chapter.chapter_number}章，共 {word_count} 字")
+
     try:
         async with write_lock:
             plant_result = await foreshadow_service.auto_plant_pending_foreshadows(
@@ -6431,14 +6438,82 @@ async def generate_single_chapter_for_batch(
             logger.info(f"🔮 批量生成 - 自动标记伏笔已埋入: {plant_result['planted_count']}个")
     except Exception as plant_error:
         logger.warning(f"⚠️ 批量生成 - 自动标记伏笔埋入失败: {str(plant_error)}")
-        
-    return {
-        "summary_preview": summary_preview,
-        "quality_metrics": quality_metrics,
-    }
 
 
+async def _run_batch_chapter_analysis(
+    db_session: AsyncSession,
+    write_lock: Lock,
+    batch_id: str,
+    chapter: Chapter,
+    user_id: str,
+    project_id: str,
+    retry_count: int,
+    max_retries: int,
+    ai_service: AIService,
+    quality_profile: Optional[Dict[str, Any]] = None,
+    generation_guidance: Optional[StoryGenerationGuidance] = None,
+    chapter_content_override: Optional[str] = None,
+    chapter_word_count_override: Optional[int] = None,
+) -> Tuple[bool, Optional[str]]:
+    """执行批量章节分析，支持质量门禁阻断时分析候选稿。"""
+    logger.info(f"🔍 开始同步分析章节: 第{chapter.chapter_number}章")
+    await publish_task_stream_event(batch_id, {
+        "type": "analysis_started",
+        "chapter_id": chapter.id,
+        "chapter_number": chapter.chapter_number,
+        "message": "章节分析开始",
+        "progress": 85,
+        "phase": "parsing",
+        "current_retry_count": retry_count,
+        "max_retries": max_retries,
+    })
 
+    analysis_retry_count = 0
+    last_analysis_error = None
+
+    while analysis_retry_count < 3:
+        try:
+            if analysis_retry_count > 0:
+                logger.info(f"🔄 重试分析章节 (第{analysis_retry_count}次): 第{chapter.chapter_number}章")
+
+            async with write_lock:
+                analysis_task = AnalysisTask(
+                    chapter_id=chapter.id,
+                    user_id=user_id,
+                    project_id=project_id,
+                    status='pending',
+                    progress=0
+                )
+                db_session.add(analysis_task)
+                await db_session.commit()
+                await db_session.refresh(analysis_task)
+
+            analysis_result = await analyze_chapter_background(
+                chapter_id=chapter.id,
+                user_id=user_id,
+                project_id=project_id,
+                task_id=analysis_task.id,
+                ai_service=ai_service,
+                quality_profile=quality_profile,
+                generation_guidance=generation_guidance,
+                chapter_content_override=chapter_content_override,
+                chapter_word_count_override=chapter_word_count_override,
+            )
+            if not analysis_result:
+                raise Exception("分析函数返回失败")
+
+            logger.info(f"✅ 章节分析成功: 第{chapter.chapter_number}章")
+            return True, None
+        except Exception as analysis_error:
+            last_analysis_error = str(analysis_error)
+            analysis_retry_count += 1
+
+            if analysis_retry_count < 3:
+                wait_time = min(2 ** analysis_retry_count, 10)
+                logger.warning(f"⏳ 分析失败，等待 {wait_time} 秒后重试...")
+                await asyncio.sleep(wait_time)
+
+    return False, last_analysis_error or "分析函数返回失败"
 
 # ==================== 章节重新生成相关API ====================
 

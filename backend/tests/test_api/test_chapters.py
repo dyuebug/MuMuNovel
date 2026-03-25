@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.api import chapters as chapters_api
+import app.database as app_database
 from app.database import Base, get_db as app_get_db
 from app.models.analysis_task import AnalysisTask
 from app.models.batch_generation_task import BatchGenerationTask
@@ -23,6 +24,8 @@ from app.models.project import Project
 from app.models.regeneration_task import RegenerationTask
 
 pytestmark = pytest.mark.asyncio
+
+REAL_EXECUTE_BATCH_GENERATION_IN_ORDER = chapters_api.execute_batch_generation_in_order
 
 
 class FakeAIService:
@@ -561,6 +564,256 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
         assert saved_project is not None
         assert saved_project.current_words == 0
 
+        history_result = await session.execute(
+            select(GenerationHistory).where(GenerationHistory.chapter_id == chapter.id)
+        )
+        assert history_result.scalars().all() == []
+
+
+
+
+async def test_execute_batch_generation_should_apply_candidate_only_after_quality_gate_passes(
+    chapters_session_factory,
+    fake_ai_service,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="batch-pass",
+    )
+
+    async with chapters_session_factory() as session:
+        engine = session.bind
+        task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=1,
+            chapter_count=1,
+            chapter_ids=[chapter.id],
+            status="pending",
+            total_chapters=1,
+            completed_chapters=0,
+            target_word_count=600,
+            enable_analysis=False,
+            max_retries=1,
+        )
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+        batch_id = task.id
+
+    async def fake_get_engine(_user_id):
+        return engine
+
+    async def fake_check_prerequisites(*args, **kwargs):
+        return True, None, None
+
+    async def fake_generate_single_chapter_for_batch(**kwargs):
+        content = "batch-candidate-pass"
+        return {
+            "full_content": content,
+            "word_count": len(content),
+            "summary_preview": content,
+            "quality_metrics": {
+                "overall_score": 88.0,
+                "conflict_chain_hit_rate": 82.0,
+                "rule_grounding_hit_rate": 84.0,
+                "outline_alignment_rate": 86.0,
+                "dialogue_naturalness_rate": 80.0,
+                "opening_hook_rate": 87.0,
+                "payoff_chain_rate": 81.0,
+                "cliffhanger_rate": 85.0,
+                "pacing_score": 8.0,
+            },
+        }
+
+    async def fake_resolve_generation_story_repair_state_for_batch(*args, **kwargs):
+        return {"payload": None, "active_story_repair_payload": None}
+
+    async def fake_set_task_active_story_repair_payload(*args, **kwargs):
+        return None
+
+    async def fake_publish_task_stream_event(*args, **kwargs):
+        return None
+
+    async def fake_record_task_quality_metrics(*args, **kwargs):
+        return None
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(app_database, "get_engine", fake_get_engine)
+    monkeypatch.setattr(chapters_api, "check_prerequisites", fake_check_prerequisites)
+    monkeypatch.setattr(chapters_api, "generate_single_chapter_for_batch", fake_generate_single_chapter_for_batch)
+    monkeypatch.setattr(
+        chapters_api,
+        "_resolve_generation_story_repair_state_for_batch",
+        fake_resolve_generation_story_repair_state_for_batch,
+    )
+    monkeypatch.setattr(chapters_api, "_set_task_active_story_repair_payload", fake_set_task_active_story_repair_payload)
+    monkeypatch.setattr(chapters_api, "publish_task_stream_event", fake_publish_task_stream_event)
+    monkeypatch.setattr(chapters_api, "_record_task_quality_metrics", fake_record_task_quality_metrics)
+    monkeypatch.setattr(chapters_api.asyncio, "sleep", fake_sleep)
+
+    await REAL_EXECUTE_BATCH_GENERATION_IN_ORDER(
+        batch_id=batch_id,
+        user_id=mock_user.user_id,
+        ai_service=fake_ai_service,
+    )
+
+    async with chapters_session_factory() as session:
+        saved_chapter = await session.get(Chapter, chapter.id)
+        saved_project = await session.get(Project, project.id)
+        saved_task = await session.get(BatchGenerationTask, batch_id)
+        history_result = await session.execute(
+            select(GenerationHistory).where(GenerationHistory.chapter_id == chapter.id)
+        )
+        histories = history_result.scalars().all()
+
+        assert saved_chapter is not None
+        assert saved_chapter.content == "batch-candidate-pass"
+        assert saved_chapter.status == "completed"
+        assert saved_chapter.word_count == len("batch-candidate-pass")
+        assert saved_project is not None
+        assert saved_project.current_words == len("batch-candidate-pass")
+        assert saved_task is not None
+        assert saved_task.status == "completed"
+        assert saved_task.completed_chapters == 1
+        assert len(histories) == 1
+        assert "batch-candidate-pass" in histories[0].generated_content
+
+
+async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and_history_when_quality_gate_blocks(
+    chapters_session_factory,
+    fake_ai_service,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="batch-blocked",
+    )
+
+    async with chapters_session_factory() as session:
+        engine = session.bind
+        task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=1,
+            chapter_count=1,
+            chapter_ids=[chapter.id],
+            status="pending",
+            total_chapters=1,
+            completed_chapters=0,
+            target_word_count=600,
+            enable_analysis=False,
+            max_retries=1,
+        )
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+        batch_id = task.id
+
+    analysis_calls: list[dict[str, Any]] = []
+
+    async def fake_get_engine(_user_id):
+        return engine
+
+    async def fake_check_prerequisites(*args, **kwargs):
+        return True, None, None
+
+    async def fake_generate_single_chapter_for_batch(**kwargs):
+        content = "batch-candidate-blocked"
+        return {
+            "full_content": content,
+            "word_count": len(content),
+            "summary_preview": content,
+            "quality_metrics": {
+                "overall_score": 66.0,
+                "conflict_chain_hit_rate": 48.0,
+                "rule_grounding_hit_rate": 52.0,
+                "outline_alignment_rate": 50.0,
+                "dialogue_naturalness_rate": 75.0,
+                "opening_hook_rate": 70.0,
+                "payoff_chain_rate": 46.0,
+                "cliffhanger_rate": 68.0,
+                "pacing_score": 6.1,
+            },
+        }
+
+    async def fake_resolve_generation_story_repair_state_for_batch(*args, **kwargs):
+        return {"payload": None, "active_story_repair_payload": None}
+
+    async def fake_set_task_active_story_repair_payload(*args, **kwargs):
+        return None
+
+    async def fake_publish_task_stream_event(*args, **kwargs):
+        return None
+
+    async def fake_record_task_quality_metrics(*args, **kwargs):
+        return None
+
+    async def fake_analyze_chapter_background(**kwargs):
+        analysis_calls.append(kwargs)
+        return True
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(app_database, "get_engine", fake_get_engine)
+    monkeypatch.setattr(chapters_api, "check_prerequisites", fake_check_prerequisites)
+    monkeypatch.setattr(chapters_api, "generate_single_chapter_for_batch", fake_generate_single_chapter_for_batch)
+    monkeypatch.setattr(
+        chapters_api,
+        "_resolve_generation_story_repair_state_for_batch",
+        fake_resolve_generation_story_repair_state_for_batch,
+    )
+    monkeypatch.setattr(chapters_api, "_set_task_active_story_repair_payload", fake_set_task_active_story_repair_payload)
+    monkeypatch.setattr(chapters_api, "publish_task_stream_event", fake_publish_task_stream_event)
+    monkeypatch.setattr(chapters_api, "_record_task_quality_metrics", fake_record_task_quality_metrics)
+    monkeypatch.setattr(chapters_api, "analyze_chapter_background", fake_analyze_chapter_background)
+    monkeypatch.setattr(chapters_api.asyncio, "sleep", fake_sleep)
+
+    await REAL_EXECUTE_BATCH_GENERATION_IN_ORDER(
+        batch_id=batch_id,
+        user_id=mock_user.user_id,
+        ai_service=fake_ai_service,
+    )
+
+    async with chapters_session_factory() as session:
+        saved_chapter = await session.get(Chapter, chapter.id)
+        saved_project = await session.get(Project, project.id)
+        saved_task = await session.get(BatchGenerationTask, batch_id)
+        history_result = await session.execute(
+            select(GenerationHistory).where(GenerationHistory.chapter_id == chapter.id)
+        )
+        histories = history_result.scalars().all()
+
+        assert saved_chapter is not None
+        assert saved_chapter.content is None
+        assert saved_chapter.status == "draft"
+        assert saved_chapter.word_count == 0
+        assert saved_project is not None
+        assert saved_project.current_words == 0
+        assert saved_task is not None
+        assert saved_task.status == "failed"
+        assert saved_task.completed_chapters == 0
+        assert saved_task.failed_chapters
+        assert saved_task.failed_chapters[0]["phase"] == "quality_blocked"
+        assert histories == []
+
+    assert analysis_calls
+    assert analysis_calls[0]["chapter_id"] == chapter.id
+    assert analysis_calls[0]["project_id"] == project.id
+    assert analysis_calls[0]["chapter_content_override"] == "batch-candidate-blocked"
+    assert analysis_calls[0]["chapter_word_count_override"] == len("batch-candidate-blocked")
 
 async def test_should_stream_partial_regenerate_with_mock_ai_response(
     chapters_client,
