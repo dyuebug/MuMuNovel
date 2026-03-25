@@ -71,9 +71,35 @@ function Invoke-Git {
         [switch]$AllowNonZeroExit
     )
 
-    $output = & git @Arguments 2>&1
-    $exitCode = $LASTEXITCODE
-    $textOutput = ($output | Out-String).TrimEnd()
+    $escapedArguments = $Arguments | ForEach-Object {
+        if ($_ -match '[\s"]') {
+            '"' + ($_.Replace('"', '\"')) + '"'
+        }
+        else {
+            $_
+        }
+    }
+
+    $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $processInfo.FileName = 'git'
+    $processInfo.Arguments = [string]::Join(' ', $escapedArguments)
+    $processInfo.RedirectStandardOutput = $true
+    $processInfo.RedirectStandardError = $true
+    $processInfo.UseShellExecute = $false
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $processInfo
+    $null = $process.Start()
+
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+
+    $exitCode = $process.ExitCode
+    $script:LastGitExitCode = $exitCode
+    $combinedOutput = @($stdout.TrimEnd(), $stderr.TrimEnd()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $textOutput = ($combinedOutput -join [Environment]::NewLine).TrimEnd()
+
     Write-LogBlock ("git " + ($Arguments -join ' '))
     Write-LogBlock $textOutput
 
@@ -81,7 +107,11 @@ function Invoke-Git {
         throw "git $($Arguments -join ' ') failed with exit code $exitCode."
     }
 
-    return @($output)
+    if ([string]::IsNullOrWhiteSpace($textOutput)) {
+        return @()
+    }
+
+    return @($textOutput -split "`r?`n")
 }
 
 function Get-FirstGitLine {
@@ -215,7 +245,7 @@ function Get-LocalTagCommit {
     param([string]$TagName)
 
     Invoke-Git -Arguments @('rev-parse', '-q', '--verify', "refs/tags/$TagName") -AllowNonZeroExit | Out-Null
-    if ($LASTEXITCODE -ne 0) {
+    if ($script:LastGitExitCode -ne 0) {
         return $null
     }
 
@@ -229,7 +259,7 @@ function Get-RemoteTagCommit {
     )
 
     $lines = Invoke-Git -Arguments @('ls-remote', '--tags', $RemoteName, "refs/tags/$TagName", "refs/tags/$TagName^{}") -AllowNonZeroExit
-    if ($LASTEXITCODE -ne 0) {
+    if ($script:LastGitExitCode -ne 0) {
         throw "Unable to read remote tag $TagName from $RemoteName"
     }
 
