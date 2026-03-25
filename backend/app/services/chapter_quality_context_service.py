@@ -30,6 +30,7 @@ from app.services.prompt_service import (
     build_story_career_state_ledger_block,
     build_story_pacing_budget_block,
     build_story_quality_trend_block,
+    build_volume_pacing_block,
     build_story_repair_target_block,
 )
 from app.services.story_repair_payload_service import StoryRepairPayload, resolve_story_repair_prompt_kwargs
@@ -327,6 +328,12 @@ def build_story_runtime_requirement_text(
             resolved_chapter_count,
             plot_stage=active_guidance.plot_stage,
             scene=scene,
+        )
+    )
+    _append_block(
+        build_volume_pacing_block(
+            resolved_chapter_count,
+            plot_stage=active_guidance.plot_stage,
         )
     )
     _append_block(build_story_character_focus_anchor_block(blueprint.character_focus_names, scene=scene))
@@ -1462,6 +1469,10 @@ def build_prompt_quality_kwargs(
             target_word_count=resolved_target_word_count,
             plot_stage=active_guidance.plot_stage,
             scene=scene,
+        ),
+        "story_volume_pacing_block": build_volume_pacing_block(
+            resolved_chapter_count,
+            plot_stage=active_guidance.plot_stage,
         ),
         "quality_metrics_summary": resolved_quality_metrics_summary,
         "story_quality_trend_block": build_story_quality_trend_block(

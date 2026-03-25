@@ -50,6 +50,18 @@ def test_should_inject_narrative_blueprint_block_into_chapter_quality_contract()
     assert "【结构蓝图】" in blocks["quality_contract_block"]
 
 
+def test_should_inject_story_volume_pacing_block_into_chapter_quality_contract():
+    blocks = PromptService._build_quality_runtime_blocks(
+        "CHAPTER_GENERATION_ONE_TO_ONE",
+        chapter_count=12,
+        plot_stage="development",
+    )
+
+    assert "发展阶段" in blocks["story_volume_pacing_block"]
+    assert "当前用户指定重点阶段" in blocks["story_volume_pacing_block"]
+    assert "【卷级节奏】" in blocks["quality_contract_block"]
+
+
 def test_should_inject_story_quality_trend_block_into_chapter_quality_contract():
     blocks = PromptService._build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",

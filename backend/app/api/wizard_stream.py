@@ -27,7 +27,6 @@ from app.services.prompt_service import (
     build_story_character_focus_anchor_block,
     build_story_foreshadow_payoff_plan_block,
     build_story_pacing_budget_block,
-    build_volume_pacing_block,
     build_story_focus_block,
     prompt_service,
 )
@@ -121,13 +120,6 @@ def _merge_wizard_outline_requirements(
     ).strip()
     if narrative_blueprint_block:
         parts.append(narrative_blueprint_block)
-
-    volume_pacing_block = build_volume_pacing_block(
-        blueprint.chapter_count if blueprint is not None and blueprint.chapter_count else outline_count,
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if volume_pacing_block:
-        parts.append(volume_pacing_block)
 
     parts.append(
         f"【开局大纲约束】这是小说的开局部分，请生成{outline_count}个大纲节点，重点关注：\n"

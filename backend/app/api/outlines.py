@@ -37,7 +37,6 @@ from app.services.prompt_service import (
     build_story_character_focus_anchor_block,
     build_story_foreshadow_payoff_plan_block,
     build_story_pacing_budget_block,
-    build_volume_pacing_block,
     build_story_focus_block,
     build_narrative_blueprint_block,
     build_story_objective_card_block,
@@ -356,13 +355,6 @@ def _merge_outline_requirements(
     ).strip()
     if story_character_arc_card_block:
         parts.append(story_character_arc_card_block)
-
-    volume_pacing_block = build_volume_pacing_block(
-        chapter_count,
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if volume_pacing_block:
-        parts.append(volume_pacing_block)
 
     return "\n\n".join(parts)
 
