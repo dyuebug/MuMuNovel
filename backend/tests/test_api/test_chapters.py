@@ -2306,6 +2306,8 @@ async def test_should_apply_project_story_packet_defaults_in_regeneration_prompt
     assert prompt_kwargs["story_creation_brief"] == "Default brief: keep the pace moving."
     assert prompt_kwargs["quality_preset"] == "tight_prose"
     assert prompt_kwargs["quality_notes"] == "Reduce exposition."
+    assert "【长线目标锚点】" in prompt_kwargs["story_long_term_goal_block"]
+    assert "【章节节奏预算】" in prompt_kwargs["story_pacing_budget_block"]
 
 
 async def test_should_merge_quality_gate_snapshot_into_regeneration_prompt_context(

@@ -130,3 +130,66 @@ def test_should_merge_wizard_outline_requirements_from_story_packet():
     assert "????" in merged
     assert "????" in merged
     assert "????" in merged
+
+
+
+def test_should_merge_outline_requirements_with_story_packet_blueprint_blocks():
+    story_packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="payoff",
+            story_focus="foreshadow_payoff",
+            plot_stage="ending",
+            story_creation_brief="keep the payoff grounded",
+        ),
+        source="outline-create-request",
+    ).with_blueprint(
+        long_term_goal="The lead must seize the capital before the enemy closes in.",
+        chapter_count=10,
+        character_focus_source=["Lin", "Su"],
+        foreshadow_payoff_source=["recover the hidden key"],
+    )
+
+    merged = _merge_outline_requirements(
+        "keep the dual-thread structure",
+        chapter_count=10,
+        story_packet=story_packet,
+    )
+
+    assert "【长线目标锚点】" in merged
+    assert "【大纲角色焦点锚点】" in merged
+    assert "【大纲伏笔兑现计划】" in merged
+    assert "【大纲节奏预算】" in merged
+
+
+def test_should_merge_wizard_outline_requirements_with_story_packet_blueprint_blocks():
+    story_packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="development",
+            story_creation_brief="front-load the pressure",
+        ),
+        source="wizard-outline-request",
+    ).with_blueprint(
+        long_term_goal="The lead must seize the capital before the enemy closes in.",
+        chapter_count=8,
+        character_focus_source=["Lin", "Su"],
+        foreshadow_payoff_source=["recover the hidden key"],
+    )
+
+    merged = _merge_wizard_outline_requirements(
+        "keep the dual-thread structure",
+        outline_count=3,
+        creative_mode=None,
+        story_focus=None,
+        plot_stage=None,
+        story_creation_brief=None,
+        quality_preset=None,
+        quality_notes=None,
+        story_packet=story_packet,
+    )
+
+    assert "【长线目标锚点】" in merged
+    assert "【大纲角色焦点锚点】" in merged
+    assert "【大纲伏笔兑现计划】" in merged
+    assert "【卷级节奏】" in merged

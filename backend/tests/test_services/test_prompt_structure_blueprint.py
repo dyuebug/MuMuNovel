@@ -24,6 +24,10 @@ from app.services.prompt_service import (
     build_story_repair_target_block,
     build_story_repetition_risk_block,
     build_story_result_card_block,
+    build_story_long_term_goal_block,
+    build_story_character_focus_anchor_block,
+    build_story_foreshadow_payoff_plan_block,
+    build_story_pacing_budget_block,
     build_volume_pacing_block,
 )
 
@@ -1026,3 +1030,45 @@ def test_should_merge_outline_quality_repair_guidance_into_requirements():
     assert "保持主要人物关系线清晰" in merged
     assert "【诊断优先级卡】" in merged
     assert "当前最弱项：章尾牵引（当前值：61）" in merged
+
+
+
+def test_should_build_story_blueprint_blocks():
+    assert "【长线目标锚点】" in build_story_long_term_goal_block(
+        "The lead must seize the capital before the enemy closes in."
+    )
+    assert "【章节角色焦点锚点】" in build_story_character_focus_anchor_block(
+        ["Lin", "Su"],
+        scene="chapter",
+    )
+    assert "【章节伏笔兑现计划】" in build_story_foreshadow_payoff_plan_block(
+        ["recover the hidden key"],
+        scene="chapter",
+    )
+    assert "【章节节奏预算】" in build_story_pacing_budget_block(
+        12,
+        current_chapter_number=5,
+        target_word_count=2600,
+        plot_stage="climax",
+        scene="chapter",
+    )
+
+
+def test_should_inject_story_blueprint_blocks_into_chapter_quality_contract():
+    blocks = PromptService._build_quality_runtime_blocks(
+        "CHAPTER_GENERATION_ONE_TO_ONE",
+        story_long_term_goal="The lead must seize the capital before the enemy closes in.",
+        story_character_focus=["Lin", "Su"],
+        story_foreshadow_payoff_plan=["recover the hidden key"],
+        chapter_count=12,
+        current_chapter_number=5,
+        target_word_count=2600,
+        plot_stage="climax",
+    )
+
+    assert "【长线目标锚点】" in blocks["story_long_term_goal_block"]
+    assert "【章节角色焦点锚点】" in blocks["story_character_focus_anchor_block"]
+    assert "【章节伏笔兑现计划】" in blocks["story_foreshadow_payoff_plan_block"]
+    assert "【章节节奏预算】" in blocks["story_pacing_budget_block"]
+    assert "【长线目标锚点】" in blocks["quality_contract_block"]
+    assert "【章节节奏预算】" in blocks["quality_contract_block"]

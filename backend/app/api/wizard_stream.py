@@ -23,6 +23,11 @@ from app.services.prompt_service import (
     build_narrative_blueprint_block,
     build_quality_preference_block,
     build_story_creation_brief_block,
+    build_story_long_term_goal_block,
+    build_story_character_focus_anchor_block,
+    build_story_foreshadow_payoff_plan_block,
+    build_story_pacing_budget_block,
+    build_volume_pacing_block,
     build_story_focus_block,
     prompt_service,
 )
@@ -79,6 +84,7 @@ def _merge_wizard_outline_requirements(
         quality_notes=quality_notes,
     )
     parts: list[str] = []
+    blueprint = story_packet.blueprint if story_packet is not None else None
 
     base_text = str(base_requirements or "").strip()
     if base_text:
@@ -87,6 +93,34 @@ def _merge_wizard_outline_requirements(
     story_creation_brief_block = build_story_creation_brief_block(active_guidance.story_creation_brief).strip()
     if story_creation_brief_block:
         parts.append(story_creation_brief_block)
+
+    story_long_term_goal_block = build_story_long_term_goal_block(
+        blueprint.long_term_goal if blueprint is not None else None,
+    ).strip()
+    if story_long_term_goal_block:
+        parts.append(story_long_term_goal_block)
+
+    story_pacing_budget_block = build_story_pacing_budget_block(
+        blueprint.chapter_count if blueprint is not None and blueprint.chapter_count else outline_count,
+        plot_stage=active_guidance.plot_stage,
+        scene="outline",
+    ).strip()
+    if story_pacing_budget_block:
+        parts.append(story_pacing_budget_block)
+
+    story_character_focus_anchor_block = build_story_character_focus_anchor_block(
+        blueprint.character_focus_names if blueprint is not None else None,
+        scene="outline",
+    ).strip()
+    if story_character_focus_anchor_block:
+        parts.append(story_character_focus_anchor_block)
+
+    story_foreshadow_payoff_plan_block = build_story_foreshadow_payoff_plan_block(
+        blueprint.foreshadow_payoff_plan if blueprint is not None else None,
+        scene="outline",
+    ).strip()
+    if story_foreshadow_payoff_plan_block:
+        parts.append(story_foreshadow_payoff_plan_block)
 
     quality_preference_block = build_quality_preference_block(
         active_guidance.quality_preset,
@@ -112,6 +146,13 @@ def _merge_wizard_outline_requirements(
     ).strip()
     if narrative_blueprint_block:
         parts.append(narrative_blueprint_block)
+
+    volume_pacing_block = build_volume_pacing_block(
+        blueprint.chapter_count if blueprint is not None and blueprint.chapter_count else outline_count,
+        plot_stage=active_guidance.plot_stage,
+    ).strip()
+    if volume_pacing_block:
+        parts.append(volume_pacing_block)
 
     parts.append(
         f"【开局大纲约束】这是小说的开局部分，请生成{outline_count}个大纲节点，重点关注：\n"

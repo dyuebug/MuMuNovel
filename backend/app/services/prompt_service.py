@@ -18,11 +18,11 @@ except Exception:
 QUALITY_RUNTIME_TRACKING_TAG = "rule_v3_quality_block_20260307"
 QUALITY_TEMPLATE_MARKER_PATTERN = re.compile(r"^<prompt_template_key value=\"(?P<key>[A-Z0-9_]+)\" />\n?", re.MULTILINE)
 
-QUALITY_BLOCK_SECTION_GENERATION = """<quality_contract priority=\"P0\">\n{quality_generation_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{quality_preference_block}\n{story_objective_card_block}\n{story_result_card_block}\n{story_payoff_chain_card_block}\n{story_rule_grounding_card_block}\n{story_information_release_card_block}\n{story_emotion_landing_card_block}\n{story_action_rendering_card_block}\n{story_summary_tone_control_card_block}\n{story_repetition_control_card_block}\n{story_viewpoint_discipline_card_block}\n{story_dialogue_advancement_card_block}\n{story_opening_hook_card_block}\n{story_repair_target_block}\n{story_repair_diagnostic_block}\n{story_execution_checklist_block}\n{story_scene_anchor_card_block}\n{story_scene_density_card_block}\n{story_repetition_risk_block}\n{story_acceptance_card_block}\n{story_cliffhanger_card_block}\n{story_character_arc_card_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
-QUALITY_BLOCK_SECTION_ANALYSIS = """<quality_contract priority=\"P0\">\n{quality_analysis_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{quality_preference_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
-QUALITY_BLOCK_SECTION_CHECKER = """<quality_contract priority=\"P0\">\n{quality_checker_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{quality_preference_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
-QUALITY_BLOCK_SECTION_REVISER = """<quality_contract priority=\"P0\">\n{quality_reviser_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{quality_preference_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
-QUALITY_BLOCK_SECTION_REGENERATION = """<quality_contract priority=\"P0\">\n{quality_regeneration_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{quality_preference_block}\n{story_objective_card_block}\n{story_result_card_block}\n{story_payoff_chain_card_block}\n{story_rule_grounding_card_block}\n{story_information_release_card_block}\n{story_emotion_landing_card_block}\n{story_action_rendering_card_block}\n{story_summary_tone_control_card_block}\n{story_repetition_control_card_block}\n{story_viewpoint_discipline_card_block}\n{story_dialogue_advancement_card_block}\n{story_opening_hook_card_block}\n{story_repair_target_block}\n{story_repair_diagnostic_block}\n{story_execution_checklist_block}\n{story_scene_anchor_card_block}\n{story_scene_density_card_block}\n{story_repetition_risk_block}\n{story_acceptance_card_block}\n{story_cliffhanger_card_block}\n{story_character_arc_card_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_GENERATION = """<quality_contract priority=\"P0\">\n{quality_generation_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{story_long_term_goal_block}\n{story_pacing_budget_block}\n{story_character_focus_anchor_block}\n{story_foreshadow_payoff_plan_block}\n{quality_preference_block}\n{story_objective_card_block}\n{story_result_card_block}\n{story_payoff_chain_card_block}\n{story_rule_grounding_card_block}\n{story_information_release_card_block}\n{story_emotion_landing_card_block}\n{story_action_rendering_card_block}\n{story_summary_tone_control_card_block}\n{story_repetition_control_card_block}\n{story_viewpoint_discipline_card_block}\n{story_dialogue_advancement_card_block}\n{story_opening_hook_card_block}\n{story_repair_target_block}\n{story_repair_diagnostic_block}\n{story_execution_checklist_block}\n{story_scene_anchor_card_block}\n{story_scene_density_card_block}\n{story_repetition_risk_block}\n{story_acceptance_card_block}\n{story_cliffhanger_card_block}\n{story_character_arc_card_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_ANALYSIS = """<quality_contract priority=\"P0\">\n{quality_analysis_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{story_long_term_goal_block}\n{story_pacing_budget_block}\n{story_character_focus_anchor_block}\n{story_foreshadow_payoff_plan_block}\n{quality_preference_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_CHECKER = """<quality_contract priority=\"P0\">\n{quality_checker_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{story_long_term_goal_block}\n{story_pacing_budget_block}\n{story_character_focus_anchor_block}\n{story_foreshadow_payoff_plan_block}\n{quality_preference_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_REVISER = """<quality_contract priority=\"P0\">\n{quality_reviser_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{story_long_term_goal_block}\n{story_pacing_budget_block}\n{story_character_focus_anchor_block}\n{story_foreshadow_payoff_plan_block}\n{quality_preference_block}\n{quality_json_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
+QUALITY_BLOCK_SECTION_REGENERATION = """<quality_contract priority=\"P0\">\n{quality_regeneration_block}\n{creative_mode_block}\n{story_focus_block}\n{narrative_blueprint_block}\n{story_creation_brief_block}\n{story_long_term_goal_block}\n{story_pacing_budget_block}\n{story_character_focus_anchor_block}\n{story_foreshadow_payoff_plan_block}\n{quality_preference_block}\n{story_objective_card_block}\n{story_result_card_block}\n{story_payoff_chain_card_block}\n{story_rule_grounding_card_block}\n{story_information_release_card_block}\n{story_emotion_landing_card_block}\n{story_action_rendering_card_block}\n{story_summary_tone_control_card_block}\n{story_repetition_control_card_block}\n{story_viewpoint_discipline_card_block}\n{story_dialogue_advancement_card_block}\n{story_opening_hook_card_block}\n{story_repair_target_block}\n{story_repair_diagnostic_block}\n{story_execution_checklist_block}\n{story_scene_anchor_card_block}\n{story_scene_density_card_block}\n{story_repetition_risk_block}\n{story_acceptance_card_block}\n{story_cliffhanger_card_block}\n{story_character_arc_card_block}\n{quality_generation_protocol_block}\n{quality_mcp_guard_block}\n{quality_external_assets_block}\n</quality_contract>"""
 
 QUALITY_TEMPLATE_INSERTIONS = {
     "CHAPTER_GENERATION_ONE_TO_MANY": QUALITY_BLOCK_SECTION_GENERATION,
@@ -2380,6 +2380,142 @@ def build_volume_pacing_block(
         lines.append(f"- 当前用户指定重点阶段：{PLOT_STAGE_LABELS.get(normalized_stage, normalized_stage)}，本轮应优先把资源集中到这一段的核心任务。")
 
     return _compact_prompt_text("\n".join(lines))
+
+
+def _coerce_positive_int(value: Optional[Any]) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        normalized = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _normalize_runtime_prompt_items(values: Optional[Any], *, limit: int = 4) -> list[str]:
+    if values is None:
+        return []
+
+    if isinstance(values, str):
+        raw_items = re.split(r"[\n;]+", values)
+    elif isinstance(values, Sequence) and not isinstance(values, (str, bytes, bytearray)):
+        raw_items = list(values)
+    else:
+        raw_items = [values]
+
+    normalized: list[str] = []
+    for raw in raw_items:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        text = re.sub(r"^[-?*?\d\.\)\s]+", "", text).strip()
+        if not text or text.startswith("【"):
+            continue
+        normalized.append(text)
+
+    return _dedupe_prompt_items(normalized)[:limit]
+
+
+def build_story_long_term_goal_block(long_term_goal: Optional[str]) -> str:
+    goal_text = _compact_prompt_text(long_term_goal)
+    if not goal_text:
+        return ""
+
+    lines = [
+        "【长线目标锚点】",
+        f"- 本书长线目标：{goal_text}",
+        "- 本轮输出必须服务这条长线，不要只完成局部热闹。",
+        "- 高潮、反转和情绪爆点都要能回扣主线目标、长期代价或最终回报。",
+    ]
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_character_focus_anchor_block(
+    story_character_focus: Optional[Any],
+    *,
+    scene: str = "chapter",
+) -> str:
+    focus_items = _normalize_runtime_prompt_items(story_character_focus, limit=4)
+    if not focus_items:
+        return ""
+
+    scene_label = "章节" if scene == "chapter" else "大纲"
+    joined_focus = " / ".join(focus_items)
+    lines = [
+        f"【{scene_label}角色焦点锚点】",
+        f"- 本轮优先照亮角色：{joined_focus}",
+        "- 让这些角色分别承担决定、反应或关系位移，不要只挂名出场。",
+        "- 重要情绪变化尽量落在这些角色的选择与后果上，避免镜头平均摊薄。",
+    ]
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_foreshadow_payoff_plan_block(
+    story_foreshadow_payoff_plan: Optional[Any],
+    *,
+    scene: str = "chapter",
+) -> str:
+    payoff_items = _normalize_runtime_prompt_items(story_foreshadow_payoff_plan, limit=3)
+    if not payoff_items:
+        return ""
+
+    scene_label = "章节" if scene == "chapter" else "大纲"
+    lines = [f"【{scene_label}伏笔兑现计划】", "- 本轮优先处理以下伏笔/回报链："]
+    lines.extend(f"  - {item}" for item in payoff_items)
+    lines.append("- 兑现时要带出新信息、新代价或新失衡，避免只做口头回收。")
+    return _compact_prompt_text("\n".join(lines))
+
+
+def build_story_pacing_budget_block(
+    chapter_count: Optional[Any],
+    *,
+    current_chapter_number: Optional[Any] = None,
+    target_word_count: Optional[Any] = None,
+    plot_stage: Optional[str] = None,
+    scene: str = "chapter",
+) -> str:
+    total = _coerce_positive_int(chapter_count)
+    current = _coerce_positive_int(current_chapter_number)
+    target = _coerce_positive_int(target_word_count)
+    normalized_stage = normalize_plot_stage(plot_stage)
+    scene_label = "章节" if scene == "chapter" else "大纲"
+
+    lines = [f"【{scene_label}节奏预算】"]
+    if total and current:
+        lines.append(f"- 当前进度：第{current}/{total}章。")
+        cursor = 1
+        for stage, count in _allocate_volume_segments(total):
+            start_chapter = cursor
+            end_chapter = cursor + count - 1
+            cursor = end_chapter + 1
+            if start_chapter <= current <= end_chapter:
+                lines.append(
+                    f"- 结构位置：当前位于第{start_chapter}-{end_chapter}章的{PLOT_STAGE_LABELS.get(stage, stage)}段，本轮要完成这一段该有的推进。"
+                )
+                break
+    elif total:
+        lines.append(f"- 计划体量：约{total}章，推进时先按整卷节奏分配资源，不要只顾单点刺激。")
+
+    if target:
+        if scene == "chapter":
+            lines.append(f"- 本章目标字数：约{target}字，可在保证节奏完整的前提下浮动 ±20%。")
+        else:
+            lines.append(f"- 单章体量可参考约{target}字，避免开局章节过短或信息堆积失衡。")
+
+    if normalized_stage:
+        lines.append(
+            f"- 阶段重点：{PLOT_STAGE_LABELS.get(normalized_stage, normalized_stage)}，优先完成该阶段最关键的任务，不要提前透支后续高潮。"
+        )
+
+    if len(lines) == 1:
+        return ""
+
+    if scene == "chapter":
+        lines.append("- 节奏上要做到：开场尽快立题，中段持续加压，尾段留下动作牵引或情绪余震。")
+    else:
+        lines.append("- 规划时要兼顾起势、升级、回报与续航，不要把所有强刺激都堆在前几章。")
+    return _compact_prompt_text("\n".join(lines))
+
 
 def _compact_prompt_text(value: Any) -> str:
     text = str(value or "").strip()
@@ -6146,6 +6282,34 @@ class PromptService:
             kwargs.get("story_creation_brief_block")
             or build_story_creation_brief_block(kwargs.get("story_creation_brief"))
         )
+        story_long_term_goal_block = _compact_prompt_text(
+            kwargs.get("story_long_term_goal_block")
+            or build_story_long_term_goal_block(kwargs.get("story_long_term_goal"))
+        )
+        story_pacing_budget_block = _compact_prompt_text(
+            kwargs.get("story_pacing_budget_block")
+            or build_story_pacing_budget_block(
+                kwargs.get("chapter_count"),
+                current_chapter_number=kwargs.get("current_chapter_number"),
+                target_word_count=kwargs.get("target_word_count"),
+                plot_stage=kwargs.get("plot_stage"),
+                scene="chapter",
+            )
+        )
+        story_character_focus_anchor_block = _compact_prompt_text(
+            kwargs.get("story_character_focus_anchor_block")
+            or build_story_character_focus_anchor_block(
+                kwargs.get("story_character_focus"),
+                scene="chapter",
+            )
+        )
+        story_foreshadow_payoff_plan_block = _compact_prompt_text(
+            kwargs.get("story_foreshadow_payoff_plan_block")
+            or build_story_foreshadow_payoff_plan_block(
+                kwargs.get("story_foreshadow_payoff_plan"),
+                scene="chapter",
+            )
+        )
         quality_preference_block = _compact_prompt_text(
             kwargs.get("quality_preference_block")
             or build_quality_preference_block(
@@ -6380,6 +6544,10 @@ class PromptService:
             "story_focus_block": story_focus_block,
             "narrative_blueprint_block": narrative_blueprint_block,
             "story_creation_brief_block": story_creation_brief_block,
+            "story_long_term_goal_block": story_long_term_goal_block,
+            "story_pacing_budget_block": story_pacing_budget_block,
+            "story_character_focus_anchor_block": story_character_focus_anchor_block,
+            "story_foreshadow_payoff_plan_block": story_foreshadow_payoff_plan_block,
             "quality_preference_block": quality_preference_block,
             "story_objective_card_block": story_objective_card_block,
             "story_result_card_block": story_result_card_block,

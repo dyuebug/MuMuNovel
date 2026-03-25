@@ -3525,11 +3525,6 @@ async def generate_chapter_content_stream(
                     story_preserve_strengths=getattr(generate_request, 'story_preserve_strengths', None),
                 )
                 story_repair_payload = story_repair_state.get("payload")
-                prompt_quality_kwargs = story_packet.build_prompt_quality_kwargs(
-                    quality_profile,
-                    active_story_repair_payload=story_repair_state.get("active_story_repair_payload"),
-                    **_story_repair_payload_to_prompt_kwargs(story_repair_payload),
-                )
                 resolved_style_id = quality_profile.get("resolved_style_id")
                 style_content = quality_profile.get("style_content") or ""
                 style_name = quality_profile.get("style_name") or ""
@@ -3589,6 +3584,16 @@ async def generate_chapter_content_stream(
                     logger.info(f"  - 伏笔提醒: {chapter_context.context_stats.get('foreshadow_length', 0)} 字符")
                     logger.info(f"  - 总长度: {chapter_context.context_stats.get('total_length', 0)} 字符")
             
+                prompt_quality_kwargs = story_packet.build_prompt_quality_kwargs(
+                    quality_profile,
+                    active_story_repair_payload=story_repair_state.get("active_story_repair_payload"),
+                    chapter_count=project.chapter_count,
+                    current_chapter_number=current_chapter.chapter_number,
+                    target_word_count=target_word_count,
+                    character_focus_source=current_chapter,
+                    foreshadow_payoff_source=chapter_context.foreshadow_reminders,
+                    **_story_repair_payload_to_prompt_kwargs(story_repair_payload),
+                )
                 yield await tracker.loading("上下文构建完成", 0.8)
                 
                 # 🎭 确定使用的叙事人称（临时指定 > 项目默认 > 系统默认）
@@ -6152,13 +6157,6 @@ async def generate_single_chapter_for_batch(
         prefer_project_default_style=not bool(style_id),
         log_prefix="批量单章生成",
     )
-    prompt_quality_kwargs = effective_story_packet.build_prompt_quality_kwargs(
-        quality_profile,
-        story_repair_summary=story_repair_summary,
-        story_repair_targets=story_repair_targets,
-        story_preserve_strengths=story_preserve_strengths,
-        active_story_repair_payload=active_story_repair_snapshot,
-    )
     style_id = quality_profile.get("resolved_style_id")
     style_content = quality_profile.get("style_content") or ""
     style_name = quality_profile.get("style_name") or ""
@@ -6211,6 +6209,18 @@ async def generate_single_chapter_for_batch(
     logger.info(f"  - 衔接锚点长度: {len(chapter_context.continuation_point or '')} 字符")
     logger.info(f"  - 相关记忆: {chapter_context.context_stats.get('memory_count', 0)} 条")
     logger.info(f"  - 总上下文长度: {chapter_context.context_stats.get('total_length', 0)} 字符")
+    prompt_quality_kwargs = effective_story_packet.build_prompt_quality_kwargs(
+        quality_profile,
+        story_repair_summary=story_repair_summary,
+        story_repair_targets=story_repair_targets,
+        story_preserve_strengths=story_preserve_strengths,
+        active_story_repair_payload=active_story_repair_snapshot,
+        chapter_count=project.chapter_count,
+        current_chapter_number=chapter.chapter_number,
+        target_word_count=target_word_count,
+        character_focus_source=chapter,
+        foreshadow_payoff_source=chapter_context.foreshadow_reminders,
+    )
     
     # 🚀 根据大纲模式选择提示词模板（批量生成）
     # 统一使用 context_builder 构建的 chapter_context 结果，与单章生成保持一致
@@ -6709,6 +6719,10 @@ async def regenerate_chapter_stream(
             prompt_quality_kwargs = regeneration_story_packet.build_prompt_quality_kwargs(
                 quality_profile,
                 active_story_repair_payload=story_repair_state.get("active_story_repair_payload"),
+                chapter_count=project.chapter_count,
+                current_chapter_number=chapter.chapter_number,
+                target_word_count=effective_regenerate_request.target_word_count,
+                character_focus_source=chapter,
                 **_story_repair_payload_to_prompt_kwargs(story_repair_payload),
             )
             style_content = quality_profile.get("style_content") or ""

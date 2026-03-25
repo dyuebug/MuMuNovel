@@ -33,6 +33,10 @@ from app.services.prompt_service import (
     build_quality_preference_block,
     build_creative_mode_block,
     build_story_creation_brief_block,
+    build_story_long_term_goal_block,
+    build_story_character_focus_anchor_block,
+    build_story_foreshadow_payoff_plan_block,
+    build_story_pacing_budget_block,
     build_volume_pacing_block,
     build_story_focus_block,
     build_narrative_blueprint_block,
@@ -142,6 +146,7 @@ def _merge_outline_requirements(
         quality_notes=quality_notes,
     )
     parts: list[str] = []
+    blueprint = story_packet.blueprint if story_packet is not None else None
 
     base_text = str(base_requirements or "").strip()
     if base_text:
@@ -150,6 +155,34 @@ def _merge_outline_requirements(
     story_creation_brief_block = build_story_creation_brief_block(active_guidance.story_creation_brief).strip()
     if story_creation_brief_block:
         parts.append(story_creation_brief_block)
+
+    story_long_term_goal_block = build_story_long_term_goal_block(
+        blueprint.long_term_goal if blueprint is not None else None,
+    ).strip()
+    if story_long_term_goal_block:
+        parts.append(story_long_term_goal_block)
+
+    story_pacing_budget_block = build_story_pacing_budget_block(
+        blueprint.chapter_count if blueprint is not None and blueprint.chapter_count else chapter_count,
+        plot_stage=active_guidance.plot_stage,
+        scene="outline",
+    ).strip()
+    if story_pacing_budget_block:
+        parts.append(story_pacing_budget_block)
+
+    story_character_focus_anchor_block = build_story_character_focus_anchor_block(
+        blueprint.character_focus_names if blueprint is not None else None,
+        scene="outline",
+    ).strip()
+    if story_character_focus_anchor_block:
+        parts.append(story_character_focus_anchor_block)
+
+    story_foreshadow_payoff_plan_block = build_story_foreshadow_payoff_plan_block(
+        blueprint.foreshadow_payoff_plan if blueprint is not None else None,
+        scene="outline",
+    ).strip()
+    if story_foreshadow_payoff_plan_block:
+        parts.append(story_foreshadow_payoff_plan_block)
 
     memory_guidance_text = str(memory_guidance or "").strip()
     if memory_guidance_text:

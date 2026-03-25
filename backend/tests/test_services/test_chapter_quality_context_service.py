@@ -289,3 +289,66 @@ def test_should_build_outline_story_repair_diagnostic_context():
     assert "门禁失败维度：章尾牵引 / 大纲贴合" in diagnostic["story_repair_diagnostic_block"]
     assert "当前最弱项：章尾牵引（当前值：61.5）" in diagnostic["story_repair_diagnostic_block"]
     assert "先把最弱项拆成每章的目标、阻力、回报与章尾牵引，再统一分配节拍。" in diagnostic["story_repair_diagnostic_block"]
+
+
+
+def test_should_build_story_packet_blueprint_from_project_and_source():
+    project = Project(
+        title="test-project",
+        user_id="user-1",
+        theme="Power and cost",
+        description="A young lead is dragged into the capital struggle.",
+        chapter_count=12,
+        target_words=240000,
+        default_story_creation_brief="keep the pressure visible",
+    )
+
+    packet = build_story_generation_packet(
+        project,
+        source={
+            "character_focus": ["Lin", "Su"],
+            "foreshadow_payoff_plan": ["recover the hidden key", "pay off the banquet ambush"],
+        },
+        source_label="chapter-generate-request",
+    )
+
+    assert "Power and cost" in (packet.blueprint.long_term_goal or "")
+    assert packet.blueprint.chapter_count == 12
+    assert packet.blueprint.target_word_count == 240000
+    assert packet.blueprint.character_focus_names == ("Lin", "Su")
+    assert packet.blueprint.foreshadow_payoff_plan == (
+        "recover the hidden key",
+        "pay off the banquet ambush",
+    )
+
+
+def test_should_build_prompt_quality_kwargs_with_story_blueprint_runtime_blocks():
+    packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="climax",
+            story_creation_brief="keep the pressure visible",
+        ),
+        source="chapter-generate-request",
+    ).with_blueprint(
+        long_term_goal="The lead must seize the capital before the enemy closes in.",
+        chapter_count=12,
+        current_chapter_number=5,
+        target_word_count=2600,
+        character_focus_source=["Lin", "Su"],
+        foreshadow_payoff_source=["recover the hidden key", "pay off the banquet ambush"],
+    )
+
+    kwargs = packet.build_prompt_quality_kwargs({"genre": "mystery"})
+
+    assert kwargs["story_long_term_goal"] == "The lead must seize the capital before the enemy closes in."
+    assert kwargs["story_character_focus"] == ["Lin", "Su"]
+    assert kwargs["story_foreshadow_payoff_plan"] == [
+        "recover the hidden key",
+        "pay off the banquet ambush",
+    ]
+    assert "【长线目标锚点】" in kwargs["story_long_term_goal_block"]
+    assert "【章节角色焦点锚点】" in kwargs["story_character_focus_anchor_block"]
+    assert "【章节伏笔兑现计划】" in kwargs["story_foreshadow_payoff_plan_block"]
+    assert "【章节节奏预算】" in kwargs["story_pacing_budget_block"]
