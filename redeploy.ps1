@@ -342,7 +342,7 @@ if (-not $SkipBuild) {
     docker @buildArgs
 }
 
-$upArgs = @("compose", "up", "-d")
+$upArgs = @("compose", "up", "-d", "--remove-orphans")
 if (-not $SkipRecreate) {
     $upArgs += "--force-recreate"
 }
