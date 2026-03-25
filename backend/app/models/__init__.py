@@ -5,6 +5,8 @@ from app.models.chapter import Chapter
 from app.models.character import Character
 from app.models.relationship import CharacterRelationship, Organization, OrganizationMember, RelationshipType
 from app.models.generation_history import GenerationHistory
+from app.models.chapter_draft_attempt import ChapterDraftAttempt
+from app.models.batch_generation_snapshot import BatchGenerationSnapshot
 from app.models.analysis_task import AnalysisTask
 from app.models.batch_generation_task import BatchGenerationTask
 from app.models.settings import Settings
@@ -29,6 +31,8 @@ __all__ = [
     "OrganizationMember",
     "RelationshipType",
     "GenerationHistory",
+    "ChapterDraftAttempt",
+    "BatchGenerationSnapshot",
     "AnalysisTask",
     "BatchGenerationTask",
     "Settings",

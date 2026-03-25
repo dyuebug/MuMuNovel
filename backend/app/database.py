@@ -19,11 +19,13 @@ Base = declarative_base()
 from app.models import (  # noqa: E402
     AnalysisTask,
     BatchGenerationTask,
+    BatchGenerationSnapshot,
     Career,
     Character,
     CharacterCareer,
     CharacterRelationship,
     Chapter,
+    ChapterDraftAttempt,
     GenerationHistory,
     MCPPlugin,
     Organization,

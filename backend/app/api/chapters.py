@@ -27,7 +27,9 @@ from app.models.generation_history import GenerationHistory
 from app.models.writing_style import WritingStyle
 from app.models.analysis_task import AnalysisTask
 from app.models.memory import PlotAnalysis, StoryMemory
+from app.models.batch_generation_snapshot import BatchGenerationSnapshot
 from app.models.batch_generation_task import BatchGenerationTask
+from app.models.chapter_draft_attempt import ChapterDraftAttempt
 from app.models.regeneration_task import RegenerationTask
 from app.schemas.chapter import (
     ChapterCreate,
@@ -58,6 +60,7 @@ from app.services.chapter_quality_context_service import (
     build_analysis_quality_kwargs,
     build_prompt_quality_kwargs,
     build_story_generation_packet,
+    clone_chapter_quality_profile,
     resolve_chapter_quality_profile,
 )
 from app.services.plot_analyzer import PlotAnalyzer
@@ -95,6 +98,100 @@ task_quality_metrics_cache: dict[str, Dict[str, Any]] = {}
 task_quality_lock = Lock()
 task_workflow_state_cache: dict[str, Dict[str, Any]] = {}
 task_workflow_lock = Lock()
+_SNAPSHOT_UNSET = object()
+
+
+def _normalize_json_payload(value: Any) -> Any:
+    """Normalize runtime payloads before persisting them into JSON columns."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _normalize_json_payload(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_normalize_json_payload(item) for item in value]
+    if hasattr(value, "model_dump"):
+        return _normalize_json_payload(value.model_dump())
+    if hasattr(value, "dict"):
+        return _normalize_json_payload(value.dict())
+    return str(value)
+
+
+async def _upsert_batch_generation_snapshot(
+    db_session: AsyncSession,
+    task_id: str,
+    *,
+    latest_quality_metrics: Any = _SNAPSHOT_UNSET,
+    quality_metrics_history: Any = _SNAPSHOT_UNSET,
+    quality_metrics_summary: Any = _SNAPSHOT_UNSET,
+) -> BatchGenerationSnapshot:
+    """Persist the latest task-level quality snapshot for recovery after restarts."""
+    result = await db_session.execute(
+        select(BatchGenerationSnapshot).where(BatchGenerationSnapshot.batch_task_id == task_id)
+    )
+    snapshot = result.scalar_one_or_none()
+    if snapshot is None:
+        snapshot = BatchGenerationSnapshot(batch_task_id=task_id)
+        db_session.add(snapshot)
+
+    if latest_quality_metrics is not _SNAPSHOT_UNSET:
+        snapshot.latest_quality_metrics = _normalize_json_payload(latest_quality_metrics)
+    if quality_metrics_history is not _SNAPSHOT_UNSET:
+        snapshot.quality_metrics_history = _normalize_json_payload(quality_metrics_history)
+    if quality_metrics_summary is not _SNAPSHOT_UNSET:
+        snapshot.quality_metrics_summary = _normalize_json_payload(quality_metrics_summary)
+
+    await db_session.commit()
+    await db_session.refresh(snapshot)
+    return snapshot
+
+
+async def _load_persisted_batch_generation_snapshot(
+    db_session: AsyncSession,
+    task_id: str,
+) -> Optional[BatchGenerationSnapshot]:
+    """Load a persisted quality snapshot when the in-memory cache is empty."""
+    result = await db_session.execute(
+        select(BatchGenerationSnapshot).where(BatchGenerationSnapshot.batch_task_id == task_id)
+    )
+    return result.scalar_one_or_none()
+
+
+def _build_chapter_draft_attempt(
+    *,
+    project_id: str,
+    chapter_id: Optional[str],
+    batch_task_id: Optional[str] = None,
+    source: str,
+    attempt_state: str,
+    quality_gate_action: Optional[str],
+    quality_gate_decision: Optional[str],
+    full_content: str,
+    summary_preview: Optional[str] = None,
+    quality_metrics: Optional[Dict[str, Any]] = None,
+    repair_payload: Optional[Dict[str, Any]] = None,
+) -> ChapterDraftAttempt:
+    """Build a lightweight persisted snapshot for blocked or retried draft candidates."""
+    normalized_content = str(full_content or "")
+    normalized_summary = str(summary_preview or "").strip()
+    if not normalized_summary and normalized_content:
+        normalized_summary = normalized_content[:220]
+
+    return ChapterDraftAttempt(
+        project_id=project_id,
+        chapter_id=chapter_id,
+        batch_task_id=batch_task_id,
+        source=source,
+        attempt_state=str(attempt_state or "candidate"),
+        quality_gate_action=quality_gate_action,
+        quality_gate_decision=quality_gate_decision,
+        word_count=len(normalized_content),
+        summary_preview=normalized_summary[:500] or None,
+        content_preview=normalized_content[:4000] or None,
+        quality_metrics=_normalize_json_payload(quality_metrics) if isinstance(quality_metrics, dict) else None,
+        repair_payload=_normalize_json_payload(repair_payload) if isinstance(repair_payload, dict) else None,
+    )
 
 
 class BatchAnalysisStatusRequest(BaseModel):
@@ -628,9 +725,10 @@ def _calc_cliffhanger_rate(text: str) -> Dict[str, Any]:
 def compute_story_quality_metrics(
     content: str,
     chapter_outline: Optional[str],
-    world_rules: Optional[str]
+    world_rules: Optional[str],
+    quality_runtime_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """计算剧情质量评分指标。"""
+    """???????????"""
     conflict = _calc_conflict_chain_rate(content)
     rule_grounding = _calc_rule_grounding_rate(content, world_rules)
     outline_alignment = _calc_outline_alignment_rate(content, chapter_outline)
@@ -668,27 +766,64 @@ def compute_story_quality_metrics(
             "cliffhanger": cliffhanger,
         }
     }
+    if isinstance(quality_runtime_context, dict) and quality_runtime_context:
+        metrics["quality_runtime_context"] = quality_runtime_context
     metrics["repair_guidance"] = build_story_repair_guidance(metrics, scope="chapter")
     metrics["quality_gate"] = build_quality_gate_decision(metrics, scope="chapter")
     return metrics
 
 
-def _build_generation_history_payload(content: str, metrics: Dict[str, Any]) -> str:
-    """构建生成历史的结构化日志文本。"""
+def _build_chapter_quality_runtime_context(
+    *,
+    story_packet: Optional[StoryPacket],
+    project: Optional[Project],
+    chapter: Chapter,
+    chapter_context: Optional[Any],
+    target_word_count: Optional[int],
+) -> Dict[str, Any]:
+    """???????????????????????????"""
+    active_story_packet = story_packet or build_story_generation_packet(
+        project,
+        source=chapter,
+        source_label="chapter-quality-runtime-context",
+    )
+    return active_story_packet.build_quality_runtime_context(
+        chapter_count=getattr(project, "chapter_count", None),
+        current_chapter_number=getattr(chapter, "chapter_number", None),
+        target_word_count=target_word_count,
+        character_focus_source=chapter,
+        foreshadow_payoff_source=getattr(chapter_context, "foreshadow_reminders", None),
+        character_state_source=chapter_context,
+        relationship_state_source=chapter_context,
+        foreshadow_state_source=chapter_context,
+    )
+
+def _build_generation_history_payload(
+    content: str,
+    metrics: Optional[Dict[str, Any]],
+    *,
+    content_applied: bool = True,
+    attempt_state: Optional[str] = None,
+) -> str:
+    """???????????????"""
     normalized_metrics = dict(metrics or {})
     if normalized_metrics and not isinstance(normalized_metrics.get("repair_guidance"), dict):
         normalized_metrics["repair_guidance"] = build_story_repair_guidance(normalized_metrics, scope="chapter")
     if normalized_metrics and not isinstance(normalized_metrics.get("quality_gate"), dict):
         normalized_metrics["quality_gate"] = build_quality_gate_decision(normalized_metrics, scope="chapter")
 
+    resolved_attempt_state = str(attempt_state or ("applied" if content_applied else "candidate")).strip() or (
+        "applied" if content_applied else "candidate"
+    )
     payload = {
         "log_type": "chapter_generation_quality_v1",
         "preview": content[:500] if len(content) > 500 else content,
         "quality_metrics": normalized_metrics,
-        "generated_at": datetime.now().isoformat()
+        "generated_at": datetime.now().isoformat(),
+        "content_applied": bool(content_applied),
+        "attempt_state": resolved_attempt_state,
     }
     return json.dumps(payload, ensure_ascii=False)
-
 
 def _normalize_checker_result(raw: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """规范化正文质检结果，确保字段稳定。"""
@@ -1079,8 +1214,13 @@ def _build_quality_metrics_summary(history: List[Dict[str, Any]]) -> Optional[Di
     return build_quality_metrics_summary(history, scope="batch")
 
 
-async def _record_task_quality_metrics(task_id: str, metrics_event: Dict[str, Any]):
-    """记录任务级质量指标事件，用于轮询和恢复。"""
+async def _record_task_quality_metrics(
+    task_id: str,
+    metrics_event: Dict[str, Any],
+    db_session: Optional[AsyncSession] = None,
+):
+    """???????????????????????"""
+    persisted_snapshot: Optional[Dict[str, Any]] = None
     async with task_quality_lock:
         current = task_quality_metrics_cache.get(task_id) or {
             "latest": None,
@@ -1093,20 +1233,60 @@ async def _record_task_quality_metrics(task_id: str, metrics_event: Dict[str, An
         if normalized_event and not isinstance(normalized_event.get("quality_gate"), dict):
             normalized_event["quality_gate"] = build_quality_gate_decision(normalized_event, scope="chapter")
 
+        normalized_event = _normalize_json_payload(normalized_event)
         current["latest"] = normalized_event
-        history = current.get("history") or []
+        history = list(current.get("history") or [])
         history.append(normalized_event)
         if len(history) > 20:
             history = history[-20:]
         current["history"] = history
         current["summary"] = _build_quality_metrics_summary(history)
         task_quality_metrics_cache[task_id] = current
+        persisted_snapshot = {
+            "latest": current["latest"],
+            "history": current["history"],
+            "summary": current["summary"],
+        }
+
+    if db_session is not None and persisted_snapshot is not None:
+        await _upsert_batch_generation_snapshot(
+            db_session,
+            task_id,
+            latest_quality_metrics=persisted_snapshot["latest"],
+            quality_metrics_history=persisted_snapshot["history"],
+            quality_metrics_summary=persisted_snapshot["summary"],
+        )
 
 
-async def _get_task_quality_metrics_snapshot(task_id: str) -> Dict[str, Any]:
-    """获取任务级质量指标快照。"""
+async def _get_task_quality_metrics_snapshot(
+    task_id: str,
+    db_session: Optional[AsyncSession] = None,
+) -> Dict[str, Any]:
+    """??????????????????????????"""
     async with task_quality_lock:
-        return task_quality_metrics_cache.get(task_id) or {}
+        cached_snapshot = task_quality_metrics_cache.get(task_id)
+    if cached_snapshot:
+        return cached_snapshot
+
+    if db_session is None:
+        return {}
+
+    persisted_snapshot = await _load_persisted_batch_generation_snapshot(db_session, task_id)
+    if persisted_snapshot is None:
+        return {}
+
+    recovered_snapshot = {
+        "latest": _normalize_json_payload(persisted_snapshot.latest_quality_metrics) or None,
+        "history": _normalize_json_payload(persisted_snapshot.quality_metrics_history) or [],
+        "summary": _normalize_json_payload(persisted_snapshot.quality_metrics_summary) or None,
+    }
+    if not recovered_snapshot["summary"] and recovered_snapshot["history"]:
+        recovered_snapshot["summary"] = _build_quality_metrics_summary(recovered_snapshot["history"])
+
+    async with task_quality_lock:
+        task_quality_metrics_cache[task_id] = recovered_snapshot
+    return recovered_snapshot
+
 
 
 def _default_batch_progress_phase(task: BatchGenerationTask) -> str:
@@ -3592,6 +3772,9 @@ async def generate_chapter_content_stream(
                     target_word_count=target_word_count,
                     character_focus_source=current_chapter,
                     foreshadow_payoff_source=chapter_context.foreshadow_reminders,
+                    character_state_source=chapter_context,
+                    relationship_state_source=chapter_context,
+                    foreshadow_state_source=chapter_context,
                     **_story_repair_payload_to_prompt_kwargs(story_repair_payload),
                 )
                 yield await tracker.loading("上下文构建完成", 0.8)
@@ -3802,11 +3985,19 @@ async def generate_chapter_content_stream(
                 # === ???? ===
                 yield await tracker.saving("????????...", 0.3)
 
-                # ?????????????
+                # ??????????????????????????
+                quality_runtime_context = _build_chapter_quality_runtime_context(
+                    story_packet=story_packet,
+                    project=project,
+                    chapter=current_chapter,
+                    chapter_context=chapter_context,
+                    target_word_count=target_word_count,
+                )
                 quality_metrics = compute_story_quality_metrics(
                     content=full_content,
                     chapter_outline=chapter_context.chapter_outline,
-                    world_rules=project.world_rules
+                    world_rules=project.world_rules,
+                    quality_runtime_context=quality_runtime_context,
                 )
                 logger.info(
                     f"?? ???? - overall={quality_metrics['overall_score']}, "
@@ -3849,15 +4040,38 @@ async def generate_chapter_content_stream(
 
                 candidate_word_count = len(full_content)
 
-                if content_applied:
-                    history = GenerationHistory(
+                attempt_state = "applied" if content_applied else quality_gate_action
+                draft_attempt = None
+                if not content_applied:
+                    draft_attempt = _build_chapter_draft_attempt(
                         project_id=current_chapter.project_id,
                         chapter_id=current_chapter.id,
-                        prompt=f"????: ?{current_chapter.chapter_number}? {current_chapter.title}",
-                        generated_content=_build_generation_history_payload(full_content, quality_metrics),
-                        model="default"
+                        source="chapter",
+                        attempt_state=attempt_state,
+                        quality_gate_action=quality_gate_action,
+                        quality_gate_decision=(quality_gate_snapshot or {}).get("decision"),
+                        full_content=full_content,
+                        quality_metrics=quality_metrics if isinstance(quality_metrics, dict) else None,
+                        repair_payload=(
+                            quality_gate_plan.get("active_story_repair_payload")
+                            or story_repair_state.get("active_story_repair_payload")
+                        ),
                     )
-                    db_session.add(history)
+                history = GenerationHistory(
+                    project_id=current_chapter.project_id,
+                    chapter_id=current_chapter.id,
+                    prompt=f"????: ?{current_chapter.chapter_number}? {current_chapter.title}",
+                    generated_content=_build_generation_history_payload(
+                        full_content,
+                        quality_metrics,
+                        content_applied=content_applied,
+                        attempt_state=attempt_state,
+                    ),
+                    model="default"
+                )
+                db_session.add(history)
+                if draft_attempt is not None:
+                    db_session.add(draft_attempt)
                 await db_session.commit()
                 db_committed = True
                 await db_session.refresh(current_chapter)
@@ -4173,6 +4387,7 @@ async def generate_chapter_content_background(
         custom_model=custom_model,
         temp_narrative_perspective=temp_narrative_perspective,
         story_packet=story_packet,
+        base_quality_profile=single_task_quality_profile,
         enable_web_research=getattr(generate_request, 'enable_web_research', None),
         web_research_query=getattr(generate_request, 'web_research_query', None),
         **_story_repair_payload_to_prompt_kwargs(story_repair_payload),
@@ -5056,6 +5271,7 @@ async def batch_generate_chapters_in_order(
         ai_service=user_ai_service,
         custom_model=batch_request.model,
         story_packet=batch_story_packet,
+        base_quality_profile=batch_quality_profile,
         enable_web_research=batch_request.enable_web_research,
         web_research_query=batch_request.web_research_query,
         **_story_repair_payload_to_prompt_kwargs(batch_story_repair_payload),
@@ -5094,7 +5310,7 @@ async def get_batch_generation_status(
     if not task:
         raise HTTPException(status_code=404, detail="批量生成任务不存在")
 
-    quality_snapshot = await _get_task_quality_metrics_snapshot(batch_id)
+    quality_snapshot = await _get_task_quality_metrics_snapshot(batch_id, db_session=db)
     workflow_snapshot = await _build_batch_task_workflow_snapshot(task)
     
     return BatchGenerateStatusResponse(
@@ -5214,7 +5430,7 @@ async def get_active_batch_generation(
             "task": None
         }
 
-    quality_snapshot = await _get_task_quality_metrics_snapshot(task.id)
+    quality_snapshot = await _get_task_quality_metrics_snapshot(task.id, db_session=db)
     workflow_snapshot = await _build_batch_task_workflow_snapshot(task)
     
     return {
@@ -5263,7 +5479,7 @@ async def list_active_batch_generation_tasks(
 
     items = []
     for task in tasks:
-        quality_snapshot = await _get_task_quality_metrics_snapshot(task.id)
+        quality_snapshot = await _get_task_quality_metrics_snapshot(task.id, db_session=db)
         workflow_snapshot = await _build_batch_task_workflow_snapshot(task)
         task_type = (
             "chapter_single_generate"
@@ -5486,6 +5702,7 @@ async def execute_batch_generation_in_order(
     story_repair_summary: Optional[str] = None,
     story_repair_targets: Optional[list[str]] = None,
     story_preserve_strengths: Optional[list[str]] = None,
+    base_quality_profile: Optional[Dict[str, Any]] = None,
 ):
     """
     按顺序执行批量生成任务（后台任务）
@@ -5554,6 +5771,21 @@ async def execute_batch_generation_in_order(
         )
         
         # 更新任务状态为运行中
+        task_base_quality_profile = (
+            clone_chapter_quality_profile(base_quality_profile)
+            if isinstance(base_quality_profile, dict) and base_quality_profile
+            else await resolve_chapter_quality_profile(
+                db_session=db_session,
+                user_id=user_id,
+                project=project,
+                style_id=task.style_id,
+                enable_mcp=True,
+                prefer_project_default_style=not bool(task.style_id),
+                log_prefix="\u6279\u91cf\u4efb\u52a1\u521d\u59cb\u5316",
+            )
+        )
+        cached_analysis_quality_profile = clone_chapter_quality_profile(task_base_quality_profile)
+        
         async with write_lock:
             task.status = 'running'
             task.started_at = datetime.now()
@@ -5651,20 +5883,8 @@ async def execute_batch_generation_in_order(
                     if not can_generate:
                         raise Exception(f"前置条件不满足: {error_msg}")
 
-                    analysis_quality_profile = None
-                    if task.enable_analysis:
-                        analysis_quality_profile = await resolve_chapter_quality_profile(
-                            db_session=db_session,
-                            user_id=user_id,
-                            project=project,
-                            style_id=task.style_id,
-                            enable_mcp=True,
-                            prefer_project_default_style=not bool(task.style_id),
-                            log_prefix="批量分析",
-                        )
+                    analysis_quality_profile = clone_chapter_quality_profile(cached_analysis_quality_profile)
 
-                    # 生成章节内容（复用现有流式生成逻辑的核心部分），传递model参数
-                    # 并获取生成后的摘要（如果生成函数支持返回）
                     generation_result = await generate_single_chapter_for_batch(
                         db_session=db_session,
                         chapter=chapter,
@@ -5674,6 +5894,7 @@ async def execute_batch_generation_in_order(
                         ai_service=ai_service,
                         write_lock=write_lock,
                         story_packet=batch_story_packet,
+                        base_quality_profile=task_base_quality_profile,
                         custom_model=custom_model,
                         previous_summary_context=last_generated_summary,
                         temp_narrative_perspective=temp_narrative_perspective,
@@ -5714,7 +5935,7 @@ async def execute_batch_generation_in_order(
                             **generation_quality_metrics,
                         }
                         await publish_task_stream_event(batch_id, metrics_event)
-                        await _record_task_quality_metrics(batch_id, metrics_event)
+                        await _record_task_quality_metrics(batch_id, metrics_event, db_session=db_session)
 
                     quality_gate_action = quality_gate_plan["action"]
                     quality_gate_requires_followup = quality_gate_action in {"retry", "manual_review"}
@@ -5732,8 +5953,25 @@ async def execute_batch_generation_in_order(
                         )
 
                         next_retry_count = retry_count + 1
+                        retry_attempt = _build_chapter_draft_attempt(
+                            project_id=project.id,
+                            chapter_id=chapter_id,
+                            batch_task_id=batch_id,
+                            source="batch",
+                            attempt_state="retry",
+                            quality_gate_action=quality_gate_action,
+                            quality_gate_decision=(quality_gate_snapshot or {}).get("decision"),
+                            full_content=generated_content,
+                            summary_preview=generated_summary,
+                            quality_metrics=generation_quality_metrics if isinstance(generation_quality_metrics, dict) else None,
+                            repair_payload=(
+                                quality_gate_plan.get("active_story_repair_payload")
+                                or active_story_repair_state.get("active_story_repair_payload")
+                            ),
+                        )
                         async with write_lock:
                             task.current_retry_count = next_retry_count
+                            db_session.add(retry_attempt)
                             await db_session.commit()
 
                         retry_message = quality_gate_plan.get("message") or f"Chapter {chapter.chapter_number} triggered a quality-gate retry."
@@ -5893,6 +6131,22 @@ async def execute_batch_generation_in_order(
                             'quality_gate_failed_metrics': failed_metric_labels,
                         }
 
+                        manual_review_attempt = _build_chapter_draft_attempt(
+                            project_id=project.id,
+                            chapter_id=chapter_id,
+                            batch_task_id=batch_id,
+                            source="batch",
+                            attempt_state="manual_review",
+                            quality_gate_action=quality_gate_action,
+                            quality_gate_decision=(quality_gate_snapshot or {}).get("decision"),
+                            full_content=generated_content,
+                            summary_preview=generated_summary,
+                            quality_metrics=generation_quality_metrics if isinstance(generation_quality_metrics, dict) else None,
+                            repair_payload=(
+                                quality_gate_plan.get("active_story_repair_payload")
+                                or active_story_repair_state.get("active_story_repair_payload")
+                            ),
+                        )
                         async with write_lock:
                             task.failed_chapters = [
                                 *(task.failed_chapters or []),
@@ -5902,6 +6156,7 @@ async def execute_batch_generation_in_order(
                             task.error_message = error_message[:500]
                             task.completed_at = datetime.now()
                             task.current_retry_count = 0
+                            db_session.add(manual_review_attempt)
                             await db_session.commit()
 
                         logger.error(f"Quality gate blocked chapter {chapter.chapter_number}: {error_message}")
@@ -6038,6 +6293,7 @@ async def generate_single_chapter_for_batch(
     ai_service: AIService,
     write_lock: Lock,
     story_packet: Optional[StoryPacket] = None,
+    base_quality_profile: Optional[Dict[str, Any]] = None,
     custom_model: Optional[str] = None,
     previous_summary_context: Optional[str] = None,
     temp_narrative_perspective: Optional[str] = None,
@@ -6146,17 +6402,24 @@ async def generate_single_chapter_for_batch(
     )
     generation_guidance = effective_story_packet.guidance
 
-    quality_profile = await resolve_chapter_quality_profile(
-        db_session=db_session,
-        user_id=user_id,
-        project=project,
-        style_id=style_id,
-        enable_mcp=True,
-        external_assets=research_assets,
-        reference_assets=research_assets,
-        prefer_project_default_style=not bool(style_id),
-        log_prefix="批量单章生成",
-    )
+    if isinstance(base_quality_profile, dict) and base_quality_profile:
+        quality_profile = clone_chapter_quality_profile(
+            base_quality_profile,
+            external_assets=research_assets,
+            reference_assets=research_assets,
+        )
+    else:
+        quality_profile = await resolve_chapter_quality_profile(
+            db_session=db_session,
+            user_id=user_id,
+            project=project,
+            style_id=style_id,
+            enable_mcp=True,
+            external_assets=research_assets,
+            reference_assets=research_assets,
+            prefer_project_default_style=not bool(style_id),
+            log_prefix="\u6279\u91cf\u5355\u7ae0\u751f\u6210",
+        )
     style_id = quality_profile.get("resolved_style_id")
     style_content = quality_profile.get("style_content") or ""
     style_name = quality_profile.get("style_name") or ""
@@ -6220,6 +6483,9 @@ async def generate_single_chapter_for_batch(
         target_word_count=target_word_count,
         character_focus_source=chapter,
         foreshadow_payoff_source=chapter_context.foreshadow_reminders,
+        character_state_source=chapter_context,
+        relationship_state_source=chapter_context,
+        foreshadow_state_source=chapter_context,
     )
     
     # 🚀 根据大纲模式选择提示词模板（批量生成）
@@ -6260,14 +6526,14 @@ async def generate_single_chapter_for_batch(
                 chapter_outline=chapter_context.chapter_outline,
                 target_word_count=target_word_count,
                 narrative_perspective=chapter_perspective,
-                world_time_period=project.world_time_period or '未设定',
-                world_location=project.world_location or '未设定',
-                world_atmosphere=project.world_atmosphere or '未设定',
-                world_rules=project.world_rules or '未设定',
-                characters_info=chapter_context.chapter_characters or '暂无角色信息',
-                chapter_careers=chapter_context.chapter_careers or '暂无职业信息',
-                foreshadow_reminders=chapter_context.foreshadow_reminders or '暂无需要关注的伏笔',
-                relevant_memories=chapter_context.relevant_memories or '暂无相关记忆',
+                world_time_period=project.world_time_period or '???',
+                world_location=project.world_location or '???',
+                world_atmosphere=project.world_atmosphere or '???',
+                world_rules=project.world_rules or '???',
+                characters_info=chapter_context.chapter_characters or '??????',
+                chapter_careers=chapter_context.chapter_careers or '??????',
+                foreshadow_reminders=chapter_context.foreshadow_reminders or '?????????',
+                relevant_memories=chapter_context.relevant_memories or '??????',
                 **prompt_quality_kwargs,
             )
     else:
@@ -6393,33 +6659,25 @@ async def generate_single_chapter_for_batch(
     if _contains_chapter_workflow_meta_text(full_content):
         raise ValueError(f"第{chapter.chapter_number}章生成结果包含流程化元文本")
     
-    # 更新章节内容到数据库（使用锁保护）
-    async with write_lock:
-        old_word_count = chapter.word_count or 0
-        chapter.content = full_content
-        new_word_count = len(full_content)
-        chapter.word_count = new_word_count
-        chapter.status = "completed"
-        
-        # 更新项目字数
-        project.current_words = project.current_words - old_word_count + new_word_count
-
-        quality_metrics = compute_story_quality_metrics(
-            content=full_content,
-            chapter_outline=chapter_context.chapter_outline,
-            world_rules=project.world_rules
-        )
-        
+    # ????????????????????
     candidate_word_count = len(full_content)
+    quality_runtime_context = _build_chapter_quality_runtime_context(
+        story_packet=effective_story_packet,
+        project=project,
+        chapter=chapter,
+        chapter_context=chapter_context,
+        target_word_count=target_word_count,
+    )
     quality_metrics = compute_story_quality_metrics(
         content=full_content,
         chapter_outline=chapter_context.chapter_outline,
-        world_rules=project.world_rules
+        world_rules=project.world_rules,
+        quality_runtime_context=quality_runtime_context,
     )
 
-    logger.info(f"✅ 单章节生成候选稿完成: 第{chapter.chapter_number}章，共 {candidate_word_count} 字")
+    logger.info(f"? ??????????: ?{chapter.chapter_number}??? {candidate_word_count} ?")
     logger.info(
-        f"📊 批量章节剧情评分 - overall={quality_metrics['overall_score']}, "
+        f"?? ???????? - overall={quality_metrics['overall_score']}, "
         f"conflict={quality_metrics['conflict_chain_hit_rate']}, "
         f"rule={quality_metrics['rule_grounding_hit_rate']}"
     )
@@ -6723,6 +6981,9 @@ async def regenerate_chapter_stream(
                 current_chapter_number=chapter.chapter_number,
                 target_word_count=effective_regenerate_request.target_word_count,
                 character_focus_source=chapter,
+                character_state_source=characters_info_with_careers,
+                relationship_state_source=characters_info_with_careers,
+                foreshadow_state_source=outline.content if outline else chapter.summary,
                 **_story_repair_payload_to_prompt_kwargs(story_repair_payload),
             )
             style_content = quality_profile.get("style_content") or ""
