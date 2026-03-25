@@ -37,6 +37,7 @@ from app.services.chapter_quality_context_service import (
     StoryGenerationGuidance,
     StoryPacket,
     build_story_generation_packet,
+    build_story_runtime_requirement_text,
 )
 from app.logger import get_logger
 from app.utils.sse_response import SSEResponse, create_sse_response, WizardProgressTracker
@@ -86,41 +87,15 @@ def _merge_wizard_outline_requirements(
     parts: list[str] = []
     blueprint = story_packet.blueprint if story_packet is not None else None
 
-    base_text = str(base_requirements or "").strip()
-    if base_text:
-        parts.append(base_text)
-
-    story_creation_brief_block = build_story_creation_brief_block(active_guidance.story_creation_brief).strip()
-    if story_creation_brief_block:
-        parts.append(story_creation_brief_block)
-
-    story_long_term_goal_block = build_story_long_term_goal_block(
-        blueprint.long_term_goal if blueprint is not None else None,
-    ).strip()
-    if story_long_term_goal_block:
-        parts.append(story_long_term_goal_block)
-
-    story_pacing_budget_block = build_story_pacing_budget_block(
-        blueprint.chapter_count if blueprint is not None and blueprint.chapter_count else outline_count,
-        plot_stage=active_guidance.plot_stage,
+    runtime_requirement_text = build_story_runtime_requirement_text(
+        base_requirements,
+        guidance=active_guidance,
+        story_packet=story_packet,
+        chapter_count=outline_count,
         scene="outline",
-    ).strip()
-    if story_pacing_budget_block:
-        parts.append(story_pacing_budget_block)
-
-    story_character_focus_anchor_block = build_story_character_focus_anchor_block(
-        blueprint.character_focus_names if blueprint is not None else None,
-        scene="outline",
-    ).strip()
-    if story_character_focus_anchor_block:
-        parts.append(story_character_focus_anchor_block)
-
-    story_foreshadow_payoff_plan_block = build_story_foreshadow_payoff_plan_block(
-        blueprint.foreshadow_payoff_plan if blueprint is not None else None,
-        scene="outline",
-    ).strip()
-    if story_foreshadow_payoff_plan_block:
-        parts.append(story_foreshadow_payoff_plan_block)
+    )
+    if runtime_requirement_text:
+        parts.append(runtime_requirement_text)
 
     quality_preference_block = build_quality_preference_block(
         active_guidance.quality_preset,

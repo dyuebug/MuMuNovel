@@ -671,7 +671,8 @@ class OneToManyContextBuilder:
         chapter: Chapter,
         project: Project,
         outline: Optional[Outline],
-        db: AsyncSession
+        db: AsyncSession,
+        filter_character_names: Optional[List[str]] = None,
     ) -> tuple[str, Optional[str]]:
         """构建1-N模式的角色信息（完整版：含年龄、外貌、背景、关系、组织、职业）+ 独立职业详情"""
         from sqlalchemy import or_
@@ -688,8 +689,9 @@ class OneToManyContextBuilder:
         # 构建全局角色名称映射（用于关系查询）
         all_char_map = {c.id: c.name for c in all_characters}
         
-        # 从expansion_plan中提取角色焦点
-        filter_character_names = self._extract_character_focus_names_from_expansion_plan(chapter)
+        # ????????????????? expansion_plan ???
+        if filter_character_names is None:
+            filter_character_names = self._extract_character_focus_names_from_expansion_plan(chapter)
         
         # 筛选角色
         characters = all_characters
@@ -1469,12 +1471,17 @@ class OneToOneContextBuilder:
             characters = characters_result.scalars().all()
             
             if characters:
-                # 构建包含职业信息的角色上下文和职业详情
-                characters_info, careers_info = await self._build_characters_and_careers(
+                # ?? 1-N ?????????????? 1-1 ?????????
+                shared_character_builder = OneToManyContextBuilder(
+                    memory_service=self.memory_service,
+                    foreshadow_service=self.foreshadow_service,
+                )
+                characters_info, careers_info = await shared_character_builder._build_chapter_characters_1n(
+                    chapter=chapter,
+                    project=project,
+                    outline=outline,
                     db=db,
-                    project_id=project.id,
-                    characters=characters,
-                    filter_character_names=character_names
+                    filter_character_names=character_names,
                 )
                 context.chapter_characters = characters_info
                 context.chapter_careers = careers_info

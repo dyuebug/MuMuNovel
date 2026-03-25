@@ -18,10 +18,13 @@ from app.services.prompt_service import (
     build_narrative_blueprint_block,
     build_quality_preference_block,
     build_story_character_focus_anchor_block,
+    build_story_character_state_ledger_block,
     build_story_creation_brief_block,
     build_story_focus_block,
     build_story_foreshadow_payoff_plan_block,
+    build_story_foreshadow_state_ledger_block,
     build_story_long_term_goal_block,
+    build_story_relationship_state_ledger_block,
     build_story_pacing_budget_block,
     build_story_repair_target_block,
 )
@@ -74,6 +77,9 @@ class StoryBlueprint:
     target_word_count: Optional[int] = None
     character_focus_names: tuple[str, ...] = ()
     foreshadow_payoff_plan: tuple[str, ...] = ()
+    character_state_ledger: tuple[str, ...] = ()
+    relationship_state_ledger: tuple[str, ...] = ()
+    foreshadow_state_ledger: tuple[str, ...] = ()
 
     def to_prompt_fields(self) -> Dict[str, Any]:
         return {
@@ -83,6 +89,9 @@ class StoryBlueprint:
             "target_word_count": self.target_word_count or "",
             "story_character_focus": list(self.character_focus_names),
             "story_foreshadow_payoff_plan": list(self.foreshadow_payoff_plan),
+            "story_character_state_ledger": list(self.character_state_ledger),
+            "story_relationship_state_ledger": list(self.relationship_state_ledger),
+            "story_foreshadow_state_ledger": list(self.foreshadow_state_ledger),
         }
 
 
@@ -123,10 +132,16 @@ class StoryPacket:
         target_word_count: Optional[int] = None,
         character_focus_source: Optional[Any] = None,
         foreshadow_payoff_source: Optional[Any] = None,
+        character_state_source: Optional[Any] = None,
+        relationship_state_source: Optional[Any] = None,
+        foreshadow_state_source: Optional[Any] = None,
     ) -> "StoryPacket":
         current = self.blueprint
         next_character_focus = _extract_story_packet_character_focus(character_focus_source)
         next_foreshadow_payoff_plan = _extract_story_packet_foreshadow_payoff_plan(foreshadow_payoff_source)
+        next_character_state_ledger = _extract_story_packet_character_state_ledger(character_state_source)
+        next_relationship_state_ledger = _extract_story_packet_relationship_state_ledger(relationship_state_source)
+        next_foreshadow_state_ledger = _extract_story_packet_foreshadow_state_ledger(foreshadow_state_source)
         blueprint = StoryBlueprint(
             long_term_goal=_normalize_optional_text(long_term_goal) or current.long_term_goal,
             chapter_count=_normalize_optional_int(chapter_count) if chapter_count is not None else current.chapter_count,
@@ -142,6 +157,9 @@ class StoryPacket:
             ),
             character_focus_names=next_character_focus or current.character_focus_names,
             foreshadow_payoff_plan=next_foreshadow_payoff_plan or current.foreshadow_payoff_plan,
+            character_state_ledger=next_character_state_ledger or current.character_state_ledger,
+            relationship_state_ledger=next_relationship_state_ledger or current.relationship_state_ledger,
+            foreshadow_state_ledger=next_foreshadow_state_ledger or current.foreshadow_state_ledger,
         )
         return replace(self, blueprint=blueprint)
 
@@ -167,6 +185,9 @@ class StoryPacket:
         target_word_count: Optional[int] = None,
         character_focus_source: Optional[Any] = None,
         foreshadow_payoff_source: Optional[Any] = None,
+        character_state_source: Optional[Any] = None,
+        relationship_state_source: Optional[Any] = None,
+        foreshadow_state_source: Optional[Any] = None,
     ) -> Dict[str, Any]:
         active_packet = self.with_blueprint(
             chapter_count=chapter_count,
@@ -174,6 +195,9 @@ class StoryPacket:
             target_word_count=target_word_count,
             character_focus_source=character_focus_source,
             foreshadow_payoff_source=foreshadow_payoff_source,
+            character_state_source=character_state_source,
+            relationship_state_source=relationship_state_source,
+            foreshadow_state_source=foreshadow_state_source,
         )
         blueprint = active_packet.blueprint
         return build_prompt_quality_kwargs(
@@ -190,13 +214,98 @@ class StoryPacket:
             chapter_count=blueprint.chapter_count,
             current_chapter_number=blueprint.current_chapter_number,
             target_word_count=blueprint.target_word_count,
+            story_character_state_ledger=blueprint.character_state_ledger,
+            story_relationship_state_ledger=blueprint.relationship_state_ledger,
+            story_foreshadow_state_ledger=blueprint.foreshadow_state_ledger,
         )
+
+    def build_quality_runtime_context(
+        self,
+        *,
+        chapter_count: Optional[int] = None,
+        current_chapter_number: Optional[int] = None,
+        target_word_count: Optional[int] = None,
+        character_focus_source: Optional[Any] = None,
+        foreshadow_payoff_source: Optional[Any] = None,
+        character_state_source: Optional[Any] = None,
+        relationship_state_source: Optional[Any] = None,
+        foreshadow_state_source: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        active_packet = self.with_blueprint(
+            chapter_count=chapter_count,
+            current_chapter_number=current_chapter_number,
+            target_word_count=target_word_count,
+            character_focus_source=character_focus_source,
+            foreshadow_payoff_source=foreshadow_payoff_source,
+            character_state_source=character_state_source,
+            relationship_state_source=relationship_state_source,
+            foreshadow_state_source=foreshadow_state_source,
+        )
+        blueprint = active_packet.blueprint
+        return {
+            "creative_mode": active_packet.guidance.creative_mode or "",
+            "story_focus": active_packet.guidance.story_focus or "",
+            "plot_stage": active_packet.guidance.plot_stage or "",
+            "quality_preset": active_packet.guidance.quality_preset or "",
+            "story_long_term_goal": blueprint.long_term_goal or "",
+            "chapter_count": blueprint.chapter_count,
+            "current_chapter_number": blueprint.current_chapter_number,
+            "target_word_count": blueprint.target_word_count,
+            "character_focus": list(blueprint.character_focus_names),
+            "foreshadow_payoff_plan": list(blueprint.foreshadow_payoff_plan),
+            "character_state_ledger": list(blueprint.character_state_ledger),
+            "relationship_state_ledger": list(blueprint.relationship_state_ledger),
+            "foreshadow_state_ledger": list(blueprint.foreshadow_state_ledger),
+        }
 
     def build_analysis_quality_kwargs(
         self,
         profile: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
         return build_analysis_quality_kwargs(profile, guidance=self.guidance)
+
+
+def build_story_runtime_requirement_text(
+    base_requirements: Optional[str],
+    *,
+    guidance: Optional[StoryGenerationGuidance] = None,
+    story_packet: Optional[StoryPacket] = None,
+    chapter_count: Optional[int] = None,
+    memory_guidance: Optional[str] = None,
+    quality_repair_guidance: Optional[str] = None,
+    scene: str = "outline",
+) -> str:
+    """???????????????/??????????"""
+    active_guidance = (story_packet.guidance if story_packet is not None else guidance) or StoryGenerationGuidance()
+    blueprint = story_packet.blueprint if story_packet is not None else StoryBlueprint()
+    resolved_chapter_count = blueprint.chapter_count or _normalize_optional_int(chapter_count)
+
+    parts: List[str] = []
+
+    def _append_block(block: Optional[str]) -> None:
+        normalized = str(block or "").strip()
+        if normalized:
+            parts.append(normalized)
+
+    _append_block(base_requirements)
+    _append_block(build_story_creation_brief_block(active_guidance.story_creation_brief))
+    _append_block(build_story_long_term_goal_block(blueprint.long_term_goal))
+    _append_block(
+        build_story_pacing_budget_block(
+            resolved_chapter_count,
+            plot_stage=active_guidance.plot_stage,
+            scene=scene,
+        )
+    )
+    _append_block(build_story_character_focus_anchor_block(blueprint.character_focus_names, scene=scene))
+    _append_block(build_story_foreshadow_payoff_plan_block(blueprint.foreshadow_payoff_plan, scene=scene))
+    _append_block(build_story_character_state_ledger_block(blueprint.character_state_ledger, scene=scene))
+    _append_block(build_story_relationship_state_ledger_block(blueprint.relationship_state_ledger, scene=scene))
+    _append_block(build_story_foreshadow_state_ledger_block(blueprint.foreshadow_state_ledger, scene=scene))
+    _append_block(memory_guidance)
+    _append_block(quality_repair_guidance)
+    return "\n\n".join(parts)
+
 
 def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
     if value is None:
@@ -340,6 +449,143 @@ def _extract_story_packet_foreshadow_payoff_plan(source: Optional[Any], *, limit
         if len(normalized) >= limit:
             break
     return tuple(normalized)
+
+
+def _normalize_story_runtime_ledger_items(values: Optional[Any], *, limit: int = 4) -> tuple[str, ...]:
+    return _normalize_string_sequence(values, limit=limit)
+
+
+def _extract_story_packet_section_lines(
+    text: Optional[Any],
+    *,
+    heading_prefix: Optional[str] = None,
+    value_prefixes: Optional[Sequence[str]] = None,
+    limit: int = 4,
+) -> tuple[str, ...]:
+    normalized_text = _normalize_optional_text(text)
+    if not normalized_text:
+        return ()
+
+    matched: list[str] = []
+    current_entity: Optional[str] = None
+    normalized_prefixes = tuple(value_prefixes or ())
+    heading = heading_prefix or ""
+
+    for raw_line in normalized_text.splitlines():
+        line = str(raw_line or "").rstrip()
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if heading and stripped.startswith(heading):
+            current_entity = stripped.replace("【", "").replace("】", "")
+            current_entity = current_entity.split("(", 1)[0].strip() if current_entity else None
+            continue
+        if stripped.startswith("- "):
+            entry = stripped[2:].strip()
+            if entry and entry not in matched:
+                matched.append(entry)
+            if len(matched) >= limit:
+                break
+            continue
+        for prefix in normalized_prefixes:
+            if stripped.startswith(prefix):
+                payload = stripped[len(prefix):].strip()
+                if not payload:
+                    break
+                entry = f"{current_entity}：{payload}" if current_entity else payload
+                if entry not in matched:
+                    matched.append(entry)
+                break
+        if len(matched) >= limit:
+            break
+
+    return tuple(matched[:limit])
+
+
+def _extract_story_packet_character_state_ledger(source: Optional[Any], *, limit: int = 4) -> tuple[str, ...]:
+    if source is None:
+        return ()
+    if isinstance(source, Mapping):
+        candidate = (
+            source.get("story_character_state_ledger")
+            or source.get("character_state_ledger")
+            or source.get("character_arc_snapshot")
+            or source.get("chapter_characters")
+            or source
+        )
+    else:
+        candidate = (
+            _read_story_guidance_value(source, "story_character_state_ledger")
+            or _read_story_guidance_value(source, "character_state_ledger")
+            or _read_story_guidance_value(source, "character_arc_snapshot")
+            or _read_story_guidance_value(source, "chapter_characters")
+            or source
+        )
+
+    if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+        return _normalize_story_runtime_ledger_items(candidate, limit=limit)
+
+    return _extract_story_packet_section_lines(
+        candidate,
+        heading_prefix="【",
+        value_prefixes=("当前状态", "当前状态:", "生存状态", "生存状态:"),
+        limit=limit,
+    )
+
+
+def _extract_story_packet_relationship_state_ledger(source: Optional[Any], *, limit: int = 4) -> tuple[str, ...]:
+    if source is None:
+        return ()
+    if isinstance(source, Mapping):
+        candidate = (
+            source.get("story_relationship_state_ledger")
+            or source.get("relationship_state_ledger")
+            or source.get("chapter_characters")
+            or source
+        )
+    else:
+        candidate = (
+            _read_story_guidance_value(source, "story_relationship_state_ledger")
+            or _read_story_guidance_value(source, "relationship_state_ledger")
+            or _read_story_guidance_value(source, "chapter_characters")
+            or source
+        )
+
+    if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+        return _normalize_story_runtime_ledger_items(candidate, limit=limit)
+
+    return _extract_story_packet_section_lines(
+        candidate,
+        heading_prefix="【",
+        value_prefixes=("关系网络:", "关系网络"),
+        limit=limit,
+    )
+
+
+def _extract_story_packet_foreshadow_state_ledger(source: Optional[Any], *, limit: int = 4) -> tuple[str, ...]:
+    if source is None:
+        return ()
+    if isinstance(source, Mapping):
+        candidate = (
+            source.get("story_foreshadow_state_ledger")
+            or source.get("foreshadow_state_ledger")
+            or source.get("foreshadow_reminders")
+            or source.get("story_foreshadow_payoff_plan")
+            or source
+        )
+    else:
+        candidate = (
+            _read_story_guidance_value(source, "story_foreshadow_state_ledger")
+            or _read_story_guidance_value(source, "foreshadow_state_ledger")
+            or _read_story_guidance_value(source, "foreshadow_reminders")
+            or _read_story_guidance_value(source, "story_foreshadow_payoff_plan")
+            or source
+        )
+
+    if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+        return _normalize_story_runtime_ledger_items(candidate, limit=limit)
+
+    return _extract_story_packet_foreshadow_payoff_plan(candidate, limit=limit)
 
 
 
@@ -654,6 +900,9 @@ def build_prompt_quality_kwargs(
     chapter_count: Optional[int] = None,
     current_chapter_number: Optional[int] = None,
     target_word_count: Optional[int] = None,
+    story_character_state_ledger: Optional[Sequence[str]] = None,
+    story_relationship_state_ledger: Optional[Sequence[str]] = None,
+    story_foreshadow_state_ledger: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     source = profile or {}
     active_guidance = guidance or StoryGenerationGuidance()
@@ -663,6 +912,9 @@ def build_prompt_quality_kwargs(
     resolved_story_long_term_goal = _normalize_optional_text(story_long_term_goal)
     resolved_story_character_focus = _normalize_string_sequence(story_character_focus, limit=4)
     resolved_story_foreshadow_payoff_plan = _normalize_string_sequence(story_foreshadow_payoff_plan, limit=3)
+    resolved_story_character_state_ledger = _normalize_string_sequence(story_character_state_ledger, limit=4)
+    resolved_story_relationship_state_ledger = _normalize_string_sequence(story_relationship_state_ledger, limit=4)
+    resolved_story_foreshadow_state_ledger = _normalize_string_sequence(story_foreshadow_state_ledger, limit=4)
     resolved_chapter_count = _normalize_optional_int(chapter_count)
     resolved_current_chapter_number = _normalize_optional_int(current_chapter_number)
     resolved_target_word_count = _normalize_optional_int(target_word_count)
@@ -680,6 +932,9 @@ def build_prompt_quality_kwargs(
         "story_long_term_goal": resolved_story_long_term_goal or "",
         "story_character_focus": list(resolved_story_character_focus),
         "story_foreshadow_payoff_plan": list(resolved_story_foreshadow_payoff_plan),
+        "story_character_state_ledger": list(resolved_story_character_state_ledger),
+        "story_relationship_state_ledger": list(resolved_story_relationship_state_ledger),
+        "story_foreshadow_state_ledger": list(resolved_story_foreshadow_state_ledger),
         "creative_mode_block": build_creative_mode_block(active_guidance.creative_mode, scene=scene),
         "story_focus_block": build_story_focus_block(active_guidance.story_focus, scene=scene),
         "story_creation_brief_block": build_story_creation_brief_block(active_guidance.story_creation_brief),
@@ -690,6 +945,18 @@ def build_prompt_quality_kwargs(
         ),
         "story_foreshadow_payoff_plan_block": build_story_foreshadow_payoff_plan_block(
             resolved_story_foreshadow_payoff_plan,
+            scene=scene,
+        ),
+        "story_character_state_ledger_block": build_story_character_state_ledger_block(
+            resolved_story_character_state_ledger,
+            scene=scene,
+        ),
+        "story_relationship_state_ledger_block": build_story_relationship_state_ledger_block(
+            resolved_story_relationship_state_ledger,
+            scene=scene,
+        ),
+        "story_foreshadow_state_ledger_block": build_story_foreshadow_state_ledger_block(
+            resolved_story_foreshadow_state_ledger,
             scene=scene,
         ),
         "story_pacing_budget_block": build_story_pacing_budget_block(
@@ -855,4 +1122,31 @@ async def resolve_chapter_quality_profile(
         except Exception as mcp_error:
             logger.warning(f"⚠️ {log_prefix} - 获取MCP参考块失败，已回退为空: {mcp_error}")
 
+    return profile
+
+
+def clone_chapter_quality_profile(
+    base_profile: Optional[Mapping[str, Any]],
+    *,
+    external_assets: Optional[List[Dict[str, Any]]] = None,
+    reference_assets: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """?????????????????????????"""
+    profile = dict(base_profile or {})
+    normalized_external_assets = tuple(external_assets or ())
+    base_reference_assets = profile.get("reference_assets")
+    if reference_assets is None:
+        normalized_reference_assets = tuple(external_assets or base_reference_assets or ())
+    else:
+        normalized_reference_assets = tuple(reference_assets or ())
+
+    profile["genre"] = str(profile.get("genre") or "")
+    profile["resolved_style_id"] = profile.get("resolved_style_id")
+    profile["style_name"] = str(profile.get("style_name") or "")
+    profile["style_preset_id"] = str(profile.get("style_preset_id") or "")
+    profile["style_content"] = str(profile.get("style_content") or "")
+    profile["external_assets"] = normalized_external_assets
+    profile["reference_assets"] = normalized_reference_assets
+    profile["mcp_guard"] = str(profile.get("mcp_guard") or "")
+    profile["mcp_references"] = str(profile.get("mcp_references") or "")
     return profile

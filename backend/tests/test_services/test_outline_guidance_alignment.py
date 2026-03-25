@@ -147,6 +147,9 @@ def test_should_merge_outline_requirements_with_story_packet_blueprint_blocks():
         chapter_count=10,
         character_focus_source=["Lin", "Su"],
         foreshadow_payoff_source=["recover the hidden key"],
+        character_state_source={"chapter_characters": "????????\n- Lin????????"},
+        relationship_state_source={"chapter_characters": "????????\n- Lin/Su??????????"},
+        foreshadow_state_source={"foreshadow_reminders": "????????\n- hidden key????????????"},
     )
 
     merged = _merge_outline_requirements(
@@ -175,6 +178,9 @@ def test_should_merge_wizard_outline_requirements_with_story_packet_blueprint_bl
         chapter_count=8,
         character_focus_source=["Lin", "Su"],
         foreshadow_payoff_source=["recover the hidden key"],
+        character_state_source={"chapter_characters": "????????\n- Lin????????"},
+        relationship_state_source={"chapter_characters": "????????\n- Lin/Su??????????"},
+        foreshadow_state_source={"foreshadow_reminders": "????????\n- hidden key????????????"},
     )
 
     merged = _merge_wizard_outline_requirements(

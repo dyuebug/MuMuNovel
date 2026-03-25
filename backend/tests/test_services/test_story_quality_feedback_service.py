@@ -27,7 +27,7 @@ def test_should_build_chapter_repair_guidance_from_low_metrics():
     assert guidance["focus_areas"][:2] == ["conflict", "outline"]
     assert any("冲突" in item for item in guidance["repair_targets"])
     assert any("语气" in item for item in guidance["preserve_strengths"])
-    assert "表面润色" in guidance["summary"]
+    assert "?????" in guidance["summary"]
 
 
 def test_should_support_batch_summary_and_pacing_guidance():
@@ -93,7 +93,8 @@ def test_should_build_repairable_quality_gate_from_single_weak_metric():
     assert quality_gate["status"] == "repairable"
     assert quality_gate["decision"] == "auto_repair"
     assert quality_gate["can_auto_repair"] is True
-    assert quality_gate["failed_metrics"][0]["label"] == "节奏稳定度"
+    assert quality_gate["failed_metrics"][0]["key"] == "pacing_score"
+
 
 
 def test_should_build_blocked_quality_gate_from_multiple_weak_metrics():
@@ -176,3 +177,113 @@ def test_should_build_outline_quality_metrics_summary_from_recent_history():
     assert summary["repair_guidance"]["focus_areas"]
     assert summary["quality_gate"]["status"] == "blocked"
     assert summary["quality_gate"]["failed_metrics"][0]["label"] == "冲突链推进"
+
+
+
+def test_should_use_opening_stage_thresholds_for_quality_gate():
+    quality_gate = build_quality_gate_decision(
+        {
+            "overall_score": 83.0,
+            "conflict_chain_hit_rate": 86.0,
+            "rule_grounding_hit_rate": 87.0,
+            "outline_alignment_rate": 84.0,
+            "dialogue_naturalness_rate": 81.0,
+            "opening_hook_rate": 80.0,
+            "payoff_chain_rate": 78.0,
+            "cliffhanger_rate": 83.0,
+            "quality_runtime_context": {
+                "plot_stage": "opening",
+                "chapter_count": 12,
+                "current_chapter_number": 1,
+            },
+        },
+        scope="chapter",
+    )
+
+    assert quality_gate["quality_stage"] == "opening"
+    assert quality_gate["manual_review_threshold"] == 68.0
+    assert quality_gate["allow_save_threshold"] == 80.0
+    assert quality_gate["allow_save"] is True
+
+
+
+def test_should_raise_ending_payoff_threshold_when_foreshadow_pressure_is_high():
+    quality_gate = build_quality_gate_decision(
+        {
+            "overall_score": 84.0,
+            "conflict_chain_hit_rate": 84.0,
+            "rule_grounding_hit_rate": 85.0,
+            "outline_alignment_rate": 84.0,
+            "dialogue_naturalness_rate": 82.0,
+            "opening_hook_rate": 78.0,
+            "payoff_chain_rate": 74.0,
+            "cliffhanger_rate": 83.0,
+            "quality_runtime_context": {
+                "plot_stage": "ending",
+                "chapter_count": 12,
+                "current_chapter_number": 11,
+                "foreshadow_state_ledger": [
+                    "hidden key????????????",
+                    "banquet trap????????",
+                    "royal seal??????????",
+                ],
+            },
+        },
+        scope="chapter",
+    )
+
+    assert quality_gate["quality_stage"] == "ending"
+    assert quality_gate["allow_save_threshold"] == 85.0
+    assert quality_gate["quality_runtime_pressure"]["foreshadow_state_count"] == 3
+    assert quality_gate["decision"] == "manual_review"
+    assert quality_gate["requires_manual_review"] is True
+
+
+
+def test_should_aggregate_runtime_context_and_trend_from_history():
+    summary = build_quality_metrics_summary(
+        [
+            {
+                "overall_score": 72.0,
+                "conflict_chain_hit_rate": 58.0,
+                "rule_grounding_hit_rate": 76.0,
+                "outline_alignment_rate": 61.0,
+                "dialogue_naturalness_rate": 80.0,
+                "opening_hook_rate": 67.0,
+                "payoff_chain_rate": 66.0,
+                "cliffhanger_rate": 59.0,
+                "quality_runtime_context": {
+                    "plot_stage": "development",
+                    "chapter_count": 12,
+                    "current_chapter_number": 4,
+                    "character_state_ledger": ["Lin????????"],
+                },
+            },
+            {
+                "overall_score": 76.0,
+                "conflict_chain_hit_rate": 64.0,
+                "rule_grounding_hit_rate": 79.0,
+                "outline_alignment_rate": 67.0,
+                "dialogue_naturalness_rate": 82.0,
+                "opening_hook_rate": 69.0,
+                "payoff_chain_rate": 68.0,
+                "cliffhanger_rate": 63.0,
+                "quality_runtime_context": {
+                    "plot_stage": "development",
+                    "chapter_count": 12,
+                    "current_chapter_number": 5,
+                    "relationship_state_ledger": ["Lin/Su??????????"],
+                    "foreshadow_state_ledger": ["hidden key????????????"],
+                },
+            },
+        ],
+        scope="outline",
+    )
+
+    assert summary is not None
+    assert summary["overall_score_delta"] == 4.0
+    assert summary["overall_score_trend"] == "rising"
+    assert summary["quality_runtime_context"]["current_chapter_number"] == 5
+    assert summary["quality_runtime_context"]["character_state_ledger"] == ["Lin????????"]
+    assert summary["quality_runtime_context"]["relationship_state_ledger"] == ["Lin/Su??????????"]
+    assert summary["quality_runtime_context"]["foreshadow_state_ledger"] == ["hidden key????????????"]

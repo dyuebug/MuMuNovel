@@ -338,6 +338,15 @@ def test_should_build_prompt_quality_kwargs_with_story_blueprint_runtime_blocks(
         target_word_count=2600,
         character_focus_source=["Lin", "Su"],
         foreshadow_payoff_source=["recover the hidden key", "pay off the banquet ambush"],
+        character_state_source={
+            "story_character_state_ledger": ["Lin????????"],
+        },
+        relationship_state_source={
+            "story_relationship_state_ledger": ["Lin/Su??????????"],
+        },
+        foreshadow_state_source={
+            "story_foreshadow_state_ledger": ["hidden key????????????"],
+        },
     )
 
     kwargs = packet.build_prompt_quality_kwargs({"genre": "mystery"})
@@ -348,7 +357,68 @@ def test_should_build_prompt_quality_kwargs_with_story_blueprint_runtime_blocks(
         "recover the hidden key",
         "pay off the banquet ambush",
     ]
-    assert "【长线目标锚点】" in kwargs["story_long_term_goal_block"]
-    assert "【章节角色焦点锚点】" in kwargs["story_character_focus_anchor_block"]
-    assert "【章节伏笔兑现计划】" in kwargs["story_foreshadow_payoff_plan_block"]
-    assert "【章节节奏预算】" in kwargs["story_pacing_budget_block"]
+    assert kwargs["story_character_state_ledger"] == ["Lin????????"]
+    assert kwargs["story_relationship_state_ledger"] == ["Lin/Su??????????"]
+    assert kwargs["story_foreshadow_state_ledger"] == ["hidden key????????????"]
+    assert "The lead must seize the capital before the enemy closes in." in kwargs["story_long_term_goal_block"]
+    assert "Lin" in kwargs["story_character_focus_anchor_block"]
+    assert "recover the hidden key" in kwargs["story_foreshadow_payoff_plan_block"]
+    assert "Lin????????" in kwargs["story_character_state_ledger_block"]
+    assert "Lin/Su??????????" in kwargs["story_relationship_state_ledger_block"]
+    assert "hidden key????????????" in kwargs["story_foreshadow_state_ledger_block"]
+    assert "2600" in kwargs["story_pacing_budget_block"]
+
+
+def test_should_build_quality_runtime_context_with_story_ledgers():
+    packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="development",
+            story_creation_brief="keep the pressure visible",
+        ),
+        source="chapter-generate-request",
+    ).with_blueprint(
+        long_term_goal="Keep pushing toward the capital.",
+        chapter_count=12,
+        current_chapter_number=6,
+        target_word_count=2800,
+        character_focus_source=["Lin", "Su"],
+        foreshadow_payoff_source=["recover the hidden key"],
+        character_state_source={
+            "story_character_state_ledger": ["Lin????????"],
+        },
+        relationship_state_source={
+            "story_relationship_state_ledger": ["Lin/Su??????????"],
+        },
+        foreshadow_state_source={
+            "story_foreshadow_state_ledger": ["hidden key????????????"],
+        },
+    )
+
+    runtime_context = packet.build_quality_runtime_context(
+        chapter_count=12,
+        current_chapter_number=6,
+        target_word_count=2800,
+        character_focus_source=["Lin", "Su"],
+        foreshadow_payoff_source=["recover the hidden key"],
+        character_state_source={
+            "story_character_state_ledger": ["Lin????????"],
+        },
+        relationship_state_source={
+            "story_relationship_state_ledger": ["Lin/Su??????????"],
+        },
+        foreshadow_state_source={
+            "story_foreshadow_state_ledger": ["hidden key????????????"],
+        },
+    )
+
+    assert runtime_context["plot_stage"] == "development"
+    assert runtime_context["chapter_count"] == 12
+    assert runtime_context["current_chapter_number"] == 6
+    assert runtime_context["target_word_count"] == 2800
+    assert runtime_context["character_focus"] == ["Lin", "Su"]
+    assert runtime_context["foreshadow_payoff_plan"] == ["recover the hidden key"]
+    assert runtime_context["character_state_ledger"] == ["Lin????????"]
+    assert runtime_context["relationship_state_ledger"] == ["Lin/Su??????????"]
+    assert runtime_context["foreshadow_state_ledger"] == ["hidden key????????????"]
