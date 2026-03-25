@@ -88,8 +88,8 @@ graph TD
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/xiamuceer-j/MuMuAINovel.git
-cd MuMuAINovel
+git clone https://github.com/dyuebug/MuMuNovel.git
+cd MuMuNovel
 
 # 2. 配置环境变量
 cp backend/.env.example .env
@@ -401,7 +401,7 @@ alembic upgrade head
 
 ## 相关资源
 
-- **项目仓库**: https://github.com/xiamuceer-j/MuMuAINovel
+- **项目仓库**: https://github.com/dyuebug/MuMuNovel
 - **API 文档**: http://localhost:8000/docs (Swagger UI)
 - **ReDoc**: http://localhost:8000/redoc
 - **Linux DO 讨论**: https://linux.do/t/topic/1106333
@@ -424,3 +424,4 @@ alembic upgrade head
 **最后更新**: 2026-02-21 23:14:25
 **文档版本**: 1.0.0
 **项目版本**: 1.3.5
+
