@@ -61,6 +61,7 @@ from app.services.plot_expansion_service import PlotExpansionService
 from app.services.foreshadow_service import foreshadow_service
 from app.services.chapter_quality_context_service import (
     StoryGenerationGuidance,
+    StoryPacket,
     build_story_generation_packet,
     build_story_repair_diagnostic_context,
 )
@@ -129,9 +130,10 @@ def _merge_outline_requirements(
     memory_guidance: Optional[str] = None,
     quality_repair_guidance: Optional[str] = None,
     guidance: Optional[StoryGenerationGuidance] = None,
+    story_packet: Optional[StoryPacket] = None,
 ) -> str:
     """Merge freeform requirements with outline quality guidance."""
-    active_guidance = guidance or StoryGenerationGuidance(
+    active_guidance = (story_packet.guidance if story_packet is not None else guidance) or StoryGenerationGuidance(
         creative_mode=creative_mode,
         story_focus=story_focus,
         plot_stage=plot_stage,
@@ -1522,7 +1524,6 @@ async def new_outline_generator(
             source=data,
             source_label="outline-create-request",
         )
-        generation_guidance = story_packet.guidance
         prompt = PromptService.format_prompt(
             template,
             title=project.title,
@@ -1538,7 +1539,7 @@ async def new_outline_generator(
             requirements=_merge_outline_requirements(
                 data.get("requirements"),
                 chapter_count=chapter_count,
-                guidance=generation_guidance,
+                story_packet=story_packet,
             ),
             mcp_references="",
             **story_packet.to_prompt_fields(),
@@ -1964,7 +1965,6 @@ async def continue_outline_generator(
                 source=data,
                 source_label="outline-continue-request",
             )
-            generation_guidance = story_packet.guidance
             prompt = PromptService.format_prompt(
                 template,
                 # 基础信息
@@ -1991,7 +1991,7 @@ async def continue_outline_generator(
                     chapter_count=current_batch_size,
                     memory_guidance=context.get('memory_guidance'),
                     quality_repair_guidance=context.get('quality_repair_guidance'),
-                    guidance=generation_guidance,
+                    story_packet=story_packet,
                 ),
                 mcp_references="",
                 **story_packet.to_prompt_fields()

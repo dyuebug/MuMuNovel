@@ -1,6 +1,7 @@
 from app.api.outlines import _build_outline_memory_guidance, _merge_outline_requirements
 from app.api.wizard_stream import _merge_wizard_outline_requirements
 from app.schemas.outline import OutlineGenerateRequest
+from app.services.chapter_quality_context_service import StoryGenerationGuidance, StoryPacket
 
 
 def test_should_normalize_story_creation_brief_in_outline_generate_request():
@@ -69,3 +70,63 @@ def test_should_merge_wizard_outline_requirements_with_generation_guidance():
     assert "主线推进" in merged
     assert "发展阶段" in merged
     assert "开局部分" in merged
+
+
+
+def test_should_merge_outline_requirements_from_story_packet():
+    story_packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="payoff",
+            story_focus="foreshadow_payoff",
+            plot_stage="ending",
+            story_creation_brief="????????",
+            quality_preset="tight_prose",
+            quality_notes="???????",
+        ),
+        source="outline-create-request",
+    )
+
+    merged = _merge_outline_requirements(
+        "??????",
+        chapter_count=4,
+        memory_guidance="???????????\n1. ????????",
+        story_packet=story_packet,
+    )
+
+    assert "??????" in merged
+    assert "????????" in merged
+    assert "???????" in merged
+    assert "????????" in merged
+
+
+def test_should_merge_wizard_outline_requirements_from_story_packet():
+    story_packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="development",
+            story_creation_brief="???????",
+            quality_preset="plot_drive",
+            quality_notes="?????",
+        ),
+        source="wizard-outline-request",
+    )
+
+    merged = _merge_wizard_outline_requirements(
+        "??????",
+        outline_count=3,
+        creative_mode=None,
+        story_focus=None,
+        plot_stage=None,
+        story_creation_brief=None,
+        quality_preset=None,
+        quality_notes=None,
+        story_packet=story_packet,
+    )
+
+    assert "??????" in merged
+    assert "???????" in merged
+    assert "?????" in merged
+    assert "????" in merged
+    assert "????" in merged
+    assert "????" in merged

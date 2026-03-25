@@ -30,6 +30,7 @@ from app.services.plot_expansion_service import PlotExpansionService
 from app.services.chapter_web_research_service import chapter_web_research_service
 from app.services.chapter_quality_context_service import (
     StoryGenerationGuidance,
+    StoryPacket,
     build_story_generation_packet,
 )
 from app.logger import get_logger
@@ -67,8 +68,9 @@ def _merge_wizard_outline_requirements(
     quality_preset: Optional[str],
     quality_notes: Optional[str],
     guidance: Optional[StoryGenerationGuidance] = None,
+    story_packet: Optional[StoryPacket] = None,
 ) -> str:
-    active_guidance = guidance or StoryGenerationGuidance(
+    active_guidance = (story_packet.guidance if story_packet is not None else guidance) or StoryGenerationGuidance(
         creative_mode=creative_mode,
         story_focus=story_focus,
         plot_stage=plot_stage,
@@ -1694,17 +1696,16 @@ async def outline_generator(
             quality_notes=quality_notes,
             source_label="wizard-outline-request",
         )
-        generation_guidance = story_packet.guidance
         outline_requirements = _merge_wizard_outline_requirements(
             requirements,
             outline_count=outline_count,
-            creative_mode=generation_guidance.creative_mode,
-            story_focus=generation_guidance.story_focus,
-            plot_stage=generation_guidance.plot_stage,
-            story_creation_brief=generation_guidance.story_creation_brief,
-            quality_preset=generation_guidance.quality_preset,
-            quality_notes=generation_guidance.quality_notes,
-            guidance=generation_guidance,
+            creative_mode=story_packet.guidance.creative_mode,
+            story_focus=story_packet.guidance.story_focus,
+            plot_stage=story_packet.guidance.plot_stage,
+            story_creation_brief=story_packet.guidance.story_creation_brief,
+            quality_preset=story_packet.guidance.quality_preset,
+            quality_notes=story_packet.guidance.quality_notes,
+            story_packet=story_packet,
         )
         
         # 获取自定义提示词模板
