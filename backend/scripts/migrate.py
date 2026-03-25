@@ -1,14 +1,24 @@
 #!/usr/bin/env python3
 """
-数据库自动迁移脚本
-用于开发和生产环境的数据库迁移管理
+Database migration utility.
+Used by local/dev/prod deployment flows to serialize Alembic upgrades.
 """
-import subprocess
-import sys
+from __future__ import annotations
+
+import contextlib
+import hashlib
 import os
 from pathlib import Path
+import subprocess
+import sys
+import time
+from typing import Iterator
 
-# 添加项目路径
+try:
+    import psycopg2
+except Exception:  # pragma: no cover
+    psycopg2 = None
+
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
@@ -16,141 +26,286 @@ from app.logger import get_logger
 
 logger = get_logger(__name__)
 
+MIGRATION_LOCK_NAME = "mumuainovel:alembic"
+MIGRATION_LOCK_TIMEOUT_SECONDS = max(int(os.getenv("MIGRATION_LOCK_TIMEOUT_SECONDS", "300") or 300), 5)
+MIGRATION_LOCK_POLL_INTERVAL = max(float(os.getenv("MIGRATION_LOCK_POLL_INTERVAL", "1") or 1), 0.2)
+
 
 def run_command(cmd: list, description: str) -> bool:
-    """运行命令并返回是否成功"""
+    """Run a shell command and return True on success."""
     try:
-        logger.info(f"🚀 {description}...")
+        logger.info("Starting %s...", description)
         result = subprocess.run(
             cmd,
             cwd=project_root,
             capture_output=True,
             text=True,
-            check=False
+            check=False,
         )
-        
+
         if result.returncode == 0:
-            logger.info(f"✅ {description}成功")
+            logger.info("Succeeded: %s", description)
             if result.stdout:
                 print(result.stdout)
             return True
-        else:
-            logger.error(f"❌ {description}失败")
-            if result.stderr:
-                print(result.stderr, file=sys.stderr)
-            return False
-    except Exception as e:
-        logger.error(f"❌ {description}异常: {e}")
+
+        logger.error("Failed: %s", description)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
         return False
+    except Exception as exc:
+        logger.error("Exception while running %s: %s", description, exc)
+        return False
+
+
+def _resolve_database_url() -> str:
+    return os.getenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://mumuai:password@localhost:5432/mumuai_novel",
+    )
+
+
+def _resolve_sync_database_url() -> str | None:
+    database_url = _resolve_database_url().strip()
+    if not database_url:
+        return None
+    if database_url.startswith("postgresql+asyncpg://"):
+        return database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    if database_url.startswith("postgresql+psycopg2://"):
+        return database_url.replace("postgresql+psycopg2://", "postgresql://", 1)
+    if database_url.startswith("postgresql://"):
+        return database_url
+    return None
+
+
+def _advisory_lock_key(name: str) -> int:
+    digest = hashlib.sha1(name.encode("utf-8")).hexdigest()
+    return int(digest[:15], 16)
+
+
+@contextlib.contextmanager
+def _postgres_migration_lock(description: str) -> Iterator[None]:
+    if psycopg2 is None:
+        raise RuntimeError("psycopg2 is unavailable")
+
+    sync_database_url = _resolve_sync_database_url()
+    if not sync_database_url:
+        raise RuntimeError("current database is not PostgreSQL")
+
+    lock_key = _advisory_lock_key(MIGRATION_LOCK_NAME)
+    started_at = time.monotonic()
+    connection = psycopg2.connect(sync_database_url)
+    connection.autocommit = True
+    cursor = connection.cursor()
+    acquired = False
+
+    try:
+        while time.monotonic() - started_at < MIGRATION_LOCK_TIMEOUT_SECONDS:
+            cursor.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
+            row = cursor.fetchone()
+            acquired = bool(row and row[0])
+            if acquired:
+                logger.info("Acquired PostgreSQL migration lock: %s", description)
+                break
+            logger.info("Another migration is in progress, waiting for advisory lock...")
+            time.sleep(MIGRATION_LOCK_POLL_INTERVAL)
+
+        if not acquired:
+            raise TimeoutError(f"Timed out waiting for migration lock after {MIGRATION_LOCK_TIMEOUT_SECONDS}s")
+
+        yield
+    finally:
+        try:
+            if acquired:
+                cursor.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+                logger.info("Released PostgreSQL migration lock")
+        finally:
+            cursor.close()
+            connection.close()
+
+
+@contextlib.contextmanager
+def _file_migration_lock(description: str) -> Iterator[None]:
+    lock_path = project_root / ".migration-singleflight.lock"
+    lock_path.touch(exist_ok=True)
+    lock_file = lock_path.open("r+", encoding="utf-8")
+    started_at = time.monotonic()
+    acquired = False
+
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            while time.monotonic() - started_at < MIGRATION_LOCK_TIMEOUT_SECONDS:
+                try:
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    acquired = True
+                    break
+                except OSError:
+                    logger.info("Another migration is in progress, waiting for file lock...")
+                    time.sleep(MIGRATION_LOCK_POLL_INTERVAL)
+        else:
+            import fcntl
+
+            while time.monotonic() - started_at < MIGRATION_LOCK_TIMEOUT_SECONDS:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except OSError:
+                    logger.info("Another migration is in progress, waiting for file lock...")
+                    time.sleep(MIGRATION_LOCK_POLL_INTERVAL)
+
+        if not acquired:
+            raise TimeoutError(f"Timed out waiting for file lock after {MIGRATION_LOCK_TIMEOUT_SECONDS}s")
+
+        logger.info("Acquired migration file lock: %s", description)
+        yield
+    finally:
+        try:
+            if acquired:
+                if os.name == "nt":
+                    import msvcrt
+
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                logger.info("Released migration file lock")
+        finally:
+            lock_file.close()
+
+
+@contextlib.contextmanager
+def _migration_single_flight(description: str) -> Iterator[None]:
+    try:
+        with _postgres_migration_lock(description):
+            yield
+            return
+    except Exception as exc:
+        logger.warning("PostgreSQL advisory lock unavailable, falling back to file lock: %s", exc)
+
+    with _file_migration_lock(description):
+        yield
 
 
 def create_migration(message: str = None):
-    """创建新的迁移版本"""
+    """Create a new Alembic revision."""
     if not message:
-        message = input("请输入迁移描述: ").strip()
+        message = input("Enter migration message: ").strip()
         if not message:
             message = "auto_migration"
-    
+
     cmd = ["alembic", "revision", "--autogenerate", "-m", message]
-    return run_command(cmd, f"生成迁移: {message}")
+    return run_command(cmd, f"create migration: {message}")
+
+
+def ensure_alembic_version_table_capacity() -> bool:
+    """Check Alembic version table capacity before upgrade."""
+    cmd = [sys.executable, "tools/ensure_alembic_version_table_capacity.py"]
+    return run_command(cmd, "check alembic version table capacity")
 
 
 def upgrade_database(revision: str = "head"):
-    """升级数据库到指定版本"""
-    cmd = ["alembic", "upgrade", revision]
-    return run_command(cmd, f"升级数据库到: {revision}")
+    """Upgrade database to the target revision."""
+    with _migration_single_flight(f"upgrade:{revision}"):
+        if not ensure_alembic_version_table_capacity():
+            return False
+        cmd = ["alembic", "upgrade", revision]
+        return run_command(cmd, f"upgrade database to {revision}")
 
 
 def downgrade_database(revision: str = "-1"):
-    """降级数据库到指定版本"""
-    cmd = ["alembic", "downgrade", revision]
-    return run_command(cmd, f"降级数据库到: {revision}")
+    """Downgrade database to a target revision."""
+    with _migration_single_flight(f"downgrade:{revision}"):
+        cmd = ["alembic", "downgrade", revision]
+        return run_command(cmd, f"downgrade database to {revision}")
 
 
 def show_current():
-    """显示当前数据库版本"""
+    """Show current revision."""
     cmd = ["alembic", "current"]
-    return run_command(cmd, "查看当前版本")
+    return run_command(cmd, "show current revision")
 
 
 def show_history():
-    """显示迁移历史"""
+    """Show migration history."""
     cmd = ["alembic", "history", "--verbose"]
-    return run_command(cmd, "查看迁移历史")
+    return run_command(cmd, "show migration history")
 
 
 def show_heads():
-    """显示最新版本"""
+    """Show latest heads."""
     cmd = ["alembic", "heads"]
-    return run_command(cmd, "查看最新版本")
+    return run_command(cmd, "show migration heads")
 
 
 def stamp_database(revision: str = "head"):
-    """标记数据库版本（不执行迁移）"""
-    cmd = ["alembic", "stamp", revision]
-    return run_command(cmd, f"标记数据库版本: {revision}")
+    """Stamp revision without executing migrations."""
+    with _migration_single_flight(f"stamp:{revision}"):
+        cmd = ["alembic", "stamp", revision]
+        return run_command(cmd, f"stamp database as {revision}")
 
 
 def auto_migrate():
-    """自动迁移：生成并执行迁移"""
+    """Create and execute an automatic migration."""
     logger.info("=" * 60)
-    logger.info("🔄 开始自动迁移流程")
+    logger.info("Starting automatic migration flow")
     logger.info("=" * 60)
-    
-    # 1. 创建迁移
+
     if not create_migration("auto_migration"):
-        logger.error("❌ 自动迁移失败：无法生成迁移")
+        logger.error("Automatic migration failed while creating revision")
         return False
-    
-    # 2. 执行迁移
+
     if not upgrade_database():
-        logger.error("❌ 自动迁移失败：无法执行迁移")
+        logger.error("Automatic migration failed while upgrading database")
         return False
-    
+
     logger.info("=" * 60)
-    logger.info("✅ 自动迁移完成")
+    logger.info("Automatic migration flow completed")
     logger.info("=" * 60)
     return True
 
 
 def init_database():
-    """初始化数据库（首次部署）"""
+    """Initialize database for first deployment."""
     logger.info("=" * 60)
-    logger.info("🔧 初始化数据库")
+    logger.info("Initializing database")
     logger.info("=" * 60)
-    
-    # 创建初始迁移
+
     if not create_migration("initial_migration"):
-        logger.warning("⚠️ 无法创建初始迁移，可能已存在")
-    
-    # 执行迁移
+        logger.warning("Unable to create initial migration, it may already exist")
+
     if not upgrade_database():
-        logger.error("❌ 初始化失败")
+        logger.error("Database initialization failed")
         return False
-    
+
     logger.info("=" * 60)
-    logger.info("✅ 数据库初始化完成")
+    logger.info("Database initialization completed")
     logger.info("=" * 60)
     return True
 
 
 def main():
-    """主函数"""
+    """CLI entrypoint."""
     if len(sys.argv) < 2:
-        print("使用方法:")
-        print("  python migrate.py create [message]    - 创建新迁移")
-        print("  python migrate.py upgrade [revision]  - 升级数据库（默认: head）")
-        print("  python migrate.py downgrade [revision] - 降级数据库（默认: -1）")
-        print("  python migrate.py current            - 显示当前版本")
-        print("  python migrate.py history            - 显示迁移历史")
-        print("  python migrate.py heads              - 显示最新版本")
-        print("  python migrate.py stamp [revision]   - 标记版本（默认: head）")
-        print("  python migrate.py auto               - 自动迁移（生成+执行）")
-        print("  python migrate.py init               - 初始化数据库")
+        print("Usage:")
+        print("  python migrate.py create [message]     - create revision")
+        print("  python migrate.py upgrade [revision]   - upgrade database (default: head)")
+        print("  python migrate.py downgrade [revision] - downgrade database (default: -1)")
+        print("  python migrate.py current              - show current revision")
+        print("  python migrate.py history              - show migration history")
+        print("  python migrate.py heads                - show migration heads")
+        print("  python migrate.py stamp [revision]     - stamp revision (default: head)")
+        print("  python migrate.py auto                 - auto create + upgrade")
+        print("  python migrate.py init                 - initialize database")
         sys.exit(1)
-    
+
     command = sys.argv[1]
-    
+
     if command == "create":
         message = sys.argv[2] if len(sys.argv) > 2 else None
         success = create_migration(message)
@@ -174,9 +329,9 @@ def main():
     elif command == "init":
         success = init_database()
     else:
-        logger.error(f"❌ 未知命令: {command}")
+        logger.error("Unknown command: %s", command)
         success = False
-    
+
     sys.exit(0 if success else 1)
 
 

@@ -1,7 +1,9 @@
 """Database connection and session management."""
 
 import asyncio
+import copy
 from datetime import datetime
+import time
 from typing import Any, Dict
 
 from fastapi import HTTPException, Request
@@ -46,6 +48,8 @@ from app.models import (  # noqa: E402
 _engine_cache: Dict[str, Any] = {}
 _session_factory_cache: Dict[str, Any] = {}
 _cache_lock = asyncio.Lock()
+_health_check_cache: Dict[str, Dict[str, Any]] = {}
+_health_check_lock = asyncio.Lock()
 
 _session_stats = {
     "created": 0,
@@ -225,6 +229,7 @@ async def close_db():
     engines = list(_engine_cache.values())
     _engine_cache.clear()
     _session_factory_cache.clear()
+    _health_check_cache.clear()
 
     for engine in engines:
         try:
@@ -310,46 +315,114 @@ async def get_database_stats():
     }
 
 
-async def check_database_health(user_id: str = None) -> dict:
-    """Run a lightweight database health check."""
-    result = {
-        "healthy": True,
-        "checks": {},
-        "timestamp": datetime.now().isoformat(),
-    }
+def _health_check_cache_key(user_id: str | None) -> str:
+    return user_id or "_health_check_"
 
-    try:
-        engine = await get_engine(user_id or "_health_check_")
-        session_factory = await get_session_factory(user_id or "_health_check_")
 
-        async with session_factory() as session:
-            await session.execute(text("SELECT 1"))
-            result["checks"]["connection"] = {"status": "ok", "healthy": True}
+def _clone_health_check_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    return copy.deepcopy(result)
 
-        pool = engine.pool
-        if hasattr(pool, "size"):
-            pool_status = {
-                "size": pool.size() if hasattr(pool, "size") else None,
-                "checked_in": pool.checkedin() if hasattr(pool, "checkedin") else None,
-                "checked_out": pool.checkedout() if hasattr(pool, "checkedout") else None,
-                "overflow": pool.overflow() if hasattr(pool, "overflow") else None,
-                "healthy": True,
-            }
-            if hasattr(pool, "overflow") and pool.overflow() >= settings.database_max_overflow:
-                pool_status["healthy"] = False
-                pool_status["warning"] = "connection pool overflow reached limit"
-                result["healthy"] = False
-            result["checks"]["pool"] = pool_status
-    except Exception as e:
-        result["healthy"] = False
-        result["checks"]["error"] = {
-            "status": "error",
-            "message": str(e),
-            "healthy": False,
+
+async def _execute_database_health_probe(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    async with session_factory() as session:
+        await session.execute(text("SELECT 1"))
+
+
+async def check_database_health(user_id: str = None, *, force_refresh: bool = False) -> dict:
+    """Run a lightweight database health check with timeout and short-lived caching."""
+    cache_key = _health_check_cache_key(user_id)
+    cache_ttl = max(float(settings.database_health_cache_ttl_seconds or 0.0), 0.0)
+    timeout_seconds = max(float(settings.database_health_timeout_seconds or 0.0), 0.1)
+    now = time.monotonic()
+
+    if not force_refresh and cache_ttl > 0:
+        cached_entry = _health_check_cache.get(cache_key)
+        if cached_entry and float(cached_entry.get("expires_at") or 0.0) > now:
+            cached_result = _clone_health_check_result(cached_entry["result"])
+            cached_result["cached"] = True
+            cached_result["cache_age_ms"] = round((now - float(cached_entry.get("stored_at") or now)) * 1000, 1)
+            return cached_result
+
+    async with _health_check_lock:
+        now = time.monotonic()
+        if not force_refresh and cache_ttl > 0:
+            cached_entry = _health_check_cache.get(cache_key)
+            if cached_entry and float(cached_entry.get("expires_at") or 0.0) > now:
+                cached_result = _clone_health_check_result(cached_entry["result"])
+                cached_result["cached"] = True
+                cached_result["cache_age_ms"] = round((now - float(cached_entry.get("stored_at") or now)) * 1000, 1)
+                return cached_result
+
+        result = {
+            "healthy": True,
+            "checks": {},
+            "timestamp": datetime.now().isoformat(),
+            "cached": False,
         }
-        logger.error(f"Database health check failed: {e}", exc_info=True)
+        started_at = time.perf_counter()
 
-    return result
+        try:
+            engine = await get_engine(cache_key)
+            session_factory = await get_session_factory(cache_key)
+            await asyncio.wait_for(_execute_database_health_probe(session_factory), timeout=timeout_seconds)
+            latency_ms = round((time.perf_counter() - started_at) * 1000, 1)
+            result["latency_ms"] = latency_ms
+            result["checks"]["connection"] = {
+                "status": "ok",
+                "healthy": True,
+                "latency_ms": latency_ms,
+            }
+
+            pool = engine.pool
+            if hasattr(pool, "size"):
+                pool_status = {
+                    "size": pool.size() if hasattr(pool, "size") else None,
+                    "checked_in": pool.checkedin() if hasattr(pool, "checkedin") else None,
+                    "checked_out": pool.checkedout() if hasattr(pool, "checkedout") else None,
+                    "overflow": pool.overflow() if hasattr(pool, "overflow") else None,
+                    "healthy": True,
+                }
+                if hasattr(pool, "overflow") and pool.overflow() >= settings.database_max_overflow:
+                    pool_status["healthy"] = False
+                    pool_status["warning"] = "connection pool overflow reached limit"
+                    result["healthy"] = False
+                result["checks"]["pool"] = pool_status
+        except asyncio.TimeoutError:
+            latency_ms = round((time.perf_counter() - started_at) * 1000, 1)
+            result["healthy"] = False
+            result["latency_ms"] = latency_ms
+            result["checks"]["connection"] = {
+                "status": "timeout",
+                "healthy": False,
+                "latency_ms": latency_ms,
+                "timeout_seconds": timeout_seconds,
+            }
+            result["checks"]["error"] = {
+                "status": "error",
+                "message": f"database health check timed out after {timeout_seconds:.1f}s",
+                "healthy": False,
+            }
+            logger.warning("Database health check timed out after %.1fs", timeout_seconds)
+        except Exception as e:
+            latency_ms = round((time.perf_counter() - started_at) * 1000, 1)
+            result["healthy"] = False
+            result["latency_ms"] = latency_ms
+            result["checks"]["error"] = {
+                "status": "error",
+                "message": str(e),
+                "healthy": False,
+            }
+            logger.error(f"Database health check failed: {e}", exc_info=True)
+
+        stored_at = time.monotonic()
+        if cache_ttl > 0:
+            _health_check_cache[cache_key] = {
+                "result": _clone_health_check_result(result),
+                "stored_at": stored_at,
+                "expires_at": stored_at + cache_ttl,
+            }
+
+        return result
 
 
 async def reset_session_stats():

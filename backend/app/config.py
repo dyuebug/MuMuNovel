@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     database_enable_slow_query_log: bool = True  # 启用慢查询日志
     database_slow_query_threshold: float = 1.0  # 慢查询阈值（秒）
     database_enable_metrics: bool = True  # 启用性能指标收集
+    database_health_cache_ttl_seconds: float = 3.0  # Health probe cache TTL to reduce readyz jitter
+    database_health_timeout_seconds: float = 2.5  # Health probe timeout to avoid blocking readyz
     
     # AI服务配置
     openai_api_key: Optional[str] = None

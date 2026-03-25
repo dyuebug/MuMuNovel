@@ -125,7 +125,7 @@ services:
     restart: unless-stopped
     healthcheck:
       # 这里运行在容器内部，因此检查的是容器内 localhost:8000，而不是宿主机的 8003
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -5,10 +5,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 from app.config import settings as config_settings
-from app.database import close_db, _session_stats
+from app.database import close_db, _session_stats, check_database_health
 from app.logger import setup_logging, get_logger
 from app.middleware import RequestIDMiddleware
 from app.middleware.auth_middleware import AuthMiddleware
@@ -25,28 +26,105 @@ setup_logging(
 logger = get_logger(__name__)
 
 
+_startup_status = {
+    "ready": False,
+    "started_at": None,
+    "completed_at": None,
+    "steps": {},
+}
+
+
+def _build_default_startup_status() -> dict:
+    return {
+        "ready": False,
+        "started_at": None,
+        "completed_at": None,
+        "steps": {
+            "status_sync": {"healthy": False, "status": "pending", "detail": "waiting"},
+            "background_tasks": {"healthy": False, "status": "pending", "detail": "waiting"},
+            "database_warmup": {"healthy": False, "status": "pending", "detail": "waiting"},
+        },
+    }
+
+
+def _reset_startup_status() -> dict:
+    global _startup_status
+    _startup_status = _build_default_startup_status()
+    _startup_status["started_at"] = datetime.now().isoformat()
+    return _startup_status
+
+
+def _get_startup_status() -> dict:
+    if not isinstance(_startup_status, dict) or not _startup_status:
+        return _reset_startup_status()
+    return _startup_status
+
+
+def _mark_startup_step(step: str, *, healthy: bool, detail: str | None = None, payload: dict | None = None) -> dict:
+    state = _get_startup_status()
+    step_state = state["steps"].setdefault(step, {})
+    step_state["healthy"] = bool(healthy)
+    step_state["status"] = "ok" if healthy else "error"
+    if detail:
+        step_state["detail"] = detail
+    if payload is not None:
+        step_state["payload"] = payload
+    return state
+
+
+def _finalize_startup_status() -> dict:
+    state = _get_startup_status()
+    state["ready"] = all(bool(item.get("healthy")) for item in state["steps"].values())
+    state["completed_at"] = datetime.now().isoformat()
+    return state
+
+
+def _set_startup_ready(ready: bool) -> dict:
+    state = _get_startup_status()
+    state["ready"] = bool(ready)
+    if ready:
+        state["completed_at"] = datetime.now().isoformat()
+    else:
+        state["completed_at"] = None
+    return state
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
-    # 注册MCP状态同步服务
-    register_status_sync()
-    await background_task_manager.ensure_loaded()
+    """Application lifespan management."""
+    _reset_startup_status()
 
-    logger.info("应用启动完成")
-    
+    register_status_sync()
+    _mark_startup_step("status_sync", healthy=True, detail="registered")
+
+    await background_task_manager.ensure_loaded()
+    _mark_startup_step("background_tasks", healthy=True, detail="loaded")
+
+    database_warmup = await check_database_health(force_refresh=True)
+    database_ready = bool(database_warmup.get("healthy"))
+    _mark_startup_step(
+        "database_warmup",
+        healthy=database_ready,
+        detail="warmup completed" if database_ready else "warmup failed",
+        payload=database_warmup,
+    )
+    _finalize_startup_status()
+
+    if database_ready:
+        logger.info("Application startup completed")
+    else:
+        logger.warning("Application startup completed, but database warmup is still unhealthy; readyz will stay 503")
+
     yield
-    
-    # 清理MCP插件
+
     await mcp_client.cleanup()
-    
-    # 清理HTTP客户端池
+
     from app.services.ai_service import cleanup_http_clients
     await cleanup_http_clients()
-    
-    # 关闭数据库连接
+
     await close_db()
-    
-    logger.info("应用已关闭")
+
+    logger.info("Application shutdown completed")
 
 
 app = FastAPI(
@@ -103,9 +181,34 @@ else:
 
 @app.get("/health")
 async def health_check():
-    """健康检查"""
+    """Compatibility health endpoint."""
     return {"status": "ok"}
 
+
+@app.get("/livez")
+async def liveness_check():
+    """Liveness probe."""
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readiness_check():
+    """Readiness probe with warmup status and database check."""
+    startup_status = _get_startup_status()
+    database_status = await check_database_health()
+    startup_ready = bool(startup_status.get("ready"))
+    database_ready = bool(database_status.get("healthy"))
+    is_ready = startup_ready and database_ready
+    return JSONResponse(
+        status_code=status.HTTP_200_OK if is_ready else status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={
+            "status": "ready" if is_ready else "not_ready",
+            "checks": {
+                "startup": startup_status,
+                "database": database_status,
+            },
+        },
+    )
 
 @app.get("/health/db-sessions")
 async def db_session_stats():

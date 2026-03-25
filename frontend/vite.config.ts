@@ -12,7 +12,8 @@ const packageJson = JSON.parse(
 
 const normalizeModuleId = (id: string) => id.split('\\').join('/')
 const bundleReportEnabled = process.env.BUNDLE_REPORT === '1'
-const bundleReportDir = resolve(__dirname, '../backend/static/reports')
+const buildOutDir = process.env.VITE_OUT_DIR?.trim() || '../backend/static'
+const bundleReportDir = resolve(__dirname, buildOutDir, 'reports')
 
 const includesAny = (value: string, patterns: readonly string[]) =>
   patterns.some((pattern) => value.includes(pattern))
@@ -269,7 +270,7 @@ export default defineConfig({
     ),
   },
   build: {
-    outDir: '../backend/static',
+    outDir: buildOutDir,
     emptyOutDir: true,
     rollupOptions: {
       output: {

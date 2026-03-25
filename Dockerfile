@@ -21,11 +21,8 @@ RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
         npm config set registry https://registry.npmmirror.com; \
     fi
 
-# 删除 package-lock.json 以避免因镜像源不一致导致的 404 错误
-RUN rm -f package-lock.json
-
 # 安装依赖（可跳过）
-RUN if [ "$SKIP_FRONTEND_BUILD" != "true" ]; then npm install && npm rebuild esbuild; fi
+RUN if [ "$SKIP_FRONTEND_BUILD" != "true" ]; then npm ci && npm rebuild esbuild; fi
 
 # 复制前端源代码
 COPY frontend/ ./
@@ -33,10 +30,9 @@ COPY frontend/ ./
 # 提供后端静态资源作为跳过前端构建时的兜底
 COPY backend/static/ /frontend/dist/
 
-# 临时修改vite配置，使其输出到dist目录（而不是../backend/static），并构建前端
+# 通过环境变量指定输出目录，避免在构建时修改源码配置
 RUN if [ "$SKIP_FRONTEND_BUILD" != "true" ]; then \
-        sed -i "s|outDir: '../backend/static'|outDir: 'dist'|g" vite.config.ts && \
-        npm run build; \
+        VITE_OUT_DIR=dist npm run build; \
     fi
 
 # 阶段2: 构建最终镜像
@@ -131,7 +127,7 @@ ENV HF_HUB_OFFLINE=1
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')" || exit 1
 
 # 使用 entrypoint 脚本启动（自动执行迁移）
 ENTRYPOINT ["/app/entrypoint.sh"]

@@ -188,6 +188,62 @@ function Invoke-CommandLineCapture {
     }
 }
 
+function Format-CommandDisplay {
+    param([string[]]$Command)
+
+    return ($Command | ForEach-Object {
+        if ($_ -match '[\s"]') {
+            '"' + ($_ -replace '"', '\"') + '"'
+        }
+        else {
+            $_
+        }
+    }) -join ' '
+}
+
+function Invoke-LoggedCommand {
+    param(
+        [string[]]$Command,
+        [string]$Label,
+        [switch]$IgnoreExitCode
+    )
+
+    if (-not $Command -or $Command.Count -eq 0) {
+        throw 'Invoke-LoggedCommand requires at least one command segment.'
+    }
+
+    $commandDisplay = Format-CommandDisplay -Command $Command
+    $commandName = $Command[0]
+    $arguments = @()
+    if ($Command.Count -gt 1) {
+        $arguments = $Command[1..($Command.Count - 1)]
+    }
+
+    Write-LogLine("Command start [$Label]: $commandDisplay")
+    $startedAt = Get-Date
+    $captured = @()
+    & cmd.exe /d /c "$commandDisplay 2>&1" | Tee-Object -Variable captured
+    $exitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
+    $durationMs = [int][Math]::Round(((Get-Date) - $startedAt).TotalMilliseconds)
+    $outputText = ($captured | Out-String).Trim()
+
+    if (-not [string]::IsNullOrWhiteSpace($outputText)) {
+        Write-LogBlock $outputText
+    }
+
+    Write-LogLine("Command finish [$Label]: exit=$exitCode duration_ms=$durationMs")
+    if (-not $IgnoreExitCode -and $exitCode -ne 0) {
+        throw "Command failed with exit code ${exitCode}: $commandDisplay"
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = $outputText
+        DurationMs = $durationMs
+        CommandLine = $commandDisplay
+    }
+}
+
 function Get-DockerContextSummary {
     try {
         $result = Invoke-CommandLineCapture -CommandLine 'docker context ls'
@@ -312,12 +368,12 @@ Test-DockerDaemon
 
 if ([string]::IsNullOrWhiteSpace($HealthUrl)) {
     $appPort = Get-AppPort
-    $HealthUrl = "http://localhost:$appPort/health"
+    $HealthUrl = "http://localhost:$appPort/readyz"
 }
 
 if ($FullRestart) {
     Write-Step "Stopping full stack"
-    docker compose down
+    Invoke-LoggedCommand -Command @("docker", "compose", "down") -Label "docker compose down" | Out-Null
 }
 else {
     Write-Step "Keeping dependent services running; only app container will be recreated"
@@ -339,7 +395,7 @@ $buildArgs += $AppService
 
 if (-not $SkipBuild) {
     Write-Step "Building application image"
-    docker @buildArgs
+    Invoke-LoggedCommand -Command (@("docker") + $buildArgs) -Label "docker compose build" | Out-Null
 }
 
 $upArgs = @("compose", "up", "-d", "--remove-orphans")
@@ -349,35 +405,53 @@ if (-not $SkipRecreate) {
 $upArgs += $AppService
 
 Write-Step "Starting application service"
-docker @upArgs
+Invoke-LoggedCommand -Command (@("docker") + $upArgs) -Label "docker compose up" | Out-Null
 
 Write-Step "Container status"
-docker compose ps
+Invoke-LoggedCommand -Command @("docker", "compose", "ps") -Label "docker compose ps" | Out-Null
 
 Write-Step "Waiting for health check: $HealthUrl"
 $deadline = (Get-Date).AddSeconds($HealthTimeoutSec)
 $isHealthy = $false
+$lastHealthError = $null
+$lastHealthStatus = $null
 
 while ((Get-Date) -lt $deadline) {
     try {
         $response = Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 5
+        $lastHealthStatus = $response.StatusCode
         if ($response.StatusCode -eq 200) {
             Write-Host "Health response: $($response.Content)" -ForegroundColor Green
             Write-LogLine "Health response: $($response.Content)"
             $isHealthy = $true
             break
         }
+
+        $lastHealthError = "Unexpected status code: $($response.StatusCode); body=$($response.Content)"
+        Write-LogLine $lastHealthError
     }
     catch {
+        $lastHealthError = $_.Exception.Message
+        Write-LogLine "Health probe failed: $lastHealthError"
     }
     Start-Sleep -Seconds 3
 }
 
 if (-not $isHealthy) {
     Write-Host ""
-    Write-Host "Health check timed out. Printing recent logs..." -ForegroundColor Yellow
-    Write-LogLine "Health check timed out. Printing recent logs..."
-    docker compose logs --tail=120 $AppService
+    Write-Host "Health check timed out. Printing recent diagnostics..." -ForegroundColor Yellow
+    Write-LogLine "Health check timed out. Printing recent diagnostics..."
+    if ($lastHealthStatus) {
+        Write-Host "Last health status: $lastHealthStatus" -ForegroundColor Yellow
+        Write-LogLine "Last health status: $lastHealthStatus"
+    }
+    if ($lastHealthError) {
+        Write-Host "Last health error: $lastHealthError" -ForegroundColor Yellow
+        Write-LogLine "Last health error: $lastHealthError"
+    }
+    Invoke-LoggedCommand -Command @("docker", "compose", "ps") -Label "diagnostic docker compose ps" -IgnoreExitCode | Out-Null
+    Invoke-LoggedCommand -Command @("docker", "inspect", $AppContainerName, "--format", "{{json .State.Health}}") -Label "diagnostic docker inspect health" -IgnoreExitCode | Out-Null
+    Invoke-LoggedCommand -Command @("docker", "compose", "logs", "--tail=120", $AppService) -Label "diagnostic docker compose logs" -IgnoreExitCode | Out-Null
     $errorMessage = "Redeploy finished but health check failed: $HealthUrl"
     Write-LogBlock $errorMessage
     throw $errorMessage

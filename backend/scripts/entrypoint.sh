@@ -34,35 +34,44 @@ DB_PORT="${DB_PORT:-5432}"
 DB_USER="${POSTGRES_USER:-mumuai}"
 DB_NAME="${POSTGRES_DB:-mumuai_novel}"
 
-# 等待数据库就绪
-echo "⏳ 等待数据库启动..."
+# Wait for database readiness
+echo "Waiting for database startup..."
 MAX_RETRIES=30
 RETRY_COUNT=0
+DB_READY_RETRIES="${DB_READY_RETRIES:-45}"
+DB_READY_INTERVAL="${DB_READY_INTERVAL:-2}"
+
+wait_for_database_ready() {
+    local retries=0
+    while ! PGPASSWORD="${POSTGRES_PASSWORD}" psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1;" > /dev/null 2>&1; do
+        retries=$((retries + 1))
+        if [ "$retries" -ge "$DB_READY_RETRIES" ]; then
+            echo "ERROR: database is still not fully ready after ${DB_READY_RETRIES} probes"
+            return 1
+        fi
+        echo "   Database is not fully ready yet... ($retries/$DB_READY_RETRIES)"
+        sleep "$DB_READY_INTERVAL"
+    done
+    return 0
+}
 
 while ! nc -z "$DB_HOST" "$DB_PORT" 2>/dev/null; do
     RETRY_COUNT=$((RETRY_COUNT + 1))
     if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
-        echo "❌ 错误: 数据库连接超时（${MAX_RETRIES}秒）"
+        echo "ERROR: database port check timed out (${MAX_RETRIES}s)"
         exit 1
     fi
-    echo "   等待数据库... ($RETRY_COUNT/$MAX_RETRIES)"
+    echo "   Waiting for database port... ($RETRY_COUNT/$MAX_RETRIES)"
     sleep 1
 done
 
-echo "✅ 数据库连接成功"
-
-# 额外等待，确保数据库完全就绪
-echo "⏳ 等待数据库完全就绪..."
-sleep 3
-
-# 检查数据库是否可以接受连接
-echo "🔍 检查数据库状态..."
-if ! PGPASSWORD="${POSTGRES_PASSWORD}" psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1;" > /dev/null 2>&1; then
-    echo "❌ 数据库尚未就绪，继续等待..."
-    sleep 5
+echo "Database port is reachable"
+echo "Checking whether the database accepts queries..."
+if ! wait_for_database_ready; then
+    exit 1
 fi
 
-echo "✅ 数据库已就绪"
+echo "Database is ready"
 
 # 运行数据库迁移
 echo "================================================"
@@ -71,18 +80,19 @@ echo "================================================"
 
 cd /app
 
-echo "?? ?? Alembic revision ????..."
+echo "Checking Alembic revision health..."
 python tools/check_alembic_revision_health.py
 
-# 统一使用 alembic upgrade head
-# Alembic 会自动处理首次部署和增量迁移
-echo "🔄 升级数据库到最新版本..."
-alembic upgrade head
+echo "Ensuring Alembic version table capacity..."
+python tools/ensure_alembic_version_table_capacity.py
 
-if [ $? -eq 0 ]; then
-    echo "✅ 数据库迁移成功"
+# Use alembic upgrade head for both bootstrap and incremental migrations
+# Alembic handles initial deployment and incremental upgrades automatically
+echo "Upgrading database to latest revision..."
+if python scripts/migrate.py upgrade head; then
+    echo "Database migration completed successfully"
 else
-    echo "❌ 数据库迁移失败"
+    echo "Database migration failed"
     exit 1
 fi
 
