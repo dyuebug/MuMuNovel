@@ -6283,6 +6283,22 @@ async def regenerate_chapter_stream(
                 prefer_project_default_style=not bool(regenerate_request.style_id),
                 log_prefix="章节重生成",
             )
+            generation_guidance = resolve_story_generation_guidance(
+                project,
+                creative_mode=getattr(regenerate_request, 'creative_mode', None),
+                story_focus=getattr(regenerate_request, 'story_focus', None),
+                plot_stage=getattr(regenerate_request, 'plot_stage', None),
+                story_creation_brief=getattr(regenerate_request, 'story_creation_brief', None),
+                quality_preset=getattr(regenerate_request, 'quality_preset', None),
+                quality_notes=getattr(regenerate_request, 'quality_notes', None),
+            )
+            prompt_quality_kwargs = build_prompt_quality_kwargs(
+                quality_profile,
+                guidance=generation_guidance,
+                story_repair_summary=getattr(regenerate_request, 'story_repair_summary', None),
+                story_repair_targets=getattr(regenerate_request, 'story_repair_targets', None),
+                story_preserve_strengths=getattr(regenerate_request, 'story_preserve_strengths', None),
+            )
             style_content = quality_profile.get("style_content") or ""
             style_id = quality_profile.get("resolved_style_id")
             if style_id:
@@ -6301,7 +6317,8 @@ async def regenerate_chapter_stream(
                 'atmosphere': project.world_atmosphere if project else '未设定',
                 'characters_info': characters_info_with_careers,
                 'chapter_outline': outline.content if outline else chapter.summary or '暂无大纲',
-                'previous_context': ''  # 可以后续扩展添加前置章节上下文
+                'previous_context': '',  # 可以后续扩展添加前置章节上下文
+                'prompt_quality_kwargs': prompt_quality_kwargs,
             }
         finally:
             await temp_db.close()

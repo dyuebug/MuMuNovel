@@ -392,6 +392,28 @@ def normalize_quality_preset(value: Optional[str]) -> Optional[str]:
     return QUALITY_PREFERENCE_ALIASES.get(cleaned) or QUALITY_PREFERENCE_ALIASES.get(cleaned.lower())
 
 
+def _split_quality_preference_note_items(
+    quality_notes: Optional[str],
+    *,
+    limit: int = 4,
+) -> list[str]:
+    notes = _compact_prompt_text(quality_notes)
+    if not notes:
+        return []
+
+    items: list[str] = []
+    seen: set[str] = set()
+    for raw in re.split(r"(?:\r?\n|[；;]+)", notes):
+        normalized = re.sub(r"^[\s\-\*•·\d\.\)\(、]+", "", str(raw or "")).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        items.append(normalized)
+        if len(items) >= limit:
+            break
+    return items
+
+
 def build_quality_preference_block(
     quality_preset: Optional[str],
     quality_notes: Optional[str],
@@ -399,12 +421,12 @@ def build_quality_preference_block(
     scene: str,
 ) -> str:
     normalized_preset = normalize_quality_preset(quality_preset)
-    notes = _compact_prompt_text(quality_notes)
+    note_items = _split_quality_preference_note_items(quality_notes)
 
     spec = QUALITY_PREFERENCE_SPECS.get(normalized_preset) if normalized_preset else None
     bullets = spec.get(scene) if spec else []
 
-    if not bullets and not notes:
+    if not bullets and not note_items:
         return ""
 
     if spec:
@@ -413,8 +435,13 @@ def build_quality_preference_block(
     else:
         lines = ["【质量偏好补充】"]
 
-    if notes:
-        lines.append(f"- 补充偏好：{notes}")
+    if note_items:
+        if len(note_items) == 1:
+            lines.append(f"- 补充偏好：{note_items[0]}")
+        else:
+            lines.append("- 补充偏好：")
+            lines.extend(f"  - {item}" for item in note_items)
+
     return _compact_prompt_text("\n".join(lines))
 
 
@@ -6543,17 +6570,20 @@ class PromptService:
 """)
         
         prompt_text = "\n".join(prompt_parts)
+        quality_kwargs = project_context.get("prompt_quality_kwargs") or {
+            "genre": project_context.get("genre"),
+            "style_name": project_context.get("style_name"),
+            "style_preset_id": project_context.get("style_preset_id"),
+            "style_content": style_content,
+            "external_assets": project_context.get("external_assets"),
+            "reference_assets": project_context.get("reference_assets"),
+            "mcp_references": project_context.get("mcp_references"),
+            "mcp_guard": project_context.get("mcp_guard"),
+        }
         return cls._inject_quality_contract(
             prompt_text,
             "CHAPTER_REGENERATION_SYSTEM",
-            genre=project_context.get("genre"),
-            style_name=project_context.get("style_name"),
-            style_preset_id=project_context.get("style_preset_id"),
-            style_content=style_content,
-            external_assets=project_context.get("external_assets"),
-            reference_assets=project_context.get("reference_assets"),
-            mcp_references=project_context.get("mcp_references"),
-            mcp_guard=project_context.get("mcp_guard"),
+            **quality_kwargs,
         )
 
     @classmethod

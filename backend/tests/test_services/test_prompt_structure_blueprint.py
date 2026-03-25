@@ -108,6 +108,19 @@ def test_should_build_quality_preference_block_with_notes():
     assert notes in block
 
 
+
+def test_should_split_multi_line_quality_notes_into_prompt_bullets():
+    notes = "减少解释句；保留动作反馈\n强化章尾牵引"
+    block = build_quality_preference_block(
+        "plot_drive",
+        notes,
+        scene="chapter",
+    )
+
+    assert "- 补充偏好：" in block
+    assert "  - 减少解释句" in block
+    assert "  - 保留动作反馈" in block
+    assert "  - 强化章尾牵引" in block
 def test_should_inject_quality_preference_block_into_chapter_quality_contract():
     notes = "make endings snap harder"
     blocks = PromptService._build_quality_runtime_blocks(
