@@ -76,6 +76,27 @@ class ChapterListResponse(BaseModel):
     items: list[ChapterResponse]
 
 
+class ProjectChapterQualityTrendItem(BaseModel):
+    """??????????"""
+    chapter_id: str
+    chapter_number: int
+    title: str
+    status: Optional[str] = None
+    history_id: Optional[str] = None
+    generated_at: Optional[str] = None
+    latest_quality_metrics: Optional[Dict[str, Any]] = None
+
+
+class ProjectChapterQualityTrendResponse(BaseModel):
+    """???????????"""
+    project_id: str
+    has_metrics: bool
+    total_chapters: int
+    analyzed_chapters: int
+    items: List[ProjectChapterQualityTrendItem]
+    quality_metrics_summary: Optional[Dict[str, Any]] = None
+
+
 class AnalysisTaskStatusResponse(BaseModel):
     """单章节分析任务状态响应"""
     has_task: bool

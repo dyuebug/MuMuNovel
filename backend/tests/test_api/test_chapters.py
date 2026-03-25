@@ -1678,6 +1678,109 @@ async def test_should_return_latest_chapter_quality_metrics(
     assert body["generated_at"] is not None
 
 
+async def test_should_get_project_chapter_quality_trend(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter_one = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="Chapter 1",
+        content="Chapter 1 body",
+    )
+    chapter_two = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title="Chapter 2",
+        content="Chapter 2 body",
+    )
+    await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=3,
+        title="Chapter 3",
+        content="Chapter 3 body",
+    )
+
+    now = datetime.utcnow()
+    async with chapters_session_factory() as session:
+        session.add_all(
+            [
+                GenerationHistory(
+                    chapter_id=chapter_one.id,
+                    project_id=project.id,
+                    prompt="chapter one quality",
+                    generated_content=json.dumps(
+                        {
+                            "log_type": "chapter_generation_quality_v1",
+                            "quality_metrics": {
+                                "overall_score": 78.0,
+                                "conflict_chain_hit_rate": 62.0,
+                                "rule_grounding_hit_rate": 80.0,
+                                "outline_alignment_rate": 64.0,
+                                "dialogue_naturalness_rate": 79.0,
+                                "opening_hook_rate": 72.0,
+                                "payoff_chain_rate": 58.0,
+                                "cliffhanger_rate": 84.0,
+                                "pacing_score": 6.9,
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                    model="default",
+                    created_at=now - timedelta(minutes=2),
+                ),
+                GenerationHistory(
+                    chapter_id=chapter_two.id,
+                    project_id=project.id,
+                    prompt="chapter two quality",
+                    generated_content=json.dumps(
+                        {
+                            "log_type": "chapter_generation_quality_v1",
+                            "quality_metrics": {
+                                "overall_score": 77.0,
+                                "conflict_chain_hit_rate": 60.0,
+                                "rule_grounding_hit_rate": 78.0,
+                                "outline_alignment_rate": 63.0,
+                                "dialogue_naturalness_rate": 77.0,
+                                "opening_hook_rate": 70.0,
+                                "payoff_chain_rate": 56.0,
+                                "cliffhanger_rate": 86.0,
+                                "pacing_score": 6.7,
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                    model="default",
+                    created_at=now - timedelta(minutes=1),
+                ),
+            ]
+        )
+        await session.commit()
+
+    response = await chapters_client.get(f"/api/chapters/project/{project.id}/quality-trend", params={"limit": 2})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["project_id"] == project.id
+    assert body["has_metrics"] is True
+    assert body["total_chapters"] == 3
+    assert body["analyzed_chapters"] == 2
+    assert len(body["items"]) == 2
+    assert body["items"][0]["chapter_id"] == chapter_one.id
+    assert body["items"][1]["chapter_id"] == chapter_two.id
+    assert body["items"][1]["latest_quality_metrics"]["repair_guidance"]["summary"]
+    assert body["quality_metrics_summary"]["chapter_count"] == 2
+    assert body["quality_metrics_summary"]["total_chapters"] == 3
+    assert body["quality_metrics_summary"]["analyzed_chapters"] == 2
+    assert body["quality_metrics_summary"]["last_generated_at"] is not None
+    assert body["quality_metrics_summary"]["pacing_imbalance"]["status"] in {"watch", "warning"}
+    assert body["quality_metrics_summary"]["pacing_imbalance"]["signals"]
+
+
 def test_should_build_runtime_prompt_with_serial_style_guard():
     project = SimpleNamespace(
         world_time_period="近未来",

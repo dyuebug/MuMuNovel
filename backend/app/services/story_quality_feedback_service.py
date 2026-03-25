@@ -817,6 +817,188 @@ def _aggregate_continuity_preflight(history: Sequence[Mapping[str, Any]]) -> Dic
     }
 
 
+
+def _average_metric_values(values: Sequence[Optional[float]], *, digits: int = 1) -> Optional[float]:
+    normalized_values = [float(value) for value in values if value is not None]
+    if not normalized_values:
+        return None
+    return round(sum(normalized_values) / len(normalized_values), digits)
+
+
+def _extract_recent_metric_average(
+    history: Sequence[Mapping[str, Any]],
+    metric_keys: Sequence[str],
+) -> Optional[float]:
+    metric_values: list[float] = []
+    for item in history:
+        current_values = [_safe_float(item.get(metric_key)) for metric_key in metric_keys]
+        normalized_values = [value for value in current_values if value is not None]
+        if normalized_values:
+            metric_values.append(sum(normalized_values) / len(normalized_values))
+    return _average_metric_values(metric_values)
+
+
+def _build_pacing_imbalance_summary(history: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    recent_history = [dict(item) for item in history[-5:] if isinstance(item, Mapping) and item]
+    if len(recent_history) < 2:
+        return {}
+
+    recent_progression_density = _extract_recent_metric_average(
+        recent_history,
+        ("conflict_chain_hit_rate", "outline_alignment_rate", "payoff_chain_rate"),
+    )
+    recent_payoff_momentum = _extract_recent_metric_average(
+        recent_history,
+        ("payoff_chain_rate", "cliffhanger_rate"),
+    )
+    recent_payoff_rate = _average_metric_values(
+        [_safe_float(item.get("payoff_chain_rate")) for item in recent_history]
+    )
+    recent_cliffhanger_pull = _average_metric_values(
+        [_safe_float(item.get("cliffhanger_rate")) for item in recent_history]
+    )
+
+    tension_variation_samples: list[float] = []
+    previous_overall_score: Optional[float] = None
+    previous_cliffhanger_rate: Optional[float] = None
+    for item in recent_history:
+        overall_score = _safe_float(item.get("overall_score"))
+        cliffhanger_rate = _safe_float(item.get("cliffhanger_rate"))
+        if previous_overall_score is not None and overall_score is not None:
+            tension_variation_samples.append(abs(overall_score - previous_overall_score))
+        if previous_cliffhanger_rate is not None and cliffhanger_rate is not None:
+            tension_variation_samples.append(abs(cliffhanger_rate - previous_cliffhanger_rate))
+        if overall_score is not None:
+            previous_overall_score = overall_score
+        if cliffhanger_rate is not None:
+            previous_cliffhanger_rate = cliffhanger_rate
+    recent_tension_variation = _average_metric_values(tension_variation_samples)
+
+    if (
+        recent_progression_density is None
+        and recent_payoff_momentum is None
+        and recent_tension_variation is None
+    ):
+        return {}
+
+    signals: list[Dict[str, Any]] = []
+    focus_areas: list[str] = []
+    repair_targets: list[str] = []
+    status = "stable"
+
+    def append_signal(
+        *,
+        key: str,
+        label: str,
+        severity: str,
+        summary: str,
+        metric: Optional[float],
+        focus_area_items: Sequence[str],
+        repair_target_items: Sequence[str],
+    ) -> None:
+        nonlocal status
+        signals.append(
+            {
+                "key": key,
+                "label": label,
+                "severity": severity,
+                "summary": summary,
+                "metric": round(metric, 1) if isinstance(metric, (int, float)) else metric,
+            }
+        )
+        focus_areas.extend(str(item).strip() for item in focus_area_items if str(item).strip())
+        repair_targets.extend(str(item).strip() for item in repair_target_items if str(item).strip())
+        if severity == "warning":
+            status = "warning"
+        elif severity == "watch" and status == "stable":
+            status = "watch"
+
+    if (
+        recent_progression_density is not None
+        and recent_progression_density < 68.0
+        and recent_tension_variation is not None
+        and recent_tension_variation < 6.5
+    ):
+        append_signal(
+            key="middle_drag",
+            label="中段拖滞",
+            severity="warning" if recent_progression_density < 64.0 else "watch",
+            summary="最近数章推进密度与张力波动都偏低，容易出现连续铺陈但有效事件不足。",
+            metric=recent_progression_density,
+            focus_area_items=("conflict", "outline", "pacing"),
+            repair_target_items=(
+                "本章至少推进 1 个主线矛盾，并写出新的代价、反制或局势变化。",
+                "把当前章节的大纲任务拆成可见动作，不要只做解释性铺陈。",
+            ),
+        )
+
+    if (
+        recent_cliffhanger_pull is not None
+        and recent_cliffhanger_pull >= 80.0
+        and recent_payoff_rate is not None
+        and recent_payoff_rate < 70.0
+    ):
+        append_signal(
+            key="overstretched_suspense",
+            label="悬念透支",
+            severity="warning" if recent_payoff_rate < 66.0 else "watch",
+            summary="章尾牵引持续偏强，但兑现率偏低，容易形成只吊胃口、不回收承诺的拖尾。",
+            metric=recent_payoff_rate,
+            focus_area_items=("payoff", "cliffhanger"),
+            repair_target_items=(
+                "本章必须回收至少 1 个既有伏笔、承诺或情绪账。",
+                "新增悬念前，先让已有悬念落地成结果、损失或关系变化。",
+            ),
+        )
+
+    if recent_payoff_rate is not None and recent_payoff_rate < 66.0:
+        append_signal(
+            key="payoff_fatigue",
+            label="回报疲劳",
+            severity="warning" if recent_payoff_rate < 62.0 else "watch",
+            summary="最近几章兑现动作持续偏弱，读者获得感和阶段闭环不足。",
+            metric=recent_payoff_rate,
+            focus_area_items=("payoff", "pacing"),
+            repair_target_items=(
+                "让本章出现一个阶段性结果、关系改写或资源转移，形成明确小闭环。",
+            ),
+        )
+
+    if recent_tension_variation is not None and recent_tension_variation > 16.0:
+        append_signal(
+            key="rhythm_whiplash",
+            label="节奏摆荡",
+            severity="warning" if recent_tension_variation > 20.0 else "watch",
+            summary="最近张力波动过大，容易出现忽强忽弱、节拍断裂的阅读体验。",
+            metric=recent_tension_variation,
+            focus_area_items=("pacing",),
+            repair_target_items=(
+                "把本章张力曲线收束为“目标—受阻—反制—余波”，避免无序跳档。",
+            ),
+        )
+
+    if signals:
+        leading_labels = "、".join(str(signal.get("label") or signal.get("key") or "") for signal in signals[:2])
+        summary = f"最近 {len(recent_history)} 章出现{leading_labels}风险，需优先修复推进密度、兑现节拍与张力接力。"
+    else:
+        summary = "最近数章推进密度、兑现节拍与张力波动整体可控，可继续维持当前节奏并放大优势。"
+
+    return {
+        "status": status,
+        "window_size": len(recent_history),
+        "signal_count": len(signals),
+        "recent_progression_density": recent_progression_density,
+        "recent_payoff_momentum": recent_payoff_momentum,
+        "recent_payoff_rate": recent_payoff_rate,
+        "recent_cliffhanger_pull": recent_cliffhanger_pull,
+        "recent_tension_variation": recent_tension_variation,
+        "signals": signals[:4],
+        "focus_areas": _normalize_runtime_items(focus_areas, limit=4),
+        "repair_targets": _normalize_runtime_items(repair_targets, limit=4),
+        "summary": summary,
+    }
+
+
 _SUMMARY_METRIC_FIELDS: tuple[tuple[str, str], ...] = (
     ("overall_score", "avg_overall_score"),
     ("conflict_chain_hit_rate", "avg_conflict_chain_hit_rate"),
@@ -1034,6 +1216,9 @@ def build_quality_metrics_summary_from_state(
     continuity_preflight = _aggregate_continuity_preflight(recent_history)
     if continuity_preflight:
         summary["continuity_preflight"] = continuity_preflight
+    pacing_imbalance = _build_pacing_imbalance_summary(recent_history)
+    if pacing_imbalance:
+        summary["pacing_imbalance"] = pacing_imbalance
     summary["repair_guidance"] = build_story_repair_guidance(summary, scope=scope)
     summary["quality_gate"] = build_quality_gate_decision(summary, scope=scope)
     return summary

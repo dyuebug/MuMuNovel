@@ -2773,6 +2773,37 @@ def build_story_quality_trend_block(
         lines.append("- 最近高频修复焦点：")
         lines.extend(f"  - {item}" for item in focus_areas)
 
+    pacing_imbalance = summary.get("pacing_imbalance") if isinstance(summary.get("pacing_imbalance"), Mapping) else {}
+    pacing_summary = str(pacing_imbalance.get("summary") or "").strip()
+    pacing_targets = _normalize_runtime_prompt_items(pacing_imbalance.get("repair_targets"), limit=3)
+    pacing_signal_lines: list[str] = []
+    for signal in pacing_imbalance.get("signals") or []:
+        if not isinstance(signal, Mapping):
+            continue
+        label = str(signal.get("label") or signal.get("key") or "节奏异常").strip()
+        if not label:
+            continue
+        severity = str(signal.get("severity") or "watch").strip().lower()
+        severity_label = "预警" if severity == "warning" else "关注"
+        signal_summary = str(signal.get("summary") or "").strip()
+        metric = signal.get("metric")
+        metric_text = f"，指标 {float(metric):.1f}" if isinstance(metric, (int, float)) else ""
+        detail = f"{label}（{severity_label}{metric_text}）"
+        if signal_summary:
+            detail = f"{detail}：{signal_summary}"
+        pacing_signal_lines.append(detail)
+        if len(pacing_signal_lines) >= 3:
+            break
+    if pacing_summary:
+        lines.append(f"- 长篇节奏信号：{pacing_summary}")
+    if pacing_signal_lines:
+        lines.append("- 当前需要盯住的长篇节奏异常：")
+        lines.extend(f"  - {item}" for item in pacing_signal_lines)
+    if pacing_targets:
+        lines.append("- 本章优先修复这些长篇节奏问题：")
+        lines.extend(f"  - {item}" for item in pacing_targets)
+        lines.append("- 节奏硬要求：本章必须同时完成“推进一件事 + 回收一件事 + 留下下一步牵引”。")
+
     continuity_preflight = summary.get("continuity_preflight") if isinstance(summary.get("continuity_preflight"), Mapping) else {}
     continuity_summary = str(continuity_preflight.get("summary") or "").strip()
     continuity_targets = _normalize_runtime_prompt_items(continuity_preflight.get("repair_targets"), limit=3)
@@ -2789,6 +2820,7 @@ def build_story_quality_trend_block(
 
     lines.append("- 生成时优先修复趋势中持续偏弱的项，同时保留已经稳定成立的强项。")
     return _compact_prompt_text("\n".join(lines))
+
 
 def build_story_character_state_ledger_block(
     story_character_state_ledger: Optional[Any],

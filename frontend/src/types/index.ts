@@ -482,6 +482,7 @@ export interface StoryQualityGateDecision {
   recommended_focus_area?: string | null;
   continuity_warning_count?: number;
   continuity_preflight?: StoryContinuityPreflight | null;
+  pacing_imbalance?: StoryPacingImbalanceSummary | null;
   manual_review_threshold?: number | null;
   allow_save_threshold?: number | null;
 }
@@ -529,6 +530,29 @@ export interface ChapterLatestQualityMetrics {
   quality_gate?: StoryQualityGateDecision | null;
 }
 
+export interface StoryPacingImbalanceSignal {
+  key?: string;
+  label?: string;
+  severity?: "watch" | "warning" | string;
+  summary?: string;
+  metric?: number | null;
+}
+
+export interface StoryPacingImbalanceSummary {
+  status?: "stable" | "watch" | "warning" | string;
+  window_size?: number;
+  signal_count?: number;
+  recent_progression_density?: number | null;
+  recent_payoff_momentum?: number | null;
+  recent_payoff_rate?: number | null;
+  recent_cliffhanger_pull?: number | null;
+  recent_tension_variation?: number | null;
+  signals?: StoryPacingImbalanceSignal[];
+  focus_areas?: string[];
+  repair_targets?: string[];
+  summary?: string;
+}
+
 export interface ChapterQualityMetricsSummary {
   avg_overall_score?: number;
   avg_conflict_chain_hit_rate?: number;
@@ -551,6 +575,7 @@ export interface ChapterQualityMetricsSummary {
   recent_manual_review_count?: number;
   recent_auto_repair_count?: number;
   continuity_preflight?: StoryContinuityPreflight | null;
+  pacing_imbalance?: StoryPacingImbalanceSummary | null;
   repair_guidance?: StoryRepairGuidance | null;
   quality_gate?: StoryQualityGateDecision | null;
 }
@@ -576,6 +601,25 @@ export interface ChapterQualityProfileSummary {
   external_assets_block?: ChapterQualityProfileBlockSummary | null;
   policy?: Record<string, unknown> | null;
   blocks?: Record<string, ChapterQualityProfileBlockSummary> | null;
+}
+
+export interface ProjectChapterQualityTrendItem {
+  chapter_id: string;
+  chapter_number: number;
+  title: string;
+  status?: string | null;
+  history_id?: string | null;
+  generated_at?: string | null;
+  latest_quality_metrics?: ChapterLatestQualityMetrics | null;
+}
+
+export interface ProjectChapterQualityTrendResponse {
+  project_id: string;
+  has_metrics: boolean;
+  total_chapters: number;
+  analyzed_chapters: number;
+  items: ProjectChapterQualityTrendItem[];
+  quality_metrics_summary?: ChapterQualityMetricsSummary | null;
 }
 
 export interface ChapterQualityMetricsResponse {

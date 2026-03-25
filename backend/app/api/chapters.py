@@ -41,7 +41,8 @@ from app.schemas.chapter import (
     BatchGenerateResponse,
     BatchGenerateStatusResponse,
     ExpansionPlanUpdate,
-    PartialRegenerateRequest
+    PartialRegenerateRequest,
+    ProjectChapterQualityTrendResponse,
 )
 from app.schemas.regeneration import (
     ChapterRegenerateRequest,
@@ -59,6 +60,7 @@ from app.services.chapter_quality_context_service import (
     StoryPacket,
     StoryGenerationGuidance,
     build_analysis_quality_kwargs,
+    build_prompt_quality_kwargs,
     build_story_generation_packet,
     build_story_generation_packet_with_project_continuity,
     clone_chapter_quality_profile,
@@ -1557,14 +1559,13 @@ def _resolve_quality_gate_from_metrics(
 
     return dict(quality_gate) if isinstance(quality_gate, dict) else None
 
-
-async def _load_latest_quality_metrics_for_chapter_ids(
+async def _load_latest_quality_metric_records_for_chapter_ids(
     db_session: AsyncSession,
     chapter_ids: List[str],
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Dict[str, Any]]:
     normalized_ids = [chapter_id for chapter_id in chapter_ids if chapter_id]
     if not normalized_ids:
-        return []
+        return {}
 
     result = await db_session.execute(
         select(GenerationHistory)
@@ -1572,19 +1573,38 @@ async def _load_latest_quality_metrics_for_chapter_ids(
         .order_by(GenerationHistory.created_at.desc())
     )
 
-    metrics_by_chapter: Dict[str, Dict[str, Any]] = {}
+    records_by_chapter: Dict[str, Dict[str, Any]] = {}
     for history in result.scalars():
         chapter_id = history.chapter_id
-        if not chapter_id or chapter_id in metrics_by_chapter:
+        if not chapter_id or chapter_id in records_by_chapter:
             continue
         metrics = _parse_quality_metrics_from_history(history.generated_content)
         if not metrics:
             continue
-        metrics_by_chapter[chapter_id] = metrics
-        if len(metrics_by_chapter) >= len(normalized_ids):
+        records_by_chapter[chapter_id] = {
+            "chapter_id": chapter_id,
+            "latest_quality_metrics": metrics,
+            "history_id": history.id,
+            "generated_at": history.created_at.isoformat() if history.created_at else None,
+            "generated_at_dt": history.created_at,
+        }
+        if len(records_by_chapter) >= len(normalized_ids):
             break
 
-    return [metrics_by_chapter[chapter_id] for chapter_id in normalized_ids if chapter_id in metrics_by_chapter]
+    return records_by_chapter
+
+
+async def _load_latest_quality_metrics_for_chapter_ids(
+    db_session: AsyncSession,
+    chapter_ids: List[str],
+) -> List[Dict[str, Any]]:
+    records_by_chapter = await _load_latest_quality_metric_records_for_chapter_ids(db_session, chapter_ids)
+    return [
+        record["latest_quality_metrics"]
+        for chapter_id in chapter_ids
+        if chapter_id in records_by_chapter
+        for record in [records_by_chapter[chapter_id]]
+    ]
 
 
 async def _load_recent_previous_chapter_ids(
@@ -2307,6 +2327,70 @@ async def get_project_chapters(
         chapters_with_outline.append(chapter_dict)
     
     return ChapterListResponse(total=total, items=chapters_with_outline)
+
+
+@router.get("/project/{project_id}/quality-trend", response_model=ProjectChapterQualityTrendResponse, summary="??????????")
+async def get_project_chapter_quality_trend(
+    project_id: str,
+    request: Request,
+    limit: int = Query(12, ge=1, le=50, description="??????????"),
+    db: AsyncSession = Depends(get_db),
+):
+    """?????????????????????"""
+    user_id = getattr(request.state, "user_id", None)
+    await verify_project_access(project_id, user_id, db)
+
+    chapters_result = await db.execute(
+        select(Chapter)
+        .where(Chapter.project_id == project_id)
+        .order_by(Chapter.chapter_number)
+    )
+    chapters = chapters_result.scalars().all()
+    chapter_ids = [chapter.id for chapter in chapters]
+    records_by_chapter = await _load_latest_quality_metric_records_for_chapter_ids(db, chapter_ids)
+
+    items: List[Dict[str, Any]] = []
+    metrics_history: List[Dict[str, Any]] = []
+    last_generated_at: Optional[datetime] = None
+    for chapter in chapters:
+        record = records_by_chapter.get(chapter.id)
+        if not record:
+            continue
+        latest_quality_metrics = record.get("latest_quality_metrics")
+        if isinstance(latest_quality_metrics, dict):
+            metrics_history.append(latest_quality_metrics)
+        generated_at_dt = record.get("generated_at_dt")
+        if isinstance(generated_at_dt, datetime) and (last_generated_at is None or generated_at_dt > last_generated_at):
+            last_generated_at = generated_at_dt
+        items.append(
+            {
+                "chapter_id": chapter.id,
+                "chapter_number": chapter.chapter_number,
+                "title": chapter.title,
+                "status": chapter.status,
+                "history_id": record.get("history_id"),
+                "generated_at": record.get("generated_at"),
+                "latest_quality_metrics": latest_quality_metrics,
+            }
+        )
+
+    if limit > 0 and len(items) > limit:
+        items = items[-limit:]
+
+    quality_metrics_summary = build_quality_metrics_summary(metrics_history, scope="batch") if metrics_history else None
+    if isinstance(quality_metrics_summary, dict):
+        quality_metrics_summary["total_chapters"] = len(chapters)
+        quality_metrics_summary["analyzed_chapters"] = len(metrics_history)
+        quality_metrics_summary["last_generated_at"] = last_generated_at.isoformat() if last_generated_at else None
+
+    return {
+        "project_id": project_id,
+        "has_metrics": bool(metrics_history),
+        "total_chapters": len(chapters),
+        "analyzed_chapters": len(metrics_history),
+        "items": items,
+        "quality_metrics_summary": quality_metrics_summary,
+    }
 
 
 @router.get("/{chapter_id}", response_model=ChapterResponse, summary="获取章节详情")

@@ -801,6 +801,12 @@ export const chapterApi = {
   getChapterQualityMetrics: (chapterId: string) =>
     api.get<unknown, import('../types').ChapterQualityMetricsResponse>(`/chapters/${chapterId}/quality-metrics`),
 
+  getProjectChapterQualityTrend: (projectId: string, limit = 12) =>
+    api.get<unknown, import('../types').ProjectChapterQualityTrendResponse>(
+      `/chapters/project/${projectId}/quality-trend`,
+      { params: { limit } }
+    ),
+
   getChapterAnalysis: (chapterId: string, includeFullDraft = false) =>
     api.get<unknown, import('../types').ChapterAnalysisResponse>(
       `/chapters/${chapterId}/analysis`,

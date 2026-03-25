@@ -501,6 +501,80 @@ def test_should_collect_recent_quality_gate_trends_from_history():
     assert summary["recent_failed_metric_counts"][0]["key"] in {"conflict_chain_hit_rate", "payoff_chain_rate", "pacing_score"}
 
 
+def test_should_build_long_form_pacing_imbalance_from_recent_history():
+    summary = build_quality_metrics_summary(
+        [
+            {
+                "overall_score": 76.0,
+                "conflict_chain_hit_rate": 61.0,
+                "rule_grounding_hit_rate": 79.0,
+                "outline_alignment_rate": 63.0,
+                "dialogue_naturalness_rate": 78.0,
+                "opening_hook_rate": 69.0,
+                "payoff_chain_rate": 58.0,
+                "cliffhanger_rate": 87.0,
+                "pacing_score": 6.7,
+            },
+            {
+                "overall_score": 75.0,
+                "conflict_chain_hit_rate": 60.0,
+                "rule_grounding_hit_rate": 77.0,
+                "outline_alignment_rate": 62.0,
+                "dialogue_naturalness_rate": 79.0,
+                "opening_hook_rate": 70.0,
+                "payoff_chain_rate": 59.0,
+                "cliffhanger_rate": 86.0,
+                "pacing_score": 6.8,
+            },
+            {
+                "overall_score": 74.0,
+                "conflict_chain_hit_rate": 59.0,
+                "rule_grounding_hit_rate": 78.0,
+                "outline_alignment_rate": 61.0,
+                "dialogue_naturalness_rate": 77.0,
+                "opening_hook_rate": 68.0,
+                "payoff_chain_rate": 57.0,
+                "cliffhanger_rate": 85.0,
+                "pacing_score": 6.6,
+            },
+            {
+                "overall_score": 75.0,
+                "conflict_chain_hit_rate": 62.0,
+                "rule_grounding_hit_rate": 80.0,
+                "outline_alignment_rate": 64.0,
+                "dialogue_naturalness_rate": 78.0,
+                "opening_hook_rate": 71.0,
+                "payoff_chain_rate": 60.0,
+                "cliffhanger_rate": 84.0,
+                "pacing_score": 6.9,
+            },
+            {
+                "overall_score": 74.0,
+                "conflict_chain_hit_rate": 60.0,
+                "rule_grounding_hit_rate": 79.0,
+                "outline_alignment_rate": 63.0,
+                "dialogue_naturalness_rate": 80.0,
+                "opening_hook_rate": 70.0,
+                "payoff_chain_rate": 58.0,
+                "cliffhanger_rate": 86.0,
+                "pacing_score": 6.7,
+            },
+        ],
+        scope="batch",
+    )
+
+    assert summary is not None
+    pacing_imbalance = summary["pacing_imbalance"]
+    assert pacing_imbalance["status"] == "warning"
+    assert pacing_imbalance["recent_progression_density"] == 60.5
+    assert pacing_imbalance["recent_payoff_rate"] == 58.4
+    assert pacing_imbalance["recent_cliffhanger_pull"] == 85.6
+    assert pacing_imbalance["recent_tension_variation"] == 1.1
+    assert {signal["key"] for signal in pacing_imbalance["signals"]} >= {"middle_drag", "overstretched_suspense", "payoff_fatigue"}
+    assert pacing_imbalance["repair_targets"]
+    assert pacing_imbalance["summary"]
+
+
 def test_should_build_quality_metrics_summary_from_reducer_state():
     history = [
         {
@@ -586,3 +660,4 @@ def test_should_advance_quality_metrics_summary_state_incrementally_with_drop():
         trimmed_history,
         scope="batch",
     )
+

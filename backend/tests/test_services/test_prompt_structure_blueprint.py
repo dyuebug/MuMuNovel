@@ -73,6 +73,18 @@ def test_should_inject_story_quality_trend_block_into_chapter_quality_contract()
             "overall_score_trend": "falling",
             "overall_score_delta": -3.0,
             "recent_focus_areas": ["payoff", "continuity"],
+            "pacing_imbalance": {
+                "summary": "最近 5 章出现中段拖滞风险，需优先修复推进密度。",
+                "repair_targets": ["本章至少推进 1 个主线矛盾。"],
+                "signals": [
+                    {
+                        "label": "中段拖滞",
+                        "severity": "warning",
+                        "summary": "最近数章推进密度与张力波动都偏低。",
+                        "metric": 61.2,
+                    }
+                ],
+            },
             "continuity_preflight": {
                 "summary": "Recent chapters show 2 continuity handoff gaps.",
                 "repair_targets": ["Carry forward the alliance tension in action."],
@@ -83,6 +95,8 @@ def test_should_inject_story_quality_trend_block_into_chapter_quality_contract()
     assert "【章节近期质量趋势】" in blocks["story_quality_trend_block"]
     assert "最近节奏稳定度均值：8.1/10" in blocks["story_quality_trend_block"]
     assert "最近回报兑现均值：76.0%" in blocks["story_quality_trend_block"]
+    assert "长篇节奏信号：最近 5 章出现中段拖滞风险" in blocks["story_quality_trend_block"]
+    assert "中段拖滞（预警，指标 61.2）" in blocks["story_quality_trend_block"]
     assert "Recent chapters show 2 continuity handoff gaps." in blocks["story_quality_trend_block"]
     assert "【章节近期质量趋势】" in blocks["quality_contract_block"]
 
