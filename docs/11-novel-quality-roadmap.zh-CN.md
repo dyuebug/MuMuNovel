@@ -14,6 +14,22 @@
 
 ---
 
+
+## 当前落地状态（2026-03-25）
+
+近期已经落地的关键能力：
+
+- 单章流式生成已切换为 hard gate：未通过验收时不保存正文。
+- 批量 / 后台生成已切换为 hard gate：先生成 candidate，再决定是否 apply。
+- `GenerationHistory` 已收紧：未 apply 的 candidate 不再作为正文历史保存。
+- follow-up analysis 已支持读取被阻断 candidate，而不是旧章节正文。
+
+建议与本文配套阅读：
+
+- [12 - 小说质量运行时架构](./12-novel-quality-runtime-architecture.zh-CN.md)
+
+---
+
 ## 当前已经具备的基础
 
 ### 1. 项目级默认生成偏好已具备统一解析入口
