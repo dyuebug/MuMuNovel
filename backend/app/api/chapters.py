@@ -2749,6 +2749,8 @@ async def analyze_chapter_background(
     ai_service: AIService,
     quality_profile: Optional[Dict[str, Any]] = None,
     generation_guidance: Optional[StoryGenerationGuidance] = None,
+    chapter_content_override: Optional[str] = None,
+    chapter_word_count_override: Optional[int] = None,
 ) -> bool:
     """
     后台异步分析章节（支持并发，使用锁保护数据库写入）
@@ -2795,15 +2797,16 @@ async def analyze_chapter_background(
             select(Chapter).where(Chapter.id == chapter_id)
         )
         chapter = chapter_result.scalar_one_or_none()
-        if not chapter or not chapter.content:
+        effective_chapter_content = chapter_content_override if chapter_content_override is not None else (chapter.content if chapter else None)
+        if not chapter or not effective_chapter_content:
             async with write_lock:
                 task.status = 'failed'
-                task.error_message = '章节不存在或内容为空'
+                task.error_message = '??????????'
                 task.completed_at = datetime.now()
                 await db_session.commit()
-            logger.error(f"❌ 章节不存在或内容为空: {chapter_id}")
+            logger.error(f"? ??????????: {chapter_id}")
             return False
-        
+        effective_chapter_word_count = int(chapter_word_count_override or chapter.word_count or len(effective_chapter_content))
         async with write_lock:
             task.progress = 20
             await db_session.commit()
@@ -2928,8 +2931,8 @@ async def analyze_chapter_background(
         analysis_result = await analyzer.analyze_chapter(
             chapter_number=chapter.chapter_number,
             title=chapter.title,
-            content=chapter.content,
-            word_count=chapter.word_count or len(chapter.content),
+            content=effective_chapter_content,
+            word_count=effective_chapter_word_count,
             existing_foreshadows=existing_foreshadows,
             on_retry=on_retry_callback,
             characters_info=characters_info,
@@ -2952,7 +2955,7 @@ async def analyze_chapter_background(
             user_id=user_id,
             chapter_number=chapter.chapter_number,
             chapter_title=chapter.title or "",
-            chapter_content=chapter.content or "",
+            chapter_content=effective_chapter_content,
             chapter_outline=chapter_outline_text,
             characters_info=characters_info,
             world_rules=project.world_rules or "",
@@ -2965,7 +2968,7 @@ async def analyze_chapter_background(
             user_id=user_id,
             chapter_number=chapter.chapter_number,
             chapter_title=chapter.title or "",
-            chapter_content=chapter.content or "",
+            chapter_content=effective_chapter_content,
             checker_result=checker_result or {},
             quality_profile=analysis_quality_profile,
             generation_guidance=analysis_guidance,
@@ -3120,7 +3123,7 @@ async def analyze_chapter_background(
             analysis=analysis_result,
             chapter_id=chapter_id,
             chapter_number=chapter.chapter_number,
-            chapter_content=chapter.content or "",
+            chapter_content=effective_chapter_content,
             chapter_title=chapter.title or ""
         )
         
@@ -3779,21 +3782,8 @@ async def generate_chapter_content_stream(
                     )
                 if not full_content.strip():
                     raise ValueError("生成内容为空或仅包含流程化元文本，请重试生成")
-                if _contains_chapter_workflow_meta_text(full_content):
-                    raise ValueError("生成内容包含流程化元文本，请重试生成")
-
-                # === 保存阶段 ===
-                yield await tracker.saving("正在保存章节...", 0.3)
-                
-                # 更新章节内容到数据库
-                old_word_count = current_chapter.word_count or 0
-                current_chapter.content = full_content
-                new_word_count = len(full_content)
-                current_chapter.word_count = new_word_count
-                current_chapter.status = "completed"
-                
-                # 更新项目字数
-                project.current_words = project.current_words - old_word_count + new_word_count
+                # === ???? ===
+                yield await tracker.saving("????????...", 0.3)
 
                 # ?????????????
                 quality_metrics = compute_story_quality_metrics(
@@ -3822,14 +3812,25 @@ async def generate_chapter_content_stream(
                         **quality_metrics,
                         "quality_gate": quality_gate_snapshot,
                     }
+
+                content_applied = not quality_gate_requires_followup
+                previous_content = current_chapter.content
+                previous_word_count = current_chapter.word_count or 0
+                previous_status = current_chapter.status
                 if quality_gate_requires_followup:
-                    quality_gate_decision = None
-                    if isinstance(quality_gate_snapshot, dict):
-                        quality_gate_decision = quality_gate_snapshot.get("decision")
-                    logger.info(
+                    quality_gate_decision = quality_gate_snapshot.get("decision") if isinstance(quality_gate_snapshot, dict) else None
+                    logger.warning(
                         f"??? ????????????: chapter_id={chapter_id}, "
                         f"action={quality_gate_action}, decision={quality_gate_decision}"
                     )
+                else:
+                    current_chapter.content = full_content
+                    new_word_count = len(full_content)
+                    current_chapter.word_count = new_word_count
+                    current_chapter.status = "completed"
+                    project.current_words = project.current_words - previous_word_count + new_word_count
+
+                candidate_word_count = len(full_content)
 
                 # ??????
                 history = GenerationHistory(
@@ -3845,21 +3846,27 @@ async def generate_chapter_content_stream(
                 db_committed = True
                 await db_session.refresh(current_chapter)
 
-                logger.info(f"?????? {chapter_id}?? {new_word_count} ?")
-
-                # ?? ???????????????????
-                try:
-                    plant_result = await foreshadow_service.auto_plant_pending_foreshadows(
-                        db=db_session,
-                        project_id=project.id,
-                        chapter_id=chapter_id,
-                        chapter_number=current_chapter.chapter_number,
-                        chapter_content=full_content
+                if content_applied:
+                    logger.info(f"?????? {chapter_id}?? {candidate_word_count} ?")
+                else:
+                    logger.info(
+                        f"?? {chapter_id} ????? {candidate_word_count} ????????????????={previous_status}"
                     )
-                    if plant_result.get('planted_count', 0) > 0:
-                        logger.info(f"?? ?????????: {plant_result['planted_count']}?")
-                except Exception as plant_error:
-                    logger.warning(f"?? ??????????: {str(plant_error)}")
+
+                # ?? ?????????????????????
+                if content_applied:
+                    try:
+                        plant_result = await foreshadow_service.auto_plant_pending_foreshadows(
+                            db=db_session,
+                            project_id=project.id,
+                            chapter_id=chapter_id,
+                            chapter_number=current_chapter.chapter_number,
+                            chapter_content=full_content
+                        )
+                        if plant_result.get('planted_count', 0) > 0:
+                            logger.info(f"?? ?????????: {plant_result['planted_count']}?")
+                    except Exception as plant_error:
+                        logger.warning(f"?? ??????????: {str(plant_error)}")
 
                 task_id = None
                 should_schedule_analysis = enable_analysis or quality_gate_requires_followup
@@ -3870,7 +3877,6 @@ async def generate_chapter_content_stream(
                     elif quality_gate_action == "manual_review":
                         analysis_reason = "quality_gate_manual_review"
 
-                    # ??????
                     analysis_task = AnalysisTask(
                         chapter_id=chapter_id,
                         user_id=current_user_id,
@@ -3885,10 +3891,8 @@ async def generate_chapter_content_stream(
                     task_id = analysis_task.id
                     logger.info(f"?? ???????: {task_id} (reason={analysis_reason})")
 
-                    # ??????SQLite WAL????
                     await asyncio.sleep(0.05)
 
-                    # ??????????????
                     background_tasks.add_task(
                         analyze_chapter_background,
                         chapter_id=chapter_id,
@@ -3898,30 +3902,51 @@ async def generate_chapter_content_stream(
                         ai_service=user_ai_service,
                         quality_profile=quality_profile,
                         generation_guidance=generation_guidance,
+                        chapter_content_override=full_content if quality_gate_requires_followup else None,
+                        chapter_word_count_override=candidate_word_count if quality_gate_requires_followup else None,
                     )
                 else:
                     logger.info("?? ???????????????????????????")
 
-                # === 完成阶段 ===
-                yield await tracker.complete("创作完成！")
+                # === ???? ===
+                completion_message = "?????"
+                if quality_gate_action == "retry":
+                    completion_message = "???????????????"
+                elif quality_gate_action == "manual_review":
+                    completion_message = "???????????????"
+                yield await tracker.complete(completion_message)
 
-                # 推送质量评分事件，便于前端即时展示
+                # ?????????????????
                 yield SSEResponse.format_sse({
                     "type": "quality_metrics",
                     "chapter_id": current_chapter.id,
                     "chapter_number": current_chapter.chapter_number,
                     **quality_metrics
                 })
-                
+
+                if quality_gate_requires_followup:
+                    yield SSEResponse.format_sse({
+                        "type": "quality_gate_retry" if quality_gate_action == "retry" else "quality_gate_blocked",
+                        "chapter_id": current_chapter.id,
+                        "chapter_number": current_chapter.chapter_number,
+                        "message": quality_gate_message,
+                        "progress": 88 if quality_gate_action == "retry" else 95,
+                        "quality_gate": quality_gate_snapshot,
+                    })
+
                 # ??????
                 yield await tracker.result({
-                    'word_count': new_word_count,
+                    'word_count': candidate_word_count,
                     'analysis_task_id': task_id,
                     'quality_metrics': quality_metrics,
                     'quality_gate_action': quality_gate_action,
                     'quality_gate_message': quality_gate_message,
+                    'content_applied': content_applied,
+                    'chapter_status': current_chapter.status,
+                    'saved_word_count': current_chapter.word_count or 0,
+                    'hard_gate_blocked': quality_gate_requires_followup,
                 })
-                
+
                 # ?????????????????
                 if task_id:
                     analysis_started_message = '???????'
@@ -3936,9 +3961,8 @@ async def generate_chapter_content_stream(
                             'message': analysis_started_message
                         }
                     )
-                
-                # 发送完成信号
-                yield await tracker.done()
+
+                # ??????
                 
                 break  # 退出async for db_session循环
         

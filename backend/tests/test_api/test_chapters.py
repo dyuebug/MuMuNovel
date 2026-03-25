@@ -382,10 +382,24 @@ async def test_should_build_context_with_expected_builder_during_generate_stream
     def fake_format_prompt(template, **kwargs):
         return "mock-generate-prompt"
 
+    def fake_compute_story_quality_metrics(**kwargs):
+        return {
+            "overall_score": 92.0,
+            "conflict_chain_hit_rate": 90.0,
+            "rule_grounding_hit_rate": 91.0,
+            "outline_alignment_rate": 93.0,
+            "dialogue_naturalness_rate": 92.0,
+            "opening_hook_rate": 90.0,
+            "payoff_chain_rate": 91.0,
+            "cliffhanger_rate": 90.0,
+            "pacing_score": 8.8,
+        }
+
     monkeypatch.setattr(chapters_api, "OneToManyContextBuilder", FakeOneToManyBuilder)
     monkeypatch.setattr(chapters_api, "OneToOneContextBuilder", FakeOneToOneBuilder)
     monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
     monkeypatch.setattr(chapters_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
 
     fake_ai_service.calls.clear()
     fake_ai_service.chunks = ["段落甲", "段落乙"]
@@ -534,6 +548,18 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
     assert calls[0]["chapter_id"] == chapter.id
     assert calls[0]["project_id"] == project.id
     assert calls[0]["task_id"] == result_data["analysis_task_id"]
+    assert calls[0]["chapter_content_override"] == "??????"
+    assert calls[0]["chapter_word_count_override"] == len("??????")
+
+    async with chapters_session_factory() as session:
+        saved_chapter = await session.get(Chapter, chapter.id)
+        saved_project = await session.get(Project, project.id)
+        assert saved_chapter is not None
+        assert saved_chapter.status == "draft"
+        assert saved_chapter.content is None
+        assert saved_chapter.word_count == 0
+        assert saved_project is not None
+        assert saved_project.current_words == 0
 
 
 async def test_should_stream_partial_regenerate_with_mock_ai_response(
