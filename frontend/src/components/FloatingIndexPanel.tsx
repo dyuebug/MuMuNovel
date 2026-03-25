@@ -49,7 +49,7 @@ function FloatingIndexPanel({
 
   return (
     <Drawer
-      title="????"
+      title="章节索引"
       placement="right"
       onClose={onClose}
       open={visible}
@@ -60,7 +60,7 @@ function FloatingIndexPanel({
     >
       <div style={{ padding: '16px', borderBottom: `1px solid ${token.colorBorderSecondary}` }}>
         <Input
-          placeholder="??????"
+          placeholder="搜索章节标题"
           prefix={<SearchOutlined />}
           value={searchTerm}
           onChange={(event) => setSearchTerm(event.target.value)}
@@ -86,7 +86,7 @@ function FloatingIndexPanel({
                 renderItem={(chapter) => (
                   <List.Item style={{ paddingLeft: 16, borderBlockStart: 'none' }}>
                     <Link onClick={() => handleChapterClick(chapter.id)}>
-                      {`?${chapter.chapter_number}? ${chapter.title}`}
+                      {`第${chapter.chapter_number}章 ${chapter.title}`}
                     </Link>
                   </List.Item>
                 )}
@@ -97,7 +97,7 @@ function FloatingIndexPanel({
           style={{ height: 'calc(100vh - 120px)', overflowY: 'auto' }}
         />
       ) : (
-        <Empty description="?????????" style={{ marginTop: 48 }} />
+        <Empty description="暂无匹配章节" style={{ marginTop: 48 }} />
       )}
     </Drawer>
   );

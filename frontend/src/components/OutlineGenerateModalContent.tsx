@@ -189,7 +189,7 @@ export default function OutlineGenerateModalContent({
             chapter_count: 5,
 
 
-            narrative_perspective: currentProject?.narrative_perspective || '????',
+            narrative_perspective: currentProject?.narrative_perspective || "第三人称",
 
 
             creative_mode: projectDefaultCreativeMode,

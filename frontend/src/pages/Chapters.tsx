@@ -1355,7 +1355,7 @@ export default function Chapters() {
 
     if (!hasMeaningfulStoryCreationDraft(singleStoryCreationCurrentDraft)) {
       if (!options?.silent) {
-        message.warning('??????????????');
+        message.warning("当前没有可保存的创作草稿");
       }
       return null;
     }
@@ -1377,13 +1377,13 @@ export default function Chapters() {
       && normalizeOptionalText(latestSnapshot.prompt) === normalizeOptionalText(normalizedPrompt)
     ) {
       if (!options?.silent && reason === 'manual') {
-        message.info('?????????????????');
+        message.info("当前草稿与最近一次快照一致");
       }
       return latestSnapshot;
     }
 
     const createdAt = new Date().toISOString();
-    const chapterLabel = currentEditingChapter.chapter_number ? `?${currentEditingChapter.chapter_number}?` : '???';
+    const chapterLabel = currentEditingChapter.chapter_number ? `第${currentEditingChapter.chapter_number}章` : "未命名章节";
     const { buildStoryCreationSnapshotId, persistStoryCreationSnapshot } = await loadStoryCreationPersistence();
     const snapshot: StoryCreationSnapshot = {
       ...singleStoryCreationCurrentDraft,
@@ -1392,7 +1392,7 @@ export default function Chapters() {
       createdAt,
       updatedAt: createdAt,
       reason,
-      label: options?.label?.trim() || `${chapterLabel} / ${reason === 'generate' ? '????' : '????'}`,
+      label: options?.label?.trim() || `${chapterLabel} / ${reason === "generate" ? "生成前快照" : "手动保存"}`,
       prompt: normalizedPrompt || undefined,
       promptLayerLabels: [...promptLayerLabels],
       promptCharCount: normalizedPrompt?.length ?? 0,
@@ -1402,7 +1402,7 @@ export default function Chapters() {
     setSingleStoryCreationSnapshots(nextSnapshots);
 
     if (!options?.silent) {
-      message.success(reason === 'generate' ? '????????' : '????????');
+      message.success(reason === "generate" ? "已保存生成前快照" : "已保存创作快照");
     }
 
     return nextSnapshots[0] ?? snapshot;
@@ -1428,7 +1428,7 @@ export default function Chapters() {
 
     if (!hasMeaningfulStoryCreationDraft(batchStoryCreationCurrentDraft)) {
       if (!options?.silent) {
-        message.warning('??????????????');
+        message.warning("当前没有可保存的批量创作草稿");
       }
       return null;
     }
@@ -1450,7 +1450,7 @@ export default function Chapters() {
       && normalizeOptionalText(latestSnapshot.prompt) === normalizeOptionalText(normalizedPrompt)
     ) {
       if (!options?.silent && reason === 'manual') {
-        message.info('?????????????????');
+        message.info("当前批量草稿与最近一次快照一致");
       }
       return latestSnapshot;
     }
@@ -1464,7 +1464,7 @@ export default function Chapters() {
       createdAt,
       updatedAt: createdAt,
       reason,
-      label: options?.label?.trim() || `?? / ${reason === 'generate' ? '????' : '????'}`,
+      label: options?.label?.trim() || `批量章节 / ${reason === "generate" ? "生成前快照" : "手动保存"}`,
       prompt: normalizedPrompt || undefined,
       promptLayerLabels: [...promptLayerLabels],
       promptCharCount: normalizedPrompt?.length ?? 0,
@@ -1474,7 +1474,7 @@ export default function Chapters() {
     setBatchStoryCreationSnapshots(nextSnapshots);
 
     if (!options?.silent) {
-      message.success(reason === 'generate' ? '????????' : '????????');
+      message.success(reason === "generate" ? "已保存批量生成前快照" : "已保存批量创作快照");
     }
 
     return nextSnapshots[0] ?? snapshot;
@@ -1547,7 +1547,7 @@ export default function Chapters() {
     const { removePersistedStoryCreationSnapshot } = await loadStoryCreationPersistence();
     const nextSnapshots = removePersistedStoryCreationSnapshot(singleStoryCreationDraftStorageKey, snapshotId);
     setSingleStoryCreationSnapshots(nextSnapshots);
-    message.success('??????');
+    message.success("已删除创作快照");
   }, [singleStoryCreationDraftStorageKey]);
 
   const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) => {
@@ -1558,7 +1558,7 @@ export default function Chapters() {
     const { removePersistedStoryCreationSnapshot } = await loadStoryCreationPersistence();
     const nextSnapshots = removePersistedStoryCreationSnapshot(batchStoryCreationDraftStorageKey, snapshotId);
     setBatchStoryCreationSnapshots(nextSnapshots);
-    message.success('??????');
+    message.success("已删除批量快照");
   }, [batchStoryCreationDraftStorageKey]);
 
   const copyStoryCreationPrompt = useCallback(async (
@@ -1793,9 +1793,9 @@ export default function Chapters() {
 
       if (options?.notifyOnTerminalTransitions && previousTasks[chapterId]?.status !== task.status) {
         if (task.status === 'completed') {
-          message.success('????????');
+          message.success("后台任务已完成");
         } else if (task.status === 'failed') {
-          message.error(`???????${task.error_message || '????'}`);
+          message.error(`后台任务失败：${task.error_message || "未知错误"}`);
         }
       }
     });
@@ -2586,7 +2586,7 @@ export default function Chapters() {
 
           outlineId: chapter.outline_id || null,
 
-          outlineTitle: chapter.outline_title || '???',
+          outlineTitle: chapter.outline_title || "未分组",
 
           outlineOrder: chapter.outline_order ?? 999,
 
@@ -2799,13 +2799,13 @@ export default function Chapters() {
 
 
 
-      message.success('??????');
+      message.success("章节更新成功");
 
       setIsEditorOpen(false);
 
     } catch {
 
-      message.error('???????');
+      message.error("章节更新失败");
 
     }
 
@@ -3642,9 +3642,9 @@ export default function Chapters() {
 
   const getStatusText = (status: string) => {
     const texts: Record<string, string> = {
-      draft: '??',
-      writing: '???',
-      completed: '???',
+      draft: "草稿",
+      writing: "创作中",
+      completed: "已完成",
     };
 
     return texts[status] || status;
@@ -3656,22 +3656,22 @@ export default function Chapters() {
     }
 
     if (chapters.length === 0) {
-      message.warning('???????');
+      message.warning("暂无可导出的章节");
       return;
     }
 
     modal.confirm({
-      title: '????',
-      content: `???????${currentProject.title}??`,
+      title: "导出项目",
+      content: `确定导出项目《${currentProject.title}》吗？`,
       centered: true,
-      okText: '??',
-      cancelText: '??',
+      okText: "导出",
+      cancelText: "取消",
       onOk: () => {
         try {
           projectApi.exportProject(currentProject.id);
-          message.success('??????');
+          message.success("已开始导出");
         } catch {
-          message.error('??????');
+          message.error("导出失败");
         }
       },
     });
@@ -3711,10 +3711,10 @@ export default function Chapters() {
         setCurrentProject(updatedProject);
       }
 
-      message.success('??????');
+      message.success("章节删除成功");
     } catch (error: unknown) {
       const err = error as Error;
-      message.error('???????' + (err.message || '????'));
+      message.error("章节删除失败：" + (err.message || "未知错误"));
     }
   }, [currentProject, deleteChapter, refreshChapters, setCurrentProject]);
 
@@ -4082,7 +4082,7 @@ export default function Chapters() {
 
             >
 
-              ????
+              新建章节
 
             </Button>
 
@@ -4106,7 +4106,7 @@ export default function Chapters() {
 
           >
 
-            ????
+            批量生成
 
           </Button>
 
@@ -4126,7 +4126,7 @@ export default function Chapters() {
 
           >
 
-            ??
+            导出
 
           </Button>
 
@@ -4136,9 +4136,9 @@ export default function Chapters() {
 
               {currentProject.outline_mode === 'one-to-one'
 
-                ? '??????'
+                ? "一章一纲"
 
-                : '??????'}
+                : "一纲多章"}
 
             </Tag>
 
@@ -4154,7 +4154,7 @@ export default function Chapters() {
 
         {chapters.length === 0 ? (
 
-          <Empty description="?????" />
+          <Empty description="暂无章节" />
 
         ) : currentProject.outline_mode === 'one-to-one' ? (
 
@@ -4229,7 +4229,7 @@ export default function Chapters() {
 
                     <Tag color={group.outlineId ? 'blue' : 'default'} style={{ margin: 0 }}>
 
-                      {group.outlineId ? `?? ${group.outlineOrder}` : '?????'}
+                      {group.outlineId ? `大纲 ${group.outlineOrder}` : "未分组"}
 
                     </Tag>
 
@@ -4333,10 +4333,10 @@ export default function Chapters() {
         <Suspense fallback={null}>
           <LazyChapterBasicModal
             open={isModalOpen}
-            title={editingId ? '????' : '????'}
+            title={editingId ? "编辑章节" : "新建章节"}
             isMobile={isMobile}
             outlineMode={currentProject.outline_mode}
-            submitText={editingId ? '????' : '????'}
+            submitText={editingId ? "保存修改" : "创建章节"}
             form={form}
             onCancel={() => setIsModalOpen(false)}
             onFinish={handleSubmit}

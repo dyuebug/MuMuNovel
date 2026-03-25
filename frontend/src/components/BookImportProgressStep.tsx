@@ -28,7 +28,7 @@ export default function BookImportProgressStep({
   onSkipFailedSteps,
 }: BookImportProgressStepProps) {
   return (
-    <Card title="????" style={{ textAlign: 'center' }}>
+    <Card title="导入进度" style={{ textAlign: "center" }}>
       <Progress
         percent={Math.min(100, Math.max(0, Math.round(retrying ? retryProgress : applyProgress)))}
         status={
@@ -64,7 +64,7 @@ export default function BookImportProgressStep({
       {applyError ? (
         <Alert
           type="error"
-          message="????"
+          message="导入失败"
           description={applyError}
           showIcon
           style={{ textAlign: 'left', marginBottom: 24 }}
@@ -77,11 +77,11 @@ export default function BookImportProgressStep({
             type="warning"
             icon={<WarningOutlined />}
             showIcon
-            message={`${failedSteps.length} ???????`}
+            message={`${failedSteps.length} 个步骤失败`}
             description={
               <div>
                 <Typography.Paragraph style={{ marginBottom: 12, color: 'rgba(0,0,0,0.65)' }}>
-                  ??????????????????????????????????????????
+                  以下步骤执行失败。你可以重试失败步骤，或跳过失败步骤继续完成导入。
                 </Typography.Paragraph>
                 <List
                   size="small"
@@ -93,7 +93,7 @@ export default function BookImportProgressStep({
                         title={
                           <Space>
                             <Tag color="error">{item.step_label}</Tag>
-                            {(item.retry_count ?? 0) > 0 ? <Tag color="orange">??? {item.retry_count} ?</Tag> : null}
+                            {(item.retry_count ?? 0) > 0 ? <Tag color="orange">已重试 {item.retry_count} 次</Tag> : null}
                           </Space>
                         }
                         description={
@@ -107,9 +107,9 @@ export default function BookImportProgressStep({
                 />
                 <Space style={{ marginTop: 16, display: 'flex', justifyContent: 'center' }}>
                   <Button type="primary" icon={<RedoOutlined />} onClick={onRetryFailedSteps} loading={retrying}>
-                    ??????????
+                    重试失败步骤
                   </Button>
-                  <Button onClick={onSkipFailedSteps}>?????????</Button>
+                  <Button onClick={onSkipFailedSteps}>跳过失败步骤</Button>
                 </Space>
               </div>
             }
@@ -124,7 +124,7 @@ export default function BookImportProgressStep({
             <Alert
               type="info"
               showIcon
-              message="????..."
+              message="正在重试..."
               description={retryMessage}
               style={{ textAlign: 'left' }}
             />
@@ -143,11 +143,12 @@ export default function BookImportProgressStep({
           }}
         >
           <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-            ????????????????<br />
-            ? ??????????????????<br />
-            ? ?????????????<br />
-            ? ?????????<br />
-            {isApplyComplete ? '???????????????' : '???????????????'}
+            导入过程中系统会自动：<br />
+            - 创建或更新项目基础信息<br />
+            - 写入章节标题、摘要与正文<br />
+            - 保留解析得到的结构与顺序<br />
+            - 支持失败步骤单独重试<br />
+            {isApplyComplete ? "导入已完成，可前往章节页继续校对与润色。" : "导入完成后，可前往章节页继续校对与润色。"}
           </Typography.Text>
         </div>
       ) : null}

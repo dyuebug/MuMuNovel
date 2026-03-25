@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Modal, Spin, Alert, Tabs, Card, Tag, List, Empty, Statistic, Row, Col, Button, message } from 'antd';
 import {
   ThunderboltOutlined,
@@ -17,6 +17,7 @@ import type { AnalysisTask, ChapterAnalysisResponse } from '../types';
 import { chapterApi } from '../services/api';
 import ChapterRegenerationModal from './ChapterRegenerationModal';
 import ChapterContentComparison from './ChapterContentComparison';
+import { getQualityTrendLabel } from '../utils/storyCreationQualitySummary';
 
 // 判断是否为移动设备
 const isMobileDevice = () => window.innerWidth < 768;
@@ -48,6 +49,29 @@ const ANALYSIS_INLINE_TERM_LABELS: Array<[string, string]> = [
   ['planted', '已埋下'],
   ['resolved', '已回收'],
 ];
+
+const ANALYSIS_QUALITY_FOCUS_LABELS: Record<string, string> = {
+  conflict: "冲突链推进",
+  rule_grounding: "规则落地",
+  outline: "大纲贴合",
+  dialogue: "对白自然度",
+  opening: "开场钩子",
+  payoff: "回报兑现",
+  cliffhanger: "章尾牵引",
+  pacing: "节奏稳定度",
+  relationship_continuity: "关系连续性",
+  foreshadow_continuity: "伏笔连续性",
+  character_continuity: "角色连续性",
+  organization_continuity: "组织连续性",
+  career_continuity: "职业成长连续性",
+};
+
+const localizeQualityFocusArea = (value?: string | null): string => {
+  if (!value) {
+    return "";
+  }
+  return ANALYSIS_QUALITY_FOCUS_LABELS[value] || value;
+};
 
 const localizeAnalysisPlotStage = (value?: string | null): string => {
   if (!value) {
@@ -491,6 +515,24 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
     const hasSuggestions = !!(analysis_data.suggestions && analysis_data.suggestions.length > 0);
     const hasCheckerResult = !!checkerResult;
     const hasDraftResult = !!draftResult;
+    const qualityMetricsSummary = analysis.quality_metrics_summary;
+    const effectiveQualityGate = analysis.quality_metrics?.quality_gate ?? qualityMetricsSummary?.quality_gate ?? null;
+    const recentFailedMetricCounts = qualityMetricsSummary?.recent_failed_metric_counts || [];
+    const recentFocusAreas = qualityMetricsSummary?.recent_focus_areas || [];
+    const continuityWarningCount = effectiveQualityGate?.continuity_warning_count
+      ?? qualityMetricsSummary?.continuity_preflight?.warning_count
+      ?? 0;
+    const qualityGateCounts = qualityMetricsSummary?.quality_gate_counts || null;
+    const qualitySignalCount = (qualityGateCounts?.pass ?? 0) + (qualityGateCounts?.repairable ?? 0) + (qualityGateCounts?.blocked ?? 0);
+    const hasQualitySignals = Boolean(
+      effectiveQualityGate?.summary
+      || effectiveQualityGate?.recommended_action_label
+      || recentFailedMetricCounts.length
+      || recentFocusAreas.length
+      || continuityWarningCount
+      || qualitySignalCount
+      || qualityMetricsSummary?.overall_score_trend,
+    );
 
     return (
       <Tabs
@@ -523,6 +565,69 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                     type="info"
                     showIcon
                     style={{ marginBottom: 16 }}
+                  />
+                )}
+
+                {hasQualitySignals && (
+                  <Alert
+                    message="质量趋势信号"
+                    type={effectiveQualityGate?.requires_manual_review ? 'warning' : 'info'}
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                    description={
+                      <div>
+                        {effectiveQualityGate?.summary && <p style={{ marginBottom: 8 }}>{effectiveQualityGate.summary}</p>}
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+                          {qualityMetricsSummary?.overall_score_trend && (
+                            <Tag color={qualityMetricsSummary.overall_score_trend === 'rising' ? 'green' : qualityMetricsSummary.overall_score_trend === 'falling' ? 'red' : 'blue'}>
+                              ???{getQualityTrendLabel(qualityMetricsSummary.overall_score_trend)}
+                              {typeof qualityMetricsSummary.overall_score_delta === 'number' ? ` ${qualityMetricsSummary.overall_score_delta > 0 ? '+' : ''}${qualityMetricsSummary.overall_score_delta.toFixed(1)}` : ''}
+                            </Tag>
+                          )}
+                          {(qualityGateCounts?.blocked ?? 0) > 0 && <Tag color="red">人工复核 {(qualityGateCounts?.blocked ?? 0)}</Tag>}
+                          {(qualityGateCounts?.repairable ?? 0) > 0 && <Tag color="orange">自动修复 {(qualityGateCounts?.repairable ?? 0)}</Tag>}
+                          {(qualityGateCounts?.pass ?? 0) > 0 && <Tag color="green">通过 {(qualityGateCounts?.pass ?? 0)}</Tag>}
+                          {continuityWarningCount > 0 && <Tag color="gold">连续性预警 {continuityWarningCount}</Tag>}
+                        </div>
+                        {effectiveQualityGate?.recommended_action_label && (
+                          <div style={{ marginBottom: 8 }}>
+                            <strong>建议动作：</strong>
+                            <Tag color="magenta" style={{ marginLeft: 8 }}>{effectiveQualityGate.recommended_action_label}</Tag>
+                          </div>
+                        )}
+                        {recentFailedMetricCounts.length > 0 && (
+                          <div style={{ marginBottom: 8 }}>
+                            <strong>最近反复失分：</strong>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                              {recentFailedMetricCounts.map((item) => (
+                                <Tag key={`${item.key || item.label}-${item.count || 0}`} color="volcano">
+                                  {item.label || item.key}
+                                  {typeof item.count === 'number' ? ` ?${item.count}` : ''}
+                                </Tag>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {recentFocusAreas.length > 0 && (
+                          <div style={{ marginBottom: 12 }}>
+                            <strong>建议动作：</strong>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                              {recentFocusAreas.map((area) => (
+                                <Tag key={area}>{localizeQualityFocusArea(area)}</Tag>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        <Button
+                          type="primary"
+                          icon={<EditOutlined />}
+                          onClick={() => setRegenerationModalVisible(true)}
+                          size={isMobile ? 'small' : 'middle'}
+                        >
+                          按质量信号重生成
+                        </Button>
+                      </div>
+                    }
                   />
                 )}
 
@@ -1076,6 +1181,8 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
           suggestions={convertSuggestionsForRegeneration()}
           hasAnalysis={Boolean(analysis)}
           repairGuidance={analysis?.quality_metrics?.repair_guidance ?? analysis?.quality_metrics_summary?.repair_guidance ?? null}
+          qualityMetricsSummary={analysis?.quality_metrics_summary ?? null}
+          qualityGate={analysis?.quality_metrics?.quality_gate ?? analysis?.quality_metrics_summary?.quality_gate ?? null}
         />
       )}
 

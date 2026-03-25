@@ -2,6 +2,10 @@ import type {
   ChapterQualityMetrics,
   ChapterQualityMetricsSummary,
   ChapterQualityProfileSummary,
+  CreativeMode,
+  QualityPreset,
+  StoryFocus,
+  StoryQualityGateDecision,
   StoryRepairGuidance,
 } from '../types';
 
@@ -24,6 +28,7 @@ export type QualityRepairGuidanceDisplay = {
   repairTargets: string[];
   preserveStrengths: string[];
   focusAreas: string[];
+  rawFocusAreas: string[];
   weakestMetricLabel?: string;
   weakestMetricValue?: number | null;
 };
@@ -49,6 +54,43 @@ const QUALITY_FOCUS_AREA_LABELS: Record<string, string> = {
   payoff: '回报兑现',
   cliffhanger: '章尾牵引',
   pacing: '节奏稳定度',
+};
+
+const QUALITY_TREND_LABELS: Record<string, string> = {
+  rising: '最近走势回升',
+  falling: '最近走势走低',
+  stable: '最近走势持平',
+};
+
+const QUALITY_GATE_RECOMMENDED_DEFAULTS: Record<string, {
+  creative_mode?: CreativeMode;
+  story_focus?: StoryFocus;
+  quality_preset?: QualityPreset;
+}> = {
+  rewrite_opening: {
+    creative_mode: 'hook',
+    story_focus: 'advance_plot',
+    quality_preset: 'plot_drive',
+  },
+  strengthen_dialogue: {
+    creative_mode: 'relationship',
+    story_focus: 'relationship_shift',
+    quality_preset: 'emotion_drama',
+  },
+  patch_payoff: {
+    creative_mode: 'payoff',
+    story_focus: 'foreshadow_payoff',
+    quality_preset: 'plot_drive',
+  },
+  bridge_scene: {
+    creative_mode: 'suspense',
+    story_focus: 'advance_plot',
+    quality_preset: 'plot_drive',
+  },
+  grounding_pass: {
+    creative_mode: 'balanced',
+    quality_preset: 'immersive',
+  },
 };
 
 const QUALITY_PROFILE_BLOCK_ORDER: Array<keyof Pick<ChapterQualityProfileSummary, 'generation' | 'checker' | 'reviser' | 'mcp_guard' | 'external_assets_block'>> = [
@@ -132,7 +174,8 @@ export const getRepairGuidanceDisplay = (
   const summary = guidance.summary?.trim() || '';
   const repairTargets = (guidance.repair_targets || []).map((item) => item.trim()).filter(Boolean);
   const preserveStrengths = (guidance.preserve_strengths || []).map((item) => item.trim()).filter(Boolean);
-  const focusAreas = (guidance.focus_areas || []).map((item) => item.trim()).filter(Boolean).map((item) => QUALITY_FOCUS_AREA_LABELS[item] || item);
+  const rawFocusAreas = (guidance.focus_areas || []).map((item) => item.trim()).filter(Boolean);
+  const focusAreas = rawFocusAreas.map((item) => QUALITY_FOCUS_AREA_LABELS[item] || item);
 
   if (
     !summary
@@ -150,6 +193,7 @@ export const getRepairGuidanceDisplay = (
     repairTargets,
     preserveStrengths,
     focusAreas,
+    rawFocusAreas,
     weakestMetricLabel: guidance.weakest_metric_label || undefined,
     weakestMetricValue: guidance.weakest_metric_value,
   };
@@ -167,6 +211,30 @@ export const formatRepairWeakestMetricHint = (
   return `${guidance.weakestMetricLabel}${value}`;
 };
 
+
+export const getQualityTrendLabel = (
+  trend?: string | null,
+): string => {
+  const value = trend?.trim();
+  if (!value) {
+    return '';
+  }
+  return QUALITY_TREND_LABELS[value] || value;
+};
+
+export const getQualityGateRecommendedDefaults = (
+  qualityGate?: StoryQualityGateDecision | null,
+): {
+  creative_mode?: CreativeMode;
+  story_focus?: StoryFocus;
+  quality_preset?: QualityPreset;
+} => {
+  const action = qualityGate?.recommended_action?.trim();
+  if (!action) {
+    return {};
+  }
+  return QUALITY_GATE_RECOMMENDED_DEFAULTS[action] || {};
+};
 
 export const getQualityProfileDisplayItems = (
   summary?: ChapterQualityProfileSummary | null,

@@ -24,17 +24,17 @@ export default function BookImportPreviewStep({
 }: BookImportPreviewStepProps) {
   return (
     <Card
-      title="????"
+      title="导入预览"
       extra={
         <Button type="primary" loading={applying} disabled={!preview} onClick={onApplyImport}>
-          ????
+          开始导入
         </Button>
       }
       style={{ marginBottom: 16 }}
     >
       <Spin spinning={loadingPreview}>
         {!preview ? (
-          <Empty description="????????????" />
+          <Empty description="请先生成导入预览" />
         ) : (
           <div style={{ maxHeight: '60vh', overflowY: 'auto', paddingRight: 8 }}>
             <Space direction="vertical" style={{ width: '100%' }} size={16}>
@@ -42,7 +42,7 @@ export default function BookImportPreviewStep({
                 <Alert
                   type="warning"
                   showIcon
-                  message="?????"
+                  message="解析警告"
                   description={
                     <ul style={{ margin: 0, paddingLeft: 20 }}>
                       {preview.warnings.map((warning, idx) => (
@@ -53,10 +53,10 @@ export default function BookImportPreviewStep({
                 />
               ) : null}
 
-              <Card size="small" title="????">
+              <Card size="small" title="项目建议">
                 <Row gutter={12}>
                   <Col xs={24} md={12}>
-                    <Text>??</Text>
+                    <Text>标题</Text>
                     <Input
                       value={preview.project_suggestion.title}
                       onChange={(event) =>
@@ -68,7 +68,7 @@ export default function BookImportPreviewStep({
                     />
                   </Col>
                   <Col xs={24} md={12}>
-                    <Text>??</Text>
+                    <Text>题材</Text>
                     <Input
                       value={preview.project_suggestion.genre}
                       onChange={(event) =>
@@ -80,7 +80,7 @@ export default function BookImportPreviewStep({
                     />
                   </Col>
                   <Col xs={24}>
-                    <Text>??</Text>
+                    <Text>主题</Text>
                     <TextArea
                       rows={3}
                       value={preview.project_suggestion.theme}
@@ -93,7 +93,7 @@ export default function BookImportPreviewStep({
                     />
                   </Col>
                   <Col xs={24}>
-                    <Text>??</Text>
+                    <Text>简介</Text>
                     <TextArea
                       rows={3}
                       value={preview.project_suggestion.description}
@@ -106,7 +106,7 @@ export default function BookImportPreviewStep({
                     />
                   </Col>
                   <Col xs={24} md={12}>
-                    <Text>????</Text>
+                    <Text>叙事视角</Text>
                     <Select
                       style={{ width: '100%' }}
                       value={preview.project_suggestion.narrative_perspective}
@@ -117,14 +117,14 @@ export default function BookImportPreviewStep({
                         }) : prev)
                       }
                       options={[
-                        { value: '????', label: '????' },
-                        { value: '????', label: '????' },
-                        { value: '????', label: '????' },
+                        { value: "第一人称", label: "第一人称" },
+                        { value: "第三人称", label: "第三人称" },
+                        { value: "全知视角", label: "全知视角" },
                       ]}
                     />
                   </Col>
                   <Col xs={24} md={12}>
-                    <Text>????</Text>
+                    <Text>目标字数</Text>
                     <InputNumber
                       style={{ width: '100%' }}
                       min={1000}
@@ -144,28 +144,28 @@ export default function BookImportPreviewStep({
                 </Row>
               </Card>
 
-              <Card size="small" title={`???${preview.chapters.length}?`}>
+              <Card size="small" title={`章节预览（${preview.chapters.length}章）`}>
                 <Collapse
                   items={preview.chapters.map((chapter, idx) => ({
                     key: String(idx),
-                    label: `? ${chapter.chapter_number} ? ? ${chapter.title}`,
+                    label: `第${chapter.chapter_number}章 · ${chapter.title}`,
                     children: (
                       <Space direction="vertical" style={{ width: '100%' }}>
                         <Input
                           value={chapter.title}
-                          addonBefore="??"
+                          addonBefore="标题"
                           onChange={(event) => updateChapter(idx, { title: event.target.value })}
                         />
                         <TextArea
                           rows={2}
                           value={chapter.summary}
-                          placeholder="????"
+                          placeholder="章节摘要"
                           onChange={(event) => updateChapter(idx, { summary: event.target.value })}
                         />
                         <TextArea
                           rows={8}
                           value={chapter.content}
-                          placeholder="????"
+                          placeholder="章节正文"
                           onChange={(event) => updateChapter(idx, { content: event.target.value })}
                         />
                       </Space>

@@ -23,14 +23,20 @@ import {
 } from '@ant-design/icons';
 
 import type {
+  ChapterQualityMetricsSummary,
   CreativeMode,
   PlotStage,
   QualityPreset,
   StoryFocus,
+  StoryQualityGateDecision,
   StoryRepairGuidance,
 } from '../types';
 import { ssePost } from '../utils/sseClient';
-import { getRepairGuidanceDisplay } from '../utils/storyCreationQualitySummary';
+import {
+  getQualityGateRecommendedDefaults,
+  getQualityTrendLabel,
+  getRepairGuidanceDisplay,
+} from '../utils/storyCreationQualitySummary';
 import {
   CREATIVE_MODE_OPTIONS,
   PLOT_STAGE_OPTIONS,
@@ -55,8 +61,16 @@ const FOCUS_AREA_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'cliffhanger', label: '章末牵引' },
 ];
 
+const EXTRA_FOCUS_AREA_LABELS: Record<string, string> = {
+  relationship_continuity: "关系连续性",
+  foreshadow_continuity: "伏笔连续性",
+  character_continuity: "角色连续性",
+  organization_continuity: "组织连续性",
+  career_continuity: "职业成长连续性",
+};
+
 const getFocusAreaLabel = (value: string): string => {
-  return FOCUS_AREA_OPTIONS.find((item) => item.value === value)?.label || value;
+  return FOCUS_AREA_OPTIONS.find((item) => item.value === value)?.label || EXTRA_FOCUS_AREA_LABELS[value] || value;
 };
 
 interface Suggestion {
@@ -75,6 +89,8 @@ interface ChapterRegenerationModalProps {
   suggestions?: Suggestion[];
   hasAnalysis: boolean;
   repairGuidance?: StoryRepairGuidance | null;
+  qualityMetricsSummary?: ChapterQualityMetricsSummary | null;
+  qualityGate?: StoryQualityGateDecision | null;
 }
 
 type ModificationSource = 'custom' | 'analysis_suggestions' | 'mixed';
@@ -131,6 +147,8 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
   suggestions = [],
   hasAnalysis,
   repairGuidance = null,
+  qualityMetricsSummary = null,
+  qualityGate = null,
 }) => {
   const [form] = Form.useForm<RegenerationFormValues>();
   const [modal, contextHolder] = Modal.useModal();
@@ -143,14 +161,41 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
   const [modificationSource, setModificationSource] = useState<ModificationSource>('custom');
 
   const repairGuidanceDisplay = getRepairGuidanceDisplay(repairGuidance);
-  const recommendedFocusAreas = (repairGuidanceDisplay?.focusAreas || []).filter((item) =>
+  const effectiveQualityGate = qualityGate ?? qualityMetricsSummary?.quality_gate ?? null;
+  const recommendedFocusAreas = (repairGuidanceDisplay?.rawFocusAreas || []).filter((item) =>
     FOCUS_AREA_OPTIONS.some((option) => option.value === item),
   );
+  const recommendedRepairDefaults = getQualityGateRecommendedDefaults(effectiveQualityGate);
   const recommendedFocusAreasKey = recommendedFocusAreas.join(',');
+  const recommendedRepairDefaultsKey = [
+    recommendedRepairDefaults.creative_mode || '',
+    recommendedRepairDefaults.story_focus || '',
+    recommendedRepairDefaults.quality_preset || '',
+  ].join(',');
   const hasRepairGuidance = Boolean(
     repairGuidanceDisplay?.summary
       || repairGuidanceDisplay?.repairTargets.length
       || repairGuidanceDisplay?.preserveStrengths.length,
+  );
+  const recentFocusAreas = (qualityMetricsSummary?.recent_focus_areas || []).filter(Boolean);
+  const recentFailedMetricCounts = (qualityMetricsSummary?.recent_failed_metric_counts || []).filter((item) => Boolean(item?.label || item?.key));
+  const qualityGateCounts = qualityMetricsSummary?.quality_gate_counts || null;
+  const qualityGateSignalCount = (qualityGateCounts?.pass ?? 0) + (qualityGateCounts?.repairable ?? 0) + (qualityGateCounts?.blocked ?? 0);
+  const continuityWarningCount = effectiveQualityGate?.continuity_warning_count
+    ?? qualityMetricsSummary?.continuity_preflight?.warning_count
+    ?? 0;
+  const trendDirection = qualityMetricsSummary?.overall_score_trend;
+  const trendDelta = qualityMetricsSummary?.overall_score_delta;
+  const trendLabel = getQualityTrendLabel(trendDirection);
+  const trendColor = trendDirection === 'rising' ? 'green' : trendDirection === 'falling' ? 'red' : 'blue';
+  const hasQualitySignals = Boolean(
+    effectiveQualityGate?.summary
+      || effectiveQualityGate?.recommended_action_label
+      || recentFocusAreas.length
+      || recentFailedMetricCounts.length
+      || continuityWarningCount
+      || qualityGateSignalCount
+      || trendLabel,
   );
 
   useEffect(() => {
@@ -174,8 +219,16 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
       preserve_structure: false,
       preserve_character_traits: true,
       focus_areas: recommendedFocusAreas,
+      ...recommendedRepairDefaults,
     });
-  }, [visible, hasAnalysis, suggestions.length, form, recommendedFocusAreasKey]);
+  }, [
+    visible,
+    hasAnalysis,
+    suggestions.length,
+    form,
+    recommendedFocusAreasKey,
+    recommendedRepairDefaultsKey,
+  ]);
 
   const handleSubmit = async () => {
     try {
@@ -268,7 +321,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
           console.error('SSE Error:', error, code);
           setStatus('error');
           setErrorMessage(error || '生成失败');
-          message.error(`??????: ${error || '未知错误'}`);
+          message.error(`生成失败: ${error || '未知错误'}`);
         },
       });
     } catch (error: unknown) {
@@ -276,7 +329,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
       setStatus('error');
       const err = error as Error;
       setErrorMessage(err.message || '提交失败');
-      message.error(`????: ${err.message || '未知错误'}`);
+      message.error(`提交失败: ${err.message || '未知错误'}`);
     } finally {
       setLoading(false);
     }
@@ -411,6 +464,67 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
                     <strong>已预选重点方向：</strong>
                     <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                       {recommendedFocusAreas.map((area) => (
+                        <Tag key={area}>{getFocusAreaLabel(area)}</Tag>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </Space>
+            )}
+          />
+        )}
+
+        {hasQualitySignals && (
+          <Alert
+            type={effectiveQualityGate?.requires_manual_review ? 'warning' : 'info'}
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="最近质量信号"
+            description={(
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                {effectiveQualityGate?.summary && <span>{effectiveQualityGate.summary}</span>}
+
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {trendLabel && (
+                    <Tag color={trendColor}>
+                      {trendLabel}
+                      {typeof trendDelta === 'number' ? ` ${trendDelta > 0 ? '+' : ''}${trendDelta.toFixed(1)}` : ''}
+                    </Tag>
+                  )}
+                  {(qualityGateCounts?.blocked ?? 0) > 0 && <Tag color="red">人工复核 {(qualityGateCounts?.blocked ?? 0)}</Tag>}
+                  {(qualityGateCounts?.repairable ?? 0) > 0 && <Tag color="orange">自动修复 {(qualityGateCounts?.repairable ?? 0)}</Tag>}
+                  {(qualityGateCounts?.pass ?? 0) > 0 && <Tag color="green">?? {(qualityGateCounts?.pass ?? 0)}</Tag>}
+                  {continuityWarningCount > 0 && <Tag color="gold">连续性预警 {continuityWarningCount}</Tag>}
+                </div>
+
+                {effectiveQualityGate?.recommended_action_label && (
+                  <div>
+                    <strong>建议动作：</strong>
+                    <Tag color="magenta" style={{ marginLeft: 8 }}>
+                      {effectiveQualityGate.recommended_action_label}
+                    </Tag>
+                  </div>
+                )}
+
+                {recentFailedMetricCounts.length > 0 && (
+                  <div>
+                    <strong>最近反复失分：</strong>
+                    <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {recentFailedMetricCounts.map((item) => (
+                        <Tag key={`${item.key || item.label}-${item.count || 0}`} color="volcano">
+                          {item.label || item.key}
+                          {typeof item.count === 'number' ? ` ?${item.count}` : ''}
+                        </Tag>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {recentFocusAreas.length > 0 && (
+                  <div>
+                    <strong>建议动作：</strong>
+                    <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {recentFocusAreas.map((area) => (
                         <Tag key={area}>{getFocusAreaLabel(area)}</Tag>
                       ))}
                     </div>

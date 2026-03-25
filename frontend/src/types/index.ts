@@ -435,6 +435,30 @@ export interface StoryQualityGateMetric {
   repair_target?: string | null;
 }
 
+export interface StoryQualityMetricFrequency {
+  key?: string | null;
+  label?: string | null;
+  focus_area?: string | null;
+  count?: number;
+}
+
+export interface StoryContinuityPreflightWarning {
+  ledger_label?: string | null;
+  focus_area?: string | null;
+  item?: string | null;
+}
+
+export interface StoryContinuityPreflight {
+  status?: string;
+  summary?: string;
+  warning_count?: number;
+  checked_item_count?: number;
+  missing_item_count?: number;
+  focus_areas?: string[];
+  repair_targets?: string[];
+  warnings?: StoryContinuityPreflightWarning[];
+}
+
 export interface StoryQualityGateDecision {
   status?: "pass" | "repairable" | "blocked" | "unknown" | string;
   decision?: "allow_save" | "auto_repair" | "manual_review" | "unknown" | string;
@@ -452,6 +476,14 @@ export interface StoryQualityGateDecision {
   weakest_metric_key?: string | null;
   weakest_metric_label?: string | null;
   weakest_metric_value?: number | null;
+  recommended_action?: string | null;
+  recommended_action_label?: string | null;
+  recommended_action_mode?: string | null;
+  recommended_focus_area?: string | null;
+  continuity_warning_count?: number;
+  continuity_preflight?: StoryContinuityPreflight | null;
+  manual_review_threshold?: number | null;
+  allow_save_threshold?: number | null;
 }
 
 export interface ActiveStoryRepairPayload extends StoryRepairGuidance {
@@ -511,6 +543,14 @@ export interface ChapterQualityMetricsSummary {
   total_chapters?: number;
   analyzed_chapters?: number;
   last_generated_at?: string | null;
+  overall_score_delta?: number;
+  overall_score_trend?: 'rising' | 'falling' | 'stable' | string;
+  recent_focus_areas?: string[];
+  recent_failed_metric_counts?: StoryQualityMetricFrequency[];
+  quality_gate_counts?: Record<string, number>;
+  recent_manual_review_count?: number;
+  recent_auto_repair_count?: number;
+  continuity_preflight?: StoryContinuityPreflight | null;
   repair_guidance?: StoryRepairGuidance | null;
   quality_gate?: StoryQualityGateDecision | null;
 }

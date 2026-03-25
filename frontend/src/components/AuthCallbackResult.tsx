@@ -30,17 +30,17 @@ export default function AuthCallbackResult({
     >
       <Result
         status={status}
-        title={status === 'error' ? '????' : '????'}
+        title={status === 'error' ? '登录失败' : '登录成功'}
         subTitle={status === 'error'
           ? errorMessage
           : showPasswordModal
-            ? '???????...'
+            ? '登录成功，正在引导设置密码...'
             : showAnnouncement
-              ? '????...'
-              : '????...'}
+              ? '登录成功，正在加载公告...'
+              : '登录成功，正在跳转...'}
         extra={status === 'error' && onBackToLogin ? (
           <Button type="primary" onClick={onBackToLogin}>
-            ????
+            返回登录
           </Button>
         ) : undefined}
         style={{
