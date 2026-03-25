@@ -1,4 +1,4 @@
-# MuMuAINovel 📚✨
+# MuMuNovel 📚✨
 
 <div align="center">
 
@@ -214,7 +214,7 @@ docker pull mumujie/mumuainovel:latest
 services:
   postgres:
     image: postgres:18-alpine
-    container_name: mumuainovel-postgres
+    container_name: mumunovel-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-mumuai_novel}
       POSTGRES_USER: ${POSTGRES_USER:-mumuai}
@@ -262,9 +262,9 @@ services:
       - -c
       - max_wal_size=${POSTGRES_MAX_WAL_SIZE:-4GB}
 
-  mumuainovel:
+  mumunovel:
     image: mumujie/mumuainovel:latest
-    container_name: mumuainovel
+    container_name: mumunovel
     depends_on:
       postgres:
         condition: service_healthy
@@ -275,7 +275,7 @@ services:
       - ./.env:/app/.env:ro
     environment:
       # 应用配置
-      - APP_NAME=${APP_NAME:-MuMuAINovel}
+      - APP_NAME=${APP_NAME:-MuMuNovel}
       - APP_VERSION=${APP_VERSION:-1.0.0}
       - APP_HOST=${APP_HOST:-0.0.0.0}
       - APP_PORT=8000
@@ -467,7 +467,7 @@ OPENAI_BASE_URL=https://your-proxy-service.com/v1
   - 初始化脚本: `backend/scripts/init_postgres.sql`（自动挂载）
   - 优化配置: 支持 80-150 并发用户
 
-- **mumuainovel**: 主应用服务
+- **mumunovel**: 主应用服务
   - 端口: 8000
   - 日志目录: `./logs`
   - 配置挂载: `.env` 文件

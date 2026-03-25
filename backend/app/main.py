@@ -191,7 +191,7 @@ else:
     @app.get("/")
     async def root():
         return {
-            "message": "欢迎使用MuMuAINovel",
+            "message": f"欢迎使用{config_settings.app_name}",
             "version": config_settings.app_version,
             "docs": "/docs",
             "notice": "请先构建前端: cd frontend && npm run build"

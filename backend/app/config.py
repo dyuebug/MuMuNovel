@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     """应用配置"""
     
     # 应用配置
-    app_name: str = "MuMuAINovel"
+    app_name: str = "MuMuNovel"
     app_version: str = "1.3.9"
     app_host: str = "0.0.0.0"
     app_port: int = 8000

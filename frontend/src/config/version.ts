@@ -13,8 +13,8 @@ export const VERSION_INFO = {
   buildTime: import.meta.env.VITE_BUILD_TIME || new Date().toISOString().split('T')[0],
   
   // 项目信息
-  projectName: 'MuMuAINovel',
-  projectFullName: 'MuMu AI 小说创作助手',
+  projectName: 'MuMuNovel',
+  projectFullName: 'MuMuNovel 智能小说创作助手',
   
   // 链接信息
   githubUrl: 'https://github.com/dyuebug/MuMuNovel',

@@ -82,7 +82,7 @@ async def fetch_github_commits(page: int = 1, per_page: int = 30) -> List[dict]:
     
     headers = {
         "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "MuMuAINovel-App"
+        "User-Agent": "MuMuNovel-App"
     }
     
     try:

@@ -15,8 +15,8 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 Set-Location -Path $PSScriptRoot
 
-$AppService = "mumuainovel"
-$AppContainerName = "mumuainovel-new"
+$AppService = "mumunovel"
+$AppContainerName = "mumunovel-new"
 $LogFilePath = Join-Path $PSScriptRoot "redeploy.log"
 $Utf8NoBomEncoding = [System.Text.UTF8Encoding]::new($false)
 
@@ -377,7 +377,7 @@ if (-not $isHealthy) {
     Write-Host ""
     Write-Host "Health check timed out. Printing recent logs..." -ForegroundColor Yellow
     Write-LogLine "Health check timed out. Printing recent logs..."
-    docker compose logs --tail=120 mumuainovel
+    docker compose logs --tail=120 $AppService
     $errorMessage = "Redeploy finished but health check failed: $HealthUrl"
     Write-LogBlock $errorMessage
     throw $errorMessage

@@ -29,6 +29,7 @@ import { preloadProjectCareers } from '../services/projectCareers';
 import ThemeSwitch from '../components/ThemeSwitch';
 import { useThemeMode } from '../theme/useThemeMode';
 import { getStoredSidebarCollapsed, setStoredSidebarCollapsed } from '../utils/sidebarState';
+import { VERSION_INFO } from '../config/version';
 
 const { Header, Sider, Content } = Layout;
 
@@ -674,7 +675,7 @@ export default function ProjectDetail() {
                 }}>
                   <BookOutlined />
                 </div>
-                <span style={{ fontWeight: 600, fontSize: 16 }}>MuMuAINovel</span>
+                <span style={{ fontWeight: 600, fontSize: 16 }}>{VERSION_INFO.projectName}</span>
               </div>
             }
             placement="left"
@@ -770,7 +771,7 @@ export default function ProjectDetail() {
                         overflow: 'hidden',
                         textOverflow: 'ellipsis'
                       }}>
-                        MuMuAINovel
+                        {VERSION_INFO.projectName}
                       </span>
                     </div>
                     <Button

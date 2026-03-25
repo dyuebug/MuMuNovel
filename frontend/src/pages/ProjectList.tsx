@@ -12,6 +12,7 @@ import UserMenu from '../components/UserMenu';
 import ThemeSwitch from '../components/ThemeSwitch';
 import { useThemeMode } from '../theme/useThemeMode';
 import { getStoredSidebarCollapsed, setStoredSidebarCollapsed } from '../utils/sidebarState';
+import { VERSION_INFO } from '../config/version';
 
 const LazyChangelogFloatingButton = lazy(() => import('../components/ChangelogFloatingButton'));
 const LazySettingsPage = lazy(() => import('./Settings'));
@@ -526,7 +527,7 @@ export default function ProjectList() {
                     overflow: 'hidden',
                     textOverflow: 'ellipsis'
                   }}>
-                    MuMuAINovel
+                    {VERSION_INFO.projectName}
                   </span>
                 </div>
                 <Button
@@ -738,7 +739,7 @@ export default function ProjectList() {
               }}>
                 <BookOutlined />
               </div>
-              <span style={{ fontWeight: 600, fontSize: 16, fontFamily: token.fontFamily }}>MuMuAINovel</span>
+              <span style={{ fontWeight: 600, fontSize: 16, fontFamily: token.fontFamily }}>{VERSION_INFO.projectName}</span>
             </div>
           }
           placement="left"

@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import type { Project } from '../types';
 import { bookshelfCardStyles, bookshelfCardHoverHandlers } from '../components/CardStyles';
 import { useThemeMode } from '../theme/useThemeMode';
+import { VERSION_INFO } from '../config/version';
 
 const { Paragraph } = Typography;
 
@@ -183,7 +184,7 @@ export default function BookshelfPage({
 
       {showApiTip && projects.length === 0 && (
         <Alert
-          message="欢迎使用 MuMuAINovel"
+          message={`欢迎使用 ${VERSION_INFO.projectName}`}
           description={
             <div style={{
               display: 'flex',
