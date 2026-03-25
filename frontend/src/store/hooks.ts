@@ -531,6 +531,14 @@ export function useChapterSync() {
                   if (qualityMessage) {
                     onProgressUpdate(qualityMessage, 92);
                   }
+                } else if ((message.type === 'quality_gate_retry' || message.type === 'quality_gate_blocked') && onProgressUpdate) {
+                  onProgressUpdate(
+                    message.message
+                      || (message.type === 'quality_gate_blocked'
+                        ? 'Chapter blocked by quality gate; manual review required.'
+                        : 'Chapter is retrying with quality-repair guidance.'),
+                    message.progress || (message.type === 'quality_gate_blocked' ? 95 : 74),
+                  );
                 } else if (message.type === 'error') {
                   streamFailure = message.error || '后台生成失败';
                 }
