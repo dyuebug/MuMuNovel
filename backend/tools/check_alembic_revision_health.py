@@ -10,12 +10,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from alembic_versioning import ALEMBIC_VERSION_NUM_LENGTH
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 VERSION_ROOTS = {
     "postgres": REPO_ROOT / "backend/alembic/postgres/versions",
     "sqlite": REPO_ROOT / "backend/alembic/sqlite/versions",
 }
-MAX_REVISION_LENGTH = 32
+MAX_REVISION_LENGTH = ALEMBIC_VERSION_NUM_LENGTH
 
 
 @dataclass(frozen=True)

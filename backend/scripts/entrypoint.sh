@@ -71,6 +71,9 @@ echo "================================================"
 
 cd /app
 
+echo "?? ?? Alembic revision ????..."
+python tools/check_alembic_revision_health.py
+
 # 统一使用 alembic upgrade head
 # Alembic 会自动处理首次部署和增量迁移
 echo "🔄 升级数据库到最新版本..."

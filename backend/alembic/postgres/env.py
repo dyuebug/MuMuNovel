@@ -9,6 +9,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
+from alembic.ddl.impl import DefaultImpl
 
 # 添加项目根目录到 Python 路径
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,6 +18,10 @@ if project_root not in sys.path:
 
 # 导入应用配置
 from app.config import settings
+from tools.alembic_versioning import (
+    ensure_version_table_column_capacity,
+    patch_default_impl_version_table,
+)
 
 # 导入 Base 和所有模型
 from app.database import Base
@@ -40,6 +45,7 @@ if config.config_file_name is not None:
 
 # 设置 target_metadata 为应用的 Base.metadata
 target_metadata = Base.metadata
+patch_default_impl_version_table(DefaultImpl)
 
 
 def run_migrations_offline() -> None:
@@ -59,6 +65,7 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
+    ensure_version_table_column_capacity(connection)
     """执行迁移的核心函数 - PostgreSQL 专用"""
     context.configure(
         connection=connection,
