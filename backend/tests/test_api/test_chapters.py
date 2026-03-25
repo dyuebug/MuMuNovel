@@ -15,8 +15,10 @@ from app.api import chapters as chapters_api
 import app.database as app_database
 from app.database import Base, get_db as app_get_db
 from app.models.analysis_task import AnalysisTask
+from app.models.batch_generation_snapshot import BatchGenerationSnapshot
 from app.models.batch_generation_task import BatchGenerationTask
 from app.models.chapter import Chapter
+from app.models.chapter_draft_attempt import ChapterDraftAttempt
 from app.models.generation_history import GenerationHistory
 from app.models.memory import PlotAnalysis, StoryMemory
 from app.models.outline import Outline
@@ -359,12 +361,19 @@ async def test_should_build_context_with_expected_builder_during_generate_stream
     calls = {"many": 0, "one": 0}
 
     class FakeContext:
-        chapter_outline = "模拟大纲"
+        chapter_outline = "????"
         continuation_point = None
         previous_chapter_summary = ""
-        chapter_characters = "角色A"
-        chapter_careers = "职业A"
-        foreshadow_reminders = ""
+        chapter_characters = (
+            "??????\n- ??A\n"
+            "????????\n- ??A???????\n"
+            "????????\n- ??A/??B???????"
+        )
+        chapter_careers = "??A????"
+        foreshadow_reminders = (
+            "????????\n- ???????\n"
+            "????????\n- ??????????????"
+        )
         relevant_memories = ""
         recent_chapters_context = ""
         context_stats = {}
@@ -493,14 +502,22 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
     )
 
     calls: list[dict[str, Any]] = []
+    quality_metric_calls: list[dict[str, Any]] = []
 
     class FakeContext:
         chapter_outline = "????"
         continuation_point = None
         previous_chapter_summary = ""
-        chapter_characters = "??A"
-        chapter_careers = "??A"
-        foreshadow_reminders = ""
+        chapter_characters = (
+            "??????\n- ??A\n"
+            "????????\n- ??A???????\n"
+            "????????\n- ??A/??B???????"
+        )
+        chapter_careers = "??A????"
+        foreshadow_reminders = (
+            "????????\n- ???????\n"
+            "????????\n- ??????????????"
+        )
         relevant_memories = ""
         recent_chapters_context = ""
         context_stats = {}
@@ -519,6 +536,7 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
         return "mock-generate-prompt"
 
     def fake_compute_story_quality_metrics(**kwargs):
+        quality_metric_calls.append(kwargs)
         return dict(quality_metrics)
 
     async def fake_analyze_chapter_background(**kwargs):
@@ -561,6 +579,14 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
     assert calls[0]["chapter_content_override"] == "??????"
     assert calls[0]["chapter_word_count_override"] == len("??????")
 
+    assert quality_metric_calls
+    runtime_context = quality_metric_calls[0]["quality_runtime_context"]
+    assert runtime_context["current_chapter_number"] == 1
+    assert runtime_context["target_word_count"] == 500
+    assert "??A???????" in runtime_context["character_state_ledger"]
+    assert "??A/??B???????" in runtime_context["relationship_state_ledger"]
+    assert "??????????????" in runtime_context["foreshadow_state_ledger"]
+
     async with chapters_session_factory() as session:
         saved_chapter = await session.get(Chapter, chapter.id)
         saved_project = await session.get(Project, project.id)
@@ -574,7 +600,19 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
         history_result = await session.execute(
             select(GenerationHistory).where(GenerationHistory.chapter_id == chapter.id)
         )
-        assert history_result.scalars().all() == []
+        histories = history_result.scalars().all()
+        draft_attempt_result = await session.execute(
+            select(ChapterDraftAttempt).where(ChapterDraftAttempt.chapter_id == chapter.id)
+        )
+        draft_attempts = draft_attempt_result.scalars().all()
+        assert len(histories) == 1
+        history_payload = json.loads(histories[0].generated_content)
+        assert history_payload["content_applied"] is False
+        assert history_payload["attempt_state"] == expected_action
+        assert len(draft_attempts) == 1
+        assert draft_attempts[0].source == "chapter"
+        assert draft_attempts[0].attempt_state == expected_action
+        assert draft_attempts[0].quality_gate_decision == expected_decision
 
 
 
@@ -620,6 +658,7 @@ async def test_execute_batch_generation_should_apply_candidate_only_after_qualit
         return True, None, None
 
     async def fake_generate_single_chapter_for_batch(**kwargs):
+        assert kwargs["base_quality_profile"]["resolved_style_id"] is None
         content = "batch-candidate-pass"
         return {
             "full_content": content,
@@ -670,6 +709,12 @@ async def test_execute_batch_generation_should_apply_candidate_only_after_qualit
         batch_id=batch_id,
         user_id=mock_user.user_id,
         ai_service=fake_ai_service,
+        base_quality_profile={
+            "resolved_style_id": None,
+            "style_content": "",
+            "style_name": "",
+            "style_preset_id": "",
+        },
     )
 
     async with chapters_session_factory() as session:
@@ -737,6 +782,7 @@ async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and
         return True, None, None
 
     async def fake_generate_single_chapter_for_batch(**kwargs):
+        assert kwargs["base_quality_profile"]["resolved_style_id"] is None
         content = "batch-candidate-blocked"
         return {
             "full_content": content,
@@ -792,6 +838,12 @@ async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and
         batch_id=batch_id,
         user_id=mock_user.user_id,
         ai_service=fake_ai_service,
+        base_quality_profile={
+            "resolved_style_id": None,
+            "style_content": "",
+            "style_name": "",
+            "style_preset_id": "",
+        },
     )
 
     async with chapters_session_factory() as session:
@@ -802,6 +854,10 @@ async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and
             select(GenerationHistory).where(GenerationHistory.chapter_id == chapter.id)
         )
         histories = history_result.scalars().all()
+        draft_attempt_result = await session.execute(
+            select(ChapterDraftAttempt).where(ChapterDraftAttempt.chapter_id == chapter.id)
+        )
+        draft_attempts = draft_attempt_result.scalars().all()
 
         assert saved_chapter is not None
         assert saved_chapter.content is None
@@ -815,6 +871,9 @@ async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and
         assert saved_task.failed_chapters
         assert saved_task.failed_chapters[0]["phase"] == "quality_blocked"
         assert histories == []
+        assert len(draft_attempts) == 1
+        assert draft_attempts[0].source == "batch"
+        assert draft_attempts[0].attempt_state == "manual_review"
 
     assert analysis_calls
     assert analysis_calls[0]["chapter_id"] == chapter.id
@@ -823,6 +882,127 @@ async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and
     assert analysis_calls[0]["story_packet"].source == "batch-execution-request"
     assert analysis_calls[0]["chapter_content_override"] == "batch-candidate-blocked"
     assert analysis_calls[0]["chapter_word_count_override"] == len("batch-candidate-blocked")
+
+async def test_generate_single_chapter_for_batch_should_build_runtime_context_without_dirty_writes(
+    chapters_session_factory,
+    fake_ai_service,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="batch-runtime-context",
+    )
+
+    quality_metric_calls: list[dict[str, Any]] = []
+
+    class FakeContext:
+        chapter_outline = "??????"
+        continuation_point = None
+        previous_chapter_summary = ""
+        chapter_characters = (
+            "??????\n- ??A\n"
+            "????????\n- ??A????????\n"
+            "????????\n- ??A/??B???????"
+        )
+        chapter_careers = "??A????"
+        foreshadow_reminders = (
+            "????????\n- ??????\n"
+            "????????\n- ???????????????"
+        )
+        relevant_memories = ""
+        recent_chapters_context = ""
+        context_stats = {}
+
+    class FakeOneToManyBuilder:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def build(self, **kwargs):
+            return FakeContext()
+
+    async def fake_resolve_chapter_quality_profile(**kwargs):
+        return {
+            "resolved_style_id": None,
+            "style_content": "",
+            "style_name": "",
+            "style_preset_id": "",
+        }
+
+    async def fake_get_template(*args, **kwargs):
+        return "template"
+
+    def fake_format_prompt(template, **kwargs):
+        return "mock-batch-generate-prompt"
+
+    def fake_build_chapter_runtime_system_prompt(**kwargs):
+        return "mock-batch-system-prompt"
+
+    def fake_compute_story_quality_metrics(**kwargs):
+        quality_metric_calls.append(kwargs)
+        return {
+            "overall_score": 88.0,
+            "conflict_chain_hit_rate": 82.0,
+            "rule_grounding_hit_rate": 84.0,
+            "outline_alignment_rate": 86.0,
+            "dialogue_naturalness_rate": 80.0,
+            "opening_hook_rate": 87.0,
+            "payoff_chain_rate": 81.0,
+            "cliffhanger_rate": 85.0,
+            "quality_runtime_context": kwargs.get("quality_runtime_context"),
+        }
+
+    monkeypatch.setattr(chapters_api.chapter_web_research_service, "is_enabled", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(chapters_api, "OneToManyContextBuilder", FakeOneToManyBuilder)
+    monkeypatch.setattr(chapters_api, "resolve_chapter_quality_profile", fake_resolve_chapter_quality_profile)
+    monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
+    monkeypatch.setattr(chapters_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(chapters_api, "_build_chapter_runtime_system_prompt", fake_build_chapter_runtime_system_prompt)
+    monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
+
+    fake_ai_service.calls.clear()
+    fake_ai_service.chunks = ["????", "????"]
+
+    async with chapters_session_factory() as session:
+        db_chapter = await session.get(Chapter, chapter.id)
+        db_project = await session.get(Project, project.id)
+        assert db_chapter is not None
+        assert db_project is not None
+
+        result = await chapters_api.generate_single_chapter_for_batch(
+            db_session=session,
+            chapter=db_chapter,
+            user_id=mock_user.user_id,
+            style_id=None,
+            target_word_count=600,
+            ai_service=fake_ai_service,
+            write_lock=chapters_api.Lock(),
+        )
+
+        assert result["full_content"] == "????????"
+        assert result["word_count"] == len("????????")
+        assert db_chapter.content is None
+        assert db_chapter.word_count == 0
+        assert db_project.current_words == 0
+
+        await session.refresh(db_chapter)
+        await session.refresh(db_project)
+        assert db_chapter.content is None
+        assert db_chapter.word_count == 0
+        assert db_project.current_words == 0
+
+    assert quality_metric_calls
+    runtime_context = quality_metric_calls[0]["quality_runtime_context"]
+    assert runtime_context["current_chapter_number"] == 1
+    assert runtime_context["target_word_count"] == 600
+    assert "??A????????" in runtime_context["character_state_ledger"]
+    assert "??A/??B???????" in runtime_context["relationship_state_ledger"]
+    assert "???????????????" in runtime_context["foreshadow_state_ledger"]
+    assert result["quality_metrics"]["quality_runtime_context"] == runtime_context
+
 
 async def test_should_stream_partial_regenerate_with_mock_ai_response(
     chapters_client,
@@ -3078,6 +3258,7 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
             "cliffhanger_rate": 92.0,
             "pacing_score": 8.1,
         },
+        db_session=session,
     )
     await chapters_api._set_task_active_story_repair_payload(
         task_id,
@@ -3092,6 +3273,8 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
             "updated_at": "2026-03-25T10:00:00",
         },
     )
+
+    chapters_api.task_quality_metrics_cache.pop(task_id, None)
 
     status_response = await chapters_client.get(f"/api/chapters/batch-generate/{task_id}/status")
     assert status_response.status_code == 200
@@ -3127,6 +3310,13 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     assert active_body["task"]["quality_metrics_summary"]["repair_guidance"]["focus_areas"]
     assert active_body["task"]["quality_metrics_summary"]["quality_gate"]["status"] == "pass"
     assert active_body["task"]["active_story_repair_payload"]["source"] == "manual_plus_recent_history_summary"
+
+    async with chapters_session_factory() as session:
+        snapshot_result = await session.execute(
+            select(BatchGenerationSnapshot).where(BatchGenerationSnapshot.batch_task_id == task_id)
+        )
+        snapshot = snapshot_result.scalar_one_or_none()
+        assert snapshot is not None
 
     active_tasks_response = await chapters_client.get("/api/chapters/batch-generate/active-tasks?limit=10")
     assert active_tasks_response.status_code == 200
