@@ -161,6 +161,8 @@ async def create_project(chapters_session_factory, user_id: str, **overrides) ->
             default_story_focus=overrides.get("default_story_focus"),
             default_plot_stage=overrides.get("default_plot_stage"),
             default_story_creation_brief=overrides.get("default_story_creation_brief"),
+            default_quality_preset=overrides.get("default_quality_preset"),
+            default_quality_notes=overrides.get("default_quality_notes"),
         )
         session.add(project)
         await session.commit()
@@ -1822,6 +1824,71 @@ async def test_should_regenerate_chapter_stream_and_persist_regeneration_task(
         assert task is not None
         assert task.status == "completed"
         assert task.regenerated_content == "新内容"
+
+
+
+async def test_should_apply_project_story_packet_defaults_in_regeneration_prompt_context(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+    project = await create_project(
+        chapters_session_factory,
+        user_id=mock_user.user_id,
+        default_creative_mode="hook",
+        default_story_focus="advance_plot",
+        default_plot_stage="development",
+        default_story_creation_brief="Default brief: keep the pace moving.",
+        default_quality_preset="tight_prose",
+        default_quality_notes="Reduce exposition.",
+    )
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="chapter-to-regenerate",
+        content="legacy content",
+        status="completed",
+    )
+
+    class FakeRegenerator:
+        def __init__(self, ai_service):
+            self.ai_service = ai_service
+
+        async def regenerate_with_feedback(self, **kwargs):
+            captured.update(kwargs)
+            yield {"type": "progress", "progress": 30, "message": "preparing"}
+            yield {"type": "chunk", "content": "new content"}
+
+        def calculate_content_diff(self, original_content, new_content):
+            return {"similarity": 8.0, "difference": 92.0}
+
+    monkeypatch.setattr(chapters_api, "ChapterRegenerator", FakeRegenerator)
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/regenerate-stream",
+        json={
+            "modification_source": "custom",
+            "custom_instructions": "improve pacing",
+            "target_word_count": 500,
+            "focus_areas": ["pacing"],
+            "auto_apply": False,
+        },
+    )
+    assert response.status_code == 200
+
+    events = parse_sse_data(response.text)
+    assert any(event.get("type") == "result" for event in events)
+
+    prompt_kwargs = captured["project_context"]["prompt_quality_kwargs"]
+    assert prompt_kwargs["creative_mode"] == "hook"
+    assert prompt_kwargs["story_focus"] == "advance_plot"
+    assert prompt_kwargs["plot_stage"] == "development"
+    assert prompt_kwargs["story_creation_brief"] == "Default brief: keep the pace moving."
+    assert prompt_kwargs["quality_preset"] == "tight_prose"
+    assert prompt_kwargs["quality_notes"] == "Reduce exposition."
 
 
 

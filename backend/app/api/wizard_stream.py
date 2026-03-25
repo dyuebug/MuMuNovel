@@ -28,7 +28,10 @@ from app.services.prompt_service import (
 )
 from app.services.plot_expansion_service import PlotExpansionService
 from app.services.chapter_web_research_service import chapter_web_research_service
-from app.services.chapter_quality_context_service import resolve_story_generation_guidance
+from app.services.chapter_quality_context_service import (
+    StoryGenerationGuidance,
+    build_story_generation_packet,
+)
 from app.logger import get_logger
 from app.utils.sse_response import SSEResponse, create_sse_response, WizardProgressTracker
 from app.api.settings import get_user_ai_service
@@ -63,38 +66,47 @@ def _merge_wizard_outline_requirements(
     story_creation_brief: Optional[str],
     quality_preset: Optional[str],
     quality_notes: Optional[str],
+    guidance: Optional[StoryGenerationGuidance] = None,
 ) -> str:
+    active_guidance = guidance or StoryGenerationGuidance(
+        creative_mode=creative_mode,
+        story_focus=story_focus,
+        plot_stage=plot_stage,
+        story_creation_brief=story_creation_brief,
+        quality_preset=quality_preset,
+        quality_notes=quality_notes,
+    )
     parts: list[str] = []
 
     base_text = str(base_requirements or "").strip()
     if base_text:
         parts.append(base_text)
 
-    story_creation_brief_block = build_story_creation_brief_block(story_creation_brief).strip()
+    story_creation_brief_block = build_story_creation_brief_block(active_guidance.story_creation_brief).strip()
     if story_creation_brief_block:
         parts.append(story_creation_brief_block)
 
     quality_preference_block = build_quality_preference_block(
-        quality_preset,
-        quality_notes,
+        active_guidance.quality_preset,
+        active_guidance.quality_notes,
         scene="outline",
     ).strip()
     if quality_preference_block:
         parts.append(quality_preference_block)
 
-    creative_mode_block = build_creative_mode_block(creative_mode, scene="outline").strip()
+    creative_mode_block = build_creative_mode_block(active_guidance.creative_mode, scene="outline").strip()
     if creative_mode_block:
         parts.append(creative_mode_block)
 
-    story_focus_block = build_story_focus_block(story_focus, scene="outline").strip()
+    story_focus_block = build_story_focus_block(active_guidance.story_focus, scene="outline").strip()
     if story_focus_block:
         parts.append(story_focus_block)
 
     narrative_blueprint_block = build_narrative_blueprint_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if narrative_blueprint_block:
         parts.append(narrative_blueprint_block)
@@ -1672,7 +1684,7 @@ async def outline_generator(
         # 准备提示词
         yield await tracker.preparing(f"准备生成{outline_count}个大纲节点...")
         
-        generation_guidance = resolve_story_generation_guidance(
+        story_packet = build_story_generation_packet(
             project,
             creative_mode=creative_mode,
             story_focus=story_focus,
@@ -1680,7 +1692,9 @@ async def outline_generator(
             story_creation_brief=story_creation_brief,
             quality_preset=quality_preset,
             quality_notes=quality_notes,
+            source_label="wizard-outline-request",
         )
+        generation_guidance = story_packet.guidance
         outline_requirements = _merge_wizard_outline_requirements(
             requirements,
             outline_count=outline_count,
@@ -1690,6 +1704,7 @@ async def outline_generator(
             story_creation_brief=generation_guidance.story_creation_brief,
             quality_preset=generation_guidance.quality_preset,
             quality_notes=generation_guidance.quality_notes,
+            guidance=generation_guidance,
         )
         
         # 获取自定义提示词模板
@@ -1729,15 +1744,10 @@ async def outline_generator(
             rules=project.world_rules or "未设定",
             characters_info=characters_info or "暂无角色信息",
             mcp_references="",
-            creative_mode=generation_guidance.creative_mode or "",
-            story_focus=generation_guidance.story_focus or "",
-            plot_stage=generation_guidance.plot_stage or "",
-            story_creation_brief=generation_guidance.story_creation_brief or "",
-            quality_preset=generation_guidance.quality_preset or "",
-            quality_notes=generation_guidance.quality_notes or "",
             requirements=outline_requirements,
             external_assets=outline_research_assets,
             reference_assets=outline_research_assets,
+            **story_packet.to_prompt_fields(),
         )
         outline_system_prompt = _build_outline_runtime_system_prompt(
             project=project,

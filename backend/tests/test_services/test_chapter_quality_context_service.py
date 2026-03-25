@@ -1,8 +1,10 @@
 from app.models.project import Project
 from app.services.chapter_quality_context_service import (
     StoryGenerationGuidance,
+    StoryPacket,
     build_analysis_quality_kwargs,
     build_prompt_quality_kwargs,
+    build_story_generation_packet,
     build_story_repair_diagnostic_context,
     resolve_story_generation_guidance,
 )
@@ -30,6 +32,93 @@ def test_should_resolve_story_generation_guidance_from_project_defaults():
         quality_preset="plot_drive",
         quality_notes="减少说明句",
     )
+
+
+def test_should_build_story_packet_from_mapping_and_project_defaults():
+    project = Project(
+        title="test-project",
+        user_id="user-1",
+        default_creative_mode="hook",
+        default_story_focus="advance_plot",
+        default_plot_stage="development",
+        default_story_creation_brief=" emphasize cost choices ",
+        default_quality_preset="plot_drive",
+        default_quality_notes=" reduce exposition ",
+    )
+
+    packet = build_story_generation_packet(
+        project,
+        source={
+            "creative_mode": " payoff ",
+            "quality_notes": " trim explanation ",
+            "story_focus": "   ",
+        },
+        source_label="outline-create-request",
+    )
+
+    assert isinstance(packet, StoryPacket)
+    assert packet.source == "outline-create-request"
+    assert packet.request_overrides == {
+        "creative_mode": "payoff",
+        "quality_notes": "trim explanation",
+    }
+    assert packet.guidance == StoryGenerationGuidance(
+        creative_mode="payoff",
+        story_focus="advance_plot",
+        plot_stage="development",
+        story_creation_brief="emphasize cost choices",
+        quality_preset="plot_drive",
+        quality_notes="trim explanation",
+    )
+    assert packet.to_generation_kwargs() == {
+        "creative_mode": "payoff",
+        "story_focus": "advance_plot",
+        "plot_stage": "development",
+        "story_creation_brief": "emphasize cost choices",
+        "quality_preset": "plot_drive",
+        "quality_notes": "trim explanation",
+    }
+
+
+
+def test_should_build_story_packet_from_request_like_object_and_reuse_prompt_kwargs():
+    request_like = type(
+        "RequestLike",
+        (),
+        {
+            "creative_mode": " suspense ",
+            "story_focus": "reveal_mystery",
+            "plot_stage": " climax ",
+            "story_creation_brief": " move the cost to the foreground ",
+            "quality_preset": "tight_prose",
+            "quality_notes": " trim explanation ",
+        },
+    )()
+
+    packet = build_story_generation_packet(
+        None,
+        source=request_like,
+        source_label="chapter-regenerate-request",
+    )
+    kwargs = packet.build_prompt_quality_kwargs({"genre": "mystery"})
+
+    assert packet.source == "chapter-regenerate-request"
+    assert packet.request_overrides == {
+        "creative_mode": "suspense",
+        "story_focus": "reveal_mystery",
+        "plot_stage": "climax",
+        "story_creation_brief": "move the cost to the foreground",
+        "quality_preset": "tight_prose",
+        "quality_notes": "trim explanation",
+    }
+    assert kwargs["genre"] == "mystery"
+    assert kwargs["creative_mode"] == "suspense"
+    assert kwargs["story_focus"] == "reveal_mystery"
+    assert kwargs["plot_stage"] == "climax"
+    assert kwargs["story_creation_brief"] == "move the cost to the foreground"
+    assert kwargs["quality_preset"] == "tight_prose"
+    assert kwargs["quality_notes"] == "trim explanation"
+
 
 
 def test_should_build_prompt_quality_kwargs_with_guidance_fields():

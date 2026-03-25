@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from sqlalchemy import select
@@ -33,15 +33,70 @@ class StoryGenerationGuidance:
     quality_preset: Optional[str] = None
     quality_notes: Optional[str] = None
 
+    def to_generation_kwargs(self) -> Dict[str, Optional[str]]:
+        return {
+            "creative_mode": self.creative_mode,
+            "story_focus": self.story_focus,
+            "plot_stage": self.plot_stage,
+            "story_creation_brief": self.story_creation_brief,
+            "quality_preset": self.quality_preset,
+            "quality_notes": self.quality_notes,
+        }
+
     def to_prompt_fields(self) -> Dict[str, Any]:
         return {
-            "creative_mode": self.creative_mode or "",
-            "story_focus": self.story_focus or "",
-            "plot_stage": self.plot_stage or "",
-            "story_creation_brief": self.story_creation_brief or "",
-            "quality_preset": self.quality_preset or "",
-            "quality_notes": self.quality_notes or "",
+            key: value or ""
+            for key, value in self.to_generation_kwargs().items()
         }
+
+
+STORY_GUIDANCE_FIELD_NAMES: tuple[str, ...] = (
+    "creative_mode",
+    "story_focus",
+    "plot_stage",
+    "story_creation_brief",
+    "quality_preset",
+    "quality_notes",
+)
+
+
+@dataclass(frozen=True)
+class StoryPacket:
+    guidance: StoryGenerationGuidance
+    request_overrides: Dict[str, Optional[str]] = field(default_factory=dict)
+    source: Optional[str] = None
+
+    def to_prompt_fields(self) -> Dict[str, Any]:
+        return self.guidance.to_prompt_fields()
+
+    def to_generation_kwargs(self) -> Dict[str, Optional[str]]:
+        return self.guidance.to_generation_kwargs()
+
+    def build_prompt_quality_kwargs(
+        self,
+        profile: Optional[Dict[str, Any]],
+        *,
+        scene: str = "chapter",
+        story_repair_summary: Optional[str] = None,
+        story_repair_targets: Optional[List[str]] = None,
+        story_preserve_strengths: Optional[List[str]] = None,
+        active_story_repair_payload: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return build_prompt_quality_kwargs(
+            profile,
+            guidance=self.guidance,
+            scene=scene,
+            story_repair_summary=story_repair_summary,
+            story_repair_targets=story_repair_targets,
+            story_preserve_strengths=story_preserve_strengths,
+            active_story_repair_payload=active_story_repair_payload,
+        )
+
+    def build_analysis_quality_kwargs(
+        self,
+        profile: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        return build_analysis_quality_kwargs(profile, guidance=self.guidance)
 
 
 def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
@@ -49,6 +104,45 @@ def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _normalize_story_guidance_values(values: Mapping[str, Any]) -> Dict[str, Optional[str]]:
+    return {
+        field_name: _normalize_optional_text(values.get(field_name))
+        for field_name in STORY_GUIDANCE_FIELD_NAMES
+    }
+
+
+def _read_story_guidance_value(source: Optional[Any], field_name: str) -> Optional[str]:
+    if source is None:
+        return None
+    if isinstance(source, Mapping):
+        return source.get(field_name)
+    return getattr(source, field_name, None)
+
+
+def _extract_story_guidance_overrides(
+    source: Optional[Any] = None,
+    *,
+    creative_mode: Optional[str] = None,
+    story_focus: Optional[str] = None,
+    plot_stage: Optional[str] = None,
+    story_creation_brief: Optional[str] = None,
+    quality_preset: Optional[str] = None,
+    quality_notes: Optional[str] = None,
+) -> Dict[str, Optional[str]]:
+    raw_overrides = {
+        "creative_mode": creative_mode,
+        "story_focus": story_focus,
+        "plot_stage": plot_stage,
+        "story_creation_brief": story_creation_brief,
+        "quality_preset": quality_preset,
+        "quality_notes": quality_notes,
+    }
+    return {
+        field_name: value if value is not None else _read_story_guidance_value(source, field_name)
+        for field_name, value in raw_overrides.items()
+    }
 
 
 STORY_REPAIR_SOURCE_PROMPT_LABELS: Dict[str, str] = {
@@ -184,18 +278,35 @@ def resolve_story_generation_guidance(
     quality_preset: Optional[str] = None,
     quality_notes: Optional[str] = None,
 ) -> StoryGenerationGuidance:
+    normalized_overrides = _normalize_story_guidance_values({
+        "creative_mode": creative_mode,
+        "story_focus": story_focus,
+        "plot_stage": plot_stage,
+        "story_creation_brief": story_creation_brief,
+        "quality_preset": quality_preset,
+        "quality_notes": quality_notes,
+    })
     if project is None:
-        return StoryGenerationGuidance(
-            creative_mode=creative_mode or None,
-            story_focus=story_focus or None,
-            plot_stage=plot_stage or None,
-            story_creation_brief=_normalize_optional_text(story_creation_brief),
-            quality_preset=quality_preset or None,
-            quality_notes=_normalize_optional_text(quality_notes),
-        )
+        return StoryGenerationGuidance(**normalized_overrides)
 
-    resolved = resolve_project_generation_defaults(
-        project,
+    resolved = resolve_project_generation_defaults(project, **normalized_overrides)
+    return StoryGenerationGuidance(**resolved)
+
+
+def build_story_generation_packet(
+    project: Optional[Project],
+    source: Optional[Any] = None,
+    *,
+    creative_mode: Optional[str] = None,
+    story_focus: Optional[str] = None,
+    plot_stage: Optional[str] = None,
+    story_creation_brief: Optional[str] = None,
+    quality_preset: Optional[str] = None,
+    quality_notes: Optional[str] = None,
+    source_label: Optional[str] = None,
+) -> StoryPacket:
+    raw_overrides = _extract_story_guidance_overrides(
+        source,
         creative_mode=creative_mode,
         story_focus=story_focus,
         plot_stage=plot_stage,
@@ -203,7 +314,17 @@ def resolve_story_generation_guidance(
         quality_preset=quality_preset,
         quality_notes=quality_notes,
     )
-    return StoryGenerationGuidance(**resolved)
+    guidance = resolve_story_generation_guidance(project, **raw_overrides)
+    request_overrides = {
+        field_name: value
+        for field_name, value in _normalize_story_guidance_values(raw_overrides).items()
+        if value is not None
+    }
+    return StoryPacket(
+        guidance=guidance,
+        request_overrides=request_overrides,
+        source=source_label,
+    )
 
 
 def build_prompt_quality_kwargs(

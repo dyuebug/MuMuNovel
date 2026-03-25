@@ -60,8 +60,9 @@ from app.services.memory_service import memory_service
 from app.services.plot_expansion_service import PlotExpansionService
 from app.services.foreshadow_service import foreshadow_service
 from app.services.chapter_quality_context_service import (
+    StoryGenerationGuidance,
+    build_story_generation_packet,
     build_story_repair_diagnostic_context,
-    resolve_story_generation_guidance,
 )
 from app.services.story_quality_feedback_service import (
     build_quality_metrics_summary,
@@ -118,7 +119,7 @@ def _format_outline_value(value: Any, max_items: int = 3) -> str:
 
 def _merge_outline_requirements(
     base_requirements: Optional[str],
-    creative_mode: Optional[str],
+    creative_mode: Optional[str] = None,
     story_focus: Optional[str] = None,
     plot_stage: Optional[str] = None,
     chapter_count: Optional[int] = None,
@@ -127,15 +128,24 @@ def _merge_outline_requirements(
     quality_notes: Optional[str] = None,
     memory_guidance: Optional[str] = None,
     quality_repair_guidance: Optional[str] = None,
+    guidance: Optional[StoryGenerationGuidance] = None,
 ) -> str:
-    """合并自由要求与结构增强要求，避免改动模板本体。"""
+    """Merge freeform requirements with outline quality guidance."""
+    active_guidance = guidance or StoryGenerationGuidance(
+        creative_mode=creative_mode,
+        story_focus=story_focus,
+        plot_stage=plot_stage,
+        story_creation_brief=story_creation_brief,
+        quality_preset=quality_preset,
+        quality_notes=quality_notes,
+    )
     parts: list[str] = []
 
     base_text = str(base_requirements or "").strip()
     if base_text:
         parts.append(base_text)
 
-    story_creation_brief_block = build_story_creation_brief_block(story_creation_brief).strip()
+    story_creation_brief_block = build_story_creation_brief_block(active_guidance.story_creation_brief).strip()
     if story_creation_brief_block:
         parts.append(story_creation_brief_block)
 
@@ -148,202 +158,205 @@ def _merge_outline_requirements(
         parts.append(quality_repair_guidance_text)
 
     quality_preference_block = build_quality_preference_block(
-        quality_preset,
-        quality_notes,
+        active_guidance.quality_preset,
+        active_guidance.quality_notes,
         scene="outline",
     ).strip()
     if quality_preference_block:
         parts.append(quality_preference_block)
 
-    creative_mode_block = build_creative_mode_block(creative_mode, scene="outline").strip()
+    creative_mode_block = build_creative_mode_block(active_guidance.creative_mode, scene="outline").strip()
     if creative_mode_block:
         parts.append(creative_mode_block)
 
-    story_focus_block = build_story_focus_block(story_focus, scene="outline").strip()
+    story_focus_block = build_story_focus_block(active_guidance.story_focus, scene="outline").strip()
     if story_focus_block:
         parts.append(story_focus_block)
 
     narrative_blueprint_block = build_narrative_blueprint_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if narrative_blueprint_block:
         parts.append(narrative_blueprint_block)
 
     story_objective_card_block = build_story_objective_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_objective_card_block:
         parts.append(story_objective_card_block)
 
     story_result_card_block = build_story_result_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_result_card_block:
         parts.append(story_result_card_block)
 
     story_payoff_chain_card_block = build_story_payoff_chain_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_payoff_chain_card_block:
         parts.append(story_payoff_chain_card_block)
 
     story_rule_grounding_card_block = build_story_rule_grounding_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_rule_grounding_card_block:
         parts.append(story_rule_grounding_card_block)
 
     story_information_release_card_block = build_story_information_release_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_information_release_card_block:
         parts.append(story_information_release_card_block)
 
     story_emotion_landing_card_block = build_story_emotion_landing_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_emotion_landing_card_block:
         parts.append(story_emotion_landing_card_block)
 
     story_action_rendering_card_block = build_story_action_rendering_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_action_rendering_card_block:
         parts.append(story_action_rendering_card_block)
 
     story_summary_tone_control_card_block = build_story_summary_tone_control_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_summary_tone_control_card_block:
         parts.append(story_summary_tone_control_card_block)
 
     story_repetition_control_card_block = build_story_repetition_control_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_repetition_control_card_block:
         parts.append(story_repetition_control_card_block)
 
     story_viewpoint_discipline_card_block = build_story_viewpoint_discipline_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_viewpoint_discipline_card_block:
         parts.append(story_viewpoint_discipline_card_block)
 
     story_dialogue_advancement_card_block = build_story_dialogue_advancement_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_dialogue_advancement_card_block:
         parts.append(story_dialogue_advancement_card_block)
 
     story_opening_hook_card_block = build_story_opening_hook_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_opening_hook_card_block:
         parts.append(story_opening_hook_card_block)
 
     story_execution_checklist_block = build_story_execution_checklist_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_execution_checklist_block:
         parts.append(story_execution_checklist_block)
 
     story_scene_anchor_card_block = build_story_scene_anchor_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_scene_anchor_card_block:
         parts.append(story_scene_anchor_card_block)
 
     story_scene_density_card_block = build_story_scene_density_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_scene_density_card_block:
         parts.append(story_scene_density_card_block)
 
     story_repetition_risk_block = build_story_repetition_risk_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_repetition_risk_block:
         parts.append(story_repetition_risk_block)
 
     story_acceptance_card_block = build_story_acceptance_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_acceptance_card_block:
         parts.append(story_acceptance_card_block)
 
     story_cliffhanger_card_block = build_story_cliffhanger_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_cliffhanger_card_block:
         parts.append(story_cliffhanger_card_block)
 
     story_character_arc_card_block = build_story_character_arc_card_block(
-        creative_mode,
-        story_focus,
+        active_guidance.creative_mode,
+        active_guidance.story_focus,
         scene="outline",
-        plot_stage=plot_stage,
+        plot_stage=active_guidance.plot_stage,
     ).strip()
     if story_character_arc_card_block:
         parts.append(story_character_arc_card_block)
 
-    volume_pacing_block = build_volume_pacing_block(chapter_count, plot_stage=plot_stage).strip()
+    volume_pacing_block = build_volume_pacing_block(
+        chapter_count,
+        plot_stage=active_guidance.plot_stage,
+    ).strip()
     if volume_pacing_block:
         parts.append(volume_pacing_block)
 
@@ -1504,15 +1517,12 @@ async def new_outline_generator(
         # 使用提示词模板
         yield await tracker.preparing("准备AI提示词...")
         template = await PromptService.get_template("OUTLINE_CREATE", user_id_for_mcp, db)
-        generation_guidance = resolve_story_generation_guidance(
+        story_packet = build_story_generation_packet(
             project,
-            creative_mode=data.get("creative_mode"),
-            story_focus=data.get("story_focus"),
-            plot_stage=data.get("plot_stage"),
-            story_creation_brief=data.get("story_creation_brief"),
-            quality_preset=data.get("quality_preset"),
-            quality_notes=data.get("quality_notes"),
+            source=data,
+            source_label="outline-create-request",
         )
+        generation_guidance = story_packet.guidance
         prompt = PromptService.format_prompt(
             template,
             title=project.title,
@@ -1527,15 +1537,11 @@ async def new_outline_generator(
             characters_info=characters_info or "暂无角色信息",
             requirements=_merge_outline_requirements(
                 data.get("requirements"),
-                generation_guidance.creative_mode,
-                generation_guidance.story_focus,
-                generation_guidance.plot_stage,
-                chapter_count,
-                generation_guidance.story_creation_brief,
-                generation_guidance.quality_preset,
-                generation_guidance.quality_notes,
+                chapter_count=chapter_count,
+                guidance=generation_guidance,
             ),
-            mcp_references=""
+            mcp_references="",
+            **story_packet.to_prompt_fields(),
         )
         outline_system_prompt = _build_outline_runtime_system_prompt(
             project=project,
@@ -1953,15 +1959,12 @@ async def continue_outline_generator(
             
             # 使用标准续写提示词模板（简化版）
             template = await PromptService.get_template("OUTLINE_CONTINUE", user_id, db)
-            generation_guidance = resolve_story_generation_guidance(
+            story_packet = build_story_generation_packet(
                 project,
-                creative_mode=data.get("creative_mode"),
-                story_focus=data.get("story_focus"),
-                plot_stage=data.get("plot_stage"),
-                story_creation_brief=data.get("story_creation_brief"),
-                quality_preset=data.get("quality_preset"),
-                quality_notes=data.get("quality_notes"),
+                source=data,
+                source_label="outline-continue-request",
             )
+            generation_guidance = story_packet.guidance
             prompt = PromptService.format_prompt(
                 template,
                 # 基础信息
@@ -1985,17 +1988,13 @@ async def continue_outline_generator(
                 story_direction=data.get("story_direction", "自然延续"),
                 requirements=_merge_outline_requirements(
                     data.get("requirements"),
-                    generation_guidance.creative_mode,
-                    generation_guidance.story_focus,
-                    generation_guidance.plot_stage,
-                    current_batch_size,
-                    generation_guidance.story_creation_brief,
-                    generation_guidance.quality_preset,
-                    generation_guidance.quality_notes,
-                    context.get('memory_guidance'),
-                    context.get('quality_repair_guidance'),
+                    chapter_count=current_batch_size,
+                    memory_guidance=context.get('memory_guidance'),
+                    quality_repair_guidance=context.get('quality_repair_guidance'),
+                    guidance=generation_guidance,
                 ),
-                mcp_references=""
+                mcp_references="",
+                **story_packet.to_prompt_fields()
             )
             outline_system_prompt = _build_outline_runtime_system_prompt(
                 project=project,

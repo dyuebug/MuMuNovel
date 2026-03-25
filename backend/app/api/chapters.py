@@ -56,6 +56,7 @@ from app.services.chapter_quality_context_service import (
     StoryGenerationGuidance,
     build_analysis_quality_kwargs,
     build_prompt_quality_kwargs,
+    build_story_generation_packet,
     resolve_chapter_quality_profile,
     resolve_story_generation_guidance,
 )
@@ -3355,15 +3356,12 @@ async def generate_chapter_content_stream(
                     prefer_project_default_style=not bool(style_id),
                     log_prefix="单章生成",
                 )
-                generation_guidance = resolve_story_generation_guidance(
+                story_packet = build_story_generation_packet(
                     project,
-                    creative_mode=generate_request.creative_mode,
-                    story_focus=generate_request.story_focus,
-                    plot_stage=getattr(generate_request, 'plot_stage', None),
-                    story_creation_brief=getattr(generate_request, 'story_creation_brief', None),
-                    quality_preset=getattr(generate_request, 'quality_preset', None),
-                    quality_notes=getattr(generate_request, 'quality_notes', None),
+                    source=generate_request,
+                    source_label="chapter-generate-request",
                 )
+                generation_guidance = story_packet.guidance
                 story_repair_state = await _resolve_generation_story_repair_state_for_chapter(
                     db_session,
                     chapter=current_chapter,
@@ -3372,9 +3370,8 @@ async def generate_chapter_content_stream(
                     story_preserve_strengths=getattr(generate_request, 'story_preserve_strengths', None),
                 )
                 story_repair_payload = story_repair_state.get("payload")
-                prompt_quality_kwargs = build_prompt_quality_kwargs(
+                prompt_quality_kwargs = story_packet.build_prompt_quality_kwargs(
                     quality_profile,
-                    guidance=generation_guidance,
                     active_story_repair_payload=story_repair_state.get("active_story_repair_payload"),
                     **_story_repair_payload_to_prompt_kwargs(story_repair_payload),
                 )
@@ -3897,14 +3894,13 @@ async def generate_chapter_content_background(
         if hasattr(generate_request, 'plot_stage')
         else None
     )
-    generation_guidance = resolve_story_generation_guidance(
+    story_packet = build_story_generation_packet(
         project,
+        source=generate_request,
         creative_mode=creative_mode,
         story_focus=story_focus,
         plot_stage=plot_stage,
-        story_creation_brief=getattr(generate_request, 'story_creation_brief', None),
-        quality_preset=getattr(generate_request, 'quality_preset', None),
-        quality_notes=getattr(generate_request, 'quality_notes', None),
+        source_label="single-background-generate-request",
     )
 
     single_task_quality_profile = await resolve_chapter_quality_profile(
@@ -3960,12 +3956,7 @@ async def generate_chapter_content_background(
         ai_service=user_ai_service,
         custom_model=custom_model,
         temp_narrative_perspective=temp_narrative_perspective,
-        creative_mode=generation_guidance.creative_mode,
-        story_focus=generation_guidance.story_focus,
-        plot_stage=generation_guidance.plot_stage,
-        story_creation_brief=generation_guidance.story_creation_brief,
-        quality_preset=generation_guidance.quality_preset,
-        quality_notes=generation_guidance.quality_notes,
+        **story_packet.to_generation_kwargs(),
         enable_web_research=getattr(generate_request, 'enable_web_research', None),
         web_research_query=getattr(generate_request, 'web_research_query', None),
         **_story_repair_payload_to_prompt_kwargs(story_repair_payload),
@@ -4832,14 +4823,10 @@ async def batch_generate_chapters_in_order(
     )
     batch_story_repair_payload = batch_story_repair_state.get("payload")
 
-    batch_generation_guidance = resolve_story_generation_guidance(
+    batch_story_packet = build_story_generation_packet(
         project,
-        creative_mode=batch_request.creative_mode,
-        story_focus=batch_request.story_focus,
-        plot_stage=batch_request.plot_stage,
-        story_creation_brief=batch_request.story_creation_brief,
-        quality_preset=getattr(batch_request, 'quality_preset', None),
-        quality_notes=getattr(batch_request, 'quality_notes', None),
+        source=batch_request,
+        source_label="batch-generate-request",
     )
     
     # 启动后台批量生成任务，传递model参数
@@ -4849,12 +4836,7 @@ async def batch_generate_chapters_in_order(
         user_id=user_id,
         ai_service=user_ai_service,
         custom_model=batch_request.model,
-        creative_mode=batch_generation_guidance.creative_mode,
-        story_focus=batch_generation_guidance.story_focus,
-        plot_stage=batch_generation_guidance.plot_stage,
-        story_creation_brief=batch_generation_guidance.story_creation_brief,
-        quality_preset=batch_generation_guidance.quality_preset,
-        quality_notes=batch_generation_guidance.quality_notes,
+        **batch_story_packet.to_generation_kwargs(),
         enable_web_research=batch_request.enable_web_research,
         web_research_query=batch_request.web_research_query,
         **_story_repair_payload_to_prompt_kwargs(batch_story_repair_payload),
@@ -5819,7 +5801,7 @@ async def generate_single_chapter_for_batch(
                 })
 
     # 获取写作风格与统一质量画像
-    generation_guidance = resolve_story_generation_guidance(
+    story_packet = build_story_generation_packet(
         project,
         creative_mode=creative_mode,
         story_focus=story_focus,
@@ -5827,7 +5809,9 @@ async def generate_single_chapter_for_batch(
         story_creation_brief=story_creation_brief,
         quality_preset=quality_preset,
         quality_notes=quality_notes,
+        source_label="batch-single-chapter-generate",
     )
+    generation_guidance = story_packet.guidance
 
     quality_profile = await resolve_chapter_quality_profile(
         db_session=db_session,
@@ -5840,9 +5824,8 @@ async def generate_single_chapter_for_batch(
         prefer_project_default_style=not bool(style_id),
         log_prefix="批量单章生成",
     )
-    prompt_quality_kwargs = build_prompt_quality_kwargs(
+    prompt_quality_kwargs = story_packet.build_prompt_quality_kwargs(
         quality_profile,
-        guidance=generation_guidance,
         story_repair_summary=story_repair_summary,
         story_repair_targets=story_repair_targets,
         story_preserve_strengths=story_preserve_strengths,
@@ -6283,18 +6266,14 @@ async def regenerate_chapter_stream(
                 prefer_project_default_style=not bool(regenerate_request.style_id),
                 log_prefix="章节重生成",
             )
-            generation_guidance = resolve_story_generation_guidance(
+            regeneration_story_packet = build_story_generation_packet(
                 project,
-                creative_mode=getattr(regenerate_request, 'creative_mode', None),
-                story_focus=getattr(regenerate_request, 'story_focus', None),
-                plot_stage=getattr(regenerate_request, 'plot_stage', None),
-                story_creation_brief=getattr(regenerate_request, 'story_creation_brief', None),
-                quality_preset=getattr(regenerate_request, 'quality_preset', None),
-                quality_notes=getattr(regenerate_request, 'quality_notes', None),
+                source=regenerate_request,
+                source_label="chapter-regenerate-request",
             )
-            prompt_quality_kwargs = build_prompt_quality_kwargs(
+            generation_guidance = regeneration_story_packet.guidance
+            prompt_quality_kwargs = regeneration_story_packet.build_prompt_quality_kwargs(
                 quality_profile,
-                guidance=generation_guidance,
                 story_repair_summary=getattr(regenerate_request, 'story_repair_summary', None),
                 story_repair_targets=getattr(regenerate_request, 'story_repair_targets', None),
                 story_preserve_strengths=getattr(regenerate_request, 'story_preserve_strengths', None),
