@@ -1,4 +1,4 @@
-import type { ChapterQualityMetrics, ChapterQualityMetricsSummary, CreativeMode, StoryFocus, StoryRepairGuidance } from '../types';
+import type { ChapterQualityMetrics, ChapterQualityMetricsSummary, CreativeMode, StoryFocus, StoryQualityGateDecision, StoryRepairGuidance } from '../types';
 import {
   type CreationPlotStage,
   type CreationPresetId,
@@ -431,6 +431,7 @@ function buildStoryRepairTargetCardFromGuidance(
   options?: {
     scope?: 'chapter' | 'batch';
     activePresetId?: CreationPresetId | null;
+    qualityGate?: StoryQualityGateDecision | null;
   },
 ): StoryRepairTargetCard | undefined {
   if (!guidance) return undefined;
@@ -439,8 +440,13 @@ function buildStoryRepairTargetCardFromGuidance(
   const repairTargets = dedupeItems(guidance.repair_targets || []).slice(0, 3);
   const preserveStrengths = dedupeItems(guidance.preserve_strengths || []).slice(0, 2);
   const focusAreas = dedupeItems(guidance.focus_areas || []).slice(0, 3);
+  const qualityGateLabel = (options?.qualityGate?.label || '').trim();
+  const qualityGateSummary = (options?.qualityGate?.summary || '').trim();
+  const qualityGateHint = qualityGateLabel
+    ? `质量门禁：${qualityGateLabel}${qualityGateSummary ? `，${qualityGateSummary}` : ''}`
+    : (qualityGateSummary ? `质量门禁：${qualityGateSummary}` : '');
 
-  if (!repairSummary && repairTargets.length === 0 && preserveStrengths.length === 0) {
+  if (!repairSummary && repairTargets.length === 0 && preserveStrengths.length === 0 && !qualityGateHint) {
     return undefined;
   }
 
@@ -549,6 +555,7 @@ export function buildStoryRepairTargetCard(
   const guidanceCard = buildStoryRepairTargetCardFromGuidance(metrics?.repair_guidance, {
     scope: 'chapter',
     activePresetId: options?.activePresetId,
+    qualityGate: metrics?.quality_gate,
   });
   if (guidanceCard) {
     return guidanceCard;
@@ -583,6 +590,7 @@ export function buildBatchStoryRepairTargetCard(
   const guidanceCard = buildStoryRepairTargetCardFromGuidance(summary?.repair_guidance, {
     scope: 'batch',
     activePresetId: options?.activePresetId,
+    qualityGate: summary?.quality_gate,
   });
   if (guidanceCard) {
     return guidanceCard;
