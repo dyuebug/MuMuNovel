@@ -120,6 +120,40 @@ def test_should_build_story_packet_from_request_like_object_and_reuse_prompt_kwa
     assert kwargs["quality_notes"] == "trim explanation"
 
 
+def test_should_build_story_packet_from_legacy_guidance_and_preserve_analysis_contract():
+    guidance = StoryGenerationGuidance(
+        creative_mode="hook",
+        story_focus="advance_plot",
+        plot_stage="development",
+        story_creation_brief="强调冲突推进",
+        quality_preset="tight_prose",
+        quality_notes="减少解释性旁白",
+    )
+
+    packet = StoryPacket.from_guidance(
+        guidance,
+        request_overrides={
+            "creative_mode": " hook ",
+            "quality_notes": " 减少解释性旁白 ",
+            "story_focus": "   ",
+        },
+        source="legacy-analysis-guidance",
+    )
+
+    kwargs = packet.build_analysis_quality_kwargs({"genre": "悬疑"})
+
+    assert packet.source == "legacy-analysis-guidance"
+    assert packet.guidance == guidance
+    assert packet.request_overrides == {
+        "creative_mode": "hook",
+        "quality_notes": "减少解释性旁白",
+    }
+    assert kwargs["genre"] == "悬疑"
+    assert kwargs["creative_mode"] == "hook"
+    assert kwargs["story_focus"] == "advance_plot"
+    assert kwargs["quality_notes"] == "减少解释性旁白"
+
+
 
 def test_should_build_prompt_quality_kwargs_with_guidance_fields():
     profile = {

@@ -22,6 +22,7 @@ from app.models.memory import PlotAnalysis, StoryMemory
 from app.models.outline import Outline
 from app.models.project import Project
 from app.models.regeneration_task import RegenerationTask
+from app.services.chapter_quality_context_service import StoryPacket
 
 pytestmark = pytest.mark.asyncio
 
@@ -225,7 +226,12 @@ async def test_should_handle_chapter_crud_and_project_word_count(
     chapters_session_factory,
     mock_user,
 ):
-    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    project = await create_project(
+        chapters_session_factory,
+        user_id=mock_user.user_id,
+        default_creative_mode="hook",
+        default_story_focus="advance_plot",
+    )
     outline = await create_outline(
         chapters_session_factory,
         project_id=project.id,
@@ -551,6 +557,7 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
     assert calls[0]["chapter_id"] == chapter.id
     assert calls[0]["project_id"] == project.id
     assert calls[0]["task_id"] == result_data["analysis_task_id"]
+    assert isinstance(calls[0]["story_packet"], StoryPacket)
     assert calls[0]["chapter_content_override"] == "??????"
     assert calls[0]["chapter_word_count_override"] == len("??????")
 
@@ -812,6 +819,8 @@ async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and
     assert analysis_calls
     assert analysis_calls[0]["chapter_id"] == chapter.id
     assert analysis_calls[0]["project_id"] == project.id
+    assert isinstance(analysis_calls[0]["story_packet"], StoryPacket)
+    assert analysis_calls[0]["story_packet"].source == "batch-execution-request"
     assert analysis_calls[0]["chapter_content_override"] == "batch-candidate-blocked"
     assert analysis_calls[0]["chapter_word_count_override"] == len("batch-candidate-blocked")
 
@@ -1052,9 +1061,10 @@ async def test_should_forward_creative_mode_to_batch_background_generation(
     )
 
     assert response.status_code == 200
-    assert captured["creative_mode"] == "payoff"
-    assert captured["story_focus"] == "foreshadow_payoff"
-    assert captured["plot_stage"] == "ending"
+    assert isinstance(captured["story_packet"], StoryPacket)
+    assert captured["story_packet"].guidance.creative_mode == "payoff"
+    assert captured["story_packet"].guidance.story_focus == "foreshadow_payoff"
+    assert captured["story_packet"].guidance.plot_stage == "ending"
 
 
 async def test_should_fallback_to_project_generation_defaults_for_batch_background_generation(
@@ -1113,10 +1123,11 @@ async def test_should_fallback_to_project_generation_defaults_for_batch_backgrou
     )
 
     assert response.status_code == 200
-    assert captured["creative_mode"] == "hook"
-    assert captured["story_focus"] == "advance_plot"
-    assert captured["plot_stage"] == "development"
-    assert captured["story_creation_brief"] == "默认要求：保持连载感和推进效率。"
+    assert isinstance(captured["story_packet"], StoryPacket)
+    assert captured["story_packet"].guidance.creative_mode == "hook"
+    assert captured["story_packet"].guidance.story_focus == "advance_plot"
+    assert captured["story_packet"].guidance.plot_stage == "development"
+    assert captured["story_packet"].guidance.story_creation_brief == "默认要求：保持连载感和推进效率。"
 
 
 async def test_should_expose_runtime_workflow_phase_in_batch_status(
@@ -1124,7 +1135,12 @@ async def test_should_expose_runtime_workflow_phase_in_batch_status(
     chapters_session_factory,
     mock_user,
 ):
-    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    project = await create_project(
+        chapters_session_factory,
+        user_id=mock_user.user_id,
+        default_creative_mode="hook",
+        default_story_focus="advance_plot",
+    )
 
     async with chapters_session_factory() as session:
         task = BatchGenerationTask(
@@ -1685,10 +1701,11 @@ async def test_should_forward_creative_mode_to_single_background_generation(
     )
 
     assert response.status_code == 200
-    assert captured["creative_mode"] == "suspense"
-    assert captured["story_focus"] == "reveal_mystery"
-    assert captured["plot_stage"] == "climax"
-    assert captured["story_creation_brief"] == "本轮先把正面对撞和章尾牵引写实"
+    assert isinstance(captured["story_packet"], StoryPacket)
+    assert captured["story_packet"].guidance.creative_mode == "suspense"
+    assert captured["story_packet"].guidance.story_focus == "reveal_mystery"
+    assert captured["story_packet"].guidance.plot_stage == "climax"
+    assert captured["story_packet"].guidance.story_creation_brief == "本轮先把正面对撞和章尾牵引写实"
     assert captured["story_repair_summary"] == "优先补强冲突抬压"
     assert captured["story_repair_targets"] == ["写实受阻", "升级代价"]
     assert captured["story_preserve_strengths"] == ["保留对白辨识度"]
@@ -2004,10 +2021,11 @@ async def test_should_fallback_to_project_generation_defaults_for_single_backgro
     )
 
     assert response.status_code == 200
-    assert captured["creative_mode"] == "suspense"
-    assert captured["story_focus"] == "reveal_mystery"
-    assert captured["plot_stage"] == "climax"
-    assert captured["story_creation_brief"] == "默认要求：重点写实对撞与悬念收束。"
+    assert isinstance(captured["story_packet"], StoryPacket)
+    assert captured["story_packet"].guidance.creative_mode == "suspense"
+    assert captured["story_packet"].guidance.story_focus == "reveal_mystery"
+    assert captured["story_packet"].guidance.plot_stage == "climax"
+    assert captured["story_packet"].guidance.story_creation_brief == "默认要求：重点写实对撞与悬念收束。"
 
 
 async def test_should_reuse_active_background_task_for_same_chapter(
@@ -2917,6 +2935,8 @@ async def test_should_trigger_manual_analysis_task_creation(
     assert calls[0]["chapter_id"] == chapter.id
     assert calls[0]["project_id"] == project.id
     assert calls[0]["task_id"] == body["task_id"]
+    assert isinstance(calls[0]["story_packet"], StoryPacket)
+    assert calls[0]["story_packet"].source == "manual-analysis-request"
 
 
 def test_should_retry_when_quality_gate_is_repairable_and_retry_budget_available():

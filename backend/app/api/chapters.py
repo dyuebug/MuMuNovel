@@ -53,12 +53,12 @@ from app.services.prompt_service import (
     WritingStyleManager,
 )
 from app.services.chapter_quality_context_service import (
+    StoryPacket,
     StoryGenerationGuidance,
     build_analysis_quality_kwargs,
     build_prompt_quality_kwargs,
     build_story_generation_packet,
     resolve_chapter_quality_profile,
-    resolve_story_generation_guidance,
 )
 from app.services.plot_analyzer import PlotAnalyzer
 from app.services.memory_service import memory_service
@@ -2748,6 +2748,7 @@ async def analyze_chapter_background(
     task_id: str,
     ai_service: AIService,
     quality_profile: Optional[Dict[str, Any]] = None,
+    story_packet: Optional[StoryPacket] = None,
     generation_guidance: Optional[StoryGenerationGuidance] = None,
     chapter_content_override: Optional[str] = None,
     chapter_word_count_override: Optional[int] = None,
@@ -2903,7 +2904,18 @@ async def analyze_chapter_background(
             prefer_project_default_style=True,
             log_prefix="章节分析",
         )
-        analysis_guidance = generation_guidance or resolve_story_generation_guidance(project)
+        analysis_story_packet = story_packet
+        if analysis_story_packet is None and generation_guidance is not None:
+            analysis_story_packet = StoryPacket.from_guidance(
+                generation_guidance,
+                source="legacy-analysis-guidance",
+            )
+        if analysis_story_packet is None:
+            analysis_story_packet = build_story_generation_packet(
+                project,
+                source_label="chapter-analysis-defaults",
+            )
+        analysis_guidance = analysis_story_packet.guidance
 
         # 定义重试回调函数，用于在重试时更新任务状态
         async def on_retry_callback(attempt: int, max_retries: int, wait_time: int, error_reason: str):
@@ -2936,7 +2948,7 @@ async def analyze_chapter_background(
             existing_foreshadows=existing_foreshadows,
             on_retry=on_retry_callback,
             characters_info=characters_info,
-            **build_analysis_quality_kwargs(analysis_quality_profile, guidance=analysis_guidance),
+            **analysis_story_packet.build_analysis_quality_kwargs(analysis_quality_profile),
         )
         
         if not analysis_result:
@@ -3900,7 +3912,7 @@ async def generate_chapter_content_stream(
                         task_id=task_id,
                         ai_service=user_ai_service,
                         quality_profile=quality_profile,
-                        generation_guidance=generation_guidance,
+                        story_packet=story_packet,
                         chapter_content_override=full_content if quality_gate_requires_followup else None,
                         chapter_word_count_override=candidate_word_count if quality_gate_requires_followup else None,
                     )
@@ -4155,7 +4167,7 @@ async def generate_chapter_content_background(
         ai_service=user_ai_service,
         custom_model=custom_model,
         temp_narrative_perspective=temp_narrative_perspective,
-        **story_packet.to_generation_kwargs(),
+        story_packet=story_packet,
         enable_web_research=getattr(generate_request, 'enable_web_research', None),
         web_research_query=getattr(generate_request, 'web_research_query', None),
         **_story_repair_payload_to_prompt_kwargs(story_repair_payload),
@@ -4853,7 +4865,10 @@ async def trigger_chapter_analysis(
         prefer_project_default_style=True,
         log_prefix="手动分析",
     )
-    analysis_generation_guidance = resolve_story_generation_guidance(project)
+    analysis_story_packet = build_story_generation_packet(
+        project,
+        source_label="manual-analysis-request",
+    )
 
     # 创建分析任务
     analysis_task = AnalysisTask(
@@ -4884,7 +4899,7 @@ async def trigger_chapter_analysis(
         task_id=task_id,
         ai_service=user_ai_service,
         quality_profile=analysis_quality_profile,
-        generation_guidance=analysis_generation_guidance,
+        story_packet=analysis_story_packet,
     )
     
     return {
@@ -5035,7 +5050,7 @@ async def batch_generate_chapters_in_order(
         user_id=user_id,
         ai_service=user_ai_service,
         custom_model=batch_request.model,
-        **batch_story_packet.to_generation_kwargs(),
+        story_packet=batch_story_packet,
         enable_web_research=batch_request.enable_web_research,
         web_research_query=batch_request.web_research_query,
         **_story_repair_payload_to_prompt_kwargs(batch_story_repair_payload),
@@ -5454,6 +5469,7 @@ async def execute_batch_generation_in_order(
     ai_service: AIService,
     custom_model: Optional[str] = None,
     temp_narrative_perspective: Optional[str] = None,
+    story_packet: Optional[StoryPacket] = None,
     creative_mode: Optional[str] = None,
     story_focus: Optional[str] = None,
     plot_stage: Optional[str] = None,
@@ -5499,6 +5515,38 @@ async def execute_batch_generation_in_order(
         if not task:
             logger.error(f"❌ 批量生成任务不存在: {batch_id}")
             return
+
+        project_result = await db_session.execute(
+            select(Project).where(Project.id == task.project_id)
+        )
+        project = project_result.scalar_one_or_none()
+
+        if not project:
+            logger.error(f"❌ 批量生成任务所属项目不存在: {task.project_id}")
+            async with write_lock:
+                task.status = 'failed'
+                task.error_message = '项目不存在'
+                task.completed_at = datetime.now()
+                await db_session.commit()
+            await publish_task_stream_event(batch_id, {
+                "type": "error",
+                "error": "项目不存在",
+                "code": 404,
+                "phase": "loading",
+            })
+            await publish_task_stream_event(batch_id, {"type": "done"})
+            return
+
+        batch_story_packet = story_packet or build_story_generation_packet(
+            project,
+            creative_mode=creative_mode,
+            story_focus=story_focus,
+            plot_stage=plot_stage,
+            story_creation_brief=story_creation_brief,
+            quality_preset=quality_preset,
+            quality_notes=quality_notes,
+            source_label="batch-execution-request",
+        )
         
         # 更新任务状态为运行中
         async with write_lock:
@@ -5568,13 +5616,8 @@ async def execute_batch_generation_in_order(
                     
                     if not chapter:
                         raise Exception(f"章节 {chapter_id} 不存在")
-                    project_result = await db_session.execute(
-                        select(Project).where(Project.id == chapter.project_id)
-                    )
-                    project = project_result.scalar_one_or_none()
-                    
-                    if not project:
-                        raise Exception(f"Project {chapter.project_id} not found")
+                    if chapter.project_id != project.id:
+                        raise Exception(f"Chapter {chapter_id} project mismatch")
                     
                     
                     # 更新当前章节序号和重试次数
@@ -5604,15 +5647,6 @@ async def execute_batch_generation_in_order(
                         raise Exception(f"前置条件不满足: {error_msg}")
 
                     analysis_quality_profile = None
-                    analysis_generation_guidance = resolve_story_generation_guidance(
-                        project,
-                        creative_mode=creative_mode,
-                        story_focus=story_focus,
-                        plot_stage=plot_stage,
-                        story_creation_brief=story_creation_brief,
-                        quality_preset=quality_preset,
-                        quality_notes=quality_notes,
-                    )
                     if task.enable_analysis:
                         analysis_quality_profile = await resolve_chapter_quality_profile(
                             db_session=db_session,
@@ -5634,15 +5668,10 @@ async def execute_batch_generation_in_order(
                         target_word_count=task.target_word_count,
                         ai_service=ai_service,
                         write_lock=write_lock,
+                        story_packet=batch_story_packet,
                         custom_model=custom_model,
                         previous_summary_context=last_generated_summary,
                         temp_narrative_perspective=temp_narrative_perspective,
-                        creative_mode=creative_mode,
-                        story_focus=story_focus,
-                        plot_stage=plot_stage,
-                        story_creation_brief=story_creation_brief,
-                        quality_preset=quality_preset,
-                        quality_notes=quality_notes,
                         enable_web_research=enable_web_research,
                         web_research_query=web_research_query,
                         **_story_repair_payload_to_prompt_kwargs(active_story_repair_payload),
@@ -5793,7 +5822,7 @@ async def execute_batch_generation_in_order(
                             max_retries=task.max_retries,
                             ai_service=ai_service,
                             quality_profile=analysis_quality_profile,
-                            generation_guidance=analysis_generation_guidance,
+                            story_packet=batch_story_packet,
                             chapter_content_override=generated_content,
                             chapter_word_count_override=generated_word_count,
                         )
@@ -6003,6 +6032,7 @@ async def generate_single_chapter_for_batch(
     target_word_count: int,
     ai_service: AIService,
     write_lock: Lock,
+    story_packet: Optional[StoryPacket] = None,
     custom_model: Optional[str] = None,
     previous_summary_context: Optional[str] = None,
     temp_narrative_perspective: Optional[str] = None,
@@ -6099,7 +6129,7 @@ async def generate_single_chapter_for_batch(
                 })
 
     # 获取写作风格与统一质量画像
-    story_packet = build_story_generation_packet(
+    effective_story_packet = story_packet or build_story_generation_packet(
         project,
         creative_mode=creative_mode,
         story_focus=story_focus,
@@ -6109,7 +6139,7 @@ async def generate_single_chapter_for_batch(
         quality_notes=quality_notes,
         source_label="batch-single-chapter-generate",
     )
-    generation_guidance = story_packet.guidance
+    generation_guidance = effective_story_packet.guidance
 
     quality_profile = await resolve_chapter_quality_profile(
         db_session=db_session,
@@ -6122,7 +6152,7 @@ async def generate_single_chapter_for_batch(
         prefer_project_default_style=not bool(style_id),
         log_prefix="批量单章生成",
     )
-    prompt_quality_kwargs = story_packet.build_prompt_quality_kwargs(
+    prompt_quality_kwargs = effective_story_packet.build_prompt_quality_kwargs(
         quality_profile,
         story_repair_summary=story_repair_summary,
         story_repair_targets=story_repair_targets,
@@ -6451,6 +6481,7 @@ async def _run_batch_chapter_analysis(
     max_retries: int,
     ai_service: AIService,
     quality_profile: Optional[Dict[str, Any]] = None,
+    story_packet: Optional[StoryPacket] = None,
     generation_guidance: Optional[StoryGenerationGuidance] = None,
     chapter_content_override: Optional[str] = None,
     chapter_word_count_override: Optional[int] = None,
@@ -6495,6 +6526,7 @@ async def _run_batch_chapter_analysis(
                 task_id=analysis_task.id,
                 ai_service=ai_service,
                 quality_profile=quality_profile,
+                story_packet=story_packet,
                 generation_guidance=generation_guidance,
                 chapter_content_override=chapter_content_override,
                 chapter_word_count_override=chapter_word_count_override,

@@ -66,6 +66,25 @@ class StoryPacket:
     request_overrides: Dict[str, Optional[str]] = field(default_factory=dict)
     source: Optional[str] = None
 
+    @classmethod
+    def from_guidance(
+        cls,
+        guidance: StoryGenerationGuidance,
+        *,
+        request_overrides: Optional[Mapping[str, Any]] = None,
+        source: Optional[str] = None,
+    ) -> "StoryPacket":
+        normalized_overrides = _normalize_story_guidance_values(request_overrides or {})
+        return cls(
+            guidance=guidance,
+            request_overrides={
+                field_name: value
+                for field_name, value in normalized_overrides.items()
+                if value is not None
+            },
+            source=source,
+        )
+
     def to_prompt_fields(self) -> Dict[str, Any]:
         return self.guidance.to_prompt_fields()
 
