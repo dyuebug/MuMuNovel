@@ -524,7 +524,7 @@ ports:
 ## 📁 项目结构
 
 ```
-MuMuAINovel/
+MuMuNovel/
 ├── backend/                 # 后端服务
 │   ├── app/
 │   │   ├── api/            # API 路由
@@ -632,3 +632,4 @@ Made with ❤️
 ## History
 
 ![Alt](https://repobeats.axiom.co/api/embed/ee7141a5f269c64759302e067abe23b46796bafe.svg "Repobeats analytics image")
+

@@ -455,7 +455,7 @@
 ## 🔗 相关资源
 
 ### 官方资源
-- **项目仓库**：https://github.com/xiamuceer-j/MuMuAINovel
+- **项目仓库**：https://github.com/dyuebug/MuMuNovel
 - **API 文档**：http://localhost:8000/docs
 - **Linux DO 讨论**：https://linux.do/t/topic/1106333
 
@@ -515,3 +515,4 @@
 **文档版本**：1.0.0
 
 **祝你学习愉快！🎉**
+
