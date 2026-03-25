@@ -6,8 +6,9 @@ import json
 import re
 from typing import Any, Mapping, Optional
 
-from sqlalchemy import or_, select
+from sqlalchemy import event, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.models.chapter import Chapter
 from app.models.character import Character
@@ -17,6 +18,38 @@ from app.models.relationship import CharacterRelationship, Organization
 
 _MAX_RECENT_ANALYSES = 12
 _EMPTY_TIME = datetime.min
+
+
+_SESSION_CACHE_KEY = "project_continuity_ledger_cache"
+
+
+def _resolve_session_cache_store(db_session: AsyncSession) -> dict[Any, ProjectContinuityLedger]:
+    sync_session = getattr(db_session, "sync_session", None)
+    info = getattr(sync_session, "info", None)
+    if not isinstance(info, dict):
+        return {}
+    cache_store = info.get(_SESSION_CACHE_KEY)
+    if isinstance(cache_store, dict):
+        return cache_store
+    cache_store = {}
+    info[_SESSION_CACHE_KEY] = cache_store
+    return cache_store
+
+
+def _build_session_cache_key(
+    db_session: AsyncSession,
+    project_id: str,
+    limit: int,
+) -> tuple[str, int]:
+    return str(project_id), int(limit)
+
+
+@event.listens_for(Session, "after_commit")
+@event.listens_for(Session, "after_rollback")
+def _clear_project_continuity_ledger_cache(sync_session: Session) -> None:
+    info = getattr(sync_session, "info", None)
+    if isinstance(info, dict):
+        info.pop(_SESSION_CACHE_KEY, None)
 
 
 @dataclass(frozen=True)
@@ -344,18 +377,35 @@ def _build_career_state_items(career_rows: list[tuple[CharacterCareer, Character
 
 
 async def build_project_continuity_ledger(db_session: AsyncSession, project_id: Optional[str], *, limit: int = 4) -> ProjectContinuityLedger:
-    """从项目角色、关系、伏笔、组织和职业信息构建 continuity ledger。"""
+    """????????????????????? continuity ledger?"""
     if not project_id:
         return ProjectContinuityLedger()
+
     resolved_limit = max(1, int(limit or 4))
+    cache_store = _resolve_session_cache_store(db_session)
+    cache_key = _build_session_cache_key(db_session, str(project_id), resolved_limit)
+    cached_ledger = cache_store.get(cache_key)
+    if isinstance(cached_ledger, ProjectContinuityLedger):
+        return cached_ledger
+
     character_result = await db_session.execute(select(Character).where(Character.project_id == project_id))
     characters = list(character_result.scalars().all())
-    character_name_map = {character.id: _compact_text(character.name, limit=24) for character in characters if getattr(character, "id", None) and getattr(character, "name", None)}
+    character_name_map = {
+        character.id: _compact_text(character.name, limit=24)
+        for character in characters
+        if getattr(character, "id", None) and getattr(character, "name", None)
+    }
     organization_result = await db_session.execute(select(Organization).where(Organization.project_id == project_id))
     organizations = list(organization_result.scalars().all())
     org_by_char_id = {organization.character_id: organization for organization in organizations}
-    organization_pairs = [(character, org_by_char_id.get(character.id)) for character in characters if getattr(character, "is_organization", False)]
-    relationship_result = await db_session.execute(select(CharacterRelationship).where(CharacterRelationship.project_id == project_id))
+    organization_pairs = [
+        (character, org_by_char_id.get(character.id))
+        for character in characters
+        if getattr(character, "is_organization", False)
+    ]
+    relationship_result = await db_session.execute(
+        select(CharacterRelationship).where(CharacterRelationship.project_id == project_id)
+    )
     relationships = list(relationship_result.scalars().all())
     foreshadow_result = await db_session.execute(
         select(StoryMemory).where(
@@ -384,10 +434,29 @@ async def build_project_continuity_ledger(db_session: AsyncSession, project_id: 
         .where(Character.project_id == project_id)
     )
     career_rows = list(character_career_result.all())
-    return ProjectContinuityLedger(
+    ledger = ProjectContinuityLedger(
         character_state_ledger=_build_character_state_items(characters, analyses, limit=resolved_limit),
-        relationship_state_ledger=_build_relationship_state_items(relationships, character_name_map, analyses, limit=resolved_limit),
-        foreshadow_state_ledger=_build_foreshadow_state_items(foreshadow_memories, analyses, limit=resolved_limit),
-        organization_state_ledger=_build_organization_state_items(organization_pairs, limit=resolved_limit),
-        career_state_ledger=_build_career_state_items(career_rows, characters, career_map, limit=resolved_limit),
+        relationship_state_ledger=_build_relationship_state_items(
+            relationships,
+            character_name_map,
+            analyses,
+            limit=resolved_limit,
+        ),
+        foreshadow_state_ledger=_build_foreshadow_state_items(
+            foreshadow_memories,
+            analyses,
+            limit=resolved_limit,
+        ),
+        organization_state_ledger=_build_organization_state_items(
+            organization_pairs,
+            limit=resolved_limit,
+        ),
+        career_state_ledger=_build_career_state_items(
+            career_rows,
+            characters,
+            career_map,
+            limit=resolved_limit,
+        ),
     )
+    cache_store[cache_key] = ledger
+    return ledger

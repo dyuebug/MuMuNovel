@@ -817,27 +817,160 @@ def _aggregate_continuity_preflight(history: Sequence[Mapping[str, Any]]) -> Dic
     }
 
 
-def build_quality_metrics_summary(
+_SUMMARY_METRIC_FIELDS: tuple[tuple[str, str], ...] = (
+    ("overall_score", "avg_overall_score"),
+    ("conflict_chain_hit_rate", "avg_conflict_chain_hit_rate"),
+    ("rule_grounding_hit_rate", "avg_rule_grounding_hit_rate"),
+    ("outline_alignment_rate", "avg_outline_alignment_rate"),
+    ("dialogue_naturalness_rate", "avg_dialogue_naturalness_rate"),
+    ("opening_hook_rate", "avg_opening_hook_rate"),
+    ("payoff_chain_rate", "avg_payoff_chain_rate"),
+    ("cliffhanger_rate", "avg_cliffhanger_rate"),
+)
+
+
+def _coerce_metric_float(value: Any) -> float:
+    try:
+        if value in (None, ""):
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+
+def _normalize_quality_metrics_history_item(
+    metrics: Mapping[str, Any],
+    *,
+    scope: str,
+) -> Dict[str, Any]:
+    normalized_metrics = dict(metrics)
+    if not isinstance(normalized_metrics.get("repair_guidance"), Mapping):
+        normalized_metrics["repair_guidance"] = build_story_repair_guidance(normalized_metrics, scope=scope)
+    if not isinstance(normalized_metrics.get("quality_gate"), Mapping):
+        normalized_metrics["quality_gate"] = build_quality_gate_decision(normalized_metrics, scope=scope)
+    return normalized_metrics
+
+
+
+def build_quality_metrics_summary_state(
     history: Sequence[Mapping[str, Any]],
     *,
     scope: str = "batch",
 ) -> Optional[Dict[str, Any]]:
-    """汇总历史质量指标并提炼趋势、闸门与修复信号。"""
-    normalized_history = [dict(item) for item in history if isinstance(item, Mapping) and item]
+    normalized_history = [
+        _normalize_quality_metrics_history_item(item, scope=scope)
+        for item in history
+        if isinstance(item, Mapping) and item
+    ]
     if not normalized_history:
         return None
 
-    overall_list = [item.get("overall_score", 0.0) for item in normalized_history]
-    conflict_list = [item.get("conflict_chain_hit_rate", 0.0) for item in normalized_history]
-    rule_list = [item.get("rule_grounding_hit_rate", 0.0) for item in normalized_history]
-    outline_alignment_list = [item.get("outline_alignment_rate", 0.0) for item in normalized_history]
-    dialogue_list = [item.get("dialogue_naturalness_rate", 0.0) for item in normalized_history]
-    opening_list = [item.get("opening_hook_rate", 0.0) for item in normalized_history]
-    payoff_list = [item.get("payoff_chain_rate", 0.0) for item in normalized_history]
-    cliffhanger_list = [item.get("cliffhanger_rate", 0.0) for item in normalized_history]
-    pacing_values = [item.get("pacing_score") for item in normalized_history if item.get("pacing_score") is not None]
-    runtime_context = _aggregate_quality_runtime_context(normalized_history)
-    trend_delta = round(float(overall_list[-1]) - float(overall_list[0]), 1) if len(overall_list) > 1 else 0.0
+    state: Dict[str, Any] = {
+        "chapter_count": len(normalized_history),
+        "first_overall_score": _coerce_metric_float(normalized_history[0].get("overall_score")),
+        "last_overall_score": _coerce_metric_float(normalized_history[-1].get("overall_score")),
+        "recent_history": [dict(item) for item in normalized_history[-5:]],
+        "pacing_score_total": 0.0,
+        "pacing_score_count": 0,
+    }
+    for metric_key, _avg_key in _SUMMARY_METRIC_FIELDS:
+        state[f"{metric_key}_total"] = sum(
+            _coerce_metric_float(item.get(metric_key))
+            for item in normalized_history
+        )
+
+    pacing_values = [
+        _coerce_metric_float(item.get("pacing_score"))
+        for item in normalized_history
+        if item.get("pacing_score") is not None
+    ]
+    if pacing_values:
+        state["pacing_score_total"] = sum(pacing_values)
+        state["pacing_score_count"] = len(pacing_values)
+    return state
+
+
+
+def advance_quality_metrics_summary_state(
+    summary_state: Optional[Mapping[str, Any]],
+    *,
+    appended_event: Mapping[str, Any],
+    current_history: Sequence[Mapping[str, Any]],
+    dropped_event: Optional[Mapping[str, Any]] = None,
+    scope: str = "batch",
+) -> Optional[Dict[str, Any]]:
+    normalized_history = [
+        _normalize_quality_metrics_history_item(item, scope=scope)
+        for item in current_history
+        if isinstance(item, Mapping) and item
+    ]
+    if not normalized_history:
+        return None
+    if not isinstance(summary_state, Mapping):
+        return build_quality_metrics_summary_state(normalized_history, scope=scope)
+
+    state = dict(summary_state)
+    normalized_appended = _normalize_quality_metrics_history_item(appended_event, scope=scope)
+    normalized_dropped = (
+        _normalize_quality_metrics_history_item(dropped_event, scope=scope)
+        if isinstance(dropped_event, Mapping) and dropped_event
+        else None
+    )
+
+    for metric_key, _avg_key in _SUMMARY_METRIC_FIELDS:
+        total_key = f"{metric_key}_total"
+        updated_total = _coerce_metric_float(state.get(total_key)) + _coerce_metric_float(
+            normalized_appended.get(metric_key)
+        )
+        if normalized_dropped is not None:
+            updated_total -= _coerce_metric_float(normalized_dropped.get(metric_key))
+        state[total_key] = round(updated_total, 6)
+
+    pacing_total = _coerce_metric_float(state.get("pacing_score_total"))
+    pacing_count = int(state.get("pacing_score_count") or 0)
+    if normalized_appended.get("pacing_score") is not None:
+        pacing_total += _coerce_metric_float(normalized_appended.get("pacing_score"))
+        pacing_count += 1
+    if normalized_dropped is not None and normalized_dropped.get("pacing_score") is not None:
+        pacing_total -= _coerce_metric_float(normalized_dropped.get("pacing_score"))
+        pacing_count = max(0, pacing_count - 1)
+    state["pacing_score_total"] = round(pacing_total, 6)
+    state["pacing_score_count"] = pacing_count
+    state["chapter_count"] = len(normalized_history)
+    state["first_overall_score"] = _coerce_metric_float(normalized_history[0].get("overall_score"))
+    state["last_overall_score"] = _coerce_metric_float(normalized_history[-1].get("overall_score"))
+    state["recent_history"] = [dict(item) for item in normalized_history[-5:]]
+    return state
+
+
+
+def build_quality_metrics_summary_from_state(
+    summary_state: Optional[Mapping[str, Any]],
+    *,
+    scope: str = "batch",
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(summary_state, Mapping):
+        return None
+
+    chapter_count = int(summary_state.get("chapter_count") or 0)
+    if chapter_count <= 0:
+        return None
+
+    recent_history = [
+        _normalize_quality_metrics_history_item(item, scope=scope)
+        for item in (summary_state.get("recent_history") or [])
+        if isinstance(item, Mapping) and item
+    ]
+    trend_delta = (
+        round(
+            _coerce_metric_float(summary_state.get("last_overall_score"))
+            - _coerce_metric_float(summary_state.get("first_overall_score")),
+            1,
+        )
+        if chapter_count > 1
+        else 0.0
+    )
     if trend_delta >= 2.0:
         trend_direction = "rising"
     elif trend_delta <= -2.0:
@@ -847,9 +980,12 @@ def build_quality_metrics_summary(
 
     recent_focus_areas: list[str] = []
     seen_focus: set[str] = set()
-    recent_history = normalized_history[-5:]
-    for item in normalized_history[-3:]:
-        guidance = item.get("repair_guidance") if isinstance(item.get("repair_guidance"), Mapping) else build_story_repair_guidance(item, scope=scope)
+    for item in recent_history[-3:]:
+        guidance = (
+            item.get("repair_guidance")
+            if isinstance(item.get("repair_guidance"), Mapping)
+            else build_story_repair_guidance(item, scope=scope)
+        )
         for area in guidance.get("focus_areas") or []:
             if area in seen_focus:
                 continue
@@ -866,17 +1002,8 @@ def build_quality_metrics_summary(
         scope=scope,
     )
 
-    summary = {
-        "avg_overall_score": round(sum(overall_list) / max(len(overall_list), 1), 1),
-        "avg_conflict_chain_hit_rate": round(sum(conflict_list) / max(len(conflict_list), 1), 1),
-        "avg_rule_grounding_hit_rate": round(sum(rule_list) / max(len(rule_list), 1), 1),
-        "avg_outline_alignment_rate": round(sum(outline_alignment_list) / max(len(outline_alignment_list), 1), 1),
-        "avg_dialogue_naturalness_rate": round(sum(dialogue_list) / max(len(dialogue_list), 1), 1),
-        "avg_opening_hook_rate": round(sum(opening_list) / max(len(opening_list), 1), 1),
-        "avg_payoff_chain_rate": round(sum(payoff_list) / max(len(payoff_list), 1), 1),
-        "avg_cliffhanger_rate": round(sum(cliffhanger_list) / max(len(cliffhanger_list), 1), 1),
-        "avg_pacing_score": round(sum(pacing_values) / len(pacing_values), 1) if pacing_values else None,
-        "chapter_count": len(normalized_history),
+    summary: Dict[str, Any] = {
+        "chapter_count": chapter_count,
         "overall_score_delta": trend_delta,
         "overall_score_trend": trend_direction,
         "recent_focus_areas": recent_focus_areas,
@@ -884,15 +1011,43 @@ def build_quality_metrics_summary(
         "quality_gate_counts": quality_gate_counts,
         "recent_manual_review_count": recent_manual_review_count,
         "recent_auto_repair_count": recent_auto_repair_count,
+        "avg_pacing_score": (
+            round(
+                _coerce_metric_float(summary_state.get("pacing_score_total"))
+                / int(summary_state.get("pacing_score_count") or 1),
+                1,
+            )
+            if int(summary_state.get("pacing_score_count") or 0) > 0
+            else None
+        ),
     }
+    for metric_key, avg_key in _SUMMARY_METRIC_FIELDS:
+        summary[avg_key] = round(
+            _coerce_metric_float(summary_state.get(f"{metric_key}_total"))
+            / max(chapter_count, 1),
+            1,
+        )
+
+    runtime_context = _aggregate_quality_runtime_context(recent_history)
     if runtime_context:
         summary["quality_runtime_context"] = runtime_context
-    continuity_preflight = _aggregate_continuity_preflight(normalized_history)
+    continuity_preflight = _aggregate_continuity_preflight(recent_history)
     if continuity_preflight:
         summary["continuity_preflight"] = continuity_preflight
     summary["repair_guidance"] = build_story_repair_guidance(summary, scope=scope)
     summary["quality_gate"] = build_quality_gate_decision(summary, scope=scope)
     return summary
+
+
+
+def build_quality_metrics_summary(
+    history: Sequence[Mapping[str, Any]],
+    *,
+    scope: str = "batch",
+) -> Optional[Dict[str, Any]]:
+    """??????????????????????"""
+    summary_state = build_quality_metrics_summary_state(history, scope=scope)
+    return build_quality_metrics_summary_from_state(summary_state, scope=scope)
 
 
 def build_story_repair_guidance(

@@ -1,8 +1,11 @@
 import json
 
 from app.services.story_quality_feedback_service import (
+    advance_quality_metrics_summary_state,
     build_quality_gate_decision,
     build_quality_metrics_summary,
+    build_quality_metrics_summary_from_state,
+    build_quality_metrics_summary_state,
     build_story_continuity_preflight,
     build_story_repair_guidance,
     extract_quality_metrics_from_history_payload,
@@ -496,3 +499,90 @@ def test_should_collect_recent_quality_gate_trends_from_history():
     assert summary["recent_auto_repair_count"] == 1
     assert summary["recent_failed_metric_counts"]
     assert summary["recent_failed_metric_counts"][0]["key"] in {"conflict_chain_hit_rate", "payoff_chain_rate", "pacing_score"}
+
+
+def test_should_build_quality_metrics_summary_from_reducer_state():
+    history = [
+        {
+            "overall_score": 81.0,
+            "conflict_chain_hit_rate": 76.0,
+            "rule_grounding_hit_rate": 80.0,
+            "outline_alignment_rate": 79.0,
+            "dialogue_naturalness_rate": 78.0,
+            "opening_hook_rate": 74.0,
+            "payoff_chain_rate": 72.0,
+            "cliffhanger_rate": 77.0,
+            "pacing_score": 7.2,
+        },
+        {
+            "overall_score": 86.0,
+            "conflict_chain_hit_rate": 82.0,
+            "rule_grounding_hit_rate": 84.0,
+            "outline_alignment_rate": 83.0,
+            "dialogue_naturalness_rate": 80.0,
+            "opening_hook_rate": 79.0,
+            "payoff_chain_rate": 75.0,
+            "cliffhanger_rate": 81.0,
+            "pacing_score": 8.0,
+        },
+    ]
+
+    summary = build_quality_metrics_summary(history, scope="batch")
+    state = build_quality_metrics_summary_state(history, scope="batch")
+
+    assert state is not None
+    assert build_quality_metrics_summary_from_state(state, scope="batch") == summary
+
+
+def test_should_advance_quality_metrics_summary_state_incrementally_with_drop():
+    history = [
+        {
+            "overall_score": 79.0,
+            "conflict_chain_hit_rate": 72.0,
+            "rule_grounding_hit_rate": 77.0,
+            "outline_alignment_rate": 74.0,
+            "dialogue_naturalness_rate": 76.0,
+            "opening_hook_rate": 73.0,
+            "payoff_chain_rate": 70.0,
+            "cliffhanger_rate": 75.0,
+            "pacing_score": 6.8,
+        },
+        {
+            "overall_score": 84.0,
+            "conflict_chain_hit_rate": 80.0,
+            "rule_grounding_hit_rate": 82.0,
+            "outline_alignment_rate": 81.0,
+            "dialogue_naturalness_rate": 79.0,
+            "opening_hook_rate": 78.0,
+            "payoff_chain_rate": 74.0,
+            "cliffhanger_rate": 80.0,
+            "pacing_score": 7.6,
+        },
+    ]
+    next_event = {
+        "overall_score": 88.0,
+        "conflict_chain_hit_rate": 85.0,
+        "rule_grounding_hit_rate": 86.0,
+        "outline_alignment_rate": 87.0,
+        "dialogue_naturalness_rate": 82.0,
+        "opening_hook_rate": 81.0,
+        "payoff_chain_rate": 79.0,
+        "cliffhanger_rate": 84.0,
+        "pacing_score": 8.3,
+    }
+
+    state = build_quality_metrics_summary_state(history, scope="batch")
+    trimmed_history = [history[1], next_event]
+    advanced_state = advance_quality_metrics_summary_state(
+        state,
+        appended_event=next_event,
+        current_history=trimmed_history,
+        dropped_event=history[0],
+        scope="batch",
+    )
+
+    assert advanced_state is not None
+    assert build_quality_metrics_summary_from_state(advanced_state, scope="batch") == build_quality_metrics_summary(
+        trimmed_history,
+        scope="batch",
+    )

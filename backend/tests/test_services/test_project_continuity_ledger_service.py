@@ -215,3 +215,34 @@ async def test_should_fill_story_packet_with_project_continuity_without_overridi
     assert any(item.startswith("hidden key") for item in override_packet.blueprint.foreshadow_state_ledger)
     assert any(item.startswith("ShadowGuild:") for item in override_packet.blueprint.organization_state_ledger)
     assert any(item.startswith("Lin/Strategist:") for item in override_packet.blueprint.career_state_ledger)
+
+
+async def test_should_reuse_project_continuity_ledger_within_same_transaction(
+    continuity_session_factory,
+    monkeypatch,
+):
+    project = await _seed_project(continuity_session_factory)
+
+    async with continuity_session_factory() as session:
+        original_execute = session.execute
+        call_count = 0
+
+        async def counted_execute(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return await original_execute(*args, **kwargs)
+
+        monkeypatch.setattr(session, "execute", counted_execute)
+
+        first_ledger = await build_project_continuity_ledger(session, project.id)
+        first_call_count = call_count
+        second_ledger = await build_project_continuity_ledger(session, project.id)
+
+        assert second_ledger == first_ledger
+        assert call_count == first_call_count
+
+        await session.commit()
+        refreshed_ledger = await build_project_continuity_ledger(session, project.id)
+
+    assert refreshed_ledger == first_ledger
+    assert call_count > first_call_count

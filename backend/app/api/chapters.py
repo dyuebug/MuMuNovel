@@ -7,7 +7,6 @@ import json
 import asyncio
 import re
 from typing import Optional, Dict, Any, List, Tuple
-from dataclasses import dataclass
 from datetime import datetime
 from asyncio import Queue, Lock
 from pydantic import BaseModel
@@ -60,12 +59,16 @@ from app.services.chapter_quality_context_service import (
     StoryPacket,
     StoryGenerationGuidance,
     build_analysis_quality_kwargs,
-    build_chapter_generation_intent,
-    build_prompt_quality_kwargs,
     build_story_generation_packet,
     build_story_generation_packet_with_project_continuity,
     clone_chapter_quality_profile,
     resolve_chapter_quality_profile,
+)
+from app.services.chapter_generation_runtime_service import (
+    build_chapter_generation_runtime_bundle as _build_chapter_generation_runtime_bundle,
+    build_chapter_prompt_quality_kwargs_from_runtime as _build_chapter_prompt_quality_kwargs,
+    build_chapter_quality_runtime_context as _build_chapter_quality_runtime_context,
+    create_chapter_generation_intent_from_runtime as _create_chapter_generation_intent,
 )
 from app.services.plot_analyzer import PlotAnalyzer
 from app.services.memory_service import memory_service
@@ -73,8 +76,11 @@ from app.services.chapter_web_research_service import chapter_web_research_servi
 from app.services.foreshadow_service import foreshadow_service
 from app.services.chapter_regenerator import ChapterRegenerator
 from app.services.story_quality_feedback_service import (
+    advance_quality_metrics_summary_state,
     build_quality_gate_decision,
     build_quality_metrics_summary,
+    build_quality_metrics_summary_from_state,
+    build_quality_metrics_summary_state,
     build_story_continuity_preflight,
     build_story_repair_guidance,
     extract_quality_metrics_from_history_payload,
@@ -941,219 +947,6 @@ def _attach_story_repair_quality_history(
     return normalized_state
 
 
-@dataclass
-class ChapterGenerationRuntimeBundle:
-    generation_guidance: Optional[StoryGenerationGuidance]
-    generation_intent: ChapterGenerationIntent
-    prompt_quality_kwargs: Dict[str, Any]
-    story_repair_payload: Optional[StoryRepairPayload] = None
-    active_story_repair_payload: Optional[Dict[str, Any]] = None
-
-
-def _build_chapter_generation_runtime_bundle(
-    *,
-    story_packet: Optional[StoryPacket],
-    quality_profile: Optional[Dict[str, Any]],
-    project: Optional[Project],
-    chapter: Chapter,
-    chapter_context: Optional[Any],
-    target_word_count: Optional[int],
-    story_repair_state: Optional[Dict[str, Any]] = None,
-    story_repair_payload: Optional[StoryRepairPayload] = None,
-    active_story_repair_payload: Optional[Dict[str, Any]] = None,
-    character_focus_source: Optional[Any] = None,
-    foreshadow_payoff_source: Optional[Any] = None,
-    character_state_source: Optional[Any] = None,
-    relationship_state_source: Optional[Any] = None,
-    foreshadow_state_source: Optional[Any] = None,
-    organization_state_source: Optional[Any] = None,
-    career_state_source: Optional[Any] = None,
-) -> ChapterGenerationRuntimeBundle:
-    resolved_story_repair_payload = story_repair_payload
-    resolved_active_story_repair_payload = active_story_repair_payload
-
-    if isinstance(story_repair_state, dict):
-        if resolved_story_repair_payload is None:
-            candidate_payload = story_repair_state.get("payload")
-            if isinstance(candidate_payload, StoryRepairPayload) or candidate_payload is None:
-                resolved_story_repair_payload = candidate_payload
-        if resolved_active_story_repair_payload is None:
-            candidate_active_payload = story_repair_state.get("active_story_repair_payload")
-            if isinstance(candidate_active_payload, dict) or candidate_active_payload is None:
-                resolved_active_story_repair_payload = candidate_active_payload
-
-    generation_intent = _create_chapter_generation_intent(
-        story_packet=story_packet,
-        quality_profile=quality_profile,
-        project=project,
-        chapter=chapter,
-        chapter_context=chapter_context,
-        target_word_count=target_word_count,
-        story_repair_state=story_repair_state,
-        story_repair_payload=resolved_story_repair_payload,
-        active_story_repair_payload=resolved_active_story_repair_payload,
-        character_focus_source=character_focus_source,
-        foreshadow_payoff_source=foreshadow_payoff_source,
-        character_state_source=character_state_source,
-        relationship_state_source=relationship_state_source,
-        foreshadow_state_source=foreshadow_state_source,
-        organization_state_source=organization_state_source,
-        career_state_source=career_state_source,
-    )
-    prompt_quality_kwargs = _build_chapter_prompt_quality_kwargs(
-        story_packet=story_packet,
-        quality_profile=quality_profile,
-        project=project,
-        chapter=chapter,
-        chapter_context=chapter_context,
-        target_word_count=target_word_count,
-        story_repair_state=story_repair_state,
-        story_repair_payload=resolved_story_repair_payload,
-        active_story_repair_payload=resolved_active_story_repair_payload,
-        character_focus_source=character_focus_source,
-        foreshadow_payoff_source=foreshadow_payoff_source,
-        character_state_source=character_state_source,
-        relationship_state_source=relationship_state_source,
-        foreshadow_state_source=foreshadow_state_source,
-        organization_state_source=organization_state_source,
-        career_state_source=career_state_source,
-        generation_intent=generation_intent,
-    )
-    return ChapterGenerationRuntimeBundle(
-        generation_guidance=generation_intent.story_packet.guidance if generation_intent else None,
-        generation_intent=generation_intent,
-        prompt_quality_kwargs=prompt_quality_kwargs,
-        story_repair_payload=resolved_story_repair_payload,
-        active_story_repair_payload=resolved_active_story_repair_payload,
-    )
-
-
-def _create_chapter_generation_intent(
-    *,
-    story_packet: Optional[StoryPacket],
-    quality_profile: Optional[Dict[str, Any]],
-    project: Optional[Project],
-    chapter: Chapter,
-    chapter_context: Optional[Any],
-    target_word_count: Optional[int],
-    story_repair_state: Optional[Dict[str, Any]] = None,
-    story_repair_payload: Optional[StoryRepairPayload] = None,
-    active_story_repair_payload: Optional[Dict[str, Any]] = None,
-    character_focus_source: Optional[Any] = None,
-    foreshadow_payoff_source: Optional[Any] = None,
-    character_state_source: Optional[Any] = None,
-    relationship_state_source: Optional[Any] = None,
-    foreshadow_state_source: Optional[Any] = None,
-    organization_state_source: Optional[Any] = None,
-    career_state_source: Optional[Any] = None,
-) -> ChapterGenerationIntent:
-    resolved_story_repair_payload = story_repair_payload
-    resolved_active_story_repair_payload = active_story_repair_payload
-    quality_history_context: Optional[Dict[str, Any]] = None
-    quality_metrics_summary: Optional[Dict[str, Any]] = None
-
-    if isinstance(story_repair_state, dict):
-        if resolved_story_repair_payload is None:
-            candidate_payload = story_repair_state.get("payload")
-            if isinstance(candidate_payload, StoryRepairPayload) or candidate_payload is None:
-                resolved_story_repair_payload = candidate_payload
-        if resolved_active_story_repair_payload is None:
-            candidate_active_payload = story_repair_state.get("active_story_repair_payload")
-            if isinstance(candidate_active_payload, dict) or candidate_active_payload is None:
-                resolved_active_story_repair_payload = candidate_active_payload
-        candidate_quality_history_context = story_repair_state.get("quality_history_context")
-        if isinstance(candidate_quality_history_context, dict):
-            quality_history_context = candidate_quality_history_context
-        candidate_quality_metrics_summary = story_repair_state.get("quality_metrics_summary")
-        if isinstance(candidate_quality_metrics_summary, dict):
-            quality_metrics_summary = candidate_quality_metrics_summary
-
-    return build_chapter_generation_intent(
-        story_packet=story_packet,
-        quality_profile=quality_profile,
-        project=project,
-        chapter=chapter,
-        chapter_context=chapter_context,
-        target_word_count=target_word_count,
-        story_repair_payload=resolved_story_repair_payload,
-        active_story_repair_payload=resolved_active_story_repair_payload,
-        quality_history_context=quality_history_context,
-        quality_metrics_summary=quality_metrics_summary,
-        character_focus_source=character_focus_source,
-        foreshadow_payoff_source=foreshadow_payoff_source,
-        character_state_source=character_state_source,
-        relationship_state_source=relationship_state_source,
-        foreshadow_state_source=foreshadow_state_source,
-        organization_state_source=organization_state_source,
-        career_state_source=career_state_source,
-    )
-
-
-def _build_chapter_quality_runtime_context(
-    *,
-    story_packet: Optional[StoryPacket],
-    project: Optional[Project],
-    chapter: Chapter,
-    chapter_context: Optional[Any],
-    target_word_count: Optional[int],
-    story_repair_state: Optional[Dict[str, Any]] = None,
-    generation_intent: Optional[ChapterGenerationIntent] = None,
-) -> Dict[str, Any]:
-    """??????????????????"""
-    active_generation_intent = generation_intent or _create_chapter_generation_intent(
-        story_packet=story_packet,
-        quality_profile=None,
-        project=project,
-        chapter=chapter,
-        chapter_context=chapter_context,
-        target_word_count=target_word_count,
-        story_repair_state=story_repair_state,
-    )
-    return active_generation_intent.build_quality_runtime_context()
-
-
-def _build_chapter_prompt_quality_kwargs(
-    *,
-    story_packet: Optional[StoryPacket],
-    quality_profile: Optional[Dict[str, Any]],
-    project: Optional[Project],
-    chapter: Chapter,
-    chapter_context: Optional[Any],
-    target_word_count: Optional[int],
-    story_repair_state: Optional[Dict[str, Any]] = None,
-    story_repair_payload: Optional[StoryRepairPayload] = None,
-    active_story_repair_payload: Optional[Dict[str, Any]] = None,
-    character_focus_source: Optional[Any] = None,
-    foreshadow_payoff_source: Optional[Any] = None,
-    character_state_source: Optional[Any] = None,
-    relationship_state_source: Optional[Any] = None,
-    foreshadow_state_source: Optional[Any] = None,
-    organization_state_source: Optional[Any] = None,
-    career_state_source: Optional[Any] = None,
-    generation_intent: Optional[ChapterGenerationIntent] = None,
-) -> Dict[str, Any]:
-    """?????? prompt ?????????"""
-    active_generation_intent = generation_intent or _create_chapter_generation_intent(
-        story_packet=story_packet,
-        quality_profile=quality_profile,
-        project=project,
-        chapter=chapter,
-        chapter_context=chapter_context,
-        target_word_count=target_word_count,
-        story_repair_state=story_repair_state,
-        story_repair_payload=story_repair_payload,
-        active_story_repair_payload=active_story_repair_payload,
-        character_focus_source=chapter if character_focus_source is None else character_focus_source,
-        foreshadow_payoff_source=foreshadow_payoff_source,
-        character_state_source=character_state_source,
-        relationship_state_source=relationship_state_source,
-        foreshadow_state_source=foreshadow_state_source,
-        organization_state_source=organization_state_source,
-        career_state_source=career_state_source,
-    )
-    return active_generation_intent.build_prompt_quality_kwargs()
-
-
 def _build_generation_history_payload(
     content: str,
     metrics: Optional[Dict[str, Any]],
@@ -1573,18 +1366,29 @@ def _build_quality_metrics_summary(history: List[Dict[str, Any]]) -> Optional[Di
     return build_quality_metrics_summary(history, scope="batch")
 
 
+def _public_task_quality_snapshot(snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(snapshot, dict):
+        return {}
+    return {
+        "latest": snapshot.get("latest"),
+        "history": list(snapshot.get("history") or []),
+        "summary": snapshot.get("summary"),
+    }
+
+
 async def _record_task_quality_metrics(
     task_id: str,
     metrics_event: Dict[str, Any],
     db_session: Optional[AsyncSession] = None,
 ):
-    """记录任务级质量指标历史，并同步汇总结果。"""
+    """????????????????????"""
     persisted_snapshot: Optional[Dict[str, Any]] = None
     async with task_quality_lock:
         current = task_quality_metrics_cache.get(task_id) or {
             "latest": None,
             "history": [],
             "summary": None,
+            "_summary_state": None,
         }
         normalized_event = dict(metrics_event or {})
         if normalized_event and not isinstance(normalized_event.get("repair_guidance"), dict):
@@ -1595,17 +1399,24 @@ async def _record_task_quality_metrics(
         normalized_event = _normalize_json_payload(normalized_event)
         current["latest"] = normalized_event
         history = list(current.get("history") or [])
+        dropped_event = history[0] if len(history) >= 20 else None
         history.append(normalized_event)
         if len(history) > 20:
             history = history[-20:]
         current["history"] = history
-        current["summary"] = _build_quality_metrics_summary(history)
+        summary_state = advance_quality_metrics_summary_state(
+            current.get("_summary_state"),
+            appended_event=normalized_event,
+            current_history=history,
+            dropped_event=dropped_event,
+            scope="batch",
+        )
+        if summary_state is None and history:
+            summary_state = build_quality_metrics_summary_state(history, scope="batch")
+        current["_summary_state"] = summary_state
+        current["summary"] = build_quality_metrics_summary_from_state(summary_state, scope="batch")
         task_quality_metrics_cache[task_id] = current
-        persisted_snapshot = {
-            "latest": current["latest"],
-            "history": current["history"],
-            "summary": current["summary"],
-        }
+        persisted_snapshot = _public_task_quality_snapshot(current)
 
     if db_session is not None and persisted_snapshot is not None:
         await _upsert_batch_generation_snapshot(
@@ -1621,11 +1432,11 @@ async def _get_task_quality_metrics_snapshot(
     task_id: str,
     db_session: Optional[AsyncSession] = None,
 ) -> Dict[str, Any]:
-    """获取任务级质量指标快照，优先读缓存，缺失时回落数据库。"""
+    """???????????????????????????"""
     async with task_quality_lock:
         cached_snapshot = task_quality_metrics_cache.get(task_id)
     if cached_snapshot:
-        return cached_snapshot
+        return _public_task_quality_snapshot(cached_snapshot)
 
     if db_session is None:
         return {}
@@ -1634,17 +1445,20 @@ async def _get_task_quality_metrics_snapshot(
     if persisted_snapshot is None:
         return {}
 
+    recovered_history = _normalize_json_payload(persisted_snapshot.quality_metrics_history) or []
+    summary_state = build_quality_metrics_summary_state(recovered_history, scope="batch") if recovered_history else None
     recovered_snapshot = {
         "latest": _normalize_json_payload(persisted_snapshot.latest_quality_metrics) or None,
-        "history": _normalize_json_payload(persisted_snapshot.quality_metrics_history) or [],
+        "history": recovered_history,
         "summary": _normalize_json_payload(persisted_snapshot.quality_metrics_summary) or None,
+        "_summary_state": summary_state,
     }
-    if not recovered_snapshot["summary"] and recovered_snapshot["history"]:
-        recovered_snapshot["summary"] = _build_quality_metrics_summary(recovered_snapshot["history"])
+    if not recovered_snapshot["summary"] and summary_state is not None:
+        recovered_snapshot["summary"] = build_quality_metrics_summary_from_state(summary_state, scope="batch")
 
     async with task_quality_lock:
         task_quality_metrics_cache[task_id] = recovered_snapshot
-    return recovered_snapshot
+    return _public_task_quality_snapshot(recovered_snapshot)
 
 
 
