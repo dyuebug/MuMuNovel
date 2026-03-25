@@ -7,7 +7,7 @@ import { DownloadOutlined, RocketOutlined, CaretRightOutlined, BookOutlined, Plu
 import { useStore } from '../store';
 import { useChapterSync } from '../store/hooks';
 import { projectApi, writingStyleApi, chapterApi, chapterBatchTaskApi } from '../services/api';
-import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterLatestQualityMetrics, ChapterQualityMetrics, ChapterQualityMetricsSummary, ChapterQualityProfileSummary, ActiveStoryRepairPayload, CreativeMode, PlotStage, StoryFocus } from '../types';
+import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterLatestQualityMetrics, ChapterQualityMetrics, ChapterQualityMetricsSummary, ChapterQualityProfileSummary, ActiveStoryRepairPayload, CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
 import { hasUsableApiCredentials } from '../utils/apiKey';
 import ChapterListItem from '../components/ChapterListItem';
 
@@ -420,6 +420,8 @@ export default function Chapters() {
   const projectDefaultStoryFocus = currentProject?.default_story_focus;
   const projectDefaultPlotStage = currentProject?.default_plot_stage;
   const projectDefaultStoryCreationBrief = currentProject?.default_story_creation_brief?.trim() ?? '';
+  const projectDefaultQualityPreset = currentProject?.default_quality_preset;
+  const projectDefaultQualityNotes = currentProject?.default_quality_notes?.trim() ?? '';
 
   const chapters = useStore((state) => state.chapters);
 
@@ -469,6 +471,10 @@ export default function Chapters() {
   const [batchSelectedStoryFocus, setBatchSelectedStoryFocus] = useState<StoryFocus | undefined>();
   const [selectedPlotStage, setSelectedPlotStage] = useState<PlotStage | undefined>();
   const [batchSelectedPlotStage, setBatchSelectedPlotStage] = useState<PlotStage | undefined>();
+  const [selectedQualityPreset, setSelectedQualityPreset] = useState<QualityPreset | undefined>();
+  const [batchSelectedQualityPreset, setBatchSelectedQualityPreset] = useState<QualityPreset | undefined>();
+  const [selectedQualityNotes, setSelectedQualityNotes] = useState('');
+  const [batchSelectedQualityNotes, setBatchSelectedQualityNotes] = useState('');
   const [singleStoryCreationBriefDraft, setSingleStoryCreationBriefDraft] = useState('');
   const [batchStoryCreationBriefDraft, setBatchStoryCreationBriefDraft] = useState('');
   const [singleStoryBeatPlannerDraft, setSingleStoryBeatPlannerDraft] = useState<StoryBeatPlannerDraft>(EMPTY_STORY_BEAT_PLANNER_DRAFT);
@@ -671,6 +677,8 @@ export default function Chapters() {
     setSelectedCreativeMode(projectDefaultCreativeMode);
     setSelectedStoryFocus(projectDefaultStoryFocus);
     setSelectedPlotStage(projectDefaultPlotStage);
+    setSelectedQualityPreset(projectDefaultQualityPreset);
+    setSelectedQualityNotes(projectDefaultQualityNotes);
 
     if (!projectDefaultPlotStage) {
       void inferPlotStage({
@@ -689,6 +697,8 @@ export default function Chapters() {
     knownStructureChapterCount,
     projectDefaultCreativeMode,
     projectDefaultPlotStage,
+    projectDefaultQualityNotes,
+    projectDefaultQualityPreset,
     projectDefaultStoryCreationBrief,
     projectDefaultStoryFocus,
   ]);
@@ -700,6 +710,8 @@ export default function Chapters() {
     setBatchSelectedCreativeMode(projectDefaultCreativeMode);
     setBatchSelectedStoryFocus(projectDefaultStoryFocus);
     setBatchSelectedPlotStage(projectDefaultPlotStage);
+    setBatchSelectedQualityPreset(projectDefaultQualityPreset);
+    setBatchSelectedQualityNotes(projectDefaultQualityNotes);
     setBatchStoryCreationBriefDraft(projectDefaultStoryCreationBrief);
     setBatchStoryBeatPlannerDraft({ ...EMPTY_STORY_BEAT_PLANNER_DRAFT });
     setBatchStorySceneOutlineDraft({ ...EMPTY_STORY_SCENE_OUTLINE_DRAFT });
@@ -1129,6 +1141,8 @@ export default function Chapters() {
       setSelectedCreativeMode(persistedDraft.creativeMode ?? projectDefaultCreativeMode);
       setSelectedStoryFocus(persistedDraft.storyFocus ?? projectDefaultStoryFocus);
       setSelectedPlotStage(persistedDraft.plotStage ?? projectDefaultPlotStage);
+      setSelectedQualityPreset(projectDefaultQualityPreset);
+      setSelectedQualityNotes(projectDefaultQualityNotes);
 
       if (!persistedDraft.plotStage && !projectDefaultPlotStage) {
         void inferPlotStage({
@@ -1156,6 +1170,8 @@ export default function Chapters() {
     knownStructureChapterCount,
     projectDefaultCreativeMode,
     projectDefaultPlotStage,
+    projectDefaultQualityNotes,
+    projectDefaultQualityPreset,
     projectDefaultStoryCreationBrief,
     projectDefaultStoryFocus,
     resetSingleStoryCreationCockpit,
@@ -1196,6 +1212,8 @@ export default function Chapters() {
       setBatchSelectedCreativeMode(persistedDraft.creativeMode ?? projectDefaultCreativeMode);
       setBatchSelectedStoryFocus(persistedDraft.storyFocus ?? projectDefaultStoryFocus);
       setBatchSelectedPlotStage(persistedDraft.plotStage ?? projectDefaultPlotStage);
+      setBatchSelectedQualityPreset(projectDefaultQualityPreset);
+      setBatchSelectedQualityNotes(projectDefaultQualityNotes);
       setBatchStoryCreationBriefDraft(persistedDraft.storyCreationBriefDraft ?? projectDefaultStoryCreationBrief);
       setBatchStoryBeatPlannerDraft(normalizeStoryBeatPlannerDraft(persistedDraft.beatPlannerDraft));
       setBatchStorySceneOutlineDraft(normalizeStorySceneOutlineDraft(persistedDraft.sceneOutlineDraft));
@@ -1209,6 +1227,8 @@ export default function Chapters() {
     batchStoryCreationDraftStorageKey,
     projectDefaultCreativeMode,
     projectDefaultPlotStage,
+    projectDefaultQualityNotes,
+    projectDefaultQualityPreset,
     projectDefaultStoryCreationBrief,
     projectDefaultStoryFocus,
     resetBatchStoryCreationCockpit,
@@ -2855,6 +2875,8 @@ export default function Chapters() {
         selectedStoryFocus,
         selectedPlotStage,
         latestResolvedSingleStoryCreationBrief,
+        selectedQualityPreset,
+        selectedQualityNotes.trim() || undefined,
         latestSingleStoryPresetState.singleStoryRepairPayload?.storyRepairSummary,
         latestSingleStoryPresetState.singleStoryRepairPayload?.storyRepairTargets,
         latestSingleStoryPresetState.singleStoryRepairPayload?.storyPreserveStrengths,
@@ -3102,6 +3124,8 @@ export default function Chapters() {
         story_focus?: StoryFocus;
         plot_stage?: PlotStage;
         story_creation_brief?: string;
+        quality_preset?: QualityPreset;
+        quality_notes?: string;
         story_repair_summary?: string;
         story_repair_targets?: string[];
         story_preserve_strengths?: string[];
@@ -3131,6 +3155,14 @@ export default function Chapters() {
 
       if (plotStage) {
         requestBody.plot_stage = plotStage;
+      }
+
+      if (batchSelectedQualityPreset) {
+        requestBody.quality_preset = batchSelectedQualityPreset;
+      }
+
+      if (batchSelectedQualityNotes.trim()) {
+        requestBody.quality_notes = batchSelectedQualityNotes.trim();
       }
 
       const { prompt: resolvedBatchStoryCreationBrief } = resolveStoryCreationPromptState({
@@ -3848,8 +3880,15 @@ export default function Chapters() {
     setSelectedCreativeMode,
     projectDefaultStoryFocus,
     setSelectedStoryFocus,
+    projectDefaultPlotStage,
     selectedPlotStage,
     setSelectedPlotStage,
+    projectDefaultQualityPreset,
+    projectDefaultQualityNotes,
+    selectedQualityPreset,
+    setSelectedQualityPreset,
+    selectedQualityNotes,
+    setSelectedQualityNotes,
     singleStoryCreationControlCard,
     isSingleStoryCreationControlCustomized,
     setSingleStoryCreationBriefDraft,
@@ -3914,16 +3953,23 @@ export default function Chapters() {
     isSingleStorySceneOutlineCustomized,
     knownStructureChapterCount,
     projectDefaultCreativeMode,
+    projectDefaultPlotStage,
+    projectDefaultQualityNotes,
+    projectDefaultQualityPreset,
     projectDefaultStoryFocus,
     resolvedSingleStoryCreationBrief,
     saveSingleStoryCreationSnapshot,
     selectedCreativeMode,
     selectedModel,
     selectedPlotStage,
+    selectedQualityNotes,
+    selectedQualityPreset,
     selectedStoryFocus,
     setSelectedCreativeMode,
     setSelectedModel,
     setSelectedPlotStage,
+    setSelectedQualityNotes,
+    setSelectedQualityPreset,
     setSelectedStoryFocus,
     setSingleStoryBeatPlannerDraft,
     setSingleStoryCreationBriefDraft,
@@ -4458,6 +4504,8 @@ export default function Chapters() {
             batchSelectedCreativeMode={batchSelectedCreativeMode}
             batchSelectedModel={batchSelectedModel}
             batchSelectedPlotStage={batchSelectedPlotStage}
+            batchSelectedQualityNotes={batchSelectedQualityNotes}
+            batchSelectedQualityPreset={batchSelectedQualityPreset}
             batchSelectedStoryFocus={batchSelectedStoryFocus}
             batchStartChapterOptions={batchStartChapterOptions}
             batchStoryBeatPlannerDraft={batchStoryBeatPlannerDraft}
@@ -4481,6 +4529,9 @@ export default function Chapters() {
             modal={modal}
             knownStructureChapterCount={knownStructureChapterCount}
             projectDefaultCreativeMode={projectDefaultCreativeMode}
+            projectDefaultPlotStage={projectDefaultPlotStage}
+            projectDefaultQualityNotes={projectDefaultQualityNotes}
+            projectDefaultQualityPreset={projectDefaultQualityPreset}
             projectDefaultStoryFocus={projectDefaultStoryFocus}
             resolvedBatchStoryCreationBrief={resolvedBatchStoryCreationBrief}
             batchStoryCreationPromptLayerLabels={batchStoryCreationPromptLayerLabels}
@@ -4494,6 +4545,8 @@ export default function Chapters() {
             setBatchSelectedCreativeMode={setBatchSelectedCreativeMode}
             setBatchSelectedModel={setBatchSelectedModel}
             setBatchSelectedPlotStage={setBatchSelectedPlotStage}
+            setBatchSelectedQualityNotes={setBatchSelectedQualityNotes}
+            setBatchSelectedQualityPreset={setBatchSelectedQualityPreset}
             setBatchSelectedStoryFocus={setBatchSelectedStoryFocus}
             setBatchStoryBeatPlannerDraft={setBatchStoryBeatPlannerDraft}
             setBatchStoryCreationBriefDraft={setBatchStoryCreationBriefDraft}

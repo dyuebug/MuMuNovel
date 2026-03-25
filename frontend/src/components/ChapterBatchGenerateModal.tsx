@@ -46,6 +46,7 @@ import {
 } from '../utils/creationPresetsBatch';
 import { buildCreationBlueprint, buildVolumePacingPlan } from '../utils/creationPresetsStory';
 import { CREATION_PLOT_STAGE_OPTIONS, CREATION_PRESETS, getCreationPresetByModes } from '../utils/creationPresetsCore';
+import { QUALITY_PRESET_OPTIONS } from '../utils/generationPreferenceOptions';
 import {
   formatActiveStoryRepairUpdatedAt,
   getActiveStoryRepairScopeLabel,
@@ -181,6 +182,8 @@ function ChapterBatchGenerateModal(props: ChapterBatchGenerateModalProps) {
     batchSelectedCreativeMode,
     batchSelectedModel,
     batchSelectedPlotStage,
+    batchSelectedQualityNotes,
+    batchSelectedQualityPreset,
     batchSelectedStoryFocus,
     batchStartChapterOptions,
     batchStoryBeatPlannerDraft,
@@ -204,6 +207,9 @@ function ChapterBatchGenerateModal(props: ChapterBatchGenerateModalProps) {
     modal,
     knownStructureChapterCount,
     projectDefaultCreativeMode,
+    projectDefaultPlotStage,
+    projectDefaultQualityNotes,
+    projectDefaultQualityPreset,
     projectDefaultStoryFocus,
     resolvedBatchStoryCreationBrief,
     batchStoryCreationPromptLayerLabels,
@@ -217,6 +223,8 @@ function ChapterBatchGenerateModal(props: ChapterBatchGenerateModalProps) {
     setBatchSelectedCreativeMode,
     setBatchSelectedModel,
     setBatchSelectedPlotStage,
+    setBatchSelectedQualityNotes,
+    setBatchSelectedQualityPreset,
     setBatchSelectedStoryFocus,
     setBatchStoryBeatPlannerDraft,
     setBatchStoryCreationBriefDraft,
@@ -1185,6 +1193,63 @@ const batchStoryInsightCards = useMemo(
                   </div>
                 </Form.Item>
               </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: `repeat(auto-fit, minmax(${isMobile ? 220 : 260}px, 1fr))`,
+                  gap: 12,
+                  marginTop: 12,
+                }}
+              >
+                <Form.Item
+                  label="质量预设"
+                  tooltip="控制这一批章节更偏推进、氛围还是表达压缩"
+                  style={{ marginBottom: 0 }}
+                >
+                  <Select
+                    placeholder="留空=项目默认"
+                    value={batchSelectedQualityPreset}
+                    onChange={setBatchSelectedQualityPreset}
+                    allowClear
+                    optionLabelProp="label"
+                  >
+                    {QUALITY_PRESET_OPTIONS.map((option) => (
+                      <Select.Option key={option.value} value={option.value} label={option.label}>
+                        <div>{option.label}</div>
+                        <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{option.description}</div>
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+                <Form.Item
+                  label="额外质量要求"
+                  tooltip="补充你对这一批章节语言、节奏或章尾牵引的偏好"
+                  style={{ marginBottom: 0 }}
+                >
+                  <TextArea
+                    value={batchSelectedQualityNotes}
+                    onChange={(event) => setBatchSelectedQualityNotes(event.target.value)}
+                    placeholder="例如：减少解释性旁白，优先让冲突和章尾牵引落在动作与对话里。"
+                    autoSize={{ minRows: 3, maxRows: 5 }}
+                    maxLength={600}
+                    showCount
+                  />
+                </Form.Item>
+              </div>
+              <Space size={8} style={{ marginTop: 12 }}>
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setBatchSelectedCreativeMode(projectDefaultCreativeMode);
+                    setBatchSelectedStoryFocus(projectDefaultStoryFocus);
+                    setBatchSelectedPlotStage(projectDefaultPlotStage);
+                    setBatchSelectedQualityPreset(projectDefaultQualityPreset);
+                    setBatchSelectedQualityNotes(projectDefaultQualityNotes);
+                  }}
+                >
+                  恢复项目默认
+                </Button>
+              </Space>
             </Card>
 
 
