@@ -1,7 +1,7 @@
 import pytest
 from types import SimpleNamespace
 
-from app.schemas.regeneration import ChapterRegenerateRequest
+from app.schemas.regeneration import ChapterRegenerateRequest, PreserveElementsConfig
 from app.services.chapter_regenerator import ChapterRegenerator
 from app.services.prompt_service import PromptService
 
@@ -10,8 +10,8 @@ def test_should_merge_story_repair_guidance_and_auto_focus_areas():
     regenerator = ChapterRegenerator(ai_service=None)
     analysis = SimpleNamespace(
         suggestions=[
-            "???????????????",
-            "??????????????",
+            "让主角在冲突中主动暴露代价",
+            "把章尾悬念落在新的失衡上",
         ],
         conflict_level=4,
         pacing_score=5.8,
@@ -21,22 +21,32 @@ def test_should_merge_story_repair_guidance_and_auto_focus_areas():
     request = ChapterRegenerateRequest(
         modification_source="mixed",
         selected_suggestion_indices=[0, 1],
-        custom_instructions="???????????????",
+        custom_instructions="增强主角与线人之间的信任撕裂。",
+        preserve_elements=PreserveElementsConfig(
+            preserve_structure=True,
+            preserve_dialogues=["别回头"],
+            preserve_plot_points=["线人暴露身份"],
+            preserve_character_traits=True,
+        ),
         target_word_count=2200,
         focus_areas=[],
-        story_repair_summary="????????????",
-        story_repair_targets=["????????????", "??????????"],
-        story_preserve_strengths=["??????????"],
+        story_repair_summary="补强冲突升级与章尾牵引。",
+        story_repair_targets=["把主冲突推到不可回避的阶段", "让章尾留下更尖锐的未决问题"],
+        story_preserve_strengths=["保留现有对峙场面的压迫感"],
     )
 
     instructions = regenerator._build_modification_instructions(analysis, request)
 
-    assert "????????" in instructions
-    assert "???????????" in instructions
-    assert "??????????" in instructions
-    assert "????" in instructions
-    assert "????" in instructions
-    assert "????" in instructions
+    assert "# 修改要求" in instructions
+    assert "## 选中的 AI 建议" in instructions
+    assert "## 额外修改要求" in instructions
+    assert "## 🩺 剧情质量修复目标" in instructions
+    assert "## 🎯 重点优化方向（含自动补充）" in instructions
+    assert "## 需要保留的内容" in instructions
+    assert "保留原有段落结构和主要事件顺序" in instructions
+    assert "保留以下对白：" in instructions
+    assert "保留以下关键情节点：" in instructions
+    assert "保留人物既有性格、语气与核心关系定位" in instructions
 
 
 @pytest.mark.asyncio

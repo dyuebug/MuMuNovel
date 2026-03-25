@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import re
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 
@@ -131,9 +132,9 @@ def _extract_rule_value(metrics: Mapping[str, Any], rule: RepairMetricRule) -> O
 
 
 QUALITY_STAGE_LABELS: Dict[str, str] = {
-    "opening": "??",
-    "development": "??",
-    "ending": "??",
+    "opening": "开篇",
+    "development": "发展段",
+    "ending": "收束段",
 }
 
 
@@ -181,11 +182,148 @@ def _normalize_runtime_items(values: Any, *, limit: int = 4) -> list[str]:
     return items
 
 
+_CONTINUITY_LEDGER_SPECS: tuple[tuple[str, str, str, str], ...] = (
+    ("character_state_ledger", "character_continuity", "Character continuity ledger", "Carry forward the character continuity ledger: {item}"),
+    ("relationship_state_ledger", "relationship_continuity", "Relationship continuity ledger", "Express the relationship ledger through dialogue, alignment, or exchange: {item}"),
+    ("foreshadow_state_ledger", "foreshadow_continuity", "Foreshadow continuity ledger", "Advance the foreshadow ledger toward payoff: {item}"),
+    ("organization_state_ledger", "organization_continuity", "Organization continuity ledger", "Carry forward the organization continuity ledger through command, resource, or territory change: {item}"),
+    ("career_state_ledger", "career_continuity", "Career continuity ledger", "Carry forward the career growth ledger through skill use, bottleneck, or cost: {item}"),
+)
+
+
+
+def _extract_continuity_anchor_candidates(item: Any) -> list[str]:
+    text = str(item or "").strip()
+    if not text:
+        return []
+    head = re.split(r"[:：]", text, maxsplit=1)[0].strip() or text
+    segments = [
+        segment.strip()
+        for segment in re.split(r"[、,\/|&＆和与+·•]+", head)
+        if segment.strip()
+    ]
+    if not segments:
+        segments = [head]
+    tokens: list[str] = []
+    seen: set[str] = set()
+    cleanup_translation = str.maketrans({
+        "?": " ",
+        "?": " ",
+        "[": " ",
+        "]": " ",
+        "?": " ",
+        "?": " ",
+        "(": " ",
+        ")": " ",
+        "<": " ",
+        ">": " ",
+        "?": " ",
+        "?": " ",
+        "?": " ",
+        "?": " ",
+        '"': " ",
+        "'": " ",
+        "`": " ",
+    })
+    for segment in segments[:3]:
+        cleaned = segment.translate(cleanup_translation)
+        for token in re.findall(r"[A-Za-z0-9_\-]{2,}|[\u4E00-\u9FFF]{2,}", cleaned):
+            normalized = token.strip().lower()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            tokens.append(normalized)
+    if tokens:
+        return tokens[:3]
+
+    fallback = re.sub(r"\s+", "", head).lower()
+    return [fallback] if len(fallback) >= 2 else []
+
+
+def build_story_continuity_preflight(
+    content: str,
+    runtime_context: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    if not isinstance(runtime_context, Mapping):
+        return {}
+
+    normalized_content = re.sub(r"\s+", "", str(content or "")).lower()
+    if not normalized_content:
+        return {}
+
+    warnings: list[Dict[str, Any]] = []
+    focus_areas: list[str] = []
+    repair_targets: list[str] = []
+    checked_item_count = 0
+    missing_item_count = 0
+
+    for ledger_key, focus_area, ledger_label, repair_template in _CONTINUITY_LEDGER_SPECS:
+        for item in _normalize_runtime_items(runtime_context.get(ledger_key), limit=3):
+            checked_item_count += 1
+            anchors = _extract_continuity_anchor_candidates(item)
+            matched_anchor_count = len({anchor for anchor in anchors if len(anchor) >= 2 and anchor in normalized_content})
+            required_match_count = 2 if ledger_key in {"relationship_state_ledger", "career_state_ledger"} and len(anchors) >= 2 else 1
+            is_matched = matched_anchor_count >= required_match_count
+            if is_matched:
+                continue
+            missing_item_count += 1
+            if focus_area not in focus_areas:
+                focus_areas.append(focus_area)
+            target = repair_template.format(item=item)
+            if target not in repair_targets:
+                repair_targets.append(target)
+            warnings.append({
+                "ledger_key": ledger_key,
+                "ledger_label": ledger_label,
+                "focus_area": focus_area,
+                "item": item,
+                "anchors": anchors,
+                "matched_anchor_count": matched_anchor_count,
+                "required_match_count": required_match_count,
+            })
+            if len(warnings) >= 4:
+                break
+        if len(warnings) >= 4:
+            break
+
+    if not warnings:
+        return {
+            "status": "ok",
+            "checked_item_count": checked_item_count,
+            "warning_count": 0,
+            "warnings": [],
+            "focus_areas": [],
+            "repair_targets": [],
+            "summary": "",
+        }
+
+    labels = ", ".join(dict.fromkeys(warning["ledger_label"] for warning in warnings))
+    summary = f"Current chapter misses explicit handoff for {missing_item_count} continuity ledger items."
+    if labels: summary = f"Current chapter misses explicit handoff for {missing_item_count} continuity ledger items. Prioritize {labels}."
+    return {
+        "status": "warning",
+        "checked_item_count": checked_item_count,
+        "warning_count": len(warnings),
+        "missing_item_count": missing_item_count,
+        "warnings": warnings,
+        "focus_areas": focus_areas,
+        "repair_targets": repair_targets[:4],
+        "summary": summary,
+    }
+
+
 def _extract_quality_runtime_context(metrics: Mapping[str, Any]) -> Dict[str, Any]:
     if not isinstance(metrics, Mapping):
         return {}
     context = metrics.get("quality_runtime_context")
     return dict(context) if isinstance(context, Mapping) else {}
+
+
+def _extract_history_runtime_snapshot(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        return {}
+    runtime_snapshot = payload.get("story_runtime_snapshot")
+    return dict(runtime_snapshot) if isinstance(runtime_snapshot, Mapping) else {}
 
 
 def _resolve_quality_stage(runtime_context: Mapping[str, Any]) -> Optional[str]:
@@ -211,13 +349,19 @@ def _build_runtime_pressure(runtime_context: Mapping[str, Any]) -> Dict[str, Any
     character_states = _normalize_runtime_items(runtime_context.get("character_state_ledger"), limit=6)
     relationship_states = _normalize_runtime_items(runtime_context.get("relationship_state_ledger"), limit=6)
     foreshadow_states = _normalize_runtime_items(runtime_context.get("foreshadow_state_ledger"), limit=6)
+    organization_states = _normalize_runtime_items(runtime_context.get("organization_state_ledger"), limit=6)
+    career_states = _normalize_runtime_items(runtime_context.get("career_state_ledger"), limit=6)
     return {
         "character_state_count": len(character_states),
         "relationship_state_count": len(relationship_states),
         "foreshadow_state_count": len(foreshadow_states),
+        "organization_state_count": len(organization_states),
+        "career_state_count": len(career_states),
         "character_state_items": character_states[:3],
         "relationship_state_items": relationship_states[:3],
         "foreshadow_state_items": foreshadow_states[:3],
+        "organization_state_items": organization_states[:3],
+        "career_state_items": career_states[:3],
     }
 
 
@@ -256,6 +400,12 @@ def _resolve_metric_threshold_adjustments(runtime_context: Mapping[str, Any]) ->
         adjustments["conflict_chain_hit_rate"] = adjustments.get("conflict_chain_hit_rate", 0.0) + 1.0
     if pressure["character_state_count"] >= 3:
         adjustments["outline_alignment_rate"] = adjustments.get("outline_alignment_rate", 0.0) + 1.0
+    if pressure["organization_state_count"] >= 2:
+        adjustments["rule_grounding_hit_rate"] = adjustments.get("rule_grounding_hit_rate", 0.0) + 1.0
+        adjustments["conflict_chain_hit_rate"] = adjustments.get("conflict_chain_hit_rate", 0.0) + 1.0
+    if pressure["career_state_count"] >= 2:
+        adjustments["outline_alignment_rate"] = adjustments.get("outline_alignment_rate", 0.0) + 1.0
+        adjustments["payoff_chain_rate"] = adjustments.get("payoff_chain_rate", 0.0) + 1.0
     return adjustments
 
 
@@ -380,13 +530,124 @@ def _build_empty_guidance() -> Dict[str, Any]:
     }
 
 
+def _resolve_quality_gate_recommended_action(
+    *,
+    focus_areas: Sequence[str],
+    weakest: Optional[Mapping[str, Any]],
+    continuity_preflight: Mapping[str, Any],
+) -> Dict[str, Optional[str]]:
+    ordered_areas: list[str] = []
+    seen: set[str] = set()
+
+    def add_area(value: Any) -> None:
+        area = str(value or "").strip()
+        if not area or area in seen:
+            return
+        seen.add(area)
+        ordered_areas.append(area)
+
+    for area in continuity_preflight.get("focus_areas") or []:
+        add_area(area)
+    for area in focus_areas or []:
+        add_area(area)
+    if weakest is not None:
+        add_area(weakest.get("focus_area"))
+
+    action_rules: Dict[str, tuple[str, str, str]] = {
+        "opening": ("rewrite_opening", "重写开场钩子", "rewrite"),
+        "dialogue": ("strengthen_dialogue", "增强对白张力", "dialogue"),
+        "relationship_continuity": ("strengthen_dialogue", "增强对白张力", "dialogue"),
+        "payoff": ("patch_payoff", "补强回报兑现", "payoff"),
+        "foreshadow_continuity": ("patch_payoff", "补强回报兑现", "payoff"),
+        "cliffhanger": ("patch_payoff", "补强回报兑现", "payoff"),
+        "outline": ("bridge_scene", "补桥关键场景", "bridge"),
+        "conflict": ("bridge_scene", "补桥关键场景", "bridge"),
+        "pacing": ("bridge_scene", "补桥关键场景", "bridge"),
+        "character_continuity": ("bridge_scene", "补桥关键场景", "bridge"),
+        "organization_continuity": ("bridge_scene", "补桥关键场景", "bridge"),
+        "career_continuity": ("bridge_scene", "补桥关键场景", "bridge"),
+        "rule_grounding": ("grounding_pass", "强化设定落地", "grounding"),
+    }
+
+    for area in ordered_areas:
+        matched = action_rules.get(area)
+        if not matched:
+            continue
+        action, label, mode = matched
+        return {
+            "recommended_action": action,
+            "recommended_action_label": label,
+            "recommended_action_mode": mode,
+            "recommended_focus_area": area,
+        }
+
+    return {
+        "recommended_action": None,
+        "recommended_action_label": None,
+        "recommended_action_mode": None,
+        "recommended_focus_area": None,
+    }
+
+
+def _collect_recent_failed_metric_counts(
+    history: Sequence[Mapping[str, Any]],
+    *,
+    scope: str,
+) -> list[Dict[str, Any]]:
+    counts: Dict[str, Dict[str, Any]] = {}
+    for item in history:
+        gate = item.get("quality_gate") if isinstance(item.get("quality_gate"), Mapping) else build_quality_gate_decision(item, scope=scope)
+        for metric in gate.get("failed_metrics") or []:
+            key = str(metric.get("key") or metric.get("label") or "").strip()
+            if not key:
+                continue
+            entry = counts.setdefault(
+                key,
+                {
+                    "key": key,
+                    "label": metric.get("label") or key,
+                    "focus_area": metric.get("focus_area"),
+                    "count": 0,
+                },
+            )
+            entry["count"] += 1
+
+    return sorted(
+        counts.values(),
+        key=lambda item: (-int(item.get("count") or 0), str(item.get("label") or item.get("key") or "")),
+    )[:6]
+
+
+def _collect_recent_quality_gate_counts(
+    history: Sequence[Mapping[str, Any]],
+    *,
+    scope: str,
+) -> tuple[Dict[str, int], int, int]:
+    gate_counts: Dict[str, int] = {"pass": 0, "repairable": 0, "blocked": 0, "unknown": 0}
+    manual_review_count = 0
+    auto_repair_count = 0
+
+    for item in history:
+        gate = item.get("quality_gate") if isinstance(item.get("quality_gate"), Mapping) else build_quality_gate_decision(item, scope=scope)
+        status = str(gate.get("status") or "unknown")
+        gate_counts[status] = gate_counts.get(status, 0) + 1
+
+        decision = str(gate.get("decision") or "")
+        if decision == "manual_review":
+            manual_review_count += 1
+        elif decision == "auto_repair":
+            auto_repair_count += 1
+
+    return gate_counts, manual_review_count, auto_repair_count
+
+
 def _build_empty_quality_gate(*, overall_score: Optional[float] = None) -> Dict[str, Any]:
     return {
         "status": "unknown",
         "decision": "unknown",
-        "label": "待补充诊断",
-        "summary": "缺少有效质量指标，暂无法给出门禁决策。",
-        "reason": "缺少可用的质量指标。",
+        "label": "待评估",
+        "summary": "尚未生成质量闸门结果。",
+        "reason": "缺少质量指标",
         "overall_score": overall_score,
         "weak_metric_count": 0,
         "failed_metrics": [],
@@ -398,6 +659,15 @@ def _build_empty_quality_gate(*, overall_score: Optional[float] = None) -> Dict[
         "weakest_metric_key": None,
         "weakest_metric_label": None,
         "weakest_metric_value": None,
+        "recommended_action": None,
+        "recommended_action_label": None,
+        "recommended_action_mode": None,
+        "recommended_focus_area": None,
+        "continuity_warning_count": 0,
+        "continuity_preflight": None,
+        "manual_review_threshold": None,
+        "allow_save_threshold": None,
+        "quality_runtime_pressure": None,
     }
 
 
@@ -423,6 +693,15 @@ def extract_quality_metrics_from_history_payload(
         return None
 
     normalized_metrics = dict(metrics)
+    runtime_snapshot = _extract_history_runtime_snapshot(payload)
+    existing_runtime_context = normalized_metrics.get("quality_runtime_context")
+    if runtime_snapshot:
+        if isinstance(existing_runtime_context, Mapping):
+            merged_runtime_context = dict(runtime_snapshot)
+            merged_runtime_context.update(dict(existing_runtime_context))
+            normalized_metrics["quality_runtime_context"] = merged_runtime_context
+        else:
+            normalized_metrics["quality_runtime_context"] = dict(runtime_snapshot)
     if not isinstance(normalized_metrics.get("repair_guidance"), dict):
         normalized_metrics["repair_guidance"] = build_story_repair_guidance(normalized_metrics, scope=scope)
     if not isinstance(normalized_metrics.get("quality_gate"), dict):
@@ -454,6 +733,14 @@ def _aggregate_quality_runtime_context(history: Sequence[Mapping[str, Any]]) -> 
         [entry for ctx in contexts[-3:] for entry in _normalize_runtime_items(ctx.get("foreshadow_state_ledger"), limit=4)],
         limit=4,
     )
+    merged["organization_state_ledger"] = _normalize_runtime_items(
+        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_items(ctx.get("organization_state_ledger"), limit=4)],
+        limit=4,
+    )
+    merged["career_state_ledger"] = _normalize_runtime_items(
+        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_items(ctx.get("career_state_ledger"), limit=4)],
+        limit=4,
+    )
     chapter_numbers = [int(value) for value in (_safe_float(ctx.get("current_chapter_number")) for ctx in contexts) if value is not None]
     if chapter_numbers:
         merged["chapter_number_span"] = [min(chapter_numbers), max(chapter_numbers)]
@@ -467,12 +754,75 @@ def _aggregate_quality_runtime_context(history: Sequence[Mapping[str, Any]]) -> 
     return merged
 
 
+def _extract_continuity_preflight(metrics: Mapping[str, Any]) -> Dict[str, Any]:
+    if not isinstance(metrics, Mapping):
+        return {}
+    payload = metrics.get("continuity_preflight")
+    return dict(payload) if isinstance(payload, Mapping) else {}
+
+
+def _aggregate_continuity_preflight(history: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    recent_items = [
+        _extract_continuity_preflight(item)
+        for item in history[-3:]
+        if isinstance(item, Mapping) and _extract_continuity_preflight(item)
+    ]
+    if not recent_items:
+        return {}
+
+    warnings: list[Dict[str, Any]] = []
+    focus_areas: list[str] = []
+    repair_targets: list[str] = []
+    warning_count = 0
+    missing_item_count = 0
+    checked_item_count = 0
+
+    for item in recent_items:
+        warning_count += int(item.get("warning_count") or 0)
+        missing_item_count += int(item.get("missing_item_count") or 0)
+        checked_item_count += int(item.get("checked_item_count") or 0)
+        for focus_area in item.get("focus_areas") or []:
+            if isinstance(focus_area, str) and focus_area and focus_area not in focus_areas:
+                focus_areas.append(focus_area)
+        for repair_target in item.get("repair_targets") or []:
+            if isinstance(repair_target, str) and repair_target and repair_target not in repair_targets:
+                repair_targets.append(repair_target)
+        for warning in item.get("warnings") or []:
+            if not isinstance(warning, Mapping):
+                continue
+            normalized_warning = dict(warning)
+            if normalized_warning not in warnings:
+                warnings.append(normalized_warning)
+            if len(warnings) >= 4:
+                break
+        if len(warnings) >= 4:
+            break
+
+    if warning_count <= 0:
+        return {}
+
+    labels = ", ".join(dict.fromkeys(str(warning.get("ledger_label") or "") for warning in warnings if warning.get("ledger_label")))
+    summary = f"Recent chapters show {warning_count} continuity handoff gaps."
+    if labels:
+        summary = f"Recent chapters show {warning_count} continuity handoff gaps. Prioritize {labels}."
+    return {
+        "status": "warning",
+        "checked_item_count": checked_item_count,
+        "warning_count": warning_count,
+        "missing_item_count": missing_item_count,
+        "warnings": warnings,
+        "focus_areas": focus_areas[:4],
+        "repair_targets": repair_targets[:4],
+        "summary": summary,
+    }
+
+
 def build_quality_metrics_summary(
     history: Sequence[Mapping[str, Any]],
     *,
     scope: str = "batch",
 ) -> Optional[Dict[str, Any]]:
-    """?????????????????"""
+    """汇总历史质量指标并提炼趋势、闸门与修复信号。"""
     normalized_history = [dict(item) for item in history if isinstance(item, Mapping) and item]
     if not normalized_history:
         return None
@@ -497,6 +847,7 @@ def build_quality_metrics_summary(
 
     recent_focus_areas: list[str] = []
     seen_focus: set[str] = set()
+    recent_history = normalized_history[-5:]
     for item in normalized_history[-3:]:
         guidance = item.get("repair_guidance") if isinstance(item.get("repair_guidance"), Mapping) else build_story_repair_guidance(item, scope=scope)
         for area in guidance.get("focus_areas") or []:
@@ -508,6 +859,12 @@ def build_quality_metrics_summary(
                 break
         if len(recent_focus_areas) >= 4:
             break
+
+    recent_failed_metric_counts = _collect_recent_failed_metric_counts(recent_history, scope=scope)
+    quality_gate_counts, recent_manual_review_count, recent_auto_repair_count = _collect_recent_quality_gate_counts(
+        recent_history,
+        scope=scope,
+    )
 
     summary = {
         "avg_overall_score": round(sum(overall_list) / max(len(overall_list), 1), 1),
@@ -523,9 +880,16 @@ def build_quality_metrics_summary(
         "overall_score_delta": trend_delta,
         "overall_score_trend": trend_direction,
         "recent_focus_areas": recent_focus_areas,
+        "recent_failed_metric_counts": recent_failed_metric_counts,
+        "quality_gate_counts": quality_gate_counts,
+        "recent_manual_review_count": recent_manual_review_count,
+        "recent_auto_repair_count": recent_auto_repair_count,
     }
     if runtime_context:
         summary["quality_runtime_context"] = runtime_context
+    continuity_preflight = _aggregate_continuity_preflight(normalized_history)
+    if continuity_preflight:
+        summary["continuity_preflight"] = continuity_preflight
     summary["repair_guidance"] = build_story_repair_guidance(summary, scope=scope)
     summary["quality_gate"] = build_quality_gate_decision(summary, scope=scope)
     return summary
@@ -536,12 +900,13 @@ def build_story_repair_guidance(
     *,
     scope: str = "chapter",
 ) -> Dict[str, Any]:
-    """????????????????"""
+    """根据质量指标生成修复指引与重点补强方向。"""
 
     if not isinstance(metrics, Mapping):
         return _build_empty_guidance()
 
     runtime_context = _extract_quality_runtime_context(metrics)
+    continuity_preflight = _extract_continuity_preflight(metrics)
     stage = _resolve_quality_stage(runtime_context)
     stage_label = QUALITY_STAGE_LABELS.get(stage, "")
     analysis = _split_metric_items(_collect_metric_items(metrics, runtime_context=runtime_context))
@@ -558,34 +923,55 @@ def build_story_repair_guidance(
         repair_targets = [weakest["repair_target"]]
 
     preserve_strengths = list(dict.fromkeys(item["preserve_hint"] for item in strength_items))
-    if not preserve_strengths and weakest["label"] != "?????":
-        preserve_strengths = ["???????????????????????"]
+    if not preserve_strengths and weakest["label"] != "综合质量":
+        preserve_strengths = ["保留当前已成立的章节优势与角色辨识度。"]
 
     focus_areas = list(dict.fromkeys(item["focus_area"] for item in low_items))
     if not focus_areas:
         focus_areas = [weakest["focus_area"]]
 
+    continuity_targets = [
+        str(target).strip()
+        for target in (continuity_preflight.get("repair_targets") or [])
+        if str(target).strip()
+    ]
+    continuity_focus_areas = [
+        str(area).strip()
+        for area in (continuity_preflight.get("focus_areas") or [])
+        if str(area).strip()
+    ]
+    if continuity_targets:
+        repair_targets = continuity_targets + repair_targets
+    if continuity_focus_areas:
+        focus_areas = continuity_focus_areas + focus_areas
+
     pressure = _build_runtime_pressure(runtime_context)
     if "payoff" in focus_areas and pressure["foreshadow_state_items"]:
-        repair_targets.insert(0, f"?????????{' / '.join(pressure['foreshadow_state_items'][:2])}?")
-    if any(area in focus_areas for area in ("conflict", "outline", "pacing")) and pressure["character_state_items"]:
-        repair_targets.append(f"??????????????{' / '.join(pressure['character_state_items'][:2])}?")
-    if any(area in focus_areas for area in ("dialogue", "conflict")) and pressure["relationship_state_items"]:
-        repair_targets.append(f"?????????????{' / '.join(pressure['relationship_state_items'][:2])}?")
+        repair_targets.insert(0, f"优先回应伏笔账本：{' / '.join(pressure['foreshadow_state_items'][:2])}。")
+    if any(area in focus_areas for area in ("conflict", "outline", "pacing", "character_continuity")) and pressure["character_state_items"]:
+        repair_targets.append(f"把角色当前状态落实进动作与代价：{' / '.join(pressure['character_state_items'][:2])}。")
+    if any(area in focus_areas for area in ("dialogue", "conflict", "relationship_continuity")) and pressure["relationship_state_items"]:
+        repair_targets.append(f"把关系变化落实进对白或站队：{' / '.join(pressure['relationship_state_items'][:2])}。")
     repair_targets = list(dict.fromkeys(repair_targets))[:4]
+    focus_areas = list(dict.fromkeys(focus_areas))[:4]
 
+    continuity_summary = str(continuity_preflight.get("summary") or "").strip()
     if low_items:
         labels = " / ".join(item["label"] for item in low_items)
         if stage_label:
-            summary = f"{scope_label}????{stage_label}????????{labels}????????????????????????"
+            summary = f"{scope_label}在{stage_label}阶段主要短板集中在{labels}，建议按优先级修补。"
         else:
-            summary = f"{scope_label}?????{labels}????????????????????????"
+            summary = f"{scope_label}当前主要短板集中在{labels}，建议按优先级修补。"
+        if continuity_summary:
+            summary = f"{summary} {continuity_summary}"
+    elif continuity_summary:
+        summary = continuity_summary
     else:
         strongest_label = strength_items[0]["label"] if strength_items else weakest["label"]
         if stage_label:
-            summary = f"{scope_label}????{stage_label}???????????????{strongest_label}??????????????????"
+            summary = f"{scope_label}在{stage_label}阶段整体稳定，可继续保持{strongest_label}上的优势。"
         else:
-            summary = f"{scope_label}????????????{strongest_label}??????????????????"
+            summary = f"{scope_label}整体稳定，可继续保持{strongest_label}上的优势。"
 
     return {
         "summary": summary,
@@ -600,18 +986,18 @@ def build_story_repair_guidance(
         "quality_runtime_pressure": pressure,
     }
 
-
 def build_quality_gate_decision(
     metrics: Mapping[str, Any],
     *,
     scope: str = "chapter",
 ) -> Dict[str, Any]:
-    """???????????????"""
+    """根据质量指标生成质量闸门结论与推荐动作。"""
 
     if not isinstance(metrics, Mapping):
         return _build_empty_quality_gate()
 
     runtime_context = _extract_quality_runtime_context(metrics)
+    continuity_preflight = _extract_continuity_preflight(metrics)
     thresholds = _resolve_gate_thresholds(runtime_context)
     stage = thresholds.get("stage")
     stage_label = thresholds.get("stage_label") or ""
@@ -645,48 +1031,53 @@ def build_quality_gate_decision(
     focus_areas = list(dict.fromkeys(item["focus_area"] for item in failed_source_items))
     repair_targets = list(dict.fromkeys(item["repair_target"] for item in failed_source_items))
     pressure = _build_runtime_pressure(runtime_context)
+    recommended_action = _resolve_quality_gate_recommended_action(
+        focus_areas=focus_areas,
+        weakest=weakest,
+        continuity_preflight=continuity_preflight,
+    )
 
     blocked_reasons: list[str] = []
     if overall_score is not None and overall_score < float(thresholds["manual_review_score"]):
-        blocked_reasons.append(f"??? {overall_score:.1f} ????????")
+        blocked_reasons.append(f"总分 {overall_score:.1f} 低于人工复核线")
     if weak_metric_count >= int(thresholds["weak_metric_block_count"]):
-        blocked_reasons.append(f"?? {weak_metric_count} ?????")
+        blocked_reasons.append(f"存在 {weak_metric_count} 个弱项指标")
     if normalized_gap >= float(thresholds["normalized_gap"]):
-        blocked_reasons.append(f"????{weakest['label']}???????")
+        blocked_reasons.append(f"最弱项{weakest['label']}缺口过大")
     if stage == "ending" and pressure["foreshadow_state_count"] >= 3 and weakest["focus_area"] == "payoff":
-        blocked_reasons.append("????????????????????")
+        blocked_reasons.append("收束段伏笔压力过高，需人工复核兑现节奏")
 
     scope_label = _resolve_scope_label(scope)
     if blocked_reasons:
         status = "blocked"
         decision = "manual_review"
-        label = "?????"
-        reason = "?".join(blocked_reasons)
+        label = "需复核"
+        reason = "；".join(blocked_reasons)
         if stage_label:
-            summary = f"{scope_label}?{stage_label}??????????????????????????????????"
+            summary = f"{scope_label}在{stage_label}阶段暂不建议直接保存，建议先人工复核再决定是否重写。"
         else:
-            summary = f"{scope_label}??????????????????????????????"
+            summary = f"{scope_label}暂不建议直接保存，建议先人工复核再决定是否重写。"
     elif weak_metric_count > 0 or (overall_score is not None and overall_score < float(thresholds["allow_save_score"])):
         status = "repairable"
         decision = "auto_repair"
-        label = "??????"
+        label = "可修复"
         if weak_metric_count > 0:
-            reason = f"?? {weak_metric_count} ????????????????????"
+            reason = f"存在 {weak_metric_count} 个待修复弱项"
         else:
-            reason = "???????????????????????"
+            reason = "综合分未达直接保存阈值"
         if stage_label:
-            summary = f"{scope_label}?{stage_label}??????????????????????????????"
+            summary = f"{scope_label}在{stage_label}阶段仍有明显短板，建议先按修复指引补强后再保存。"
         else:
-            summary = f"{scope_label}????????????????????????????"
+            summary = f"{scope_label}仍有明显短板，建议先按修复指引补强后再保存。"
     else:
         status = "pass"
         decision = "allow_save"
-        label = "????"
-        reason = "?????????????????"
+        label = "可保存"
+        reason = "质量指标达到保存要求"
         if stage_label:
-            summary = f"{scope_label}?{stage_label}??????????????????????"
+            summary = f"{scope_label}在{stage_label}阶段通过质量闸门，可继续保存或进入下一步。"
         else:
-            summary = f"{scope_label}????????????????????"
+            summary = f"{scope_label}已通过质量闸门，可继续保存或进入下一步。"
 
     return {
         "status": status,
@@ -707,7 +1098,27 @@ def build_quality_gate_decision(
         "weakest_metric_value": weakest["raw_value"],
         "quality_stage": stage or "",
         "quality_stage_label": stage_label,
+        "continuity_warning_count": int(continuity_preflight.get("warning_count") or 0),
+        "continuity_preflight": continuity_preflight or None,
         "manual_review_threshold": thresholds["manual_review_score"],
         "allow_save_threshold": thresholds["allow_save_score"],
         "quality_runtime_pressure": pressure,
+        **recommended_action,
     }
+
+
+def test_should_detect_organization_and_career_continuity_gaps():
+    runtime_context = {
+        "organization_state_ledger": ["ShadowGuild: power=72; location=North Dock"],
+        "career_state_ledger": ["Lin/Strategist: stage 3; promotion blocked by council"],
+    }
+
+    preflight = build_story_continuity_preflight(
+        "Lin argued with Su in the archive, but the guild structure and strategist bottleneck were never mentioned.",
+        runtime_context,
+    )
+
+    assert preflight["status"] == "warning"
+    assert preflight["warning_count"] == 2
+    assert "organization_continuity" in preflight["focus_areas"]
+    assert "career_continuity" in preflight["focus_areas"]

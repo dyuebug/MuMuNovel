@@ -1,8 +1,10 @@
 from app.models.project import Project
+from app.services.story_repair_payload_service import StoryRepairPayload
 from app.services.chapter_quality_context_service import (
     StoryGenerationGuidance,
     StoryPacket,
     build_analysis_quality_kwargs,
+    build_chapter_generation_intent,
     build_prompt_quality_kwargs,
     build_story_generation_packet,
     build_story_repair_diagnostic_context,
@@ -339,13 +341,19 @@ def test_should_build_prompt_quality_kwargs_with_story_blueprint_runtime_blocks(
         character_focus_source=["Lin", "Su"],
         foreshadow_payoff_source=["recover the hidden key", "pay off the banquet ambush"],
         character_state_source={
-            "story_character_state_ledger": ["Lin????????"],
+            "story_character_state_ledger": ["Lin: distrust remains visible"],
         },
         relationship_state_source={
-            "story_relationship_state_ledger": ["Lin/Su??????????"],
+            "story_relationship_state_ledger": ["Lin/Su: uneasy alliance under tension"],
         },
         foreshadow_state_source={
-            "story_foreshadow_state_ledger": ["hidden key????????????"],
+            "story_foreshadow_state_ledger": ["hidden key: still missing from the archive"],
+        },
+        organization_state_source={
+            "story_organization_state_ledger": ["Guild: control tightened around the docks"],
+        },
+        career_state_source={
+            "story_career_state_ledger": ["Lin/Strategist: stalled at stage 3"],
         },
     )
 
@@ -357,15 +365,19 @@ def test_should_build_prompt_quality_kwargs_with_story_blueprint_runtime_blocks(
         "recover the hidden key",
         "pay off the banquet ambush",
     ]
-    assert kwargs["story_character_state_ledger"] == ["Lin????????"]
-    assert kwargs["story_relationship_state_ledger"] == ["Lin/Su??????????"]
-    assert kwargs["story_foreshadow_state_ledger"] == ["hidden key????????????"]
+    assert kwargs["story_character_state_ledger"] == ["Lin: distrust remains visible"]
+    assert kwargs["story_relationship_state_ledger"] == ["Lin/Su: uneasy alliance under tension"]
+    assert kwargs["story_foreshadow_state_ledger"] == ["hidden key: still missing from the archive"]
+    assert kwargs["story_organization_state_ledger"] == ["Guild: control tightened around the docks"]
+    assert kwargs["story_career_state_ledger"] == ["Lin/Strategist: stalled at stage 3"]
     assert "The lead must seize the capital before the enemy closes in." in kwargs["story_long_term_goal_block"]
     assert "Lin" in kwargs["story_character_focus_anchor_block"]
     assert "recover the hidden key" in kwargs["story_foreshadow_payoff_plan_block"]
-    assert "Lin????????" in kwargs["story_character_state_ledger_block"]
-    assert "Lin/Su??????????" in kwargs["story_relationship_state_ledger_block"]
-    assert "hidden key????????????" in kwargs["story_foreshadow_state_ledger_block"]
+    assert "Lin: distrust remains visible" in kwargs["story_character_state_ledger_block"]
+    assert "Lin/Su: uneasy alliance under tension" in kwargs["story_relationship_state_ledger_block"]
+    assert "hidden key: still missing from the archive" in kwargs["story_foreshadow_state_ledger_block"]
+    assert "Guild: control tightened around the docks" in kwargs["story_organization_state_ledger_block"]
+    assert "Lin/Strategist: stalled at stage 3" in kwargs["story_career_state_ledger_block"]
     assert "2600" in kwargs["story_pacing_budget_block"]
 
 
@@ -386,13 +398,19 @@ def test_should_build_quality_runtime_context_with_story_ledgers():
         character_focus_source=["Lin", "Su"],
         foreshadow_payoff_source=["recover the hidden key"],
         character_state_source={
-            "story_character_state_ledger": ["Lin????????"],
+            "story_character_state_ledger": ["Lin: distrust remains visible"],
         },
         relationship_state_source={
-            "story_relationship_state_ledger": ["Lin/Su??????????"],
+            "story_relationship_state_ledger": ["Lin/Su: uneasy alliance under tension"],
         },
         foreshadow_state_source={
-            "story_foreshadow_state_ledger": ["hidden key????????????"],
+            "story_foreshadow_state_ledger": ["hidden key: still missing from the archive"],
+        },
+        organization_state_source={
+            "story_organization_state_ledger": ["Guild: control tightened around the docks"],
+        },
+        career_state_source={
+            "story_career_state_ledger": ["Lin/Strategist: stalled at stage 3"],
         },
     )
 
@@ -403,13 +421,19 @@ def test_should_build_quality_runtime_context_with_story_ledgers():
         character_focus_source=["Lin", "Su"],
         foreshadow_payoff_source=["recover the hidden key"],
         character_state_source={
-            "story_character_state_ledger": ["Lin????????"],
+            "story_character_state_ledger": ["Lin: distrust remains visible"],
         },
         relationship_state_source={
-            "story_relationship_state_ledger": ["Lin/Su??????????"],
+            "story_relationship_state_ledger": ["Lin/Su: uneasy alliance under tension"],
         },
         foreshadow_state_source={
-            "story_foreshadow_state_ledger": ["hidden key????????????"],
+            "story_foreshadow_state_ledger": ["hidden key: still missing from the archive"],
+        },
+        organization_state_source={
+            "story_organization_state_ledger": ["Guild: control tightened around the docks"],
+        },
+        career_state_source={
+            "story_career_state_ledger": ["Lin/Strategist: stalled at stage 3"],
         },
     )
 
@@ -419,6 +443,206 @@ def test_should_build_quality_runtime_context_with_story_ledgers():
     assert runtime_context["target_word_count"] == 2800
     assert runtime_context["character_focus"] == ["Lin", "Su"]
     assert runtime_context["foreshadow_payoff_plan"] == ["recover the hidden key"]
-    assert runtime_context["character_state_ledger"] == ["Lin????????"]
-    assert runtime_context["relationship_state_ledger"] == ["Lin/Su??????????"]
-    assert runtime_context["foreshadow_state_ledger"] == ["hidden key????????????"]
+    assert runtime_context["character_state_ledger"] == ["Lin: distrust remains visible"]
+    assert runtime_context["relationship_state_ledger"] == ["Lin/Su: uneasy alliance under tension"]
+    assert runtime_context["foreshadow_state_ledger"] == ["hidden key: still missing from the archive"]
+    assert runtime_context["organization_state_ledger"] == ["Guild: control tightened around the docks"]
+    assert runtime_context["career_state_ledger"] == ["Lin/Strategist: stalled at stage 3"]
+
+
+
+def test_should_build_prompt_quality_kwargs_from_story_repair_payload_object():
+    packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="development",
+            story_creation_brief="keep pressure visible",
+        ),
+        source="chapter-generate-request",
+    )
+    payload = StoryRepairPayload(
+        summary="优先补强冲突折返与兑现节奏",
+        targets=("升级代价", "兑现伏笔"),
+        strengths=("保留对白辨识度",),
+    )
+
+    kwargs = packet.build_prompt_quality_kwargs(
+        {"genre": "mystery"},
+        story_repair_payload=payload,
+    )
+
+    assert kwargs["story_repair_summary"] == "优先补强冲突折返与兑现节奏"
+    assert kwargs["story_repair_targets"] == ["升级代价", "兑现伏笔"]
+    assert kwargs["story_preserve_strengths"] == ["保留对白辨识度"]
+    assert "优先补强冲突折返与兑现节奏" in kwargs["story_repair_target_block"]
+    assert "升级代价" in kwargs["story_repair_target_block"]
+    assert "保留对白辨识度" in kwargs["story_repair_target_block"]
+
+
+
+def test_should_build_chapter_generation_intent_with_quality_history_context_fallback():
+    packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="development",
+            story_creation_brief="keep pressure visible",
+        ),
+        source="chapter-generate-request",
+    )
+    project = Project(title="history-fallback", user_id="user-1", chapter_count=12)
+    chapter = type("ChapterStub", (), {"chapter_number": 7})()
+
+    intent = build_chapter_generation_intent(
+        story_packet=packet,
+        quality_profile={"genre": "mystery"},
+        project=project,
+        chapter=chapter,
+        chapter_context=None,
+        target_word_count=2600,
+        quality_history_context={
+            "foreshadow_payoff_plan": ["recover the hidden key"],
+            "character_state_ledger": ["Lin: injured hand still limits movement"],
+            "relationship_state_ledger": ["Lin/Su: uneasy alliance under tension"],
+            "foreshadow_state_ledger": ["hidden key: still missing after the archive raid"],
+            "organization_state_ledger": ["ShadowGuild: control tightened around the docks"],
+            "career_state_ledger": ["Lin/Strategist: stage 3 with supply-chain pressure"],
+        },
+    )
+
+    prompt_kwargs = intent.build_prompt_quality_kwargs()
+    runtime_context = intent.build_quality_runtime_context()
+
+    assert "recover the hidden key" in prompt_kwargs["story_foreshadow_payoff_plan_block"]
+    assert "Lin: injured hand still limits movement" in prompt_kwargs["story_character_state_ledger_block"]
+    assert "Lin/Su: uneasy alliance under tension" in prompt_kwargs["story_relationship_state_ledger_block"]
+    assert "hidden key: still missing after the archive raid" in prompt_kwargs["story_foreshadow_state_ledger_block"]
+    assert "ShadowGuild: control tightened around the docks" in prompt_kwargs["story_organization_state_ledger_block"]
+    assert "Lin/Strategist: stage 3 with supply-chain pressure" in prompt_kwargs["story_career_state_ledger_block"]
+    assert runtime_context["foreshadow_payoff_plan"] == ["recover the hidden key"]
+    assert runtime_context["organization_state_ledger"] == ["ShadowGuild: control tightened around the docks"]
+    assert runtime_context["career_state_ledger"] == ["Lin/Strategist: stage 3 with supply-chain pressure"]
+
+
+def test_should_forward_quality_metrics_summary_into_intent_prompt_kwargs():
+    packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="development",
+            story_creation_brief="keep pressure visible",
+        ),
+        source="chapter-generate-request",
+    )
+    project = Project(title="quality-summary", user_id="user-1", chapter_count=12)
+    chapter = type("ChapterStub", (), {"chapter_number": 7})()
+
+    intent = build_chapter_generation_intent(
+        story_packet=packet,
+        quality_profile={"genre": "mystery"},
+        project=project,
+        chapter=chapter,
+        chapter_context=None,
+        target_word_count=2600,
+        quality_metrics_summary={
+            "chapter_count": 3,
+            "avg_pacing_score": 7.8,
+            "avg_payoff_chain_rate": 73.0,
+            "avg_cliffhanger_rate": 81.0,
+            "recent_focus_areas": ["payoff", "continuity"],
+            "continuity_preflight": {
+                "summary": "Recent chapters show 1 continuity handoff gaps.",
+                "repair_targets": ["Carry forward the hidden-key pressure."],
+            },
+        },
+    )
+
+    prompt_kwargs = intent.build_prompt_quality_kwargs()
+
+    assert prompt_kwargs["quality_metrics_summary"]["avg_pacing_score"] == 7.8
+    assert "【章节近期质量趋势】" in prompt_kwargs["story_quality_trend_block"]
+    assert "最近节奏稳定度均值：7.8/10" in prompt_kwargs["story_quality_trend_block"]
+    assert "Carry forward the hidden-key pressure." in prompt_kwargs["story_quality_trend_block"]
+
+
+def test_should_apply_story_repair_guidance_defaults_when_request_has_no_explicit_overrides():
+    project = Project(
+        title="repair-defaults",
+        user_id="user-1",
+        default_creative_mode="balanced",
+        default_story_focus="deepen_character",
+        default_quality_preset="clean_prose",
+    )
+    packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="balanced",
+            story_focus="deepen_character",
+            quality_preset="clean_prose",
+        ),
+        source="chapter-generate-request",
+    )
+    chapter = type("ChapterStub", (), {"chapter_number": 3})()
+
+    intent = build_chapter_generation_intent(
+        story_packet=packet,
+        quality_profile={"genre": "mystery"},
+        project=project,
+        chapter=chapter,
+        chapter_context=None,
+        target_word_count=2400,
+        active_story_repair_payload={
+            "recommended_action": "patch_payoff",
+            "recommended_action_mode": "payoff",
+            "recommended_focus_area": "payoff",
+            "weakest_metric_label": "回报兑现",
+            "summary": "需要尽快补强伏笔兑现。",
+        },
+    )
+
+    prompt_kwargs = intent.build_prompt_quality_kwargs()
+
+    assert prompt_kwargs["creative_mode"] == "payoff"
+    assert prompt_kwargs["story_focus"] == "foreshadow_payoff"
+    assert prompt_kwargs["quality_preset"] == "plot_drive"
+    assert "回报兑现" in prompt_kwargs["quality_notes"]
+
+
+def test_should_keep_explicit_request_overrides_above_story_repair_defaults():
+    project = Project(
+        title="repair-defaults",
+        user_id="user-1",
+        default_creative_mode="balanced",
+        default_story_focus="advance_plot",
+        default_quality_preset="plot_drive",
+    )
+    packet = build_story_generation_packet(
+        project,
+        source={
+            "creative_mode": "emotion",
+            "story_focus": "deepen_character",
+            "quality_preset": "emotion_drama",
+        },
+        source_label="chapter-regenerate-request",
+    )
+    chapter = type("ChapterStub", (), {"chapter_number": 5})()
+
+    intent = build_chapter_generation_intent(
+        story_packet=packet,
+        quality_profile={"genre": "mystery"},
+        project=project,
+        chapter=chapter,
+        chapter_context=None,
+        target_word_count=2600,
+        active_story_repair_payload={
+            "recommended_action": "bridge_scene",
+            "recommended_action_mode": "bridge",
+            "recommended_focus_area": "pacing",
+        },
+    )
+
+    prompt_kwargs = intent.build_prompt_quality_kwargs()
+
+    assert prompt_kwargs["creative_mode"] == "emotion"
+    assert prompt_kwargs["story_focus"] == "deepen_character"
+    assert prompt_kwargs["quality_preset"] == "emotion_drama"

@@ -1,42 +1,83 @@
 from app.services.story_repair_payload_service import (
-    build_story_repair_payload_from_metrics,
-    merge_story_repair_payload,
+    build_story_repair_runtime_state,
     normalize_story_repair_payload,
+    resolve_story_repair_prompt_kwargs,
+    story_repair_payload_to_prompt_kwargs,
 )
 
 
-def test_should_merge_partial_story_repair_payload_with_fallback():
-    primary = normalize_story_repair_payload(summary="??????")
-    fallback = normalize_story_repair_payload(
-        targets=["??????", "?????"],
+def test_should_convert_story_repair_payload_to_prompt_kwargs():
+    payload = normalize_story_repair_payload(
+        summary="??????",
+        targets=["?????????????"],
+        strengths=["??????????"],
+    )
+
+    assert story_repair_payload_to_prompt_kwargs(payload) == {
+        "story_repair_summary": "??????",
+        "story_repair_targets": ["?????????????"],
+        "story_preserve_strengths": ["??????????"],
+    }
+
+
+def test_should_build_story_repair_runtime_state_with_merged_sources():
+    explicit_payload = normalize_story_repair_payload(
+        summary="????????????",
+        targets=["?????????????"],
+        strengths=["??????????"],
+    )
+    derived_payload = normalize_story_repair_payload(
+        summary="???????????",
+        targets=["?????????????"],
         strengths=["???????"],
     )
 
-    merged = merge_story_repair_payload(primary, fallback)
-
-    assert merged is not None
-    assert merged.summary == "??????"
-    assert list(merged.targets) == ["??????", "?????"]
-    assert list(merged.strengths) == ["???????"]
-
-
-def test_should_build_story_repair_payload_from_metrics():
-    payload = build_story_repair_payload_from_metrics(
-        {
-            "overall_score": 72.0,
-            "conflict_chain_hit_rate": 60.0,
-            "rule_grounding_hit_rate": 81.0,
-            "outline_alignment_rate": 58.0,
-            "dialogue_naturalness_rate": 78.0,
-            "opening_hook_rate": 76.0,
-            "payoff_chain_rate": 56.0,
-            "cliffhanger_rate": 82.0,
-            "pacing_score": 6.9,
-        },
+    state = build_story_repair_runtime_state(
+        explicit_payload=explicit_payload,
+        derived_payload=derived_payload,
         scope="chapter",
+        derived_source="current_chapter_quality",
+        guidance={
+            "summary": "??????????????????????",
+            "focus_areas": ["conflict", "payoff"],
+            "weakest_metric_label": "????",
+            "weakest_metric_value": 58.0,
+        },
+        quality_gate={
+            "status": "repairable",
+            "decision": "auto_repair",
+            "label": "????",
+            "summary": "????????????",
+            "failed_metrics": [
+                {"label": "?????"},
+                {"label": "????"},
+            ],
+        },
     )
 
-    assert payload is not None
-    assert payload.summary
-    assert list(payload.targets)
-    assert list(payload.strengths)
+    assert state["payload"] is not None
+    assert state["payload"].summary == "????????????"
+    assert state["payload"].targets == ("?????????????",)
+    assert state["active_story_repair_payload"]["source"] == "manual_plus_current_chapter_quality"
+    assert state["active_story_repair_payload"]["source_label"] == "Manual + current chapter quality"
+    assert state["active_story_repair_payload"]["quality_gate_decision"] == "auto_repair"
+    assert state["active_story_repair_payload"]["quality_gate_failed_metrics"] == ["?????", "????"]
+
+
+
+def test_should_merge_explicit_story_repair_prompt_kwargs_with_payload_fallback():
+    payload = normalize_story_repair_payload(
+        summary="补强冲突折返与伏笔兑现",
+        targets=["升级代价", "兑现伏笔"],
+        strengths=["保留对白辨识度"],
+    )
+
+    kwargs = resolve_story_repair_prompt_kwargs(
+        payload,
+        summary="优先把代价写实",
+        strengths=["保留动作节奏"],
+    )
+
+    assert kwargs["story_repair_summary"] == "优先把代价写实"
+    assert kwargs["story_repair_targets"] == ["升级代价", "兑现伏笔"]
+    assert kwargs["story_preserve_strengths"] == ["保留动作节奏"]

@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import json
+import re
 
 from app.models.chapter import Chapter
 from app.models.project import Project
@@ -33,6 +34,26 @@ CHARACTER_ROLE_PRIORITIES = {
     "antagonist": 2,
     "supporting": 1,
 }
+
+MEMORY_TYPE_DISPLAY_LABELS = {
+    "plot_point": "情节事件",
+    "character_event": "人物事件",
+    "hook": "钩子",
+    "foreshadow": "伏笔",
+    "world_detail": "世界细节",
+    "dialogue": "对白",
+    "scene": "场景",
+    "chapter_summary": "章节摘要",
+}
+
+MEMORY_TYPE_COVERAGE_PRIORITY = (
+    "plot_point",
+    "character_event",
+    "hook",
+    "foreshadow",
+    "world_detail",
+    "dialogue",
+)
 
 
 def _preview_text(text: Any, max_length: int = 120) -> str:
@@ -87,6 +108,222 @@ def _merge_reference_blocks(*blocks: Optional[str]) -> Optional[str]:
         seen.add(text)
         merged.append(text)
     return "\n\n".join(merged) if merged else None
+
+
+def _extract_query_focus_lines(
+    text: Optional[str],
+    *,
+    limit: int = 3,
+    max_length: int = 72,
+) -> List[str]:
+    items: List[str] = []
+    seen: set[str] = set()
+    for raw_line in str(text or "").splitlines():
+        normalized = str(raw_line or "").strip()
+        if not normalized or normalized.startswith("【"):
+            continue
+        if normalized.startswith("- "):
+            normalized = normalized[2:].strip()
+        normalized = _preview_text(normalized, max_length=max_length)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        items.append(normalized)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _extract_character_sheet_query_hints(
+    chapter_characters: Optional[str],
+    *,
+    limit: int = 3,
+    max_length: int = 72,
+) -> List[str]:
+    focus_prefixes = (
+        "当前状态",
+        "关系网络",
+        "组织归属",
+        "主职业",
+        "副职业",
+    )
+    items: List[str] = []
+    seen: set[str] = set()
+    for raw_line in str(chapter_characters or "").splitlines():
+        normalized = str(raw_line or "").strip()
+        if not normalized:
+            continue
+        if not any(normalized.startswith(prefix) for prefix in focus_prefixes):
+            continue
+        normalized = _preview_text(normalized, max_length=max_length)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        items.append(normalized)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def build_memory_query_text(
+    chapter_outline: str,
+    *,
+    related_names: Optional[List[str]] = None,
+    character_arc_snapshot: Optional[str] = None,
+    foreshadow_reminders: Optional[str] = None,
+    chapter_careers: Optional[str] = None,
+    chapter_characters: Optional[str] = None,
+    max_length: int = 720,
+) -> str:
+    outline_preview = _preview_text(
+        str(chapter_outline or "").replace("\n", " "),
+        max_length=320,
+    )
+    sections: List[str] = []
+    if outline_preview:
+        sections.append(f"本章大纲：{outline_preview}")
+
+    normalized_names = [
+        str(name or "").strip()
+        for name in (related_names or [])
+        if str(name or "").strip()
+    ]
+    if normalized_names:
+        sections.append(f"角色焦点：{'、'.join(normalized_names[:6])}")
+
+    character_hints = _extract_query_focus_lines(character_arc_snapshot, limit=3, max_length=80)
+    if character_hints:
+        sections.append(f"角色状态：{'；'.join(character_hints)}")
+
+    relationship_hints = _extract_character_sheet_query_hints(
+        chapter_characters,
+        limit=3,
+        max_length=80,
+    )
+    if relationship_hints:
+        sections.append(f"关系与组织：{'；'.join(relationship_hints)}")
+
+    career_hints = _extract_query_focus_lines(chapter_careers, limit=2, max_length=80)
+    if career_hints:
+        sections.append(f"职业线索：{'；'.join(career_hints)}")
+
+    foreshadow_hints = _extract_query_focus_lines(foreshadow_reminders, limit=3, max_length=80)
+    if foreshadow_hints:
+        sections.append(f"伏笔线索：{'；'.join(foreshadow_hints)}")
+
+    if not sections:
+        return outline_preview
+    return _preview_text(" ".join(sections), max_length=max_length)
+
+
+def _normalize_memory_content_key(content: Any, *, max_length: int = 96) -> str:
+    raw_value = re.sub(r"\s+", "", str(content or "").strip().lower())
+    normalized = re.sub(r"[^\w\u4e00-\u9fff]+", "", raw_value)
+    if normalized:
+        return normalized[:max_length]
+    return raw_value[:max_length]
+
+
+def _get_memory_type(memory: Dict[str, Any]) -> str:
+    metadata = memory.get("metadata") or {}
+    return str(
+        metadata.get("memory_type")
+        or metadata.get("type")
+        or memory.get("memory_type")
+        or memory.get("type")
+        or ""
+    ).strip().lower()
+
+
+def _build_memory_prompt_line(memory: Dict[str, Any], *, preview_length: int = 88) -> str:
+    content_preview = _preview_text(memory.get("content", ""), max_length=preview_length)
+    if not content_preview:
+        return ""
+
+    similarity = float(memory.get("similarity", 0.0) or 0.0)
+    memory_type = _get_memory_type(memory)
+    type_label = MEMORY_TYPE_DISPLAY_LABELS.get(memory_type, memory_type or "未分类")
+    return f"- ({type_label} / 相关度:{similarity:.2f}) {content_preview}"
+
+
+def _select_memories_for_prompt(
+    memories: List[Dict[str, Any]],
+    *,
+    max_count: int,
+    total_chars_budget: int,
+    preview_length: int = 88,
+) -> List[Dict[str, Any]]:
+    if not memories or max_count <= 0:
+        return []
+
+    deduped_candidates: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    seen_content_keys: set[str] = set()
+    for memory in memories:
+        content_key = _normalize_memory_content_key(memory.get("content"))
+        if not content_key or content_key in seen_content_keys:
+            continue
+        memory_id = str(memory.get("id") or "").strip()
+        if memory_id and memory_id in seen_ids:
+            continue
+        if memory_id:
+            seen_ids.add(memory_id)
+        seen_content_keys.add(content_key)
+        deduped_candidates.append(memory)
+
+    if not deduped_candidates:
+        return []
+
+    selected: List[Dict[str, Any]] = []
+    selected_keys: set[str] = set()
+    current_size = len("【相关记忆】")
+
+    def memory_key(memory: Dict[str, Any]) -> str:
+        memory_id = str(memory.get("id") or "").strip()
+        if memory_id:
+            return memory_id
+        return f"{_get_memory_type(memory)}|{_normalize_memory_content_key(memory.get('content'))}"
+
+    def try_select(memory: Dict[str, Any]) -> bool:
+        nonlocal current_size
+        key = memory_key(memory)
+        if key in selected_keys:
+            return False
+
+        line = _build_memory_prompt_line(memory, preview_length=preview_length)
+        if not line:
+            return False
+
+        projected_size = current_size + len(line) + 1
+        if selected and projected_size > total_chars_budget:
+            return False
+
+        selected.append(memory)
+        selected_keys.add(key)
+        current_size = projected_size
+        return True
+
+    for memory_type in MEMORY_TYPE_COVERAGE_PRIORITY:
+        for memory in deduped_candidates:
+            if _get_memory_type(memory) != memory_type:
+                continue
+            if try_select(memory):
+                break
+        if len(selected) >= max_count:
+            break
+
+    if len(selected) < max_count:
+        for memory in deduped_candidates:
+            if try_select(memory) and len(selected) >= max_count:
+                break
+
+    if not selected:
+        top_candidate = deduped_candidates[0]
+        selected_line = _build_memory_prompt_line(top_candidate, preview_length=min(preview_length, 64))
+        if selected_line:
+            selected = [top_candidate]
+
+    return selected
 
 
 def build_character_arc_snapshot(
@@ -385,6 +622,11 @@ class OneToManyContextBuilder:
     ENDING_LENGTH = 500          # 统一衔接长度500字
     MEMORY_COUNT = 10            # 记忆条数
     MEMORY_SIMILARITY_THRESHOLD = 0.6  # 记忆相关度阈值
+    MEMORY_CHAR_BUDGET = 720     # 记忆提示总字符预算
+    MEMORY_TOTAL_CHARS_BUDGET = MEMORY_CHAR_BUDGET  # 兼容旧测试/旧调用方命名
+    MEMORY_PREVIEW_LENGTH = 76   # 单条记忆预览长度
+    MEMORY_QUERY_LIMIT = 24      # 向量召回条数
+    MEMORY_RANK_LIMIT = 15       # 重排后保留条数
     RECENT_CHAPTERS_COUNT = 10   # 最近章节规划数量
     
     def __init__(self, memory_service=None, foreshadow_service=None):
@@ -531,27 +773,38 @@ class OneToManyContextBuilder:
         if context.character_arc_snapshot:
             logger.info(f"  ✅ 角色弧光快照: {len(context.character_arc_snapshot)}字符")
         
-        # === P2-参考信息（始终启用）===
-        if self.memory_service:
-            context.relevant_memories = await self._get_relevant_memories_enhanced(
-                user_id, project.id, chapter_number,
-                context.chapter_outline, db,
-                related_names=focus_character_names,
-            )
-        context.relevant_memories = _merge_reference_blocks(
-            context.relevant_memories,
-            context.character_arc_snapshot,
-        )
-        logger.info(f"  ✅ 相关记忆: {len(context.relevant_memories or '')}字符")
-        
-        # === P2-伏笔提醒===
+        # === P2-参考信息 ===
         if self.foreshadow_service:
             context.foreshadow_reminders = await self._get_foreshadow_reminders(
                 project.id, chapter_number, db
             )
             if context.foreshadow_reminders:
-                logger.info(f"  ✅ 伏笔提醒: {len(context.foreshadow_reminders)}字符")
-        
+                logger.info(f"  ✅ P2-伏笔提醒: {len(context.foreshadow_reminders)}字符")
+
+        memory_query_text = build_memory_query_text(
+            context.chapter_outline,
+            related_names=focus_character_names,
+            character_arc_snapshot=context.character_arc_snapshot,
+            foreshadow_reminders=context.foreshadow_reminders,
+            chapter_careers=context.chapter_careers,
+            chapter_characters=context.chapter_characters,
+        )
+
+        if self.memory_service:
+            context.relevant_memories = await self._get_relevant_memories_enhanced(
+                user_id, project.id, chapter_number,
+                context.chapter_outline, db,
+                related_names=focus_character_names,
+                character_arc_snapshot=context.character_arc_snapshot,
+                foreshadow_reminders=context.foreshadow_reminders,
+                chapter_careers=context.chapter_careers,
+                chapter_characters=context.chapter_characters,
+            )
+        context.relevant_memories = _merge_reference_blocks(
+            context.relevant_memories,
+            context.character_arc_snapshot,
+        )
+        logger.info(f"  ✅ P2-相关记忆: {len(context.relevant_memories or '')}字符")
         # === 统计信息 ===
         context.context_stats = {
             "mode": "one-to-many",
@@ -562,6 +815,8 @@ class OneToManyContextBuilder:
             "careers_length": len(context.chapter_careers or ""),
             "recent_context_length": len(context.recent_chapters_context or ""),
             "character_arc_length": len(context.character_arc_snapshot or ""),
+            "memory_query_length": len(memory_query_text or ""),
+            "memory_query_preview": _preview_text(memory_query_text, max_length=120) if memory_query_text else None,
             "memories_length": len(context.relevant_memories or ""),
             "foreshadow_length": len(context.foreshadow_reminders or ""),
             "total_length": context.get_total_context_length()
@@ -689,7 +944,7 @@ class OneToManyContextBuilder:
         # 构建全局角色名称映射（用于关系查询）
         all_char_map = {c.id: c.name for c in all_characters}
         
-        # ????????????????? expansion_plan ???
+        # 从章节扩写计划中抽取角色焦点，作为 expansion_plan 的兜底输入
         if filter_character_names is None:
             filter_character_names = self._extract_character_focus_names_from_expansion_plan(chapter)
         
@@ -982,8 +1237,7 @@ class OneToManyContextBuilder:
             return "\n".join(lines)
         except Exception as e:
             logger.error(f"❌ 构建最近章节上下文失败: {str(e)}")
-            return None
-    
+
     async def _get_relevant_memories_enhanced(
         self,
         user_id: str,
@@ -992,51 +1246,76 @@ class OneToManyContextBuilder:
         chapter_outline: str,
         db: AsyncSession,
         related_names: Optional[List[str]] = None,
+        character_arc_snapshot: Optional[str] = None,
+        foreshadow_reminders: Optional[str] = None,
+        chapter_careers: Optional[str] = None,
+        chapter_characters: Optional[str] = None,
     ) -> Optional[str]:
-        """获取相关记忆（始终启用，相关度>0.6）"""
+        """基于混合上下文查询相关度 > 0.6 的记忆，提升 continuity 召回质量。"""
         if not self.memory_service:
             return None
-        
+
         try:
-            query_text = chapter_outline[:500].replace('\n', ' ')
-            
+            query_text = build_memory_query_text(
+                chapter_outline,
+                related_names=related_names,
+                character_arc_snapshot=character_arc_snapshot,
+                foreshadow_reminders=foreshadow_reminders,
+                chapter_careers=chapter_careers,
+                chapter_characters=chapter_characters,
+            )
+            logger.info(f"  🧠 记忆混合查询: {query_text[:120]}...")
+
+            preferred_types = ["plot_point", "character_event", "hook", "world_detail"]
             relevant_memories = await self.memory_service.search_memories(
                 user_id=user_id,
                 project_id=project_id,
                 query=query_text,
-                limit=24,
-                min_importance=0.0
+                limit=self.MEMORY_QUERY_LIMIT,
+                min_importance=0.0,
             )
 
             relevant_memories = rank_memories_for_generation(
                 memories=relevant_memories,
                 current_chapter=chapter_number,
-                preferred_types=['plot_point', 'character_event', 'hook', 'world_detail'],
+                preferred_types=preferred_types,
                 related_names=related_names,
-                limit=15,
+                limit=self.MEMORY_RANK_LIMIT,
             )
-            
-            # 过滤相关度>0.6
+
             filtered_memories = [
                 mem for mem in relevant_memories
-                if mem.get('similarity', 0) > self.MEMORY_SIMILARITY_THRESHOLD
+                if mem.get("similarity", 0) > self.MEMORY_SIMILARITY_THRESHOLD
             ]
-            
-            if not filtered_memories:
+            memory_char_budget = getattr(
+                self,
+                "MEMORY_TOTAL_CHARS_BUDGET",
+                self.MEMORY_CHAR_BUDGET,
+            )
+            selected_memories = _select_memories_for_prompt(
+                filtered_memories,
+                max_count=self.MEMORY_COUNT,
+                total_chars_budget=memory_char_budget,
+                preview_length=self.MEMORY_PREVIEW_LENGTH,
+            )
+            if not selected_memories:
                 return None
-            
+
             memory_lines = ["【相关记忆】"]
-            for mem in filtered_memories[:self.MEMORY_COUNT]:
-                similarity = mem.get('similarity', 0)
-                content = mem.get('content', '')[:100]
-                memory_lines.append(f"- (相关度:{similarity:.2f}) {content}")
-            
+            for mem in selected_memories:
+                line = _build_memory_prompt_line(
+                    mem,
+                    preview_length=self.MEMORY_PREVIEW_LENGTH,
+                )
+                if line:
+                    memory_lines.append(line)
+
             return "\n".join(memory_lines) if len(memory_lines) > 1 else None
-            
+
         except Exception as e:
             logger.error(f"❌ 获取相关记忆失败: {str(e)}")
             return None
-    
+
     async def _get_last_ending_enhanced(
         self,
         chapter: Chapter,
@@ -1354,6 +1633,36 @@ class OneToOneContextBuilder:
         self.memory_service = memory_service
         self.foreshadow_service = foreshadow_service
     
+    async def _get_relevant_memories_enhanced(
+        self,
+        user_id: str,
+        project_id: str,
+        chapter_number: int,
+        chapter_outline: str,
+        db: AsyncSession,
+        related_names: Optional[List[str]] = None,
+        character_arc_snapshot: Optional[str] = None,
+        foreshadow_reminders: Optional[str] = None,
+        chapter_careers: Optional[str] = None,
+        chapter_characters: Optional[str] = None,
+    ) -> Optional[str]:
+        shared_builder = OneToManyContextBuilder(
+            memory_service=self.memory_service,
+            foreshadow_service=self.foreshadow_service,
+        )
+        return await shared_builder._get_relevant_memories_enhanced(
+            user_id=user_id,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            chapter_outline=chapter_outline,
+            db=db,
+            related_names=related_names,
+            character_arc_snapshot=character_arc_snapshot,
+            foreshadow_reminders=foreshadow_reminders,
+            chapter_careers=chapter_careers,
+            chapter_characters=chapter_characters,
+        )
+
     async def build(
         self,
         chapter: Chapter,
@@ -1471,7 +1780,7 @@ class OneToOneContextBuilder:
             characters = characters_result.scalars().all()
             
             if characters:
-                # ?? 1-N ?????????????? 1-1 ?????????
+                # 复用 1-N 的角色详情构建逻辑，保证 1-1 输出结构一致
                 shared_character_builder = OneToManyContextBuilder(
                     memory_service=self.memory_service,
                     foreshadow_service=self.foreshadow_service,
@@ -1515,55 +1824,36 @@ class OneToOneContextBuilder:
                 logger.info(f"  ✅ P2-伏笔提醒: {len(context.foreshadow_reminders)}字符")
             else:
                 logger.info(f"  ⚠️ P2-伏笔提醒: 无")
-        
-        # 2. 根据大纲内容检索相关记忆（相关度>0.4）
-        if self.memory_service and context.chapter_outline:
-            try:
-                # 使用大纲内容作为查询（截取前500字符以避免过长）
-                query_text = context.chapter_outline[:500].replace('\n', ' ')
-                logger.info(f"  🔍 记忆查询关键词: {query_text[:100]}...")
-                
-                relevant_memories = await self.memory_service.search_memories(
-                    user_id=user_id,
-                    project_id=project.id,
-                    query=query_text,
-                    limit=24,
-                    min_importance=0.0
-                )
+        # 2. 基于大纲/角色/伏笔/职业的混合记忆检索
+        memory_query_text = build_memory_query_text(
+            context.chapter_outline,
+            related_names=character_names,
+            character_arc_snapshot=context.character_arc_snapshot,
+            foreshadow_reminders=context.foreshadow_reminders,
+            chapter_careers=context.chapter_careers,
+            chapter_characters=context.chapter_characters,
+        )
 
-                relevant_memories = rank_memories_for_generation(
-                    memories=relevant_memories,
-                    current_chapter=chapter_number,
-                    preferred_types=['plot_point', 'character_event', 'hook', 'world_detail'],
-                    related_names=character_names,
-                    limit=15,
-                )
-                
-                # 过滤相关度阈值为0.6
-                filtered_memories = [
-                    mem for mem in relevant_memories
-                    if mem.get('similarity', 0) > 0.6
-                ]
-                
-                if filtered_memories:
-                    memory_lines = ["【相关记忆】"]
-                    for mem in filtered_memories[:10]:  # 最多显示10条
-                        similarity = mem.get('similarity', 0)
-                        content = mem.get('content', '')[:100]
-                        memory_lines.append(f"- (相关度:{similarity:.2f}) {content}")
-                    
-                    context.relevant_memories = "\n".join(memory_lines)
-                    logger.info(f"  ✅ P2-相关记忆: {len(filtered_memories)}条 (相关度>0.6, 共搜索{len(relevant_memories)}条)")
-                else:
-                    context.relevant_memories = None
-                    logger.info(f"  ⚠️ P2-相关记忆: 无符合条件的记忆 (共搜索到{len(relevant_memories)}条)")
-                    
-            except Exception as e:
-                logger.error(f"  ❌ 检索相关记忆失败: {str(e)}")
-                context.relevant_memories = None
+        if self.memory_service and context.chapter_outline:
+            context.relevant_memories = await self._get_relevant_memories_enhanced(
+                user_id=user_id,
+                project_id=project.id,
+                chapter_number=chapter_number,
+                chapter_outline=context.chapter_outline,
+                db=db,
+                related_names=character_names,
+                character_arc_snapshot=context.character_arc_snapshot,
+                foreshadow_reminders=context.foreshadow_reminders,
+                chapter_careers=context.chapter_careers,
+                chapter_characters=context.chapter_characters,
+            )
+            if context.relevant_memories:
+                logger.info(f"  ✅ P2-相关记忆: {len(context.relevant_memories)}字符")
+            else:
+                logger.info("  ⚠️ P2-相关记忆: 无匹配结果")
         else:
             context.relevant_memories = None
-            logger.info(f"  ⚠️ P2-相关记忆: 无大纲内容或记忆服务不可用")
+            logger.info("  ⚠️ P2-相关记忆: 未启用记忆检索")
 
         context.relevant_memories = _merge_reference_blocks(
             context.relevant_memories,
@@ -1582,6 +1872,8 @@ class OneToOneContextBuilder:
             "careers_length": len(context.chapter_careers or ""),
             "character_arc_length": len(context.character_arc_snapshot or ""),
             "foreshadow_length": len(context.foreshadow_reminders or ""),
+            "memory_query_length": len(memory_query_text or ""),
+            "memory_query_preview": _preview_text(memory_query_text, max_length=120) if memory_query_text else None,
             "memories_length": len(context.relevant_memories or ""),
             "total_length": context.get_total_context_length()
         }
@@ -1908,75 +2200,13 @@ class OneToOneContextBuilder:
         chapter_number: int,
         db: AsyncSession
     ) -> Optional[str]:
-        """
-        获取伏笔提醒信息（增强版）
-        
-        策略：
-        1. 本章必须回收的伏笔（target_resolve_chapter_number == chapter_number）
-        2. 超期未回收的伏笔（target_resolve_chapter_number < chapter_number）
-        3. 即将到期的伏笔（target_resolve_chapter_number 在未来3章内）
-        """
-        if not self.foreshadow_service:
-            return None
-        
-        try:
-            lines = []
-            
-            # 1. 本章必须回收的伏笔
-            must_resolve = await self.foreshadow_service.get_must_resolve_foreshadows(
-                db=db,
-                project_id=project_id,
-                chapter_number=chapter_number
-            )
-            
-            if must_resolve:
-                lines.append("【🎯 本章必须回收的伏笔】")
-                for f in must_resolve:
-                    lines.append(f"- {f.title}")
-                    lines.append(f"  埋入章节：第{f.plant_chapter_number}章")
-                    lines.append(f"  伏笔内容：{f.content[:100]}{'...' if len(f.content) > 100 else ''}")
-                    if f.resolution_notes:
-                        lines.append(f"  回收提示：{f.resolution_notes}")
-                    lines.append("")
-            
-            # 2. 超期未回收的伏笔
-            overdue = await self.foreshadow_service.get_overdue_foreshadows(
-                db=db,
-                project_id=project_id,
-                current_chapter=chapter_number
-            )
-            
-            if overdue:
-                lines.append("【⚠️ 超期待回收伏笔】")
-                for f in overdue[:3]:  # 最多显示3个
-                    overdue_chapters = chapter_number - (f.target_resolve_chapter_number or 0)
-                    lines.append(f"- {f.title} [已超期{overdue_chapters}章]")
-                    lines.append(f"  埋入章节：第{f.plant_chapter_number}章，原计划第{f.target_resolve_chapter_number}章回收")
-                    lines.append(f"  伏笔内容：{f.content[:80]}...")
-                    lines.append("")
-            
-            # 3. 即将到期的伏笔（未来3章内）
-            upcoming = await self.foreshadow_service.get_pending_resolve_foreshadows(
-                db=db,
-                project_id=project_id,
-                current_chapter=chapter_number,
-                lookahead=3
-            )
-            
-            # 过滤：只保留未来章节的，排除本章和超期的
-            upcoming_filtered = [f for f in upcoming
-                               if (f.target_resolve_chapter_number or 0) > chapter_number]
-            
-            if upcoming_filtered:
-                lines.append("【📋 即将到期的伏笔（仅供参考）】")
-                for f in upcoming_filtered[:3]:  # 最多显示3个
-                    remaining = (f.target_resolve_chapter_number or 0) - chapter_number
-                    lines.append(f"- {f.title}（计划第{f.target_resolve_chapter_number}章回收，还有{remaining}章）")
-                lines.append("")
-            
-            return "\n".join(lines) if lines else None
-            
-        except Exception as e:
-            logger.error(f"❌ 获取伏笔提醒失败: {str(e)}")
-            return None
-
+        """复用 1-N 模式的伏笔提醒构建逻辑。"""
+        shared_builder = OneToManyContextBuilder(
+            memory_service=self.memory_service,
+            foreshadow_service=self.foreshadow_service,
+        )
+        return await shared_builder._get_foreshadow_reminders(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            db=db,
+        )

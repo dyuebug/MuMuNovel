@@ -66,7 +66,7 @@ from app.services.foreshadow_service import foreshadow_service
 from app.services.chapter_quality_context_service import (
     StoryGenerationGuidance,
     StoryPacket,
-    build_story_generation_packet,
+    build_story_generation_packet_with_project_continuity,
     build_story_repair_diagnostic_context,
     build_story_runtime_requirement_text,
 )
@@ -1521,7 +1521,8 @@ async def new_outline_generator(
         # 使用提示词模板
         yield await tracker.preparing("准备AI提示词...")
         template = await PromptService.get_template("OUTLINE_CREATE", user_id_for_mcp, db)
-        story_packet = build_story_generation_packet(
+        story_packet = await build_story_generation_packet_with_project_continuity(
+            db,
             project,
             source=data,
             source_label="outline-create-request",
@@ -1962,7 +1963,8 @@ async def continue_outline_generator(
             
             # 使用标准续写提示词模板（简化版）
             template = await PromptService.get_template("OUTLINE_CONTINUE", user_id, db)
-            story_packet = build_story_generation_packet(
+            story_packet = await build_story_generation_packet_with_project_continuity(
+                db,
                 project,
                 source=data,
                 source_label="outline-continue-request",

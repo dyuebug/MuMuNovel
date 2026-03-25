@@ -20,6 +20,7 @@ class BatchGenerationSnapshot(Base):
     latest_quality_metrics = Column(JSON, nullable=True, comment="????????")
     quality_metrics_history = Column(JSON, nullable=True, comment="?????????")
     quality_metrics_summary = Column(JSON, nullable=True, comment="?????????")
+    workflow_runtime_state = Column(JSON, nullable=True, comment="Persisted workflow runtime state")
     created_at = Column(DateTime, server_default=func.now(), comment="????")
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), comment="????")
 

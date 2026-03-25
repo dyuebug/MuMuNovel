@@ -36,7 +36,7 @@ from app.services.chapter_web_research_service import chapter_web_research_servi
 from app.services.chapter_quality_context_service import (
     StoryGenerationGuidance,
     StoryPacket,
-    build_story_generation_packet,
+    build_story_generation_packet_with_project_continuity,
     build_story_runtime_requirement_text,
 )
 from app.logger import get_logger
@@ -1702,7 +1702,8 @@ async def outline_generator(
         # 准备提示词
         yield await tracker.preparing(f"准备生成{outline_count}个大纲节点...")
         
-        story_packet = build_story_generation_packet(
+        story_packet = await build_story_generation_packet_with_project_continuity(
+            db,
             project,
             creative_mode=creative_mode,
             story_focus=story_focus,

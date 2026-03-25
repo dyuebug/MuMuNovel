@@ -28,6 +28,11 @@ from app.services.prompt_service import (
     build_story_character_focus_anchor_block,
     build_story_foreshadow_payoff_plan_block,
     build_story_pacing_budget_block,
+    build_story_character_state_ledger_block,
+    build_story_relationship_state_ledger_block,
+    build_story_foreshadow_state_ledger_block,
+    build_story_organization_state_ledger_block,
+    build_story_career_state_ledger_block,
     build_volume_pacing_block,
 )
 
@@ -43,6 +48,50 @@ def test_should_inject_narrative_blueprint_block_into_chapter_quality_contract()
     assert "钩子优先" in blocks["narrative_blueprint_block"]
     assert "主线推进" in blocks["narrative_blueprint_block"]
     assert "【结构蓝图】" in blocks["quality_contract_block"]
+
+
+def test_should_inject_story_quality_trend_block_into_chapter_quality_contract():
+    blocks = PromptService._build_quality_runtime_blocks(
+        "CHAPTER_GENERATION_ONE_TO_ONE",
+        quality_metrics_summary={
+            "chapter_count": 3,
+            "avg_pacing_score": 8.1,
+            "avg_payoff_chain_rate": 76.0,
+            "avg_cliffhanger_rate": 84.0,
+            "overall_score_trend": "falling",
+            "overall_score_delta": -3.0,
+            "recent_focus_areas": ["payoff", "continuity"],
+            "continuity_preflight": {
+                "summary": "Recent chapters show 2 continuity handoff gaps.",
+                "repair_targets": ["Carry forward the alliance tension in action."],
+            },
+        },
+    )
+
+    assert "【章节近期质量趋势】" in blocks["story_quality_trend_block"]
+    assert "最近节奏稳定度均值：8.1/10" in blocks["story_quality_trend_block"]
+    assert "最近回报兑现均值：76.0%" in blocks["story_quality_trend_block"]
+    assert "Recent chapters show 2 continuity handoff gaps." in blocks["story_quality_trend_block"]
+    assert "【章节近期质量趋势】" in blocks["quality_contract_block"]
+
+
+def test_should_add_continuity_handoff_into_execution_checklist():
+    block = build_story_execution_checklist_block(
+        "hook",
+        "advance_plot",
+        scene="chapter",
+        plot_stage="climax",
+        continuity_preflight={
+            "repair_targets": [
+                "Carry forward the alliance tension in action.",
+                "Surface the dock control shift on the page.",
+            ]
+        },
+    )
+
+    assert "优先补齐" in block
+    assert "Carry forward the alliance tension in action." in block
+    assert "Surface the dock control shift on the page." in block
 
 
 def test_should_build_story_objective_card_block_with_stage_hint():
@@ -1072,3 +1121,198 @@ def test_should_inject_story_blueprint_blocks_into_chapter_quality_contract():
     assert "【章节节奏预算】" in blocks["story_pacing_budget_block"]
     assert "【长线目标锚点】" in blocks["quality_contract_block"]
     assert "【章节节奏预算】" in blocks["quality_contract_block"]
+
+
+def test_should_build_story_continuity_ledger_blocks():
+    assert "【章节人物状态账本】" in build_story_character_state_ledger_block(
+        ["Lin: exhausted but still pushing forward"],
+        scene="chapter",
+    )
+    assert "【章节关系状态账本】" in build_story_relationship_state_ledger_block(
+        ["Lin/Su: alliance under strain"],
+        scene="chapter",
+    )
+    assert "【章节伏笔状态账本】" in build_story_foreshadow_state_ledger_block(
+        ["hidden key: still missing after the archive raid"],
+        scene="chapter",
+    )
+    assert "【章节组织状态账本】" in build_story_organization_state_ledger_block(
+        ["ShadowGuild: control tightened around the docks"],
+        scene="chapter",
+    )
+    assert "【章节职业状态账本】" in build_story_career_state_ledger_block(
+        ["Lin/Strategist: stage 3 with supply-chain pressure"],
+        scene="chapter",
+    )
+
+
+def test_should_trim_low_priority_optional_cards_when_budget_is_tight():
+    blocks = PromptService._build_quality_runtime_blocks(
+        "CHAPTER_GENERATION_ONE_TO_ONE",
+        creative_mode="hook",
+        story_focus="advance_plot",
+        plot_stage="ending",
+        story_creation_brief="Keep pressure visible and resolve promised setup.",
+        story_long_term_goal="Seize the capital before the enemy closes in.",
+        story_character_focus=["Lin", "Su"],
+        story_foreshadow_payoff_plan=["recover the hidden key", "expose the false treaty"],
+        story_character_state_ledger=["Lin: exhausted but still pushing the squad forward"],
+        story_relationship_state_ledger=["Lin/Su: alliance under strain after the ambush"],
+        story_foreshadow_state_ledger=["hidden key: still missing after the archive raid"],
+        story_organization_state_ledger=["ShadowGuild: control tightened around the docks"],
+        story_career_state_ledger=["Lin/Strategist: stage 3 with supply-chain pressure"],
+        chapter_count=12,
+        current_chapter_number=10,
+        target_word_count=3200,
+        quality_optional_block_budget=1200,
+    )
+
+    assert blocks["story_opening_hook_card_block"] == ""
+    assert blocks["story_scene_density_card_block"] == ""
+    assert blocks["story_payoff_chain_card_block"]
+    assert blocks["story_organization_state_ledger_block"]
+    assert blocks["story_career_state_ledger_block"]
+    assert "【章节人物状态账本】" in blocks["quality_contract_block"]
+    assert "【章节职业状态账本】" in blocks["quality_contract_block"]
+
+
+
+def test_should_keep_focus_area_blocks_longer_when_budget_is_tight():
+    blocks = PromptService._build_quality_runtime_blocks(
+        "CHAPTER_GENERATION_ONE_TO_ONE",
+        creative_mode="balanced",
+        story_focus="advance_plot",
+        plot_stage="development",
+        story_creation_brief="Keep the handoff between payoff and continuity visible.",
+        story_long_term_goal="Recover the hidden key before the guild purges the docks.",
+        story_character_focus=["Lin", "Su"],
+        story_foreshadow_payoff_plan=["recover the hidden key", "expose the false treaty"],
+        story_character_state_ledger=["Lin: exhausted but still pushing the squad forward"],
+        story_relationship_state_ledger=["Lin/Su: alliance under strain after the ambush"],
+        story_foreshadow_state_ledger=["hidden key: still missing after the archive raid"],
+        story_organization_state_ledger=["ShadowGuild: control tightened around the docks"],
+        story_career_state_ledger=["Lin/Strategist: stage 3 with supply-chain pressure"],
+        quality_metrics_summary={
+            "recent_focus_areas": ["payoff", "continuity"],
+            "continuity_preflight": {
+                "focus_areas": ["organization_continuity"],
+                "repair_targets": ["Carry forward the dock control shift in the current scene."],
+            },
+        },
+        chapter_count=12,
+        current_chapter_number=10,
+        target_word_count=3200,
+        quality_optional_block_budget=1200,
+    )
+
+    assert blocks["story_payoff_chain_card_block"]
+    assert blocks["story_scene_anchor_card_block"]
+    assert blocks["story_opening_hook_card_block"] == ""
+    assert blocks["story_repetition_risk_block"] == ""
+
+
+def test_should_keep_focus_protected_optional_cards_when_budget_is_tight():
+    blocks = PromptService._build_quality_runtime_blocks(
+        "CHAPTER_GENERATION_ONE_TO_ONE",
+        creative_mode="hook",
+        story_focus="advance_plot",
+        plot_stage="ending",
+        story_creation_brief="Keep pressure visible and resolve promised setup.",
+        story_long_term_goal="Seize the capital before the enemy closes in.",
+        story_character_focus=["Lin", "Su"],
+        story_foreshadow_payoff_plan=["recover the hidden key", "expose the false treaty"],
+        story_character_state_ledger=["Lin: exhausted but still pushing the squad forward"],
+        story_relationship_state_ledger=["Lin/Su: alliance under strain after the ambush"],
+        story_foreshadow_state_ledger=["hidden key: still missing after the archive raid"],
+        story_organization_state_ledger=["ShadowGuild: control tightened around the docks"],
+        story_career_state_ledger=["Lin/Strategist: stage 3 with supply-chain pressure"],
+        chapter_count=12,
+        current_chapter_number=10,
+        target_word_count=3200,
+        quality_optional_block_budget=900,
+        quality_metrics_summary={
+            "recent_focus_areas": ["dialogue", "payoff"],
+            "continuity_preflight": {
+                "focus_areas": ["continuity"],
+                "repair_targets": ["carry forward the alliance tension in action"],
+            },
+        },
+    )
+
+    assert blocks["story_dialogue_advancement_card_block"]
+    assert blocks["story_payoff_chain_card_block"]
+    assert blocks["story_scene_anchor_card_block"]
+    assert blocks["story_opening_hook_card_block"] == ""
+
+
+
+def test_should_keep_focus_protected_optional_blocks_under_budget():
+    blocks = {
+        "story_acceptance_card_block": "A" * 200,
+        "story_repetition_risk_block": "B" * 200,
+        "story_scene_anchor_card_block": "C" * 200,
+        "story_dialogue_advancement_card_block": "D" * 200,
+        "story_payoff_chain_card_block": "E" * 200,
+        "story_character_focus_anchor_block": "focus",
+        "story_character_state_ledger_block": "state",
+    }
+    template_insertion = "".join(f"{{{key}}}" for key in blocks)
+
+    trimmed = PromptService._apply_quality_optional_block_budget(
+        blocks,
+        template_key="CHAPTER_GENERATION_ONE_TO_ONE",
+        template_insertion=template_insertion,
+        plot_stage="ending",
+        budget_override=600,
+        quality_metrics_summary={
+            "recent_focus_areas": ["payoff", "dialogue"],
+            "continuity_preflight": {
+                "summary": "Keep scene-to-scene continuity visible.",
+                "repair_targets": ["Carry forward Lin and Su distrust into the next confrontation."],
+            },
+        },
+    )
+
+    assert trimmed["story_repetition_risk_block"] == ""
+    assert trimmed["story_acceptance_card_block"] == ""
+    assert trimmed["story_scene_anchor_card_block"] == "C" * 200
+    assert trimmed["story_dialogue_advancement_card_block"] == "D" * 200
+    assert trimmed["story_payoff_chain_card_block"] == "E" * 200
+
+
+
+def test_should_inject_continuity_handoff_into_execution_checklist():
+    block = build_story_execution_checklist_block(
+        "hook",
+        "advance_plot",
+        scene="chapter",
+        plot_stage="climax",
+        continuity_preflight={
+            "summary": "Keep the chapter-to-chapter handoff explicit.",
+            "repair_targets": ["Carry forward Lin and Su distrust through action and dialogue."],
+        },
+    )
+
+    assert "连续性接力" in block
+    assert "优先补齐" in block
+    assert "Carry forward Lin and Su distrust" in block
+
+
+
+def test_should_use_tighter_optional_budget_for_regeneration_templates():
+    template_insertion = "{story_objective_card_block}{story_payoff_chain_card_block}"
+    generation_budget = PromptService._resolve_quality_optional_block_budget(
+        "CHAPTER_GENERATION_ONE_TO_ONE",
+        template_insertion,
+        "climax",
+        continuity_density=3,
+    )
+    regeneration_budget = PromptService._resolve_quality_optional_block_budget(
+        "CHAPTER_REGENERATION_SYSTEM",
+        template_insertion,
+        "climax",
+        continuity_density=3,
+    )
+
+    assert generation_budget == 3000
+    assert regeneration_budget == 2200

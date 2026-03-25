@@ -1365,6 +1365,65 @@ async def test_should_expose_runtime_workflow_phase_in_batch_status(
     assert body["checkpoint"]["current_chapter_number"] == 1
 
 
+async def test_should_skip_snapshot_commit_when_payload_is_unchanged(
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+
+    async with chapters_session_factory() as session:
+        task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=1,
+            chapter_count=1,
+            chapter_ids=["chapter-1"],
+            status="running",
+            total_chapters=1,
+            completed_chapters=0,
+        )
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+
+        commit_count = 0
+        original_commit = session.commit
+
+        async def counted_commit():
+            nonlocal commit_count
+            commit_count += 1
+            return await original_commit()
+
+        monkeypatch.setattr(session, "commit", counted_commit)
+
+        await chapters_api._upsert_batch_generation_snapshot(
+            session,
+            task.id,
+            workflow_runtime_state={"phase": "loading", "progress": 5},
+        )
+        await chapters_api._upsert_batch_generation_snapshot(
+            session,
+            task.id,
+            workflow_runtime_state={"phase": "loading", "progress": 5},
+        )
+        await chapters_api._upsert_batch_generation_snapshot(
+            session,
+            task.id,
+            workflow_runtime_state={"phase": "generating", "progress": 35},
+        )
+
+        snapshot_result = await session.execute(
+            select(BatchGenerationSnapshot).where(BatchGenerationSnapshot.batch_task_id == task.id)
+        )
+        snapshot = snapshot_result.scalar_one_or_none()
+
+    assert commit_count == 2
+    assert snapshot is not None
+    assert snapshot.workflow_runtime_state["phase"] == "generating"
+    assert snapshot.workflow_runtime_state["progress"] == 35
+
+
 async def test_should_resume_failed_batch_task_from_current_chapter(
     chapters_client,
     chapters_session_factory,
@@ -1675,6 +1734,30 @@ def test_should_append_serial_guard_when_apply_style_to_prompt():
     assert "人物情绪要有层次" in merged_prompt
     assert "比喻要克制" in merged_prompt
     assert "慎用高频定式句法" in merged_prompt
+
+
+def test_should_attach_continuity_preflight_to_story_quality_metrics():
+    runtime_context = {
+        "plot_stage": "development",
+        "chapter_count": 12,
+        "current_chapter_number": 5,
+        "character_state_ledger": ["Lin: injured hand still limits movement"],
+        "relationship_state_ledger": ["Lin/Su: uneasy alliance under tension"],
+        "foreshadow_state_ledger": ["RoyalKey: still missing from the archive"],
+    }
+
+    metrics = chapters_api.compute_story_quality_metrics(
+        content="Lin slipped into the archive alone, his injured hand slowing every move.",
+        chapter_outline="Lin and Su hold a fragile alliance while the RoyalKey clue advances.",
+        world_rules="An injured hand should reduce action efficiency.",
+        quality_runtime_context=runtime_context,
+    )
+
+    assert metrics["continuity_preflight"]["status"] == "warning"
+    assert metrics["continuity_preflight"]["warning_count"] == 2
+    assert metrics["quality_gate"]["continuity_warning_count"] == 2
+    assert "relationship_continuity" in metrics["repair_guidance"]["focus_areas"]
+    assert metrics["repair_guidance"]["repair_targets"]
 
 
 def test_should_detect_workflow_meta_line_in_generated_content():
@@ -2568,6 +2651,100 @@ async def test_should_merge_quality_gate_snapshot_into_regeneration_prompt_conte
     assert captured["regenerate_request"].story_preserve_strengths
 
 
+async def test_should_reuse_quality_history_context_in_regeneration_prompt(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="history-aware-regeneration",
+        content="legacy content",
+        status="completed",
+    )
+
+    quality_metrics = {
+        "overall_score": 76.0,
+        "conflict_chain_hit_rate": 68.0,
+        "rule_grounding_hit_rate": 79.0,
+        "outline_alignment_rate": 72.0,
+        "dialogue_naturalness_rate": 80.0,
+        "opening_hook_rate": 74.0,
+        "payoff_chain_rate": 66.0,
+        "cliffhanger_rate": 71.0,
+        "pacing_score": 7.8,
+        "repair_guidance": {"focus_areas": ["payoff", "continuity"]},
+        "continuity_preflight": {
+            "status": "warning",
+            "warning_count": 1,
+            "repair_targets": ["Carry forward the hidden-key pressure."],
+            "summary": "Current chapter misses explicit handoff for 1 continuity ledger items.",
+        },
+        "quality_runtime_context": {
+            "plot_stage": "development",
+            "chapter_count": 12,
+            "current_chapter_number": 1,
+            "foreshadow_payoff_plan": ["recover the hidden key"],
+            "organization_state_ledger": ["ShadowGuild: control tightened around the docks"],
+            "career_state_ledger": ["Lin/Strategist: stage 3 with supply-chain pressure"],
+        },
+    }
+
+    async with chapters_session_factory() as session:
+        session.add(
+            GenerationHistory(
+                project_id=project.id,
+                chapter_id=chapter.id,
+                prompt="history prompt",
+                generated_content=chapters_api._build_generation_history_payload("generated body", quality_metrics),
+                model="default",
+            )
+        )
+        await session.commit()
+
+    class FakeRegenerator:
+        def __init__(self, ai_service):
+            self.ai_service = ai_service
+
+        async def regenerate_with_feedback(self, **kwargs):
+            captured.update(kwargs)
+            yield {"type": "progress", "progress": 30, "message": "preparing"}
+            yield {"type": "chunk", "content": "new content"}
+
+        def calculate_content_diff(self, original_content, new_content):
+            return {"similarity": 8.0, "difference": 92.0}
+
+    monkeypatch.setattr(chapters_api, "ChapterRegenerator", FakeRegenerator)
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/regenerate-stream",
+        json={
+            "modification_source": "custom",
+            "custom_instructions": "improve payoff and continuity",
+            "target_word_count": 500,
+            "focus_areas": ["payoff"],
+            "auto_apply": False,
+        },
+    )
+    assert response.status_code == 200
+
+    events = parse_sse_data(response.text)
+    assert any(event.get("type") == "result" for event in events)
+
+    prompt_kwargs = captured["project_context"]["prompt_quality_kwargs"]
+    assert "recover the hidden key" in prompt_kwargs["story_foreshadow_payoff_plan_block"]
+    assert "ShadowGuild: control tightened around the docks" in prompt_kwargs["story_organization_state_ledger_block"]
+    assert "Lin/Strategist: stage 3 with supply-chain pressure" in prompt_kwargs["story_career_state_ledger_block"]
+    assert "【章节近期质量趋势】" in prompt_kwargs["story_quality_trend_block"]
+    assert "最近节奏稳定度均值：7.8/10" in prompt_kwargs["story_quality_trend_block"]
+    assert "Carry forward the hidden-key pressure." in prompt_kwargs["story_quality_trend_block"]
+
+
 async def test_should_sanitize_regenerated_content_before_persisting_task(
     chapters_client,
     chapters_session_factory,
@@ -3149,6 +3326,8 @@ def test_should_retry_when_quality_gate_is_repairable_and_retry_budget_available
 
     assert plan["action"] == "retry"
     assert plan["quality_gate"]["decision"] == "auto_repair"
+    assert plan["quality_gate"]["recommended_action"]
+    assert "Recommended repair action" in (plan["message"] or "")
     assert plan["repair_payload"] is not None
     assert plan["active_story_repair_payload"]["quality_gate_decision"] == "auto_repair"
 
@@ -3193,8 +3372,10 @@ def test_should_switch_to_manual_review_when_quality_gate_blocks_or_retry_budget
 
     assert blocked_plan["action"] == "manual_review"
     assert blocked_plan["quality_gate"]["decision"] == "manual_review"
+    assert "Recommended repair action" in (blocked_plan["message"] or "")
     assert exhausted_plan["action"] == "manual_review"
     assert exhausted_plan["quality_gate"]["decision"] == "auto_repair"
+    assert "Recommended repair action" in (exhausted_plan["message"] or "")
 
 
 async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneration_compatibility(
@@ -3232,54 +3413,63 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
         await session.refresh(task)
         task_id = task.id
 
-    await chapters_api.publish_task_stream_event(
-        task_id,
-        {
-            "type": "analysis_started",
-            "chapter_id": chapter.id,
-            "chapter_number": 1,
-            "message": "章节分析开始",
-            "progress": 85,
-            "phase": "parsing",
-        },
-    )
-    await chapters_api._record_task_quality_metrics(
-        task_id,
-        {
-            "chapter_id": chapter.id,
-            "chapter_number": 1,
-            "overall_score": 88.0,
-            "conflict_chain_hit_rate": 80.0,
-            "rule_grounding_hit_rate": 84.0,
-            "outline_alignment_rate": 86.0,
-            "dialogue_naturalness_rate": 78.0,
-            "opening_hook_rate": 90.0,
-            "payoff_chain_rate": 76.0,
-            "cliffhanger_rate": 92.0,
-            "pacing_score": 8.1,
-        },
-        db_session=session,
-    )
-    await chapters_api._set_task_active_story_repair_payload(
-        task_id,
-        {
-            "summary": "Favor concrete scene pressure and emotional payoff.",
-            "repair_targets": ["Raise external pressure", "Tighten chapter payoff"],
-            "preserve_strengths": ["Keep character voice stable"],
-            "focus_areas": ["pressure", "payoff"],
-            "source": "manual_plus_recent_history_summary",
-            "source_label": "Manual + recent quality trend",
-            "scope": "batch",
-            "updated_at": "2026-03-25T10:00:00",
-        },
-    )
+    async with chapters_session_factory() as session:
+        await chapters_api.publish_task_stream_event(
+            task_id,
+            {
+                "type": "analysis_started",
+                "chapter_id": chapter.id,
+                "chapter_number": 1,
+                "message": "analysis started",
+                "progress": 85,
+                "phase": "parsing",
+            },
+            db_session=session,
+        )
+        await chapters_api._record_task_quality_metrics(
+            task_id,
+            {
+                "chapter_id": chapter.id,
+                "chapter_number": 1,
+                "overall_score": 88.0,
+                "conflict_chain_hit_rate": 80.0,
+                "rule_grounding_hit_rate": 84.0,
+                "outline_alignment_rate": 86.0,
+                "dialogue_naturalness_rate": 78.0,
+                "opening_hook_rate": 90.0,
+                "payoff_chain_rate": 76.0,
+                "cliffhanger_rate": 92.0,
+                "pacing_score": 8.1,
+            },
+            db_session=session,
+        )
+        await chapters_api._set_task_active_story_repair_payload(
+            task_id,
+            {
+                "summary": "Favor concrete scene pressure and emotional payoff.",
+                "repair_targets": ["Raise external pressure", "Tighten chapter payoff"],
+                "preserve_strengths": ["Keep character voice stable"],
+                "focus_areas": ["pressure", "payoff"],
+                "source": "manual_plus_recent_history_summary",
+                "source_label": "Manual + recent quality trend",
+                "scope": "batch",
+                "updated_at": "2026-03-25T10:00:00",
+            },
+            db_session=session,
+        )
 
-    chapters_api.task_quality_metrics_cache.pop(task_id, None)
+    async def clear_runtime_caches() -> None:
+        chapters_api.task_quality_metrics_cache.pop(task_id, None)
+        async with chapters_api.task_workflow_lock:
+            chapters_api.task_workflow_state_cache.pop(task_id, None)
+
+    await clear_runtime_caches()
 
     status_response = await chapters_client.get(f"/api/chapters/batch-generate/{task_id}/status")
     assert status_response.status_code == 200
     status_body = status_response.json()
     assert status_body["stage_code"] == "6.writing.parsing"
+    assert status_body["checkpoint"]["progress_phase"] == "parsing"
     assert status_body["checkpoint"]["last_event"] == "analysis_started"
     assert status_body["latest_quality_metrics"]["overall_score"] == 88.0
     assert status_body["latest_quality_metrics"]["repair_guidance"]["summary"]
@@ -3294,6 +3484,8 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     assert status_body["active_story_repair_payload"]["source"] == "manual_plus_recent_history_summary"
     assert status_body["active_story_repair_payload"]["source_label"] == "Manual + recent quality trend"
 
+    await clear_runtime_caches()
+
     active_response = await chapters_client.get(
         f"/api/chapters/project/{project.id}/batch-generate/active"
     )
@@ -3302,6 +3494,7 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     assert active_body["has_active_task"] is True
     assert active_body["task"]["batch_id"] == task_id
     assert active_body["task"]["checkpoint"]["progress_phase"] == "parsing"
+    assert active_body["task"]["checkpoint"]["last_event"] == "analysis_started"
     assert active_body["task"]["latest_quality_metrics"]["overall_score"] == 88.0
     assert active_body["task"]["latest_quality_metrics"]["repair_guidance"]["focus_areas"]
     assert active_body["task"]["latest_quality_metrics"]["quality_gate"]["status"] == "pass"
@@ -3317,11 +3510,19 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
         )
         snapshot = snapshot_result.scalar_one_or_none()
         assert snapshot is not None
+        assert snapshot.workflow_runtime_state is not None
+        assert snapshot.workflow_runtime_state["phase"] == "parsing"
+        assert snapshot.workflow_runtime_state["last_event"] == "analysis_started"
+        assert snapshot.workflow_runtime_state["active_story_repair_payload"]["source"] == "manual_plus_recent_history_summary"
+
+    await clear_runtime_caches()
 
     active_tasks_response = await chapters_client.get("/api/chapters/batch-generate/active-tasks?limit=10")
     assert active_tasks_response.status_code == 200
     active_tasks_body = active_tasks_response.json()
     active_task_item = next(item for item in active_tasks_body["items"] if item["batch_id"] == task_id)
+    assert active_task_item["checkpoint"]["progress_phase"] == "parsing"
+    assert active_task_item["checkpoint"]["last_event"] == "analysis_started"
     assert active_task_item["active_story_repair_payload"]["source"] == "manual_plus_recent_history_summary"
 
     can_generate_response = await chapters_client.get(f"/api/chapters/{chapter.id}/can-generate")

@@ -7,6 +7,7 @@ from app.models.chapter import Chapter
 from app.models.memory import PlotAnalysis
 from app.schemas.regeneration import ChapterRegenerateRequest, PreserveElementsConfig
 from app.logger import get_logger
+from app.services.story_repair_payload_service import normalize_story_repair_payload
 import difflib
 
 logger = get_logger(__name__)
@@ -208,10 +209,10 @@ class ChapterRegenerator:
         analysis: Optional[PlotAnalysis],
         regenerate_request: ChapterRegenerateRequest
     ) -> str:
-        """??????"""
+        """构建章节重生成的修改指令。"""
 
         instructions: List[str] = []
-        instructions.append("# ??????\n")
+        instructions.append("# 修改要求\n")
 
         selected_suggestions: List[str] = []
         if analysis and regenerate_request.selected_suggestion_indices and analysis.suggestions:
@@ -239,9 +240,14 @@ class ChapterRegenerator:
         effective_focus_areas = _normalize_focus_areas([*explicit_focus_areas, *inferred_focus_areas])
         auto_added_focus_areas = [area for area in effective_focus_areas if area not in explicit_focus_areas]
 
-        repair_summary = str(getattr(regenerate_request, "story_repair_summary", "") or "").strip()
-        repair_targets = _dedupe_text_items(getattr(regenerate_request, "story_repair_targets", []) or [], limit=3)
-        preserve_strengths = _dedupe_text_items(getattr(regenerate_request, "story_preserve_strengths", []) or [], limit=2)
+        repair_payload = normalize_story_repair_payload(
+            getattr(regenerate_request, "story_repair_summary", None),
+            getattr(regenerate_request, "story_repair_targets", []) or [],
+            getattr(regenerate_request, "story_preserve_strengths", []) or [],
+        )
+        repair_summary = repair_payload.summary if repair_payload is not None else ""
+        repair_targets = list(repair_payload.targets) if repair_payload is not None else []
+        preserve_strengths = list(repair_payload.strengths) if repair_payload is not None else []
 
         if not repair_targets and auto_added_focus_areas:
             repair_targets = [
@@ -254,13 +260,13 @@ class ChapterRegenerator:
             repair_summary = f"本轮优先修复：{repair_targets[0]}，不要只做表面润色。"
 
         if selected_suggestions:
-            instructions.append("## ?? ??????????AI????\n")
+            instructions.append("## 选中的 AI 建议\n")
             for idx, suggestion in enumerate(selected_suggestions, start=1):
                 instructions.append(f"{idx}. {suggestion}")
             instructions.append("")
 
         if custom_instructions:
-            instructions.append("## ?? ??????????\n")
+            instructions.append("## 额外修改要求\n")
             instructions.append(custom_instructions)
             instructions.append("")
 
@@ -289,23 +295,23 @@ class ChapterRegenerator:
 
         if regenerate_request.preserve_elements:
             preserve = regenerate_request.preserve_elements
-            instructions.append("## ?? ????????\n")
+            instructions.append("## 需要保留的内容\n")
 
             if preserve.preserve_structure:
-                instructions.append("- ???????????????")
+                instructions.append("- 保留原有段落结构和主要事件顺序")
 
             if preserve.preserve_dialogues:
-                instructions.append("- ???????????")
+                instructions.append("- 保留以下对白：")
                 for dialogue in preserve.preserve_dialogues:
                     instructions.append(f"  * {dialogue}")
 
             if preserve.preserve_plot_points:
-                instructions.append("- ????????????")
+                instructions.append("- 保留以下关键情节点：")
                 for plot in preserve.preserve_plot_points:
                     instructions.append(f"  * {plot}")
 
             if preserve.preserve_character_traits:
-                instructions.append("- ??????????????????")
+                instructions.append("- 保留人物既有性格、语气与核心关系定位")
 
             instructions.append("")
 
