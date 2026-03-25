@@ -2130,9 +2130,12 @@ async def test_should_return_analysis_checker_and_auto_revision_payloads(
     assert body["quality_metrics"]["overall_score"] == 82.4
     assert body["quality_metrics"]["repair_guidance"]["summary"]
     assert body["quality_metrics"]["repair_guidance"]["focus_areas"]
+    assert body["quality_metrics"]["quality_gate"]["status"]
+    assert body["quality_metrics"]["quality_gate"]["decision"]
     assert body["quality_metrics_summary"]["chapter_count"] == 1
     assert body["quality_metrics_summary"]["avg_pacing_score"] == 8.2
     assert body["quality_metrics_summary"]["repair_guidance"]["summary"]
+    assert body["quality_metrics_summary"]["quality_gate"]["status"]
 
     full_response = await chapters_client.get(f"/api/chapters/{chapter.id}/analysis?include_full_draft=true")
     assert full_response.status_code == 200
@@ -2523,12 +2526,14 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     assert status_body["checkpoint"]["last_event"] == "analysis_started"
     assert status_body["latest_quality_metrics"]["overall_score"] == 88.0
     assert status_body["latest_quality_metrics"]["repair_guidance"]["summary"]
+    assert status_body["latest_quality_metrics"]["quality_gate"]["status"] == "pass"
     assert status_body["quality_metrics_summary"]["chapter_count"] == 1
     assert status_body["quality_metrics_summary"]["avg_overall_score"] == 88.0
     assert status_body["quality_metrics_summary"]["avg_outline_alignment_rate"] == 86.0
     assert status_body["quality_metrics_summary"]["avg_dialogue_naturalness_rate"] == 78.0
     assert status_body["quality_metrics_summary"]["avg_pacing_score"] == 8.1
     assert status_body["quality_metrics_summary"]["repair_guidance"]["summary"]
+    assert status_body["quality_metrics_summary"]["quality_gate"]["status"] == "pass"
     assert status_body["active_story_repair_payload"]["source"] == "manual_plus_recent_history_summary"
     assert status_body["active_story_repair_payload"]["source_label"] == "Manual + recent quality trend"
 
@@ -2542,9 +2547,11 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     assert active_body["task"]["checkpoint"]["progress_phase"] == "parsing"
     assert active_body["task"]["latest_quality_metrics"]["overall_score"] == 88.0
     assert active_body["task"]["latest_quality_metrics"]["repair_guidance"]["focus_areas"]
+    assert active_body["task"]["latest_quality_metrics"]["quality_gate"]["status"] == "pass"
     assert active_body["task"]["quality_metrics_summary"]["avg_cliffhanger_rate"] == 92.0
     assert active_body["task"]["quality_metrics_summary"]["avg_pacing_score"] == 8.1
     assert active_body["task"]["quality_metrics_summary"]["repair_guidance"]["focus_areas"]
+    assert active_body["task"]["quality_metrics_summary"]["quality_gate"]["status"] == "pass"
     assert active_body["task"]["active_story_repair_payload"]["source"] == "manual_plus_recent_history_summary"
 
     active_tasks_response = await chapters_client.get("/api/chapters/batch-generate/active-tasks?limit=10")

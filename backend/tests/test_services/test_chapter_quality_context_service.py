@@ -239,11 +239,19 @@ def test_should_build_outline_story_repair_diagnostic_context():
             "focus_areas": ["cliffhanger", "outline"],
             "weakest_metric_label": "章尾牵引",
             "weakest_metric_value": 61.5,
+            "quality_gate_label": "需人工介入",
+            "quality_gate_decision": "manual_review",
+            "quality_gate_summary": "最近章节质量风险较高，建议先人工介入或重写关键桥段，再继续后续生成。",
+            "quality_gate_failed_metrics": ["章尾牵引", "大纲贴合"],
         },
         scene="outline",
     )
 
     assert diagnostic["story_repair_source_label"] == "最近3章质量汇总"
     assert diagnostic["story_repair_focus_areas"] == ["章尾牵引", "大纲贴合"]
+    assert diagnostic["story_repair_quality_gate_label"] == "需人工介入"
+    assert diagnostic["story_repair_quality_gate_failed_metrics"] == ["章尾牵引", "大纲贴合"]
+    assert "质量门禁：需人工介入" in diagnostic["story_repair_diagnostic_block"]
+    assert "门禁失败维度：章尾牵引 / 大纲贴合" in diagnostic["story_repair_diagnostic_block"]
     assert "当前最弱项：章尾牵引（当前值：61.5）" in diagnostic["story_repair_diagnostic_block"]
     assert "先把最弱项拆成每章的目标、阻力、回报与章尾牵引，再统一分配节拍。" in diagnostic["story_repair_diagnostic_block"]

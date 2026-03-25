@@ -425,10 +425,45 @@ export interface StoryRepairGuidance {
   weakest_metric_value?: number | null;
 }
 
+export interface StoryQualityGateMetric {
+  key?: string | null;
+  label?: string | null;
+  value?: number | null;
+  threshold?: number | null;
+  gap?: number | null;
+  focus_area?: string | null;
+  repair_target?: string | null;
+}
+
+export interface StoryQualityGateDecision {
+  status?: "pass" | "repairable" | "blocked" | "unknown" | string;
+  decision?: "allow_save" | "auto_repair" | "manual_review" | "unknown" | string;
+  label?: string;
+  summary?: string;
+  reason?: string;
+  overall_score?: number | null;
+  weak_metric_count?: number;
+  failed_metrics?: StoryQualityGateMetric[];
+  focus_areas?: string[];
+  repair_targets?: string[];
+  allow_save?: boolean;
+  can_auto_repair?: boolean;
+  requires_manual_review?: boolean;
+  weakest_metric_key?: string | null;
+  weakest_metric_label?: string | null;
+  weakest_metric_value?: number | null;
+}
+
 export interface ActiveStoryRepairPayload extends StoryRepairGuidance {
   source?: 'manual_request' | 'current_chapter_quality' | 'recent_history_summary' | 'manual_plus_current_chapter_quality' | 'manual_plus_recent_history_summary' | string;
   source_label?: string | null;
   scope?: 'chapter' | 'batch' | string | null;
+  quality_gate?: StoryQualityGateDecision | null;
+  quality_gate_status?: StoryQualityGateDecision['status'] | null;
+  quality_gate_decision?: StoryQualityGateDecision['decision'] | null;
+  quality_gate_label?: string | null;
+  quality_gate_summary?: string | null;
+  quality_gate_failed_metrics?: string[];
   updated_at?: string | null;
 }
 
@@ -442,6 +477,7 @@ export interface ChapterQualityMetrics {
   payoff_chain_rate: number;
   cliffhanger_rate: number;
   repair_guidance?: StoryRepairGuidance | null;
+  quality_gate?: StoryQualityGateDecision | null;
 }
 
 export interface ChapterLatestQualityMetrics {
@@ -458,6 +494,7 @@ export interface ChapterLatestQualityMetrics {
   history_id?: string | null;
   generated_at?: string | null;
   repair_guidance?: StoryRepairGuidance | null;
+  quality_gate?: StoryQualityGateDecision | null;
 }
 
 export interface ChapterQualityMetricsSummary {
@@ -475,6 +512,7 @@ export interface ChapterQualityMetricsSummary {
   analyzed_chapters?: number;
   last_generated_at?: string | null;
   repair_guidance?: StoryRepairGuidance | null;
+  quality_gate?: StoryQualityGateDecision | null;
 }
 
 export interface ChapterQualityProfileBlockSummary {

@@ -1,6 +1,7 @@
 import json
 
 from app.services.story_quality_feedback_service import (
+    build_quality_gate_decision,
     build_quality_metrics_summary,
     build_story_repair_guidance,
     extract_quality_metrics_from_history_payload,
@@ -51,6 +52,70 @@ def test_should_support_batch_summary_and_pacing_guidance():
     assert guidance["summary"].startswith("这一批章节")
 
 
+def test_should_build_pass_quality_gate_from_stable_metrics():
+    quality_gate = build_quality_gate_decision(
+        {
+            "overall_score": 88.0,
+            "conflict_chain_hit_rate": 86.0,
+            "rule_grounding_hit_rate": 87.0,
+            "outline_alignment_rate": 84.0,
+            "dialogue_naturalness_rate": 81.0,
+            "opening_hook_rate": 80.0,
+            "payoff_chain_rate": 78.0,
+            "cliffhanger_rate": 83.0,
+            "pacing_score": 8.1,
+        },
+        scope="chapter",
+    )
+
+    assert quality_gate["status"] == "pass"
+    assert quality_gate["decision"] == "allow_save"
+    assert quality_gate["allow_save"] is True
+    assert quality_gate["weak_metric_count"] == 0
+
+
+def test_should_build_repairable_quality_gate_from_single_weak_metric():
+    quality_gate = build_quality_gate_decision(
+        {
+            "avg_overall_score": 76.0,
+            "avg_conflict_chain_hit_rate": 70.0,
+            "avg_rule_grounding_hit_rate": 84.0,
+            "avg_outline_alignment_rate": 82.0,
+            "avg_dialogue_naturalness_rate": 79.0,
+            "avg_opening_hook_rate": 76.0,
+            "avg_payoff_chain_rate": 80.0,
+            "avg_cliffhanger_rate": 78.0,
+            "avg_pacing_score": 5.9,
+        },
+        scope="batch",
+    )
+
+    assert quality_gate["status"] == "repairable"
+    assert quality_gate["decision"] == "auto_repair"
+    assert quality_gate["can_auto_repair"] is True
+    assert quality_gate["failed_metrics"][0]["label"] == "节奏稳定度"
+
+
+def test_should_build_blocked_quality_gate_from_multiple_weak_metrics():
+    quality_gate = build_quality_gate_decision(
+        {
+            "conflict_chain_hit_rate": 48.0,
+            "rule_grounding_hit_rate": 72.0,
+            "outline_alignment_rate": 54.0,
+            "dialogue_naturalness_rate": 83.0,
+            "opening_hook_rate": 61.0,
+            "payoff_chain_rate": 75.0,
+            "cliffhanger_rate": 69.0,
+        },
+        scope="chapter",
+    )
+
+    assert quality_gate["status"] == "blocked"
+    assert quality_gate["decision"] == "manual_review"
+    assert quality_gate["requires_manual_review"] is True
+    assert quality_gate["weak_metric_count"] == 3
+
+
 def test_should_extract_quality_metrics_from_history_payload_with_guidance():
     generated_content = json.dumps(
         {
@@ -73,6 +138,8 @@ def test_should_extract_quality_metrics_from_history_payload_with_guidance():
     assert metrics["outline_alignment_rate"] == 63.0
     assert metrics["repair_guidance"]["weakest_metric_key"] == "conflict_chain_hit_rate"
     assert metrics["repair_guidance"]["focus_areas"][0] == "conflict"
+    assert metrics["quality_gate"]["status"] == "blocked"
+    assert metrics["quality_gate"]["failed_metrics"][0]["label"] == "冲突链推进"
 
 
 def test_should_build_outline_quality_metrics_summary_from_recent_history():
@@ -107,3 +174,5 @@ def test_should_build_outline_quality_metrics_summary_from_recent_history():
     assert summary["avg_outline_alignment_rate"] == 62.5
     assert summary["repair_guidance"]["summary"].startswith("最近章节")
     assert summary["repair_guidance"]["focus_areas"]
+    assert summary["quality_gate"]["status"] == "blocked"
+    assert summary["quality_gate"]["failed_metrics"][0]["label"] == "冲突链推进"

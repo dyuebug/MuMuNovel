@@ -66,6 +66,7 @@ from app.services.chapter_web_research_service import chapter_web_research_servi
 from app.services.foreshadow_service import foreshadow_service
 from app.services.chapter_regenerator import ChapterRegenerator
 from app.services.story_quality_feedback_service import (
+    build_quality_gate_decision,
     build_quality_metrics_summary,
     build_story_repair_guidance,
     extract_quality_metrics_from_history_payload,
@@ -668,6 +669,7 @@ def compute_story_quality_metrics(
         }
     }
     metrics["repair_guidance"] = build_story_repair_guidance(metrics, scope="chapter")
+    metrics["quality_gate"] = build_quality_gate_decision(metrics, scope="chapter")
     return metrics
 
 
@@ -676,6 +678,8 @@ def _build_generation_history_payload(content: str, metrics: Dict[str, Any]) -> 
     normalized_metrics = dict(metrics or {})
     if normalized_metrics and not isinstance(normalized_metrics.get("repair_guidance"), dict):
         normalized_metrics["repair_guidance"] = build_story_repair_guidance(normalized_metrics, scope="chapter")
+    if normalized_metrics and not isinstance(normalized_metrics.get("quality_gate"), dict):
+        normalized_metrics["quality_gate"] = build_quality_gate_decision(normalized_metrics, scope="chapter")
 
     payload = {
         "log_type": "chapter_generation_quality_v1",
@@ -1076,7 +1080,7 @@ def _build_quality_metrics_summary(history: List[Dict[str, Any]]) -> Optional[Di
 
 
 async def _record_task_quality_metrics(task_id: str, metrics_event: Dict[str, Any]):
-    """Record task-level quality metric snapshots for polling APIs."""
+    """记录任务级质量指标事件，用于轮询和恢复。"""
     async with task_quality_lock:
         current = task_quality_metrics_cache.get(task_id) or {
             "latest": None,
@@ -1086,6 +1090,8 @@ async def _record_task_quality_metrics(task_id: str, metrics_event: Dict[str, An
         normalized_event = dict(metrics_event or {})
         if normalized_event and not isinstance(normalized_event.get("repair_guidance"), dict):
             normalized_event["repair_guidance"] = build_story_repair_guidance(normalized_event, scope="chapter")
+        if normalized_event and not isinstance(normalized_event.get("quality_gate"), dict):
+            normalized_event["quality_gate"] = build_quality_gate_decision(normalized_event, scope="chapter")
 
         current["latest"] = normalized_event
         history = current.get("history") or []
@@ -1216,6 +1222,23 @@ def _resolve_story_repair_guidance_from_metrics(
     return dict(guidance) if isinstance(guidance, dict) else None
 
 
+def _resolve_quality_gate_from_metrics(
+    metrics: Optional[Dict[str, Any]],
+    *,
+    scope: str,
+    prefer_embedded_quality_gate: bool = True,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(metrics, dict):
+        return None
+
+    quality_gate = metrics.get("quality_gate") if prefer_embedded_quality_gate else None
+    if not isinstance(quality_gate, dict):
+        derived_quality_gate = build_quality_gate_decision(metrics, scope=scope)
+        quality_gate = derived_quality_gate if isinstance(derived_quality_gate, dict) else None
+
+    return dict(quality_gate) if isinstance(quality_gate, dict) else None
+
+
 def _resolve_story_repair_runtime_source(
     *,
     explicit_payload: Optional[StoryRepairPayload],
@@ -1240,15 +1263,22 @@ def _build_story_repair_runtime_snapshot(
     scope: str,
     source: Optional[str],
     guidance: Optional[Dict[str, Any]] = None,
+    quality_gate: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     if payload is None or not source:
         return None
 
     guidance_payload = guidance if isinstance(guidance, dict) else {}
+    quality_gate_payload = quality_gate if isinstance(quality_gate, dict) else {}
     summary = payload.summary or str(guidance_payload.get("summary") or "").strip() or None
     weakest_metric_key = guidance_payload.get("weakest_metric_key")
     weakest_metric_label = guidance_payload.get("weakest_metric_label")
     weakest_metric_value = guidance_payload.get("weakest_metric_value")
+    failed_metric_labels = [
+        item.get("label")
+        for item in (quality_gate_payload.get("failed_metrics") or [])
+        if isinstance(item, dict) and isinstance(item.get("label"), str) and item.get("label")
+    ]
 
     return {
         "summary": summary,
@@ -1258,6 +1288,12 @@ def _build_story_repair_runtime_snapshot(
         "weakest_metric_key": weakest_metric_key if isinstance(weakest_metric_key, str) and weakest_metric_key else None,
         "weakest_metric_label": weakest_metric_label if isinstance(weakest_metric_label, str) and weakest_metric_label else None,
         "weakest_metric_value": weakest_metric_value if isinstance(weakest_metric_value, (int, float)) else None,
+        "quality_gate": dict(quality_gate_payload) if quality_gate_payload else None,
+        "quality_gate_status": quality_gate_payload.get("status") if isinstance(quality_gate_payload.get("status"), str) else None,
+        "quality_gate_decision": quality_gate_payload.get("decision") if isinstance(quality_gate_payload.get("decision"), str) else None,
+        "quality_gate_label": quality_gate_payload.get("label") if isinstance(quality_gate_payload.get("label"), str) else None,
+        "quality_gate_summary": quality_gate_payload.get("summary") if isinstance(quality_gate_payload.get("summary"), str) else None,
+        "quality_gate_failed_metrics": failed_metric_labels,
         "source": source,
         "source_label": STORY_REPAIR_SOURCE_LABELS.get(source, source),
         "scope": scope,
@@ -1359,6 +1395,11 @@ async def _resolve_generation_story_repair_state_for_batch(
         scope="batch",
         prefer_embedded_guidance=False,
     ) if summary_metrics else None
+    derived_quality_gate = _resolve_quality_gate_from_metrics(
+        summary_metrics,
+        scope="batch",
+        prefer_embedded_quality_gate=False,
+    ) if summary_metrics else None
     payload = merge_story_repair_payload(explicit_payload, derived_payload)
     source = _resolve_story_repair_runtime_source(
         explicit_payload=explicit_payload,
@@ -1372,6 +1413,7 @@ async def _resolve_generation_story_repair_state_for_batch(
             scope="batch",
             source=source,
             guidance=derived_guidance,
+            quality_gate=derived_quality_gate,
         ),
     }
 
@@ -1394,6 +1436,7 @@ async def _resolve_generation_story_repair_state_for_chapter(
     if current_metrics:
         derived_payload = build_story_repair_payload_from_metrics(current_metrics[0], scope="chapter")
         derived_guidance = _resolve_story_repair_guidance_from_metrics(current_metrics[0], scope="chapter")
+        derived_quality_gate = _resolve_quality_gate_from_metrics(current_metrics[0], scope="chapter")
         payload = merge_story_repair_payload(explicit_payload, derived_payload)
         source = _resolve_story_repair_runtime_source(
             explicit_payload=explicit_payload,
@@ -1407,6 +1450,7 @@ async def _resolve_generation_story_repair_state_for_chapter(
                 scope="chapter",
                 source=source,
                 guidance=derived_guidance,
+                quality_gate=derived_quality_gate,
             ),
         }
 
@@ -1443,6 +1487,11 @@ async def _resolve_generation_story_repair_state_for_chapter(
         scope="chapter",
         prefer_embedded_guidance=False,
     ) if summary_metrics else None
+    derived_quality_gate = _resolve_quality_gate_from_metrics(
+        summary_metrics,
+        scope="chapter",
+        prefer_embedded_quality_gate=False,
+    ) if summary_metrics else None
     payload = merge_story_repair_payload(explicit_payload, derived_payload)
     source = _resolve_story_repair_runtime_source(
         explicit_payload=explicit_payload,
@@ -1456,6 +1505,7 @@ async def _resolve_generation_story_repair_state_for_chapter(
             scope="chapter",
             source=source,
             guidance=derived_guidance,
+            quality_gate=derived_quality_gate,
         ),
     }
 

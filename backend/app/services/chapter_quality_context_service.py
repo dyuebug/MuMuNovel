@@ -214,6 +214,10 @@ def build_story_repair_diagnostic_context(
         "story_repair_focus_areas": [],
         "story_repair_weakest_metric_label": "",
         "story_repair_weakest_metric_value": None,
+        "story_repair_quality_gate_label": "",
+        "story_repair_quality_gate_decision": "",
+        "story_repair_quality_gate_summary": "",
+        "story_repair_quality_gate_failed_metrics": [],
         "story_repair_diagnostic_block": "",
     }
     if not isinstance(active_story_repair_payload, Mapping):
@@ -231,13 +235,35 @@ def build_story_repair_diagnostic_context(
     )
     weakest_metric_text = _format_story_repair_metric_value(weakest_metric_value)
     summary = str(active_story_repair_payload.get("summary") or "").strip()
+    quality_gate_label = str(active_story_repair_payload.get("quality_gate_label") or "").strip()
+    quality_gate_decision = str(active_story_repair_payload.get("quality_gate_decision") or "").strip()
+    quality_gate_summary = str(active_story_repair_payload.get("quality_gate_summary") or "").strip()
+    quality_gate_failed_metrics = _normalize_story_repair_prompt_items(
+        active_story_repair_payload.get("quality_gate_failed_metrics"),
+        limit=4,
+    )
 
     closing_line = "先把最弱项拆成每章的目标、阻力、回报与章尾牵引，再统一分配节拍。" if scene == "outline" else "先修最弱项对应的事件、动作与后果，再统一润色语言。"
     diagnostic_block = ""
-    if weakest_metric_label or focus_areas or source in STORY_REPAIR_QUALITY_SIGNAL_SOURCES:
+    if (
+        weakest_metric_label
+        or focus_areas
+        or quality_gate_label
+        or quality_gate_summary
+        or source in STORY_REPAIR_QUALITY_SIGNAL_SOURCES
+    ):
         lines = ["【诊断优先级卡】"]
         if source_label:
             lines.append(f"- 诊断来源：{source_label}")
+        if quality_gate_label:
+            gate_line = quality_gate_label
+            if quality_gate_summary and quality_gate_summary != summary:
+                gate_line = f"{gate_line}（{quality_gate_summary}）"
+            lines.append(f"- 质量门禁：{gate_line}")
+        elif quality_gate_summary:
+            lines.append(f"- 质量门禁：{quality_gate_summary}")
+        if quality_gate_failed_metrics:
+            lines.append("- 门禁失败维度：" + " / ".join(quality_gate_failed_metrics))
         if weakest_metric_label:
             metric_line = weakest_metric_label
             if weakest_metric_text:
@@ -256,6 +282,10 @@ def build_story_repair_diagnostic_context(
         "story_repair_focus_areas": focus_areas,
         "story_repair_weakest_metric_label": weakest_metric_label,
         "story_repair_weakest_metric_value": weakest_metric_value,
+        "story_repair_quality_gate_label": quality_gate_label,
+        "story_repair_quality_gate_decision": quality_gate_decision,
+        "story_repair_quality_gate_summary": quality_gate_summary,
+        "story_repair_quality_gate_failed_metrics": quality_gate_failed_metrics,
         "story_repair_diagnostic_block": diagnostic_block,
     }
 
