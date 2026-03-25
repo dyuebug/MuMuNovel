@@ -65,7 +65,7 @@ def normalize_story_repair_payload(
     strengths: Optional[Sequence[str]] = None,
 ) -> Optional[StoryRepairPayload]:
     normalized_summary = _normalize_text(summary)
-    normalized_targets = _normalize_items(targets, limit=3)
+    normalized_targets = _normalize_items(targets, limit=4)
     normalized_strengths = _normalize_items(strengths, limit=2)
 
     if not normalized_summary and not normalized_targets and not normalized_strengths:

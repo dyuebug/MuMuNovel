@@ -553,6 +553,31 @@ export interface StoryPacingImbalanceSummary {
   summary?: string;
 }
 
+export interface StoryVolumeGoalCompletionSummary {
+  status?: "stable" | "watch" | "warning" | string;
+  completion_rate?: number | null;
+  expected_stage?: string;
+  expected_stage_label?: string;
+  current_stage?: string;
+  current_stage_label?: string;
+  stage_alignment?: number | null;
+  focus_areas?: string[];
+  repair_targets?: string[];
+  summary?: string;
+}
+
+export interface StoryForeshadowPayoffDelaySummary {
+  status?: "stable" | "watch" | "warning" | string;
+  delay_index?: number | null;
+  plan_count?: number;
+  backlog_count?: number;
+  recent_payoff_rate?: number | null;
+  recent_payoff_momentum?: number | null;
+  focus_areas?: string[];
+  repair_targets?: string[];
+  summary?: string;
+}
+
 export interface ChapterQualityMetricsSummary {
   avg_overall_score?: number;
   avg_conflict_chain_hit_rate?: number;
@@ -576,6 +601,8 @@ export interface ChapterQualityMetricsSummary {
   recent_auto_repair_count?: number;
   continuity_preflight?: StoryContinuityPreflight | null;
   pacing_imbalance?: StoryPacingImbalanceSummary | null;
+  volume_goal_completion?: StoryVolumeGoalCompletionSummary | null;
+  foreshadow_payoff_delay?: StoryForeshadowPayoffDelaySummary | null;
   repair_guidance?: StoryRepairGuidance | null;
   quality_gate?: StoryQualityGateDecision | null;
 }

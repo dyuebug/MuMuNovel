@@ -721,6 +721,14 @@ def _aggregate_quality_runtime_context(history: Sequence[Mapping[str, Any]]) -> 
     contexts.sort(key=lambda item: (_safe_float(item.get("current_chapter_number")) or 0.0, _safe_float(item.get("chapter_count")) or 0.0))
     latest = contexts[-1]
     merged = dict(latest)
+    merged["character_focus"] = _normalize_runtime_items(
+        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_items(ctx.get("character_focus"), limit=4)],
+        limit=4,
+    )
+    merged["foreshadow_payoff_plan"] = _normalize_runtime_items(
+        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_items(ctx.get("foreshadow_payoff_plan"), limit=6)],
+        limit=6,
+    )
     merged["character_state_ledger"] = _normalize_runtime_items(
         [entry for ctx in contexts[-3:] for entry in _normalize_runtime_items(ctx.get("character_state_ledger"), limit=4)],
         limit=4,
@@ -1127,6 +1135,210 @@ def advance_quality_metrics_summary_state(
 
 
 
+def _infer_progress_stage(runtime_context: Mapping[str, Any]) -> Optional[str]:
+    if not isinstance(runtime_context, Mapping):
+        return None
+    current = _safe_float(runtime_context.get("current_chapter_number"))
+    total = _safe_float(runtime_context.get("chapter_count"))
+    if current is None or total is None or total <= 0:
+        return None
+    progress = current / total
+    if progress <= 0.22:
+        return "opening"
+    if progress >= 0.78:
+        return "ending"
+    return "development"
+
+
+
+def _resolve_summary_metric_value(summary: Mapping[str, Any], metric_key: str) -> Optional[float]:
+    if metric_key == "pacing_score":
+        value = _safe_float(summary.get("avg_pacing_score"))
+        return round(value * 10, 1) if value is not None else None
+    return _safe_float(summary.get(f"avg_{metric_key}"))
+
+
+
+def _build_volume_goal_completion_summary(summary: Mapping[str, Any]) -> Dict[str, Any]:
+    runtime_context = _extract_quality_runtime_context(summary)
+    if not runtime_context:
+        return {}
+
+    expected_stage = _infer_progress_stage(runtime_context)
+    current_stage = _resolve_quality_stage(runtime_context) or expected_stage
+    resolved_stage = expected_stage or current_stage
+    if not resolved_stage:
+        return {}
+
+    if resolved_stage == "opening":
+        metric_specs = (
+            ("opening_hook_rate", "opening", "开场钩子"),
+            ("outline_alignment_rate", "outline", "大纲贴合"),
+            ("conflict_chain_hit_rate", "conflict", "冲突链推进"),
+        )
+        stage_goal = "开篇阶段需要把主目标、异常与初始阻力快速立起来。"
+        default_targets = [
+            "尽快抛出主线目标或异常，不要用整章解释背景。",
+            "让主角在本章就遭遇第一次明确受阻或代价。",
+        ]
+    elif resolved_stage == "ending":
+        metric_specs = (
+            ("payoff_chain_rate", "payoff", "回报兑现"),
+            ("outline_alignment_rate", "outline", "大纲贴合"),
+            ("cliffhanger_rate", "cliffhanger", "章尾牵引"),
+            ("conflict_chain_hit_rate", "conflict", "冲突链推进"),
+        )
+        stage_goal = "收束阶段需要完成阶段兑现、冲突回收与下一步牵引。"
+        default_targets = [
+            "优先回收已经承诺的结果、伏笔或关系变化，不要继续横向开新坑。",
+            "让阶段冲突形成结果、损失或站队变化，并保留下一步牵引。",
+        ]
+    else:
+        metric_specs = (
+            ("conflict_chain_hit_rate", "conflict", "冲突链推进"),
+            ("outline_alignment_rate", "outline", "大纲贴合"),
+            ("pacing_score", "pacing", "节奏稳定度"),
+            ("payoff_chain_rate", "payoff", "回报兑现"),
+        )
+        stage_goal = "发展阶段需要把卷内任务拆成可见动作、反制和局势位移。"
+        default_targets = [
+            "把当前卷的阶段目标拆成可见动作，不要只做解释性铺陈。",
+            "至少推进一条主线矛盾，并让角色因此付出新代价。",
+        ]
+
+    metric_values: list[float] = []
+    weak_labels: list[str] = []
+    focus_areas: list[str] = []
+    for metric_key, focus_area, label in metric_specs:
+        value = _resolve_summary_metric_value(summary, metric_key)
+        if value is None:
+            continue
+        metric_values.append(value)
+        if value < 72.0:
+            weak_labels.append(label)
+            focus_areas.append(focus_area)
+
+    if not metric_values:
+        return {}
+
+    base_completion = _average_metric_values(metric_values)
+    if base_completion is None:
+        return {}
+
+    stage_alignment = None
+    if expected_stage and current_stage:
+        stage_sequence = ("opening", "development", "ending")
+        expected_index = stage_sequence.index(expected_stage) if expected_stage in stage_sequence else None
+        current_index = stage_sequence.index(current_stage) if current_stage in stage_sequence else None
+        if expected_index is not None and current_index is not None:
+            stage_alignment = max(40.0, 100.0 - abs(expected_index - current_index) * 35.0)
+    completion_rate = round(((base_completion * 0.72) + ((stage_alignment if stage_alignment is not None else 85.0) * 0.28)), 1)
+
+    repair_targets: list[str] = []
+    if stage_alignment is not None and expected_stage and current_stage and expected_stage != current_stage:
+        repair_targets.append(
+            f"按章节进度应进入{QUALITY_STAGE_LABELS.get(expected_stage, expected_stage)}，但当前表现仍偏向{QUALITY_STAGE_LABELS.get(current_stage, current_stage)}，本章要主动拉回阶段任务。"
+        )
+    repair_targets.extend(default_targets)
+
+    status = "stable"
+    if completion_rate < 68.0:
+        status = "warning"
+    elif completion_rate < 78.0:
+        status = "watch"
+
+    expected_label = QUALITY_STAGE_LABELS.get(expected_stage or "", expected_stage or "")
+    current_label = QUALITY_STAGE_LABELS.get(current_stage or "", current_stage or "")
+    weak_label_text = " / ".join(weak_labels[:3])
+    summary_text = f"卷级目标达成率约 {completion_rate:.1f}%，{stage_goal}"
+    if stage_alignment is not None and expected_stage and current_stage and expected_stage != current_stage:
+        summary_text = (
+            f"卷级目标达成率约 {completion_rate:.1f}%，按章节进度应处于{expected_label}，"
+            f"但当前质量信号更接近{current_label}，说明阶段任务完成度不足。"
+        )
+    elif weak_label_text:
+        summary_text = f"卷级目标达成率约 {completion_rate:.1f}%，当前主要拖累项为{weak_label_text}。"
+
+    return {
+        "status": status,
+        "completion_rate": completion_rate,
+        "expected_stage": expected_stage or "",
+        "expected_stage_label": expected_label,
+        "current_stage": current_stage or "",
+        "current_stage_label": current_label,
+        "stage_alignment": round(stage_alignment, 1) if isinstance(stage_alignment, (int, float)) else None,
+        "summary": summary_text,
+        "focus_areas": _normalize_runtime_items(focus_areas, limit=4),
+        "repair_targets": _normalize_runtime_items(repair_targets, limit=4),
+    }
+
+
+
+def _build_foreshadow_payoff_delay_summary(summary: Mapping[str, Any]) -> Dict[str, Any]:
+    runtime_context = _extract_quality_runtime_context(summary)
+    foreshadow_payoff_plan = _normalize_runtime_items(runtime_context.get("foreshadow_payoff_plan"), limit=6)
+    foreshadow_state_ledger = _normalize_runtime_items(runtime_context.get("foreshadow_state_ledger"), limit=6)
+    recent_payoff_rate = _safe_float(summary.get("avg_payoff_chain_rate"))
+    pacing_imbalance = summary.get("pacing_imbalance") if isinstance(summary.get("pacing_imbalance"), Mapping) else {}
+    recent_payoff_momentum = _safe_float(pacing_imbalance.get("recent_payoff_momentum"))
+
+    if not foreshadow_payoff_plan and not foreshadow_state_ledger and recent_payoff_rate is None:
+        return {}
+
+    outstanding_count = max(len(foreshadow_payoff_plan), len(foreshadow_state_ledger))
+    current = _safe_float(runtime_context.get("current_chapter_number"))
+    total = _safe_float(runtime_context.get("chapter_count"))
+    progress_ratio = (current / total) if current is not None and total not in {None, 0} else None
+
+    backlog_pressure = min(100.0, outstanding_count * 18.0)
+    payoff_gap = max(0.0, 78.0 - recent_payoff_rate) if recent_payoff_rate is not None else (18.0 if outstanding_count > 0 else 0.0)
+    momentum_gap = max(0.0, 76.0 - recent_payoff_momentum) if recent_payoff_momentum is not None else (10.0 if outstanding_count > 1 else 0.0)
+    progress_multiplier = 1.0
+    if progress_ratio is not None and progress_ratio >= 0.75:
+        progress_multiplier = 1.15
+    elif progress_ratio is not None and progress_ratio >= 0.55:
+        progress_multiplier = 1.05
+
+    delay_index = round(min(100.0, (backlog_pressure * 0.45 + payoff_gap * 0.35 + momentum_gap * 0.20) * progress_multiplier), 1)
+
+    status = "stable"
+    if delay_index >= 55.0 or ((progress_ratio or 0.0) >= 0.7 and outstanding_count >= 3):
+        status = "warning"
+    elif delay_index >= 35.0 or outstanding_count >= 2:
+        status = "watch"
+
+    repair_targets: list[str] = []
+    if foreshadow_payoff_plan:
+        repair_targets.append(f"优先兑现伏笔计划中的至少 1 条：{' / '.join(foreshadow_payoff_plan[:2])}。")
+    if outstanding_count >= 3:
+        repair_targets.append("减少新增悬念，把已有伏笔写成结果、损失或信息揭示。")
+    if (progress_ratio or 0.0) >= 0.72:
+        repair_targets.append("临近收束阶段，未兑现伏笔必须与主线结果绑定，避免尾部堆积。")
+    if not repair_targets and recent_payoff_rate is not None and recent_payoff_rate < 72.0:
+        repair_targets.append("本章至少回收一个既有伏笔、承诺或情绪账，避免继续透支悬念。")
+
+    backlog_label = ' / '.join(foreshadow_state_ledger[:2])
+    summary_text = f"伏笔兑现延迟指数 {delay_index:.1f}，当前仍有 {outstanding_count} 项伏笔/承诺需要清偿。"
+    if backlog_label:
+        summary_text = f"伏笔兑现延迟指数 {delay_index:.1f}，待清偿重点包括 {backlog_label}。"
+
+    focus_areas = ["payoff", "cliffhanger"]
+    if (progress_ratio or 0.0) >= 0.72:
+        focus_areas.append("outline")
+
+    return {
+        "status": status,
+        "delay_index": delay_index,
+        "plan_count": len(foreshadow_payoff_plan),
+        "backlog_count": len(foreshadow_state_ledger),
+        "recent_payoff_rate": round(recent_payoff_rate, 1) if isinstance(recent_payoff_rate, (int, float)) else None,
+        "recent_payoff_momentum": round(recent_payoff_momentum, 1) if isinstance(recent_payoff_momentum, (int, float)) else None,
+        "summary": summary_text,
+        "focus_areas": _normalize_runtime_items(focus_areas, limit=4),
+        "repair_targets": _normalize_runtime_items(repair_targets, limit=4),
+    }
+
+
 def build_quality_metrics_summary_from_state(
     summary_state: Optional[Mapping[str, Any]],
     *,
@@ -1219,6 +1431,12 @@ def build_quality_metrics_summary_from_state(
     pacing_imbalance = _build_pacing_imbalance_summary(recent_history)
     if pacing_imbalance:
         summary["pacing_imbalance"] = pacing_imbalance
+    volume_goal_completion = _build_volume_goal_completion_summary(summary)
+    if volume_goal_completion:
+        summary["volume_goal_completion"] = volume_goal_completion
+    foreshadow_payoff_delay = _build_foreshadow_payoff_delay_summary(summary)
+    if foreshadow_payoff_delay:
+        summary["foreshadow_payoff_delay"] = foreshadow_payoff_delay
     summary["repair_guidance"] = build_story_repair_guidance(summary, scope=scope)
     summary["quality_gate"] = build_quality_gate_decision(summary, scope=scope)
     return summary
@@ -1247,6 +1465,9 @@ def build_story_repair_guidance(
 
     runtime_context = _extract_quality_runtime_context(metrics)
     continuity_preflight = _extract_continuity_preflight(metrics)
+    pacing_imbalance = metrics.get("pacing_imbalance") if isinstance(metrics.get("pacing_imbalance"), Mapping) else {}
+    volume_goal_completion = metrics.get("volume_goal_completion") if isinstance(metrics.get("volume_goal_completion"), Mapping) else {}
+    foreshadow_payoff_delay = metrics.get("foreshadow_payoff_delay") if isinstance(metrics.get("foreshadow_payoff_delay"), Mapping) else {}
     stage = _resolve_quality_stage(runtime_context)
     stage_label = QUALITY_STAGE_LABELS.get(stage, "")
     analysis = _split_metric_items(_collect_metric_items(metrics, runtime_context=runtime_context))
@@ -1285,6 +1506,29 @@ def build_story_repair_guidance(
     if continuity_focus_areas:
         focus_areas = continuity_focus_areas + focus_areas
 
+    priority_signal_summaries: list[str] = []
+    for signal_payload in (volume_goal_completion, foreshadow_payoff_delay, pacing_imbalance):
+        signal_status = str(signal_payload.get("status") or "").strip().lower()
+        if signal_status not in {"watch", "warning"}:
+            continue
+        signal_summary = str(signal_payload.get("summary") or "").strip()
+        if signal_summary:
+            priority_signal_summaries.append(signal_summary)
+        signal_targets = [
+            str(target).strip()
+            for target in (signal_payload.get("repair_targets") or [])
+            if str(target).strip()
+        ]
+        signal_focus_areas = [
+            str(area).strip()
+            for area in (signal_payload.get("focus_areas") or [])
+            if str(area).strip()
+        ]
+        if signal_targets:
+            repair_targets = signal_targets + repair_targets
+        if signal_focus_areas:
+            focus_areas = signal_focus_areas + focus_areas
+
     pressure = _build_runtime_pressure(runtime_context)
     if "payoff" in focus_areas and pressure["foreshadow_state_items"]:
         repair_targets.insert(0, f"优先回应伏笔账本：{' / '.join(pressure['foreshadow_state_items'][:2])}。")
@@ -1313,6 +1557,11 @@ def build_story_repair_guidance(
         else:
             summary = f"{scope_label}整体稳定，可继续保持{strongest_label}上的优势。"
 
+    if priority_signal_summaries:
+        signal_summary = next((item for item in priority_signal_summaries if item not in summary), "")
+        if signal_summary:
+            summary = f"{summary} {signal_summary}"
+
     return {
         "summary": summary,
         "repair_targets": repair_targets,
@@ -1325,6 +1574,7 @@ def build_story_repair_guidance(
         "quality_stage_label": stage_label,
         "quality_runtime_pressure": pressure,
     }
+
 
 def build_quality_gate_decision(
     metrics: Mapping[str, Any],

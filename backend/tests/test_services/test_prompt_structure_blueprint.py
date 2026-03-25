@@ -85,6 +85,16 @@ def test_should_inject_story_quality_trend_block_into_chapter_quality_contract()
                     }
                 ],
             },
+            "volume_goal_completion": {
+                "completion_rate": 68.5,
+                "summary": "卷级目标达成率约 68.5%，按章节进度应处于收束段，但当前质量信号更接近发展段，说明阶段任务完成度不足。",
+                "repair_targets": ["让阶段冲突形成结果、损失或站队变化，并保留下一步牵引。"],
+            },
+            "foreshadow_payoff_delay": {
+                "delay_index": 57.2,
+                "summary": "伏笔兑现延迟指数 57.2，待清偿重点包括 王城密钥 / 苏离盟约。",
+                "repair_targets": ["优先兑现伏笔计划中的至少 1 条：王城密钥 / 苏离盟约。"],
+            },
             "continuity_preflight": {
                 "summary": "Recent chapters show 2 continuity handoff gaps.",
                 "repair_targets": ["Carry forward the alliance tension in action."],
@@ -95,6 +105,8 @@ def test_should_inject_story_quality_trend_block_into_chapter_quality_contract()
     assert "【章节近期质量趋势】" in blocks["story_quality_trend_block"]
     assert "最近节奏稳定度均值：8.1/10" in blocks["story_quality_trend_block"]
     assert "最近回报兑现均值：76.0%" in blocks["story_quality_trend_block"]
+    assert "卷级目标达成率：68.5%" in blocks["story_quality_trend_block"]
+    assert "伏笔兑现延迟指数：57.2" in blocks["story_quality_trend_block"]
     assert "长篇节奏信号：最近 5 章出现中段拖滞风险" in blocks["story_quality_trend_block"]
     assert "中段拖滞（预警，指标 61.2）" in blocks["story_quality_trend_block"]
     assert "Recent chapters show 2 continuity handoff gaps." in blocks["story_quality_trend_block"]

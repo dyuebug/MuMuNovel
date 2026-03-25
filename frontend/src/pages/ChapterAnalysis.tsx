@@ -13,7 +13,8 @@ import { useParams } from 'react-router-dom';
 import api, { chapterApi } from '../services/api';
 import AnnotatedText, { type MemoryAnnotation } from '../components/AnnotatedText';
 import MemorySidebar from '../components/MemorySidebar';
-import type { ChapterAnalysisResponse, ChapterQualityMetrics } from '../types';
+import ProjectQualityTrendPanel from '../components/ProjectQualityTrendPanel';
+import type { ChapterAnalysisResponse, ChapterQualityMetrics, ProjectChapterQualityTrendResponse } from '../types';
 import {
   renderCompactFactCard,
   renderCompactFactGrid,
@@ -85,6 +86,7 @@ const ChapterAnalysis: React.FC = () => {
   const [selectedChapter, setSelectedChapter] = useState<ChapterItem | null>(null);
   const [annotationsData, setAnnotationsData] = useState<AnnotationsData | null>(null);
   const [analysisDetail, setAnalysisDetail] = useState<ChapterAnalysisResponse | null>(null);
+  const [projectQualityTrend, setProjectQualityTrend] = useState<ProjectChapterQualityTrendResponse | null>(null);
   const [navigation, setNavigation] = useState<NavigationData | null>(null);
   const [loading, setLoading] = useState(true);
   const [contentLoading, setContentLoading] = useState(false);
@@ -114,11 +116,18 @@ const ChapterAnalysis: React.FC = () => {
       
       try {
         setLoading(true);
-        const response = await api.get(`/chapters/project/${projectId}`);
+        const [response, trendResponse] = await Promise.all([
+          api.get(`/chapters/project/${projectId}`),
+          chapterApi.getProjectChapterQualityTrend(projectId, 12).catch((trendError) => {
+            console.error('加载项目质量趋势失败:', trendError);
+            return null;
+          }),
+        ]);
         // API 拦截器已经解析了 response.data，所以直接使用
         const data = response.data || response;
         const chapterList = data.items || [];
         setChapters(chapterList);
+        setProjectQualityTrend(trendResponse);
         
         // 自动选择第一个有内容的章节
         const firstChapterWithContent = chapterList.find((ch: ChapterItem) => ch.content && ch.content.trim() !== '');
@@ -126,6 +135,7 @@ const ChapterAnalysis: React.FC = () => {
           loadChapterContent(firstChapterWithContent.id);
         }
       } catch (error) {
+        setProjectQualityTrend(null);
         console.error('加载章节列表失败:', error);
         message.error('加载章节列表失败');
       } finally {
@@ -542,6 +552,12 @@ const ChapterAnalysis: React.FC = () => {
                 </div>
               )}
             </Card>
+
+            <ProjectQualityTrendPanel
+              trendData={projectQualityTrend}
+              loading={loading}
+              compact={isMobile}
+            />
 
             <Card
               title="质量验收"

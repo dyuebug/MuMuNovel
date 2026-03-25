@@ -2773,6 +2773,18 @@ def build_story_quality_trend_block(
         lines.append("- 最近高频修复焦点：")
         lines.extend(f"  - {item}" for item in focus_areas)
 
+    volume_goal_completion = summary.get("volume_goal_completion") if isinstance(summary.get("volume_goal_completion"), Mapping) else {}
+    volume_completion_rate = volume_goal_completion.get("completion_rate")
+    volume_summary = str(volume_goal_completion.get("summary") or "").strip()
+    volume_targets = _normalize_runtime_prompt_items(volume_goal_completion.get("repair_targets"), limit=2)
+    if isinstance(volume_completion_rate, (int, float)):
+        lines.append(f"- 卷级目标达成率：{float(volume_completion_rate):.1f}%，本章必须对齐当前阶段任务。")
+    if volume_summary:
+        lines.append(f"- 卷级推进判断：{volume_summary}")
+    if volume_targets:
+        lines.append("- 本章优先拉回这些卷级任务：")
+        lines.extend(f"  - {item}" for item in volume_targets)
+
     pacing_imbalance = summary.get("pacing_imbalance") if isinstance(summary.get("pacing_imbalance"), Mapping) else {}
     pacing_summary = str(pacing_imbalance.get("summary") or "").strip()
     pacing_targets = _normalize_runtime_prompt_items(pacing_imbalance.get("repair_targets"), limit=3)
@@ -2804,11 +2816,23 @@ def build_story_quality_trend_block(
         lines.extend(f"  - {item}" for item in pacing_targets)
         lines.append("- 节奏硬要求：本章必须同时完成“推进一件事 + 回收一件事 + 留下下一步牵引”。")
 
+    foreshadow_payoff_delay = summary.get("foreshadow_payoff_delay") if isinstance(summary.get("foreshadow_payoff_delay"), Mapping) else {}
+    delay_index = foreshadow_payoff_delay.get("delay_index")
+    foreshadow_summary = str(foreshadow_payoff_delay.get("summary") or "").strip()
+    foreshadow_targets = _normalize_runtime_prompt_items(foreshadow_payoff_delay.get("repair_targets"), limit=2)
+    if isinstance(delay_index, (int, float)):
+        lines.append(f"- 伏笔兑现延迟指数：{float(delay_index):.1f}，越高越说明旧伏笔积压越多。")
+    if foreshadow_summary:
+        lines.append(f"- 伏笔兑现判断：{foreshadow_summary}")
+    if foreshadow_targets:
+        lines.append("- 本章优先清偿这些伏笔账：")
+        lines.extend(f"  - {item}" for item in foreshadow_targets)
+
     continuity_preflight = summary.get("continuity_preflight") if isinstance(summary.get("continuity_preflight"), Mapping) else {}
     continuity_summary = str(continuity_preflight.get("summary") or "").strip()
     continuity_targets = _normalize_runtime_prompt_items(continuity_preflight.get("repair_targets"), limit=3)
     if continuity_summary:
-        lines.append(f"- 连贯性预检：{continuity_summary}")
+        lines.append(f"- 连续性预检：{continuity_summary}")
     if continuity_targets:
         lines.append("- 本章要补齐这些连续性接力：")
         lines.extend(f"  - {item}" for item in continuity_targets)

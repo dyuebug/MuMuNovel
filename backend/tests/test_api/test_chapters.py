@@ -1727,6 +1727,13 @@ async def test_should_get_project_chapter_quality_trend(
                                 "payoff_chain_rate": 58.0,
                                 "cliffhanger_rate": 84.0,
                                 "pacing_score": 6.9,
+                                "quality_runtime_context": {
+                                    "plot_stage": "development",
+                                    "chapter_count": 12,
+                                    "current_chapter_number": 9,
+                                    "foreshadow_payoff_plan": ["王城密钥"],
+                                    "foreshadow_state_ledger": ["王城密钥仍未现身", "苏离盟约尚未兑现"],
+                                },
                             },
                         },
                         ensure_ascii=False,
@@ -1751,6 +1758,13 @@ async def test_should_get_project_chapter_quality_trend(
                                 "payoff_chain_rate": 56.0,
                                 "cliffhanger_rate": 86.0,
                                 "pacing_score": 6.7,
+                                "quality_runtime_context": {
+                                    "plot_stage": "development",
+                                    "chapter_count": 12,
+                                    "current_chapter_number": 10,
+                                    "foreshadow_payoff_plan": ["王城密钥", "苏离盟约"],
+                                    "foreshadow_state_ledger": ["王城密钥仍未现身", "苏离盟约尚未兑现", "档案馆真相仍被压住"],
+                                },
                             },
                         },
                         ensure_ascii=False,
@@ -1779,6 +1793,8 @@ async def test_should_get_project_chapter_quality_trend(
     assert body["quality_metrics_summary"]["last_generated_at"] is not None
     assert body["quality_metrics_summary"]["pacing_imbalance"]["status"] in {"watch", "warning"}
     assert body["quality_metrics_summary"]["pacing_imbalance"]["signals"]
+    assert body["quality_metrics_summary"]["volume_goal_completion"]["completion_rate"] > 0
+    assert body["quality_metrics_summary"]["foreshadow_payoff_delay"]["delay_index"] > 0
 
 
 def test_should_build_runtime_prompt_with_serial_style_guard():

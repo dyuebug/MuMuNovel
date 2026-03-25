@@ -573,6 +573,84 @@ def test_should_build_long_form_pacing_imbalance_from_recent_history():
     assert {signal["key"] for signal in pacing_imbalance["signals"]} >= {"middle_drag", "overstretched_suspense", "payoff_fatigue"}
     assert pacing_imbalance["repair_targets"]
     assert pacing_imbalance["summary"]
+    assert "pacing" in summary["repair_guidance"]["focus_areas"]
+    assert summary["repair_guidance"]["repair_targets"]
+
+
+
+def test_should_build_volume_goal_completion_and_foreshadow_payoff_delay_from_recent_history():
+    summary = build_quality_metrics_summary(
+        [
+            {
+                "overall_score": 76.0,
+                "conflict_chain_hit_rate": 65.0,
+                "rule_grounding_hit_rate": 81.0,
+                "outline_alignment_rate": 67.0,
+                "dialogue_naturalness_rate": 80.0,
+                "opening_hook_rate": 72.0,
+                "payoff_chain_rate": 60.0,
+                "cliffhanger_rate": 82.0,
+                "pacing_score": 6.6,
+                "quality_runtime_context": {
+                    "plot_stage": "development",
+                    "chapter_count": 12,
+                    "current_chapter_number": 10,
+                    "foreshadow_payoff_plan": ["王城密钥", "苏离盟约"],
+                    "foreshadow_state_ledger": ["王城密钥仍未现身", "苏离盟约还未兑现", "档案馆真相仍被压住"],
+                    "character_state_ledger": ["林砚：必须在终局前拿回主动权"],
+                },
+            },
+            {
+                "overall_score": 75.0,
+                "conflict_chain_hit_rate": 64.0,
+                "rule_grounding_hit_rate": 80.0,
+                "outline_alignment_rate": 66.0,
+                "dialogue_naturalness_rate": 79.0,
+                "opening_hook_rate": 71.0,
+                "payoff_chain_rate": 58.0,
+                "cliffhanger_rate": 84.0,
+                "pacing_score": 6.4,
+                "quality_runtime_context": {
+                    "plot_stage": "development",
+                    "chapter_count": 12,
+                    "current_chapter_number": 10,
+                    "foreshadow_payoff_plan": ["王城密钥", "苏离盟约"],
+                    "foreshadow_state_ledger": ["王城密钥仍未现身", "苏离盟约还未兑现", "档案馆真相仍被压住"],
+                    "character_state_ledger": ["林砚：必须在终局前拿回主动权"],
+                },
+            },
+            {
+                "overall_score": 74.0,
+                "conflict_chain_hit_rate": 63.0,
+                "rule_grounding_hit_rate": 79.0,
+                "outline_alignment_rate": 65.0,
+                "dialogue_naturalness_rate": 78.0,
+                "opening_hook_rate": 70.0,
+                "payoff_chain_rate": 57.0,
+                "cliffhanger_rate": 83.0,
+                "pacing_score": 6.5,
+                "quality_runtime_context": {
+                    "plot_stage": "development",
+                    "chapter_count": 12,
+                    "current_chapter_number": 10,
+                    "foreshadow_payoff_plan": ["王城密钥", "苏离盟约"],
+                    "foreshadow_state_ledger": ["王城密钥仍未现身", "苏离盟约还未兑现", "档案馆真相仍被压住"],
+                    "character_state_ledger": ["林砚：必须在终局前拿回主动权"],
+                },
+            },
+        ],
+        scope="batch",
+    )
+
+    assert summary is not None
+    assert summary["volume_goal_completion"]["status"] in {"watch", "warning"}
+    assert summary["volume_goal_completion"]["expected_stage"] == "ending"
+    assert summary["volume_goal_completion"]["current_stage"] == "development"
+    assert summary["foreshadow_payoff_delay"]["status"] in {"watch", "warning"}
+    assert summary["foreshadow_payoff_delay"]["delay_index"] >= 35.0
+    assert summary["foreshadow_payoff_delay"]["repair_targets"]
+    assert "payoff" in summary["repair_guidance"]["focus_areas"]
+    assert any("伏笔" in item or "兑现" in item for item in summary["repair_guidance"]["repair_targets"])
 
 
 def test_should_build_quality_metrics_summary_from_reducer_state():

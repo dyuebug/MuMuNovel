@@ -2376,6 +2376,7 @@ async def get_project_chapter_quality_trend(
 
     if limit > 0 and len(items) > limit:
         items = items[-limit:]
+        metrics_history = metrics_history[-limit:]
 
     quality_metrics_summary = build_quality_metrics_summary(metrics_history, scope="batch") if metrics_history else None
     if isinstance(quality_metrics_summary, dict):
