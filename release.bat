@@ -1,6 +1,6 @@
 @echo off
 setlocal
-echo Usage: release.bat [-Version v1.3.8] [-TargetBranch dev] [-Remote origin] [-SkipPush] [-SkipRelease] [-AllowDirtyWorktree] [-DryRun]
+echo Usage: release.bat [-Version v1.3.9] [-TargetBranch dev] [-Remote origin] [-SkipPush] [-SkipRelease] [-AllowDirtyWorktree] [-DryRun]
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0release.ps1" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (

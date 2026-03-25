@@ -17,7 +17,7 @@ export const VERSION_INFO = {
   projectFullName: 'MuMu AI 小说创作助手',
   
   // 链接信息
-  githubUrl: 'https://github.com/xiamuceer-j/MuMuAINovel',
+  githubUrl: 'https://github.com/dyuebug/MuMuNovel',
   linuxDoUrl: 'https://linux.do/t/topic/1106333',
   
   // 许可证

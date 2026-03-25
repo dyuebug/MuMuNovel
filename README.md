@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-1.3.8-blue.svg)
+![Version](https://img.shields.io/badge/version-1.3.9-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109.0-green.svg)
 ![React](https://img.shields.io/badge/react-18.3.1-blue.svg)
@@ -173,8 +173,8 @@
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/xiamuceer-j/MuMuAINovel.git
-cd MuMuAINovel
+git clone https://github.com/dyuebug/MuMuNovel.git
+cd MuMuNovel
 
 # 2. 配置环境变量（必需）
 cp backend/.env.example .env
@@ -580,8 +580,8 @@ MuMuAINovel/
 
 感谢所有为本项目做出贡献的开发者！
 
-<a href="https://github.com/xiamuceer-j/MuMuAINovel/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=xiamuceer-j/MuMuAINovel" />
+<a href="https://github.com/dyuebug/MuMuNovel/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=dyuebug/MuMuNovel" />
 </a>
 
 ## 📝 许可证
@@ -604,7 +604,7 @@ MuMuAINovel/
 
 ## 📧 联系方式
 
-- 提交 [Issue](https://github.com/xiamuceer-j/MuMuAINovel/issues)
+- 提交 [Issue](https://github.com/dyuebug/MuMuNovel/issues)
 - Linux DO [讨论](https://linux.do/t/topic/1106333)
 - 加入QQ群 [QQ群](frontend/public/qq.jpg)
 - 加入WX群 [WX群](frontend/public/WX.png)
@@ -621,11 +621,11 @@ Made with ❤️
 
 ## Star History
 
-<a href="https://www.star-history.com/#xiamuceer-j/MuMuAINovel&type=date&legend=top-left">
+<a href="https://www.star-history.com/#dyuebug/MuMuNovel&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=xiamuceer-j/MuMuAINovel&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=xiamuceer-j/MuMuAINovel&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=xiamuceer-j/MuMuAINovel&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=dyuebug/MuMuNovel&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=dyuebug/MuMuNovel&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=dyuebug/MuMuNovel&type=date&legend=top-left" />
  </picture>
 </a>
 

@@ -15,8 +15,8 @@ router = APIRouter()
 
 # GitHub API配置
 GITHUB_API_BASE = "https://api.github.com"
-REPO_OWNER = "xiamuceer-j"
-REPO_NAME = "MuMuAINovel"
+REPO_OWNER = "dyuebug"
+REPO_NAME = "MuMuNovel"
 
 # 缓存配置
 _cache = {
