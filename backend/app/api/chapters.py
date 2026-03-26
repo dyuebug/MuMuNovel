@@ -49,6 +49,11 @@ from app.schemas.regeneration import (
     RegenerationTaskResponse,
     RegenerationTaskStatus
 )
+from app.schemas.generation_payload import (
+    build_chapter_generation_quality_history_payload,
+    build_chapter_generation_stream_result_payload,
+    build_chapter_regeneration_stream_result_payload,
+)
 from app.services.ai_service import AIService
 from app.services.prompt_service import (
     prompt_service,
@@ -98,8 +103,6 @@ from app.services.story_repair_payload_service import (
 )
 from app.services.story_runtime_serialization_service import (
     attach_story_runtime_contract as _attach_story_runtime_contract,
-    attach_story_runtime_result_payload as _attach_story_runtime_result_payload,
-    extract_story_runtime_snapshot_from_contract as _extract_story_runtime_snapshot_from_contract,
 )
 from app.services.chapter_candidate_rerank_service import (
     attach_candidate_selection_metadata,
@@ -1734,33 +1737,15 @@ def _build_generation_history_payload(
     attempt_state: Optional[str] = None,
     story_runtime_contract: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """???? GenerationHistory ??? payload?"""
-    normalized_metrics = _attach_story_runtime_contract(metrics, story_runtime_contract) or {}
-    if normalized_metrics and not isinstance(normalized_metrics.get("repair_guidance"), dict):
-        normalized_metrics["repair_guidance"] = build_story_repair_guidance(normalized_metrics, scope="chapter")
-    if normalized_metrics and not isinstance(normalized_metrics.get("quality_gate"), dict):
-        normalized_metrics["quality_gate"] = build_quality_gate_decision(normalized_metrics, scope="chapter")
-
-    resolved_attempt_state = str(attempt_state or ("applied" if content_applied else "candidate")).strip() or (
-        "applied" if content_applied else "candidate"
+    """?????????? payload?"""
+    payload = build_chapter_generation_quality_history_payload(
+        content,
+        metrics,
+        content_applied=content_applied,
+        attempt_state=attempt_state,
+        story_runtime_contract=story_runtime_contract,
     )
-    payload = {
-        "log_type": "chapter_generation_quality_v1",
-        "preview": content[:500] if len(content) > 500 else content,
-        "quality_metrics": normalized_metrics,
-        "generated_at": datetime.now().isoformat(),
-        "content_applied": bool(content_applied),
-        "attempt_state": resolved_attempt_state,
-    }
-    runtime_contract_payload = normalized_metrics.get("story_runtime_contract")
-    runtime_snapshot = normalized_metrics.get("quality_runtime_context")
-    if not isinstance(runtime_snapshot, dict) or not runtime_snapshot:
-        runtime_snapshot = _extract_story_runtime_snapshot_from_contract(runtime_contract_payload)
-    if isinstance(runtime_snapshot, dict) and runtime_snapshot:
-        payload["story_runtime_snapshot"] = runtime_snapshot
-    if isinstance(runtime_contract_payload, dict) and runtime_contract_payload:
-        payload["story_runtime_contract"] = runtime_contract_payload
-    return json.dumps(payload, ensure_ascii=False)
+    return payload.model_dump_json(exclude_none=True)
 
 def _normalize_checker_result(raw: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """规范化正文质检结果，确保字段稳定。"""
@@ -5338,19 +5323,17 @@ async def generate_chapter_content_stream(
 
                 # 推送最终结果
                 yield await tracker.result(
-                    _attach_story_runtime_result_payload(
-                        {
-                            'word_count': candidate_word_count,
-                            'analysis_task_id': task_id,
-                            'quality_metrics': quality_metrics,
-                            'quality_gate_action': quality_gate_action,
-                            'quality_gate_message': quality_gate_message,
-                            'content_applied': content_applied,
-                            'chapter_status': current_chapter.status,
-                            'saved_word_count': current_chapter.word_count or 0,
-                            'hard_gate_blocked': quality_gate_requires_followup,
-                        },
-                        story_runtime_contract,
+                    build_chapter_generation_stream_result_payload(
+                        word_count=candidate_word_count,
+                        analysis_task_id=task_id,
+                        quality_metrics=quality_metrics if isinstance(quality_metrics, dict) else None,
+                        quality_gate_action=quality_gate_action,
+                        quality_gate_message=quality_gate_message,
+                        content_applied=content_applied,
+                        chapter_status=current_chapter.status,
+                        saved_word_count=current_chapter.word_count or 0,
+                        hard_gate_blocked=quality_gate_requires_followup,
+                        story_runtime_contract=story_runtime_contract,
                     )
                 )
 
@@ -8581,15 +8564,13 @@ async def regenerate_chapter_stream(
                 
                 # 发送结果数据
                 yield await tracker.result(
-                    _attach_story_runtime_result_payload(
-                        {
-                            'task_id': task_id,
-                            'word_count': len(full_content),
-                            'version_number': regen_task.version_number,
-                            'auto_applied': regenerate_request.auto_apply,
-                            'diff_stats': diff_stats,
-                        },
-                        story_runtime_contract,
+                    build_chapter_regeneration_stream_result_payload(
+                        task_id=task_id,
+                        word_count=len(full_content),
+                        version_number=regen_task.version_number,
+                        auto_applied=regenerate_request.auto_apply,
+                        diff_stats=diff_stats,
+                        story_runtime_contract=story_runtime_contract,
                     )
                 )
                 
