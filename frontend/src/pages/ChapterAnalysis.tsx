@@ -11,8 +11,7 @@ import {
 } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import api, { chapterApi } from '../services/api';
-import AnnotatedText, { type MemoryAnnotation } from '../components/AnnotatedText';
-import MemorySidebar from '../components/MemorySidebar';
+import type { MemoryAnnotation } from '../components/AnnotatedText';
 import type { ChapterAnalysisResponse, ChapterCandidateDraftQualityHighlights, ChapterQualityMetrics, ProjectChapterQualityTrendResponse } from '../types';
 import {
   renderCompactFactCard,
@@ -33,6 +32,8 @@ import {
 
 const LazyProjectQualityTrendPanel = lazy(() => import('../components/ProjectQualityTrendPanel'));
 const LazyChapterContentComparison = lazy(() => import('../components/ChapterContentComparison'));
+const LazyAnnotatedText = lazy(() => import('../components/AnnotatedText'));
+const LazyMemorySidebar = lazy(() => import('../components/MemorySidebar'));
 
 interface ChapterItem {
   id: string;
@@ -1001,17 +1002,19 @@ const ChapterAnalysis: React.FC = () => {
                     )}
 
                     {showAnnotations && hasAnnotations && annotationsData ? (
-                      <AnnotatedText
-                        content={selectedChapter.content}
-                        annotations={annotationsData.annotations}
-                        onAnnotationClick={(annotation) => handleAnnotationClick(annotation, 'content')}
-                        activeAnnotationId={activeAnnotationId}
-                        scrollToAnnotation={scrollToContentAnnotation}
-                        style={{
-                          lineHeight: isMobile ? 1.8 : 2,
-                          fontSize: isMobile ? 14 : 16,
-                        }}
-                      />
+                      <Suspense fallback={<div style={{ padding: '24px 0', textAlign: 'center' }}><Spin size="small" /></div>}>
+                        <LazyAnnotatedText
+                          content={selectedChapter.content}
+                          annotations={annotationsData.annotations}
+                          onAnnotationClick={(annotation) => handleAnnotationClick(annotation, 'content')}
+                          activeAnnotationId={activeAnnotationId}
+                          scrollToAnnotation={scrollToContentAnnotation}
+                          style={{
+                            lineHeight: isMobile ? 1.8 : 2,
+                            fontSize: isMobile ? 14 : 16,
+                          }}
+                        />
+                      </Suspense>
                     ) : (
                       <div
                         style={{
@@ -1034,12 +1037,14 @@ const ChapterAnalysis: React.FC = () => {
                   style={{ width: 400, overflow: 'auto' }}
                   bodyStyle={{ padding: 0 }}
                 >
-                  <MemorySidebar
-                    annotations={annotationsData.annotations}
-                    activeAnnotationId={activeAnnotationId}
-                    onAnnotationClick={(annotation) => handleAnnotationClick(annotation, 'sidebar')}
-                    scrollToAnnotation={scrollToSidebarAnnotation}
-                  />
+                  <Suspense fallback={<div style={{ padding: '24px 0', textAlign: 'center' }}><Spin size="small" /></div>}>
+                    <LazyMemorySidebar
+                      annotations={annotationsData.annotations}
+                      activeAnnotationId={activeAnnotationId}
+                      onAnnotationClick={(annotation) => handleAnnotationClick(annotation, 'sidebar')}
+                      scrollToAnnotation={scrollToSidebarAnnotation}
+                    />
+                  </Suspense>
                 </Card>
               )}
             </div>
@@ -1053,15 +1058,17 @@ const ChapterAnalysis: React.FC = () => {
                 open={sidebarVisible}
                 width={isMobile ? '90%' : '80%'}
               >
-                <MemorySidebar
-                  annotations={annotationsData.annotations}
-                  activeAnnotationId={activeAnnotationId}
-                  onAnnotationClick={(annotation) => {
-                    handleAnnotationClick(annotation, 'sidebar');
-                    setSidebarVisible(false);
-                  }}
-                  scrollToAnnotation={scrollToSidebarAnnotation}
-                />
+                <Suspense fallback={<div style={{ padding: '24px 0', textAlign: 'center' }}><Spin size="small" /></div>}>
+                  <LazyMemorySidebar
+                    annotations={annotationsData.annotations}
+                    activeAnnotationId={activeAnnotationId}
+                    onAnnotationClick={(annotation) => {
+                      handleAnnotationClick(annotation, 'sidebar');
+                      setSidebarVisible(false);
+                    }}
+                    scrollToAnnotation={scrollToSidebarAnnotation}
+                  />
+                </Suspense>
               </Drawer>
             )}
             {selectedChapter && candidateComparisonVisible && (
