@@ -61,39 +61,39 @@ function renderCharacterFields(
       <Row gutter={12}>
         <Col span={8}>
           <Form.Item
-            label="????"
+            label="名称"
             name="name"
-            rules={[{ required: true, message: '???????' }]}
+            rules={[{ required: true, message: '请输入角色名称' }]}
             style={{ marginBottom: 12 }}
           >
-            <Input placeholder="????" />
+            <Input placeholder="例如：林渊 / 苏璃 / 阿迟" />
           </Form.Item>
         </Col>
         <Col span={6}>
           <Form.Item
-            label="????"
+            label="角色类型"
             name="role_type"
             initialValue={mode === 'create' ? 'supporting' : undefined}
             style={{ marginBottom: 12 }}
           >
             <Select>
-              <Select.Option value="protagonist">??</Select.Option>
-              <Select.Option value="supporting">??</Select.Option>
-              <Select.Option value="antagonist">??</Select.Option>
+              <Select.Option value="protagonist">主角</Select.Option>
+              <Select.Option value="supporting">配角</Select.Option>
+              <Select.Option value="antagonist">反派</Select.Option>
             </Select>
           </Form.Item>
         </Col>
         <Col span={5}>
-          <Form.Item label="??" name="age" style={{ marginBottom: 12 }}>
-            <Input placeholder="??25?" />
+          <Form.Item label="年龄" name="age" style={{ marginBottom: 12 }}>
+            <Input placeholder="例如：25岁" />
           </Form.Item>
         </Col>
         <Col span={5}>
-          <Form.Item label="??" name="gender" style={{ marginBottom: 12 }}>
-            <Select placeholder="??">
-              <Select.Option value="?">?</Select.Option>
-              <Select.Option value="?">?</Select.Option>
-              <Select.Option value="??">??</Select.Option>
+          <Form.Item label="性别" name="gender" style={{ marginBottom: 12 }}>
+            <Select placeholder="请选择">
+              <Select.Option value="男">男</Select.Option>
+              <Select.Option value="女">女</Select.Option>
+              <Select.Option value="其他">其他</Select.Option>
             </Select>
           </Form.Item>
         </Col>
@@ -101,19 +101,19 @@ function renderCharacterFields(
 
       <Row gutter={12}>
         <Col span={12}>
-          <Form.Item label="????" name="personality" style={{ marginBottom: 12 }}>
-            <TextArea rows={2} placeholder="?????????..." />
+          <Form.Item label="性格特点" name="personality" style={{ marginBottom: 12 }}>
+            <TextArea rows={2} placeholder="角色的性格、习惯与处事方式..." />
           </Form.Item>
         </Col>
         <Col span={12}>
-          <Form.Item label="????" name="appearance" style={{ marginBottom: 12 }}>
-            <TextArea rows={2} placeholder="?????????..." />
+          <Form.Item label="外貌特征" name="appearance" style={{ marginBottom: 12 }}>
+            <TextArea rows={2} placeholder="外形、服饰、气质或辨识特征..." />
           </Form.Item>
         </Col>
       </Row>
 
       {mode === 'edit' && record?.relationships ? (
-        <Form.Item label="?????????????" style={{ marginBottom: 12 }}>
+        <Form.Item label="当前关系摘要" style={{ marginBottom: 12 }}>
           <Input.TextArea
             value={record.relationships}
             readOnly
@@ -123,39 +123,39 @@ function renderCharacterFields(
         </Form.Item>
       ) : null}
 
-      <Form.Item label="????" name="background" style={{ marginBottom: 12 }}>
-        <TextArea rows={2} placeholder="?????????..." />
+      <Form.Item label="背景故事" name="background" style={{ marginBottom: 12 }}>
+        <TextArea rows={2} placeholder="角色经历、动机与重要过往..." />
       </Form.Item>
 
       {mainCareers.length > 0 || subCareers.length > 0 ? (
         <>
           <Divider style={{ margin: '8px 0' }}>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {mode === 'create' ? '????????' : '????'}
+              {mode === 'create' ? '职业设定（可选）' : '职业信息'}
             </Typography.Text>
           </Divider>
           {mainCareers.length > 0 ? (
             <Row gutter={12}>
               <Col span={16}>
-                <Form.Item label="???" name="main_career_id" tooltip="?????????" style={{ marginBottom: 12 }}>
-                  <Select placeholder="?????" allowClear size="small">
+                <Form.Item label="主职业" name="main_career_id" tooltip="用于标记角色当前的核心职业" style={{ marginBottom: 12 }}>
+                  <Select placeholder="请选择职业" allowClear size="small">
                     {mainCareers.map((career) => (
                       <Select.Option key={career.id} value={career.id}>
-                        {career.name}???{career.max_stage}??
+                        {career.name}（最高{career.max_stage}阶）
                       </Select.Option>
                     ))}
                   </Select>
                 </Form.Item>
               </Col>
               <Col span={8}>
-                <Form.Item label="????" name="main_career_stage" tooltip="???????????" style={{ marginBottom: 12 }}>
+                <Form.Item label="职业阶位" name="main_career_stage" tooltip="填写角色当前主职业所处的阶段" style={{ marginBottom: 12 }}>
                   <InputNumber
                     min={1}
                     max={form.getFieldValue('main_career_id')
                       ? mainCareers.find((career) => career.id === form.getFieldValue('main_career_id'))?.max_stage || 10
                       : 10}
                     style={{ width: '100%' }}
-                    placeholder="??"
+                    placeholder="阶位"
                     size="small"
                   />
                 </Form.Item>
@@ -167,7 +167,7 @@ function renderCharacterFields(
               {(fields, { add, remove }) => (
                 <>
                   <div style={{ marginBottom: 4 }}>
-                    <Typography.Text strong style={{ fontSize: 12 }}>???</Typography.Text>
+                    <Typography.Text strong style={{ fontSize: 12 }}>副职业</Typography.Text>
                   </div>
                   <div style={{ maxHeight: '80px', overflowY: 'auto', overflowX: 'hidden', marginBottom: 8, paddingRight: 8 }}>
                     {fields.map((field) => (
@@ -176,13 +176,13 @@ function renderCharacterFields(
                           <Form.Item
                             {...field}
                             name={[field.name, 'career_id']}
-                            rules={[{ required: true, message: '??????' }]}
+                            rules={[{ required: true, message: '请选择职业' }]}
                             style={{ marginBottom: 0 }}
                           >
-                            <Select placeholder="?????" size="small">
+                            <Select placeholder="请选择职业" size="small">
                               {subCareers.map((career) => (
                                 <Select.Option key={career.id} value={career.id}>
-                                  {career.name}???{career.max_stage}??
+                                  {career.name}（最高{career.max_stage}阶）
                                 </Select.Option>
                               ))}
                             </Select>
@@ -192,7 +192,7 @@ function renderCharacterFields(
                           <Form.Item
                             {...field}
                             name={[field.name, 'stage']}
-                            rules={[{ required: true, message: '??' }]}
+                            rules={[{ required: true, message: '请输入阶位' }]}
                             style={{ marginBottom: 0 }}
                           >
                             <InputNumber
@@ -202,7 +202,7 @@ function renderCharacterFields(
                                 const career = subCareers.find((item) => item.id === careerId);
                                 return career?.max_stage || 10;
                               })()}
-                              placeholder="??"
+                              placeholder="阶位"
                               style={{ width: '100%' }}
                               size="small"
                             />
@@ -215,7 +215,7 @@ function renderCharacterFields(
                             size="small"
                             onClick={() => remove(field.name)}
                           >
-                            ??
+                            删除
                           </Button>
                         </Col>
                       </Row>
@@ -227,7 +227,7 @@ function renderCharacterFields(
                     block
                     size="small"
                   >
-                    + ?????
+                    + 添加副职业
                   </Button>
                 </>
               )}
@@ -248,30 +248,30 @@ function renderOrganizationFields(
       <Row gutter={12}>
         <Col span={10}>
           <Form.Item
-            label="????"
+            label="组织名称"
             name="name"
-            rules={[{ required: true, message: '???????' }]}
+            rules={[{ required: true, message: '请输入组织名称' }]}
             style={{ marginBottom: 12 }}
           >
-            <Input placeholder="????" />
+            <Input placeholder="例如：青岚会" />
           </Form.Item>
         </Col>
         <Col span={8}>
           <Form.Item
-            label="????"
+            label="组织类型"
             name="organization_type"
-            rules={[{ required: true, message: '???????' }]}
+            rules={[{ required: true, message: '请输入组织类型' }]}
             style={{ marginBottom: 12 }}
           >
-            <Input placeholder="???????" />
+            <Input placeholder="例如：宗门 / 商会 / 学院" />
           </Form.Item>
         </Col>
         <Col span={6}>
           <Form.Item
-            label="????"
+            label="势力等级"
             name="power_level"
             initialValue={mode === 'create' ? 50 : undefined}
-            tooltip="0-100???"
+            tooltip="0-100 的数值，表示组织的影响力"
             style={{ marginBottom: 12 }}
           >
             <InputNumber min={0} max={100} style={{ width: '100%' }} />
@@ -280,54 +280,54 @@ function renderOrganizationFields(
       </Row>
 
       <Form.Item
-        label="????"
+        label="组织宗旨"
         name="organization_purpose"
-        rules={[{ required: true, message: '???????' }]}
+        rules={[{ required: true, message: '请输入组织宗旨' }]}
         style={{ marginBottom: 12 }}
       >
-        <Input placeholder="??????????..." />
+        <Input placeholder="组织追求什么、维护什么、想改变什么..." />
       </Form.Item>
 
       {mode === 'edit' ? (
         <>
           <Form.Item
-            label="????"
+            label="组织成员"
             name="organization_members"
             style={{ marginBottom: 4 }}
-            tooltip="???????????????????"
+            tooltip="仅展示已关联到该组织的角色，需在角色信息中维护归属"
           >
             <TextArea
               disabled
               autoSize={{ minRows: 1, maxRows: 4 }}
-              placeholder="??????????????"
+              placeholder="暂无已关联成员"
               style={{ color: token.colorText, backgroundColor: token.colorFillAlter }}
             />
           </Form.Item>
           <div style={{ marginBottom: 12, fontSize: 12, color: token.colorTextTertiary }}>
-            ?? ????????????????????
+            组织成员会随着角色归属调整自动更新
           </div>
         </>
       ) : null}
 
       <Row gutter={12}>
         <Col span={12}>
-          <Form.Item label="???" name="location" style={{ marginBottom: 12 }}>
-            <Input placeholder="????" />
+          <Form.Item label="所在地" name="location" style={{ marginBottom: 12 }}>
+            <Input placeholder="组织的主要活动区域或总部位置" />
           </Form.Item>
         </Col>
         <Col span={12}>
-          <Form.Item label="????" name="color" style={{ marginBottom: 12 }}>
-            <Input placeholder="????" />
+          <Form.Item label="代表颜色" name="color" style={{ marginBottom: 12 }}>
+            <Input placeholder="例如：深红色 / 金色 / 黑色" />
           </Form.Item>
         </Col>
       </Row>
 
-      <Form.Item label="??/??" name="motto" style={{ marginBottom: 12 }}>
-        <Input placeholder="???????????" />
+      <Form.Item label="格言 / 口号" name="motto" style={{ marginBottom: 12 }}>
+        <Input placeholder="例如：秩序高于一切" />
       </Form.Item>
 
-      <Form.Item label="????" name="background" style={{ marginBottom: 12 }}>
-        <TextArea rows={2} placeholder="?????????..." />
+      <Form.Item label="组织背景" name="background" style={{ marginBottom: 12 }}>
+        <TextArea rows={2} placeholder="组织起源、历史与当前局势..." />
       </Form.Item>
     </>
   );
@@ -356,7 +356,7 @@ export default function CharacterFormModal({
       onCancel={onCancel}
       footer={
         <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
-          <Button onClick={onCancel}>??</Button>
+          <Button onClick={onCancel}>取消</Button>
           <Button type="primary" onClick={() => form.submit()}>
             {submitText}
           </Button>

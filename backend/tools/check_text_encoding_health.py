@@ -73,7 +73,8 @@ def has_cjk(text: str) -> bool:
 def detect_reasons(line: str, *, strict_qmark: bool) -> List[str]:
     reasons: List[str] = []
     qmark_pattern = re.compile(r"\?{2,}") if strict_qmark else QMARK_PATTERN
-    if qmark_pattern.search(line):
+    sanitized_line = re.sub(r"\?\?|\?\.(?=[A-Za-z_(\[])", "", line)
+    if qmark_pattern.search(sanitized_line):
         reasons.append("qmark")
     if any(0x80 <= ord(ch) <= 0x9F for ch in line):
         reasons.append("control")

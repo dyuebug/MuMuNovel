@@ -83,24 +83,24 @@ def test_should_merge_outline_requirements_from_story_packet():
             creative_mode="payoff",
             story_focus="foreshadow_payoff",
             plot_stage="ending",
-            story_creation_brief="????????",
+            story_creation_brief="highlight the trade-off",
             quality_preset="tight_prose",
-            quality_notes="???????",
+            quality_notes="cut exposition",
         ),
         source="outline-create-request",
     )
 
     merged = _merge_outline_requirements(
-        "??????",
+        "keep dual threads",
         chapter_count=4,
-        memory_guidance="???????????\n1. ????????",
+        memory_guidance="[serial memory]\n1. hidden key unresolved",
         story_packet=story_packet,
     )
 
-    assert "??????" in merged
-    assert "????????" in merged
-    assert "???????" in merged
-    assert "????????" in merged
+    assert "keep dual threads" in merged
+    assert "highlight the trade-off" in merged
+    assert "cut exposition" in merged
+    assert "hidden key unresolved" in merged
 
 
 def test_should_merge_wizard_outline_requirements_from_story_packet():
@@ -109,15 +109,15 @@ def test_should_merge_wizard_outline_requirements_from_story_packet():
             creative_mode="hook",
             story_focus="advance_plot",
             plot_stage="development",
-            story_creation_brief="???????",
+            story_creation_brief="front-load the pressure",
             quality_preset="plot_drive",
-            quality_notes="?????",
+            quality_notes="trim filler",
         ),
         source="wizard-outline-request",
     )
 
     merged = _merge_wizard_outline_requirements(
-        "??????",
+        "keep dual threads",
         outline_count=3,
         creative_mode=None,
         story_focus=None,
@@ -128,12 +128,12 @@ def test_should_merge_wizard_outline_requirements_from_story_packet():
         story_packet=story_packet,
     )
 
-    assert "??????" in merged
-    assert "???????" in merged
-    assert "?????" in merged
-    assert "????" in merged
-    assert "????" in merged
-    assert "????" in merged
+    assert "keep dual threads" in merged
+    assert "front-load the pressure" in merged
+    assert "trim filler" in merged
+    assert "钩子优先" in merged
+    assert "主线推进" in merged
+    assert "发展阶段" in merged
 
 
 
@@ -151,9 +151,9 @@ def test_should_merge_outline_requirements_with_story_packet_blueprint_blocks():
         chapter_count=10,
         character_focus_source=["Lin", "Su"],
         foreshadow_payoff_source=["recover the hidden key"],
-        character_state_source={"chapter_characters": "????????\n- Lin????????"},
-        relationship_state_source={"chapter_characters": "????????\n- Lin/Su??????????"},
-        foreshadow_state_source={"foreshadow_reminders": "????????\n- hidden key????????????"},
+        character_state_source={"chapter_characters": "【Lin】\n当前状态：remains under pressure"},
+        relationship_state_source={"chapter_characters": "【Lin / Su】\n关系网络：remain in conflict"},
+        foreshadow_state_source={"foreshadow_reminders": "【伏笔状态】\n- hidden key still needs payoff"},
     )
 
     merged = _merge_outline_requirements(
@@ -182,9 +182,9 @@ def test_should_merge_wizard_outline_requirements_with_story_packet_blueprint_bl
         chapter_count=8,
         character_focus_source=["Lin", "Su"],
         foreshadow_payoff_source=["recover the hidden key"],
-        character_state_source={"chapter_characters": "????????\n- Lin????????"},
-        relationship_state_source={"chapter_characters": "????????\n- Lin/Su??????????"},
-        foreshadow_state_source={"foreshadow_reminders": "????????\n- hidden key????????????"},
+        character_state_source={"chapter_characters": "【Lin】\n当前状态：remains under pressure"},
+        relationship_state_source={"chapter_characters": "【Lin / Su】\n关系网络：remain in conflict"},
+        foreshadow_state_source={"foreshadow_reminders": "【伏笔状态】\n- hidden key still needs payoff"},
     )
 
     merged = _merge_wizard_outline_requirements(
