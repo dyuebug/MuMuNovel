@@ -17,6 +17,9 @@ Set-Location -Path $PSScriptRoot
 
 $AppService = "mumunovel"
 $AppContainerName = "mumunovel-new"
+$DbService = "postgres"
+$PostgresContainerName = "mumunovel-postgres-new"
+$MigrationPreflightTimeoutSec = 90
 $LogFilePath = Join-Path $PSScriptRoot "redeploy.log"
 $Utf8NoBomEncoding = [System.Text.UTF8Encoding]::new($false)
 
@@ -346,6 +349,47 @@ $details
     throw $errorMessage
 }
 
+function Wait-ContainerHealthy {
+    param(
+        [string]$ContainerName,
+        [string]$Label,
+        [int]$TimeoutSec = 90
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $lastStatus = $null
+    while ((Get-Date) -lt $deadline) {
+        $inspectResult = Invoke-LoggedCommand -Command @(
+            "docker", "inspect", $ContainerName, "--format", "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}"
+        ) -Label "inspect $Label status" -IgnoreExitCode
+        $status = ($inspectResult.Output | Out-String).Trim()
+        if ($status -eq "healthy" -or $status -eq "running") {
+            Write-LogLine "$Label is ready: $status"
+            return
+        }
+        if (-not [string]::IsNullOrWhiteSpace($status) -and $status -ne $lastStatus) {
+            Write-LogLine "$Label status: $status"
+            $lastStatus = $status
+        }
+        Start-Sleep -Seconds 2
+    }
+
+    $errorMessage = "Timed out waiting for $Label to become healthy. Last status: $lastStatus"
+    Write-LogBlock $errorMessage
+    throw $errorMessage
+}
+
+function Invoke-AlembicVersionCapacityPreflight {
+    Write-Step "Starting database service for Alembic preflight"
+    Invoke-LoggedCommand -Command @("docker", "compose", "up", "-d", $DbService) -Label "docker compose up postgres" | Out-Null
+    Wait-ContainerHealthy -ContainerName $PostgresContainerName -Label $DbService -TimeoutSec $MigrationPreflightTimeoutSec
+
+    Write-Step "Ensuring Alembic version table capacity"
+    Invoke-LoggedCommand -Command @(
+        "docker", "compose", "run", "--rm", "--no-deps", "--entrypoint", "python", $AppService, "tools/ensure_alembic_version_table_capacity.py"
+    ) -Label "docker compose run alembic capacity preflight" | Out-Null
+}
+
 Initialize-LogFile
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -397,6 +441,8 @@ if (-not $SkipBuild) {
     Write-Step "Building application image"
     Invoke-LoggedCommand -Command (@("docker") + $buildArgs) -Label "docker compose build" | Out-Null
 }
+
+Invoke-AlembicVersionCapacityPreflight
 
 $upArgs = @("compose", "up", "-d", "--remove-orphans")
 if (-not $SkipRecreate) {
