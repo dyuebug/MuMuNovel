@@ -5,7 +5,10 @@ import type {
   ProjectChapterQualityTrendItem,
   ProjectChapterQualityTrendResponse,
   QualityRuntimeContextSummary,
+  QualityRuntimeLedgerItem,
+  QualityRuntimePlanItem,
   StoryPacingImbalanceSignal,
+  StoryQualityRuntimePressure,
 } from '../types';
 import {
   renderCompactListCard,
@@ -162,6 +165,76 @@ const formatPacingSignal = (signal: StoryPacingImbalanceSignal): string => {
   return summary ? `${label}${metricText} · ${severityLabel}：${summary}` : `${label}${metricText} · ${severityLabel}`;
 };
 
+const formatRuntimeLedgerItem = (item?: QualityRuntimeLedgerItem | null): string => {
+  if (!item) {
+    return "";
+  }
+  if (typeof item === "string") {
+    return item.trim();
+  }
+
+  const primary = item.pair?.trim() || item.name?.trim() || item.label?.trim() || "";
+  const secondary = item.state?.trim() || item.detail?.trim() || item.status?.trim() || "";
+  if (primary && secondary) {
+    return `${primary}：${secondary}`;
+  }
+  return primary || secondary;
+};
+
+const formatRuntimePlanItem = (item?: QualityRuntimePlanItem | null): string => {
+  if (!item) {
+    return "";
+  }
+  if (typeof item === "string") {
+    return item.trim();
+  }
+
+  const head = item.name?.trim() || item.label?.trim() || item.summary?.trim() || "";
+  const details = [
+    item.summary?.trim() && item.summary?.trim() !== head ? item.summary.trim() : "",
+    typeof item.target_chapter === "number" ? `目标第${item.target_chapter}章` : "",
+    item.status?.trim() || "",
+  ].filter((value): value is string => Boolean(value));
+
+  return [head, ...details].filter(Boolean).join(" · ");
+};
+
+const buildRuntimeContextHighlights = (
+  runtimeContext?: QualityRuntimeContextSummary | null,
+  runtimePressure?: StoryQualityRuntimePressure | null,
+): string[] => {
+  if (!runtimeContext && !runtimePressure) {
+    return [];
+  }
+
+  const highlights = dedupeItems([
+    runtimeContext?.character_focus?.length
+      ? `角色焦点：${runtimeContext.character_focus.slice(0, 3).join(" / ")}`
+      : null,
+    runtimeContext?.foreshadow_payoff_plan?.length
+      ? `伏笔计划：${runtimeContext.foreshadow_payoff_plan.map((item) => formatRuntimePlanItem(item)).filter(Boolean).slice(0, 2).join("；")}`
+      : null,
+    runtimeContext?.foreshadow_state_ledger?.length
+      ? `伏笔压力：${runtimeContext.foreshadow_state_ledger.map((item) => formatRuntimeLedgerItem(item)).filter(Boolean).slice(0, 2).join("；")}`
+      : runtimePressure?.foreshadow_state_items?.length
+        ? `伏笔压力：${runtimePressure.foreshadow_state_items.slice(0, 2).join("；")}`
+        : null,
+    runtimeContext?.character_state_ledger?.length
+      ? `角色状态：${runtimeContext.character_state_ledger.map((item) => formatRuntimeLedgerItem(item)).filter(Boolean).slice(0, 2).join("；")}`
+      : runtimePressure?.character_state_items?.length
+        ? `角色状态：${runtimePressure.character_state_items.slice(0, 2).join("；")}`
+        : null,
+    runtimeContext?.relationship_state_ledger?.length
+      ? `关系进展：${runtimeContext.relationship_state_ledger.map((item) => formatRuntimeLedgerItem(item)).filter(Boolean).slice(0, 2).join("；")}`
+      : null,
+    runtimeContext?.organization_state_ledger?.length
+      ? `组织局势：${runtimeContext.organization_state_ledger.map((item) => formatRuntimeLedgerItem(item)).filter(Boolean).slice(0, 2).join("；")}`
+      : null,
+  ], 4);
+
+  return highlights;
+};
+
 const buildTrendSeries = (
   items: ProjectChapterQualityTrendItem[],
   selector: (item: ProjectChapterQualityTrendItem) => number | null | undefined,
@@ -253,6 +326,11 @@ const ProjectQualityTrendPanel: React.FC<ProjectQualityTrendPanelProps> = ({
   const volumeGoal = summary?.volume_goal_completion ?? null;
   const foreshadowDelay = summary?.foreshadow_payoff_delay ?? null;
   const repairEffectiveness = summary?.repair_effectiveness ?? null;
+  const runtimeContext = summary?.quality_runtime_context ?? null;
+  const runtimePressure = summary?.quality_gate?.quality_runtime_pressure
+    ?? summary?.repair_guidance?.quality_runtime_pressure
+    ?? null;
+  const runtimeContextHighlights = buildRuntimeContextHighlights(runtimeContext, runtimePressure);
   const trendLabel = getQualityTrendLabel(summary?.overall_score_trend ?? undefined);
   const analyzedCount = trendData?.analyzed_chapters ?? 0;
   const totalCount = trendData?.total_chapters ?? 0;
@@ -383,6 +461,11 @@ const ProjectQualityTrendPanel: React.FC<ProjectQualityTrendPanelProps> = ({
             '当前修复建议',
             guidance.summary,
             { tone: overallTone, style: { marginBottom: 10 } },
+          )}
+          {runtimeContextHighlights.length > 0 && renderCompactListCard(
+            '运行时账本焦点',
+            runtimeContextHighlights,
+            { tagText: `${runtimeContextHighlights.length}项`, tagColor: 'blue', style: { marginBottom: 10 } },
           )}
           {metricItems.length > 0 && renderCompactMetricGrid(metricItems, { style: { marginBottom: 10 } })}
           {volumeGoal?.summary && renderCompactSettingHint(

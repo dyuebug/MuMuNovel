@@ -423,6 +423,10 @@ export interface StoryRepairGuidance {
   weakest_metric_key?: string | null;
   weakest_metric_label?: string | null;
   weakest_metric_value?: number | null;
+  quality_stage?: string | null;
+  quality_stage_label?: string | null;
+  continuity_preflight?: StoryContinuityPreflight | null;
+  quality_runtime_pressure?: StoryQualityRuntimePressure | null;
 }
 
 export interface StoryQualityGateMetric {
@@ -488,6 +492,9 @@ export interface StoryQualityGateDecision {
   weak_metric_block_count?: number | null;
   allow_save_weak_metric_count?: number | null;
   normalized_gap_threshold?: number | null;
+  quality_stage?: string | null;
+  quality_stage_label?: string | null;
+  quality_runtime_pressure?: StoryQualityRuntimePressure | null;
 }
 
 export interface ActiveStoryRepairPayload extends StoryRepairGuidance {
@@ -516,16 +523,65 @@ export interface ChapterQualityMetrics {
   quality_gate?: StoryQualityGateDecision | null;
 }
 
+export interface QualityRuntimeLedgerEntry {
+  name?: string | null;
+  state?: string | null;
+  status?: string | null;
+  pair?: string | null;
+  label?: string | null;
+  detail?: string | null;
+  [key: string]: unknown;
+}
+
+export interface QualityRuntimePlanEntry {
+  name?: string | null;
+  status?: string | null;
+  summary?: string | null;
+  label?: string | null;
+  target_chapter?: number | null;
+  [key: string]: unknown;
+}
+
+export type QualityRuntimeLedgerItem = string | QualityRuntimeLedgerEntry;
+export type QualityRuntimePlanItem = string | QualityRuntimePlanEntry;
+
+export interface StoryQualityRuntimePressure {
+  foreshadow_state_count?: number;
+  character_state_count?: number;
+  relationship_state_count?: number;
+  organization_state_count?: number;
+  career_state_count?: number;
+  foreshadow_state_items?: string[];
+  character_state_items?: string[];
+  relationship_state_items?: string[];
+  organization_state_items?: string[];
+  career_state_items?: string[];
+}
+
 export interface QualityRuntimeContextSummary {
   plot_stage?: string;
   chapter_count?: number | null;
   current_chapter_number?: number | null;
+  target_word_count?: number | null;
   genre?: string;
   genre_profiles?: string[];
   style_name?: string;
   style_preset_id?: string;
   style_profile?: string;
   quality_preset?: string;
+  quality_notes?: string;
+  creative_mode?: string;
+  story_focus?: string;
+  story_creation_brief?: string;
+  story_long_term_goal?: string;
+  chapter_number_span?: number[];
+  character_focus?: string[];
+  foreshadow_payoff_plan?: QualityRuntimePlanItem[];
+  character_state_ledger?: QualityRuntimeLedgerItem[];
+  relationship_state_ledger?: QualityRuntimeLedgerItem[];
+  foreshadow_state_ledger?: QualityRuntimeLedgerItem[];
+  organization_state_ledger?: QualityRuntimeLedgerItem[];
+  career_state_ledger?: QualityRuntimeLedgerItem[];
 }
 
 export interface ChapterLatestQualityMetrics {
@@ -648,6 +704,7 @@ export interface ChapterQualityMetricsSummary {
   repair_effectiveness?: StoryRepairEffectivenessSummary | null;
   repair_guidance?: StoryRepairGuidance | null;
   quality_gate?: StoryQualityGateDecision | null;
+  quality_runtime_context?: QualityRuntimeContextSummary | null;
 }
 
 export interface ChapterQualityProfileBlockSummary {
