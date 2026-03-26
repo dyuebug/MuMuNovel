@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { Card, List, Button, Space, Empty, Tag, Spin, Alert, Switch, Drawer, message, theme } from 'antd';
 import {
   EyeOutlined,
@@ -13,8 +13,7 @@ import { useParams } from 'react-router-dom';
 import api, { chapterApi } from '../services/api';
 import AnnotatedText, { type MemoryAnnotation } from '../components/AnnotatedText';
 import MemorySidebar from '../components/MemorySidebar';
-import ProjectQualityTrendPanel from '../components/ProjectQualityTrendPanel';
-import type { ChapterAnalysisResponse, ChapterQualityMetrics, ProjectChapterQualityTrendResponse } from '../types';
+import type { ChapterAnalysisResponse, ChapterCandidateDraftQualityHighlights, ChapterQualityMetrics, ProjectChapterQualityTrendResponse } from '../types';
 import {
   renderCompactFactCard,
   renderCompactFactGrid,
@@ -31,6 +30,9 @@ import {
   getWeakestQualityMetric,
 } from '../utils/storyCreationQualitySummary';
 
+
+const LazyProjectQualityTrendPanel = lazy(() => import('../components/ProjectQualityTrendPanel'));
+const LazyChapterContentComparison = lazy(() => import('../components/ChapterContentComparison'));
 
 interface ChapterItem {
   id: string;
@@ -90,6 +92,12 @@ const ChapterAnalysis: React.FC = () => {
   const [navigation, setNavigation] = useState<NavigationData | null>(null);
   const [loading, setLoading] = useState(true);
   const [contentLoading, setContentLoading] = useState(false);
+  const [applyingCandidateDraft, setApplyingCandidateDraft] = useState(false);
+  const [candidateComparisonVisible, setCandidateComparisonVisible] = useState(false);
+  const [candidateComparisonLoading, setCandidateComparisonLoading] = useState(false);
+  const [candidateComparisonContent, setCandidateComparisonContent] = useState('');
+  const [candidateComparisonWordCount, setCandidateComparisonWordCount] = useState(0);
+  const [candidateComparisonHighlights, setCandidateComparisonHighlights] = useState<ChapterCandidateDraftQualityHighlights | null>(null);
   const [showAnnotations, setShowAnnotations] = useState(true);
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | undefined>();
   const [sidebarVisible, setSidebarVisible] = useState(false);
@@ -151,6 +159,9 @@ const ChapterAnalysis: React.FC = () => {
     try {
       setContentLoading(true);
       setAnalysisDetail(null);
+      setCandidateComparisonVisible(false);
+      setCandidateComparisonContent('');
+      setCandidateComparisonWordCount(0);
       
       const [chapterResponse, annotationsResponse, analysisResponse, navigationResponse] = await Promise.all([
         api.get(`/chapters/${chapterId}`),
@@ -163,7 +174,13 @@ const ChapterAnalysis: React.FC = () => {
       const normalizedAnalysisResponse = analysisResponse && typeof analysisResponse === 'object' && 'data' in analysisResponse
         ? (analysisResponse as { data?: ChapterAnalysisResponse }).data ?? analysisResponse
         : analysisResponse;
-      setSelectedChapter(chapterResponse.data || chapterResponse);
+      const normalizedChapterResponse = chapterResponse.data || chapterResponse;
+      setSelectedChapter(normalizedChapterResponse);
+      setChapters((prev) => prev.map((item) => (
+        item.id === normalizedChapterResponse.id
+          ? { ...item, ...normalizedChapterResponse }
+          : item
+      )));
       setAnnotationsData(annotationsResponse ? (annotationsResponse.data || annotationsResponse) : null);
       setAnalysisDetail(normalizedAnalysisResponse ?? null);
       setNavigation(navigationResponse ? (navigationResponse.data || navigationResponse) : null);
@@ -173,6 +190,100 @@ const ChapterAnalysis: React.FC = () => {
       message.error('加载章节内容失败');
     } finally {
       setContentLoading(false);
+    }
+  };
+
+  const applyCandidateDraft = async (): Promise<boolean> => {
+    if (!selectedChapter || !analysisDetail?.candidate_draft) {
+      return false;
+    }
+
+    const candidateDraft = analysisDetail.candidate_draft;
+    const confirmSections: string[] = [];
+    const applyRiskItems = candidateDraft.apply_risk?.items ?? [];
+    if (applyRiskItems.length > 0) {
+      const riskSummary = candidateDraft.apply_risk?.summary?.trim()
+        || '恢复前请先确认这些一致性 / 质量风险是否可接受。';
+      const riskList = applyRiskItems
+        .map((item, index) => `${index + 1}. ${item}`)
+        .join('\n');
+      confirmSections.push(`${riskSummary}\n${riskList}`);
+    }
+    if (candidateDraft.is_stale) {
+      confirmSections.push('候选草稿早于当前章节内容，恢复会覆盖现有正文。');
+    }
+    if (confirmSections.length > 0) {
+      const confirmed = window.confirm(`${confirmSections.join('\n\n')}\n\n是否继续恢复？`);
+      if (!confirmed) {
+        return false;
+      }
+    }
+
+    try {
+      setApplyingCandidateDraft(true);
+      const response = await chapterApi.applyCandidateDraft(selectedChapter.id, {
+        attempt_id: candidateDraft.attempt_id,
+        allow_stale: candidateDraft.is_stale,
+      });
+      message.success(response.message || '候选草稿已恢复');
+      await loadChapterContent(selectedChapter.id);
+      if (projectId) {
+        try {
+          const trendResponse = await chapterApi.getProjectChapterQualityTrend(projectId, 12);
+          setProjectQualityTrend(trendResponse);
+        } catch (trendError) {
+          console.error('Failed to refresh project quality trend:', trendError);
+        }
+      }
+      return true;
+    } catch (error) {
+      console.error('Failed to apply candidate draft:', error);
+      const errorMessage = typeof error === 'object' && error !== null && 'response' in error
+        ? ((error as { response?: { data?: { detail?: string } } }).response?.data?.detail || '恢复候选草稿失败')
+        : '恢复候选草稿失败';
+      message.error(errorMessage);
+      return false;
+    } finally {
+      setApplyingCandidateDraft(false);
+    }
+  };
+
+  const handleApplyCandidateDraft = async () => {
+    await applyCandidateDraft();
+  };
+
+  const handlePreviewCandidateDraftComparison = async () => {
+    if (!selectedChapter || !analysisDetail?.candidate_draft) {
+      return;
+    }
+
+    const candidateDraft = analysisDetail.candidate_draft;
+    if (!candidateDraft.can_apply) {
+      message.warning('当前候选稿只保留了预览，无法进行正文对比。');
+      return;
+    }
+
+    try {
+      setCandidateComparisonLoading(true);
+      setCandidateComparisonHighlights(null);
+      const response = await chapterApi.getCandidateDraft(selectedChapter.id, candidateDraft.attempt_id);
+      const detailDraft = response.candidate_draft;
+      if (!detailDraft?.content) {
+        message.warning('当前候选稿缺少完整正文，暂时无法进行对比。');
+        return;
+      }
+      setCandidateComparisonContent(detailDraft.content);
+      setCandidateComparisonWordCount(detailDraft.word_count || detailDraft.content.length);
+      setCandidateComparisonHighlights(detailDraft.quality_highlights || null);
+      setCandidateComparisonVisible(true);
+    } catch (error) {
+      console.error('Failed to load candidate draft detail:', error);
+      const errorMessage = typeof error === 'object' && error !== null && 'response' in error
+        ? ((error as { response?: { data?: { detail?: string } } }).response?.data?.detail || '加载候选稿正文失败')
+        : '加载候选稿正文失败';
+      message.error(errorMessage);
+    } finally {
+      setCandidateComparisonLoading(false);
     }
   };
 
@@ -230,6 +341,36 @@ const ChapterAnalysis: React.FC = () => {
   } : null;
   const checkerResult = analysisDetail?.checker_result ?? null;
   const draftResult = analysisDetail?.auto_revision_draft ?? null;
+  const candidateDraft = analysisDetail?.candidate_draft ?? null;
+  const candidateSelection = candidateDraft?.candidate_selection ?? null;
+  const candidateRepairTargets = candidateDraft?.repair_targets ?? [];
+  const candidatePreserveStrengths = candidateDraft?.preserve_strengths ?? [];
+  const candidateFailedMetricLabels = (candidateDraft?.failed_metrics ?? [])
+    .map((item) => item.label)
+    .filter((label): label is string => Boolean(label));
+  const candidateApplyRisk = candidateDraft?.apply_risk ?? null;
+  const candidateApplyRiskItems = candidateApplyRisk?.items ?? [];
+  const candidateDraftStateLabel = !candidateDraft
+    ? ''
+    : (!candidateDraft.can_apply
+      ? '仅预览'
+      : (candidateDraft.is_stale ? '已过期' : '可恢复'));
+  const candidateSourceLabel = !candidateDraft
+    ? ''
+    : (candidateDraft.source === 'batch'
+      ? '批量生成'
+      : (candidateDraft.source === 'chapter' ? '单章生成' : candidateDraft.source));
+  const candidateSelectionSummaryItems = candidateDraft ? [
+    { label: '状态', value: candidateDraftStateLabel, color: !candidateDraft.can_apply ? 'gold' : (candidateDraft.is_stale ? 'gold' : 'green') },
+    { label: '来源', value: candidateSourceLabel },
+    { label: '草稿字数', value: `${candidateDraft.word_count}` },
+    ...(candidateSelection?.candidate_index && candidateSelection?.candidate_count
+      ? [{ label: '候选位次', value: `${candidateSelection.candidate_index}/${candidateSelection.candidate_count}` }]
+      : []),
+    ...(typeof candidateSelection?.selection_score === 'number'
+      ? [{ label: '选择分', value: `${candidateSelection.selection_score.toFixed(1)}` }]
+      : []),
+  ] : [];
   const weakestQualityMetric = normalizedChapterQualityMetrics ? getWeakestQualityMetric(normalizedChapterQualityMetrics) : null;
   const qualityRepairGuidance = getRepairGuidanceDisplay(normalizedChapterQualityMetrics?.repair_guidance ?? null);
   const qualityRepairWeakestMetricHint = formatRepairWeakestMetricHint(qualityRepairGuidance);
@@ -274,6 +415,7 @@ const ChapterAnalysis: React.FC = () => {
     normalizedChapterQualityMetrics
     || checkerResult
     || draftResult
+    || candidateDraft
     || qualityProfileItems.length > 0,
   );
 
@@ -553,11 +695,25 @@ const ChapterAnalysis: React.FC = () => {
               )}
             </Card>
 
-            <ProjectQualityTrendPanel
-              trendData={projectQualityTrend}
-              loading={loading}
-              compact={isMobile}
-            />
+            <Suspense
+              fallback={(
+                <Card
+                  title="章节质量趋势"
+                  size={isMobile ? 'small' : 'default'}
+                  style={{ marginBottom: 16 }}
+                >
+                  <div style={{ padding: '12px 0', textAlign: 'center' }}>
+                    <Spin size="small" />
+                  </div>
+                </Card>
+              )}
+            >
+              <LazyProjectQualityTrendPanel
+                trendData={projectQualityTrend}
+                loading={loading}
+                compact={isMobile}
+              />
+            </Suspense>
 
             <Card
               title="质量验收"
@@ -712,6 +868,97 @@ const ChapterAnalysis: React.FC = () => {
                     </>
                   )}
 
+                  {candidateDraft && (
+                    <>
+                      {renderCompactSettingHint(
+                        '候选草稿',
+                        candidateDraft.repair_summary || '质量门禁已保留一份候选草稿，可恢复到正文后再继续润色。',
+                        {
+                          tone: candidateDraft.can_apply ? (candidateDraft.is_stale ? 'warning' : 'success') : 'warning',
+                          style: { marginBottom: 10 },
+                        },
+                      )}
+                      {candidateSelectionSummaryItems.length > 0 && renderCompactSelectionSummary(
+                        candidateSelectionSummaryItems,
+                        { style: { marginBottom: 10 } },
+                      )}
+                      {candidateRepairTargets.length > 0 && renderCompactListCard(
+                        '修复目标',
+                        candidateRepairTargets,
+                        { tagText: `${candidateRepairTargets.length}项`, tagColor: 'blue', style: { marginBottom: 10 } },
+                      )}
+                      {candidatePreserveStrengths.length > 0 && renderCompactListCard(
+                        '保留优势',
+                        candidatePreserveStrengths,
+                        { tagText: `${candidatePreserveStrengths.length}项`, tagColor: 'green', style: { marginBottom: 10 } },
+                      )}
+                      {candidateFailedMetricLabels.length > 0 && renderCompactListCard(
+                        '门禁关注项',
+                        candidateFailedMetricLabels,
+                        { tagText: `${candidateFailedMetricLabels.length}项`, tagColor: 'red', style: { marginBottom: 10 } },
+                      )}
+                      {candidateApplyRisk && renderCompactSettingHint(
+                        '????????',
+                        candidateApplyRisk.summary || '???????????? / ??????????',
+                        { tone: 'warning', style: { marginBottom: 10 } },
+                      )}
+                      {candidateApplyRiskItems.length > 0 && renderCompactListCard(
+                        '?????',
+                        candidateApplyRiskItems,
+                        { tagText: `${candidateApplyRiskItems.length}?`, tagColor: 'orange', style: { marginBottom: 10 } },
+                      )}
+                      {candidateDraft.content_preview && (
+                        <div
+                          style={{
+                            padding: '8px 10px',
+                            border: '1px solid #f0f0f0',
+                            borderRadius: 8,
+                            marginBottom: 10,
+                          }}
+                        >
+                          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>候选预览</div>
+                          <div
+                            style={{
+                              color: 'var(--color-text-secondary)',
+                              fontSize: 12,
+                              lineHeight: 1.7,
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-word',
+                              maxHeight: 160,
+                              overflowY: 'auto',
+                            }}
+                          >
+                            {candidateDraft.content_preview}
+                          </div>
+                        </div>
+                      )}
+                      <Space size={8} style={{ marginBottom: qualityProfileItems.length > 0 ? 12 : 0 }}>
+                        <Button
+                          size="small"
+                          onClick={handlePreviewCandidateDraftComparison}
+                          loading={candidateComparisonLoading}
+                          disabled={!candidateDraft.can_apply}
+                        >
+                          {'对比预览'}
+                        </Button>
+                        <Button
+                          type="primary"
+                          size="small"
+                          onClick={handleApplyCandidateDraft}
+                          loading={applyingCandidateDraft}
+                          disabled={!candidateDraft.can_apply}
+                        >
+                          {'恢复到正文'}
+                        </Button>
+                        {!candidateDraft.can_apply && (
+                          <span style={{ fontSize: 12, color: token.colorTextTertiary }}>
+                            {'当前只保留了预览，旧候选草稿暂无法直接恢复。'}
+                          </span>
+                        )}
+                      </Space>
+                    </>
+                  )}
+
                   {qualityProfileItems.length > 0 && (
                     <>
                       {renderCompactSettingHint(
@@ -816,6 +1063,30 @@ const ChapterAnalysis: React.FC = () => {
                   scrollToAnnotation={scrollToSidebarAnnotation}
                 />
               </Drawer>
+            )}
+            {selectedChapter && candidateComparisonVisible && (
+              <Suspense fallback={<Spin size="small" />}>
+                <LazyChapterContentComparison
+                  visible={candidateComparisonVisible}
+                  onClose={() => {
+                    setCandidateComparisonVisible(false);
+                    setCandidateComparisonHighlights(null);
+                  }}
+                  chapterId={selectedChapter.id}
+                  projectId={projectId}
+                  chapterTitle={selectedChapter.title}
+                  originalContent={selectedChapter.content || ''}
+                  newContent={candidateComparisonContent}
+                  wordCount={candidateComparisonWordCount || candidateComparisonContent.length}
+                  qualityHighlights={candidateComparisonHighlights}
+                  onApplyAction={applyCandidateDraft}
+                  showDiscardButton={false}
+                  applyButtonText="\u6062\u590d\u5230\u6b63\u6587"
+                  modalTitle={`\u5019\u9009\u7a3f\u5bf9\u6bd4 - ${selectedChapter.title}`}
+                  leftTitle="\u5f53\u524d\u6b63\u6587"
+                  rightTitle="\u5019\u9009\u7a3f"
+                />
+              </Suspense>
             )}
           </>
         )}

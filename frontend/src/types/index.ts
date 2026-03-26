@@ -485,6 +485,9 @@ export interface StoryQualityGateDecision {
   pacing_imbalance?: StoryPacingImbalanceSummary | null;
   manual_review_threshold?: number | null;
   allow_save_threshold?: number | null;
+  weak_metric_block_count?: number | null;
+  allow_save_weak_metric_count?: number | null;
+  normalized_gap_threshold?: number | null;
 }
 
 export interface ActiveStoryRepairPayload extends StoryRepairGuidance {
@@ -513,6 +516,18 @@ export interface ChapterQualityMetrics {
   quality_gate?: StoryQualityGateDecision | null;
 }
 
+export interface QualityRuntimeContextSummary {
+  plot_stage?: string;
+  chapter_count?: number | null;
+  current_chapter_number?: number | null;
+  genre?: string;
+  genre_profiles?: string[];
+  style_name?: string;
+  style_preset_id?: string;
+  style_profile?: string;
+  quality_preset?: string;
+}
+
 export interface ChapterLatestQualityMetrics {
   overall_score?: number;
   conflict_chain_hit_rate?: number;
@@ -528,6 +543,7 @@ export interface ChapterLatestQualityMetrics {
   generated_at?: string | null;
   repair_guidance?: StoryRepairGuidance | null;
   quality_gate?: StoryQualityGateDecision | null;
+  quality_runtime_context?: QualityRuntimeContextSummary | null;
 }
 
 export interface StoryPacingImbalanceSignal {
@@ -563,6 +579,11 @@ export interface StoryVolumeGoalCompletionSummary {
   stage_alignment?: number | null;
   focus_areas?: string[];
   repair_targets?: string[];
+  profile_summary?: string;
+  profile_focuses?: string[];
+  style_profile?: string;
+  genre_profiles?: string[];
+  quality_preset?: string;
   summary?: string;
 }
 
@@ -575,6 +596,27 @@ export interface StoryForeshadowPayoffDelaySummary {
   recent_payoff_momentum?: number | null;
   focus_areas?: string[];
   repair_targets?: string[];
+  summary?: string;
+}
+
+export interface StoryRepairEffectivenessFocusAreaStat {
+  focus_area?: string;
+  label?: string;
+  metric_key?: string;
+  evaluated_pairs?: number;
+  successful_pairs?: number;
+  success_rate?: number | null;
+  avg_delta?: number | null;
+}
+
+export interface StoryRepairEffectivenessSummary {
+  status?: "stable" | "watch" | "warning" | string;
+  success_rate?: number | null;
+  evaluated_pairs?: number;
+  successful_pairs?: number;
+  recovered_focus_areas?: string[];
+  unresolved_focus_areas?: string[];
+  focus_area_stats?: StoryRepairEffectivenessFocusAreaStat[];
   summary?: string;
 }
 
@@ -603,6 +645,7 @@ export interface ChapterQualityMetricsSummary {
   pacing_imbalance?: StoryPacingImbalanceSummary | null;
   volume_goal_completion?: StoryVolumeGoalCompletionSummary | null;
   foreshadow_payoff_delay?: StoryForeshadowPayoffDelaySummary | null;
+  repair_effectiveness?: StoryRepairEffectivenessSummary | null;
   repair_guidance?: StoryRepairGuidance | null;
   quality_gate?: StoryQualityGateDecision | null;
 }
@@ -673,7 +716,7 @@ export interface GenerateOutlineRequest {
   requirements?: string;
   provider?: string;
   model?: string;
-  // ????????
+  // Generation mode for chapter creation
   mode?: 'auto' | 'new' | 'continue';
   story_direction?: string;
   plot_stage?: PlotStage;
@@ -1092,20 +1135,97 @@ export interface ChapterAutoRevisionDraft {
   quality_profile_summary?: ChapterQualityProfileSummary | null;
 }
 
+export interface ChapterCandidateDraftFailedMetric {
+  key?: string;
+  label?: string;
+  value?: number;
+  threshold?: number;
+  gap?: number;
+  focus_area?: string | null;
+  repair_target?: string | null;
+}
+
+export interface ChapterCandidateSelectionSummary {
+  candidate_index?: number;
+  candidate_count?: number;
+  source?: string;
+  selection_score?: number;
+  overall_score?: number;
+  quality_gate_decision?: string;
+  quality_gate_status?: string;
+  quality_gate_priority?: number;
+  word_count?: number;
+  target_word_count?: number;
+  word_count_fit_score?: number;
+  word_count_delta?: number;
+  continuity_warning_count?: number;
+}
+
+export interface ChapterCandidateDraftQualityEvidence {
+  item: string;
+  snippet: string;
+  matched_anchors: string[];
+}
+
+export interface ChapterCandidateDraftQualityFacet {
+  status: string;
+  summary?: string | null;
+  matched_items: string[];
+  missing_items: string[];
+  repair_targets: string[];
+  matched_evidence?: ChapterCandidateDraftQualityEvidence[];
+}
+
+export interface ChapterCandidateDraftQualityHighlights {
+  continuity?: ChapterCandidateDraftQualityFacet | null;
+  foreshadow?: ChapterCandidateDraftQualityFacet | null;
+}
+
+export interface ChapterCandidateDraftApplyRisk {
+  status: string;
+  summary?: string | null;
+  items: string[];
+}
+
+export interface ChapterCandidateDraft {
+  attempt_id: string;
+  source: string;
+  attempt_state: string;
+  quality_gate_action?: string | null;
+  quality_gate_decision?: string | null;
+  word_count: number;
+  summary_preview: string;
+  content_preview: string;
+  has_full_content: boolean;
+  content_complete: boolean;
+  can_apply: boolean;
+  is_stale: boolean;
+  created_at: string | null;
+  repair_summary?: string | null;
+  repair_targets: string[];
+  preserve_strengths: string[];
+  focus_areas: string[];
+  failed_metrics: ChapterCandidateDraftFailedMetric[];
+  candidate_selection?: ChapterCandidateSelectionSummary | null;
+  quality_highlights?: ChapterCandidateDraftQualityHighlights | null;
+  apply_risk?: ChapterCandidateDraftApplyRisk | null;
+  content?: string;
+}
+
 export interface ChapterAnalysisResponse {
   chapter_id: string;
-  analysis: AnalysisData;  // 注意：后端返回的是analysis而不是analysis_data
+  analysis: AnalysisData;  // Backend returns analysis here instead of analysis_data
   memories: StoryMemory[];
   checker_result?: ChapterTextCheckerResult | null;
   checker_created_at?: string | null;
   auto_revision_draft?: ChapterAutoRevisionDraft | null;
+  candidate_draft?: ChapterCandidateDraft | null;
   quality_metrics?: ChapterLatestQualityMetrics | null;
   quality_metrics_summary?: ChapterQualityMetricsSummary | null;
   quality_profile_summary?: ChapterQualityProfileSummary | null;
   created_at: string;
 }
 
-// 手动触发分析响应
 export interface ChapterAutoRevisionDraftResponse {
   chapter_id: string;
   auto_revision_draft: ChapterAutoRevisionDraft;
@@ -1122,6 +1242,27 @@ export interface ApplyAutoRevisionDraftResponse {
   word_count: number;
   old_word_count: number;
   draft_history_id: string;
+  draft_created_at: string | null;
+  stale_applied: boolean;
+  message: string;
+}
+
+export interface ChapterCandidateDraftResponse {
+  chapter_id: string;
+  candidate_draft: ChapterCandidateDraft;
+}
+
+export interface ApplyCandidateDraftRequest {
+  attempt_id?: string;
+  allow_stale?: boolean;
+}
+
+export interface ApplyCandidateDraftResponse {
+  success: boolean;
+  chapter_id: string;
+  word_count: number;
+  old_word_count: number;
+  draft_attempt_id: string;
   draft_created_at: string | null;
   stale_applied: boolean;
   message: string;

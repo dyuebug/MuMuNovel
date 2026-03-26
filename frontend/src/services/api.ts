@@ -869,7 +869,21 @@ export const chapterApi = {
       data
     ),
 
-  // 章节重新生成相关
+  getCandidateDraft: (chapterId: string, attemptId?: string) =>
+    api.get<unknown, import('../types').ChapterCandidateDraftResponse>(
+      `/chapters/${chapterId}/analysis/candidate-draft`,
+      { params: { attempt_id: attemptId } }
+    ),
+
+  applyCandidateDraft: (
+    chapterId: string,
+    data: import('../types').ApplyCandidateDraftRequest = {}
+  ) =>
+    api.post<unknown, import('../types').ApplyCandidateDraftResponse>(
+      `/chapters/${chapterId}/analysis/candidate-draft/apply`,
+      data
+    ),
+
   getRegenerationTasks: (chapterId: string, limit?: number) =>
     api.get<unknown, {
       chapter_id: string;
