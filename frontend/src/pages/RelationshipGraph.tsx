@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, type CSSProperties } from 'react';
+import { Suspense, lazy, useState, useEffect, useCallback, useMemo, type CSSProperties } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Card, Tag, Button, Space, message, Typography, theme } from 'antd';
 import {
@@ -9,20 +9,11 @@ import {
   TrophyOutlined,
 } from '@ant-design/icons';
 import axios from 'axios';
-import dagre from 'dagre';
-import {
-  ReactFlow,
-  Background,
-  Controls,
-  useNodesState,
-  useEdgesState,
-  BackgroundVariant,
-  MarkerType,
-} from '@xyflow/react';
 import type { Node, Edge } from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
+import type { BuildGraphThemeToken } from '../components/relationship-graph/buildGraph';
 
 const { Text } = Typography;
+const RelationshipGraphCanvas = lazy(() => import('../components/relationship-graph/RelationshipGraphCanvas'));
 
 interface GraphNode {
   id: string;
@@ -160,208 +151,6 @@ const clampTextStyle = (rows: number): CSSProperties => ({
   wordBreak: 'break-word',
 });
 
-const getNodeSize = (node: Node) => {
-  const width =
-    typeof node.style?.width === 'number'
-      ? node.style.width
-      : Number(node.style?.width ?? 140) || 140;
-  const height =
-    typeof node.style?.height === 'number'
-      ? node.style.height
-      : Number(node.style?.height ?? 60) || 60;
-
-  return { width, height };
-};
-
-const MAIN_GRAPH_FIXED_X_GAP = 220;
-const MAIN_GRAPH_FIXED_Y_GAP = 180;
-const MAIN_GRAPH_MAX_PER_ROW = 6;
-const MAIN_GRAPH_GROUP_Y_GAP = 140;
-
-const layoutNodesInWrappedRows = (
-  rowNodes: Node[],
-  startX: number,
-  startY: number,
-  maxPerRow: number,
-  columnGap: number,
-  rowGap: number,
-): Node[] => {
-  if (rowNodes.length === 0) {
-    return [];
-  }
-
-  const sorted = [...rowNodes].sort((a, b) => a.position.x - b.position.x);
-
-  return sorted.map((node, index) => {
-    const col = index % maxPerRow;
-    const row = Math.floor(index / maxPerRow);
-    return {
-      ...node,
-      position: {
-        ...node.position,
-        x: startX + col * columnGap,
-        y: startY + row * rowGap,
-      },
-    };
-  });
-};
-
-// 使用 dagre 进行自动布局，并支持分组排版策略
-const getLayoutedElements = (nodes: Node[], edges: Edge[]) => {
-  const dagreGraph = new dagre.graphlib.Graph();
-  dagreGraph.setDefaultEdgeLabel(() => ({}));
-  // 增大节点间距，使用更合理的排版
-  dagreGraph.setGraph({ rankdir: 'TB', nodesep: 160, ranksep: 180, edgesep: 80, marginx: 40, marginy: 40 });
-
-  // 1. 拆分职业节点和其他节点
-  const careerNodeIds = new Set(
-    nodes.filter((n) => n.id.startsWith('career-') || n.id.startsWith('__career_group')).map((n) => n.id)
-  );
-
-  const layoutNodes = nodes.filter((n) => !careerNodeIds.has(n.id));
-  const careerNodes = nodes.filter((n) => careerNodeIds.has(n.id));
-
-  // 2. 配置主图谱 (组织 + 角色)
-  layoutNodes.forEach((node) => {
-    const { width, height } = getNodeSize(node);
-    dagreGraph.setNode(node.id, { width, height });
-  });
-
-  // 使用虚拟根节点强制分层：第一排组织，第二排角色
-  dagreGraph.setNode('__dummy_root', { width: 1, height: 1 });
-  layoutNodes.forEach((node) => {
-    if (node.data?.type === 'organization') {
-      dagreGraph.setEdge('__dummy_root', node.id, { weight: 100, minlen: 1 });
-    } else {
-      // 角色统一放在第二排（minlen=2）
-      dagreGraph.setEdge('__dummy_root', node.id, { weight: 1, minlen: 2 });
-    }
-  });
-
-  // 添加常规连线（排除职业相关的连线参与 Dagre 布局，避免干扰主图谱结构）
-  edges.forEach((edge) => {
-    if (!careerNodeIds.has(edge.source) && !careerNodeIds.has(edge.target)) {
-      dagreGraph.setEdge(edge.source, edge.target, {
-        weight: edge.data?.layoutWeight ?? 1,
-        minlen: 1
-      });
-    }
-  });
-
-  dagre.layout(dagreGraph);
-
-  // 3. 应用 Dagre 布局结果，并执行“首元素对齐 + 每排最多6个自动换行”
-  const layoutedNodes = layoutNodes.map((node) => {
-    const nodeWithPosition = dagreGraph.node(node.id);
-    const { width, height } = getNodeSize(node);
-
-    return {
-      ...node,
-      position: {
-        x: nodeWithPosition.x - width / 2,
-        y: nodeWithPosition.y - height / 2,
-      },
-    };
-  });
-
-  const organizationNodes = layoutedNodes.filter((node) => node.data?.type === 'organization');
-  const characterNodes = layoutedNodes.filter((node) => node.data?.type !== 'organization');
-
-  const baseStartX = layoutedNodes.reduce(
-    (min, node) => (node.position.x < min ? node.position.x : min),
-    Infinity,
-  );
-  const alignedStartX = Number.isFinite(baseStartX) ? baseStartX : 0;
-
-  const orgStartYRaw = organizationNodes.reduce(
-    (min, node) => (node.position.y < min ? node.position.y : min),
-    Infinity,
-  );
-  const orgStartY = Number.isFinite(orgStartYRaw) ? orgStartYRaw : 0;
-
-  const orgRows = Math.ceil(organizationNodes.length / MAIN_GRAPH_MAX_PER_ROW);
-  const orgMaxHeight = organizationNodes.reduce(
-    (max, node) => Math.max(max, getNodeSize(node).height),
-    0,
-  );
-  const organizationBottomY =
-    orgStartY +
-    Math.max(orgRows - 1, 0) * MAIN_GRAPH_FIXED_Y_GAP +
-    orgMaxHeight;
-
-  const characterStartYRaw = characterNodes.reduce(
-    (min, node) => (node.position.y < min ? node.position.y : min),
-    Infinity,
-  );
-  const characterStartYBase = Number.isFinite(characterStartYRaw)
-    ? characterStartYRaw
-    : organizationBottomY + MAIN_GRAPH_GROUP_Y_GAP;
-  const characterStartY = Math.max(characterStartYBase, organizationBottomY + MAIN_GRAPH_GROUP_Y_GAP);
-
-  const wrappedOrganizations = layoutNodesInWrappedRows(
-    organizationNodes,
-    alignedStartX,
-    orgStartY,
-    MAIN_GRAPH_MAX_PER_ROW,
-    MAIN_GRAPH_FIXED_X_GAP,
-    MAIN_GRAPH_FIXED_Y_GAP,
-  );
-
-  const wrappedCharacters = layoutNodesInWrappedRows(
-    characterNodes,
-    alignedStartX,
-    characterStartY,
-    MAIN_GRAPH_MAX_PER_ROW,
-    MAIN_GRAPH_FIXED_X_GAP,
-    MAIN_GRAPH_FIXED_Y_GAP,
-  );
-
-  const normalizedMap = new Map<string, Node>(
-    [...wrappedOrganizations, ...wrappedCharacters].map((node) => [node.id, node]),
-  );
-
-  const normalizedLayoutedNodes = layoutedNodes.map((node) => normalizedMap.get(node.id) || node);
-
-  const { minX, minY } = normalizedLayoutedNodes.reduce(
-    (acc, node) => ({
-      minX: Math.min(acc.minX, node.position.x),
-      minY: Math.min(acc.minY, node.position.y),
-    }),
-    { minX: Infinity, minY: Infinity },
-  );
-
-  const safeMinX = Number.isFinite(minX) ? minX : 0;
-  const safeMinY = Number.isFinite(minY) ? minY : 0;
-
-  // 4. 在左侧独立排版职业节点
-  const careerStartX = safeMinX - 460; // 在主图左侧留出足够空间
-  let currentY = safeMinY;
-
-  const placedCareerNodes: Node[] = [];
-  const placeNode = (nodeId: string, xOffset = 0) => {
-    const node = careerNodes.find((n) => n.id === nodeId);
-    if (node) {
-      placedCareerNodes.push({
-        ...node,
-        position: { x: careerStartX + xOffset, y: currentY },
-      });
-      const { height } = getNodeSize(node);
-      currentY += height + 30; // 节点垂直间距
-    }
-  };
-
-  // 依次排列：主职业分组 -> 主职业列表 -> 副职业分组 -> 副职业列表
-  placeNode(GROUP_MAIN_CAREER_NODE_ID, -180);
-  careerNodes.filter((n) => n.data?.type === 'career_main').forEach((n) => placeNode(n.id));
-
-  currentY += 20; // 主副职业之间的额外间距
-
-  placeNode(GROUP_SUB_CAREER_NODE_ID, -180);
-  careerNodes.filter((n) => n.data?.type === 'career_sub').forEach((n) => placeNode(n.id));
-
-  return { nodes: [...normalizedLayoutedNodes, ...placedCareerNodes], edges };
-};
-
 const safeParseStringArray = (raw: unknown): string[] => {
   if (!raw) return [];
 
@@ -407,129 +196,6 @@ const safeParseSubCareers = (raw: CharacterDetail['sub_careers']) => {
   return [];
 };
 
-const getCategoryColor = (
-  relationshipName: string,
-  isActive: boolean,
-  relationshipTypes: RelationshipType[],
-  token: {
-    colorPrimary: string;
-    colorWarning: string;
-    colorInfo: string;
-    colorTextTertiary: string;
-    colorError: string;
-    colorSuccess: string;
-    colorBorder: string;
-  },
-) => {
-  const inactiveColor = token.colorBorder;
-
-  if (relationshipName.startsWith('组织成员·')) {
-    return isActive ? token.colorPrimary : inactiveColor;
-  }
-
-  if (relationshipName.startsWith('主职业·')) {
-    return isActive ? token.colorWarning : inactiveColor;
-  }
-
-  if (relationshipName.startsWith('副职业·')) {
-    return isActive ? token.colorInfo : inactiveColor;
-  }
-
-  if (relationshipName.startsWith('职业分类·')) {
-    return isActive ? token.colorTextTertiary : inactiveColor;
-  }
-
-  const relType = relationshipTypes.find((rt) => rt.name === relationshipName);
-  const category = relType?.category || 'default';
-
-  const categoryColors: Record<string, string> = {
-    family: token.colorWarning,
-    hostile: token.colorError,
-    professional: token.colorInfo,
-    social: token.colorSuccess,
-    default: token.colorTextTertiary,
-  };
-
-  const activeColor = categoryColors[category] || categoryColors.default;
-  return isActive ? activeColor : inactiveColor;
-};
-
-const getCharacterNodeStyle = (roleType: string): CSSProperties => {
-  const roleColorMap: Record<string, string> = {
-    protagonist: 'var(--ant-color-error)',
-    antagonist: 'var(--ant-color-primary)',
-    supporting: 'var(--ant-color-info)',
-  };
-
-  const baseColor = roleColorMap[roleType] || 'var(--ant-color-info)';
-
-  return {
-    width: 130,
-    height: 130,
-    border: `2px solid ${baseColor}`,
-    borderRadius: '50%',
-    background: `linear-gradient(135deg, var(--ant-color-bg-container), color-mix(in srgb, ${baseColor} 12%, var(--ant-color-bg-container)))`,
-    boxShadow: `0 4px 16px color-mix(in srgb, ${baseColor} 25%, transparent)`,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 0,
-    transition: 'all 0.3s ease',
-  };
-};
-
-const getOrganizationNodeStyle = (): CSSProperties => ({
-  width: 160,
-  height: 90,
-  border: '2px solid var(--ant-color-success)',
-  borderRadius: 12,
-  background: 'linear-gradient(135deg, var(--ant-color-bg-container), color-mix(in srgb, var(--ant-color-success) 12%, var(--ant-color-bg-container)))',
-  boxShadow: '0 4px 16px color-mix(in srgb, var(--ant-color-success) 15%, transparent)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: 0,
-  transition: 'all 0.3s ease',
-});
-
-const getCareerNodeStyle = (type: 'main' | 'sub'): CSSProperties => {
-  const color = type === 'main' ? 'var(--ant-color-warning)' : 'var(--ant-color-info)';
-
-  return {
-    width: 150,
-    height: 72,
-    border: `2px solid ${color}`,
-    borderRadius: 12,
-    background: `linear-gradient(135deg, var(--ant-color-bg-container), color-mix(in srgb, ${color} 12%, var(--ant-color-bg-container)))`,
-    boxShadow: `0 4px 12px color-mix(in srgb, ${color} 20%, transparent)`,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 0,
-    transition: 'all 0.3s ease',
-  };
-};
-
-const getCareerGroupStyle = (type: 'main' | 'sub'): CSSProperties => {
-  const color = type === 'main' ? 'var(--ant-color-warning)' : 'var(--ant-color-info)';
-
-  return {
-    width: 130,
-    height: 52,
-    border: `2px dashed ${color}`,
-    borderRadius: 26,
-    backgroundColor: 'var(--ant-color-bg-container)',
-    boxShadow: `0 2px 8px color-mix(in srgb, ${color} 15%, transparent)`,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontWeight: 600,
-    fontSize: 13,
-    color,
-    padding: 0,
-  };
-};
-
 const InfoField = ({
   label,
   value,
@@ -567,8 +233,39 @@ export default function RelationshipGraph() {
   const alphaColor = (color: string, alpha: number) =>
     `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
 
+  const graphTheme = useMemo<BuildGraphThemeToken>(
+    () => ({
+      colorBgContainer: token.colorBgContainer,
+      colorBorder: token.colorBorder,
+      colorError: token.colorError,
+      colorFillSecondary: token.colorFillSecondary,
+      colorInfo: token.colorInfo,
+      colorPrimary: token.colorPrimary,
+      colorSuccess: token.colorSuccess,
+      colorText: token.colorText,
+      colorTextBase: token.colorTextBase,
+      colorTextSecondary: token.colorTextSecondary,
+      colorTextTertiary: token.colorTextTertiary,
+      colorWarning: token.colorWarning,
+    }),
+    [
+      token.colorBgContainer,
+      token.colorBorder,
+      token.colorError,
+      token.colorFillSecondary,
+      token.colorInfo,
+      token.colorPrimary,
+      token.colorSuccess,
+      token.colorText,
+      token.colorTextBase,
+      token.colorTextSecondary,
+      token.colorTextTertiary,
+      token.colorWarning,
+    ],
+  );
+
   const [graphData, setGraphData] = useState<GraphData | null>(null);
-  const [, setLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [nodeDetail, setNodeDetail] = useState<CharacterDetail | null>(null);
   const [, setDetailLoading] = useState(false);
@@ -577,8 +274,8 @@ export default function RelationshipGraph() {
   const [mainCareers, setMainCareers] = useState<CareerItem[]>([]);
   const [subCareers, setSubCareers] = useState<CareerItem[]>([]);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
   const [edgeVisibilityMap, setEdgeVisibilityMap] = useState<Record<string, boolean>>({});
 
   const careerNameMap = useMemo(() => {
@@ -652,355 +349,47 @@ export default function RelationshipGraph() {
     }
   };
 
-  const buildFlowEdge = useCallback(
-    (
-      edgeId: string,
-      source: string,
-      target: string,
-      relationship: string,
-      status: string,
-      intimacy: number,
-      opts?: {
-        dashed?: boolean;
-        animated?: boolean;
-        layoutWeight?: number;
-      },
-    ): Edge => {
-      const edgeColor = getCategoryColor(relationship, status === 'active', relationshipTypes, {
-        colorPrimary: token.colorPrimary,
-        colorWarning: token.colorWarning,
-        colorInfo: token.colorInfo,
-        colorTextTertiary: token.colorTextTertiary,
-        colorError: token.colorError,
-        colorSuccess: token.colorSuccess,
-        colorBorder: token.colorBorder,
-      });
-      const isOrgMemberLink = relationship.startsWith('组织成员·');
-      const isCareerMainLink = relationship.startsWith('主职业·');
-      const isCareerSubLink = relationship.startsWith('副职业·');
-      const isCareerClassLink = relationship.startsWith('职业分类·');
-
-      return {
-        id: edgeId,
-        source,
-        target,
-        label: relationship,
-        type: 'smoothstep',
-        animated: opts?.animated,
-        style: {
-          stroke: edgeColor,
-          strokeWidth: isCareerClassLink ? 1.5 : 2,
-          strokeDasharray: opts?.dashed || isOrgMemberLink || isCareerSubLink ? '6 3' : undefined,
-          opacity: isCareerClassLink ? 0.5 : (isCareerMainLink || isCareerSubLink ? 0.6 : 1),
-        },
-        labelStyle: {
-          fill: token.colorTextSecondary,
-          fontSize: 10,
-          fontWeight: isCareerMainLink || isCareerSubLink ? 600 : 500,
-        },
-        labelBgStyle: {
-          fill: token.colorBgContainer,
-          fillOpacity: 0.9,
-        },
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: edgeColor,
-        },
-        data: {
-          intimacy,
-          status,
-          layoutWeight: opts?.layoutWeight ?? 1,
-          category: isOrgMemberLink
-            ? 'organization'
-            : isCareerMainLink
-              ? 'career_main'
-              : isCareerSubLink
-                ? 'career_sub'
-                : isCareerClassLink
-                  ? 'career_group'
-                  : relationshipTypes.find((rt) => rt.name === relationship)?.category || 'social',
-        },
-      };
-    },
-    [
-      relationshipTypes,
-      token.colorBgContainer,
-      token.colorBorder,
-      token.colorError,
-      token.colorInfo,
-      token.colorPrimary,
-      token.colorSuccess,
-      token.colorTextSecondary,
-      token.colorTextTertiary,
-      token.colorWarning,
-    ],
-  );
-
   const loadGraphData = useCallback(async () => {
     if (!projectId || relationshipTypes.length === 0) return;
 
     setLoading(true);
     try {
-      const [graphRes, charactersRes, careersRes] = await Promise.all([
+      const [graphRes, charactersRes, careersRes, layoutModule, graphBuilderModule] = await Promise.all([
         axios.get(`/api/relationships/graph/${projectId}`),
         axios.get('/api/characters', { params: { project_id: projectId } }),
         axios.get('/api/careers', { params: { project_id: projectId } }),
+        import('../components/relationship-graph/layout'),
+        import('../components/relationship-graph/buildGraph'),
       ]);
 
       const data = graphRes.data as GraphData;
       const characters = (charactersRes.data as CharacterListResponse)?.items || [];
       const careersData = (careersRes.data as CareerListResponse) || {};
-
-      setMainCareers(careersData.main_careers || []);
-      setSubCareers(careersData.sub_careers || []);
-
-      const detailMap: Record<string, CharacterDetail> = {};
-      characters.forEach((item) => {
-        detailMap[item.id] = item;
-      });
-      setCharacterDetailMap(detailMap);
-
-      const baseNodes: Node[] = data.nodes.map((node) => {
-        const style = node.type === 'organization' ? getOrganizationNodeStyle() : getCharacterNodeStyle(node.role_type);
-        const detail = detailMap[node.id];
-
-        const roleColorMap: Record<string, string> = {
-          protagonist: token.colorError,
-          antagonist: token.colorPrimary,
-          supporting: token.colorInfo,
-        };
-        const baseColor = roleColorMap[node.role_type] || token.colorInfo;
-
-        const labelContent = node.type === 'organization' ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>
-            <ApartmentOutlined style={{ fontSize: 24, color: token.colorSuccess, marginBottom: 4 }} />
-            <div style={{ fontWeight: 600, fontSize: 14, color: token.colorText, maxWidth: '90%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</div>
-            <div style={{ fontSize: 11, color: token.colorTextSecondary, marginTop: 2 }}>{detail?.organization_type || '组织'}</div>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>
-            {detail?.avatar_url ? (
-               <img src={detail.avatar_url} alt={node.name} style={{ width: 56, height: 56, borderRadius: '50%', objectFit: 'cover', border: `2px solid ${token.colorBgContainer}`, boxShadow: `0 2px 6px ${alphaColor(token.colorTextBase, 0.18)}`, marginBottom: 6 }} />
-            ) : (
-               <div style={{ width: 56, height: 56, borderRadius: '50%', backgroundColor: token.colorFillSecondary, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `2px solid ${token.colorBgContainer}`, boxShadow: `0 2px 6px ${alphaColor(token.colorTextBase, 0.18)}`, marginBottom: 6 }}>
-                 <UserOutlined style={{ fontSize: 28, color: baseColor }} />
-               </div>
-            )}
-            <div style={{ fontWeight: 600, fontSize: 13, color: token.colorText, maxWidth: '90%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</div>
-            <div style={{ fontSize: 11, color: baseColor, marginTop: 2, transform: 'scale(0.9)' }}>
-              {node.role_type === 'protagonist' ? '主角' : node.role_type === 'antagonist' ? '反派' : '配角'}
-            </div>
-          </div>
-        );
-
-        return {
-          id: node.id,
-          type: 'default',
-          position: { x: 0, y: 0 },
-          data: {
-            label: labelContent,
-            type: node.type,
-            role_type: node.role_type,
-          },
-          style,
-        };
+      const buildResult = graphBuilderModule.buildRelationshipGraph({
+        projectId,
+        graphData: data,
+        characters,
+        careersData,
+        relationshipTypes,
+        token: graphTheme,
+        getLayoutedElements: layoutModule.getLayoutedElements,
       });
 
-      const mainCareerNodes: Node[] = (careersData.main_careers || []).map((career) => ({
-        id: `career-main-${career.id}`,
-        type: 'default',
-        position: { x: 0, y: 0 },
-        data: {
-          label: (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-              <div style={{ fontSize: 11, color: token.colorWarning, marginBottom: 2 }}>主职业</div>
-              <div style={{ fontWeight: 600, fontSize: 13, color: token.colorText }}>{career.name}</div>
-            </div>
-          ),
-          type: 'career_main',
-        },
-        style: getCareerNodeStyle('main'),
-      }));
-
-      const subCareerNodes: Node[] = (careersData.sub_careers || []).map((career) => ({
-        id: `career-sub-${career.id}`,
-        type: 'default',
-        position: { x: 0, y: 0 },
-        data: {
-          label: (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-              <div style={{ fontSize: 11, color: token.colorInfo, marginBottom: 2 }}>副职业</div>
-              <div style={{ fontWeight: 600, fontSize: 13, color: token.colorText }}>{career.name}</div>
-            </div>
-          ),
-          type: 'career_sub',
-        },
-        style: getCareerNodeStyle('sub'),
-      }));
-
-      const careerGroupNodes: Node[] = [];
-      if (mainCareerNodes.length > 0) {
-        careerGroupNodes.push({
-          id: GROUP_MAIN_CAREER_NODE_ID,
-          type: 'default',
-          position: { x: 0, y: 0 },
-          data: {
-            label: '主职业分组',
-            type: 'career_group',
-          },
-          style: getCareerGroupStyle('main'),
-        });
-      }
-      if (subCareerNodes.length > 0) {
-        careerGroupNodes.push({
-          id: GROUP_SUB_CAREER_NODE_ID,
-          type: 'default',
-          position: { x: 0, y: 0 },
-          data: {
-            label: '副职业分组',
-            type: 'career_group',
-          },
-          style: getCareerGroupStyle('sub'),
-        });
-      }
-
-      const allNodes: Node[] = [...baseNodes, ...careerGroupNodes, ...mainCareerNodes, ...subCareerNodes];
-
-      const orgMemberLinks = data.links.filter((link) => link.relationship.startsWith('组织成员·'));
-      const memberRelationLinks = data.links.filter((link) => !link.relationship.startsWith('组织成员·'));
-
-      // 先建立组织-成员边（用于先稳定层级结构）
-      const orgMemberEdges: Edge[] = orgMemberLinks.map((link) =>
-        buildFlowEdge(
-          `${link.source}-${link.target}-${link.relationship}`,
-          link.source,
-          link.target,
-          link.relationship,
-          link.status,
-          link.intimacy,
-          { layoutWeight: 8 },
-        ),
-      );
-
-      // 再构建职业块 -> 职业 -> 角色边
-      const careerGroupEdges: Edge[] = [
-        ...mainCareerNodes.map((node) =>
-          buildFlowEdge(
-            `${GROUP_MAIN_CAREER_NODE_ID}-${node.id}`,
-            GROUP_MAIN_CAREER_NODE_ID,
-            node.id,
-            '职业分类·主职业',
-            'active',
-            0,
-            { dashed: true, layoutWeight: 4 },
-          ),
-        ),
-        ...subCareerNodes.map((node) =>
-          buildFlowEdge(
-            `${GROUP_SUB_CAREER_NODE_ID}-${node.id}`,
-            GROUP_SUB_CAREER_NODE_ID,
-            node.id,
-            '职业分类·副职业',
-            'active',
-            0,
-            { dashed: true, layoutWeight: 4 },
-          ),
-        ),
-      ];
-
-      const careerToCharacterEdges: Edge[] = [];
-      const localCareerNameMap: Record<string, string> = {};
-      [...(careersData.main_careers || []), ...(careersData.sub_careers || [])].forEach((career) => {
-        localCareerNameMap[career.id] = career.name;
-      });
-
-      characters
-        .filter((character) => !character.is_organization)
-        .forEach((character) => {
-          if (character.main_career_id) {
-            const careerNodeId = `career-main-${character.main_career_id}`;
-            if (mainCareerNodes.some((node) => node.id === careerNodeId)) {
-              const careerName = localCareerNameMap[character.main_career_id] || '未知职业';
-              careerToCharacterEdges.push(
-                buildFlowEdge(
-                  `${careerNodeId}-${character.id}-main`,
-                  careerNodeId,
-                  character.id,
-                  `主职业·${careerName}`,
-                  'active',
-                  100,
-                  { layoutWeight: 3 },
-                ),
-              );
-            }
-          }
-
-          const subCareerData = safeParseSubCareers(character.sub_careers);
-          subCareerData.forEach((sub) => {
-            const careerNodeId = `career-sub-${sub.career_id}`;
-            if (subCareerNodes.some((node) => node.id === careerNodeId)) {
-              const careerName = localCareerNameMap[sub.career_id] || '未知副职业';
-              careerToCharacterEdges.push(
-                buildFlowEdge(
-                  `${careerNodeId}-${character.id}-sub-${sub.stage || 1}`,
-                  careerNodeId,
-                  character.id,
-                  `副职业·${careerName}`,
-                  'active',
-                  80,
-                  { dashed: true, layoutWeight: 2 },
-                ),
-              );
-            }
-          });
-        });
-
-      // 最后才连接成员之间的人际关系
-      const memberRelationEdges: Edge[] = memberRelationLinks.map((link) =>
-        buildFlowEdge(
-          `${link.source}-${link.target}-${link.relationship}`,
-          link.source,
-          link.target,
-          link.relationship,
-          link.status,
-          link.intimacy,
-          { layoutWeight: 1 },
-        ),
-      );
-
-      const layoutEdges = [...orgMemberEdges, ...careerGroupEdges, ...careerToCharacterEdges];
-      const fallbackLayoutEdges = layoutEdges.length > 0 ? layoutEdges : memberRelationEdges;
-
-      const layouted = getLayoutedElements(allNodes, fallbackLayoutEdges);
-
-      setNodes(layouted.nodes);
-      setEdges([...orgMemberEdges, ...careerGroupEdges, ...careerToCharacterEdges, ...memberRelationEdges]);
-      setGraphData(data);
+      setMainCareers(buildResult.mainCareers);
+      setSubCareers(buildResult.subCareers);
+      setCharacterDetailMap(buildResult.characterDetailMap);
+      setNodes(buildResult.nodes);
+      setEdges(buildResult.edges);
+      setGraphData(buildResult.graphData);
     } catch (error) {
       message.error('加载关系图谱失败');
       console.error(error);
     } finally {
       setLoading(false);
     }
-  }, [
-    projectId,
-    relationshipTypes,
-    buildFlowEdge,
-    setNodes,
-    setEdges,
-    token.colorBgContainer,
-    token.colorError,
-    token.colorFillSecondary,
-    token.colorInfo,
-    token.colorPrimary,
-    token.colorSuccess,
-    token.colorText,
-    token.colorTextBase,
-    token.colorTextSecondary,
-    token.colorWarning,
-  ]);
+  }, [projectId, relationshipTypes, graphTheme]);
 
-  // 当 relationshipTypes 加载完成后再加载图数据
+  // ? relationshipTypes ???????????
   useEffect(() => {
     void loadGraphData();
   }, [loadGraphData]);
@@ -1126,6 +515,22 @@ export default function RelationshipGraph() {
   const traitList = safeParseStringArray(nodeDetail?.traits);
   const orgMembers = safeParseStringArray(nodeDetail?.organization_members);
 
+  const renderGraphCanvasPlaceholder = (messageText: string) => (
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 12,
+        background: token.colorFillQuaternary,
+      }}
+    >
+      <Text type="secondary">{messageText}</Text>
+    </div>
+  );
+
   return (
     <div
       style={{
@@ -1230,86 +635,22 @@ export default function RelationshipGraph() {
           </Space>
         }
       >
-        <div style={{ flex: 1, minHeight: 0 }} className="relationship-graph-flow">
-          <style>
-            {`
-              .relationship-graph-flow .react-flow__handle {
-                opacity: 0 !important;
-                background: transparent !important;
-                border: none !important;
-                pointer-events: none !important;
-              }
-
-              .relationship-graph-flow .react-flow__node {
-                outline: 1px solid var(--ant-color-border-secondary);
-                outline-offset: 0;
-              }
-
-              .relationship-graph-flow .react-flow__controls {
-                border: 1px solid var(--ant-color-border-secondary);
-                border-radius: var(--ant-border-radius-lg);
-                overflow: hidden;
-                background: var(--ant-color-bg-elevated);
-                box-shadow: 0 6px 16px color-mix(in srgb, var(--ant-color-text) 12%, transparent);
-              }
-
-              .relationship-graph-flow .react-flow__controls-button {
-                background: var(--ant-color-bg-elevated);
-                border-bottom: 1px solid var(--ant-color-border-secondary);
-                color: var(--ant-color-text);
-              }
-
-              .relationship-graph-flow .react-flow__controls-button:last-child {
-                border-bottom: none;
-              }
-
-              .relationship-graph-flow .react-flow__controls-button:hover {
-                background: var(--ant-color-fill-secondary);
-              }
-
-              .relationship-graph-flow .react-flow__controls-button:disabled {
-                background: var(--ant-color-fill-quaternary);
-                color: var(--ant-color-text-quaternary);
-              }
-
-              .relationship-graph-flow .react-flow__controls-button svg {
-                fill: currentColor;
-              }
-
-              .relationship-graph-flow .react-flow__attribution {
-                background: var(--ant-color-bg-elevated);
-                border: 1px solid var(--ant-color-border-secondary);
-                border-radius: var(--ant-border-radius-sm);
-                box-shadow: 0 2px 8px color-mix(in srgb, var(--ant-color-text) 10%, transparent);
-              }
-
-              .relationship-graph-flow .react-flow__attribution a {
-                color: var(--ant-color-text-secondary);
-              }
-
-              .relationship-graph-flow .react-flow__attribution a:hover {
-                color: var(--ant-color-primary);
-              }
-            `}
-          </style>
-          <ReactFlow
-            nodes={nodes}
-            edges={visibleEdges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onNodeClick={handleNodeClick}
-            fitView
-            fitViewOptions={{ padding: 0.2 }}
-            attributionPosition="bottom-left"
-          >
-            <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
-            <Controls position="top-left" />
-          </ReactFlow>
-        </div>
+        {loading ? (
+          renderGraphCanvasPlaceholder('关系图谱加载中...')
+        ) : graphData && nodes.length > 0 ? (
+          <Suspense fallback={renderGraphCanvasPlaceholder('图谱引擎加载中...')}>
+            <RelationshipGraphCanvas
+              nodes={nodes}
+              edges={visibleEdges}
+              onNodeClick={handleNodeClick}
+            />
+          </Suspense>
+        ) : (
+          renderGraphCanvasPlaceholder('暂无可渲染的关系图谱数据')
+        )}
       </Card>
 
-      {/* 节点详情 */}
-{selectedNodeId && nodeDetail && (
+      {selectedNodeId && nodeDetail && (
 <div
   style={{
     position: 'fixed',
