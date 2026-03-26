@@ -49,6 +49,14 @@ class StoryGenerationGuidance:
     quality_preset: Optional[str] = None
     quality_notes: Optional[str] = None
 
+    @classmethod
+    def from_generation_kwargs(
+        cls,
+        values: Optional[Mapping[str, Any]] = None,
+    ) -> "StoryGenerationGuidance":
+        normalized_values = _normalize_story_guidance_values(values or {})
+        return cls(**normalized_values)
+
     def to_generation_kwargs(self) -> Dict[str, Optional[str]]:
         return {
             "creative_mode": self.creative_mode,
@@ -58,6 +66,9 @@ class StoryGenerationGuidance:
             "quality_preset": self.quality_preset,
             "quality_notes": self.quality_notes,
         }
+
+    def to_runtime_contract(self) -> Dict[str, Optional[str]]:
+        return self.to_generation_kwargs()
 
     def to_prompt_fields(self) -> Dict[str, Any]:
         return {
@@ -74,6 +85,7 @@ STORY_GUIDANCE_FIELD_NAMES: tuple[str, ...] = (
     "quality_preset",
     "quality_notes",
 )
+STORY_PACKET_RUNTIME_CONTRACT_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -89,6 +101,41 @@ class StoryBlueprint:
     foreshadow_state_ledger: tuple[str, ...] = ()
     organization_state_ledger: tuple[str, ...] = ()
     career_state_ledger: tuple[str, ...] = ()
+
+    @classmethod
+    def from_runtime_contract(
+        cls,
+        values: Optional[Mapping[str, Any]] = None,
+    ) -> "StoryBlueprint":
+        payload = values or {}
+        return cls(
+            long_term_goal=_normalize_optional_text(payload.get("long_term_goal")),
+            chapter_count=_normalize_optional_int(payload.get("chapter_count")),
+            current_chapter_number=_normalize_optional_int(payload.get("current_chapter_number")),
+            target_word_count=_normalize_optional_int(payload.get("target_word_count")),
+            character_focus_names=_normalize_string_sequence(payload.get("character_focus_names"), limit=4),
+            foreshadow_payoff_plan=_normalize_string_sequence(payload.get("foreshadow_payoff_plan"), limit=3),
+            character_state_ledger=_normalize_string_sequence(payload.get("character_state_ledger"), limit=4),
+            relationship_state_ledger=_normalize_string_sequence(payload.get("relationship_state_ledger"), limit=4),
+            foreshadow_state_ledger=_normalize_string_sequence(payload.get("foreshadow_state_ledger"), limit=4),
+            organization_state_ledger=_normalize_string_sequence(payload.get("organization_state_ledger"), limit=4),
+            career_state_ledger=_normalize_string_sequence(payload.get("career_state_ledger"), limit=4),
+        )
+
+    def to_runtime_contract(self) -> Dict[str, Any]:
+        return {
+            "long_term_goal": self.long_term_goal,
+            "chapter_count": self.chapter_count,
+            "current_chapter_number": self.current_chapter_number,
+            "target_word_count": self.target_word_count,
+            "character_focus_names": list(self.character_focus_names),
+            "foreshadow_payoff_plan": list(self.foreshadow_payoff_plan),
+            "character_state_ledger": list(self.character_state_ledger),
+            "relationship_state_ledger": list(self.relationship_state_ledger),
+            "foreshadow_state_ledger": list(self.foreshadow_state_ledger),
+            "organization_state_ledger": list(self.organization_state_ledger),
+            "career_state_ledger": list(self.career_state_ledger),
+        }
 
     def to_prompt_fields(self) -> Dict[str, Any]:
         return {
@@ -112,6 +159,22 @@ class StoryPacket:
     request_overrides: Dict[str, Optional[str]] = field(default_factory=dict)
     source: Optional[str] = None
     blueprint: StoryBlueprint = field(default_factory=StoryBlueprint)
+
+    @classmethod
+    def from_runtime_contract(
+        cls,
+        values: Optional[Mapping[str, Any]] = None,
+    ) -> "StoryPacket":
+        payload = values or {}
+        guidance_payload = payload.get("guidance") if isinstance(payload.get("guidance"), Mapping) else {}
+        request_overrides = payload.get("request_overrides") if isinstance(payload.get("request_overrides"), Mapping) else {}
+        blueprint_payload = payload.get("blueprint") if isinstance(payload.get("blueprint"), Mapping) else {}
+        return cls.from_guidance(
+            StoryGenerationGuidance.from_generation_kwargs(guidance_payload),
+            request_overrides=request_overrides,
+            source=_normalize_optional_text(payload.get("source")),
+            blueprint=StoryBlueprint.from_runtime_contract(blueprint_payload),
+        )
 
     @classmethod
     def from_guidance(
@@ -188,6 +251,19 @@ class StoryPacket:
 
     def to_generation_kwargs(self) -> Dict[str, Optional[str]]:
         return self.guidance.to_generation_kwargs()
+
+    def to_runtime_contract(self) -> Dict[str, Any]:
+        return {
+            "version": STORY_PACKET_RUNTIME_CONTRACT_VERSION,
+            "guidance": self.guidance.to_runtime_contract(),
+            "request_overrides": {
+                field_name: value
+                for field_name, value in self.request_overrides.items()
+                if value is not None
+            },
+            "source": self.source,
+            "blueprint": self.blueprint.to_runtime_contract(),
+        }
 
     def build_prompt_quality_kwargs(
         self,
@@ -1246,95 +1322,73 @@ class ChapterGenerationIntent:
             return history_context
         return None
 
-    def build_prompt_quality_kwargs(self) -> Dict[str, Any]:
+    def _build_story_packet_blueprint_kwargs(self) -> Dict[str, Any]:
         runtime_source = self._build_runtime_source()
+        return {
+            "chapter_count": getattr(self.project, "chapter_count", None),
+            "current_chapter_number": getattr(self.chapter, "chapter_number", None),
+            "target_word_count": self.target_word_count,
+            "character_focus_source": (
+                self.character_focus_source
+                if self.character_focus_source is not None
+                else (self.chapter if self.chapter is not None else runtime_source)
+            ),
+            "foreshadow_payoff_source": (
+                self.foreshadow_payoff_source
+                if self.foreshadow_payoff_source is not None
+                else runtime_source
+            ),
+            "character_state_source": (
+                self.character_state_source
+                if self.character_state_source is not None
+                else runtime_source
+            ),
+            "relationship_state_source": (
+                self.relationship_state_source
+                if self.relationship_state_source is not None
+                else runtime_source
+            ),
+            "foreshadow_state_source": (
+                self.foreshadow_state_source
+                if self.foreshadow_state_source is not None
+                else runtime_source
+            ),
+            "organization_state_source": (
+                self.organization_state_source
+                if self.organization_state_source is not None
+                else runtime_source
+            ),
+            "career_state_source": (
+                self.career_state_source
+                if self.career_state_source is not None
+                else runtime_source
+            ),
+        }
+
+    def build_runtime_story_packet(self) -> StoryPacket:
+        return self.story_packet.with_blueprint(
+            quality_metrics_summary=self.quality_metrics_summary,
+            **self._build_story_packet_blueprint_kwargs(),
+        )
+
+    def build_story_runtime_contract(self) -> Dict[str, Any]:
+        return self.build_runtime_story_packet().to_runtime_contract()
+
+    def build_prompt_quality_kwargs(self) -> Dict[str, Any]:
+        runtime_blueprint_kwargs = self._build_story_packet_blueprint_kwargs()
         return self.story_packet.build_prompt_quality_kwargs(
             self.quality_profile,
             story_repair_payload=self.story_repair_payload,
             active_story_repair_payload=self.active_story_repair_payload,
-            chapter_count=getattr(self.project, "chapter_count", None),
-            current_chapter_number=getattr(self.chapter, "chapter_number", None),
-            target_word_count=self.target_word_count,
             quality_metrics_summary=self.quality_metrics_summary,
-            character_focus_source=(
-                self.character_focus_source
-                if self.character_focus_source is not None
-                else (self.chapter if self.chapter is not None else runtime_source)
-            ),
-            foreshadow_payoff_source=(
-                self.foreshadow_payoff_source
-                if self.foreshadow_payoff_source is not None
-                else runtime_source
-            ),
-            character_state_source=(
-                self.character_state_source
-                if self.character_state_source is not None
-                else runtime_source
-            ),
-            relationship_state_source=(
-                self.relationship_state_source
-                if self.relationship_state_source is not None
-                else runtime_source
-            ),
-            foreshadow_state_source=(
-                self.foreshadow_state_source
-                if self.foreshadow_state_source is not None
-                else runtime_source
-            ),
-            organization_state_source=(
-                self.organization_state_source
-                if self.organization_state_source is not None
-                else runtime_source
-            ),
-            career_state_source=(
-                self.career_state_source
-                if self.career_state_source is not None
-                else runtime_source
-            ),
+            **runtime_blueprint_kwargs,
         )
 
     def build_quality_runtime_context(self) -> Dict[str, Any]:
-        runtime_source = self._build_runtime_source()
+        runtime_blueprint_kwargs = self._build_story_packet_blueprint_kwargs()
         profile_source = self.quality_profile if isinstance(self.quality_profile, Mapping) else {}
         return self.story_packet.build_quality_runtime_context(
-            chapter_count=getattr(self.project, "chapter_count", None),
-            current_chapter_number=getattr(self.chapter, "chapter_number", None),
-            target_word_count=self.target_word_count,
-            character_focus_source=(
-                self.character_focus_source
-                if self.character_focus_source is not None
-                else (self.chapter if self.chapter is not None else runtime_source)
-            ),
-            foreshadow_payoff_source=(
-                self.foreshadow_payoff_source
-                if self.foreshadow_payoff_source is not None
-                else runtime_source
-            ),
-            character_state_source=(
-                self.character_state_source
-                if self.character_state_source is not None
-                else runtime_source
-            ),
-            relationship_state_source=(
-                self.relationship_state_source
-                if self.relationship_state_source is not None
-                else runtime_source
-            ),
-            foreshadow_state_source=(
-                self.foreshadow_state_source
-                if self.foreshadow_state_source is not None
-                else runtime_source
-            ),
-            organization_state_source=(
-                self.organization_state_source
-                if self.organization_state_source is not None
-                else runtime_source
-            ),
-            career_state_source=(
-                self.career_state_source
-                if self.career_state_source is not None
-                else runtime_source
-            ),
+            **runtime_blueprint_kwargs,
             genre=profile_source.get("genre") or getattr(self.project, "genre", None),
             style_name=profile_source.get("style_name"),
             style_preset_id=profile_source.get("style_preset_id"),

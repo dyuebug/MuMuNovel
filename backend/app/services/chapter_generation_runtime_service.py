@@ -21,6 +21,7 @@ class ChapterGenerationRuntimeBundle:
     prompt_quality_kwargs: Dict[str, Any]
     story_repair_payload: Optional[StoryRepairPayload] = None
     active_story_repair_payload: Optional[Dict[str, Any]] = None
+    story_runtime_contract: Optional[Dict[str, Any]] = None
 
 
 def create_chapter_generation_intent_from_runtime(
@@ -222,4 +223,9 @@ def build_chapter_generation_runtime_bundle(
         prompt_quality_kwargs=prompt_quality_kwargs,
         story_repair_payload=resolved_story_repair_payload,
         active_story_repair_payload=resolved_active_story_repair_payload,
+        story_runtime_contract=(
+            generation_intent.build_story_runtime_contract()
+            if generation_intent is not None
+            else None
+        ),
     )

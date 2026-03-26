@@ -4702,3 +4702,37 @@ async def test_generate_single_chapter_for_batch_should_rerank_candidates_before
     assert result["quality_gate_plan"]["action"] == "continue"
     assert result["quality_gate_plan"]["quality_gate"]["decision"] == "allow_save"
     assert result["quality_metrics"]["candidate_selection"]["candidate_index"] == 2
+
+
+
+def test_should_include_story_runtime_contract_in_generation_history_payload():
+    story_runtime_contract = {
+        "guidance": {
+            "plot_stage": "development",
+            "story_focus": "alliance under pressure",
+            "quality_preset": "cinematic",
+        },
+        "blueprint": {
+            "chapter_count": 12,
+            "current_chapter_number": 5,
+            "target_word_count": 2400,
+            "character_focus_names": ["Lin", "Su"],
+            "foreshadow_payoff_plan": ["recover the hidden key"],
+            "organization_state_ledger": ["ShadowGuild: control tightened around the docks"],
+            "career_state_ledger": ["Lin/Strategist: stage 3 with supply-chain pressure"],
+        },
+    }
+
+    payload = json.loads(
+        chapters_api._build_generation_history_payload(
+            "generated body",
+            {"overall_score": 88.0},
+            story_runtime_contract=story_runtime_contract,
+        )
+    )
+
+    assert payload["quality_metrics"]["story_runtime_contract"] == story_runtime_contract
+    assert payload["story_runtime_contract"] == story_runtime_contract
+    assert payload["story_runtime_snapshot"]["plot_stage"] == "development"
+    assert payload["story_runtime_snapshot"]["current_chapter_number"] == 5
+    assert payload["story_runtime_snapshot"]["character_focus"] == ["Lin", "Su"]

@@ -16,6 +16,9 @@ from app.services.novel_quality_profile_service import (
 from app.services.story_quality_repair_effectiveness_service import (
     build_repair_effectiveness_summary,
 )
+from app.services.story_runtime_serialization_service import (
+    extract_story_runtime_snapshot_from_contract,
+)
 
 
 @dataclass(frozen=True)
@@ -333,7 +336,15 @@ def _extract_history_runtime_snapshot(payload: Mapping[str, Any]) -> Dict[str, A
     if not isinstance(payload, Mapping):
         return {}
     runtime_snapshot = payload.get("story_runtime_snapshot")
-    return dict(runtime_snapshot) if isinstance(runtime_snapshot, Mapping) else {}
+    if isinstance(runtime_snapshot, Mapping):
+        return dict(runtime_snapshot)
+    runtime_contract = payload.get("story_runtime_contract")
+    extracted_snapshot = (
+        extract_story_runtime_snapshot_from_contract(runtime_contract)
+        if isinstance(runtime_contract, Mapping)
+        else None
+    )
+    return dict(extracted_snapshot) if isinstance(extracted_snapshot, Mapping) else {}
 
 
 def _resolve_quality_stage(runtime_context: Mapping[str, Any]) -> Optional[str]:

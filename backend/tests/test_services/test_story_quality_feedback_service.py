@@ -941,3 +941,47 @@ def test_should_build_repair_effectiveness_summary_from_adjacent_history():
     assert repair_effectiveness["success_rate"] > 0
     assert repair_effectiveness["focus_area_stats"]
     assert repair_effectiveness["summary"]
+
+
+
+def test_should_restore_runtime_snapshot_from_runtime_contract_when_snapshot_missing():
+    payload = json.dumps(
+        {
+            "log_type": "chapter_generation_quality_v1",
+            "preview": "chapter preview",
+            "quality_metrics": {
+                "overall_score": 84.0,
+                "conflict_chain_hit_rate": 82.0,
+                "rule_grounding_hit_rate": 85.0,
+                "outline_alignment_rate": 83.0,
+                "dialogue_naturalness_rate": 81.0,
+                "opening_hook_rate": 79.0,
+                "payoff_chain_rate": 78.0,
+                "cliffhanger_rate": 80.0,
+            },
+            "story_runtime_contract": {
+                "guidance": {
+                    "plot_stage": "development",
+                    "quality_preset": "cinematic",
+                },
+                "blueprint": {
+                    "chapter_count": 12,
+                    "current_chapter_number": 6,
+                    "character_focus_names": ["Lin", "Su"],
+                    "organization_state_ledger": ["ShadowGuild: control tightened around the docks"],
+                    "career_state_ledger": ["Lin/Strategist: stage 3 with supply-chain pressure"],
+                },
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    metrics = extract_quality_metrics_from_history_payload(payload, scope="chapter")
+
+    assert metrics is not None
+    assert metrics["quality_runtime_context"]["plot_stage"] == "development"
+    assert metrics["quality_runtime_context"]["current_chapter_number"] == 6
+    assert metrics["quality_runtime_context"]["character_focus"] == ["Lin", "Su"]
+    assert metrics["quality_runtime_context"]["organization_state_ledger"] == [
+        "ShadowGuild: control tightened around the docks"
+    ]

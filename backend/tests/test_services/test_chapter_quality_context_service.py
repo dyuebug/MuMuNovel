@@ -83,6 +83,86 @@ def test_should_build_story_packet_from_mapping_and_project_defaults():
 
 
 
+def test_should_round_trip_story_packet_runtime_contract():
+    packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="development",
+            story_creation_brief="keep the vault threat visible",
+            quality_preset="tight_prose",
+            quality_notes="trim explanation",
+        ),
+        request_overrides={
+            "creative_mode": "hook",
+            "quality_notes": "trim explanation",
+            "story_focus": " ",
+        },
+        source="chapter-generate-request",
+    ).with_blueprint(
+        long_term_goal="Protect the hidden key before the guild closes in.",
+        chapter_count=12,
+        current_chapter_number=5,
+        target_word_count=2600,
+        character_focus_source=["Lin", "Bo"],
+        foreshadow_payoff_source=["recover the hidden key"],
+        character_state_source=["Lin: trust strained after the failed ambush"],
+        relationship_state_source=["Lin/Bo: alliance tested by secrecy"],
+        foreshadow_state_source=["hidden key: still missing after the archive raid"],
+        organization_state_source=["ShadowGuild: control tightened around the docks"],
+        career_state_source=["Lin/Strategist: stage 3 with supply-chain pressure"],
+    )
+
+    contract = packet.to_runtime_contract()
+    restored = StoryPacket.from_runtime_contract(contract)
+
+    assert contract["version"] == 1
+    assert restored == packet
+
+
+
+def test_should_build_story_runtime_contract_from_intent_snapshot():
+    packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="development",
+            story_creation_brief="keep the pressure visible",
+        ),
+        source="chapter-generate-request",
+    )
+    project = Project(title="runtime-contract", user_id="user-1", chapter_count=16)
+    chapter = type("ChapterStub", (), {"chapter_number": 4})()
+
+    intent = build_chapter_generation_intent(
+        story_packet=packet,
+        quality_profile={"genre": "mystery"},
+        project=project,
+        chapter=chapter,
+        chapter_context=None,
+        target_word_count=2800,
+        character_focus_source=["Lin"],
+        foreshadow_payoff_source=["recover the hidden key"],
+        relationship_state_source=["Lin/Bo: alliance tested by secrecy"],
+        organization_state_source=["ShadowGuild: control tightened around the docks"],
+        career_state_source=["Lin/Strategist: stage 3 with supply-chain pressure"],
+    )
+
+    contract = intent.build_story_runtime_contract()
+    restored = StoryPacket.from_runtime_contract(contract)
+
+    assert restored.guidance.creative_mode == "hook"
+    assert restored.blueprint.chapter_count == 16
+    assert restored.blueprint.current_chapter_number == 4
+    assert restored.blueprint.target_word_count == 2800
+    assert restored.blueprint.character_focus_names == ("Lin",)
+    assert restored.blueprint.foreshadow_payoff_plan == ("recover the hidden key",)
+    assert restored.blueprint.relationship_state_ledger == ("Lin/Bo: alliance tested by secrecy",)
+    assert restored.blueprint.organization_state_ledger == ("ShadowGuild: control tightened around the docks",)
+    assert restored.blueprint.career_state_ledger == ("Lin/Strategist: stage 3 with supply-chain pressure",)
+
+
+
 def test_should_build_story_packet_from_request_like_object_and_reuse_prompt_kwargs():
     request_like = type(
         "RequestLike",

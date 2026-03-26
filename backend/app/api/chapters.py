@@ -96,6 +96,11 @@ from app.services.story_repair_payload_service import (
     resolve_story_repair_prompt_kwargs,
     story_repair_payload_to_prompt_kwargs,
 )
+from app.services.story_runtime_serialization_service import (
+    attach_story_runtime_contract as _attach_story_runtime_contract,
+    attach_story_runtime_result_payload as _attach_story_runtime_result_payload,
+    extract_story_runtime_snapshot_from_contract as _extract_story_runtime_snapshot_from_contract,
+)
 from app.services.chapter_candidate_rerank_service import (
     attach_candidate_selection_metadata,
     build_candidate_retry_prompt_suffix,
@@ -1727,9 +1732,10 @@ def _build_generation_history_payload(
     *,
     content_applied: bool = True,
     attempt_state: Optional[str] = None,
+    story_runtime_contract: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """构建写入 GenerationHistory 的统一 payload。"""
-    normalized_metrics = dict(metrics or {})
+    """???? GenerationHistory ??? payload?"""
+    normalized_metrics = _attach_story_runtime_contract(metrics, story_runtime_contract) or {}
     if normalized_metrics and not isinstance(normalized_metrics.get("repair_guidance"), dict):
         normalized_metrics["repair_guidance"] = build_story_repair_guidance(normalized_metrics, scope="chapter")
     if normalized_metrics and not isinstance(normalized_metrics.get("quality_gate"), dict):
@@ -1746,9 +1752,14 @@ def _build_generation_history_payload(
         "content_applied": bool(content_applied),
         "attempt_state": resolved_attempt_state,
     }
+    runtime_contract_payload = normalized_metrics.get("story_runtime_contract")
     runtime_snapshot = normalized_metrics.get("quality_runtime_context")
+    if not isinstance(runtime_snapshot, dict) or not runtime_snapshot:
+        runtime_snapshot = _extract_story_runtime_snapshot_from_contract(runtime_contract_payload)
     if isinstance(runtime_snapshot, dict) and runtime_snapshot:
         payload["story_runtime_snapshot"] = runtime_snapshot
+    if isinstance(runtime_contract_payload, dict) and runtime_contract_payload:
+        payload["story_runtime_contract"] = runtime_contract_payload
     return json.dumps(payload, ensure_ascii=False)
 
 def _normalize_checker_result(raw: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -4943,6 +4954,7 @@ async def generate_chapter_content_stream(
                 )
                 generation_intent = generation_runtime.generation_intent
                 prompt_quality_kwargs = generation_runtime.prompt_quality_kwargs
+                story_runtime_contract = generation_runtime.story_runtime_contract
                 yield await tracker.loading("上下文构建完成", 0.8)
                 
                 # 🎭 确定使用的叙事人称（临时指定 > 项目默认 > 系统默认）
@@ -5185,6 +5197,7 @@ async def generate_chapter_content_stream(
                         **quality_metrics,
                         "quality_gate": quality_gate_snapshot,
                     }
+                quality_metrics = _attach_story_runtime_contract(quality_metrics, story_runtime_contract)
 
                 draft_attempt = None
                 if quality_gate_requires_followup:
@@ -5224,6 +5237,7 @@ async def generate_chapter_content_stream(
                         quality_metrics,
                         content_applied=content_applied,
                         attempt_state=attempt_state,
+                        story_runtime_contract=story_runtime_contract,
                     ),
                     model="default"
                 )
@@ -5323,17 +5337,22 @@ async def generate_chapter_content_stream(
                     })
 
                 # 推送最终结果
-                yield await tracker.result({
-                    'word_count': candidate_word_count,
-                    'analysis_task_id': task_id,
-                    'quality_metrics': quality_metrics,
-                    'quality_gate_action': quality_gate_action,
-                    'quality_gate_message': quality_gate_message,
-                    'content_applied': content_applied,
-                    'chapter_status': current_chapter.status,
-                    'saved_word_count': current_chapter.word_count or 0,
-                    'hard_gate_blocked': quality_gate_requires_followup,
-                })
+                yield await tracker.result(
+                    _attach_story_runtime_result_payload(
+                        {
+                            'word_count': candidate_word_count,
+                            'analysis_task_id': task_id,
+                            'quality_metrics': quality_metrics,
+                            'quality_gate_action': quality_gate_action,
+                            'quality_gate_message': quality_gate_message,
+                            'content_applied': content_applied,
+                            'chapter_status': current_chapter.status,
+                            'saved_word_count': current_chapter.word_count or 0,
+                            'hard_gate_blocked': quality_gate_requires_followup,
+                        },
+                        story_runtime_contract,
+                    )
+                )
 
                 # 如果有分析任务，再补发分析启动事件
                 if task_id:
@@ -7270,6 +7289,7 @@ async def execute_batch_generation_in_order(
                     generated_content = str(generation_result.get("full_content") or "")
                     generated_word_count = int(generation_result.get("word_count") or len(generated_content))
                     generation_quality_metrics = generation_result.get("quality_metrics")
+                    generation_story_runtime_contract = generation_result.get("story_runtime_contract")
                     quality_gate_plan = generation_result.get("quality_gate_plan") or _resolve_quality_gate_execution_plan(
                         generation_quality_metrics if isinstance(generation_quality_metrics, dict) else None,
                         retry_count=retry_count,
@@ -7287,6 +7307,10 @@ async def execute_batch_generation_in_order(
                         generation_quality_metrics = {
                             "quality_gate": quality_gate_snapshot,
                         }
+                    generation_quality_metrics = _attach_story_runtime_contract(
+                        generation_quality_metrics,
+                        generation_story_runtime_contract if isinstance(generation_story_runtime_contract, dict) else None,
+                    )
 
                     if isinstance(generation_quality_metrics, dict):
                         metrics_event = {
@@ -7379,6 +7403,7 @@ async def execute_batch_generation_in_order(
                             full_content=generated_content,
                             word_count=generated_word_count,
                             quality_metrics=generation_quality_metrics,
+                            story_runtime_contract=generation_story_runtime_contract if isinstance(generation_story_runtime_contract, dict) else None,
                         )
 
                         if generated_summary:
@@ -7852,6 +7877,7 @@ async def generate_single_chapter_for_batch(
     )
     generation_intent = generation_runtime.generation_intent
     prompt_quality_kwargs = generation_runtime.prompt_quality_kwargs
+    story_runtime_contract = generation_runtime.story_runtime_contract
     
     # 🚀 根据大纲模式选择提示词模板（批量生成）
     # 统一使用 context_builder 构建的 chapter_context 结果，与单章生成保持一致
@@ -8080,6 +8106,7 @@ async def generate_single_chapter_for_batch(
             f"winner={selected_candidate.get('candidate_index', 1)}"
         )
 
+    quality_metrics = _attach_story_runtime_contract(quality_metrics, story_runtime_contract)
     summary_preview = full_content[:300].replace("\n", " ") if full_content else ""
     return {
         "full_content": full_content,
@@ -8088,6 +8115,7 @@ async def generate_single_chapter_for_batch(
         "quality_metrics": quality_metrics,
         "quality_gate_plan": quality_gate_plan,
         "candidate_count": int(selected_candidate.get("candidate_count") or 1),
+        "story_runtime_contract": story_runtime_contract,
     }
 async def _apply_generated_batch_chapter_candidate(
     db_session: AsyncSession,
@@ -8097,6 +8125,7 @@ async def _apply_generated_batch_chapter_candidate(
     full_content: str,
     word_count: int,
     quality_metrics: Optional[Dict[str, Any]] = None,
+    story_runtime_contract: Optional[Dict[str, Any]] = None,
 ) -> None:
     """将批量生成候选稿写回章节，仅在质量门禁放行后调用。"""
     async with write_lock:
@@ -8113,6 +8142,7 @@ async def _apply_generated_batch_chapter_candidate(
             generated_content=_build_generation_history_payload(
                 full_content,
                 quality_metrics if isinstance(quality_metrics, dict) else None,
+                story_runtime_contract=story_runtime_contract,
             ),
             model="default"
         )
@@ -8391,6 +8421,7 @@ async def regenerate_chapter_stream(
             generation_guidance = generation_runtime.generation_guidance
             generation_intent = generation_runtime.generation_intent
             prompt_quality_kwargs = generation_runtime.prompt_quality_kwargs
+            story_runtime_contract = generation_runtime.story_runtime_contract
             style_content = quality_profile.get("style_content") or ""
             style_id = quality_profile.get("resolved_style_id")
             if style_id:
@@ -8549,13 +8580,18 @@ async def regenerate_chapter_stream(
                 yield await tracker.complete("重新生成完成！")
                 
                 # 发送结果数据
-                yield await tracker.result({
-                    'task_id': task_id,
-                    'word_count': len(full_content),
-                    'version_number': regen_task.version_number,
-                    'auto_applied': regenerate_request.auto_apply,
-                    'diff_stats': diff_stats
-                })
+                yield await tracker.result(
+                    _attach_story_runtime_result_payload(
+                        {
+                            'task_id': task_id,
+                            'word_count': len(full_content),
+                            'version_number': regen_task.version_number,
+                            'auto_applied': regenerate_request.auto_apply,
+                            'diff_stats': diff_stats,
+                        },
+                        story_runtime_contract,
+                    )
+                )
                 
                 # 发送完成信号
                 yield await tracker.done()
