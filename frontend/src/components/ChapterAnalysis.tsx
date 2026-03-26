@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { Modal, Spin, Alert, Tabs, Card, Tag, List, Empty, Statistic, Row, Col, Button, message } from 'antd';
 import {
   ThunderboltOutlined,
@@ -15,11 +15,12 @@ import {
 } from '@ant-design/icons';
 import type { AnalysisTask, ChapterAnalysisResponse } from '../types';
 import { chapterApi } from '../services/api';
-import ChapterRegenerationModal from './ChapterRegenerationModal';
-import ChapterContentComparison from './ChapterContentComparison';
 import { getQualityTrendLabel } from '../utils/storyCreationQualitySummary';
 
 // 判断是否为移动设备
+const LazyChapterRegenerationModal = lazy(() => import('./ChapterRegenerationModal'));
+const LazyChapterContentComparison = lazy(() => import('./ChapterContentComparison'));
+
 const isMobileDevice = () => window.innerWidth < 768;
 
 const ANALYSIS_PLOT_STAGE_LABELS: Record<string, string> = {
@@ -1163,7 +1164,8 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
 
       {/* 重新生成Modal */}
       {chapterInfo && (
-        <ChapterRegenerationModal
+        <Suspense fallback={null}>
+          <LazyChapterRegenerationModal
           visible={regenerationModalVisible}
           onCancel={() => setRegenerationModalVisible(false)}
           onSuccess={(newContent: string, wordCount: number) => {
@@ -1183,12 +1185,14 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
           repairGuidance={analysis?.quality_metrics?.repair_guidance ?? analysis?.quality_metrics_summary?.repair_guidance ?? null}
           qualityMetricsSummary={analysis?.quality_metrics_summary ?? null}
           qualityGate={analysis?.quality_metrics?.quality_gate ?? analysis?.quality_metrics_summary?.quality_gate ?? null}
-        />
+          />
+        </Suspense>
       )}
 
       {/* 内容对比组件 */}
       {chapterInfo && comparisonModalVisible && (
-        <ChapterContentComparison
+        <Suspense fallback={null}>
+          <LazyChapterContentComparison
           visible={comparisonModalVisible}
           onClose={() => setComparisonModalVisible(false)}
           chapterId={chapterId}
@@ -1213,7 +1217,8 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
             setNewGeneratedContent('');
             setNewContentWordCount(0);
           }}
-        />
+          />
+        </Suspense>
       )}
     </Modal>
   );
