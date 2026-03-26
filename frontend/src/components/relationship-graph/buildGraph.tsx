@@ -2,90 +2,21 @@ import { ApartmentOutlined, UserOutlined } from '@ant-design/icons';
 import type { CSSProperties } from 'react';
 import type { Edge, Node } from '@xyflow/react';
 
-interface GraphNode {
-  id: string;
-  name: string;
-  type: string;
-  role_type: string;
-  avatar: string | null;
-}
-
-interface GraphLink {
-  source: string;
-  target: string;
-  relationship: string;
-  intimacy: number;
-  status: string;
-}
-
-interface GraphData {
-  nodes: GraphNode[];
-  links: GraphLink[];
-}
-
-interface RelationshipType {
-  id: number;
-  name: string;
-  category: string;
-  reverse_name: string;
-  intimacy_range: string;
-  icon: string;
-  description: string;
-  created_at: string;
-}
-
-interface CharacterDetail {
-  id: string;
-  project_id: string;
-  name: string;
-  age: string;
-  gender: string;
-  is_organization: boolean;
-  role_type: string;
-  personality: string;
-  background: string;
-  appearance: string;
-  organization_type: string;
-  organization_purpose: string;
-  organization_members: string;
-  traits: string;
-  avatar_url: string;
-  power_level: number;
-  location: string;
-  motto: string;
-  color: string;
-  main_career_id?: string;
-  main_career_stage?: number;
-  sub_careers?: Array<{ career_id: string; stage?: number }> | string | null;
-}
-
-interface CareerItem {
-  id: string;
-  name: string;
-  type: 'main' | 'sub';
-  max_stage: number;
-}
-
-interface CareerListResponse {
-  main_careers?: CareerItem[];
-  sub_careers?: CareerItem[];
-}
-
-
-export interface BuildGraphThemeToken {
-  colorBgContainer: string;
-  colorBorder: string;
-  colorError: string;
-  colorFillSecondary: string;
-  colorInfo: string;
-  colorPrimary: string;
-  colorSuccess: string;
-  colorText: string;
-  colorTextBase: string;
-  colorTextSecondary: string;
-  colorTextTertiary: string;
-  colorWarning: string;
-}
+import {
+  buildCareerNameMap,
+  getRelationshipEdgeColor,
+  safeParseSubCareers,
+} from './selectors';
+import {
+  GROUP_MAIN_CAREER_NODE_ID,
+  GROUP_SUB_CAREER_NODE_ID,
+  type CareerItem,
+  type CareerListResponse,
+  type CharacterDetail,
+  type GraphData,
+  type RelationshipGraphThemeToken,
+  type RelationshipType,
+} from './types';
 
 interface BuildFlowEdgeOptions {
   dashed?: boolean;
@@ -99,11 +30,11 @@ interface BuildRelationshipGraphInput {
   characters: CharacterDetail[];
   careersData: CareerListResponse;
   relationshipTypes: RelationshipType[];
-  token: BuildGraphThemeToken;
+  token: RelationshipGraphThemeToken;
   getLayoutedElements: (nodes: Node[], edges: Edge[]) => { nodes: Node[]; edges: Edge[] };
 }
 
-interface BuildRelationshipGraphResult {
+export interface BuildRelationshipGraphResult {
   graphData: GraphData;
   characterDetailMap: Record<string, CharacterDetail>;
   mainCareers: CareerItem[];
@@ -112,70 +43,10 @@ interface BuildRelationshipGraphResult {
   edges: Edge[];
 }
 
-const GROUP_MAIN_CAREER_NODE_ID = '__career_group_main__';
-const GROUP_SUB_CAREER_NODE_ID = '__career_group_sub__';
 const graphBuildCache = new Map<string, BuildRelationshipGraphResult>();
 
 const alphaColor = (color: string, alpha: number) =>
   `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
-
-const safeParseSubCareers = (raw: CharacterDetail['sub_careers']) => {
-  if (!raw) return [] as Array<{ career_id: string; stage?: number }>;
-
-  if (Array.isArray(raw)) {
-    return raw.filter((item) => item?.career_id);
-  }
-
-  if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw) as Array<{ career_id: string; stage?: number }>;
-      if (Array.isArray(parsed)) {
-        return parsed.filter((item) => item?.career_id);
-      }
-    } catch {
-      return [];
-    }
-  }
-
-  return [];
-};
-
-const getCategoryColor = (
-  relationshipName: string,
-  isActive: boolean,
-  relationshipTypes: RelationshipType[],
-  token: BuildGraphThemeToken,
-) => {
-  const inactiveColor = token.colorBorder;
-
-  if (relationshipName.startsWith('?????')) {
-    return isActive ? token.colorPrimary : inactiveColor;
-  }
-
-  if (relationshipName.startsWith('????')) {
-    return isActive ? token.colorWarning : inactiveColor;
-  }
-
-  if (relationshipName.startsWith('????')) {
-    return isActive ? token.colorInfo : inactiveColor;
-  }
-
-  if (relationshipName.startsWith('?????')) {
-    return isActive ? token.colorTextTertiary : inactiveColor;
-  }
-
-  const relType = relationshipTypes.find((item) => item.name === relationshipName);
-  const category = relType?.category || 'default';
-  const categoryColors: Record<string, string> = {
-    family: token.colorWarning,
-    hostile: token.colorError,
-    professional: token.colorInfo,
-    social: token.colorSuccess,
-    default: token.colorTextTertiary,
-  };
-
-  return isActive ? (categoryColors[category] || categoryColors.default) : inactiveColor;
-};
 
 const getCharacterNodeStyle = (roleType: string): CSSProperties => {
   const roleColorMap: Record<string, string> = {
@@ -261,10 +132,10 @@ const buildFlowEdge = (
   status: string,
   intimacy: number,
   relationshipTypes: RelationshipType[],
-  token: BuildGraphThemeToken,
+  token: RelationshipGraphThemeToken,
   opts?: BuildFlowEdgeOptions,
 ): Edge => {
-  const edgeColor = getCategoryColor(relationship, status === 'active', relationshipTypes, token);
+  const edgeColor = getRelationshipEdgeColor(relationship, status === 'active', relationshipTypes, token);
   const isOrgMemberLink = relationship.startsWith('?????');
   const isCareerMainLink = relationship.startsWith('????');
   const isCareerSubLink = relationship.startsWith('????');
@@ -559,10 +430,9 @@ export const buildRelationshipGraph = ({
 
   const mainCareerNodeIds = new Set(mainCareerNodes.map((node) => node.id));
   const subCareerNodeIds = new Set(subCareerNodes.map((node) => node.id));
-  const careerNameMap: Record<string, string> = {};
-  [...mainCareers, ...subCareers].forEach((career) => {
-    careerNameMap[career.id] = career.name;
-  });
+  const careerNameMap = Object.fromEntries(
+    Object.entries(buildCareerNameMap(mainCareers, subCareers)).map(([careerId, career]) => [careerId, career.name]),
+  );
 
   const careerToCharacterEdges: Edge[] = [];
   characters

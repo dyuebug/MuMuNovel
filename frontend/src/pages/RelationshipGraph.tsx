@@ -10,133 +10,26 @@ import {
 } from '@ant-design/icons';
 import axios from 'axios';
 import type { Node, Edge } from '@xyflow/react';
-import type { BuildGraphThemeToken } from '../components/relationship-graph/buildGraph';
+import {
+  buildCareerNameMap,
+  buildEdgeCategoryOptions,
+  getEdgeCategory,
+  safeParseSubCareers,
+} from '../components/relationship-graph/selectors';
+import {
+  GROUP_MAIN_CAREER_NODE_ID,
+  GROUP_SUB_CAREER_NODE_ID,
+  type CareerItem,
+  type CareerListResponse,
+  type CharacterDetail,
+  type CharacterListResponse,
+  type GraphData,
+  type RelationshipGraphThemeToken,
+  type RelationshipType,
+} from '../components/relationship-graph/types';
 
 const { Text } = Typography;
 const RelationshipGraphCanvas = lazy(() => import('../components/relationship-graph/RelationshipGraphCanvas'));
-
-interface GraphNode {
-  id: string;
-  name: string;
-  type: string;
-  role_type: string;
-  avatar: string | null;
-}
-
-interface GraphLink {
-  source: string;
-  target: string;
-  relationship: string;
-  intimacy: number;
-  status: string;
-}
-
-interface GraphData {
-  nodes: GraphNode[];
-  links: GraphLink[];
-}
-
-interface RelationshipType {
-  id: number;
-  name: string;
-  category: string;
-  reverse_name: string;
-  intimacy_range: string;
-  icon: string;
-  description: string;
-  created_at: string;
-}
-
-interface CharacterDetail {
-  id: string;
-  project_id: string;
-  name: string;
-  age: string;
-  gender: string;
-  is_organization: boolean;
-  role_type: string;
-  personality: string;
-  background: string;
-  appearance: string;
-  organization_type: string;
-  organization_purpose: string;
-  organization_members: string;
-  traits: string;
-  avatar_url: string;
-  power_level: number;
-  location: string;
-  motto: string;
-  color: string;
-  main_career_id?: string;
-  main_career_stage?: number;
-  sub_careers?: Array<{ career_id: string; stage?: number }> | string | null;
-}
-
-interface CareerItem {
-  id: string;
-  name: string;
-  type: 'main' | 'sub';
-  max_stage: number;
-}
-
-interface CareerListResponse {
-  main_careers?: CareerItem[];
-  sub_careers?: CareerItem[];
-}
-
-interface CharacterListResponse {
-  items?: CharacterDetail[];
-}
-
-const GROUP_MAIN_CAREER_NODE_ID = '__career_group_main__';
-const GROUP_SUB_CAREER_NODE_ID = '__career_group_sub__';
-
-type EdgeColorPreset = 'primary' | 'warning' | 'info' | 'textTertiary' | 'error' | 'success';
-
-const EDGE_CATEGORY_META: Record<string, { label: string; colorPreset: EdgeColorPreset; order: number }> = {
-  organization: { label: '组织成员', colorPreset: 'primary', order: 1 },
-  career_main: { label: '主职业关联', colorPreset: 'warning', order: 2 },
-  career_sub: { label: '副职业关联', colorPreset: 'info', order: 3 },
-  career_group: { label: '职业分类', colorPreset: 'textTertiary', order: 4 },
-  family: { label: '亲属关系', colorPreset: 'warning', order: 5 },
-  hostile: { label: '敌对关系', colorPreset: 'error', order: 6 },
-  professional: { label: '职业关系', colorPreset: 'info', order: 7 },
-  social: { label: '社交关系', colorPreset: 'success', order: 8 },
-  default: { label: '其他关系', colorPreset: 'textTertiary', order: 99 },
-};
-
-const getEdgeCategory = (edge: Edge) =>
-  typeof edge.data?.category === 'string' ? edge.data.category : 'default';
-
-const getEdgeCategoryMeta = (category: string) =>
-  EDGE_CATEGORY_META[category] || {
-    label: `${category}关系`,
-    colorPreset: 'textTertiary' as const,
-    order: 999,
-  };
-
-const resolveEdgePresetColor = (
-  colorPreset: EdgeColorPreset,
-  token: {
-    colorPrimary: string;
-    colorWarning: string;
-    colorInfo: string;
-    colorTextTertiary: string;
-    colorError: string;
-    colorSuccess: string;
-  },
-) => {
-  const colorMap: Record<EdgeColorPreset, string> = {
-    primary: token.colorPrimary,
-    warning: token.colorWarning,
-    info: token.colorInfo,
-    textTertiary: token.colorTextTertiary,
-    error: token.colorError,
-    success: token.colorSuccess,
-  };
-
-  return colorMap[colorPreset];
-};
 
 const clampTextStyle = (rows: number): CSSProperties => ({
   margin: '4px 0 0',
@@ -169,27 +62,6 @@ const safeParseStringArray = (raw: unknown): string[] => {
         .split(/[，,、]/)
         .map((item) => item.trim())
         .filter(Boolean);
-    }
-  }
-
-  return [];
-};
-
-const safeParseSubCareers = (raw: CharacterDetail['sub_careers']) => {
-  if (!raw) return [] as Array<{ career_id: string; stage?: number }>;
-
-  if (Array.isArray(raw)) {
-    return raw.filter((item) => item?.career_id);
-  }
-
-  if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw) as Array<{ career_id: string; stage?: number }>;
-      if (Array.isArray(parsed)) {
-        return parsed.filter((item) => item?.career_id);
-      }
-    } catch {
-      return [];
     }
   }
 
@@ -233,7 +105,7 @@ export default function RelationshipGraph() {
   const alphaColor = (color: string, alpha: number) =>
     `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
 
-  const graphTheme = useMemo<BuildGraphThemeToken>(
+  const graphTheme = useMemo<RelationshipGraphThemeToken>(
     () => ({
       colorBgContainer: token.colorBgContainer,
       colorBorder: token.colorBorder,
@@ -278,35 +150,15 @@ export default function RelationshipGraph() {
   const [edges, setEdges] = useState<Edge[]>([]);
   const [edgeVisibilityMap, setEdgeVisibilityMap] = useState<Record<string, boolean>>({});
 
-  const careerNameMap = useMemo(() => {
-    const map: Record<string, CareerItem> = {};
-    [...mainCareers, ...subCareers].forEach((career) => {
-      map[career.id] = career;
-    });
-    return map;
-  }, [mainCareers, subCareers]);
+  const careerNameMap = useMemo(
+    () => buildCareerNameMap(mainCareers, subCareers),
+    [mainCareers, subCareers],
+  );
 
-  const edgeCategoryOptions = useMemo(() => {
-    const counter = new Map<string, number>();
-
-    edges.forEach((edge) => {
-      const category = getEdgeCategory(edge);
-      counter.set(category, (counter.get(category) || 0) + 1);
-    });
-
-    return Array.from(counter.entries())
-      .map(([category, count]) => {
-        const meta = getEdgeCategoryMeta(category);
-        return {
-          category,
-          count,
-          label: meta.label,
-          color: resolveEdgePresetColor(meta.colorPreset, token),
-          order: meta.order,
-        };
-      })
-      .sort((a, b) => a.order - b.order || a.label.localeCompare(b.label, 'zh-CN'));
-  }, [edges, token]);
+  const edgeCategoryOptions = useMemo(
+    () => buildEdgeCategoryOptions(edges, graphTheme),
+    [edges, graphTheme],
+  );
 
   useEffect(() => {
     if (edgeCategoryOptions.length === 0) {
