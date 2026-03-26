@@ -14,6 +14,7 @@ from app.models.writing_style import WritingStyle
 from app.services.mcp_tools_loader import mcp_tools_loader
 from app.services.project_generation_defaults import resolve_project_generation_defaults
 from app.services.project_continuity_ledger_service import build_project_continuity_ledger
+from app.services.novel_quality_rules import detect_genre_profiles, detect_style_profile
 from app.services.prompt_service import (
     build_creative_mode_block,
     build_narrative_blueprint_block,
@@ -259,6 +260,12 @@ class StoryPacket:
         foreshadow_state_source: Optional[Any] = None,
         organization_state_source: Optional[Any] = None,
         career_state_source: Optional[Any] = None,
+        genre: Optional[str] = None,
+        style_name: Optional[str] = None,
+        style_preset_id: Optional[str] = None,
+        style_content: Optional[str] = None,
+        style_profile: Optional[str] = None,
+        genre_profiles: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]:
         active_packet = self.with_blueprint(
             chapter_count=chapter_count,
@@ -273,6 +280,16 @@ class StoryPacket:
             career_state_source=career_state_source,
         )
         blueprint = active_packet.blueprint
+        resolved_genre = str(genre or "").strip()
+        resolved_style_name = str(style_name or "").strip()
+        resolved_style_preset_id = str(style_preset_id or "").strip()
+        resolved_style_profile = str(style_profile or "").strip().lower()
+        if not resolved_style_profile:
+            resolved_style_profile = detect_style_profile(
+                style_name=resolved_style_name,
+                style_preset_id=resolved_style_preset_id,
+                style_content=style_content,
+            )
         return {
             "creative_mode": active_packet.guidance.creative_mode or "",
             "story_focus": active_packet.guidance.story_focus or "",
@@ -289,9 +306,15 @@ class StoryPacket:
             "foreshadow_state_ledger": list(blueprint.foreshadow_state_ledger),
             "organization_state_ledger": list(blueprint.organization_state_ledger),
             "career_state_ledger": list(blueprint.career_state_ledger),
+            "genre": resolved_genre,
+            "genre_profiles": _normalize_string_sequence(genre_profiles, limit=4) or list(detect_genre_profiles(resolved_genre)),
+            "style_name": resolved_style_name,
+            "style_preset_id": resolved_style_preset_id,
+            "style_profile": resolved_style_profile,
         }
 
     def build_analysis_quality_kwargs(
+
         self,
         profile: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
@@ -307,6 +330,7 @@ def build_story_runtime_requirement_text(
     memory_guidance: Optional[str] = None,
     quality_repair_guidance: Optional[str] = None,
     scene: str = "outline",
+    quality_trend_guidance: Optional[str] = None,
 ) -> str:
     """构建故事运行时要求文本，融合蓝图、记忆与修复提示。"""
     active_guidance = (story_packet.guidance if story_packet is not None else guidance) or StoryGenerationGuidance()
@@ -345,6 +369,7 @@ def build_story_runtime_requirement_text(
     _append_block(build_story_career_state_ledger_block(blueprint.career_state_ledger, scene=scene))
     _append_block(memory_guidance)
     _append_block(quality_repair_guidance)
+    _append_block(quality_trend_guidance)
     return "\n\n".join(parts)
 
 
@@ -1270,6 +1295,7 @@ class ChapterGenerationIntent:
 
     def build_quality_runtime_context(self) -> Dict[str, Any]:
         runtime_source = self._build_runtime_source()
+        profile_source = self.quality_profile if isinstance(self.quality_profile, Mapping) else {}
         return self.story_packet.build_quality_runtime_context(
             chapter_count=getattr(self.project, "chapter_count", None),
             current_chapter_number=getattr(self.chapter, "chapter_number", None),
@@ -1309,10 +1335,17 @@ class ChapterGenerationIntent:
                 if self.career_state_source is not None
                 else runtime_source
             ),
+            genre=profile_source.get("genre") or getattr(self.project, "genre", None),
+            style_name=profile_source.get("style_name"),
+            style_preset_id=profile_source.get("style_preset_id"),
+            style_content=profile_source.get("style_content"),
+            style_profile=profile_source.get("style_profile"),
+            genre_profiles=profile_source.get("genre_profiles"),
         )
 
 
 def build_chapter_generation_intent(
+
     *,
     story_packet: Optional[StoryPacket],
     quality_profile: Optional[Dict[str, Any]],

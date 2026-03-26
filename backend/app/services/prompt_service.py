@@ -3,6 +3,7 @@ from typing import Dict, Any, Mapping, Optional, Tuple, Sequence
 import json
 import re
 
+from app.logger import get_logger
 from app.services.novel_quality_profile_service import novel_quality_profile_service
 
 try:
@@ -13,6 +14,9 @@ try:
 except Exception:
     MCP_CANON_PRIORITY_RULE = "项目 canon（既有设定、角色关系、本章大纲）优先级高于一切外部参考。"
     MCP_SOURCE_DISCLOSURE_RULE = "最终输出禁止暴露 MCP、工具名、检索过程或来源站点。"
+
+
+logger = get_logger(__name__)
 
 
 QUALITY_RUNTIME_TRACKING_TAG = "rule_v3_quality_block_20260307"
@@ -2531,6 +2535,22 @@ def _coerce_positive_int(value: Optional[Any]) -> Optional[int]:
     return normalized if normalized > 0 else None
 
 
+def _trim_prompt_terminal_punctuation(value: Any) -> str:
+    text = _compact_prompt_text(value)
+    return text.rstrip("\u3002\uff01\uff1f!?\uff1b;,.\uff0c\u3001 ")
+
+
+def _normalize_prompt_sentence_fragments(values: Any) -> list[str]:
+    normalized: list[str] = []
+    for value in values or ():
+        cleaned = _trim_prompt_terminal_punctuation(value)
+        if cleaned:
+            normalized.append(cleaned)
+    return normalized
+
+
+
+
 
 
 def _normalize_runtime_prompt_items(values: Optional[Any], *, limit: int = 4) -> list[str]:
@@ -2549,7 +2569,7 @@ def _normalize_runtime_prompt_items(values: Optional[Any], *, limit: int = 4) ->
         text = str(raw or "").strip()
         if not text:
             continue
-        text = re.sub(r"^[-?*?\d\.\)\s]+", "", text).strip()
+        text = re.sub(r"^[-•*·\d\.\)\s]+", "", text).strip()
         if not text or text.startswith("【"):
             continue
         normalized.append(text)
@@ -2737,114 +2757,185 @@ def build_story_quality_trend_block(
     if not isinstance(summary, Mapping):
         return ""
 
-    scene_label = "章节" if scene == "chapter" else "大纲"
-    lines = [f"【{scene_label}近期质量趋势】"]
+    scene_label = "\u7ae0\u8282" if scene == "chapter" else "\u5927\u7eb2"
+    header = f"\u3010{scene_label}\u8fd1\u671f\u8d28\u91cf\u8d8b\u52bf\u3011"
+    sections: list[tuple[int, str, str]] = []
+
+    def append_section(priority: int, section_key: str, value: Any) -> None:
+        cleaned = _compact_prompt_text(value)
+        if cleaned:
+            sections.append((priority, section_key, cleaned))
 
     chapter_count = _coerce_positive_int(summary.get("chapter_count"))
     trend_label_map = {
-        "rising": "整体质量趋势在回升，本轮可以稳中求进。",
-        "stable": "整体质量趋势相对稳定，本轮要优先补短板。",
-        "falling": "整体质量趋势在下滑，本轮必须主动修复关键短板。",
+        "rising": "\u6574\u4f53\u8d28\u91cf\u8d8b\u52bf\u5728\u56de\u5347\uff0c\u672c\u8f6e\u53ef\u4ee5\u7a33\u4e2d\u6c42\u8fdb\u3002",
+        "stable": "\u6574\u4f53\u8d28\u91cf\u8d8b\u52bf\u76f8\u5bf9\u7a33\u5b9a\uff0c\u672c\u8f6e\u8981\u4f18\u5148\u8865\u77ed\u677f\u3002",
+        "falling": "\u6574\u4f53\u8d28\u91cf\u8d8b\u52bf\u5728\u4e0b\u6ed1\uff0c\u672c\u8f6e\u5fc5\u987b\u4e3b\u52a8\u4fee\u590d\u5173\u952e\u77ed\u677f\u3002",
     }
     if chapter_count:
-        lines.append(f"- 参考范围：最近 {chapter_count} 章的生成反馈。")
+        append_section(2, "reference_window", f"- \u53c2\u8003\u8303\u56f4\uff1a\u6700\u8fd1 {chapter_count} \u7ae0\u7684\u751f\u6210\u53cd\u9988\u3002")
 
     pacing_score = summary.get("avg_pacing_score")
     if isinstance(pacing_score, (int, float)):
-        lines.append(f"- 最近节奏稳定度均值：{float(pacing_score):.1f}/10，场景切换与推进要维持连续压强。")
+        append_section(2, "avg_pacing_score", f"- \u6700\u8fd1\u8282\u594f\u7a33\u5b9a\u5ea6\u5747\u503c\uff1a{float(pacing_score):.1f}/10\uff0c\u573a\u666f\u5207\u6362\u4e0e\u63a8\u8fdb\u8981\u7ef4\u6301\u8fde\u7eed\u538b\u5f3a\u3002")
 
     payoff_rate = summary.get("avg_payoff_chain_rate")
     if isinstance(payoff_rate, (int, float)):
-        lines.append(f"- 最近回报兑现均值：{float(payoff_rate):.1f}%，本章至少回收一个既有承诺或伏笔。")
+        append_section(2, "avg_payoff_chain_rate", f"- \u6700\u8fd1\u56de\u62a5\u5151\u73b0\u5747\u503c\uff1a{float(payoff_rate):.1f}%\uff0c\u672c\u7ae0\u81f3\u5c11\u56de\u6536\u4e00\u4e2a\u65e2\u6709\u627f\u8bfa\u6216\u4f0f\u7b14\u3002")
 
     cliffhanger_rate = summary.get("avg_cliffhanger_rate")
     if isinstance(cliffhanger_rate, (int, float)):
-        lines.append(f"- 最近章尾牵引均值：{float(cliffhanger_rate):.1f}%，尾段要留下明确的未决问题、代价或动作牵引。")
+        append_section(2, "avg_cliffhanger_rate", f"- \u6700\u8fd1\u7ae0\u5c3e\u7275\u5f15\u5747\u503c\uff1a{float(cliffhanger_rate):.1f}%\uff0c\u5c3e\u6bb5\u8981\u7559\u4e0b\u660e\u786e\u7684\u672a\u51b3\u95ee\u9898\u3001\u4ee3\u4ef7\u6216\u52a8\u4f5c\u7275\u5f15\u3002")
 
     trend_note = trend_label_map.get(str(summary.get("overall_score_trend") or "").strip().lower())
     overall_delta = summary.get("overall_score_delta")
-    if trend_note and isinstance(overall_delta, (int, float)):
-        lines.append(f"- 趋势判断：{trend_note}（最近综合分变化 {float(overall_delta):+.1f}）。")
-    elif trend_note:
-        lines.append(f"- 趋势判断：{trend_note}")
+    normalized_trend_note = _trim_prompt_terminal_punctuation(trend_note)
+    if normalized_trend_note and isinstance(overall_delta, (int, float)):
+        append_section(0, "overall_score_trend", f"- \u8d8b\u52bf\u5224\u65ad\uff1a{normalized_trend_note}\uff08\u6700\u8fd1\u7efc\u5408\u5206\u53d8\u5316 {float(overall_delta):+.1f}\uff09\u3002")
+    elif normalized_trend_note:
+        append_section(0, "overall_score_trend", f"- \u8d8b\u52bf\u5224\u65ad\uff1a{normalized_trend_note}\u3002")
 
-    focus_areas = _normalize_runtime_prompt_items(summary.get("recent_focus_areas"), limit=4)
+    focus_areas = _normalize_runtime_prompt_items(summary.get("recent_focus_areas"), limit=3)
     if focus_areas:
-        lines.append("- 最近高频修复焦点：")
-        lines.extend(f"  - {item}" for item in focus_areas)
+        append_section(1, "recent_focus_areas", f"- \u6700\u8fd1\u9ad8\u9891\u4fee\u590d\u7126\u70b9\uff1a{' / '.join(focus_areas)}\u3002")
 
     volume_goal_completion = summary.get("volume_goal_completion") if isinstance(summary.get("volume_goal_completion"), Mapping) else {}
     volume_completion_rate = volume_goal_completion.get("completion_rate")
     volume_summary = str(volume_goal_completion.get("summary") or "").strip()
     volume_targets = _normalize_runtime_prompt_items(volume_goal_completion.get("repair_targets"), limit=2)
+    normalized_volume_targets = _normalize_prompt_sentence_fragments(volume_targets)
     if isinstance(volume_completion_rate, (int, float)):
-        lines.append(f"- 卷级目标达成率：{float(volume_completion_rate):.1f}%，本章必须对齐当前阶段任务。")
+        append_section(2, "volume_goal_completion_rate", f"- \u5377\u7ea7\u76ee\u6807\u8fbe\u6210\u7387\uff1a{float(volume_completion_rate):.1f}%\uff0c\u672c\u7ae0\u5fc5\u987b\u5bf9\u9f50\u5f53\u524d\u9636\u6bb5\u4efb\u52a1\u3002")
     if volume_summary:
-        lines.append(f"- 卷级推进判断：{volume_summary}")
-    if volume_targets:
-        lines.append("- 本章优先拉回这些卷级任务：")
-        lines.extend(f"  - {item}" for item in volume_targets)
+        append_section(0, "volume_goal_completion_summary", f"- \u5377\u7ea7\u63a8\u8fdb\u5224\u65ad\uff1a{volume_summary}")
+    volume_profile_summary = str(volume_goal_completion.get("profile_summary") or "").strip()
+    volume_profile_focuses = _normalize_runtime_prompt_items(volume_goal_completion.get("profile_focuses"), limit=3)
+    if volume_profile_summary:
+        append_section(1, "volume_profile_summary", f"- \u5f53\u524d\u4f53\u88c1 / \u98ce\u683c\u753b\u50cf\uff1a{volume_profile_summary}")
+    elif volume_profile_focuses:
+        append_section(1, "volume_profile_focuses", f"- \u5f53\u524d\u4f53\u88c1 / \u98ce\u683c\u91cd\u5fc3\uff1a{' / '.join(volume_profile_focuses)}\u3002")
+    if normalized_volume_targets:
+        append_section(0, "volume_goal_completion_targets", f"- \u672c\u7ae0\u4f18\u5148\u5bf9\u9f50\u8fd9\u4e9b\u5377\u7ea7\u4efb\u52a1\uff1a{' / '.join(normalized_volume_targets)}\u3002")
 
     pacing_imbalance = summary.get("pacing_imbalance") if isinstance(summary.get("pacing_imbalance"), Mapping) else {}
     pacing_summary = str(pacing_imbalance.get("summary") or "").strip()
-    pacing_targets = _normalize_runtime_prompt_items(pacing_imbalance.get("repair_targets"), limit=3)
+    pacing_targets = _normalize_runtime_prompt_items(pacing_imbalance.get("repair_targets"), limit=2)
+    normalized_pacing_targets = _normalize_prompt_sentence_fragments(pacing_targets)
     pacing_signal_lines: list[str] = []
     for signal in pacing_imbalance.get("signals") or []:
         if not isinstance(signal, Mapping):
             continue
-        label = str(signal.get("label") or signal.get("key") or "节奏异常").strip()
+        label = str(signal.get("label") or signal.get("key") or "\u8282\u594f\u5f02\u5e38").strip()
         if not label:
             continue
         severity = str(signal.get("severity") or "watch").strip().lower()
-        severity_label = "预警" if severity == "warning" else "关注"
-        signal_summary = str(signal.get("summary") or "").strip()
+        severity_label = "\u9884\u8b66" if severity == "warning" else "\u5173\u6ce8"
+        signal_summary = _trim_prompt_terminal_punctuation(signal.get("summary"))
         metric = signal.get("metric")
-        metric_text = f"，指标 {float(metric):.1f}" if isinstance(metric, (int, float)) else ""
-        detail = f"{label}（{severity_label}{metric_text}）"
+        metric_text = f"\uff0c\u6307\u6807 {float(metric):.1f}" if isinstance(metric, (int, float)) else ""
+        detail = f"{label}\uff08{severity_label}{metric_text}\uff09"
         if signal_summary:
-            detail = f"{detail}：{signal_summary}"
+            detail = f"{detail}\uff1a{signal_summary}"
         pacing_signal_lines.append(detail)
-        if len(pacing_signal_lines) >= 3:
-            break
     if pacing_summary:
-        lines.append(f"- 长篇节奏信号：{pacing_summary}")
+        append_section(0, "pacing_imbalance_summary", f"- \u957f\u7bc7\u8282\u594f\u4fe1\u53f7\uff1a{pacing_summary}")
     if pacing_signal_lines:
-        lines.append("- 当前需要盯住的长篇节奏异常：")
-        lines.extend(f"  - {item}" for item in pacing_signal_lines)
-    if pacing_targets:
-        lines.append("- 本章优先修复这些长篇节奏问题：")
-        lines.extend(f"  - {item}" for item in pacing_targets)
-        lines.append("- 节奏硬要求：本章必须同时完成“推进一件事 + 回收一件事 + 留下下一步牵引”。")
+        append_section(1, "pacing_imbalance_signals", f"- \u5f53\u524d\u8981\u76ef\u4f4f\u7684\u957f\u7bc7\u8282\u594f\u5f02\u5e38\uff1a{'\uff1b'.join(pacing_signal_lines)}\u3002")
+    if normalized_pacing_targets:
+        append_section(0, "pacing_imbalance_targets", f"- \u672c\u7ae0\u4f18\u5148\u4fee\u590d\u8fd9\u4e9b\u957f\u7bc7\u8282\u594f\u95ee\u9898\uff1a{' / '.join(normalized_pacing_targets)}\u3002")
+        append_section(0, "pacing_guardrail", "- \u8282\u594f\u786c\u8981\u6c42\uff1a\u672c\u7ae0\u5fc5\u987b\u540c\u65f6\u5b8c\u6210\u201c\u63a8\u8fdb\u4e00\u4ef6\u4e8b + \u56de\u6536\u4e00\u4ef6\u4e8b + \u7559\u4e0b\u4e0b\u4e00\u6b65\u7275\u5f15\u201d\u3002")
 
     foreshadow_payoff_delay = summary.get("foreshadow_payoff_delay") if isinstance(summary.get("foreshadow_payoff_delay"), Mapping) else {}
     delay_index = foreshadow_payoff_delay.get("delay_index")
     foreshadow_summary = str(foreshadow_payoff_delay.get("summary") or "").strip()
     foreshadow_targets = _normalize_runtime_prompt_items(foreshadow_payoff_delay.get("repair_targets"), limit=2)
+    normalized_foreshadow_targets = _normalize_prompt_sentence_fragments(foreshadow_targets)
     if isinstance(delay_index, (int, float)):
-        lines.append(f"- 伏笔兑现延迟指数：{float(delay_index):.1f}，越高越说明旧伏笔积压越多。")
+        append_section(2, "foreshadow_delay_index", f"- \u4f0f\u7b14\u5151\u73b0\u5ef6\u8fdf\u6307\u6570\uff1a{float(delay_index):.1f}\uff0c\u8d8a\u9ad8\u8d8a\u8bf4\u660e\u65e7\u4f0f\u7b14\u79ef\u538b\u8d8a\u591a\u3002")
     if foreshadow_summary:
-        lines.append(f"- 伏笔兑现判断：{foreshadow_summary}")
-    if foreshadow_targets:
-        lines.append("- 本章优先清偿这些伏笔账：")
-        lines.extend(f"  - {item}" for item in foreshadow_targets)
+        append_section(0, "foreshadow_payoff_summary", f"- \u4f0f\u7b14\u5151\u73b0\u5224\u65ad\uff1a{foreshadow_summary}")
+    if normalized_foreshadow_targets:
+        append_section(0, "foreshadow_payoff_targets", f"- \u672c\u7ae0\u4f18\u5148\u6e05\u507f\u8fd9\u4e9b\u4f0f\u7b14\u8d26\uff1a{' / '.join(normalized_foreshadow_targets)}\u3002")
 
     continuity_preflight = summary.get("continuity_preflight") if isinstance(summary.get("continuity_preflight"), Mapping) else {}
     continuity_summary = str(continuity_preflight.get("summary") or "").strip()
-    continuity_targets = _normalize_runtime_prompt_items(continuity_preflight.get("repair_targets"), limit=3)
+    continuity_targets = _normalize_runtime_prompt_items(continuity_preflight.get("repair_targets"), limit=2)
+    normalized_continuity_targets = _normalize_prompt_sentence_fragments(continuity_targets)
     if continuity_summary:
-        lines.append(f"- 连续性预检：{continuity_summary}")
-    if continuity_targets:
-        lines.append("- 本章要补齐这些连续性接力：")
-        lines.extend(f"  - {item}" for item in continuity_targets)
-    if continuity_summary or continuity_targets:
-        lines.append("- 硬接力要求：正文里必须显式承接至少 1 项连续性缺口，并把它写成动作、关系变化或设定落地。")
+        append_section(0, "continuity_preflight_summary", f"- \u8fde\u7eed\u6027\u9884\u68c0\uff1a{continuity_summary}")
+    if normalized_continuity_targets:
+        append_section(0, "continuity_preflight_targets", f"- \u672c\u7ae0\u8981\u8865\u9f50\u8fd9\u4e9b\u8fde\u7eed\u6027\u63a5\u529b\uff1a{' / '.join(normalized_continuity_targets)}\u3002")
+    if continuity_summary or normalized_continuity_targets:
+        append_section(0, "continuity_guardrail", "- \u8fde\u7eed\u6027\u786c\u8981\u6c42\uff1a\u81f3\u5c11\u663e\u5f0f\u63a5\u4f4f 1 \u4e2a\u4e0a\u4e00\u7ae0\u5df2\u7ecf\u5efa\u7acb\u7684\u4eba\u7269 / \u5173\u7cfb / \u4f0f\u7b14\u72b6\u6001\u3002")
 
-    if len(lines) == 1:
+    repair_effectiveness = summary.get("repair_effectiveness") if isinstance(summary.get("repair_effectiveness"), Mapping) else {}
+    repair_success_rate = repair_effectiveness.get("success_rate")
+    repair_effectiveness_summary = str(repair_effectiveness.get("summary") or "").strip()
+    repair_evaluated_pairs = _coerce_positive_int(repair_effectiveness.get("evaluated_pairs"))
+    recovered_focuses = _normalize_runtime_prompt_items(repair_effectiveness.get("recovered_focus_areas"), limit=2)
+    unresolved_focuses = _normalize_runtime_prompt_items(repair_effectiveness.get("unresolved_focus_areas"), limit=2)
+    if isinstance(repair_success_rate, (int, float)):
+        pair_text = f"\uff08\u57fa\u4e8e {repair_evaluated_pairs} \u7ec4\u76f8\u90bb\u7ae0\u8282\uff09" if repair_evaluated_pairs else ""
+        append_section(2, "repair_effectiveness_rate", f"- \u6700\u8fd1\u4fee\u590d\u6210\u6548\u7387\uff1a{float(repair_success_rate):.1f}%{pair_text}\u3002")
+    if repair_effectiveness_summary:
+        append_section(0, "repair_effectiveness_summary", f"- \u4fee\u590d\u6548\u679c\u5224\u65ad\uff1a{repair_effectiveness_summary}")
+    if unresolved_focuses:
+        append_section(1, "repair_unresolved_focuses", f"- \u4ecd\u672a\u7a33\u5b9a\u7684\u4fee\u590d\u7126\u70b9\uff1a{' / '.join(unresolved_focuses)}\u3002")
+    elif recovered_focuses:
+        append_section(1, "repair_recovered_focuses", f"- \u5df2\u7ecf\u5f00\u59cb\u56de\u6536\u7684\u4fee\u590d\u7126\u70b9\uff1a{' / '.join(recovered_focuses)}\u3002")
+
+    if not sections:
         return ""
 
-    lines.append("- 生成时优先修复趋势中持续偏弱的项，同时保留已经稳定成立的强项。")
-    return _compact_prompt_text("\n".join(lines))
+    selected_lines = [header]
+    total_chars = len(header)
+    dropped_optional = False
+    max_lines = 18
+    max_chars = 1700
+    selected_section_keys: list[str] = []
+    dropped_section_keys: list[str] = []
 
+    for priority in (0, 1, 2):
+        for section_priority, section_key, line in sections:
+            if section_priority != priority:
+                continue
+            line_cost = len(line) + 1
+            if priority > 0 and (len(selected_lines) + 1 > max_lines or total_chars + line_cost > max_chars):
+                dropped_optional = True
+                if section_key not in dropped_section_keys:
+                    dropped_section_keys.append(section_key)
+                continue
+            selected_lines.append(line)
+            total_chars += line_cost
+            if section_key not in selected_section_keys:
+                selected_section_keys.append(section_key)
+
+    final_line = "- \u751f\u6210\u65f6\u4f18\u5148\u4fee\u590d\u8d8b\u52bf\u4e2d\u6301\u7eed\u504f\u5f31\u7684\u9879\uff0c\u540c\u65f6\u4fdd\u7559\u5df2\u7ecf\u7a33\u5b9a\u6210\u7acb\u7684\u5f3a\u9879\u3002"
+    if len(selected_lines) + 1 <= max_lines and total_chars + len(final_line) + 1 <= max_chars:
+        selected_lines.append(final_line)
+        total_chars += len(final_line) + 1
+        selected_section_keys.append("final_instruction")
+
+    folded_note = "- \u5176\u4f59\u6b21\u7ea7\u8d8b\u52bf\u7ec6\u9879\u5df2\u6298\u53e0\uff0c\u4f18\u5148\u6267\u884c\u4ee5\u4e0a\u5173\u952e\u4fe1\u53f7\u3002"
+    if dropped_optional and len(selected_lines) + 1 <= max_lines and total_chars + len(folded_note) + 1 <= max_chars:
+        selected_lines.append(folded_note)
+        total_chars += len(folded_note) + 1
+        selected_section_keys.append("folded_optional_note")
+
+    if logger.isEnabledFor(10):
+        logger.debug(
+            "story_quality_trend_budget tracking=%s scene=%s total_sections=%s selected_lines=%s selected_chars=%s selected_sections=%s dropped_sections=%s dropped_optional=%s",
+            QUALITY_RUNTIME_TRACKING_TAG,
+            scene,
+            len(sections),
+            len(selected_lines),
+            total_chars,
+            selected_section_keys,
+            dropped_section_keys,
+            dropped_optional,
+        )
+
+    return _compact_prompt_text("\n".join(selected_lines))
 
 def build_story_character_state_ledger_block(
     story_character_state_ledger: Optional[Any],
@@ -7423,10 +7514,7 @@ class PromptService:
         """
         from sqlalchemy import select
         from app.models.prompt_template import PromptTemplate
-        from app.logger import get_logger
         from app.services.prompt_template_sync_service import sync_managed_template_if_legacy
-        
-        logger = get_logger(__name__)
 
         # Resolve current system template metadata once and reuse it.
         template_content = getattr(cls, template_key, None)

@@ -1,4 +1,8 @@
-from app.api.outlines import _build_outline_memory_guidance, _merge_outline_requirements
+from app.api.outlines import (
+    _build_outline_memory_guidance,
+    _build_outline_story_quality_trend_guidance_from_summary,
+    _merge_outline_requirements,
+)
 from app.api.wizard_stream import _merge_wizard_outline_requirements
 from app.schemas.outline import OutlineGenerateRequest
 from app.services.chapter_quality_context_service import StoryGenerationGuidance, StoryPacket
@@ -199,3 +203,51 @@ def test_should_merge_wizard_outline_requirements_with_story_packet_blueprint_bl
     assert "【大纲角色焦点锚点】" in merged
     assert "【大纲伏笔兑现计划】" in merged
     assert "【卷级节奏】" in merged
+
+
+
+def test_should_build_outline_story_quality_trend_guidance_from_summary():
+    guidance = _build_outline_story_quality_trend_guidance_from_summary(
+        {
+            "chapter_count": 3,
+            "overall_score_trend": "falling",
+            "avg_payoff_chain_rate": 61.0,
+            "avg_cliffhanger_rate": 58.0,
+        }
+    )
+
+    assert "\u3010\u5927\u7eb2\u8fd1\u671f\u8d28\u91cf\u8d8b\u52bf\u3011" in guidance
+    assert "\u6700\u8fd1 3 \u7ae0" in guidance
+    assert "\u540e\u7eed\u7ae0\u8282" in guidance
+    assert "\u672c\u7ae0" not in guidance
+
+
+def test_should_merge_outline_requirements_with_quality_trend_guidance():
+    merged = _merge_outline_requirements(
+        "\u4fdd\u7559\u53cc\u7ebf\u5e76\u8fdb",
+        "hook",
+        story_focus="advance_plot",
+        quality_trend_guidance="\u3010\u5927\u7eb2\u8fd1\u671f\u8d28\u91cf\u8d8b\u52bf\u3011\n- \u540e\u7eed\u7ae0\u8282\u8981\u4f18\u5148\u56de\u6536\u65e7\u627f\u8bfa",
+    )
+
+    assert "\u4fdd\u7559\u53cc\u7ebf\u5e76\u8fdb" in merged
+    assert "\u3010\u5927\u7eb2\u8fd1\u671f\u8d28\u91cf\u8d8b\u52bf\u3011" in merged
+    assert "\u540e\u7eed\u7ae0\u8282\u8981\u4f18\u5148\u56de\u6536\u65e7\u627f\u8bfa" in merged
+
+
+def test_should_merge_wizard_outline_requirements_with_quality_trend_guidance():
+    merged = _merge_wizard_outline_requirements(
+        "\u4fdd\u7559\u53cc\u7ebf\u5e76\u8fdb",
+        outline_count=3,
+        creative_mode="hook",
+        story_focus="advance_plot",
+        plot_stage="development",
+        story_creation_brief="\u7a81\u51fa\u4ee3\u4ef7\u548c\u6292\u62e9",
+        quality_preset="plot_drive",
+        quality_notes="\u51cf\u5c11\u8bf4\u660e\u53e5",
+        quality_trend_guidance="\u3010\u5927\u7eb2\u8fd1\u671f\u8d28\u91cf\u8d8b\u52bf\u3011\n- \u540e\u7eed\u7ae0\u8282\u8981\u4f18\u5148\u56de\u6536\u65e7\u627f\u8bfa",
+    )
+
+    assert "\u4fdd\u7559\u53cc\u7ebf\u5e76\u8fdb" in merged
+    assert "\u3010\u5927\u7eb2\u8fd1\u671f\u8d28\u91cf\u8d8b\u52bf\u3011" in merged
+    assert "\u540e\u7eed\u7ae0\u8282\u8981\u4f18\u5148\u56de\u6536\u65e7\u627f\u8bfa" in merged

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 from app.services.novel_quality_rules import (
     CHECKER_ALLOWED_CATEGORIES,
@@ -554,6 +554,239 @@ class NovelQualityProfileService:
                 },
             },
         }
+
+
+QUALITY_FOCUS_LABELS: Dict[str, str] = {
+    "opening": "开篇抓力",
+    "conflict": "冲突升级",
+    "outline": "大纲推进",
+    "pacing": "节奏控制",
+    "payoff": "兑现回收",
+    "cliffhanger": "章尾牵引",
+    "dialogue": "对白质感",
+    "rule_grounding": "设定落地",
+    "foreshadow_continuity": "伏笔接力",
+    "relationship_continuity": "关系接力",
+    "character_continuity": "人物接力",
+    "organization_continuity": "势力接力",
+    "career_continuity": "成长接力",
+}
+
+QUALITY_PROFILE_STYLE_LABELS: Dict[str, str] = {
+    "low_ai_serial": "低 AI 连载感",
+    "low_ai_life": "低 AI 生活化",
+    "urban_finance": "都市金融",
+    "tech_xianxia": "科技仙侠",
+    "light_humor": "轻喜节奏",
+    "era_plain": "年代朴素风",
+}
+
+QUALITY_PROFILE_GENRE_LABELS: Dict[str, str] = {
+    "romance_slice_of_life": "言情 / 生活流",
+    "suspense_mystery": "悬疑 / 谜案",
+    "xianxia_fantasy": "仙侠 / 奇幻",
+    "science_fiction_tech": "科幻 / 科技流",
+    "history_power": "历史 / 权谋",
+}
+
+QUALITY_PROFILE_PRESET_LABELS: Dict[str, str] = {
+    "plot_drive": "剧情推进",
+    "immersive": "沉浸细节",
+    "emotion_drama": "情绪戏剧",
+    "clean_prose": "干净文风",
+}
+
+
+def _normalize_profile_token(value: Any) -> str:
+    return _as_text(value).lower()
+
+
+def _normalize_profile_token_sequence(values: Any, *, limit: int = 4) -> list[str]:
+    if isinstance(values, (list, tuple, set)):
+        iterable: Sequence[Any] = list(values)
+    elif values in (None, ""):
+        iterable = ()
+    else:
+        iterable = (values,)
+
+    items: list[str] = []
+    seen: set[str] = set()
+    for value in iterable:
+        token = _normalize_profile_token(value)
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        items.append(token)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def resolve_runtime_quality_profile(runtime_context: Mapping[str, Any]) -> Dict[str, Any]:
+    genre = _as_text(runtime_context.get("genre"))
+    style_name = _as_text(runtime_context.get("style_name"))
+    style_preset_id = _as_text(runtime_context.get("style_preset_id"))
+    style_profile = _normalize_profile_token(runtime_context.get("style_profile"))
+    if not style_profile:
+        style_profile = detect_style_profile(
+            style_name=style_name,
+            style_preset_id=style_preset_id,
+        )
+
+    genre_profiles = _normalize_profile_token_sequence(runtime_context.get("genre_profiles"), limit=4)
+    if not genre_profiles or genre_profiles == ["default"]:
+        genre_profiles = list(detect_genre_profiles(genre))
+
+    return {
+        "genre": genre,
+        "genre_profiles": genre_profiles,
+        "style_name": style_name,
+        "style_preset_id": style_preset_id,
+        "style_profile": style_profile,
+        "quality_preset": _normalize_profile_token(runtime_context.get("quality_preset")),
+    }
+
+
+def _apply_focus_weight(weights: Dict[str, float], focus_area: str, multiplier: float) -> None:
+    if focus_area not in weights:
+        return
+    weights[focus_area] = round(max(0.78, min(1.45, weights[focus_area] * multiplier)), 4)
+
+
+def resolve_quality_weight_profile(
+    runtime_context: Mapping[str, Any],
+    resolved_stage: Optional[str],
+) -> Dict[str, Any]:
+    weights: Dict[str, float] = {
+        "opening": 1.0,
+        "conflict": 1.0,
+        "outline": 1.0,
+        "pacing": 1.0,
+        "payoff": 1.0,
+        "cliffhanger": 1.0,
+        "dialogue": 1.0,
+        "rule_grounding": 1.0,
+    }
+
+    if resolved_stage == "opening":
+        _apply_focus_weight(weights, "opening", 1.15)
+        _apply_focus_weight(weights, "conflict", 1.08)
+        _apply_focus_weight(weights, "outline", 1.05)
+    elif resolved_stage == "ending":
+        _apply_focus_weight(weights, "payoff", 1.18)
+        _apply_focus_weight(weights, "cliffhanger", 1.10)
+        _apply_focus_weight(weights, "outline", 1.08)
+        _apply_focus_weight(weights, "conflict", 1.05)
+    else:
+        _apply_focus_weight(weights, "conflict", 1.12)
+        _apply_focus_weight(weights, "pacing", 1.08)
+        _apply_focus_weight(weights, "payoff", 1.05)
+
+    profile = resolve_runtime_quality_profile(runtime_context)
+    style_profile = profile["style_profile"]
+    genre_profiles = profile["genre_profiles"]
+    quality_preset = profile["quality_preset"]
+
+    if style_profile == "low_ai_serial":
+        _apply_focus_weight(weights, "conflict", 1.10)
+        _apply_focus_weight(weights, "payoff", 1.08)
+        _apply_focus_weight(weights, "cliffhanger", 1.12)
+    elif style_profile == "low_ai_life":
+        _apply_focus_weight(weights, "dialogue", 1.14)
+        _apply_focus_weight(weights, "payoff", 1.08)
+        _apply_focus_weight(weights, "cliffhanger", 0.94)
+        _apply_focus_weight(weights, "outline", 1.04)
+    elif style_profile == "urban_finance":
+        _apply_focus_weight(weights, "rule_grounding", 1.10)
+        _apply_focus_weight(weights, "dialogue", 1.08)
+        _apply_focus_weight(weights, "conflict", 1.06)
+    elif style_profile == "tech_xianxia":
+        _apply_focus_weight(weights, "rule_grounding", 1.14)
+        _apply_focus_weight(weights, "payoff", 1.08)
+        _apply_focus_weight(weights, "outline", 1.06)
+    elif style_profile == "light_humor":
+        _apply_focus_weight(weights, "dialogue", 1.12)
+        _apply_focus_weight(weights, "cliffhanger", 0.95)
+        _apply_focus_weight(weights, "payoff", 1.05)
+    elif style_profile == "era_plain":
+        _apply_focus_weight(weights, "rule_grounding", 1.08)
+        _apply_focus_weight(weights, "outline", 1.05)
+        _apply_focus_weight(weights, "dialogue", 1.05)
+
+    if "romance_slice_of_life" in genre_profiles:
+        _apply_focus_weight(weights, "dialogue", 1.10)
+        _apply_focus_weight(weights, "payoff", 1.08)
+        _apply_focus_weight(weights, "cliffhanger", 0.95)
+    if "suspense_mystery" in genre_profiles:
+        _apply_focus_weight(weights, "conflict", 1.08)
+        _apply_focus_weight(weights, "cliffhanger", 1.12)
+        _apply_focus_weight(weights, "outline", 1.06)
+    if "xianxia_fantasy" in genre_profiles:
+        _apply_focus_weight(weights, "rule_grounding", 1.12)
+        _apply_focus_weight(weights, "payoff", 1.08)
+        _apply_focus_weight(weights, "outline", 1.06)
+    if "science_fiction_tech" in genre_profiles:
+        _apply_focus_weight(weights, "rule_grounding", 1.12)
+        _apply_focus_weight(weights, "outline", 1.08)
+        _apply_focus_weight(weights, "opening", 1.04)
+    if "history_power" in genre_profiles:
+        _apply_focus_weight(weights, "outline", 1.10)
+        _apply_focus_weight(weights, "rule_grounding", 1.08)
+        _apply_focus_weight(weights, "conflict", 1.06)
+
+    if quality_preset == "immersive":
+        _apply_focus_weight(weights, "dialogue", 1.10)
+        _apply_focus_weight(weights, "rule_grounding", 1.08)
+        _apply_focus_weight(weights, "pacing", 1.05)
+    elif quality_preset == "plot_drive":
+        _apply_focus_weight(weights, "conflict", 1.12)
+        _apply_focus_weight(weights, "cliffhanger", 1.08)
+        _apply_focus_weight(weights, "outline", 1.06)
+    elif quality_preset == "emotion_drama":
+        _apply_focus_weight(weights, "dialogue", 1.12)
+        _apply_focus_weight(weights, "payoff", 1.10)
+        _apply_focus_weight(weights, "conflict", 1.04)
+    elif quality_preset == "clean_prose":
+        _apply_focus_weight(weights, "pacing", 1.08)
+        _apply_focus_weight(weights, "dialogue", 1.06)
+        _apply_focus_weight(weights, "rule_grounding", 1.04)
+
+    ranked_weights = sorted(weights.items(), key=lambda item: item[1], reverse=True)
+    emphasized_focuses = [focus_area for focus_area, weight in ranked_weights if weight >= 1.08][:3]
+    focus_labels = [QUALITY_FOCUS_LABELS.get(focus_area, focus_area) for focus_area in emphasized_focuses]
+
+    profile_parts: list[str] = []
+    visible_genres = [
+        QUALITY_PROFILE_GENRE_LABELS.get(item, item)
+        for item in genre_profiles
+        if item and item != "default"
+    ]
+    if visible_genres:
+        profile_parts.append("题材：" + " / ".join(visible_genres[:2]))
+    if style_profile and style_profile != "default":
+        profile_parts.append("风格：" + QUALITY_PROFILE_STYLE_LABELS.get(style_profile, style_profile))
+    if quality_preset and quality_preset != "balanced":
+        profile_parts.append("预设：" + QUALITY_PROFILE_PRESET_LABELS.get(quality_preset, quality_preset))
+
+    profile_summary = ""
+    if focus_labels:
+        focus_text = " / ".join(focus_labels)
+        if profile_parts:
+            profile_summary = f"{' / '.join(profile_parts)}，当前更看重 {focus_text}。"
+        else:
+            profile_summary = f"当前画像更看重 {focus_text}。"
+    elif profile_parts:
+        profile_summary = " / ".join(profile_parts)
+
+    return {
+        "weights": weights,
+        "focus_areas": emphasized_focuses,
+        "focus_labels": focus_labels,
+        "summary": profile_summary,
+        "genre_profiles": genre_profiles,
+        "style_profile": style_profile,
+        "quality_preset": quality_preset,
+    }
 
 
 novel_quality_profile_service = NovelQualityProfileService()

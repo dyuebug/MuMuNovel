@@ -646,3 +646,46 @@ def test_should_keep_explicit_request_overrides_above_story_repair_defaults():
     assert prompt_kwargs["creative_mode"] == "emotion"
     assert prompt_kwargs["story_focus"] == "deepen_character"
     assert prompt_kwargs["quality_preset"] == "emotion_drama"
+
+
+def test_should_include_genre_and_style_profile_in_quality_runtime_context():
+    project = Project(
+        title="仙朝风云",
+        user_id="user-1",
+        genre="仙侠权谋",
+        chapter_count=12,
+    )
+    packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="development",
+            quality_preset="plot_drive",
+        ),
+        source="chapter-generate-request",
+    )
+    chapter = type("ChapterStub", (), {"chapter_number": 6})()
+
+    intent = build_chapter_generation_intent(
+        story_packet=packet,
+        quality_profile={
+            "genre": "仙侠权谋",
+            "style_name": "低AI连载",
+            "style_preset_id": "low_ai_serial",
+            "style_profile": "low_ai_serial",
+        },
+        project=project,
+        chapter=chapter,
+        chapter_context=None,
+        target_word_count=2600,
+    )
+
+    runtime_context = intent.build_quality_runtime_context()
+
+    assert runtime_context["genre"] == "仙侠权谋"
+    assert "xianxia_fantasy" in runtime_context["genre_profiles"]
+    assert "history_power" in runtime_context["genre_profiles"]
+    assert runtime_context["style_name"] == "低AI连载"
+    assert runtime_context["style_preset_id"] == "low_ai_serial"
+    assert runtime_context["style_profile"] == "low_ai_serial"
+    assert runtime_context["quality_preset"] == "plot_drive"

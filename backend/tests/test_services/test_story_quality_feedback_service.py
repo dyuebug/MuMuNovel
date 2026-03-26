@@ -287,6 +287,93 @@ def test_should_raise_ending_payoff_threshold_when_foreshadow_pressure_is_high()
 
 
 
+def test_should_relax_relationship_shift_gate_for_emotion_drama_profile():
+    quality_gate = build_quality_gate_decision(
+        {
+            "overall_score": 81.2,
+            "conflict_chain_hit_rate": 66.5,
+            "rule_grounding_hit_rate": 78.0,
+            "outline_alignment_rate": 79.0,
+            "dialogue_naturalness_rate": 70.0,
+            "opening_hook_rate": 73.0,
+            "payoff_chain_rate": 66.0,
+            "cliffhanger_rate": 71.0,
+            "quality_runtime_context": {
+                "plot_stage": "development",
+                "chapter_count": 12,
+                "current_chapter_number": 6,
+                "quality_preset": "emotion_drama",
+                "story_focus": "relationship_shift",
+                "creative_mode": "relationship",
+            },
+        },
+        scope="chapter",
+    )
+
+    assert quality_gate["allow_save_threshold"] == 81.0
+    assert quality_gate["weak_metric_block_count"] == 4
+    assert quality_gate["allow_save"] is True
+    assert quality_gate["decision"] == "allow_save"
+
+
+
+def test_should_raise_clean_prose_gate_thresholds():
+    quality_gate = build_quality_gate_decision(
+        {
+            "overall_score": 82.2,
+            "conflict_chain_hit_rate": 78.0,
+            "rule_grounding_hit_rate": 82.0,
+            "outline_alignment_rate": 80.0,
+            "dialogue_naturalness_rate": 79.0,
+            "opening_hook_rate": 74.0,
+            "payoff_chain_rate": 76.0,
+            "cliffhanger_rate": 78.0,
+            "quality_runtime_context": {
+                "plot_stage": "development",
+                "chapter_count": 12,
+                "current_chapter_number": 5,
+                "quality_preset": "clean_prose",
+            },
+        },
+        scope="chapter",
+    )
+
+    assert quality_gate["manual_review_threshold"] == 71.0
+    assert quality_gate["allow_save_threshold"] == 83.0
+    assert quality_gate["allow_save"] is False
+
+
+
+def test_should_raise_rule_grounding_threshold_for_tech_xianxia_profile():
+    quality_gate = build_quality_gate_decision(
+        {
+            "overall_score": 80.5,
+            "conflict_chain_hit_rate": 79.0,
+            "rule_grounding_hit_rate": 67.0,
+            "outline_alignment_rate": 81.0,
+            "dialogue_naturalness_rate": 78.0,
+            "opening_hook_rate": 75.0,
+            "payoff_chain_rate": 77.0,
+            "cliffhanger_rate": 79.0,
+            "quality_runtime_context": {
+                "plot_stage": "development",
+                "chapter_count": 12,
+                "current_chapter_number": 5,
+                "style_profile": "tech_xianxia",
+            },
+        },
+        scope="chapter",
+    )
+
+    rule_metric = next(
+        item for item in quality_gate["failed_metrics"]
+        if item["key"] == "rule_grounding_hit_rate"
+    )
+    assert rule_metric["threshold"] > 65.0
+    assert quality_gate["allow_save_threshold"] >= 83.0
+
+
+
 def test_should_aggregate_continuity_preflight_from_history_summary():
     summary = build_quality_metrics_summary(
         [
@@ -739,3 +826,118 @@ def test_should_advance_quality_metrics_summary_state_incrementally_with_drop():
         scope="batch",
     )
 
+
+
+def test_should_apply_genre_and_style_weight_profile_to_volume_goal_completion():
+    summary = build_quality_metrics_summary(
+        [
+            {
+                "overall_score": 79.0,
+                "conflict_chain_hit_rate": 70.0,
+                "rule_grounding_hit_rate": 69.0,
+                "outline_alignment_rate": 68.0,
+                "dialogue_naturalness_rate": 78.0,
+                "opening_hook_rate": 71.0,
+                "payoff_chain_rate": 66.0,
+                "cliffhanger_rate": 67.0,
+                "pacing_score": 6.9,
+                "quality_runtime_context": {
+                    "plot_stage": "ending",
+                    "chapter_count": 12,
+                    "current_chapter_number": 10,
+                    "genre": "仙侠权谋",
+                    "genre_profiles": ["xianxia_fantasy", "history_power"],
+                    "style_name": "低AI连载",
+                    "style_preset_id": "low_ai_serial",
+                    "style_profile": "low_ai_serial",
+                    "quality_preset": "plot_drive",
+                },
+            },
+            {
+                "overall_score": 81.0,
+                "conflict_chain_hit_rate": 72.0,
+                "rule_grounding_hit_rate": 71.0,
+                "outline_alignment_rate": 69.0,
+                "dialogue_naturalness_rate": 79.0,
+                "opening_hook_rate": 73.0,
+                "payoff_chain_rate": 68.0,
+                "cliffhanger_rate": 69.0,
+                "pacing_score": 7.1,
+                "quality_runtime_context": {
+                    "plot_stage": "ending",
+                    "chapter_count": 12,
+                    "current_chapter_number": 11,
+                    "genre": "仙侠权谋",
+                    "genre_profiles": ["xianxia_fantasy", "history_power"],
+                    "style_name": "低AI连载",
+                    "style_preset_id": "low_ai_serial",
+                    "style_profile": "low_ai_serial",
+                    "quality_preset": "plot_drive",
+                },
+            },
+        ],
+        scope="batch",
+    )
+
+    assert summary is not None
+    volume_goal = summary["volume_goal_completion"]
+    assert volume_goal["style_profile"] == "low_ai_serial"
+    assert "xianxia_fantasy" in volume_goal["genre_profiles"]
+    assert volume_goal["quality_preset"] == "plot_drive"
+    assert volume_goal["profile_focuses"]
+    assert volume_goal["profile_summary"]
+
+
+def test_should_build_repair_effectiveness_summary_from_adjacent_history():
+    summary = build_quality_metrics_summary(
+        [
+            {
+                "overall_score": 75.0,
+                "conflict_chain_hit_rate": 60.0,
+                "rule_grounding_hit_rate": 70.0,
+                "outline_alignment_rate": 66.0,
+                "dialogue_naturalness_rate": 73.0,
+                "opening_hook_rate": 69.0,
+                "payoff_chain_rate": 58.0,
+                "cliffhanger_rate": 64.0,
+                "pacing_score": 6.4,
+                "repair_guidance": {
+                    "focus_areas": ["payoff", "conflict"],
+                },
+            },
+            {
+                "overall_score": 80.0,
+                "conflict_chain_hit_rate": 65.0,
+                "rule_grounding_hit_rate": 71.0,
+                "outline_alignment_rate": 68.0,
+                "dialogue_naturalness_rate": 74.0,
+                "opening_hook_rate": 70.0,
+                "payoff_chain_rate": 63.0,
+                "cliffhanger_rate": 68.0,
+                "pacing_score": 6.8,
+                "repair_guidance": {
+                    "focus_areas": ["payoff", "cliffhanger"],
+                },
+            },
+            {
+                "overall_score": 84.0,
+                "conflict_chain_hit_rate": 69.0,
+                "rule_grounding_hit_rate": 74.0,
+                "outline_alignment_rate": 71.0,
+                "dialogue_naturalness_rate": 76.0,
+                "opening_hook_rate": 72.0,
+                "payoff_chain_rate": 68.0,
+                "cliffhanger_rate": 72.0,
+                "pacing_score": 7.2,
+            },
+        ],
+        scope="batch",
+    )
+
+    assert summary is not None
+    repair_effectiveness = summary["repair_effectiveness"]
+    assert repair_effectiveness["evaluated_pairs"] == 2
+    assert repair_effectiveness["successful_pairs"] >= 1
+    assert repair_effectiveness["success_rate"] > 0
+    assert repair_effectiveness["focus_area_stats"]
+    assert repair_effectiveness["summary"]

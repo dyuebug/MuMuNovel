@@ -72,6 +72,7 @@ def _merge_wizard_outline_requirements(
     story_creation_brief: Optional[str],
     quality_preset: Optional[str],
     quality_notes: Optional[str],
+    quality_trend_guidance: Optional[str] = None,
     guidance: Optional[StoryGenerationGuidance] = None,
     story_packet: Optional[StoryPacket] = None,
 ) -> str:
@@ -91,6 +92,7 @@ def _merge_wizard_outline_requirements(
         guidance=active_guidance,
         story_packet=story_packet,
         chapter_count=outline_count,
+        quality_trend_guidance=quality_trend_guidance,
         scene="outline",
     )
     if runtime_requirement_text:

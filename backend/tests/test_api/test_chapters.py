@@ -91,6 +91,29 @@ def mock_side_effect_services(monkeypatch):
     )
 
 
+def _build_quality_history_payload(metrics: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "log_type": "chapter_generation_quality_v1",
+            "quality_metrics": metrics,
+        },
+        ensure_ascii=False,
+    )
+
+
+@pytest.fixture(autouse=True)
+def reset_chapters_runtime_caches():
+    chapters_api.task_quality_metrics_cache.clear()
+    chapters_api.task_workflow_state_cache.clear()
+    if hasattr(chapters_api, "project_quality_trend_cache"):
+        chapters_api.project_quality_trend_cache.clear()
+    yield
+    chapters_api.task_quality_metrics_cache.clear()
+    chapters_api.task_workflow_state_cache.clear()
+    if hasattr(chapters_api, "project_quality_trend_cache"):
+        chapters_api.project_quality_trend_cache.clear()
+
+
 @pytest_asyncio.fixture
 async def chapters_session_factory():
     engine = create_async_engine(
@@ -1794,7 +1817,249 @@ async def test_should_get_project_chapter_quality_trend(
     assert body["quality_metrics_summary"]["pacing_imbalance"]["status"] in {"watch", "warning"}
     assert body["quality_metrics_summary"]["pacing_imbalance"]["signals"]
     assert body["quality_metrics_summary"]["volume_goal_completion"]["completion_rate"] > 0
+    assert body["quality_metrics_summary"]["volume_goal_completion"]["profile_summary"]
     assert body["quality_metrics_summary"]["foreshadow_payoff_delay"]["delay_index"] > 0
+    assert body["quality_metrics_summary"]["repair_effectiveness"]["success_rate"] >= 0
+
+
+async def test_should_reuse_project_quality_trend_cached_summary_state(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter_one = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="Chapter 1",
+        content="Chapter 1 body",
+    )
+    chapter_two = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title="Chapter 2",
+        content="Chapter 2 body",
+    )
+
+    now = datetime.utcnow()
+    async with chapters_session_factory() as session:
+        session.add_all(
+            [
+                GenerationHistory(
+                    chapter_id=chapter_one.id,
+                    project_id=project.id,
+                    prompt="chapter one quality",
+                    generated_content=_build_quality_history_payload(
+                        {
+                            "overall_score": 78.0,
+                            "conflict_chain_hit_rate": 62.0,
+                            "rule_grounding_hit_rate": 80.0,
+                            "outline_alignment_rate": 64.0,
+                            "dialogue_naturalness_rate": 79.0,
+                            "opening_hook_rate": 72.0,
+                            "payoff_chain_rate": 58.0,
+                            "cliffhanger_rate": 84.0,
+                            "pacing_score": 6.9,
+                        }
+                    ),
+                    model="default",
+                    created_at=now - timedelta(minutes=2),
+                ),
+                GenerationHistory(
+                    chapter_id=chapter_two.id,
+                    project_id=project.id,
+                    prompt="chapter two quality",
+                    generated_content=_build_quality_history_payload(
+                        {
+                            "overall_score": 81.0,
+                            "conflict_chain_hit_rate": 67.0,
+                            "rule_grounding_hit_rate": 82.0,
+                            "outline_alignment_rate": 69.0,
+                            "dialogue_naturalness_rate": 80.0,
+                            "opening_hook_rate": 75.0,
+                            "payoff_chain_rate": 61.0,
+                            "cliffhanger_rate": 85.0,
+                            "pacing_score": 7.1,
+                        }
+                    ),
+                    model="default",
+                    created_at=now - timedelta(minutes=1),
+                ),
+            ]
+        )
+        await session.commit()
+
+    original_build_state = chapters_api.build_quality_metrics_summary_state
+    original_advance_state = chapters_api.advance_quality_metrics_summary_state
+    calls = {"build": 0, "advance": 0}
+
+    def counting_build_state(*args, **kwargs):
+        calls["build"] += 1
+        return original_build_state(*args, **kwargs)
+
+    def counting_advance_state(*args, **kwargs):
+        calls["advance"] += 1
+        return original_advance_state(*args, **kwargs)
+
+    monkeypatch.setattr(chapters_api, "build_quality_metrics_summary_state", counting_build_state)
+    monkeypatch.setattr(chapters_api, "advance_quality_metrics_summary_state", counting_advance_state)
+
+    first_response = await chapters_client.get(
+        f"/api/chapters/project/{project.id}/quality-trend",
+        params={"limit": 2},
+    )
+    second_response = await chapters_client.get(
+        f"/api/chapters/project/{project.id}/quality-trend",
+        params={"limit": 2},
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert second_response.json()["quality_metrics_summary"]["chapter_count"] == 2
+    assert calls["build"] == 1
+    assert calls["advance"] == 0
+
+
+async def test_should_incrementally_slide_project_quality_trend_cache_when_window_moves(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter_one = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="Chapter 1",
+        content="Chapter 1 body",
+    )
+    chapter_two = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title="Chapter 2",
+        content="Chapter 2 body",
+    )
+    chapter_three = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=3,
+        title="Chapter 3",
+        content="Chapter 3 body",
+    )
+
+    now = datetime.utcnow()
+    async with chapters_session_factory() as session:
+        session.add_all(
+            [
+                GenerationHistory(
+                    chapter_id=chapter_one.id,
+                    project_id=project.id,
+                    prompt="chapter one quality",
+                    generated_content=_build_quality_history_payload(
+                        {
+                            "overall_score": 76.0,
+                            "conflict_chain_hit_rate": 60.0,
+                            "rule_grounding_hit_rate": 79.0,
+                            "outline_alignment_rate": 63.0,
+                            "dialogue_naturalness_rate": 77.0,
+                            "opening_hook_rate": 71.0,
+                            "payoff_chain_rate": 57.0,
+                            "cliffhanger_rate": 82.0,
+                            "pacing_score": 6.8,
+                        }
+                    ),
+                    model="default",
+                    created_at=now - timedelta(minutes=3),
+                ),
+                GenerationHistory(
+                    chapter_id=chapter_two.id,
+                    project_id=project.id,
+                    prompt="chapter two quality",
+                    generated_content=_build_quality_history_payload(
+                        {
+                            "overall_score": 80.0,
+                            "conflict_chain_hit_rate": 66.0,
+                            "rule_grounding_hit_rate": 81.0,
+                            "outline_alignment_rate": 68.0,
+                            "dialogue_naturalness_rate": 79.0,
+                            "opening_hook_rate": 74.0,
+                            "payoff_chain_rate": 60.0,
+                            "cliffhanger_rate": 84.0,
+                            "pacing_score": 7.0,
+                        }
+                    ),
+                    model="default",
+                    created_at=now - timedelta(minutes=2),
+                ),
+            ]
+        )
+        await session.commit()
+
+    original_build_state = chapters_api.build_quality_metrics_summary_state
+    original_advance_state = chapters_api.advance_quality_metrics_summary_state
+    calls = {"build": 0, "advance": 0}
+
+    def counting_build_state(*args, **kwargs):
+        calls["build"] += 1
+        return original_build_state(*args, **kwargs)
+
+    def counting_advance_state(*args, **kwargs):
+        calls["advance"] += 1
+        return original_advance_state(*args, **kwargs)
+
+    monkeypatch.setattr(chapters_api, "build_quality_metrics_summary_state", counting_build_state)
+    monkeypatch.setattr(chapters_api, "advance_quality_metrics_summary_state", counting_advance_state)
+
+    first_response = await chapters_client.get(
+        f"/api/chapters/project/{project.id}/quality-trend",
+        params={"limit": 2},
+    )
+    assert first_response.status_code == 200
+    assert first_response.json()["items"][0]["chapter_id"] == chapter_one.id
+    assert calls["build"] == 1
+
+    async with chapters_session_factory() as session:
+        session.add(
+            GenerationHistory(
+                chapter_id=chapter_three.id,
+                project_id=project.id,
+                prompt="chapter three quality",
+                generated_content=_build_quality_history_payload(
+                    {
+                        "overall_score": 84.0,
+                        "conflict_chain_hit_rate": 72.0,
+                        "rule_grounding_hit_rate": 84.0,
+                        "outline_alignment_rate": 74.0,
+                        "dialogue_naturalness_rate": 82.0,
+                        "opening_hook_rate": 78.0,
+                        "payoff_chain_rate": 66.0,
+                        "cliffhanger_rate": 87.0,
+                        "pacing_score": 7.4,
+                    }
+                ),
+                model="default",
+                created_at=now - timedelta(minutes=1),
+            )
+        )
+        await session.commit()
+
+    second_response = await chapters_client.get(
+        f"/api/chapters/project/{project.id}/quality-trend",
+        params={"limit": 2},
+    )
+    assert second_response.status_code == 200
+    body = second_response.json()
+    assert body["items"][0]["chapter_id"] == chapter_two.id
+    assert body["items"][1]["chapter_id"] == chapter_three.id
+    assert body["analyzed_chapters"] == 2
+    assert body["quality_metrics_summary"]["chapter_count"] == 2
+    assert calls["build"] == 1
+    assert calls["advance"] >= 1
 
 
 def test_should_build_runtime_prompt_with_serial_style_guard():
@@ -1853,6 +2118,34 @@ def test_should_append_serial_guard_when_apply_style_to_prompt():
     assert "人物情绪要有层次" in merged_prompt
     assert "比喻要克制" in merged_prompt
     assert "慎用高频定式句法" in merged_prompt
+
+
+
+
+def test_should_dedupe_overlapping_continuity_missing_items_in_candidate_highlights():
+    highlights = chapters_api._build_candidate_draft_quality_highlights(
+        content="The chapter focuses on the quiet before the alarm but never pays it off.",
+        quality_metrics={
+            "quality_runtime_context": {
+                "character_state_ledger": [
+                    "Watchtower alarm: Harbor bells stay one strike away from a citywide lockdown.",
+                    "Alliance fracture: The dockworkers no longer trust the magistrate.",
+                ],
+            },
+            "continuity_preflight": {
+                "status": "warning",
+                "warnings": [
+                    {"item": "Watchtower alarm"},
+                ],
+            },
+        },
+    )
+
+    continuity = highlights["continuity"]
+    assert continuity["missing_items"] == [
+        "Watchtower alarm: Harbor bells stay one strike away from a citywide lockdown.",
+        "Alliance fracture: The dockworkers no longer trust the magistrate.",
+    ]
 
 
 def test_should_attach_continuity_preflight_to_story_quality_metrics():
@@ -2116,7 +2409,7 @@ async def test_should_auto_fill_story_repair_payload_from_chapter_quality_histor
         chapters_session_factory,
         project_id=project.id,
         order_index=1,
-        title="????????",
+        title="preview only chapter",
     )
     chapter = await create_chapter(
         chapters_session_factory,
@@ -2861,7 +3154,7 @@ async def test_should_reuse_quality_history_context_in_regeneration_prompt(
     assert "Lin/Strategist: stage 3 with supply-chain pressure" in prompt_kwargs["story_career_state_ledger_block"]
     assert "【章节近期质量趋势】" in prompt_kwargs["story_quality_trend_block"]
     assert "最近节奏稳定度均值：7.8/10" in prompt_kwargs["story_quality_trend_block"]
-    assert "Carry forward the hidden-key pressure." in prompt_kwargs["story_quality_trend_block"]
+    assert "Carry forward the hidden-key pressure" in prompt_kwargs["story_quality_trend_block"]
 
 
 async def test_should_sanitize_regenerated_content_before_persisting_task(
@@ -3034,6 +3327,72 @@ async def test_should_return_analysis_checker_and_auto_revision_payloads(
         "pacing_score": 8.2,
     }
 
+    candidate_content = (
+        "Candidate draft restores the alliance fracture after the dock control change, "
+        "and the hidden key oath now surfaces with a visible cost."
+    )
+    candidate_metrics = {
+        **quality_metrics,
+        "quality_gate": {
+            "status": "blocked",
+            "decision": "manual_review",
+            "failed_metrics": [
+                {
+                    "key": "conflict_chain_hit_rate",
+                    "label": "Conflict chain",
+                    "value": 61.0,
+                    "threshold": 68.0,
+                    "gap": 7.0,
+                    "focus_area": "conflict",
+                    "repair_target": "Strengthen the transition beat",
+                }
+            ],
+        },
+        "candidate_selection": {
+            "candidate_index": 2,
+            "candidate_count": 2,
+            "selection_score": 84.6,
+        },
+        "quality_runtime_context": {
+            "relationship_state_ledger": [
+                "Alliance fracture: Lin and Su are still at odds",
+                "Watchtower alarm: the crew expects the alarm signal tonight",
+            ],
+            "organization_state_ledger": [
+                "Dock control change: Su now controls the docks",
+            ],
+            "foreshadow_state_ledger": [
+                "Hidden key oath: the price of the hidden key still hangs over Lin",
+            ],
+            "foreshadow_payoff_plan": [
+                "Hidden key payoff: reveal the price of the hidden key oath",
+                "Royal seal payoff: identify who now holds the royal seal",
+            ],
+        },
+        "continuity_preflight": {
+            "status": "warning",
+            "summary": "Need to keep the alliance fracture and dock control change in play.",
+            "repair_targets": [
+                "Carry forward the alliance fracture in action.",
+                "Mention the dock control change in a consequential beat.",
+            ],
+            "warnings": [
+                {
+                    "item": "Watchtower alarm",
+                    "focus_area": "relationship_continuity",
+                }
+            ],
+        },
+        "foreshadow_payoff_delay": {
+            "status": "warning",
+            "summary": "Key payoff still needs to land on the page.",
+            "repair_targets": [
+                "Reveal the price of the hidden key oath.",
+                "Clarify who now holds the royal seal.",
+            ],
+        },
+    }
+
     async with chapters_session_factory() as session:
         session.add(analysis)
         session.add(
@@ -3084,6 +3443,28 @@ async def test_should_return_analysis_checker_and_auto_revision_payloads(
                 created_at=datetime.utcnow() - timedelta(minutes=1),
             )
         )
+        session.add(
+            ChapterDraftAttempt(
+                project_id=project.id,
+                chapter_id=chapter.id,
+                source="chapter",
+                attempt_state="manual_review",
+                quality_gate_action="manual_review",
+                quality_gate_decision="manual_review",
+                word_count=len(candidate_content),
+                summary_preview="candidate summary",
+                content_preview=candidate_content[:4000],
+                quality_metrics=candidate_metrics,
+                repair_payload={
+                    "summary": "Candidate draft for quality gate follow-up",
+                    "repair_targets": ["Improve the transition"],
+                    "preserve_strengths": ["Keep the suspense"],
+                    "candidate_full_content": candidate_content,
+                    "content_complete": True,
+                },
+                created_at=datetime.utcnow() - timedelta(seconds=30),
+            )
+        )
         await session.commit()
 
     response = await chapters_client.get(f"/api/chapters/{chapter.id}/analysis")
@@ -3099,6 +3480,23 @@ async def test_should_return_analysis_checker_and_auto_revision_payloads(
     assert body["auto_revision_draft"]["applied_issue_count"] == 1
     assert body["auto_revision_draft"]["is_stale"] is True
     assert body["auto_revision_draft"].get("revised_text") is None
+    assert body["candidate_draft"]["repair_targets"] == ["Improve the transition"]
+    assert body["candidate_draft"]["can_apply"] is True
+    assert body["candidate_draft"].get("content") is None
+    continuity_highlights = body["candidate_draft"]["quality_highlights"]["continuity"]
+    foreshadow_highlights = body["candidate_draft"]["quality_highlights"]["foreshadow"]
+    assert any("Alliance fracture" in item for item in continuity_highlights["matched_items"])
+    assert any("Watchtower alarm" in item for item in continuity_highlights["missing_items"])
+    assert continuity_highlights["repair_targets"] == [
+        "Carry forward the alliance fracture in action.",
+        "Mention the dock control change in a consequential beat.",
+    ]
+    assert continuity_highlights["matched_evidence"]
+    assert any("dock control change" in evidence["snippet"] for evidence in continuity_highlights["matched_evidence"])
+    assert any("Hidden key" in item for item in foreshadow_highlights["matched_items"])
+    assert any("Royal seal" in item for item in foreshadow_highlights["missing_items"])
+    assert foreshadow_highlights["matched_evidence"]
+    assert any("hidden key oath" in evidence["snippet"].lower() for evidence in foreshadow_highlights["matched_evidence"])
     assert body["quality_metrics"]["overall_score"] == 82.4
     assert body["quality_metrics"]["repair_guidance"]["summary"]
     assert body["quality_metrics"]["repair_guidance"]["focus_areas"]
@@ -3115,6 +3513,74 @@ async def test_should_return_analysis_checker_and_auto_revision_payloads(
         full_response.json()["auto_revision_draft"]["revised_text"]
         == reviser_result["revised_text"]
     )
+    assert full_response.json()["candidate_draft"]["content"] == candidate_content
+    assert full_response.json()["candidate_draft"]["quality_highlights"]["foreshadow"]["summary"] == "Key payoff still needs to land on the page."
+
+
+async def test_should_generate_second_candidate_with_retry_prompt_and_strategy(monkeypatch):
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            yield f"candidate-{len(self.calls)}"
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        if content.endswith("1"):
+            overall_score = 72.0
+            decision = "manual_review"
+        else:
+            overall_score = 88.0
+            decision = "allow_save"
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 8.0,
+            "quality_runtime_context": {
+                "quality_preset": "emotion_drama",
+                "creative_mode": "relationship",
+                "story_focus": "relationship_shift",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": [{"label": "Conflict chain"}] if decision != "allow_save" else [],
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {
+            "quality_gate": quality_gate,
+            "message": "need retry",
+            "active_story_repair_payload": {
+                "summary": "Retry with stronger transition",
+                "repair_targets": ["Improve the transition"],
+                "preserve_strengths": ["Keep the suspense"],
+            },
+        }
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-rerank",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) == 2
+    assert "Revision attempt #2" in ai_service.calls[1]["prompt"]
+    assert "Alternative candidate strategy #2" in ai_service.calls[1]["prompt"]
+    assert ai_service.calls[1]["temperature"] != 0.8
+    assert result["candidate_index"] == 2
+
 
 
 async def test_should_get_and_apply_auto_revision_draft(
@@ -3192,6 +3658,179 @@ async def test_should_get_and_apply_auto_revision_draft(
         )
         histories = history_result.scalars().all()
         assert any(history.model == "chapter_text_reviser_apply_v1" for history in histories)
+
+
+async def test_should_get_and_apply_candidate_draft(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="candidate apply chapter",
+        content="old text",
+        status="completed",
+    )
+    candidate_content = (
+        "Candidate draft restores the alliance fracture after the dock control change, "
+        "and the hidden key oath now surfaces with a visible cost."
+    )
+
+    async with chapters_session_factory() as session:
+        draft_attempt = ChapterDraftAttempt(
+            project_id=project.id,
+            chapter_id=chapter.id,
+            source="chapter",
+            attempt_state="manual_review",
+            quality_gate_action="manual_review",
+            quality_gate_decision="manual_review",
+            word_count=len(candidate_content),
+            summary_preview="candidate summary",
+            content_preview=candidate_content[:4000],
+            quality_metrics={
+                "overall_score": 80.1,
+                "quality_gate": {
+                    "status": "blocked",
+                    "decision": "manual_review",
+                    "failed_metrics": [],
+                },
+                "quality_runtime_context": {
+                    "relationship_state_ledger": [
+                        "Alliance fracture: Lin and Su are still at odds",
+                        "Watchtower alarm: the crew expects the alarm signal tonight",
+                    ],
+                    "organization_state_ledger": [
+                        "Dock control change: Su now controls the docks",
+                    ],
+                    "foreshadow_state_ledger": [
+                        "Hidden key oath: the price of the hidden key still hangs over Lin",
+                    ],
+                    "foreshadow_payoff_plan": [
+                        "Hidden key payoff: reveal the price of the hidden key oath",
+                        "Royal seal payoff: identify who now holds the royal seal",
+                    ],
+                },
+                "continuity_preflight": {
+                    "status": "warning",
+                    "summary": "Need to keep the alliance fracture and dock control change in play.",
+                    "repair_targets": [
+                        "Carry forward the alliance fracture in action.",
+                        "Mention the dock control change in a consequential beat.",
+                    ],
+                    "warnings": [
+                        {
+                            "item": "Watchtower alarm",
+                            "focus_area": "relationship_continuity",
+                        }
+                    ],
+                },
+                "foreshadow_payoff_delay": {
+                    "status": "warning",
+                    "summary": "Key payoff still needs to land on the page.",
+                    "repair_targets": [
+                        "Reveal the price of the hidden key oath.",
+                        "Clarify who now holds the royal seal.",
+                    ],
+                },
+            },
+            repair_payload={
+                "summary": "Candidate summary",
+                "repair_targets": ["Improve the transition"],
+                "candidate_full_content": candidate_content,
+                "content_complete": True,
+            },
+        )
+        session.add(draft_attempt)
+        await session.commit()
+        await session.refresh(draft_attempt)
+        attempt_id = draft_attempt.id
+
+    draft_response = await chapters_client.get(
+        f"/api/chapters/{chapter.id}/analysis/candidate-draft"
+    )
+    assert draft_response.status_code == 200
+    draft = draft_response.json()["candidate_draft"]
+    assert draft["attempt_id"] == attempt_id
+    assert draft["content"] == candidate_content
+    assert draft["can_apply"] is True
+    assert any("Alliance fracture" in item for item in draft["quality_highlights"]["continuity"]["matched_items"])
+    assert any("Watchtower alarm" in item for item in draft["quality_highlights"]["continuity"]["missing_items"])
+    assert draft["quality_highlights"]["continuity"]["matched_evidence"]
+    assert any("dock control change" in evidence["snippet"] for evidence in draft["quality_highlights"]["continuity"]["matched_evidence"])
+    assert any("Royal seal" in item for item in draft["quality_highlights"]["foreshadow"]["missing_items"])
+    assert draft["quality_highlights"]["foreshadow"]["matched_evidence"]
+    assert draft["apply_risk"]["status"] == "warning"
+    assert any("Watchtower alarm" in item for item in draft["apply_risk"]["items"])
+    assert any("Royal seal" in item for item in draft["apply_risk"]["items"])
+
+    apply_response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/analysis/candidate-draft/apply",
+        json={"attempt_id": attempt_id},
+    )
+    assert apply_response.status_code == 200
+    apply_body = apply_response.json()
+    assert apply_body["success"] is True
+    assert apply_body["draft_attempt_id"] == attempt_id
+    assert apply_body["word_count"] == len(candidate_content)
+
+    async with chapters_session_factory() as session:
+        saved_chapter = await session.get(Chapter, chapter.id)
+        assert saved_chapter is not None
+        assert saved_chapter.content == candidate_content
+
+        history_result = await session.execute(
+            select(GenerationHistory)
+            .where(GenerationHistory.chapter_id == chapter.id)
+            .order_by(GenerationHistory.created_at.desc())
+        )
+        histories = history_result.scalars().all()
+        assert any(history.model == "chapter_candidate_apply_v1" for history in histories)
+
+
+async def test_should_reject_preview_only_candidate_draft_apply(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="preview only chapter",
+        content="old text",
+        status="completed",
+    )
+
+    async with chapters_session_factory() as session:
+        draft_attempt = ChapterDraftAttempt(
+            project_id=project.id,
+            chapter_id=chapter.id,
+            source="chapter",
+            attempt_state="manual_review",
+            quality_gate_action="manual_review",
+            quality_gate_decision="manual_review",
+            word_count=120,
+            summary_preview="preview",
+            content_preview="preview only draft",
+            quality_metrics={"overall_score": 74.0},
+            repair_payload={"summary": "preview-only draft"},
+        )
+        session.add(draft_attempt)
+        await session.commit()
+        await session.refresh(draft_attempt)
+        attempt_id = draft_attempt.id
+
+    apply_response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/analysis/candidate-draft/apply",
+        json={"attempt_id": attempt_id},
+    )
+    assert apply_response.status_code == 409
+    assert "预览" in apply_response.json()["detail"]
+
 
 
 async def test_should_generate_auto_revision_draft_when_only_major_issues_exist(
@@ -3647,3 +4286,419 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     can_generate_response = await chapters_client.get(f"/api/chapters/{chapter.id}/can-generate")
     assert can_generate_response.status_code == 200
     assert can_generate_response.json()["can_generate"] is True
+
+
+async def test_should_restore_project_quality_trend_from_persisted_snapshot_after_cache_clear(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter_one = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="Trend A",
+        content="Trend A body",
+    )
+    chapter_two = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title="Trend B",
+        content="Trend B body",
+    )
+
+    now = datetime.utcnow()
+    async with chapters_session_factory() as session:
+        session.add_all(
+            [
+                GenerationHistory(
+                    chapter_id=chapter_one.id,
+                    project_id=project.id,
+                    prompt="trend one",
+                    generated_content=_build_quality_history_payload(
+                        {
+                            "overall_score": 78.0,
+                            "conflict_chain_hit_rate": 64.0,
+                            "rule_grounding_hit_rate": 82.0,
+                            "outline_alignment_rate": 68.0,
+                            "dialogue_naturalness_rate": 79.0,
+                            "opening_hook_rate": 74.0,
+                            "payoff_chain_rate": 60.0,
+                            "cliffhanger_rate": 83.0,
+                            "pacing_score": 6.9,
+                        }
+                    ),
+                    model="default",
+                    created_at=now - timedelta(minutes=2),
+                ),
+                GenerationHistory(
+                    chapter_id=chapter_two.id,
+                    project_id=project.id,
+                    prompt="trend two",
+                    generated_content=_build_quality_history_payload(
+                        {
+                            "overall_score": 84.0,
+                            "conflict_chain_hit_rate": 70.0,
+                            "rule_grounding_hit_rate": 86.0,
+                            "outline_alignment_rate": 73.0,
+                            "dialogue_naturalness_rate": 82.0,
+                            "opening_hook_rate": 78.0,
+                            "payoff_chain_rate": 66.0,
+                            "cliffhanger_rate": 87.0,
+                            "pacing_score": 7.4,
+                        }
+                    ),
+                    model="default",
+                    created_at=now - timedelta(minutes=1),
+                ),
+            ]
+        )
+        await session.commit()
+
+    original_build_state = chapters_api.build_quality_metrics_summary_state
+    persisted_snapshots: dict[tuple[str, int], dict[str, Any]] = {}
+    calls = {"build": 0, "load": 0, "persist": 0}
+
+    def counting_build_state(*args, **kwargs):
+        calls["build"] += 1
+        return original_build_state(*args, **kwargs)
+
+    def fake_persist_snapshot(project_id: str, limit: int, snapshot: dict[str, Any]):
+        calls["persist"] += 1
+        persisted_snapshots[(project_id, limit)] = json.loads(json.dumps(snapshot, ensure_ascii=False))
+
+    def fake_load_snapshot(project_id: str, limit: int):
+        calls["load"] += 1
+        snapshot = persisted_snapshots.get((project_id, limit))
+        return json.loads(json.dumps(snapshot, ensure_ascii=False)) if snapshot is not None else None
+
+    monkeypatch.setattr(chapters_api, "build_quality_metrics_summary_state", counting_build_state)
+    monkeypatch.setattr(chapters_api, "persist_project_quality_trend_snapshot", fake_persist_snapshot)
+    monkeypatch.setattr(chapters_api, "load_project_quality_trend_snapshot", fake_load_snapshot)
+
+    first_response = await chapters_client.get(
+        f"/api/chapters/project/{project.id}/quality-trend",
+        params={"limit": 2},
+    )
+    assert first_response.status_code == 200
+    assert calls["build"] == 1
+    assert calls["persist"] == 1
+
+    chapters_api.project_quality_trend_cache.clear()
+
+    second_response = await chapters_client.get(
+        f"/api/chapters/project/{project.id}/quality-trend",
+        params={"limit": 2},
+    )
+    assert second_response.status_code == 200
+    assert second_response.json()["quality_metrics_summary"]["chapter_count"] == 2
+    assert calls["build"] == 1
+    assert calls["load"] == 2
+    assert calls["persist"] == 2
+
+
+async def test_should_rerank_generate_stream_candidates_and_save_best_winner(
+    chapters_client,
+    chapters_session_factory,
+    fake_ai_service,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="rerank-stream",
+    )
+
+    class FakeContext:
+        chapter_outline = "Outline anchor"
+        continuation_point = None
+        previous_chapter_summary = ""
+        chapter_characters = "Character Ledger\n- Alex protects the hidden key"
+        chapter_careers = "Alex: courier"
+        foreshadow_reminders = "Foreshadow Ledger\n- Preserve the hidden-key pressure"
+        relevant_memories = ""
+        recent_chapters_context = ""
+        context_stats = {}
+
+    class FakeOneToManyBuilder:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def build(self, **kwargs):
+            return FakeContext()
+
+    class FakeOneToOneBuilder(FakeOneToManyBuilder):
+        pass
+
+    async def fake_get_template(*args, **kwargs):
+        return "template"
+
+    def fake_format_prompt(template, **kwargs):
+        return "mock-generate-prompt"
+
+    def fake_compute_story_quality_metrics(**kwargs):
+        content = kwargs["content"]
+        if content == "draft-one":
+            return {
+                "overall_score": 79.0,
+                "conflict_chain_hit_rate": 72.0,
+                "rule_grounding_hit_rate": 80.0,
+                "outline_alignment_rate": 76.0,
+                "dialogue_naturalness_rate": 78.0,
+                "opening_hook_rate": 74.0,
+                "payoff_chain_rate": 69.0,
+                "cliffhanger_rate": 82.0,
+                "pacing_score": 7.0,
+            }
+        return {
+            "overall_score": 92.0,
+            "conflict_chain_hit_rate": 88.0,
+            "rule_grounding_hit_rate": 90.0,
+            "outline_alignment_rate": 91.0,
+            "dialogue_naturalness_rate": 89.0,
+            "opening_hook_rate": 90.0,
+            "payoff_chain_rate": 87.0,
+            "cliffhanger_rate": 91.0,
+            "pacing_score": 8.7,
+        }
+
+    def fake_resolve_quality_gate_execution_plan(
+        quality_metrics,
+        *,
+        retry_count,
+        max_retries,
+        current_story_repair_payload,
+        scope,
+    ):
+        overall_score = float((quality_metrics or {}).get("overall_score") or 0.0)
+        if overall_score >= 90.0:
+            return {
+                "action": "continue",
+                "message": "winner accepted",
+                "quality_gate": {
+                    "decision": "allow_save",
+                    "status": "pass",
+                    "failed_metrics": [],
+                },
+            }
+        return {
+            "action": "retry",
+            "message": "need rerank retry",
+            "quality_gate": {
+                "decision": "auto_repair",
+                "status": "warn",
+                "failed_metrics": [{"label": "Conflict chain"}],
+                "recommended_action": "repair_conflict",
+            },
+            "active_story_repair_payload": {
+                "summary": "Strengthen conflict payoff",
+                "repair_targets": ["conflict payoff"],
+                "preserve_strengths": ["voice"],
+            },
+        }
+
+    generation_calls: list[dict[str, Any]] = []
+    responses = [["draft-", "one"], ["draft-", "two"]]
+
+    async def fake_generate_text_stream(**kwargs):
+        generation_calls.append(kwargs)
+        for chunk in responses[len(generation_calls) - 1]:
+            yield chunk
+
+    monkeypatch.setattr(chapters_api, "OneToManyContextBuilder", FakeOneToManyBuilder)
+    monkeypatch.setattr(chapters_api, "OneToOneContextBuilder", FakeOneToOneBuilder)
+    monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
+    monkeypatch.setattr(chapters_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
+    monkeypatch.setattr(chapters_api, "_resolve_quality_gate_execution_plan", fake_resolve_quality_gate_execution_plan)
+    monkeypatch.setattr(fake_ai_service, "generate_text_stream", fake_generate_text_stream)
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/generate-stream",
+        json={"target_word_count": 500, "enable_analysis": False},
+    )
+    assert response.status_code == 200
+
+    events = parse_sse_data(response.text)
+    result_event = next(event for event in events if event.get("type") == "result")
+    result_data = result_event["data"]
+
+    assert len(generation_calls) == 2
+    assert "Revision attempt #2" in generation_calls[1]["prompt"]
+    assert result_data["quality_gate_action"] == "continue"
+    assert result_data["quality_metrics"]["candidate_selection"]["candidate_count"] == 2
+    assert result_data["quality_metrics"]["candidate_selection"]["candidate_index"] == 2
+
+    async with chapters_session_factory() as session:
+        saved_chapter = await session.get(Chapter, chapter.id)
+        history_result = await session.execute(
+            select(GenerationHistory).where(GenerationHistory.chapter_id == chapter.id)
+        )
+        histories = history_result.scalars().all()
+
+        assert saved_chapter is not None
+        assert saved_chapter.status == "completed"
+        assert saved_chapter.content == "draft-two"
+        assert histories
+        assert "draft-two" in histories[0].generated_content
+
+
+async def test_generate_single_chapter_for_batch_should_rerank_candidates_before_returning(
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="rerank-batch-helper",
+    )
+
+    class FakeContext:
+        chapter_outline = "Outline anchor"
+        continuation_point = None
+        previous_chapter_summary = ""
+        chapter_characters = "Character Ledger\n- Alex protects the hidden key"
+        chapter_careers = "Alex: courier"
+        foreshadow_reminders = "Foreshadow Ledger\n- Preserve the hidden-key pressure"
+        relevant_memories = ""
+        recent_chapters_context = ""
+        context_stats = {}
+
+    class FakeOneToManyBuilder:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def build(self, **kwargs):
+            return FakeContext()
+
+    async def fake_resolve_chapter_quality_profile(**kwargs):
+        return {
+            "resolved_style_id": None,
+            "style_content": "",
+            "style_name": "",
+            "style_preset_id": "",
+        }
+
+    async def fake_get_template(*args, **kwargs):
+        return "template"
+
+    def fake_format_prompt(template, **kwargs):
+        return "mock-batch-generate-prompt"
+
+    def fake_build_chapter_runtime_system_prompt(**kwargs):
+        return "mock-batch-system-prompt"
+
+    def fake_compute_story_quality_metrics(**kwargs):
+        content = kwargs["content"]
+        if content == "draft-one":
+            return {
+                "overall_score": 78.0,
+                "conflict_chain_hit_rate": 70.0,
+                "rule_grounding_hit_rate": 79.0,
+                "outline_alignment_rate": 75.0,
+                "dialogue_naturalness_rate": 77.0,
+                "opening_hook_rate": 74.0,
+                "payoff_chain_rate": 68.0,
+                "cliffhanger_rate": 81.0,
+                "pacing_score": 6.9,
+            }
+        return {
+            "overall_score": 93.0,
+            "conflict_chain_hit_rate": 89.0,
+            "rule_grounding_hit_rate": 91.0,
+            "outline_alignment_rate": 92.0,
+            "dialogue_naturalness_rate": 90.0,
+            "opening_hook_rate": 88.0,
+            "payoff_chain_rate": 87.0,
+            "cliffhanger_rate": 92.0,
+            "pacing_score": 8.8,
+        }
+
+    def fake_resolve_quality_gate_execution_plan(
+        quality_metrics,
+        *,
+        retry_count,
+        max_retries,
+        current_story_repair_payload,
+        scope,
+    ):
+        overall_score = float((quality_metrics or {}).get("overall_score") or 0.0)
+        if overall_score >= 90.0:
+            return {
+                "action": "continue",
+                "message": "winner accepted",
+                "quality_gate": {
+                    "decision": "allow_save",
+                    "status": "pass",
+                    "failed_metrics": [],
+                },
+            }
+        return {
+            "action": "retry",
+            "message": "need rerank retry",
+            "quality_gate": {
+                "decision": "auto_repair",
+                "status": "warn",
+                "failed_metrics": [{"label": "Conflict chain"}],
+                "recommended_action": "repair_conflict",
+            },
+            "active_story_repair_payload": {
+                "summary": "Strengthen conflict payoff",
+                "repair_targets": ["conflict payoff"],
+                "preserve_strengths": ["voice"],
+            },
+        }
+
+    class SequencedAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+            self.responses = [["draft-", "one"], ["draft-", "two"]]
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            for chunk in self.responses[len(self.calls) - 1]:
+                yield chunk
+
+    ai_service = SequencedAIService()
+
+    monkeypatch.setattr(chapters_api.chapter_web_research_service, "is_enabled", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(chapters_api, "OneToManyContextBuilder", FakeOneToManyBuilder)
+    monkeypatch.setattr(chapters_api, "resolve_chapter_quality_profile", fake_resolve_chapter_quality_profile)
+    monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
+    monkeypatch.setattr(chapters_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(chapters_api, "_build_chapter_runtime_system_prompt", fake_build_chapter_runtime_system_prompt)
+    monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
+    monkeypatch.setattr(chapters_api, "_resolve_quality_gate_execution_plan", fake_resolve_quality_gate_execution_plan)
+
+    async with chapters_session_factory() as session:
+        db_chapter = await session.get(Chapter, chapter.id)
+        assert db_chapter is not None
+
+        result = await chapters_api.generate_single_chapter_for_batch(
+            db_session=session,
+            chapter=db_chapter,
+            user_id=mock_user.user_id,
+            style_id=None,
+            target_word_count=600,
+            ai_service=ai_service,
+            write_lock=chapters_api.Lock(),
+            retry_count=0,
+            max_retries=1,
+        )
+
+    assert len(ai_service.calls) == 2
+    assert "Revision attempt #2" in ai_service.calls[1]["prompt"]
+    assert result["full_content"] == "draft-two"
+    assert result["candidate_count"] == 2
+    assert result["quality_gate_plan"]["action"] == "continue"
+    assert result["quality_gate_plan"]["quality_gate"]["decision"] == "allow_save"
+    assert result["quality_metrics"]["candidate_selection"]["candidate_index"] == 2

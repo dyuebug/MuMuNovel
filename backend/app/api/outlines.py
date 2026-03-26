@@ -36,7 +36,7 @@ from app.services.prompt_service import (
     build_story_long_term_goal_block,
     build_story_character_focus_anchor_block,
     build_story_foreshadow_payoff_plan_block,
-    build_story_pacing_budget_block,
+    build_story_quality_trend_block,
     build_story_focus_block,
     build_narrative_blueprint_block,
     build_story_objective_card_block,
@@ -133,6 +133,7 @@ def _merge_outline_requirements(
     quality_notes: Optional[str] = None,
     memory_guidance: Optional[str] = None,
     quality_repair_guidance: Optional[str] = None,
+    quality_trend_guidance: Optional[str] = None,
     guidance: Optional[StoryGenerationGuidance] = None,
     story_packet: Optional[StoryPacket] = None,
 ) -> str:
@@ -155,6 +156,7 @@ def _merge_outline_requirements(
         chapter_count=chapter_count,
         memory_guidance=memory_guidance,
         quality_repair_guidance=quality_repair_guidance,
+        quality_trend_guidance=quality_trend_guidance,
         scene="outline",
     )
     if runtime_requirement_text:
@@ -382,12 +384,12 @@ def _build_outline_memory_guidance(memory_context: Optional[Dict[str, Any]]) -> 
     return "【连载记忆与伏笔约束】\n" + "\n\n".join(parts)
 
 
-async def _build_outline_quality_repair_guidance(
+async def _load_outline_quality_summary(
     db: AsyncSession,
     project_id: str,
     *,
     chapter_limit: int = 3,
-) -> str:
+) -> Dict[str, Any]:
     chapter_rows = await db.execute(
         select(Chapter.id, Chapter.chapter_number)
         .where(Chapter.project_id == project_id)
@@ -397,7 +399,7 @@ async def _build_outline_quality_repair_guidance(
     recent_chapters = chapter_rows.all()
     chapter_ids = [row.id for row in recent_chapters if getattr(row, "id", None)]
     if not chapter_ids:
-        return ""
+        return {}
 
     history_result = await db.execute(
         select(GenerationHistory)
@@ -421,19 +423,64 @@ async def _build_outline_quality_repair_guidance(
 
     metrics_history = [metrics_by_chapter[chapter_id] for chapter_id in chapter_ids if chapter_id in metrics_by_chapter]
     summary = build_quality_metrics_summary(metrics_history, scope="outline")
-    if not summary:
+    return dict(summary) if isinstance(summary, dict) else {}
+
+
+def _build_outline_quality_repair_guidance_from_summary(summary: Dict[str, Any]) -> str:
+    if not isinstance(summary, dict) or not summary:
         return ""
 
     repair_guidance = summary.get("repair_guidance")
     if not isinstance(repair_guidance, dict):
         return ""
 
-    chapter_count = int(summary.get("chapter_count") or len(metrics_history) or len(chapter_ids))
+    chapter_count = int(summary.get("chapter_count") or 0)
     repair_payload = dict(repair_guidance)
     repair_payload.setdefault("source", "recent_chapter_quality_summary")
-    repair_payload.setdefault("source_label", f"最近{chapter_count}章质量汇总")
+    repair_payload.setdefault("source_label", f"最近{chapter_count}章质量汇总" if chapter_count > 0 else "最近章节质量汇总")
     diagnostic_context = build_story_repair_diagnostic_context(repair_payload, scene="outline")
     return str(diagnostic_context.get("story_repair_diagnostic_block") or "").strip()
+
+
+def _build_outline_story_quality_trend_guidance_from_summary(summary: Dict[str, Any]) -> str:
+    if not isinstance(summary, dict) or not summary:
+        return ""
+
+    trend_block = str(build_story_quality_trend_block(summary, scene="outline") or "").strip()
+    if not trend_block:
+        return ""
+    return trend_block.replace("本章", "后续章节")
+
+
+async def _build_outline_quality_guidance_bundle(
+    db: AsyncSession,
+    project_id: str,
+    *,
+    chapter_limit: int = 3,
+) -> Dict[str, str]:
+    summary = await _load_outline_quality_summary(
+        db,
+        project_id,
+        chapter_limit=chapter_limit,
+    )
+    return {
+        "quality_repair_guidance": _build_outline_quality_repair_guidance_from_summary(summary),
+        "quality_trend_guidance": _build_outline_story_quality_trend_guidance_from_summary(summary),
+    }
+
+
+async def _build_outline_quality_repair_guidance(
+    db: AsyncSession,
+    project_id: str,
+    *,
+    chapter_limit: int = 3,
+) -> str:
+    guidance_bundle = await _build_outline_quality_guidance_bundle(
+        db,
+        project_id,
+        chapter_limit=chapter_limit,
+    )
+    return str(guidance_bundle.get("quality_repair_guidance") or "").strip()
 
 
 def _build_outline_content_from_item(chapter_data: Dict[str, Any]) -> str:
@@ -926,6 +973,7 @@ async def _build_outline_continue_context(
         'characters_info': '',
         'memory_guidance': '',
         'quality_repair_guidance': '',
+        'quality_trend_guidance': '',
         'user_input': '',
         'stats': {
             'total_outlines': len(latest_outlines),
@@ -933,6 +981,7 @@ async def _build_outline_continue_context(
             'characters_count': len(characters),
             'memory_guidance_length': 0,
             'quality_repair_guidance_length': 0,
+            'quality_trend_guidance_length': 0,
         }
     }
     
@@ -1154,15 +1203,17 @@ async def _build_outline_continue_context(
             context['memory_guidance'] = ''
 
         try:
-            context['quality_repair_guidance'] = await _build_outline_quality_repair_guidance(
+            quality_guidance_bundle = await _build_outline_quality_guidance_bundle(
                 db,
                 project.id,
             )
+            context['quality_repair_guidance'] = str(quality_guidance_bundle.get('quality_repair_guidance') or '').strip()
+            context['quality_trend_guidance'] = str(quality_guidance_bundle.get('quality_trend_guidance') or '').strip()
         except Exception as repair_error:
-            logger.warning(f"⚠️ 构建大纲续写质量修复提示失败，已回退为空: {repair_error}")
+            logger.warning(f"⚠️ 构建大纲续写质量指导失败，已回退为空: {repair_error}")
             context['quality_repair_guidance'] = ''
+            context['quality_trend_guidance'] = ''
 
-        # 5. 用户输入
         user_input_parts = [
             "【用户输入】",
             f"要生成章节数：{chapter_count}章",
@@ -1181,10 +1232,12 @@ async def _build_outline_continue_context(
             len(context['characters_info']),
             len(context['memory_guidance']),
             len(context['quality_repair_guidance']),
+            len(context['quality_trend_guidance']),
             len(context['user_input'])
         ])
         context['stats']['memory_guidance_length'] = len(context['memory_guidance'])
         context['stats']['quality_repair_guidance_length'] = len(context['quality_repair_guidance'])
+        context['stats']['quality_trend_guidance_length'] = len(context['quality_trend_guidance'])
         context['stats']['total_length'] = total_length
         logger.info(f"📊 大纲续写上下文总长度: {total_length} 字符")
         
@@ -1519,6 +1572,14 @@ async def new_outline_generator(
             source=data,
             source_label="outline-create-request",
         )
+        try:
+            quality_guidance_bundle = await _build_outline_quality_guidance_bundle(
+                db,
+                project.id,
+            )
+        except Exception as quality_error:
+            logger.warning(f"⚠️ 构建大纲质量趋势指导失败，已回退为空: {quality_error}")
+            quality_guidance_bundle = {}
         prompt = PromptService.format_prompt(
             template,
             title=project.title,
@@ -1534,6 +1595,8 @@ async def new_outline_generator(
             requirements=_merge_outline_requirements(
                 data.get("requirements"),
                 chapter_count=chapter_count,
+                quality_repair_guidance=str(quality_guidance_bundle.get("quality_repair_guidance") or "").strip() or None,
+                quality_trend_guidance=str(quality_guidance_bundle.get("quality_trend_guidance") or "").strip() or None,
                 story_packet=story_packet,
             ),
             mcp_references="",
@@ -1987,6 +2050,7 @@ async def continue_outline_generator(
                     chapter_count=current_batch_size,
                     memory_guidance=context.get('memory_guidance'),
                     quality_repair_guidance=context.get('quality_repair_guidance'),
+                    quality_trend_guidance=context.get('quality_trend_guidance'),
                     story_packet=story_packet,
                 ),
                 mcp_references="",
@@ -2214,8 +2278,7 @@ async def continue_outline_generator(
             logger.info("大纲续写事务已回滚（异常）")
         yield await tracker.error(f"续写失败: {str(e)}")
 
-
-@router.post("/generate-stream", summary="AI??/????(SSE??)")
+@router.post("/generate-stream", summary="AI生成/续写大纲(SSE流式)")
 async def generate_outline_stream(
     data: OutlineGenerateRequest,
     request: Request,
@@ -2223,37 +2286,36 @@ async def generate_outline_stream(
     user_ai_service: AIService = Depends(get_user_ai_service)
 ):
     """
-    ??SSE????????????????????
-    
-    ?????
-    - auto: ???????????????????
-    - new: ????
-    - continue: ????
-    
-    ??????
+    AI 流式生成大纲。
+
+    mode 说明：
+    - new: 强制新建大纲
+    - continue: 基于已有大纲续写
+
+    请求体示例：
     {
-        "project_id": "??ID",
-        "chapter_count": 5,  // ???
+        "project_id": "项目ID",
+        "chapter_count": 5,  // 生成章节数
         "mode": "auto",  // auto/new/continue
-        "theme": "????",  // new????
-        "story_direction": "??????",  // continue????
-        "plot_stage": "development",  // continue???development/climax/ending
-        "narrative_perspective": "????",
-        "requirements": "????",
-        "provider": "openai",  // ??
-        "model": "gpt-4"  // ??
+        "theme": "故事主题",  // new 模式使用
+        "story_direction": "自然延续",  // continue 模式使用
+        "plot_stage": "development",  // continue 模式：development/climax/ending
+        "narrative_perspective": "第三人称",
+        "requirements": "其他要求",
+        "provider": "openai",  // 模型提供商
+        "model": "gpt-4"  // 模型名称
     }
     """
     payload = data.model_dump(exclude_none=False)
 
-    # ??????
+    # 验证项目权限
     user_id = getattr(request.state, 'user_id', None)
     await verify_project_access(payload.get("project_id"), user_id, db)
 
-    # ????
+    # 获取模式
     mode = payload.get("mode", "auto")
 
-    # ??????
+    # 检查是否已有大纲
     existing_result = await db.execute(
         select(Outline)
         .where(Outline.project_id == payload.get("project_id"))
@@ -2261,30 +2323,29 @@ async def generate_outline_stream(
     )
     existing_outlines = existing_result.scalars().all()
 
-    # ??????
+    # 自动推断模式
     if mode == "auto":
         mode = "continue" if existing_outlines else "new"
-        logger.info(f"???????{'??' if existing_outlines else '??'}")
+        logger.info(f"自动选择模式：{'续写' if existing_outlines else '新建'}")
 
-    # ????ID
+    # 获取用户ID
     user_id = getattr(request.state, "user_id", "system")
 
-    # ?????????
+    # 根据模式分发
     if mode == "new":
         return create_sse_response(new_outline_generator(payload, db, user_ai_service))
     if mode == "continue":
         if not existing_outlines:
             raise HTTPException(
                 status_code=400,
-                detail="???????????????????"
+                detail="没有可用的现有大纲，无法继续生成"
             )
         return create_sse_response(continue_outline_generator(payload, db, user_ai_service, user_id))
 
     raise HTTPException(
         status_code=400,
-        detail=f"??????: {mode}"
+        detail=f"不支持的模式: {mode}"
     )
-
 
 async def expand_outline_generator(
     outline_id: str,

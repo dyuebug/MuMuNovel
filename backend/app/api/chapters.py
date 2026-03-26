@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 import json
 import asyncio
 import re
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Callable
 from datetime import datetime
 from asyncio import Queue, Lock
 from pydantic import BaseModel
@@ -96,6 +96,19 @@ from app.services.story_repair_payload_service import (
     resolve_story_repair_prompt_kwargs,
     story_repair_payload_to_prompt_kwargs,
 )
+from app.services.chapter_candidate_rerank_service import (
+    attach_candidate_selection_metadata,
+    build_candidate_retry_prompt_suffix,
+    build_candidate_retry_strategy_suffix,
+    build_candidate_selection_metadata,
+    resolve_candidate_retry_temperature,
+    select_best_generation_candidate,
+    should_generate_additional_candidate,
+)
+from app.services.project_quality_trend_snapshot_store import (
+    load_project_quality_trend_snapshot,
+    persist_project_quality_trend_snapshot,
+)
 from app.services.writing_style_sync_service import sync_low_ai_presets
 from app.logger import get_logger
 from app.api.settings import get_user_ai_service
@@ -112,6 +125,10 @@ task_stream_subscribers: dict[str, list[Queue]] = {}
 task_stream_lock = Lock()
 task_quality_metrics_cache: dict[str, Dict[str, Any]] = {}
 task_quality_lock = Lock()
+project_quality_trend_cache: dict[str, Dict[str, Any]] = {}
+project_quality_trend_lock = Lock()
+PROJECT_QUALITY_TREND_CACHE_MAX_SIZE = 128
+CHAPTER_CANDIDATE_RERANK_LIMIT = 2
 task_workflow_state_cache: dict[str, Dict[str, Any]] = {}
 task_workflow_lock = Lock()
 _SNAPSHOT_UNSET = object()
@@ -132,6 +149,154 @@ def _normalize_json_payload(value: Any) -> Any:
     if hasattr(value, "dict"):
         return _normalize_json_payload(value.dict())
     return str(value)
+
+
+async def _collect_generation_candidate_output(
+    ai_service: AIService,
+    generate_kwargs: Dict[str, Any],
+) -> tuple[str, List[str]]:
+    full_content = ""
+    chunks: List[str] = []
+    async for chunk in ai_service.generate_text_stream(**generate_kwargs):
+        full_content += chunk
+        chunks.append(chunk)
+        await asyncio.sleep(0)
+    return full_content, chunks
+
+
+async def _generate_best_ranked_candidate(
+    *,
+    ai_service: AIService,
+    base_generate_kwargs: Dict[str, Any],
+    target_word_count: int,
+    source: str,
+    generation_label: str,
+    quality_evaluator: Callable[[str], Dict[str, Any]],
+    quality_gate_plan_builder: Callable[[Dict[str, Any], int], Dict[str, Any]],
+    max_candidates: int = CHAPTER_CANDIDATE_RERANK_LIMIT,
+) -> Dict[str, Any]:
+    resolved_max_candidates = max(int(max_candidates or 1), 1)
+    base_prompt = str(base_generate_kwargs.get("prompt") or "")
+    try:
+        base_temperature = float(base_generate_kwargs.get("temperature") or 0.8)
+    except (TypeError, ValueError):
+        base_temperature = 0.8
+
+    candidates: List[Dict[str, Any]] = []
+    retry_suffix = ""
+    retry_temperature: Optional[float] = None
+
+    for candidate_offset in range(resolved_max_candidates):
+        candidate_index = candidate_offset + 1
+        current_generate_kwargs = dict(base_generate_kwargs)
+        if retry_suffix:
+            current_generate_kwargs["prompt"] = f"{base_prompt}\n\n{retry_suffix}".strip()
+        if retry_temperature is not None:
+            current_generate_kwargs["temperature"] = retry_temperature
+
+        full_content, candidate_chunks = await _collect_generation_candidate_output(
+            ai_service,
+            current_generate_kwargs,
+        )
+        full_content, removed_meta_lines = _sanitize_generated_narrative_text(full_content)
+        if removed_meta_lines > 0:
+            logger.warning(
+                f"Sanitized {removed_meta_lines} workflow/meta lines: {generation_label}, candidate={candidate_index}"
+            )
+        if not full_content.strip():
+            raise ValueError(f"{generation_label} generated empty narrative after sanitization")
+        if _contains_chapter_workflow_meta_text(full_content):
+            raise ValueError(f"{generation_label} generated workflow/meta text")
+
+        candidate_word_count = len(full_content)
+        quality_metrics = quality_evaluator(full_content)
+        quality_gate_plan = quality_gate_plan_builder(quality_metrics, candidate_offset)
+        selection_metadata = build_candidate_selection_metadata(
+            quality_metrics,
+            word_count=candidate_word_count,
+            target_word_count=target_word_count,
+            candidate_index=candidate_index,
+            candidate_count=candidate_index,
+            source=source,
+            quality_gate_plan=quality_gate_plan,
+        )
+        enriched_quality_metrics = attach_candidate_selection_metadata(
+            quality_metrics,
+            selection_metadata=selection_metadata,
+        )
+        if isinstance(quality_gate_plan.get("quality_gate"), dict):
+            enriched_quality_metrics["quality_gate"] = quality_gate_plan["quality_gate"]
+
+        candidate_summary = full_content[:300].replace("\n", " ") if full_content else ""
+        candidate = {
+            "candidate_index": candidate_index,
+            "full_content": full_content,
+            "word_count": candidate_word_count,
+            "summary_preview": candidate_summary,
+            "quality_metrics": enriched_quality_metrics,
+            "quality_gate_plan": quality_gate_plan,
+            "candidate_chunks": candidate_chunks,
+            **selection_metadata,
+        }
+        candidates.append(candidate)
+
+        if not should_generate_additional_candidate(
+            candidate,
+            produced_candidates=len(candidates),
+            max_candidates=resolved_max_candidates,
+        ):
+            break
+
+        retry_prompt_suffix = build_candidate_retry_prompt_suffix(
+            quality_gate_plan,
+            attempt_index=candidate_index + 1,
+        )
+        retry_strategy_suffix = build_candidate_retry_strategy_suffix(
+            quality_gate_plan,
+            quality_metrics=enriched_quality_metrics,
+            attempt_index=candidate_index + 1,
+            source=source,
+        )
+        retry_suffix_parts = [
+            part.strip()
+            for part in (retry_prompt_suffix, retry_strategy_suffix)
+            if isinstance(part, str) and part.strip()
+        ]
+        retry_suffix = "\n\n".join(retry_suffix_parts).strip()
+        retry_temperature = resolve_candidate_retry_temperature(
+            base_temperature,
+            quality_metrics=enriched_quality_metrics,
+            quality_gate_plan=quality_gate_plan,
+            attempt_index=candidate_index + 1,
+        )
+        if not retry_suffix:
+            break
+
+    selected_candidate = select_best_generation_candidate(candidates) or dict(candidates[-1])
+    final_quality_metrics = dict(selected_candidate.get("quality_metrics") or {})
+    final_quality_gate_plan = quality_gate_plan_builder(final_quality_metrics, 0)
+    final_selection_metadata = build_candidate_selection_metadata(
+        final_quality_metrics,
+        word_count=int(selected_candidate.get("word_count") or 0),
+        target_word_count=target_word_count,
+        candidate_index=int(selected_candidate.get("candidate_index") or 1),
+        candidate_count=len(candidates),
+        source=source,
+        quality_gate_plan=final_quality_gate_plan,
+    )
+    final_quality_metrics = attach_candidate_selection_metadata(
+        final_quality_metrics,
+        selection_metadata=final_selection_metadata,
+    )
+    if isinstance(final_quality_gate_plan.get("quality_gate"), dict):
+        final_quality_metrics["quality_gate"] = final_quality_gate_plan["quality_gate"]
+
+    selected_candidate.update(final_selection_metadata)
+    selected_candidate["quality_metrics"] = final_quality_metrics
+    selected_candidate["quality_gate_plan"] = final_quality_gate_plan
+    selected_candidate["candidate_count"] = len(candidates)
+    selected_candidate["rerank_pool_size"] = len(candidates)
+    return selected_candidate
 
 
 async def _upsert_batch_generation_snapshot(
@@ -249,6 +414,15 @@ def _build_chapter_draft_attempt(
     if not normalized_summary and normalized_content:
         normalized_summary = normalized_content[:220]
 
+    normalized_repair_payload: Optional[Dict[str, Any]]
+    if isinstance(repair_payload, dict):
+        normalized_repair_payload = dict(repair_payload)
+    else:
+        normalized_repair_payload = {}
+    if normalized_content:
+        normalized_repair_payload.setdefault("candidate_full_content", normalized_content)
+        normalized_repair_payload["content_complete"] = True
+
     return ChapterDraftAttempt(
         project_id=project_id,
         chapter_id=chapter_id,
@@ -261,8 +435,606 @@ def _build_chapter_draft_attempt(
         summary_preview=normalized_summary[:500] or None,
         content_preview=normalized_content[:4000] or None,
         quality_metrics=_normalize_json_payload(quality_metrics) if isinstance(quality_metrics, dict) else None,
-        repair_payload=_normalize_json_payload(repair_payload) if isinstance(repair_payload, dict) else None,
+        repair_payload=_normalize_json_payload(normalized_repair_payload) if normalized_repair_payload else None,
     )
+
+
+def _normalize_candidate_draft_items(values: Any, *, limit: int = 4) -> List[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        raw_items = [values]
+    elif isinstance(values, (list, tuple, set)):
+        raw_items = list(values)
+    else:
+        raw_items = [values]
+
+    items: List[str] = []
+    seen: set[str] = set()
+    for value in raw_items:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        items.append(text)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _collect_candidate_runtime_items(runtime_context: Dict[str, Any], keys: Tuple[str, ...], *, limit: int = 6) -> List[str]:
+    items: List[str] = []
+    seen: set[str] = set()
+    for key in keys:
+        for item in _normalize_candidate_draft_items(runtime_context.get(key), limit=limit):
+            if item in seen:
+                continue
+            seen.add(item)
+            items.append(item)
+            if len(items) >= limit:
+                return items
+    return items
+
+
+def _normalize_candidate_quality_match_text(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "")).lower()
+
+
+_CANDIDATE_QUALITY_STOPWORDS = {
+    "the", "and", "for", "with", "from", "that", "this", "into", "onto", "over", "under",
+    "still", "now", "then", "than", "are", "was", "were", "is", "be", "been", "being",
+    "have", "has", "had", "who", "whom", "whose", "will", "would", "shall", "should",
+    "can", "could", "may", "might", "must", "just", "only", "very", "more", "most",
+    "less", "least", "not", "out", "off", "our", "your", "their", "his", "her", "its",
+}
+
+_CANDIDATE_QUALITY_TRANSLATION = str.maketrans({
+    "\u3010": " ",
+    "\u3011": " ",
+    "[": " ",
+    "]": " ",
+    "\uff08": " ",
+    "\uff09": " ",
+    "(": " ",
+    ")": " ",
+    "<": " ",
+    ">": " ",
+    "\u300a": " ",
+    "\u300b": " ",
+    '"': " ",
+    "'": " ",
+    "`": " ",
+    ":": " ",
+    "\uff1a": " ",
+    "\uff0c": " ",
+    ",": " ",
+    "\u3002": " ",
+    ";": " ",
+    "\uff1b": " ",
+    "!": " ",
+    "\uff01": " ",
+    "?": " ",
+    "\uff1f": " ",
+})
+
+
+def _append_candidate_quality_token(tokens: List[str], seen: set[str], token: str, *, max_tokens: int) -> None:
+    normalized = token.strip().lower()
+    if len(normalized) < 2 or normalized in seen or normalized in _CANDIDATE_QUALITY_STOPWORDS or len(tokens) >= max_tokens:
+        return
+    seen.add(normalized)
+    tokens.append(normalized)
+
+
+
+def _tokenize_candidate_quality_text(value: Any, *, max_tokens: int = 24) -> List[str]:
+    cleaned = str(value or "").translate(_CANDIDATE_QUALITY_TRANSLATION)
+    tokens: List[str] = []
+    seen: set[str] = set()
+    for raw_token in re.findall(r"[A-Za-z0-9_\-]{2,}|[\u4e00-\u9fff]{2,12}", cleaned):
+        _append_candidate_quality_token(tokens, seen, raw_token, max_tokens=max_tokens)
+        if re.fullmatch(r"[\u4e00-\u9fff]{3,12}", raw_token):
+            for window_size in (2, 3, 4):
+                if len(raw_token) < window_size:
+                    continue
+                for start in range(0, len(raw_token) - window_size + 1):
+                    _append_candidate_quality_token(
+                        tokens,
+                        seen,
+                        raw_token[start:start + window_size],
+                        max_tokens=max_tokens,
+                    )
+                    if len(tokens) >= max_tokens:
+                        break
+                if len(tokens) >= max_tokens:
+                    break
+        if len(tokens) >= max_tokens:
+            break
+    return tokens
+
+
+
+
+def _extract_candidate_quality_anchor_candidates(item: Any) -> List[str]:
+    text = str(item or "").strip()
+    if not text:
+        return []
+
+    parts = [part.strip() for part in re.split(r"[:：]", text, maxsplit=1) if part.strip()]
+    head = parts[0] if parts else text
+    tail = parts[1] if len(parts) > 1 else ""
+    segments = [
+        segment.strip()
+        for segment in re.split(r"[、,\/|&＆和与+·•]+", head)
+        if segment.strip()
+    ]
+    if tail:
+        tail_clauses = [
+            clause.strip()
+            for clause in re.split(r"[，,。；;]", tail)
+            if clause.strip()
+        ]
+        segments.extend(tail_clauses[:2])
+    if not segments:
+        segments = [text]
+
+    anchors: List[str] = []
+    seen: set[str] = set()
+    for segment in segments[:4]:
+        for token in _tokenize_candidate_quality_text(segment, max_tokens=10):
+            if token in seen:
+                continue
+            seen.add(token)
+            anchors.append(token)
+            if len(anchors) >= 6:
+                return anchors
+    if anchors:
+        return anchors
+
+    fallback = _normalize_candidate_quality_match_text(head)
+    return [fallback] if len(fallback) >= 2 else []
+
+
+
+def _extract_candidate_quality_item_head(item: Any) -> str:
+    text = str(item or "").strip()
+    if not text:
+        return ""
+    parts = [part.strip() for part in re.split(r"[:：]", text, maxsplit=1) if part.strip()]
+    return parts[0] if parts else text
+
+
+
+def _candidate_quality_items_overlap(left: str, right: str) -> bool:
+    left_text = str(left or "").strip()
+    right_text = str(right or "").strip()
+    if not left_text or not right_text:
+        return False
+    if left_text == right_text:
+        return True
+
+    left_head = _normalize_candidate_quality_match_text(_extract_candidate_quality_item_head(left_text))
+    right_head = _normalize_candidate_quality_match_text(_extract_candidate_quality_item_head(right_text))
+    if left_head and right_head and (left_head in right_head or right_head in left_head):
+        return True
+
+    left_tokens = set(_extract_candidate_quality_anchor_candidates(left_text)[:4])
+    right_tokens = set(_extract_candidate_quality_anchor_candidates(right_text)[:4])
+    if len(left_tokens) >= 2 and len(right_tokens) >= 2:
+        return len(left_tokens & right_tokens) >= min(len(left_tokens), len(right_tokens))
+    return False
+
+
+
+def _merge_candidate_quality_items(values: Any, *, limit: int = 4) -> List[str]:
+    items = _normalize_candidate_draft_items(values, limit=max(limit * 4, 12))
+    merged: List[str] = []
+    for item in items:
+        overlap_index = next(
+            (index for index, existing in enumerate(merged) if _candidate_quality_items_overlap(existing, item)),
+            None,
+        )
+        if overlap_index is None:
+            merged.append(item)
+            continue
+        if len(item) > len(merged[overlap_index]):
+            merged[overlap_index] = item
+    return merged[:limit]
+
+
+def _split_candidate_quality_content_segments(content: str, *, limit: int = 24) -> List[str]:
+    segments: List[str] = []
+    seen: set[str] = set()
+    paragraphs = [part.strip() for part in re.split(r"(?:\r?\n)+", str(content or "")) if part.strip()]
+    for paragraph in paragraphs or [str(content or "").strip()]:
+        sentence_parts = [
+            part.strip()
+            for part in re.split(r"(?<=[\u3002\uff01\uff1f!?\uff1b;])", paragraph)
+            if part.strip()
+        ]
+        if not sentence_parts:
+            sentence_parts = [paragraph]
+        for index, part in enumerate(sentence_parts):
+            candidates = [part]
+            if index + 1 < len(sentence_parts):
+                candidates.append(f"{part} {sentence_parts[index + 1]}")
+            for candidate in candidates:
+                compact = re.sub(r"\s+", " ", candidate).strip()
+                if not compact or compact in seen:
+                    continue
+                seen.add(compact)
+                segments.append(compact)
+                if len(segments) >= limit:
+                    return segments
+    return segments[:limit]
+
+
+
+def _truncate_candidate_quality_snippet(snippet: str, *, focus: Optional[str] = None, max_chars: int = 96) -> str:
+    compact = re.sub(r"\s+", " ", str(snippet or "")).strip()
+    if len(compact) <= max_chars:
+        return compact
+    if focus:
+        focus_index = compact.lower().find(str(focus).lower())
+        if focus_index >= 0:
+            start = max(0, focus_index - 24)
+            end = min(len(compact), focus_index + len(str(focus)) + 36)
+            prefix = "\u2026" if start > 0 else ""
+            suffix = "\u2026" if end < len(compact) else ""
+            return prefix + compact[start:end] + suffix
+    return compact[: max_chars - 1] + "\u2026"
+
+
+
+
+def _build_candidate_quality_segment_contexts(content_segments: List[str]) -> List[Dict[str, Any]]:
+    contexts: List[Dict[str, Any]] = []
+    for segment in content_segments:
+        normalized_segment = _normalize_candidate_quality_match_text(segment)
+        if not normalized_segment:
+            continue
+        contexts.append(
+            {
+                "raw": segment,
+                "normalized": normalized_segment,
+                "tokens": set(_tokenize_candidate_quality_text(segment, max_tokens=18)),
+            }
+        )
+    return contexts
+
+
+
+def _evaluate_candidate_quality_item_match(
+    *,
+    item: str,
+    anchors: List[str],
+    normalized_content: str,
+    content_tokens: set[str],
+    content_segment_contexts: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    required_match_count = 2 if len(anchors) >= 4 else 1
+    if len(anchors) >= 2 and any(sep in item for sep in ('/', '&', '\u4e0e', '\u548c')):
+        required_match_count = max(required_match_count, 2)
+    exact_hits = [anchor for anchor in anchors if len(anchor) >= 2 and anchor in normalized_content]
+    token_hits = [anchor for anchor in anchors if anchor in content_tokens]
+
+    best_segment = ""
+    best_focus = None
+    best_anchors: List[str] = []
+    best_score = -1.0
+    for segment_context in content_segment_contexts:
+        normalized_segment = str(segment_context.get("normalized") or "")
+        if not normalized_segment:
+            continue
+        segment_exact_hits = [anchor for anchor in anchors if len(anchor) >= 2 and anchor in normalized_segment]
+        segment_tokens = segment_context.get("tokens")
+        if not isinstance(segment_tokens, set):
+            segment_tokens = set()
+        segment_token_hits = [anchor for anchor in anchors if anchor in segment_tokens]
+        score = float(len(segment_exact_hits) * 4 + len(segment_token_hits))
+        if score <= 0:
+            continue
+        if score > best_score:
+            best_score = score
+            best_segment = str(segment_context.get("raw") or "")
+            best_anchors = segment_exact_hits or segment_token_hits
+            best_focus = best_anchors[0] if best_anchors else None
+
+    matched = len(set(exact_hits)) >= required_match_count
+    if not matched:
+        semantic_threshold = max(required_match_count, 2 if len(anchors) >= 2 else 1)
+        matched = len(set(token_hits)) >= semantic_threshold
+
+    return {
+        "matched": matched,
+        "matched_anchors": list(dict.fromkeys(exact_hits or token_hits))[:3],
+        "snippet": _truncate_candidate_quality_snippet(best_segment, focus=best_focus) if matched and best_segment else None,
+    }
+
+
+def _split_candidate_quality_item_matches(
+    content: str,
+    items: List[str],
+    *,
+    limit: int = 3,
+) -> Tuple[List[str], List[str], List[Dict[str, Any]]]:
+    normalized_content = _normalize_candidate_quality_match_text(content)
+    if not normalized_content:
+        return [], [], []
+
+    content_tokens = set(_tokenize_candidate_quality_text(content, max_tokens=48))
+    content_segments = _split_candidate_quality_content_segments(content)
+    content_segment_contexts = _build_candidate_quality_segment_contexts(content_segments)
+    matched_items: List[str] = []
+    missing_items: List[str] = []
+    matched_evidence: List[Dict[str, Any]] = []
+    for item in items:
+        anchors = _extract_candidate_quality_anchor_candidates(item)
+        match_result = _evaluate_candidate_quality_item_match(
+            item=item,
+            anchors=anchors,
+            normalized_content=normalized_content,
+            content_tokens=content_tokens,
+            content_segment_contexts=content_segment_contexts,
+        )
+        if match_result["matched"]:
+            matched_items.append(item)
+            if match_result.get("snippet"):
+                matched_evidence.append(
+                    {
+                        "item": item,
+                        "snippet": match_result["snippet"],
+                        "matched_anchors": match_result.get("matched_anchors") or [],
+                    }
+                )
+        else:
+            missing_items.append(item)
+        if len(matched_items) >= limit and len(missing_items) >= limit:
+            break
+    return matched_items[:limit], missing_items[:limit], matched_evidence[:limit]
+
+
+
+def _build_candidate_draft_quality_highlights(
+    *,
+    content: str,
+    quality_metrics: Dict[str, Any],
+) -> Dict[str, Any]:
+    normalized_content = str(content or "").strip()
+    if not normalized_content or not isinstance(quality_metrics, dict):
+        return {}
+
+    runtime_context = (
+        dict(quality_metrics.get("quality_runtime_context"))
+        if isinstance(quality_metrics.get("quality_runtime_context"), dict)
+        else {}
+    )
+    continuity_preflight = (
+        dict(quality_metrics.get("continuity_preflight"))
+        if isinstance(quality_metrics.get("continuity_preflight"), dict)
+        else {}
+    )
+    if not continuity_preflight and runtime_context:
+        continuity_preflight = build_story_continuity_preflight(normalized_content, runtime_context)
+
+    continuity_items = _collect_candidate_runtime_items(
+        runtime_context,
+        (
+            "character_state_ledger",
+            "relationship_state_ledger",
+            "foreshadow_state_ledger",
+            "organization_state_ledger",
+            "career_state_ledger",
+        ),
+        limit=6,
+    )
+    continuity_matched, continuity_missing, continuity_evidence = _split_candidate_quality_item_matches(normalized_content, continuity_items)
+    warning_items = _normalize_candidate_draft_items(
+        [warning.get("item") for warning in (continuity_preflight.get("warnings") or []) if isinstance(warning, dict)],
+        limit=3,
+    )
+    if warning_items:
+        continuity_missing = _merge_candidate_quality_items(warning_items + continuity_missing, limit=3)
+    continuity_summary = str(continuity_preflight.get("summary") or "").strip()
+    continuity_status = str(continuity_preflight.get("status") or "").strip().lower()
+    if not continuity_status:
+        continuity_status = "warning" if continuity_missing else ("ok" if continuity_matched else "unknown")
+    if not continuity_summary:
+        if continuity_missing:
+            continuity_summary = f"\u5019\u9009\u7a3f\u4ecd\u6709 {len(continuity_missing)} \u9879\u8fde\u7eed\u6027\u63a5\u529b\u5f85\u8865\u9f50\u3002"
+        elif continuity_matched:
+            continuity_summary = "\u5019\u9009\u7a3f\u5df2\u7ecf\u63a5\u4f4f\u5f53\u524d\u8fde\u7eed\u6027\u8d26\u672c\u4e2d\u7684\u5173\u952e\u9879\u3002"
+
+    foreshadow_payoff_delay = (
+        dict(quality_metrics.get("foreshadow_payoff_delay"))
+        if isinstance(quality_metrics.get("foreshadow_payoff_delay"), dict)
+        else {}
+    )
+    foreshadow_items = _collect_candidate_runtime_items(
+        runtime_context,
+        ("foreshadow_payoff_plan", "foreshadow_state_ledger"),
+        limit=6,
+    )
+    foreshadow_matched, foreshadow_missing, foreshadow_evidence = _split_candidate_quality_item_matches(normalized_content, foreshadow_items)
+    foreshadow_summary = str(foreshadow_payoff_delay.get("summary") or "").strip()
+    foreshadow_status = str(foreshadow_payoff_delay.get("status") or "").strip().lower()
+    if not foreshadow_status:
+        foreshadow_status = "warning" if foreshadow_missing else ("stable" if foreshadow_matched else "unknown")
+    if not foreshadow_summary:
+        if foreshadow_missing:
+            foreshadow_summary = f"\u5019\u9009\u7a3f\u4ecd\u6709 {len(foreshadow_missing)} \u9879\u4f0f\u7b14/\u627f\u8bfa\u5f85\u5151\u73b0\u3002"
+        elif foreshadow_matched:
+            foreshadow_summary = "\u5019\u9009\u7a3f\u5df2\u7ecf\u8986\u76d6\u5f53\u524d\u4f18\u5148\u5151\u73b0\u7684\u4f0f\u7b14\u9879\u3002"
+
+    highlights: Dict[str, Any] = {}
+    if continuity_summary or continuity_matched or continuity_missing:
+        highlights["continuity"] = {
+            "status": continuity_status or "unknown",
+            "summary": continuity_summary or None,
+            "matched_items": continuity_matched,
+            "missing_items": continuity_missing,
+            "repair_targets": _normalize_candidate_draft_items(continuity_preflight.get("repair_targets"), limit=3),
+            "matched_evidence": continuity_evidence,
+        }
+    if foreshadow_summary or foreshadow_matched or foreshadow_missing:
+        highlights["foreshadow"] = {
+            "status": foreshadow_status or "unknown",
+            "summary": foreshadow_summary or None,
+            "matched_items": foreshadow_matched,
+            "missing_items": foreshadow_missing,
+            "repair_targets": _normalize_candidate_draft_items(foreshadow_payoff_delay.get("repair_targets"), limit=3),
+            "matched_evidence": foreshadow_evidence,
+        }
+    return highlights
+
+
+def _extract_candidate_draft_full_content(draft_attempt: ChapterDraftAttempt) -> Tuple[str, bool]:
+    repair_payload = draft_attempt.repair_payload if isinstance(draft_attempt.repair_payload, dict) else {}
+    full_content = str(repair_payload.get("candidate_full_content") or "").strip()
+    if full_content:
+        return full_content, True
+
+    preview_content = str(draft_attempt.content_preview or "").strip()
+    if not preview_content:
+        return "", False
+
+    if bool(repair_payload.get("content_complete")):
+        return preview_content, True
+
+    word_count = int(draft_attempt.word_count or 0)
+    if word_count > 0 and len(preview_content) == word_count:
+        return preview_content, True
+
+    return "", False
+
+
+def _build_candidate_draft_apply_risk(
+    *,
+    quality_gate: Dict[str, Any],
+    quality_highlights: Dict[str, Any],
+    quality_gate_action: Optional[str],
+    quality_gate_decision: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    items: List[str] = []
+
+    continuity = quality_highlights.get("continuity") if isinstance(quality_highlights.get("continuity"), dict) else {}
+    continuity_missing = _normalize_candidate_draft_items(continuity.get("missing_items"), limit=3)
+    if continuity_missing:
+        items.append(f"连续性待补齐：{'；'.join(continuity_missing)}")
+
+    foreshadow = quality_highlights.get("foreshadow") if isinstance(quality_highlights.get("foreshadow"), dict) else {}
+    foreshadow_missing = _normalize_candidate_draft_items(foreshadow.get("missing_items"), limit=3)
+    if foreshadow_missing:
+        items.append(f"伏笔/回收待补齐：{'；'.join(foreshadow_missing)}")
+
+    failed_metric_labels = _normalize_candidate_draft_items(
+        [item.get("label") for item in (quality_gate.get("failed_metrics") or []) if isinstance(item, dict)],
+        limit=3,
+    )
+    if failed_metric_labels:
+        items.append(f"质量门禁关注项：{'；'.join(failed_metric_labels)}")
+
+    quality_gate_status = str(quality_gate.get("status") or "").strip().lower()
+    normalized_action = str(quality_gate_action or "").strip().lower()
+    normalized_decision = str(quality_gate_decision or quality_gate.get("decision") or "").strip().lower()
+    if not items and (
+        quality_gate_status in {"warning", "blocked"}
+        or normalized_action in {"manual_review", "auto_repair"}
+        or normalized_decision in {"manual_review", "auto_repair"}
+    ):
+        items.append("当前候选稿仍建议先做一致性复核，再决定是否直接恢复。")
+
+    if not items:
+        return None
+
+    return {
+        "status": "warning",
+        "summary": "恢复前请先确认这些一致性 / 质量风险是否可接受。",
+        "items": items[:4],
+    }
+
+
+def _build_candidate_draft_payload(
+    *,
+    draft_attempt: ChapterDraftAttempt,
+    chapter_updated_at: Optional[datetime],
+    include_full_text: bool = False,
+) -> Dict[str, Any]:
+    quality_metrics = dict(draft_attempt.quality_metrics or {}) if isinstance(draft_attempt.quality_metrics, dict) else {}
+    repair_payload = dict(draft_attempt.repair_payload or {}) if isinstance(draft_attempt.repair_payload, dict) else {}
+    quality_gate = quality_metrics.get("quality_gate") if isinstance(quality_metrics.get("quality_gate"), dict) else {}
+    repair_guidance = quality_metrics.get("repair_guidance") if isinstance(quality_metrics.get("repair_guidance"), dict) else {}
+    selection_metadata = quality_metrics.get("candidate_selection") if isinstance(quality_metrics.get("candidate_selection"), dict) else None
+    full_content, has_full_content = _extract_candidate_draft_full_content(draft_attempt)
+
+    preview_text = str(draft_attempt.content_preview or draft_attempt.summary_preview or "").strip()
+    if not preview_text and full_content:
+        preview_text = full_content[:500]
+
+    failed_metrics: List[Dict[str, Any]] = []
+    for item in quality_gate.get("failed_metrics") or []:
+        if not isinstance(item, dict):
+            continue
+        failed_metrics.append(
+            {
+                "key": str(item.get("key") or "").strip(),
+                "label": str(item.get("label") or item.get("key") or "").strip(),
+                "value": float(item.get("value") or 0.0),
+                "threshold": float(item.get("threshold") or 0.0),
+                "gap": float(item.get("gap") or 0.0),
+                "focus_area": str(item.get("focus_area") or "").strip() or None,
+                "repair_target": str(item.get("repair_target") or "").strip() or None,
+            }
+        )
+
+    highlight_content = full_content if has_full_content else ""
+    quality_highlights = _build_candidate_draft_quality_highlights(
+        content=highlight_content,
+        quality_metrics=quality_metrics,
+    )
+    apply_risk = _build_candidate_draft_apply_risk(
+        quality_gate=quality_gate,
+        quality_highlights=quality_highlights,
+        quality_gate_action=draft_attempt.quality_gate_action,
+        quality_gate_decision=draft_attempt.quality_gate_decision,
+    )
+
+    payload: Dict[str, Any] = {
+        "attempt_id": draft_attempt.id,
+        "source": str(draft_attempt.source or "").strip(),
+        "attempt_state": str(draft_attempt.attempt_state or "").strip(),
+        "quality_gate_action": draft_attempt.quality_gate_action,
+        "quality_gate_decision": draft_attempt.quality_gate_decision,
+        "word_count": int(draft_attempt.word_count or len(full_content)),
+        "summary_preview": str(draft_attempt.summary_preview or "").strip(),
+        "content_preview": preview_text,
+        "has_full_content": has_full_content,
+        "content_complete": has_full_content,
+        "can_apply": has_full_content,
+        "is_stale": _is_reviser_draft_stale(chapter_updated_at, draft_attempt.created_at),
+        "created_at": draft_attempt.created_at.isoformat() if draft_attempt.created_at else None,
+        "repair_summary": str(
+            repair_payload.get("summary")
+            or repair_guidance.get("summary")
+            or ""
+        ).strip() or None,
+        "repair_targets": _normalize_candidate_draft_items(
+            repair_payload.get("repair_targets") or repair_guidance.get("repair_targets")
+        ),
+        "preserve_strengths": _normalize_candidate_draft_items(
+            repair_payload.get("preserve_strengths") or repair_guidance.get("preserve_strengths")
+        ),
+        "focus_areas": _normalize_candidate_draft_items(
+            repair_guidance.get("focus_areas") or quality_gate.get("focus_areas")
+        ),
+        "failed_metrics": failed_metrics,
+        "candidate_selection": dict(selection_metadata) if isinstance(selection_metadata, dict) else None,
+        "quality_highlights": quality_highlights or None,
+        "apply_risk": apply_risk,
+    }
+    if include_full_text and has_full_content:
+        payload["content"] = full_content
+    return payload
 
 
 class BatchAnalysisStatusRequest(BaseModel):
@@ -1378,12 +2150,228 @@ def _public_task_quality_snapshot(snapshot: Optional[Dict[str, Any]]) -> Dict[st
     }
 
 
+def _build_project_quality_trend_cache_key(project_id: str, limit: int) -> str:
+    return f"{project_id}:{limit}"
+
+
+
+def _build_project_quality_trend_item_keys(items: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
+    return [
+        (
+            str(item.get("chapter_id") or ""),
+            str(item.get("history_id") or ""),
+        )
+        for item in items
+        if item.get("chapter_id")
+    ]
+
+
+def _normalize_project_quality_trend_item_keys(value: Any) -> List[Tuple[str, str]]:
+    normalized: List[Tuple[str, str]] = []
+    for item in value or []:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        normalized.append((str(item[0] or ""), str(item[1] or "")))
+    return normalized
+
+
+
+def _decorate_project_quality_metrics_summary(
+    summary: Optional[Dict[str, Any]],
+    *,
+    total_chapters: int,
+    analyzed_chapters: int,
+    last_generated_at: Optional[datetime],
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(summary, dict):
+        return None
+    decorated = dict(summary)
+    decorated["total_chapters"] = total_chapters
+    decorated["analyzed_chapters"] = analyzed_chapters
+    decorated["last_generated_at"] = last_generated_at.isoformat() if last_generated_at else None
+    return decorated
+
+
+
+def _build_project_quality_trend_snapshot(
+    *,
+    items: List[Dict[str, Any]],
+    metrics_history: List[Dict[str, Any]],
+    total_chapters: int,
+    analyzed_chapters: int,
+    last_generated_at: Optional[datetime],
+    summary_state: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    resolved_summary_state = summary_state
+    if resolved_summary_state is None and metrics_history:
+        resolved_summary_state = build_quality_metrics_summary_state(metrics_history, scope="batch")
+    summary = build_quality_metrics_summary_from_state(resolved_summary_state, scope="batch")
+    return {
+        "item_keys": _build_project_quality_trend_item_keys(items),
+        "items": _normalize_json_payload(items),
+        "metrics_history": _normalize_json_payload(metrics_history),
+        "_summary_state": _normalize_json_payload(resolved_summary_state),
+        "summary": _decorate_project_quality_metrics_summary(
+            _normalize_json_payload(summary),
+            total_chapters=total_chapters,
+            analyzed_chapters=analyzed_chapters,
+            last_generated_at=last_generated_at,
+        ),
+    }
+
+
+
+def _try_advance_project_quality_trend_snapshot(
+    cached_snapshot: Optional[Dict[str, Any]],
+    *,
+    items: List[Dict[str, Any]],
+    metrics_history: List[Dict[str, Any]],
+    total_chapters: int,
+    analyzed_chapters: int,
+    last_generated_at: Optional[datetime],
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(cached_snapshot, dict):
+        return None
+
+    current_item_keys = _build_project_quality_trend_item_keys(items)
+    cached_item_keys = _normalize_project_quality_trend_item_keys(cached_snapshot.get("item_keys"))
+    cached_metrics_history = list(cached_snapshot.get("metrics_history") or [])
+    cached_summary_state = cached_snapshot.get("_summary_state")
+
+    if current_item_keys == cached_item_keys:
+        return _build_project_quality_trend_snapshot(
+            items=items,
+            metrics_history=metrics_history,
+            total_chapters=total_chapters,
+            analyzed_chapters=analyzed_chapters,
+            last_generated_at=last_generated_at,
+            summary_state=cached_summary_state,
+        )
+
+    if (
+        not current_item_keys
+        or not cached_item_keys
+        or not isinstance(cached_summary_state, dict)
+        or len(cached_item_keys) != len(cached_metrics_history)
+    ):
+        return None
+
+    overlap = 0
+    max_overlap = min(len(cached_item_keys), len(current_item_keys))
+    for size in range(max_overlap, 0, -1):
+        if cached_item_keys[-size:] == current_item_keys[:size]:
+            overlap = size
+            break
+    if overlap <= 0:
+        return None
+
+    dropped_count = len(cached_item_keys) - overlap
+    appended_count = len(current_item_keys) - overlap
+    if appended_count <= 0 or dropped_count > appended_count:
+        return None
+
+    working_history = list(cached_metrics_history)
+    working_state: Optional[Dict[str, Any]] = dict(cached_summary_state)
+    append_index = overlap
+
+    for _ in range(dropped_count):
+        if append_index >= len(metrics_history) or not working_history:
+            return None
+        dropped_event = working_history[0]
+        appended_event = metrics_history[append_index]
+        next_history = working_history[1:] + [appended_event]
+        working_state = advance_quality_metrics_summary_state(
+            working_state,
+            appended_event=appended_event,
+            current_history=next_history,
+            dropped_event=dropped_event,
+            scope="batch",
+        )
+        if working_state is None:
+            return None
+        working_history = next_history
+        append_index += 1
+
+    while append_index < len(metrics_history):
+        appended_event = metrics_history[append_index]
+        next_history = working_history + [appended_event]
+        working_state = advance_quality_metrics_summary_state(
+            working_state,
+            appended_event=appended_event,
+            current_history=next_history,
+            dropped_event=None,
+            scope="batch",
+        )
+        if working_state is None:
+            return None
+        working_history = next_history
+        append_index += 1
+
+    if working_history != metrics_history:
+        return None
+
+    return _build_project_quality_trend_snapshot(
+        items=items,
+        metrics_history=metrics_history,
+        total_chapters=total_chapters,
+        analyzed_chapters=analyzed_chapters,
+        last_generated_at=last_generated_at,
+        summary_state=working_state,
+    )
+
+
+async def _get_project_quality_trend_snapshot(
+    *,
+    project_id: str,
+    limit: int,
+    items: List[Dict[str, Any]],
+    metrics_history: List[Dict[str, Any]],
+    total_chapters: int,
+    analyzed_chapters: int,
+    last_generated_at: Optional[datetime],
+) -> Dict[str, Any]:
+    cache_key = _build_project_quality_trend_cache_key(project_id, limit)
+    async with project_quality_trend_lock:
+        cached_snapshot = project_quality_trend_cache.get(cache_key)
+        if cached_snapshot is None:
+            persisted_snapshot = load_project_quality_trend_snapshot(project_id, limit)
+            if isinstance(persisted_snapshot, dict):
+                project_quality_trend_cache[cache_key] = persisted_snapshot
+                cached_snapshot = persisted_snapshot
+
+        snapshot = _try_advance_project_quality_trend_snapshot(
+            cached_snapshot,
+            items=items,
+            metrics_history=metrics_history,
+            total_chapters=total_chapters,
+            analyzed_chapters=analyzed_chapters,
+            last_generated_at=last_generated_at,
+        )
+        if snapshot is None:
+            snapshot = _build_project_quality_trend_snapshot(
+                items=items,
+                metrics_history=metrics_history,
+                total_chapters=total_chapters,
+                analyzed_chapters=analyzed_chapters,
+                last_generated_at=last_generated_at,
+            )
+        project_quality_trend_cache[cache_key] = snapshot
+        persist_project_quality_trend_snapshot(project_id, limit, snapshot)
+        while len(project_quality_trend_cache) > PROJECT_QUALITY_TREND_CACHE_MAX_SIZE:
+            oldest_key = next(iter(project_quality_trend_cache))
+            project_quality_trend_cache.pop(oldest_key, None)
+        return {
+            "items": list(snapshot.get("items") or []),
+            "summary": snapshot.get("summary"),
+        }
+
+
 async def _record_task_quality_metrics(
     task_id: str,
     metrics_event: Dict[str, Any],
     db_session: Optional[AsyncSession] = None,
 ):
-    """????????????????????"""
+    """Record task quality metrics and refresh the task snapshot state."""
     persisted_snapshot: Optional[Dict[str, Any]] = None
     async with task_quality_lock:
         current = task_quality_metrics_cache.get(task_id) or {
@@ -1434,7 +2422,7 @@ async def _get_task_quality_metrics_snapshot(
     task_id: str,
     db_session: Optional[AsyncSession] = None,
 ) -> Dict[str, Any]:
-    """???????????????????????????"""
+    """Load task quality metrics from cache or persisted snapshot."""
     async with task_quality_lock:
         cached_snapshot = task_quality_metrics_cache.get(task_id)
     if cached_snapshot:
@@ -2082,6 +3070,20 @@ async def _load_latest_reviser_history(
     return None
 
 
+async def _load_latest_candidate_draft_attempt(
+    db: AsyncSession,
+    chapter_id: str,
+    attempt_id: Optional[str] = None,
+) -> Optional[ChapterDraftAttempt]:
+    query = select(ChapterDraftAttempt).where(ChapterDraftAttempt.chapter_id == chapter_id)
+    if attempt_id:
+        query = query.where(ChapterDraftAttempt.id == attempt_id)
+    else:
+        query = query.order_by(ChapterDraftAttempt.created_at.desc()).limit(1)
+    result = await db.execute(query)
+    return result.scalar_one_or_none()
+
+
 def _extract_outline_anchor_lines(chapter_outline: Optional[str], max_lines: int = 10) -> List[str]:
     """从章节大纲文本中提取剧情锚点，供运行时系统提示词约束使用。"""
     if not chapter_outline:
@@ -2329,14 +3331,14 @@ async def get_project_chapters(
     return ChapterListResponse(total=total, items=chapters_with_outline)
 
 
-@router.get("/project/{project_id}/quality-trend", response_model=ProjectChapterQualityTrendResponse, summary="??????????")
+@router.get("/project/{project_id}/quality-trend", response_model=ProjectChapterQualityTrendResponse, summary="Get project chapter quality trend")
 async def get_project_chapter_quality_trend(
     project_id: str,
     request: Request,
-    limit: int = Query(12, ge=1, le=50, description="??????????"),
+    limit: int = Query(12, ge=1, le=50, description="Number of recent chapters to return"),
     db: AsyncSession = Depends(get_db),
 ):
-    """?????????????????????"""
+    """Return recent chapter quality trend items and summary for a project."""
     user_id = getattr(request.state, "user_id", None)
     await verify_project_access(project_id, user_id, db)
 
@@ -2378,19 +3380,23 @@ async def get_project_chapter_quality_trend(
         items = items[-limit:]
         metrics_history = metrics_history[-limit:]
 
-    quality_metrics_summary = build_quality_metrics_summary(metrics_history, scope="batch") if metrics_history else None
-    if isinstance(quality_metrics_summary, dict):
-        quality_metrics_summary["total_chapters"] = len(chapters)
-        quality_metrics_summary["analyzed_chapters"] = len(metrics_history)
-        quality_metrics_summary["last_generated_at"] = last_generated_at.isoformat() if last_generated_at else None
+    trend_snapshot = await _get_project_quality_trend_snapshot(
+        project_id=project_id,
+        limit=limit,
+        items=items,
+        metrics_history=metrics_history,
+        total_chapters=len(chapters),
+        analyzed_chapters=len(metrics_history),
+        last_generated_at=last_generated_at,
+    )
 
     return {
         "project_id": project_id,
         "has_metrics": bool(metrics_history),
         "total_chapters": len(chapters),
         "analyzed_chapters": len(metrics_history),
-        "items": items,
-        "quality_metrics_summary": quality_metrics_summary,
+        "items": trend_snapshot.get("items") or items,
+        "quality_metrics_summary": trend_snapshot.get("summary"),
     }
 
 
@@ -4105,119 +5111,110 @@ async def generate_chapter_content_stream(
                     # 注意：这里使用用户配置的AI服务，模型参数会覆盖默认模型
                     # 如果需要切换provider，需要在前端传递provider参数
                 
-                # === 生成阶段 ===
-                full_content = ""
-                chunk_count = 0
-                
+                # === generation stage ===
                 yield await tracker.generating(
                     current_chars=0,
                     estimated_total=target_word_count
                 )
-                
-                async for chunk in user_ai_service.generate_text_stream(**generate_kwargs):
-                    full_content += chunk
-                    chunk_count += 1
-                    
-                    # 发送内容块
-                    yield await tracker.generating_chunk(chunk)
-                    
-                    # 每5个chunk发送一次进度更新
-                    if chunk_count % 5 == 0:
-                        yield await tracker.generating(
-                            current_chars=len(full_content),
-                            estimated_total=target_word_count,
-                            message=f'正在创作中... 已生成 {len(full_content)} 字'
-                        )
-                    
-                    # 每20个chunk发送心跳
-                    if chunk_count % 20 == 0:
-                        yield await tracker.heartbeat()
-                    
-                    await asyncio.sleep(0)  # 让出控制权
-                
-                full_content, removed_meta_lines = _sanitize_generated_narrative_text(full_content)
-                if removed_meta_lines > 0:
-                    logger.warning(
-                        f"⚠️ 章节生成检测到流程化元文本，已清理 {removed_meta_lines} 行: chapter_id={chapter_id}"
-                    )
-                if not full_content.strip():
-                    raise ValueError("生成内容为空或仅包含流程化元文本，请重试生成")
-                # === 保存阶段 ===
-                yield await tracker.saving("正在保存章节与质量结果...", 0.3)
 
-                # 构建质量运行时上下文并执行质量评估
-                quality_runtime_context = _build_chapter_quality_runtime_context(
-                    story_packet=story_packet,
-                    project=project,
-                    chapter=current_chapter,
-                    chapter_context=chapter_context,
+                def evaluate_candidate_quality(generated_content: str) -> Dict[str, Any]:
+                    quality_runtime_context = _build_chapter_quality_runtime_context(
+                        story_packet=story_packet,
+                        project=project,
+                        chapter=current_chapter,
+                        chapter_context=chapter_context,
+                        target_word_count=target_word_count,
+                        generation_intent=generation_intent,
+                    )
+                    metrics = compute_story_quality_metrics(
+                        content=generated_content,
+                        chapter_outline=chapter_context.chapter_outline,
+                        world_rules=project.world_rules,
+                        quality_runtime_context=quality_runtime_context,
+                    )
+                    logger.info(
+                        f"Chapter candidate metrics - overall={metrics['overall_score']}, "
+                        f"conflict={metrics['conflict_chain_hit_rate']}, "
+                        f"rule={metrics['rule_grounding_hit_rate']}"
+                    )
+                    return metrics
+
+                def build_candidate_quality_gate_plan(
+                    candidate_metrics: Dict[str, Any],
+                    attempt_offset: int,
+                ) -> Dict[str, Any]:
+                    return _resolve_quality_gate_execution_plan(
+                        candidate_metrics if isinstance(candidate_metrics, dict) else None,
+                        retry_count=0,
+                        max_retries=1,
+                        current_story_repair_payload=story_repair_state.get("payload"),
+                        scope="chapter",
+                    )
+
+                selected_candidate = await _generate_best_ranked_candidate(
+                    ai_service=user_ai_service,
+                    base_generate_kwargs=generate_kwargs,
                     target_word_count=target_word_count,
-                    generation_intent=generation_intent,
+                    source="chapter",
+                    generation_label=f"chapter_id={chapter_id}",
+                    quality_evaluator=evaluate_candidate_quality,
+                    quality_gate_plan_builder=build_candidate_quality_gate_plan,
+                    max_candidates=CHAPTER_CANDIDATE_RERANK_LIMIT,
                 )
-                quality_metrics = compute_story_quality_metrics(
-                    content=full_content,
-                    chapter_outline=chapter_context.chapter_outline,
-                    world_rules=project.world_rules,
-                    quality_runtime_context=quality_runtime_context,
-                )
-                logger.info(
-                    f"📊 章节质量评分 - overall={quality_metrics['overall_score']}, "
-                    f"conflict={quality_metrics['conflict_chain_hit_rate']}, "
-                    f"rule={quality_metrics['rule_grounding_hit_rate']}"
-                )
-                quality_gate_plan = _resolve_quality_gate_execution_plan(
-                    quality_metrics if isinstance(quality_metrics, dict) else None,
-                    retry_count=0,
-                    max_retries=1,
-                    current_story_repair_payload=story_repair_state.get("payload"),
-                    scope="chapter",
-                )
+                full_content = str(selected_candidate.get("full_content") or "")
+                candidate_word_count = int(selected_candidate.get("word_count") or len(full_content))
+                quality_metrics = selected_candidate.get("quality_metrics")
+                quality_gate_plan = selected_candidate.get("quality_gate_plan") or {}
                 quality_gate_action = str(quality_gate_plan.get("action") or "continue")
                 quality_gate_requires_followup = quality_gate_action in {"retry", "manual_review"}
                 quality_gate_message = quality_gate_plan.get("message")
                 quality_gate_snapshot = quality_gate_plan.get("quality_gate")
+                content_applied = not quality_gate_requires_followup
+                attempt_state = "applied" if content_applied else quality_gate_action
+                previous_content = current_chapter.content
+                previous_word_count = current_chapter.word_count or 0
+                previous_status = current_chapter.status
+                if selected_candidate.get("candidate_count", 1) > 1:
+                    logger.info(
+                        f"Chapter candidate rerank selected winner: chapter_id={chapter_id}, "
+                        f"candidate_count={selected_candidate.get('candidate_count', 1)}, "
+                        f"winner={selected_candidate.get('candidate_index', 1)}"
+                    )
                 if isinstance(quality_metrics, dict) and isinstance(quality_gate_snapshot, dict):
                     quality_metrics = {
                         **quality_metrics,
                         "quality_gate": quality_gate_snapshot,
                     }
 
-                content_applied = not quality_gate_requires_followup
-                previous_content = current_chapter.content
-                previous_word_count = current_chapter.word_count or 0
-                previous_status = current_chapter.status
+                draft_attempt = None
                 if quality_gate_requires_followup:
                     quality_gate_decision = quality_gate_snapshot.get("decision") if isinstance(quality_gate_snapshot, dict) else None
+                    draft_attempt = _build_chapter_draft_attempt(
+                        project_id=project.id,
+                        chapter_id=current_chapter.id,
+                        source="chapter",
+                        attempt_state=quality_gate_action,
+                        quality_gate_action=quality_gate_action,
+                        quality_gate_decision=quality_gate_decision,
+                        full_content=full_content,
+                        summary_preview=full_content[:220],
+                        quality_metrics=quality_metrics if isinstance(quality_metrics, dict) else None,
+                        repair_payload=quality_gate_plan.get("active_story_repair_payload"),
+                    )
                     logger.warning(
-                        f"⚠️ 质量门禁要求后续处理: chapter_id={chapter_id}, "
+                        f"Quality gate requires follow-up: chapter_id={chapter_id}, "
                         f"action={quality_gate_action}, decision={quality_gate_decision}"
                     )
                 else:
+                    for chunk in selected_candidate.get("candidate_chunks") or []:
+                        yield await tracker.generating_chunk(chunk)
                     current_chapter.content = full_content
-                    new_word_count = len(full_content)
+                    new_word_count = candidate_word_count
                     current_chapter.word_count = new_word_count
                     current_chapter.status = "completed"
                     project.current_words = project.current_words - previous_word_count + new_word_count
 
-                candidate_word_count = len(full_content)
-
-                attempt_state = "applied" if content_applied else quality_gate_action
-                draft_attempt = None
-                if not content_applied:
-                    draft_attempt = _build_chapter_draft_attempt(
-                        project_id=current_chapter.project_id,
-                        chapter_id=current_chapter.id,
-                        source="chapter",
-                        attempt_state=attempt_state,
-                        quality_gate_action=quality_gate_action,
-                        quality_gate_decision=(quality_gate_snapshot or {}).get("decision"),
-                        full_content=full_content,
-                        quality_metrics=quality_metrics if isinstance(quality_metrics, dict) else None,
-                        repair_payload=(
-                            quality_gate_plan.get("active_story_repair_payload")
-                            or story_repair_state.get("active_story_repair_payload")
-                        ),
-                    )
+                yield await tracker.saving("Saving chapter content and quality results...", 0.3)
                 history = GenerationHistory(
                     project_id=current_chapter.project_id,
                     chapter_id=current_chapter.id,
@@ -4864,6 +5861,17 @@ async def get_chapter_analysis(
     latest_quality_metrics = quality_metrics_history[0] if quality_metrics_history else None
     quality_metrics_summary = _build_quality_metrics_summary(quality_metrics_history)
 
+    candidate_attempt = await _load_latest_candidate_draft_attempt(db, chapter_id)
+    candidate_draft = (
+        _build_candidate_draft_payload(
+            draft_attempt=candidate_attempt,
+            chapter_updated_at=chapter_check.updated_at,
+            include_full_text=include_full_draft,
+        )
+        if candidate_attempt is not None
+        else None
+    )
+
     return {
         "chapter_id": chapter_id,
         "analysis": analysis.to_dict(),
@@ -4884,6 +5892,7 @@ async def get_chapter_analysis(
         "checker_result": latest_checker_result,
         "checker_created_at": checker_created_at,
         "auto_revision_draft": auto_revision_draft,
+        "candidate_draft": candidate_draft,
         "quality_metrics": latest_quality_metrics,
         "quality_metrics_summary": quality_metrics_summary,
         "created_at": analysis.created_at.isoformat() if analysis.created_at else None
@@ -5055,6 +6064,158 @@ async def apply_auto_revision_draft(
         "draft_created_at": reviser_history.created_at.isoformat() if reviser_history.created_at else None,
         "stale_applied": stale,
         "message": "自动修订草稿已应用",
+    }
+
+
+@router.get("/{chapter_id}/analysis/candidate-draft", summary="Get candidate draft detail")
+async def get_candidate_draft(
+    chapter_id: str,
+    request: Request,
+    attempt_id: Optional[str] = Query(None, description="Specify candidate draft ID"),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get the persisted candidate draft kept by the quality gate."""
+    user_id = getattr(request.state, 'user_id', None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    chapter_result = await db.execute(
+        select(Chapter).where(Chapter.id == chapter_id)
+    )
+    chapter = chapter_result.scalar_one_or_none()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="章节不存在")
+
+    await verify_project_access(chapter.project_id, user_id, db)
+
+    draft_attempt = await _load_latest_candidate_draft_attempt(
+        db=db,
+        chapter_id=chapter_id,
+        attempt_id=attempt_id,
+    )
+    if not draft_attempt:
+        if attempt_id:
+            raise HTTPException(status_code=404, detail="指定的候选草稿不存在或不可用")
+        raise HTTPException(status_code=404, detail="该章节暂无候选草稿")
+
+    return {
+        "chapter_id": chapter_id,
+        "candidate_draft": _build_candidate_draft_payload(
+            draft_attempt=draft_attempt,
+            chapter_updated_at=chapter.updated_at,
+            include_full_text=True,
+        ),
+    }
+
+
+@router.post("/{chapter_id}/analysis/candidate-draft/apply", summary="Apply candidate draft")
+async def apply_candidate_draft(
+    chapter_id: str,
+    request: Request,
+    apply_request: Optional[Dict[str, Any]] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """Write the candidate draft back into the chapter body."""
+    user_id = getattr(request.state, 'user_id', None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    chapter_result = await db.execute(
+        select(Chapter).where(Chapter.id == chapter_id)
+    )
+    chapter = chapter_result.scalar_one_or_none()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="章节不存在")
+
+    await verify_project_access(chapter.project_id, user_id, db)
+
+    payload = apply_request or {}
+    attempt_id_raw = payload.get("attempt_id")
+    attempt_id = str(attempt_id_raw).strip() if attempt_id_raw is not None else ""
+    attempt_id = attempt_id or None
+
+    allow_stale_raw = payload.get("allow_stale", False)
+    if isinstance(allow_stale_raw, bool):
+        allow_stale = allow_stale_raw
+    elif isinstance(allow_stale_raw, str):
+        allow_stale = allow_stale_raw.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        allow_stale = bool(allow_stale_raw)
+
+    draft_attempt = await _load_latest_candidate_draft_attempt(
+        db=db,
+        chapter_id=chapter_id,
+        attempt_id=attempt_id,
+    )
+    if not draft_attempt:
+        if attempt_id:
+            raise HTTPException(status_code=404, detail="指定的候选草稿不存在或不可用")
+        raise HTTPException(status_code=404, detail="该章节暂无可应用的候选草稿")
+
+    candidate_content_raw, has_full_content = _extract_candidate_draft_full_content(draft_attempt)
+    if not has_full_content or not candidate_content_raw.strip():
+        raise HTTPException(status_code=409, detail="该候选草稿仅保存了预览，无法直接恢复正文")
+
+    candidate_content, _ = _sanitize_generated_narrative_text(candidate_content_raw)
+    if not candidate_content.strip():
+        raise HTTPException(status_code=400, detail="候选草稿内容为空，无法应用")
+    if _contains_chapter_workflow_meta_text(candidate_content):
+        raise HTTPException(status_code=400, detail="候选草稿包含流程化元文本，无法应用")
+
+    stale = _is_reviser_draft_stale(chapter.updated_at, draft_attempt.created_at)
+    if stale and not allow_stale:
+        raise HTTPException(
+            status_code=409,
+            detail="候选草稿已过期，请获取最新草稿或在请求中设置 allow_stale=true",
+        )
+
+    old_word_count = chapter.word_count or len(chapter.content or "")
+    chapter.content = candidate_content
+    new_word_count = len(candidate_content)
+    chapter.word_count = new_word_count
+
+    project_result = await db.execute(
+        select(Project).where(Project.id == chapter.project_id)
+    )
+    project = project_result.scalar_one_or_none()
+    if project:
+        current_words = project.current_words or 0
+        project.current_words = max(0, current_words - old_word_count + new_word_count)
+
+    quality_metrics = dict(draft_attempt.quality_metrics or {}) if isinstance(draft_attempt.quality_metrics, dict) else {}
+    apply_history = GenerationHistory(
+        project_id=chapter.project_id,
+        chapter_id=chapter_id,
+        prompt=f"apply candidate draft: chapter {chapter.chapter_number} {chapter.title or ''}",
+        generated_content=_build_generation_history_payload(
+            candidate_content,
+            quality_metrics,
+            content_applied=True,
+            attempt_state="applied_from_candidate",
+        ),
+        model="chapter_candidate_apply_v1",
+    )
+    db.add(apply_history)
+
+    await db.commit()
+    await db.refresh(chapter)
+
+    logger.info(
+        "Applied candidate draft: chapter_id=%s, old=%s, new=%s, stale=%s",
+        chapter_id,
+        old_word_count,
+        new_word_count,
+        stale,
+    )
+    return {
+        "success": True,
+        "chapter_id": chapter_id,
+        "word_count": new_word_count,
+        "old_word_count": old_word_count,
+        "draft_attempt_id": draft_attempt.id,
+        "draft_created_at": draft_attempt.created_at.isoformat() if draft_attempt.created_at else None,
+        "stale_applied": stale,
+        "message": "候选草稿已恢复到章节正文",
     }
 
 
@@ -6101,13 +7262,15 @@ async def execute_batch_generation_in_order(
                         active_story_repair_snapshot=active_story_repair_state.get("active_story_repair_payload"),
                         story_repair_state=active_story_repair_state,
                         stream_task_id=batch_id,
-                        stream_chunks=stream_chunks
+                        stream_chunks=stream_chunks,
+                        retry_count=retry_count,
+                        max_retries=task.max_retries,
                     )
                     generated_summary = str(generation_result.get("summary_preview") or "").strip()
                     generated_content = str(generation_result.get("full_content") or "")
                     generated_word_count = int(generation_result.get("word_count") or len(generated_content))
                     generation_quality_metrics = generation_result.get("quality_metrics")
-                    quality_gate_plan = _resolve_quality_gate_execution_plan(
+                    quality_gate_plan = generation_result.get("quality_gate_plan") or _resolve_quality_gate_execution_plan(
                         generation_quality_metrics if isinstance(generation_quality_metrics, dict) else None,
                         retry_count=retry_count,
                         max_retries=task.max_retries,
@@ -6507,7 +7670,9 @@ async def generate_single_chapter_for_batch(
     active_story_repair_snapshot: Optional[Dict[str, Any]] = None,
     story_repair_state: Optional[Dict[str, Any]] = None,
     stream_task_id: Optional[str] = None,
-    stream_chunks: bool = False
+    stream_chunks: bool = False,
+    retry_count: int = 0,
+    max_retries: int = 1,
 ) -> Dict[str, Any]:
     """
     为批量生成执行单个章节的生成（非流式）
@@ -6817,14 +7982,13 @@ async def generate_single_chapter_for_batch(
     calculated_max_tokens = max(2000, min(calculated_max_tokens, 16000))  # 限制在 2000-16000 之间
     logger.info(f"📊 批量生成 - 目标字数: {target_word_count}, 计算 max_tokens: {calculated_max_tokens}")
     
-    # 非流式生成内容
-    full_content = ""
-    # 准备生成参数
+    # Build generation kwargs
+    # candidate generation payload
     generate_kwargs = {
         "prompt": prompt,
         "system_prompt": system_prompt_with_style,
         "tool_choice": "auto",
-        "max_tokens": calculated_max_tokens,  # 添加 max_tokens 限制
+        "max_tokens": calculated_max_tokens,  # apply max_tokens cap
         "temperature": _resolve_generation_temperature(
             _detect_style_profile(
                 style_name=style_name,
@@ -6833,72 +7997,97 @@ async def generate_single_chapter_for_batch(
             )
         ),
     }
-    # 如果传入了自定义模型，使用指定的模型
+    # Override model when the task explicitly requests one
     if custom_model:
         generate_kwargs["model"] = custom_model
-        logger.info(f"  批量生成使用自定义模型: {custom_model}")
-    
-    # 如果启用了流式任务推送，先发送章节生成进度
+        logger.info(f"  Batch generation uses custom model: {custom_model}")
+
+    # Stream progress for single-chapter batch tasks
     if stream_task_id and stream_chunks:
         await publish_task_stream_event(stream_task_id, {
             "type": "progress",
             "chapter_id": chapter.id,
             "chapter_number": chapter.chapter_number,
-            "message": f"第{chapter.chapter_number}章正在生成",
+            "message": f"Generating chapter {chapter.chapter_number}",
             "progress": 35,
             "status": "running",
             "phase": "generating",
         }, db_session=db_session)
-    async for chunk in ai_service.generate_text_stream(**generate_kwargs):
-        full_content += chunk
-        if stream_task_id and stream_chunks:
+
+    def evaluate_candidate_quality(generated_content: str) -> Dict[str, Any]:
+        quality_runtime_context = _build_chapter_quality_runtime_context(
+            story_packet=effective_story_packet,
+            project=project,
+            chapter=chapter,
+            chapter_context=chapter_context,
+            target_word_count=target_word_count,
+            generation_intent=generation_intent,
+        )
+        metrics = compute_story_quality_metrics(
+            content=generated_content,
+            chapter_outline=chapter_context.chapter_outline,
+            world_rules=project.world_rules,
+            quality_runtime_context=quality_runtime_context,
+        )
+        logger.info(
+            f"Batch candidate metrics - overall={metrics['overall_score']}, "
+            f"conflict={metrics['conflict_chain_hit_rate']}, "
+            f"rule={metrics['rule_grounding_hit_rate']}"
+        )
+        return metrics
+
+    def build_candidate_quality_gate_plan(
+        candidate_metrics: Dict[str, Any],
+        attempt_offset: int,
+    ) -> Dict[str, Any]:
+        return _resolve_quality_gate_execution_plan(
+            candidate_metrics if isinstance(candidate_metrics, dict) else None,
+            retry_count=retry_count,
+            max_retries=max_retries,
+            current_story_repair_payload=story_repair_payload,
+            scope="batch",
+        )
+
+    selected_candidate = await _generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs=generate_kwargs,
+        target_word_count=target_word_count,
+        source="batch",
+        generation_label=f"chapter={chapter.chapter_number}",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=CHAPTER_CANDIDATE_RERANK_LIMIT if retry_count <= 0 else 1,
+    )
+    full_content = str(selected_candidate.get("full_content") or "")
+    candidate_word_count = int(selected_candidate.get("word_count") or len(full_content))
+    quality_metrics = selected_candidate.get("quality_metrics")
+    quality_gate_plan = selected_candidate.get("quality_gate_plan") or {}
+
+    if stream_task_id and stream_chunks and str(quality_gate_plan.get("action") or "continue") == "continue":
+        for chunk in selected_candidate.get("candidate_chunks") or []:
             await publish_task_stream_event(stream_task_id, {
                 "type": "chunk",
                 "chapter_id": chapter.id,
                 "chapter_number": chapter.chapter_number,
-                "content": chunk
+                "content": chunk,
             })
 
-    full_content, removed_meta_lines = _sanitize_generated_narrative_text(full_content)
-    if removed_meta_lines > 0:
-        logger.warning(
-            f"⚠️ 批量章节生成检测到流程化元文本，已清理 {removed_meta_lines} 行: chapter={chapter.chapter_number}"
+    logger.info(f"Batch candidate ready: chapter={chapter.chapter_number}, word_count={candidate_word_count}")
+    if selected_candidate.get("candidate_count", 1) > 1:
+        logger.info(
+            f"Batch candidate rerank winner: chapter={chapter.chapter_number}, "
+            f"candidate_count={selected_candidate.get('candidate_count', 1)}, "
+            f"winner={selected_candidate.get('candidate_index', 1)}"
         )
-    if not full_content.strip():
-        raise ValueError(f"第{chapter.chapter_number}章生成内容为空或仅包含流程化元文本")
-    if _contains_chapter_workflow_meta_text(full_content):
-        raise ValueError(f"第{chapter.chapter_number}章生成结果包含流程化元文本")
-    
-    # 计算候选稿字数并执行质量评估
-    candidate_word_count = len(full_content)
-    quality_runtime_context = _build_chapter_quality_runtime_context(
-        story_packet=effective_story_packet,
-        project=project,
-        chapter=chapter,
-        chapter_context=chapter_context,
-        target_word_count=target_word_count,
-        generation_intent=generation_intent,
-    )
-    quality_metrics = compute_story_quality_metrics(
-        content=full_content,
-        chapter_outline=chapter_context.chapter_outline,
-        world_rules=project.world_rules,
-        quality_runtime_context=quality_runtime_context,
-    )
 
-    logger.info(f"✅ 候选稿生成完成: 第{chapter.chapter_number}章，共 {candidate_word_count} 字")
-    logger.info(
-        f"📊 批量章节质量评分 - overall={quality_metrics['overall_score']}, "
-        f"conflict={quality_metrics['conflict_chain_hit_rate']}, "
-        f"rule={quality_metrics['rule_grounding_hit_rate']}"
-    )
-
-    summary_preview = full_content[:300].replace('\n', ' ') if full_content else ""
+    summary_preview = full_content[:300].replace("\n", " ") if full_content else ""
     return {
         "full_content": full_content,
         "word_count": candidate_word_count,
         "summary_preview": summary_preview,
         "quality_metrics": quality_metrics,
+        "quality_gate_plan": quality_gate_plan,
+        "candidate_count": int(selected_candidate.get("candidate_count") or 1),
     }
 async def _apply_generated_batch_chapter_candidate(
     db_session: AsyncSession,

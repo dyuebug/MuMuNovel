@@ -6,6 +6,17 @@ import json
 import re
 from typing import Any, Dict, Mapping, Optional, Sequence
 
+from app.services.novel_quality_profile_service import (
+    QUALITY_PROFILE_GENRE_LABELS,
+    QUALITY_PROFILE_PRESET_LABELS,
+    QUALITY_PROFILE_STYLE_LABELS,
+    resolve_quality_weight_profile,
+    resolve_runtime_quality_profile,
+)
+from app.services.story_quality_repair_effectiveness_service import (
+    build_repair_effectiveness_summary,
+)
+
 
 @dataclass(frozen=True)
 class RepairMetricRule:
@@ -137,7 +148,6 @@ QUALITY_STAGE_LABELS: Dict[str, str] = {
     "ending": "收束段",
 }
 
-
 def _normalize_runtime_stage(value: Any) -> Optional[str]:
     text = str(value or "").strip().lower()
     if not text:
@@ -207,20 +217,20 @@ def _extract_continuity_anchor_candidates(item: Any) -> list[str]:
     tokens: list[str] = []
     seen: set[str] = set()
     cleanup_translation = str.maketrans({
-        "?": " ",
-        "?": " ",
+        "【": " ",
+        "】": " ",
         "[": " ",
         "]": " ",
-        "?": " ",
-        "?": " ",
+        "（": " ",
+        "）": " ",
         "(": " ",
         ")": " ",
         "<": " ",
         ">": " ",
-        "?": " ",
-        "?": " ",
-        "?": " ",
-        "?": " ",
+        "《": " ",
+        "》": " ",
+        "“": " ",
+        "”": " ",
         '"': " ",
         "'": " ",
         "`": " ",
@@ -365,9 +375,35 @@ def _build_runtime_pressure(runtime_context: Mapping[str, Any]) -> Dict[str, Any
     }
 
 
+def _resolve_adaptive_quality_gate_profile(runtime_context: Mapping[str, Any]) -> Dict[str, Any]:
+    resolved_stage = _resolve_quality_stage(runtime_context)
+    runtime_profile = resolve_runtime_quality_profile(runtime_context or {})
+    weight_profile = resolve_quality_weight_profile(runtime_context or {}, resolved_stage)
+    return {
+        "resolved_stage": resolved_stage,
+        "quality_preset": str(runtime_profile.get("quality_preset") or "").strip(),
+        "style_profile": str(runtime_profile.get("style_profile") or "").strip(),
+        "genre_profiles": _normalize_runtime_items(runtime_profile.get("genre_profiles"), limit=4),
+        "focus_areas": _normalize_runtime_items(weight_profile.get("focus_areas"), limit=4),
+        "weight_profile": weight_profile,
+    }
+
+
 def _resolve_metric_threshold_adjustments(runtime_context: Mapping[str, Any]) -> Dict[str, float]:
     stage = _resolve_quality_stage(runtime_context)
+    adaptive_profile = _resolve_adaptive_quality_gate_profile(runtime_context)
+    quality_preset = str(adaptive_profile.get("quality_preset") or "").strip()
+    style_profile = str(adaptive_profile.get("style_profile") or "").strip()
+    genre_profiles = set(adaptive_profile.get("genre_profiles") or [])
+    focus_areas = list(adaptive_profile.get("focus_areas") or [])
+    creative_mode = str(runtime_context.get("creative_mode") or "").strip()
+    story_focus = str(runtime_context.get("story_focus") or "").strip()
+
     adjustments: Dict[str, float] = {}
+
+    def add_adjustment(key: str, delta: float) -> None:
+        adjustments[key] = adjustments.get(key, 0.0) + delta
+
     if stage == "opening":
         adjustments.update({
             "opening_hook_rate": 6.0,
@@ -392,25 +428,133 @@ def _resolve_metric_threshold_adjustments(runtime_context: Mapping[str, Any]) ->
             "pacing_score": 0.4,
         })
 
+    if quality_preset == "emotion_drama":
+        add_adjustment("dialogue_naturalness_rate", 2.0)
+        add_adjustment("payoff_chain_rate", 2.0)
+        add_adjustment("conflict_chain_hit_rate", 1.0)
+    elif quality_preset == "clean_prose":
+        add_adjustment("pacing_score", 0.5)
+        add_adjustment("dialogue_naturalness_rate", 1.0)
+        add_adjustment("rule_grounding_hit_rate", 0.5)
+    elif quality_preset == "plot_drive":
+        add_adjustment("conflict_chain_hit_rate", 2.0)
+        add_adjustment("cliffhanger_rate", 1.0)
+        add_adjustment("outline_alignment_rate", 1.0)
+    elif quality_preset == "immersive":
+        add_adjustment("dialogue_naturalness_rate", 1.0)
+        add_adjustment("rule_grounding_hit_rate", 1.0)
+        add_adjustment("pacing_score", 0.2)
+
+    if style_profile == "urban_finance":
+        add_adjustment("rule_grounding_hit_rate", 3.0)
+        add_adjustment("outline_alignment_rate", 1.0)
+        add_adjustment("dialogue_naturalness_rate", 1.0)
+    elif style_profile == "tech_xianxia":
+        add_adjustment("rule_grounding_hit_rate", 4.0)
+        add_adjustment("payoff_chain_rate", 1.0)
+        add_adjustment("outline_alignment_rate", 1.0)
+    elif style_profile == "low_ai_life":
+        add_adjustment("dialogue_naturalness_rate", 2.0)
+        add_adjustment("payoff_chain_rate", 1.0)
+        add_adjustment("cliffhanger_rate", -1.0)
+    elif style_profile == "low_ai_serial":
+        add_adjustment("conflict_chain_hit_rate", 1.0)
+        add_adjustment("payoff_chain_rate", 1.0)
+        add_adjustment("cliffhanger_rate", 1.0)
+
+    if "romance_slice_of_life" in genre_profiles:
+        add_adjustment("dialogue_naturalness_rate", 2.0)
+        add_adjustment("payoff_chain_rate", 1.0)
+        add_adjustment("cliffhanger_rate", -1.0)
+    if "suspense_mystery" in genre_profiles:
+        add_adjustment("conflict_chain_hit_rate", 1.0)
+        add_adjustment("cliffhanger_rate", 2.0)
+        add_adjustment("outline_alignment_rate", 1.0)
+    if "xianxia_fantasy" in genre_profiles:
+        add_adjustment("rule_grounding_hit_rate", 2.0)
+        add_adjustment("payoff_chain_rate", 1.0)
+    if "science_fiction_tech" in genre_profiles:
+        add_adjustment("rule_grounding_hit_rate", 2.0)
+        add_adjustment("outline_alignment_rate", 1.0)
+    if "history_power" in genre_profiles:
+        add_adjustment("rule_grounding_hit_rate", 2.0)
+        add_adjustment("outline_alignment_rate", 1.0)
+        add_adjustment("conflict_chain_hit_rate", 1.0)
+
+    if creative_mode in {"hook", "suspense"}:
+        add_adjustment("opening_hook_rate", 1.0)
+        add_adjustment("cliffhanger_rate", 1.0)
+    elif creative_mode == "emotion":
+        add_adjustment("dialogue_naturalness_rate", 1.0)
+        add_adjustment("payoff_chain_rate", 1.0)
+    elif creative_mode == "relationship":
+        add_adjustment("dialogue_naturalness_rate", 2.0)
+        add_adjustment("conflict_chain_hit_rate", 1.0)
+    elif creative_mode == "payoff":
+        add_adjustment("payoff_chain_rate", 2.0)
+
+    if story_focus == "advance_plot":
+        add_adjustment("conflict_chain_hit_rate", 1.0)
+        add_adjustment("outline_alignment_rate", 1.0)
+    elif story_focus == "deepen_character":
+        add_adjustment("dialogue_naturalness_rate", 1.0)
+        add_adjustment("payoff_chain_rate", 1.0)
+    elif story_focus == "escalate_conflict":
+        add_adjustment("conflict_chain_hit_rate", 2.0)
+        add_adjustment("cliffhanger_rate", 1.0)
+    elif story_focus == "reveal_mystery":
+        add_adjustment("outline_alignment_rate", 1.0)
+        add_adjustment("cliffhanger_rate", 1.0)
+    elif story_focus == "relationship_shift":
+        add_adjustment("dialogue_naturalness_rate", 2.0)
+        add_adjustment("conflict_chain_hit_rate", 1.0)
+    elif story_focus == "foreshadow_payoff":
+        add_adjustment("payoff_chain_rate", 2.0)
+
+    focus_metric_map = {
+        "opening": ("opening_hook_rate", 1.0),
+        "conflict": ("conflict_chain_hit_rate", 1.0),
+        "outline": ("outline_alignment_rate", 1.0),
+        "dialogue": ("dialogue_naturalness_rate", 1.0),
+        "payoff": ("payoff_chain_rate", 1.0),
+        "cliffhanger": ("cliffhanger_rate", 1.0),
+        "rule_grounding": ("rule_grounding_hit_rate", 1.0),
+        "pacing": ("pacing_score", 0.2),
+    }
+    for focus_area in focus_areas:
+        mapped = focus_metric_map.get(str(focus_area or "").strip())
+        if not mapped:
+            continue
+        metric_key, delta = mapped
+        add_adjustment(metric_key, delta)
+
     pressure = _build_runtime_pressure(runtime_context)
     if pressure["foreshadow_state_count"] >= 3:
-        adjustments["payoff_chain_rate"] = adjustments.get("payoff_chain_rate", 0.0) + 2.0
+        add_adjustment("payoff_chain_rate", 2.0)
     if pressure["relationship_state_count"] >= 2:
-        adjustments["dialogue_naturalness_rate"] = adjustments.get("dialogue_naturalness_rate", 0.0) + 1.0
-        adjustments["conflict_chain_hit_rate"] = adjustments.get("conflict_chain_hit_rate", 0.0) + 1.0
+        add_adjustment("dialogue_naturalness_rate", 1.0)
+        add_adjustment("conflict_chain_hit_rate", 1.0)
     if pressure["character_state_count"] >= 3:
-        adjustments["outline_alignment_rate"] = adjustments.get("outline_alignment_rate", 0.0) + 1.0
+        add_adjustment("outline_alignment_rate", 1.0)
     if pressure["organization_state_count"] >= 2:
-        adjustments["rule_grounding_hit_rate"] = adjustments.get("rule_grounding_hit_rate", 0.0) + 1.0
-        adjustments["conflict_chain_hit_rate"] = adjustments.get("conflict_chain_hit_rate", 0.0) + 1.0
+        add_adjustment("rule_grounding_hit_rate", 1.0)
+        add_adjustment("conflict_chain_hit_rate", 1.0)
     if pressure["career_state_count"] >= 2:
-        adjustments["outline_alignment_rate"] = adjustments.get("outline_alignment_rate", 0.0) + 1.0
-        adjustments["payoff_chain_rate"] = adjustments.get("payoff_chain_rate", 0.0) + 1.0
+        add_adjustment("outline_alignment_rate", 1.0)
+        add_adjustment("payoff_chain_rate", 1.0)
     return adjustments
 
 
 def _resolve_gate_thresholds(runtime_context: Mapping[str, Any]) -> Dict[str, Any]:
     stage = _resolve_quality_stage(runtime_context)
+    adaptive_profile = _resolve_adaptive_quality_gate_profile(runtime_context)
+    quality_preset = str(adaptive_profile.get("quality_preset") or "").strip()
+    style_profile = str(adaptive_profile.get("style_profile") or "").strip()
+    genre_profiles = set(adaptive_profile.get("genre_profiles") or [])
+    focus_areas = set(adaptive_profile.get("focus_areas") or [])
+    creative_mode = str(runtime_context.get("creative_mode") or "").strip()
+    story_focus = str(runtime_context.get("story_focus") or "").strip()
+
     thresholds: Dict[str, Any] = {
         "stage": stage,
         "stage_label": QUALITY_STAGE_LABELS.get(stage, ""),
@@ -418,6 +562,7 @@ def _resolve_gate_thresholds(runtime_context: Mapping[str, Any]) -> Dict[str, An
         "allow_save_score": 82.0,
         "normalized_gap": 12.0,
         "weak_metric_block_count": 3,
+        "allow_save_weak_metric_count": 0,
     }
     if stage == "opening":
         thresholds.update({
@@ -431,6 +576,37 @@ def _resolve_gate_thresholds(runtime_context: Mapping[str, Any]) -> Dict[str, An
             "allow_save_score": 84.0,
             "normalized_gap": 10.0,
         })
+
+    if quality_preset == "emotion_drama":
+        thresholds["manual_review_score"] = min(float(thresholds["manual_review_score"]), 69.0)
+        thresholds["allow_save_score"] = min(float(thresholds["allow_save_score"]), 81.0)
+        thresholds["normalized_gap"] = max(float(thresholds["normalized_gap"]), 12.5)
+    elif quality_preset == "clean_prose":
+        thresholds["manual_review_score"] = max(float(thresholds["manual_review_score"]), 71.0)
+        thresholds["allow_save_score"] = max(float(thresholds["allow_save_score"]), 83.0)
+        thresholds["normalized_gap"] = min(float(thresholds["normalized_gap"]), 11.0)
+    elif quality_preset == "plot_drive":
+        thresholds["allow_save_score"] = max(float(thresholds["allow_save_score"]), 82.5)
+    elif quality_preset == "immersive":
+        thresholds["manual_review_score"] = max(float(thresholds["manual_review_score"]), 70.5)
+
+    if story_focus == "relationship_shift" or creative_mode in {"relationship", "emotion"}:
+        thresholds["weak_metric_block_count"] = max(int(thresholds["weak_metric_block_count"]), 4)
+        thresholds["allow_save_weak_metric_count"] = max(int(thresholds["allow_save_weak_metric_count"]), 2)
+        thresholds["normalized_gap"] = max(float(thresholds["normalized_gap"]), 12.5)
+
+    if story_focus == "foreshadow_payoff" or creative_mode == "payoff":
+        thresholds["allow_save_score"] = max(float(thresholds["allow_save_score"]), 83.0)
+        thresholds["normalized_gap"] = min(float(thresholds["normalized_gap"]), 11.0)
+
+    grounding_profiles = {"urban_finance", "tech_xianxia"}
+    if style_profile in grounding_profiles or genre_profiles.intersection({"science_fiction_tech", "history_power", "xianxia_fantasy"}):
+        thresholds["manual_review_score"] = max(float(thresholds["manual_review_score"]), 71.0)
+        thresholds["allow_save_score"] = max(float(thresholds["allow_save_score"]), 83.0)
+        thresholds["normalized_gap"] = min(float(thresholds["normalized_gap"]), 11.0)
+
+    if "rule_grounding" in focus_areas:
+        thresholds["allow_save_score"] = max(float(thresholds["allow_save_score"]), 82.5)
 
     pressure = _build_runtime_pressure(runtime_context)
     if stage == "ending" and pressure["foreshadow_state_count"] >= 3:
@@ -1206,25 +1382,31 @@ def _build_volume_goal_completion_summary(summary: Mapping[str, Any]) -> Dict[st
             "至少推进一条主线矛盾，并让角色因此付出新代价。",
         ]
 
-    metric_values: list[float] = []
+    weight_profile = resolve_quality_weight_profile(runtime_context, resolved_stage)
+    weights = weight_profile.get("weights") if isinstance(weight_profile.get("weights"), Mapping) else {}
+
+    weighted_total = 0.0
+    weight_total = 0.0
     weak_labels: list[str] = []
     focus_areas: list[str] = []
+    metric_count = 0
     for metric_key, focus_area, label in metric_specs:
         value = _resolve_summary_metric_value(summary, metric_key)
         if value is None:
             continue
-        metric_values.append(value)
-        if value < 72.0:
+        metric_count += 1
+        weight = _safe_float(weights.get(focus_area)) or 1.0
+        weighted_total += value * weight
+        weight_total += weight
+        weak_threshold = 72.0 + max(0.0, (weight - 1.0) * 10.0)
+        if value < weak_threshold:
             weak_labels.append(label)
             focus_areas.append(focus_area)
 
-    if not metric_values:
+    if metric_count <= 0 or weight_total <= 0.0:
         return {}
 
-    base_completion = _average_metric_values(metric_values)
-    if base_completion is None:
-        return {}
-
+    base_completion = round(weighted_total / weight_total, 1)
     stage_alignment = None
     if expected_stage and current_stage:
         stage_sequence = ("opening", "development", "ending")
@@ -1270,6 +1452,11 @@ def _build_volume_goal_completion_summary(summary: Mapping[str, Any]) -> Dict[st
         "summary": summary_text,
         "focus_areas": _normalize_runtime_items(focus_areas, limit=4),
         "repair_targets": _normalize_runtime_items(repair_targets, limit=4),
+        "profile_summary": str(weight_profile.get("summary") or "").strip(),
+        "profile_focuses": _normalize_runtime_items(weight_profile.get("focus_labels"), limit=4),
+        "style_profile": str(weight_profile.get("style_profile") or "").strip(),
+        "genre_profiles": _normalize_runtime_items(weight_profile.get("genre_profiles"), limit=4),
+        "quality_preset": str(weight_profile.get("quality_preset") or "").strip(),
     }
 
 
@@ -1337,6 +1524,155 @@ def _build_foreshadow_payoff_delay_summary(summary: Mapping[str, Any]) -> Dict[s
         "focus_areas": _normalize_runtime_items(focus_areas, limit=4),
         "repair_targets": _normalize_runtime_items(repair_targets, limit=4),
     }
+
+
+
+def _evaluate_repair_focus_improvement(
+    current_item: Mapping[str, Any],
+    next_item: Mapping[str, Any],
+    focus_area: str,
+) -> Optional[Dict[str, Any]]:
+    metric_spec = REPAIR_EFFECTIVENESS_METRIC_MAP.get(focus_area)
+    if metric_spec is None:
+        return None
+
+    metric_key, safe_threshold, improvement_threshold = metric_spec
+    current_value = _safe_float(current_item.get(metric_key))
+    next_value = _safe_float(next_item.get(metric_key))
+    if current_value is None or next_value is None:
+        return None
+
+    delta = round(next_value - current_value, 1)
+    success = next_value >= current_value + improvement_threshold or (
+        current_value < safe_threshold <= next_value
+    )
+    return {
+        "focus_area": focus_area,
+        "metric_key": metric_key,
+        "delta": delta,
+        "success": success,
+    }
+
+
+
+def _build_repair_effectiveness_summary(
+    history: Sequence[Mapping[str, Any]],
+    *,
+    scope: str,
+) -> Dict[str, Any]:
+    normalized_history = [
+        _normalize_quality_metrics_history_item(item, scope=scope)
+        for item in history
+        if isinstance(item, Mapping) and item
+    ]
+    if len(normalized_history) < 2:
+        return {}
+
+    evaluated_pairs = 0
+    successful_pairs = 0
+    focus_area_state: Dict[str, Dict[str, Any]] = {}
+
+    for current_item, next_item in zip(normalized_history, normalized_history[1:]):
+        guidance = (
+            current_item.get("repair_guidance")
+            if isinstance(current_item.get("repair_guidance"), Mapping)
+            else build_story_repair_guidance(current_item, scope=scope)
+        )
+        focus_areas = _normalize_runtime_items(guidance.get("focus_areas"), limit=4)
+        pair_evaluations = []
+        for focus_area in focus_areas:
+            evaluation = _evaluate_repair_focus_improvement(current_item, next_item, focus_area)
+            if evaluation is None:
+                continue
+            pair_evaluations.append(evaluation)
+            state = focus_area_state.setdefault(
+                focus_area,
+                {
+                    "focus_area": focus_area,
+                    "label": QUALITY_FOCUS_LABELS.get(focus_area, focus_area),
+                    "metric_key": evaluation["metric_key"],
+                    "evaluated_pairs": 0,
+                    "successful_pairs": 0,
+                    "delta_total": 0.0,
+                },
+            )
+            state["evaluated_pairs"] += 1
+            state["delta_total"] = round(_safe_float(state.get("delta_total")) + evaluation["delta"], 6)
+            if evaluation["success"]:
+                state["successful_pairs"] += 1
+
+        if not pair_evaluations:
+            continue
+
+        evaluated_pairs += 1
+        pair_success_count = sum(1 for item in pair_evaluations if item["success"])
+        if pair_success_count >= max(1, (len(pair_evaluations) + 1) // 2):
+            successful_pairs += 1
+
+    if evaluated_pairs <= 0:
+        return {}
+
+    success_rate = round(successful_pairs / evaluated_pairs * 100, 1)
+    focus_area_stats = []
+    for focus_area, state in focus_area_state.items():
+        area_pairs = int(state.get("evaluated_pairs") or 0)
+        if area_pairs <= 0:
+            continue
+        area_successful_pairs = int(state.get("successful_pairs") or 0)
+        focus_area_stats.append(
+            {
+                "focus_area": focus_area,
+                "label": state.get("label") or QUALITY_FOCUS_LABELS.get(focus_area, focus_area),
+                "metric_key": state.get("metric_key"),
+                "evaluated_pairs": area_pairs,
+                "successful_pairs": area_successful_pairs,
+                "success_rate": round(area_successful_pairs / area_pairs * 100, 1),
+                "avg_delta": round(_safe_float(state.get("delta_total")) / area_pairs, 1),
+            }
+        )
+
+    focus_area_stats.sort(
+        key=lambda item: (
+            float(item.get("success_rate") or 0.0),
+            -int(item.get("evaluated_pairs") or 0),
+            str(item.get("label") or ""),
+        )
+    )
+
+    recovered_focus_areas = [
+        str(item.get("label") or "").strip()
+        for item in focus_area_stats
+        if (item.get("success_rate") or 0.0) >= 60.0 and (item.get("avg_delta") or 0.0) > 0.0
+    ][:3]
+    unresolved_focus_areas = [
+        str(item.get("label") or "").strip()
+        for item in focus_area_stats
+        if (item.get("success_rate") or 0.0) < 50.0
+    ][:3]
+
+    summary_text = f"最近 {evaluated_pairs} 组相邻章节中，修复成效率约 {success_rate:.1f}%。"
+    if recovered_focus_areas:
+        summary_text += f" 已开始回收：{' / '.join(recovered_focus_areas[:2])}。"
+    if unresolved_focus_areas:
+        summary_text += f" 仍需盯住：{' / '.join(unresolved_focus_areas[:2])}。"
+
+    status = "stable"
+    if success_rate < 40.0:
+        status = "warning"
+    elif success_rate < 65.0:
+        status = "watch"
+
+    return {
+        "status": status,
+        "success_rate": success_rate,
+        "evaluated_pairs": evaluated_pairs,
+        "successful_pairs": successful_pairs,
+        "recovered_focus_areas": _normalize_runtime_items(recovered_focus_areas, limit=3),
+        "unresolved_focus_areas": _normalize_runtime_items(unresolved_focus_areas, limit=3),
+        "focus_area_stats": focus_area_stats,
+        "summary": summary_text,
+    }
+
 
 
 def build_quality_metrics_summary_from_state(
@@ -1437,6 +1773,16 @@ def build_quality_metrics_summary_from_state(
     foreshadow_payoff_delay = _build_foreshadow_payoff_delay_summary(summary)
     if foreshadow_payoff_delay:
         summary["foreshadow_payoff_delay"] = foreshadow_payoff_delay
+    repair_effectiveness = build_repair_effectiveness_summary(
+        recent_history,
+        scope=scope,
+        history_normalizer=_normalize_quality_metrics_history_item,
+        repair_guidance_builder=build_story_repair_guidance,
+        runtime_items_normalizer=_normalize_runtime_items,
+        safe_float=_safe_float,
+    )
+    if repair_effectiveness:
+        summary["repair_effectiveness"] = repair_effectiveness
     summary["repair_guidance"] = build_story_repair_guidance(summary, scope=scope)
     summary["quality_gate"] = build_quality_gate_decision(summary, scope=scope)
     return summary
@@ -1448,7 +1794,7 @@ def build_quality_metrics_summary(
     *,
     scope: str = "batch",
 ) -> Optional[Dict[str, Any]]:
-    """??????????????????????"""
+    """汇总最近章节质量指标，生成可直接用于提示和看板展示的摘要。"""
     summary_state = build_quality_metrics_summary_state(history, scope=scope)
     return build_quality_metrics_summary_from_state(summary_state, scope=scope)
 
@@ -1647,7 +1993,9 @@ def build_quality_gate_decision(
             summary = f"{scope_label}在{stage_label}阶段暂不建议直接保存，建议先人工复核再决定是否重写。"
         else:
             summary = f"{scope_label}暂不建议直接保存，建议先人工复核再决定是否重写。"
-    elif weak_metric_count > 0 or (overall_score is not None and overall_score < float(thresholds["allow_save_score"])):
+    elif weak_metric_count > int(thresholds.get("allow_save_weak_metric_count") or 0) or (
+        overall_score is not None and overall_score < float(thresholds["allow_save_score"])
+    ):
         status = "repairable"
         decision = "auto_repair"
         label = "可修复"
@@ -1692,6 +2040,9 @@ def build_quality_gate_decision(
         "continuity_preflight": continuity_preflight or None,
         "manual_review_threshold": thresholds["manual_review_score"],
         "allow_save_threshold": thresholds["allow_save_score"],
+        "weak_metric_block_count": thresholds["weak_metric_block_count"],
+        "allow_save_weak_metric_count": thresholds.get("allow_save_weak_metric_count"),
+        "normalized_gap_threshold": thresholds["normalized_gap"],
         "quality_runtime_pressure": pressure,
         **recommended_action,
     }
