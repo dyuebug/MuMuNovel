@@ -10,6 +10,11 @@ from app.schemas.generation_preferences import (
     normalize_optional_choice,
     normalize_optional_text,
 )
+from app.schemas.quality import (
+    ActiveStoryRepairPayload,
+    ChapterLatestQualityMetrics,
+    ChapterQualityMetricsSummary,
+)
 from datetime import datetime
 
 
@@ -84,7 +89,7 @@ class ProjectChapterQualityTrendItem(BaseModel):
     status: Optional[str] = None
     history_id: Optional[str] = None
     generated_at: Optional[str] = None
-    latest_quality_metrics: Optional[Dict[str, Any]] = None
+    latest_quality_metrics: Optional[ChapterLatestQualityMetrics] = None
 
 
 class ProjectChapterQualityTrendResponse(BaseModel):
@@ -94,7 +99,7 @@ class ProjectChapterQualityTrendResponse(BaseModel):
     total_chapters: int
     analyzed_chapters: int
     items: List[ProjectChapterQualityTrendItem]
-    quality_metrics_summary: Optional[Dict[str, Any]] = None
+    quality_metrics_summary: Optional[ChapterQualityMetricsSummary] = None
 
 
 class AnalysisTaskStatusResponse(BaseModel):
@@ -298,9 +303,9 @@ class BatchGenerateStatusResponse(BaseModel):
     stage_code: Optional[str] = None
     execution_mode: Optional[str] = None
     checkpoint: Optional[Dict[str, Any]] = None
-    latest_quality_metrics: Optional[Dict[str, Any]] = None
-    quality_metrics_summary: Optional[Dict[str, Any]] = None
-    active_story_repair_payload: Optional[Dict[str, Any]] = None
+    latest_quality_metrics: Optional[ChapterLatestQualityMetrics] = None
+    quality_metrics_summary: Optional[ChapterQualityMetricsSummary] = None
+    active_story_repair_payload: Optional[ActiveStoryRepairPayload] = None
 
 
 class SceneData(BaseModel):

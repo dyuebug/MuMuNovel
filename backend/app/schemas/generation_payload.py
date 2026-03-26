@@ -5,6 +5,7 @@ from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas.quality import StoryQualityMetricsPayload, normalize_story_quality_metrics_payload
 from app.services.story_quality_feedback_service import (
     build_quality_gate_decision,
     build_story_repair_guidance,
@@ -19,7 +20,7 @@ from app.services.story_runtime_serialization_service import (
 class ChapterGenerationQualityHistoryPayload(BaseModel):
     log_type: Literal["chapter_generation_quality_v1"] = "chapter_generation_quality_v1"
     preview: str
-    quality_metrics: Dict[str, Any] = Field(default_factory=dict)
+    quality_metrics: StoryQualityMetricsPayload = Field(default_factory=StoryQualityMetricsPayload)
     generated_at: str
     content_applied: bool
     attempt_state: str
@@ -30,7 +31,7 @@ class ChapterGenerationQualityHistoryPayload(BaseModel):
 class ChapterGenerationStreamResultPayload(BaseModel):
     word_count: int
     analysis_task_id: Optional[str] = None
-    quality_metrics: Optional[Dict[str, Any]] = None
+    quality_metrics: Optional[StoryQualityMetricsPayload] = None
     quality_gate_action: Optional[str] = None
     quality_gate_message: Optional[str] = None
     content_applied: bool
@@ -63,17 +64,22 @@ def build_chapter_generation_quality_history_payload(
     if normalized_metrics and not isinstance(normalized_metrics.get("quality_gate"), dict):
         normalized_metrics["quality_gate"] = build_quality_gate_decision(normalized_metrics, scope="chapter")
 
+    quality_metrics_payload = normalize_story_quality_metrics_payload(normalized_metrics) or StoryQualityMetricsPayload()
     resolved_attempt_state = str(attempt_state or ("applied" if content_applied else "candidate")).strip() or (
         "applied" if content_applied else "candidate"
     )
-    runtime_contract_payload = normalized_metrics.get("story_runtime_contract")
-    runtime_snapshot = normalized_metrics.get("quality_runtime_context")
+    runtime_contract_payload = quality_metrics_payload.story_runtime_contract
+    runtime_snapshot = (
+        quality_metrics_payload.quality_runtime_context.model_dump(exclude_none=True)
+        if quality_metrics_payload.quality_runtime_context is not None
+        else None
+    )
     if not isinstance(runtime_snapshot, dict) or not runtime_snapshot:
         runtime_snapshot = extract_story_runtime_snapshot_from_contract(runtime_contract_payload)
 
     return ChapterGenerationQualityHistoryPayload(
         preview=content[:500] if len(content) > 500 else content,
-        quality_metrics=normalized_metrics,
+        quality_metrics=quality_metrics_payload,
         generated_at=datetime.now().isoformat(),
         content_applied=bool(content_applied),
         attempt_state=resolved_attempt_state,
@@ -101,7 +107,7 @@ def build_chapter_generation_stream_result_payload(
     payload = ChapterGenerationStreamResultPayload(
         word_count=word_count,
         analysis_task_id=analysis_task_id,
-        quality_metrics=quality_metrics if isinstance(quality_metrics, dict) else None,
+        quality_metrics=normalize_story_quality_metrics_payload(quality_metrics) if isinstance(quality_metrics, dict) else None,
         quality_gate_action=quality_gate_action,
         quality_gate_message=quality_gate_message,
         content_applied=content_applied,

@@ -57,17 +57,18 @@ def test_should_build_chapter_generation_quality_history_payload_with_runtime_co
     assert payload.content_applied is False
     assert payload.attempt_state == "candidate"
     assert payload.story_runtime_contract == SAMPLE_RUNTIME_CONTRACT
-    assert payload.quality_metrics["story_runtime_contract"] == SAMPLE_RUNTIME_CONTRACT
+    assert payload.quality_metrics.story_runtime_contract == SAMPLE_RUNTIME_CONTRACT
     assert payload.story_runtime_snapshot is not None
     assert payload.story_runtime_snapshot["plot_stage"] == "opening"
     assert payload.story_runtime_snapshot["chapter_count"] == 24
     assert payload.story_runtime_snapshot["current_chapter_number"] == 3
     assert payload.story_runtime_snapshot["character_focus"] == ["??", "??"]
-    assert payload.quality_metrics["quality_runtime_context"] == payload.story_runtime_snapshot
-    assert isinstance(payload.quality_metrics.get("repair_guidance"), dict)
-    assert payload.quality_metrics["repair_guidance"]["focus_areas"]
-    assert isinstance(payload.quality_metrics.get("quality_gate"), dict)
-    assert payload.quality_metrics["quality_gate"]["status"] in {"pass", "repairable", "blocked"}
+    assert payload.quality_metrics.quality_runtime_context is not None
+    assert payload.quality_metrics.quality_runtime_context.model_dump(exclude_none=True) == payload.story_runtime_snapshot
+    assert payload.quality_metrics.repair_guidance is not None
+    assert payload.quality_metrics.repair_guidance.focus_areas
+    assert payload.quality_metrics.quality_gate is not None
+    assert payload.quality_metrics.quality_gate.status in {"pass", "repairable", "blocked"}
     assert payload.generated_at
 
 
