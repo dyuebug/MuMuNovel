@@ -73,6 +73,7 @@ from app.services.story_quality_feedback_service import (
     build_quality_metrics_summary,
     extract_quality_metrics_from_history_payload,
 )
+from app.services.outline_requirement_service import build_outline_generation_requirements
 from app.logger import get_logger
 from app.api.settings import get_user_ai_service
 from app.utils.sse_response import SSEResponse, create_sse_response, WizardProgressTracker
@@ -138,227 +139,22 @@ def _merge_outline_requirements(
     story_packet: Optional[StoryPacket] = None,
 ) -> str:
     """Merge freeform requirements with outline quality guidance."""
-    active_guidance = (story_packet.guidance if story_packet is not None else guidance) or StoryGenerationGuidance(
+    return build_outline_generation_requirements(
+        base_requirements,
+        chapter_count=chapter_count,
         creative_mode=creative_mode,
         story_focus=story_focus,
         plot_stage=plot_stage,
         story_creation_brief=story_creation_brief,
         quality_preset=quality_preset,
         quality_notes=quality_notes,
-    )
-    parts: list[str] = []
-    blueprint = story_packet.blueprint if story_packet is not None else None
-
-    runtime_requirement_text = build_story_runtime_requirement_text(
-        base_requirements,
-        guidance=active_guidance,
-        story_packet=story_packet,
-        chapter_count=chapter_count,
         memory_guidance=memory_guidance,
         quality_repair_guidance=quality_repair_guidance,
         quality_trend_guidance=quality_trend_guidance,
-        scene="outline",
+        guidance=guidance,
+        story_packet=story_packet,
     )
-    if runtime_requirement_text:
-        parts.append(runtime_requirement_text)
 
-    quality_preference_block = build_quality_preference_block(
-        active_guidance.quality_preset,
-        active_guidance.quality_notes,
-        scene="outline",
-    ).strip()
-    if quality_preference_block:
-        parts.append(quality_preference_block)
-
-    creative_mode_block = build_creative_mode_block(active_guidance.creative_mode, scene="outline").strip()
-    if creative_mode_block:
-        parts.append(creative_mode_block)
-
-    story_focus_block = build_story_focus_block(active_guidance.story_focus, scene="outline").strip()
-    if story_focus_block:
-        parts.append(story_focus_block)
-
-    narrative_blueprint_block = build_narrative_blueprint_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if narrative_blueprint_block:
-        parts.append(narrative_blueprint_block)
-
-    story_objective_card_block = build_story_objective_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_objective_card_block:
-        parts.append(story_objective_card_block)
-
-    story_result_card_block = build_story_result_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_result_card_block:
-        parts.append(story_result_card_block)
-
-    story_payoff_chain_card_block = build_story_payoff_chain_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_payoff_chain_card_block:
-        parts.append(story_payoff_chain_card_block)
-
-    story_rule_grounding_card_block = build_story_rule_grounding_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_rule_grounding_card_block:
-        parts.append(story_rule_grounding_card_block)
-
-    story_information_release_card_block = build_story_information_release_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_information_release_card_block:
-        parts.append(story_information_release_card_block)
-
-    story_emotion_landing_card_block = build_story_emotion_landing_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_emotion_landing_card_block:
-        parts.append(story_emotion_landing_card_block)
-
-    story_action_rendering_card_block = build_story_action_rendering_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_action_rendering_card_block:
-        parts.append(story_action_rendering_card_block)
-
-    story_summary_tone_control_card_block = build_story_summary_tone_control_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_summary_tone_control_card_block:
-        parts.append(story_summary_tone_control_card_block)
-
-    story_repetition_control_card_block = build_story_repetition_control_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_repetition_control_card_block:
-        parts.append(story_repetition_control_card_block)
-
-    story_viewpoint_discipline_card_block = build_story_viewpoint_discipline_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_viewpoint_discipline_card_block:
-        parts.append(story_viewpoint_discipline_card_block)
-
-    story_dialogue_advancement_card_block = build_story_dialogue_advancement_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_dialogue_advancement_card_block:
-        parts.append(story_dialogue_advancement_card_block)
-
-    story_opening_hook_card_block = build_story_opening_hook_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_opening_hook_card_block:
-        parts.append(story_opening_hook_card_block)
-
-    story_execution_checklist_block = build_story_execution_checklist_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_execution_checklist_block:
-        parts.append(story_execution_checklist_block)
-
-    story_scene_anchor_card_block = build_story_scene_anchor_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_scene_anchor_card_block:
-        parts.append(story_scene_anchor_card_block)
-
-    story_scene_density_card_block = build_story_scene_density_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_scene_density_card_block:
-        parts.append(story_scene_density_card_block)
-
-    story_repetition_risk_block = build_story_repetition_risk_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_repetition_risk_block:
-        parts.append(story_repetition_risk_block)
-
-    story_acceptance_card_block = build_story_acceptance_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_acceptance_card_block:
-        parts.append(story_acceptance_card_block)
-
-    story_cliffhanger_card_block = build_story_cliffhanger_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_cliffhanger_card_block:
-        parts.append(story_cliffhanger_card_block)
-
-    story_character_arc_card_block = build_story_character_arc_card_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if story_character_arc_card_block:
-        parts.append(story_character_arc_card_block)
-
-    return "\n\n".join(parts)
 
 
 def _truncate_outline_memory_block(text: str, limit: int = 800) -> str:

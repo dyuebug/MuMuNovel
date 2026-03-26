@@ -36,8 +36,8 @@ from app.services.chapter_quality_context_service import (
     StoryGenerationGuidance,
     StoryPacket,
     build_story_generation_packet_with_project_continuity,
-    build_story_runtime_requirement_text,
 )
+from app.services.outline_requirement_service import build_outline_generation_requirements
 from app.logger import get_logger
 from app.utils.sse_response import SSEResponse, create_sse_response, WizardProgressTracker
 from app.api.settings import get_user_ai_service
@@ -76,65 +76,21 @@ def _merge_wizard_outline_requirements(
     guidance: Optional[StoryGenerationGuidance] = None,
     story_packet: Optional[StoryPacket] = None,
 ) -> str:
-    active_guidance = (story_packet.guidance if story_packet is not None else guidance) or StoryGenerationGuidance(
+    return build_outline_generation_requirements(
+        base_requirements,
+        chapter_count=outline_count,
         creative_mode=creative_mode,
         story_focus=story_focus,
         plot_stage=plot_stage,
         story_creation_brief=story_creation_brief,
         quality_preset=quality_preset,
         quality_notes=quality_notes,
-    )
-    parts: list[str] = []
-    blueprint = story_packet.blueprint if story_packet is not None else None
-
-    runtime_requirement_text = build_story_runtime_requirement_text(
-        base_requirements,
-        guidance=active_guidance,
-        story_packet=story_packet,
-        chapter_count=outline_count,
         quality_trend_guidance=quality_trend_guidance,
-        scene="outline",
-    )
-    if runtime_requirement_text:
-        parts.append(runtime_requirement_text)
-
-    quality_preference_block = build_quality_preference_block(
-        active_guidance.quality_preset,
-        active_guidance.quality_notes,
-        scene="outline",
-    ).strip()
-    if quality_preference_block:
-        parts.append(quality_preference_block)
-
-    creative_mode_block = build_creative_mode_block(active_guidance.creative_mode, scene="outline").strip()
-    if creative_mode_block:
-        parts.append(creative_mode_block)
-
-    story_focus_block = build_story_focus_block(active_guidance.story_focus, scene="outline").strip()
-    if story_focus_block:
-        parts.append(story_focus_block)
-
-    narrative_blueprint_block = build_narrative_blueprint_block(
-        active_guidance.creative_mode,
-        active_guidance.story_focus,
-        scene="outline",
-        plot_stage=active_guidance.plot_stage,
-    ).strip()
-    if narrative_blueprint_block:
-        parts.append(narrative_blueprint_block)
-
-    parts.append(
-        f"【开局大纲约束】这是小说的开局部分，请生成{outline_count}个大纲节点，重点关注：\n"
-        "1. 引入主要角色和世界观设定\n"
-        "2. 建立主线冲突和故事钩子\n"
-        "3. 展开初期情节，为后续发展埋下伏笔\n"
-        "4. 若包含第1-3章，尽量体现黄金三章节奏（钩子→升级→小高潮）\n"
-        "5. 每章至少一个小爽点与一个章尾钩子，避免平推\n"
-        "6. 不要试图完结故事，这只是开始部分\n"
-        "7. 不要在JSON字符串值中使用中文引号（\"\"''），请使用【】或《》标记"
+        guidance=guidance,
+        story_packet=story_packet,
+        opening_outline_count=outline_count,
     )
 
-    return "\n\n".join(part for part in parts if part)
 
 
 def _format_outline_value(value: Any, max_items: int = 3) -> str:

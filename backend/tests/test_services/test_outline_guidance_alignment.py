@@ -131,6 +131,7 @@ def test_should_merge_wizard_outline_requirements_from_story_packet():
     assert "keep dual threads" in merged
     assert "front-load the pressure" in merged
     assert "trim filler" in merged
+    assert "\u3010\u5f00\u5c40\u5927\u7eb2\u7ea6\u675f\u3011" in merged
     assert "钩子优先" in merged
     assert "主线推进" in merged
     assert "发展阶段" in merged
