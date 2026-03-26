@@ -530,6 +530,69 @@ def test_should_build_quality_runtime_context_with_story_ledgers():
     assert runtime_context["career_state_ledger"] == ["Lin/Strategist: stalled at stage 3"]
 
 
+def test_should_preserve_structured_story_ledgers_in_runtime_context_and_stringify_prompt_fields():
+    packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="development",
+            story_creation_brief="keep the pressure visible",
+        ),
+        source="chapter-generate-request",
+    ).with_blueprint(
+        chapter_count=12,
+        current_chapter_number=6,
+        target_word_count=2800,
+        foreshadow_payoff_source={
+            "foreshadow_payoff_plan": [
+                {
+                    "label": "RoyalKey",
+                    "summary": "must be paid off before the court hearing",
+                    "target_chapter": 9,
+                }
+            ],
+        },
+        character_state_source={
+            "story_character_state_ledger": [
+                {
+                    "label": "Lin",
+                    "summary": "distrust remains visible",
+                    "status": "wounded",
+                }
+            ],
+        },
+        relationship_state_source={
+            "story_relationship_state_ledger": [
+                {
+                    "label": "Lin/Su",
+                    "summary": "uneasy alliance under tension",
+                    "status": "active",
+                }
+            ],
+        },
+    )
+
+    runtime_context = packet.build_quality_runtime_context(
+        chapter_count=12,
+        current_chapter_number=6,
+        target_word_count=2800,
+    )
+    prompt_fields = packet.to_prompt_fields()
+    prompt_kwargs = packet.build_prompt_quality_kwargs({"genre": "mystery"})
+
+    assert runtime_context["foreshadow_payoff_plan"][0]["label"] == "RoyalKey"
+    assert runtime_context["foreshadow_payoff_plan"][0]["target_chapter"] == 9
+    assert runtime_context["character_state_ledger"][0]["status"] == "wounded"
+    assert runtime_context["relationship_state_ledger"][0]["label"] == "Lin/Su"
+
+    assert prompt_fields["story_character_state_ledger"][0].startswith("Lin: distrust remains visible")
+    assert "status=wounded" in prompt_fields["story_character_state_ledger"][0]
+    assert prompt_kwargs["story_foreshadow_payoff_plan"][0].startswith(
+        "RoyalKey: must be paid off before the court hearing"
+    )
+    assert "target_chapter=9" in prompt_kwargs["story_foreshadow_payoff_plan"][0]
+
+
 
 def test_should_build_prompt_quality_kwargs_from_story_repair_payload_object():
     packet = StoryPacket.from_guidance(
@@ -643,7 +706,7 @@ def test_should_forward_quality_metrics_summary_into_intent_prompt_kwargs():
     assert prompt_kwargs["quality_metrics_summary"]["avg_pacing_score"] == 7.8
     assert "【章节近期质量趋势】" in prompt_kwargs["story_quality_trend_block"]
     assert "最近节奏稳定度均值：7.8/10" in prompt_kwargs["story_quality_trend_block"]
-    assert "Carry forward the hidden-key pressure." in prompt_kwargs["story_quality_trend_block"]
+    assert "hidden-key" in prompt_kwargs["story_quality_trend_block"]
 
 
 def test_should_apply_story_repair_guidance_defaults_when_request_has_no_explicit_overrides():

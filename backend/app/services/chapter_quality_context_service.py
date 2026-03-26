@@ -39,6 +39,9 @@ from app.services.writing_style_sync_service import sync_low_ai_presets
 
 logger = get_logger(__name__)
 
+StoryRuntimeLedgerItem = str | Dict[str, Any]
+StoryRuntimePlanItem = str | Dict[str, Any]
+
 
 @dataclass(frozen=True)
 class StoryGenerationGuidance:
@@ -95,12 +98,12 @@ class StoryBlueprint:
     current_chapter_number: Optional[int] = None
     target_word_count: Optional[int] = None
     character_focus_names: tuple[str, ...] = ()
-    foreshadow_payoff_plan: tuple[str, ...] = ()
-    character_state_ledger: tuple[str, ...] = ()
-    relationship_state_ledger: tuple[str, ...] = ()
-    foreshadow_state_ledger: tuple[str, ...] = ()
-    organization_state_ledger: tuple[str, ...] = ()
-    career_state_ledger: tuple[str, ...] = ()
+    foreshadow_payoff_plan: tuple[StoryRuntimePlanItem, ...] = ()
+    character_state_ledger: tuple[StoryRuntimeLedgerItem, ...] = ()
+    relationship_state_ledger: tuple[StoryRuntimeLedgerItem, ...] = ()
+    foreshadow_state_ledger: tuple[StoryRuntimeLedgerItem, ...] = ()
+    organization_state_ledger: tuple[StoryRuntimeLedgerItem, ...] = ()
+    career_state_ledger: tuple[StoryRuntimeLedgerItem, ...] = ()
 
     @classmethod
     def from_runtime_contract(
@@ -114,12 +117,12 @@ class StoryBlueprint:
             current_chapter_number=_normalize_optional_int(payload.get("current_chapter_number")),
             target_word_count=_normalize_optional_int(payload.get("target_word_count")),
             character_focus_names=_normalize_string_sequence(payload.get("character_focus_names"), limit=4),
-            foreshadow_payoff_plan=_normalize_string_sequence(payload.get("foreshadow_payoff_plan"), limit=3),
-            character_state_ledger=_normalize_string_sequence(payload.get("character_state_ledger"), limit=4),
-            relationship_state_ledger=_normalize_string_sequence(payload.get("relationship_state_ledger"), limit=4),
-            foreshadow_state_ledger=_normalize_string_sequence(payload.get("foreshadow_state_ledger"), limit=4),
-            organization_state_ledger=_normalize_string_sequence(payload.get("organization_state_ledger"), limit=4),
-            career_state_ledger=_normalize_string_sequence(payload.get("career_state_ledger"), limit=4),
+            foreshadow_payoff_plan=_normalize_story_runtime_plan_items(payload.get("foreshadow_payoff_plan"), limit=3),
+            character_state_ledger=_normalize_story_runtime_ledger_items(payload.get("character_state_ledger"), limit=4),
+            relationship_state_ledger=_normalize_story_runtime_ledger_items(payload.get("relationship_state_ledger"), limit=4),
+            foreshadow_state_ledger=_normalize_story_runtime_ledger_items(payload.get("foreshadow_state_ledger"), limit=4),
+            organization_state_ledger=_normalize_story_runtime_ledger_items(payload.get("organization_state_ledger"), limit=4),
+            career_state_ledger=_normalize_story_runtime_ledger_items(payload.get("career_state_ledger"), limit=4),
         )
 
     def to_runtime_contract(self) -> Dict[str, Any]:
@@ -144,12 +147,12 @@ class StoryBlueprint:
             "current_chapter_number": self.current_chapter_number or "",
             "target_word_count": self.target_word_count or "",
             "story_character_focus": list(self.character_focus_names),
-            "story_foreshadow_payoff_plan": list(self.foreshadow_payoff_plan),
-            "story_character_state_ledger": list(self.character_state_ledger),
-            "story_relationship_state_ledger": list(self.relationship_state_ledger),
-            "story_foreshadow_state_ledger": list(self.foreshadow_state_ledger),
-            "story_organization_state_ledger": list(self.organization_state_ledger),
-            "story_career_state_ledger": list(self.career_state_ledger),
+            "story_foreshadow_payoff_plan": list(_stringify_story_runtime_items(self.foreshadow_payoff_plan, limit=3)),
+            "story_character_state_ledger": list(_stringify_story_runtime_items(self.character_state_ledger, limit=4)),
+            "story_relationship_state_ledger": list(_stringify_story_runtime_items(self.relationship_state_ledger, limit=4)),
+            "story_foreshadow_state_ledger": list(_stringify_story_runtime_items(self.foreshadow_state_ledger, limit=4)),
+            "story_organization_state_ledger": list(_stringify_story_runtime_items(self.organization_state_ledger, limit=4)),
+            "story_career_state_ledger": list(_stringify_story_runtime_items(self.career_state_ledger, limit=4)),
         }
 
 
@@ -496,6 +499,108 @@ def _normalize_string_sequence(values: Optional[Any], *, limit: int = 4) -> tupl
     return tuple(normalized)
 
 
+def _normalize_story_runtime_item_mapping(value: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    label = _normalize_optional_text(value.get("label") or value.get("name") or value.get("title"))
+    summary = _normalize_optional_text(
+        value.get("summary")
+        or value.get("content")
+        or value.get("item")
+        or value.get("value")
+    )
+    status = _normalize_optional_text(value.get("status"))
+    target_chapter = _normalize_optional_int(value.get("target_chapter"))
+
+    normalized: Dict[str, Any] = {}
+    if label:
+        normalized["label"] = label
+    if summary:
+        normalized["summary"] = summary
+    if status:
+        normalized["status"] = status.lower()
+    if target_chapter is not None:
+        normalized["target_chapter"] = target_chapter
+    return normalized or None
+
+
+def _normalize_story_runtime_items(
+    values: Optional[Any],
+    *,
+    limit: int = 4,
+) -> tuple[StoryRuntimeLedgerItem, ...]:
+    if values is None:
+        return ()
+    if isinstance(values, str):
+        raw_items = [values]
+    elif isinstance(values, Sequence) and not isinstance(values, (str, bytes, bytearray)):
+        raw_items = list(values)
+    else:
+        raw_items = [values]
+
+    normalized: list[StoryRuntimeLedgerItem] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        if isinstance(item, Mapping):
+            normalized_item = _normalize_story_runtime_item_mapping(item)
+            if not normalized_item:
+                continue
+            dedupe_key = json.dumps(normalized_item, sort_keys=True, ensure_ascii=False)
+            resolved_item: StoryRuntimeLedgerItem = normalized_item
+        else:
+            text = _normalize_optional_text(item)
+            if not text:
+                continue
+            dedupe_key = text
+            resolved_item = text
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized.append(resolved_item)
+        if len(normalized) >= limit:
+            break
+    return tuple(normalized)
+
+
+def _normalize_story_runtime_plan_items(
+    values: Optional[Any],
+    *,
+    limit: int = 3,
+) -> tuple[StoryRuntimePlanItem, ...]:
+    return _normalize_story_runtime_items(values, limit=limit)
+
+
+def _stringify_story_runtime_item(value: Any) -> str:
+    if isinstance(value, Mapping):
+        normalized = _normalize_story_runtime_item_mapping(value)
+        if not normalized:
+            return ""
+        label = str(normalized.get("label") or "").strip()
+        summary = str(normalized.get("summary") or "").strip()
+        status = str(normalized.get("status") or "").strip()
+        target_chapter = normalized.get("target_chapter")
+
+        base = f"{label}: {summary}" if label and summary else (summary or label)
+        meta_parts: list[str] = []
+        if status:
+            meta_parts.append(f"status={status}")
+        if isinstance(target_chapter, int):
+            meta_parts.append(f"target_chapter={target_chapter}")
+        if meta_parts:
+            if base:
+                return f"{base}; {'; '.join(meta_parts)}"
+            return '; '.join(meta_parts)
+        return base
+    return _normalize_optional_text(value) or ""
+
+
+def _stringify_story_runtime_items(values: Optional[Any], *, limit: int = 4) -> tuple[str, ...]:
+    items = _normalize_story_runtime_items(values, limit=limit)
+    return tuple(
+        text
+        for text in (_stringify_story_runtime_item(item) for item in items)
+        if text
+    )
+
+
 def _read_story_guidance_value(source: Optional[Any], field_name: str) -> Optional[str]:
     if source is None:
         return None
@@ -541,7 +646,11 @@ def _extract_story_packet_character_focus(source: Optional[Any], *, limit: int =
 
 
 
-def _extract_story_packet_foreshadow_payoff_plan(source: Optional[Any], *, limit: int = 3) -> tuple[str, ...]:
+def _extract_story_packet_foreshadow_payoff_plan(
+    source: Optional[Any],
+    *,
+    limit: int = 3,
+) -> tuple[StoryRuntimePlanItem, ...]:
     if source is None:
         return ()
 
@@ -557,7 +666,7 @@ def _extract_story_packet_foreshadow_payoff_plan(source: Optional[Any], *, limit
         candidate = source
 
     if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
-        return _normalize_string_sequence(candidate, limit=limit)
+        return _normalize_story_runtime_plan_items(candidate, limit=limit)
 
     text = _normalize_optional_text(candidate)
     if not text:
@@ -593,8 +702,12 @@ def _extract_story_packet_foreshadow_payoff_plan(source: Optional[Any], *, limit
     return tuple(normalized)
 
 
-def _normalize_story_runtime_ledger_items(values: Optional[Any], *, limit: int = 4) -> tuple[str, ...]:
-    return _normalize_string_sequence(values, limit=limit)
+def _normalize_story_runtime_ledger_items(
+    values: Optional[Any],
+    *,
+    limit: int = 4,
+) -> tuple[StoryRuntimeLedgerItem, ...]:
+    return _normalize_story_runtime_items(values, limit=limit)
 
 
 def _extract_story_packet_section_lines(
@@ -644,7 +757,11 @@ def _extract_story_packet_section_lines(
     return tuple(matched[:limit])
 
 
-def _extract_story_packet_character_state_ledger(source: Optional[Any], *, limit: int = 4) -> tuple[str, ...]:
+def _extract_story_packet_character_state_ledger(
+    source: Optional[Any],
+    *,
+    limit: int = 4,
+) -> tuple[StoryRuntimeLedgerItem, ...]:
     if source is None:
         return ()
     if isinstance(source, Mapping):
@@ -674,7 +791,11 @@ def _extract_story_packet_character_state_ledger(source: Optional[Any], *, limit
     )
 
 
-def _extract_story_packet_relationship_state_ledger(source: Optional[Any], *, limit: int = 4) -> tuple[str, ...]:
+def _extract_story_packet_relationship_state_ledger(
+    source: Optional[Any],
+    *,
+    limit: int = 4,
+) -> tuple[StoryRuntimeLedgerItem, ...]:
     if source is None:
         return ()
     if isinstance(source, Mapping):
@@ -702,7 +823,11 @@ def _extract_story_packet_relationship_state_ledger(source: Optional[Any], *, li
     )
 
 
-def _extract_story_packet_foreshadow_state_ledger(source: Optional[Any], *, limit: int = 4) -> tuple[str, ...]:
+def _extract_story_packet_foreshadow_state_ledger(
+    source: Optional[Any],
+    *,
+    limit: int = 4,
+) -> tuple[StoryRuntimeLedgerItem, ...]:
     if source is None:
         return ()
     if isinstance(source, Mapping):
@@ -727,7 +852,11 @@ def _extract_story_packet_foreshadow_state_ledger(source: Optional[Any], *, limi
     return _extract_story_packet_foreshadow_payoff_plan(candidate, limit=limit)
 
 
-def _extract_story_packet_organization_state_ledger(source: Optional[Any], *, limit: int = 4) -> tuple[str, ...]:
+def _extract_story_packet_organization_state_ledger(
+    source: Optional[Any],
+    *,
+    limit: int = 4,
+) -> tuple[StoryRuntimeLedgerItem, ...]:
     if source is None:
         return ()
     if isinstance(source, Mapping):
@@ -755,7 +884,11 @@ def _extract_story_packet_organization_state_ledger(source: Optional[Any], *, li
     )
 
 
-def _extract_story_packet_career_state_ledger(source: Optional[Any], *, limit: int = 4) -> tuple[str, ...]:
+def _extract_story_packet_career_state_ledger(
+    source: Optional[Any],
+    *,
+    limit: int = 4,
+) -> tuple[StoryRuntimeLedgerItem, ...]:
     if source is None:
         return ()
     if isinstance(source, Mapping):
@@ -1462,16 +1595,16 @@ def build_prompt_quality_kwargs(
     story_repair_payload: Optional[StoryRepairPayload] = None,
     story_long_term_goal: Optional[str] = None,
     story_character_focus: Optional[Sequence[str]] = None,
-    story_foreshadow_payoff_plan: Optional[Sequence[str]] = None,
+    story_foreshadow_payoff_plan: Optional[Sequence[Any]] = None,
     chapter_count: Optional[int] = None,
     current_chapter_number: Optional[int] = None,
     target_word_count: Optional[int] = None,
     quality_metrics_summary: Optional[Mapping[str, Any]] = None,
-    story_character_state_ledger: Optional[Sequence[str]] = None,
-    story_relationship_state_ledger: Optional[Sequence[str]] = None,
-    story_foreshadow_state_ledger: Optional[Sequence[str]] = None,
-    story_organization_state_ledger: Optional[Sequence[str]] = None,
-    story_career_state_ledger: Optional[Sequence[str]] = None,
+    story_character_state_ledger: Optional[Sequence[Any]] = None,
+    story_relationship_state_ledger: Optional[Sequence[Any]] = None,
+    story_foreshadow_state_ledger: Optional[Sequence[Any]] = None,
+    story_organization_state_ledger: Optional[Sequence[Any]] = None,
+    story_career_state_ledger: Optional[Sequence[Any]] = None,
 ) -> Dict[str, Any]:
     source = profile or {}
     active_guidance = guidance or StoryGenerationGuidance()
@@ -1489,12 +1622,12 @@ def build_prompt_quality_kwargs(
     repair_diagnostic_context = build_story_repair_diagnostic_context(active_story_repair_payload, scene=scene)
     resolved_story_long_term_goal = _normalize_optional_text(story_long_term_goal)
     resolved_story_character_focus = _normalize_string_sequence(story_character_focus, limit=4)
-    resolved_story_foreshadow_payoff_plan = _normalize_string_sequence(story_foreshadow_payoff_plan, limit=3)
-    resolved_story_character_state_ledger = _normalize_string_sequence(story_character_state_ledger, limit=4)
-    resolved_story_relationship_state_ledger = _normalize_string_sequence(story_relationship_state_ledger, limit=4)
-    resolved_story_foreshadow_state_ledger = _normalize_string_sequence(story_foreshadow_state_ledger, limit=4)
-    resolved_story_organization_state_ledger = _normalize_string_sequence(story_organization_state_ledger, limit=4)
-    resolved_story_career_state_ledger = _normalize_string_sequence(story_career_state_ledger, limit=4)
+    resolved_story_foreshadow_payoff_plan = _stringify_story_runtime_items(story_foreshadow_payoff_plan, limit=3)
+    resolved_story_character_state_ledger = _stringify_story_runtime_items(story_character_state_ledger, limit=4)
+    resolved_story_relationship_state_ledger = _stringify_story_runtime_items(story_relationship_state_ledger, limit=4)
+    resolved_story_foreshadow_state_ledger = _stringify_story_runtime_items(story_foreshadow_state_ledger, limit=4)
+    resolved_story_organization_state_ledger = _stringify_story_runtime_items(story_organization_state_ledger, limit=4)
+    resolved_story_career_state_ledger = _stringify_story_runtime_items(story_career_state_ledger, limit=4)
     resolved_chapter_count = _normalize_optional_int(chapter_count)
     resolved_current_chapter_number = _normalize_optional_int(current_chapter_number)
     resolved_target_word_count = _normalize_optional_int(target_word_count)

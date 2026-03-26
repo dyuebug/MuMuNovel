@@ -5,6 +5,8 @@ from app.schemas.quality import (
     ActiveStoryRepairPayload,
     ChapterLatestQualityMetrics,
     ChapterQualityMetricsSummary,
+    QualityRuntimeLedgerEntry,
+    QualityRuntimePlanEntry,
     StoryQualityMetricsPayload,
     normalize_story_quality_metrics_payload,
 )

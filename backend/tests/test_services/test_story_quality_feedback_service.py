@@ -96,6 +96,68 @@ def test_should_build_story_continuity_preflight_and_enrich_guidance():
     assert guidance["summary"]
 
 
+def test_should_support_structured_runtime_items_in_continuity_preflight_and_guidance():
+    runtime_context = {
+        "plot_stage": "development",
+        "chapter_count": 12,
+        "current_chapter_number": 5,
+        "relationship_state_ledger": [
+            {
+                "label": "Lin/Su",
+                "summary": "fragile alliance under tension",
+                "status": "active",
+                "target_chapter": 6,
+            }
+        ],
+        "foreshadow_state_ledger": [
+            {
+                "label": "RoyalKey",
+                "summary": "still missing from the archive",
+                "status": "planted",
+                "target_chapter": 8,
+            }
+        ],
+    }
+    preflight = build_story_continuity_preflight(
+        "Lin entered the archive alone and avoided mentioning Su or the key.",
+        runtime_context,
+    )
+
+    assert preflight["status"] == "warning"
+    assert all(
+        "Lin/Su: fragile alliance under tension" not in item["item"]
+        for item in preflight["warnings"]
+    )
+    assert any(
+        "RoyalKey: still missing from the archive" in item["item"]
+        for item in preflight["warnings"]
+    )
+
+    guidance = build_story_repair_guidance(
+        {
+            "overall_score": 84.0,
+            "conflict_chain_hit_rate": 82.0,
+            "rule_grounding_hit_rate": 83.0,
+            "outline_alignment_rate": 81.0,
+            "dialogue_naturalness_rate": 80.0,
+            "opening_hook_rate": 79.0,
+            "payoff_chain_rate": 77.0,
+            "cliffhanger_rate": 80.0,
+            "quality_runtime_context": runtime_context,
+            "continuity_preflight": preflight,
+        },
+        scope="chapter",
+    )
+
+    assert any(
+        "RoyalKey: still missing from the archive" in item
+        for item in guidance["repair_targets"]
+    )
+    assert guidance["quality_runtime_pressure"]["relationship_state_items"][0].startswith(
+        "Lin/Su: fragile alliance under tension"
+    )
+
+
 def test_should_build_pass_quality_gate_from_stable_metrics():
     quality_gate = build_quality_gate_decision(
         {
@@ -496,6 +558,80 @@ def test_should_aggregate_runtime_context_and_trend_from_history():
     assert summary["quality_runtime_context"]["character_state_ledger"] == ["Lin: distrust remains visible"]
     assert summary["quality_runtime_context"]["relationship_state_ledger"] == ["Lin/Su: uneasy alliance under tension"]
     assert summary["quality_runtime_context"]["foreshadow_state_ledger"] == ["hidden key: still missing from the archive"]
+
+
+def test_should_preserve_structured_runtime_items_in_summary_runtime_context():
+    summary = build_quality_metrics_summary(
+        [
+            {
+                "overall_score": 74.0,
+                "conflict_chain_hit_rate": 64.0,
+                "rule_grounding_hit_rate": 78.0,
+                "outline_alignment_rate": 70.0,
+                "dialogue_naturalness_rate": 81.0,
+                "opening_hook_rate": 68.0,
+                "payoff_chain_rate": 66.0,
+                "cliffhanger_rate": 65.0,
+                "quality_runtime_context": {
+                    "plot_stage": "development",
+                    "chapter_count": 12,
+                    "current_chapter_number": 5,
+                    "foreshadow_payoff_plan": [
+                        {
+                            "label": "RoyalKey",
+                            "summary": "must be paid off before the court hearing",
+                            "status": "pending",
+                            "target_chapter": 9,
+                        }
+                    ],
+                    "foreshadow_state_ledger": [
+                        {
+                            "label": "RoyalKey",
+                            "summary": "still missing from the archive",
+                            "status": "planted",
+                            "target_chapter": 8,
+                        }
+                    ],
+                },
+            },
+            {
+                "overall_score": 77.0,
+                "conflict_chain_hit_rate": 68.0,
+                "rule_grounding_hit_rate": 80.0,
+                "outline_alignment_rate": 73.0,
+                "dialogue_naturalness_rate": 82.0,
+                "opening_hook_rate": 71.0,
+                "payoff_chain_rate": 69.0,
+                "cliffhanger_rate": 67.0,
+                "quality_runtime_context": {
+                    "plot_stage": "development",
+                    "chapter_count": 12,
+                    "current_chapter_number": 6,
+                    "relationship_state_ledger": [
+                        {
+                            "label": "Lin/Su",
+                            "summary": "fragile alliance under tension",
+                            "status": "active",
+                        }
+                    ],
+                },
+            },
+        ],
+        scope="outline",
+    )
+
+    assert summary is not None
+    plan_entry = summary["quality_runtime_context"]["foreshadow_payoff_plan"][0]
+    assert isinstance(plan_entry, dict)
+    assert plan_entry["label"] == "RoyalKey"
+    assert plan_entry["target_chapter"] == 9
+
+    foreshadow_entry = summary["quality_runtime_context"]["foreshadow_state_ledger"][0]
+    assert isinstance(foreshadow_entry, dict)
+    assert foreshadow_entry["status"] == "planted"
+    assert summary["quality_gate"]["quality_runtime_pressure"]["foreshadow_state_items"][0].startswith(
+        "RoyalKey: still missing from the archive"
+    )
 
 
 def test_should_restore_runtime_snapshot_from_generation_history_payload():

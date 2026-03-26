@@ -16,6 +16,8 @@ from app.models.career import Career, CharacterCareer
 from app.models.memory import PlotAnalysis, StoryMemory
 from app.models.relationship import CharacterRelationship, Organization
 
+ProjectContinuityLedgerItem = str | dict[str, Any]
+
 _MAX_RECENT_ANALYSES = 12
 _EMPTY_TIME = datetime.min
 
@@ -56,11 +58,11 @@ def _clear_project_continuity_ledger_cache(sync_session: Session) -> None:
 class ProjectContinuityLedger:
     """项目级 continuity ledger 聚合结果。"""
 
-    character_state_ledger: tuple[str, ...] = ()
-    relationship_state_ledger: tuple[str, ...] = ()
-    foreshadow_state_ledger: tuple[str, ...] = ()
-    organization_state_ledger: tuple[str, ...] = ()
-    career_state_ledger: tuple[str, ...] = ()
+    character_state_ledger: tuple[ProjectContinuityLedgerItem, ...] = ()
+    relationship_state_ledger: tuple[ProjectContinuityLedgerItem, ...] = ()
+    foreshadow_state_ledger: tuple[ProjectContinuityLedgerItem, ...] = ()
+    organization_state_ledger: tuple[ProjectContinuityLedgerItem, ...] = ()
+    career_state_ledger: tuple[ProjectContinuityLedgerItem, ...] = ()
 
     def has_any_entries(self) -> bool:
         return bool(
@@ -89,6 +91,41 @@ def _append_unique(items: list[str], seen_keys: set[Any], dedupe_key: Any, value
         return
     seen_keys.add(dedupe_key)
     items.append(text)
+
+
+def _append_unique_entry(
+    items: list[ProjectContinuityLedgerItem],
+    seen_keys: set[Any],
+    dedupe_key: Any,
+    *,
+    label: Optional[str] = None,
+    summary: Optional[str] = None,
+    status: Optional[str] = None,
+    target_chapter: Optional[int] = None,
+    limit: int,
+) -> None:
+    if len(items) >= limit or dedupe_key in seen_keys:
+        return
+
+    normalized_label = _compact_text(label, limit=36)
+    normalized_summary = _compact_text(summary, limit=72)
+    normalized_status = _normalize_status_label(status)
+
+    entry: dict[str, Any] = {}
+    if normalized_label:
+        entry["label"] = normalized_label
+    if normalized_summary:
+        entry["summary"] = normalized_summary
+    if normalized_status:
+        entry["status"] = normalized_status
+    if isinstance(target_chapter, int) and target_chapter > 0:
+        entry["target_chapter"] = target_chapter
+
+    if not entry:
+        return
+
+    seen_keys.add(dedupe_key)
+    items.append(entry)
 
 
 def _safe_int(value: Any) -> Optional[int]:
@@ -135,8 +172,13 @@ def _relationship_pair_key(name_a: str, name_b: str) -> tuple[str, str]:
     return tuple(sorted((name_a.lower(), name_b.lower())))
 
 
-def _build_character_state_items(characters: list[Character], analyses: list[PlotAnalysis], *, limit: int) -> tuple[str, ...]:
-    items: list[str] = []
+def _build_character_state_items(
+    characters: list[Character],
+    analyses: list[PlotAnalysis],
+    *,
+    limit: int,
+) -> tuple[ProjectContinuityLedgerItem, ...]:
+    items: list[ProjectContinuityLedgerItem] = []
     seen_names: set[str] = set()
     ranked_characters = sorted(
         characters,
@@ -159,11 +201,17 @@ def _build_character_state_items(characters: list[Character], analyses: list[Plo
         if current_state:
             fragments.append(current_state)
         status = _normalize_status_label(getattr(character, "status", None))
-        if status:
-            fragments.append(f"status={status}")
-        if not fragments:
+        if not fragments and not status:
             continue
-        _append_unique(items, seen_names, name.lower(), f"{name}: {'; '.join(list(dict.fromkeys(fragments))[:2])}", limit=limit)
+        _append_unique_entry(
+            items,
+            seen_names,
+            name.lower(),
+            label=name,
+            summary='; '.join(list(dict.fromkeys(fragments))[:2]),
+            status=status,
+            limit=limit,
+        )
         if len(items) >= limit:
             return tuple(items)
     for analysis in analyses:
@@ -177,14 +225,27 @@ def _build_character_state_items(characters: list[Character], analyses: list[Plo
             )
             if not state_text:
                 continue
-            _append_unique(items, seen_names, name.lower(), f"{name}: {state_text}", limit=limit)
+            _append_unique_entry(
+                items,
+                seen_names,
+                name.lower(),
+                label=name,
+                summary=state_text,
+                limit=limit,
+            )
             if len(items) >= limit:
                 return tuple(items)
     return tuple(items)
 
 
-def _build_relationship_state_items(relationships: list[CharacterRelationship], character_name_map: Mapping[str, str], analyses: list[PlotAnalysis], *, limit: int) -> tuple[str, ...]:
-    items: list[str] = []
+def _build_relationship_state_items(
+    relationships: list[CharacterRelationship],
+    character_name_map: Mapping[str, str],
+    analyses: list[PlotAnalysis],
+    *,
+    limit: int,
+) -> tuple[ProjectContinuityLedgerItem, ...]:
+    items: list[ProjectContinuityLedgerItem] = []
     seen_pairs: set[tuple[str, str]] = set()
     ranked_relationships = sorted(
         relationships,
@@ -214,11 +275,17 @@ def _build_relationship_state_items(relationships: list[CharacterRelationship], 
         if not fragments and intimacy_level is not None:
             fragments.append(f"intimacy={intimacy_level}")
         status = _normalize_status_label(getattr(relationship, "status", None))
-        if status:
-            fragments.append(f"status={status}")
-        if not fragments:
+        if not fragments and not status:
             continue
-        _append_unique(items, seen_pairs, pair_key, f"{from_name}/{to_name}: {'; '.join(list(dict.fromkeys(fragments))[:2])}", limit=limit)
+        _append_unique_entry(
+            items,
+            seen_pairs,
+            pair_key,
+            label=f"{from_name}/{to_name}",
+            summary='; '.join(list(dict.fromkeys(fragments))[:2]),
+            status=status,
+            limit=limit,
+        )
         if len(items) >= limit:
             return tuple(items)
     for analysis in analyses:
@@ -235,14 +302,26 @@ def _build_relationship_state_items(relationships: list[CharacterRelationship], 
                 pair_key = _relationship_pair_key(base_name, other_name)
                 if pair_key in seen_pairs:
                     continue
-                _append_unique(items, seen_pairs, pair_key, f"{base_name}/{other_name}: {change_text}", limit=limit)
+                _append_unique_entry(
+                    items,
+                    seen_pairs,
+                    pair_key,
+                    label=f"{base_name}/{other_name}",
+                    summary=change_text,
+                    limit=limit,
+                )
                 if len(items) >= limit:
                     return tuple(items)
     return tuple(items)
 
 
-def _build_foreshadow_state_items(foreshadow_memories: list[StoryMemory], analyses: list[PlotAnalysis], *, limit: int) -> tuple[str, ...]:
-    items: list[str] = []
+def _build_foreshadow_state_items(
+    foreshadow_memories: list[StoryMemory],
+    analyses: list[PlotAnalysis],
+    *,
+    limit: int,
+) -> tuple[ProjectContinuityLedgerItem, ...]:
+    items: list[ProjectContinuityLedgerItem] = []
     seen_heads: set[str] = set()
     ranked_memories = sorted(
         foreshadow_memories,
@@ -260,8 +339,15 @@ def _build_foreshadow_state_items(foreshadow_memories: list[StoryMemory], analys
         if not head:
             continue
         detail = _compact_text(getattr(memory, "content", None), limit=72)
-        value = head if not detail or detail.lower() == head.lower() else f"{head}: {detail}"
-        _append_unique(items, seen_heads, head.lower(), value, limit=limit)
+        _append_unique_entry(
+            items,
+            seen_heads,
+            head.lower(),
+            label=head,
+            summary=(detail if detail and detail.lower() != head.lower() else None),
+            status="planted",
+            limit=limit,
+        )
         if len(items) >= limit:
             return tuple(items)
     for analysis in analyses:
@@ -272,14 +358,25 @@ def _build_foreshadow_state_items(foreshadow_memories: list[StoryMemory], analys
             head = _compact_text(foreshadow.get("content") or foreshadow.get("title"), limit=36)
             if not head:
                 continue
-            _append_unique(items, seen_heads, head.lower(), head, limit=limit)
+            _append_unique_entry(
+                items,
+                seen_heads,
+                head.lower(),
+                label=head,
+                status=foreshadow_type if foreshadow_type else None,
+                limit=limit,
+            )
             if len(items) >= limit:
                 return tuple(items)
     return tuple(items)
 
 
-def _build_organization_state_items(organizations: list[tuple[Character, Optional[Organization]]], *, limit: int) -> tuple[str, ...]:
-    items: list[str] = []
+def _build_organization_state_items(
+    organizations: list[tuple[Character, Optional[Organization]]],
+    *,
+    limit: int,
+) -> tuple[ProjectContinuityLedgerItem, ...]:
+    items: list[ProjectContinuityLedgerItem] = []
     seen_names: set[str] = set()
     ranked_orgs = sorted(
         organizations,
@@ -300,8 +397,6 @@ def _build_organization_state_items(organizations: list[tuple[Character, Optiona
         if current_state:
             fragments.append(current_state)
         status = _normalize_status_label(getattr(org_char, "status", None))
-        if status:
-            fragments.append(f"status={status}")
         if organization is not None:
             power_level = _safe_int(getattr(organization, "power_level", None))
             if power_level is not None:
@@ -309,16 +404,30 @@ def _build_organization_state_items(organizations: list[tuple[Character, Optiona
             location = _compact_text(getattr(organization, "location", None), limit=36)
             if location:
                 fragments.append(f"location={location}")
-        if not fragments:
+        if not fragments and not status:
             continue
-        _append_unique(items, seen_names, name.lower(), f"{name}: {'; '.join(list(dict.fromkeys(fragments))[:2])}", limit=limit)
+        _append_unique_entry(
+            items,
+            seen_names,
+            name.lower(),
+            label=name,
+            summary='; '.join(list(dict.fromkeys(fragments))[:2]),
+            status=status,
+            limit=limit,
+        )
         if len(items) >= limit:
             return tuple(items)
     return tuple(items)
 
 
-def _build_career_state_items(career_rows: list[tuple[CharacterCareer, Character, Career]], characters: list[Character], career_map: Mapping[str, Career], *, limit: int) -> tuple[str, ...]:
-    items: list[str] = []
+def _build_career_state_items(
+    career_rows: list[tuple[CharacterCareer, Character, Career]],
+    characters: list[Character],
+    career_map: Mapping[str, Career],
+    *,
+    limit: int,
+) -> tuple[ProjectContinuityLedgerItem, ...]:
+    items: list[ProjectContinuityLedgerItem] = []
     seen_keys: set[tuple[str, str]] = set()
     ranked_rows = sorted(
         career_rows,
@@ -344,7 +453,14 @@ def _build_career_state_items(career_rows: list[tuple[CharacterCareer, Character
         notes = _compact_text(getattr(character_career, "notes", None), limit=48)
         if notes:
             fragments.append(notes)
-        _append_unique(items, seen_keys, dedupe_key, f"{char_name}/{career_name}: {'; '.join(list(dict.fromkeys(fragments))[:2])}", limit=limit)
+        _append_unique_entry(
+            items,
+            seen_keys,
+            dedupe_key,
+            label=f"{char_name}/{career_name}",
+            summary='; '.join(list(dict.fromkeys(fragments))[:2]),
+            limit=limit,
+        )
         if len(items) >= limit:
             return tuple(items)
     if items:
@@ -359,7 +475,14 @@ def _build_career_state_items(career_rows: list[tuple[CharacterCareer, Character
         if main_career is not None:
             career_name = _compact_text(getattr(main_career, "name", None), limit=24)
             stage = max(_safe_int(getattr(character, "main_career_stage", None)) or 1, 1)
-            _append_unique(items, seen_keys, (char_name.lower(), career_name.lower()), f"{char_name}/{career_name}: stage {stage}", limit=limit)
+            _append_unique_entry(
+                items,
+                seen_keys,
+                (char_name.lower(), career_name.lower()),
+                label=f"{char_name}/{career_name}",
+                summary=f"stage {stage}",
+                limit=limit,
+            )
             if len(items) >= limit:
                 return tuple(items)
         for sub_data in _safe_json_list(getattr(character, "sub_careers", None)):
@@ -370,7 +493,14 @@ def _build_career_state_items(career_rows: list[tuple[CharacterCareer, Character
             if not career_name:
                 continue
             stage = max(_safe_int(sub_data.get("stage")) or 1, 1)
-            _append_unique(items, seen_keys, (char_name.lower(), career_name.lower()), f"{char_name}/{career_name}: stage {stage}", limit=limit)
+            _append_unique_entry(
+                items,
+                seen_keys,
+                (char_name.lower(), career_name.lower()),
+                label=f"{char_name}/{career_name}",
+                summary=f"stage {stage}",
+                limit=limit,
+            )
             if len(items) >= limit:
                 return tuple(items)
     return tuple(items)

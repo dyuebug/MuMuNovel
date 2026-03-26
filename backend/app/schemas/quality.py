@@ -70,6 +70,28 @@ class StoryQualityRuntimePressure(QualitySchemaModel):
     career_state_items: List[str] = Field(default_factory=list)
 
 
+
+
+class QualityRuntimeLedgerEntry(QualitySchemaModel):
+    name: Optional[str] = None
+    state: Optional[str] = None
+    status: Optional[str] = None
+    pair: Optional[str] = None
+    label: Optional[str] = None
+    detail: Optional[str] = None
+
+
+class QualityRuntimePlanEntry(QualitySchemaModel):
+    name: Optional[str] = None
+    status: Optional[str] = None
+    summary: Optional[str] = None
+    label: Optional[str] = None
+    target_chapter: Optional[int] = None
+
+
+QualityRuntimeLedgerItem = str | QualityRuntimeLedgerEntry
+QualityRuntimePlanItem = str | QualityRuntimePlanEntry
+
 class QualityRuntimeContextSummary(QualitySchemaModel):
     plot_stage: Optional[str] = None
     chapter_count: Optional[int] = None
@@ -88,12 +110,12 @@ class QualityRuntimeContextSummary(QualitySchemaModel):
     style_profile: Optional[str] = None
     chapter_number_span: List[int] = Field(default_factory=list)
     character_focus: List[str] = Field(default_factory=list)
-    foreshadow_payoff_plan: List[Any] = Field(default_factory=list)
-    character_state_ledger: List[Any] = Field(default_factory=list)
-    relationship_state_ledger: List[Any] = Field(default_factory=list)
-    foreshadow_state_ledger: List[Any] = Field(default_factory=list)
-    organization_state_ledger: List[Any] = Field(default_factory=list)
-    career_state_ledger: List[Any] = Field(default_factory=list)
+    foreshadow_payoff_plan: List[QualityRuntimePlanItem] = Field(default_factory=list)
+    character_state_ledger: List[QualityRuntimeLedgerItem] = Field(default_factory=list)
+    relationship_state_ledger: List[QualityRuntimeLedgerItem] = Field(default_factory=list)
+    foreshadow_state_ledger: List[QualityRuntimeLedgerItem] = Field(default_factory=list)
+    organization_state_ledger: List[QualityRuntimeLedgerItem] = Field(default_factory=list)
+    career_state_ledger: List[QualityRuntimeLedgerItem] = Field(default_factory=list)
 
 
 class StoryPacingImbalanceSignal(QualitySchemaModel):
@@ -315,6 +337,8 @@ def normalize_active_story_repair_payload(payload: Optional[Mapping[str, Any]]) 
     return _validate_optional(ActiveStoryRepairPayload, payload)
 
 
+QualityRuntimeLedgerEntry.model_rebuild()
+QualityRuntimePlanEntry.model_rebuild()
 StoryRepairGuidance.model_rebuild()
 StoryQualityGateDecision.model_rebuild()
 StoryQualityMetricsPayload.model_rebuild()

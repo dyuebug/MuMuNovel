@@ -2566,7 +2566,27 @@ def _normalize_runtime_prompt_items(values: Optional[Any], *, limit: int = 4) ->
 
     normalized: list[str] = []
     for raw in raw_items:
-        text = str(raw or "").strip()
+        if isinstance(raw, Mapping):
+            label = str(raw.get("label") or raw.get("name") or raw.get("title") or "").strip()
+            summary = str(
+                raw.get("summary")
+                or raw.get("content")
+                or raw.get("item")
+                or raw.get("value")
+                or ""
+            ).strip()
+            status = str(raw.get("status") or "").strip()
+            target_chapter = raw.get("target_chapter")
+            text = f"{label}: {summary}" if label and summary else (summary or label)
+            meta_parts: list[str] = []
+            if status:
+                meta_parts.append(f"status={status}")
+            if target_chapter not in (None, ""):
+                meta_parts.append(f"target_chapter={target_chapter}")
+            if meta_parts:
+                text = f"{text}; {'; '.join(meta_parts)}" if text else '; '.join(meta_parts)
+        else:
+            text = str(raw or "").strip()
         if not text:
             continue
         text = re.sub(r"^[-•*·\d\.\)\s]+", "", text).strip()

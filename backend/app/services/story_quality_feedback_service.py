@@ -195,6 +195,105 @@ def _normalize_runtime_items(values: Any, *, limit: int = 4) -> list[str]:
     return items
 
 
+RuntimeContextItem = str | Dict[str, Any]
+
+
+def _normalize_runtime_context_item_mapping(value: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    summary = str(
+        value.get("summary")
+        or value.get("content")
+        or value.get("item")
+        or value.get("value")
+        or ""
+    ).strip()
+    label = str(value.get("label") or value.get("name") or value.get("title") or "").strip()
+    status = str(value.get("status") or "").strip().lower()
+    target_chapter = _safe_float(value.get("target_chapter"))
+
+    normalized: Dict[str, Any] = {}
+    if summary:
+        normalized["summary"] = summary
+    if label:
+        normalized["label"] = label
+    if status:
+        normalized["status"] = status
+    if target_chapter is not None:
+        normalized["target_chapter"] = int(target_chapter)
+    return normalized or None
+
+
+def _stringify_runtime_context_item(value: Any) -> str:
+    if isinstance(value, Mapping):
+        normalized = _normalize_runtime_context_item_mapping(value)
+        if not normalized:
+            return ""
+        summary = str(normalized.get("summary") or "").strip()
+        label = str(normalized.get("label") or "").strip()
+        status = str(normalized.get("status") or "").strip()
+        target_chapter = normalized.get("target_chapter")
+
+        if label and summary and label != summary:
+            text = f"{label}: {summary}"
+        else:
+            text = summary or label
+
+        meta_parts: list[str] = []
+        if status:
+            meta_parts.append(status)
+        if isinstance(target_chapter, int):
+            meta_parts.append(f"chapter {target_chapter}")
+        if meta_parts:
+            text = f"{text} ({', '.join(meta_parts)})"
+        return text.strip()
+    return str(value or "").strip()
+
+
+def _normalize_runtime_context_items(values: Any, *, limit: int = 4) -> list[RuntimeContextItem]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        raw_items = [values]
+    elif isinstance(values, Sequence) and not isinstance(values, (str, bytes, bytearray)):
+        raw_items = list(values)
+    else:
+        raw_items = [values]
+
+    items: list[RuntimeContextItem] = []
+    seen: set[str] = set()
+    for value in raw_items:
+        if isinstance(value, Mapping):
+            normalized_mapping = _normalize_runtime_context_item_mapping(value)
+            if not normalized_mapping:
+                continue
+            dedupe_key = json.dumps(normalized_mapping, sort_keys=True, ensure_ascii=False)
+            normalized_value: RuntimeContextItem = normalized_mapping
+        else:
+            text = str(value or "").strip()
+            if not text:
+                continue
+            dedupe_key = text
+            normalized_value = text
+
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        items.append(normalized_value)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _normalize_runtime_context_item_texts(values: Any, *, limit: int = 4) -> list[str]:
+    return [
+        text
+        for text in (
+            _stringify_runtime_context_item(item)
+            for item in _normalize_runtime_context_items(values, limit=limit)
+        )
+        if text
+    ]
+
+
 _CONTINUITY_LEDGER_SPECS: tuple[tuple[str, str, str, str], ...] = (
     ("character_state_ledger", "character_continuity", "Character continuity ledger", "Carry forward the character continuity ledger: {item}"),
     ("relationship_state_ledger", "relationship_continuity", "Relationship continuity ledger", "Express the relationship ledger through dialogue, alignment, or exchange: {item}"),
@@ -271,9 +370,12 @@ def build_story_continuity_preflight(
     missing_item_count = 0
 
     for ledger_key, focus_area, ledger_label, repair_template in _CONTINUITY_LEDGER_SPECS:
-        for item in _normalize_runtime_items(runtime_context.get(ledger_key), limit=3):
+        for item in _normalize_runtime_context_items(runtime_context.get(ledger_key), limit=3):
+            item_text = _stringify_runtime_context_item(item)
+            if not item_text:
+                continue
             checked_item_count += 1
-            anchors = _extract_continuity_anchor_candidates(item)
+            anchors = _extract_continuity_anchor_candidates(item_text)
             matched_anchor_count = len({anchor for anchor in anchors if len(anchor) >= 2 and anchor in normalized_content})
             required_match_count = 2 if ledger_key in {"relationship_state_ledger", "career_state_ledger"} and len(anchors) >= 2 else 1
             is_matched = matched_anchor_count >= required_match_count
@@ -282,14 +384,14 @@ def build_story_continuity_preflight(
             missing_item_count += 1
             if focus_area not in focus_areas:
                 focus_areas.append(focus_area)
-            target = repair_template.format(item=item)
+            target = repair_template.format(item=item_text)
             if target not in repair_targets:
                 repair_targets.append(target)
             warnings.append({
                 "ledger_key": ledger_key,
                 "ledger_label": ledger_label,
                 "focus_area": focus_area,
-                "item": item,
+                "item": item_text,
                 "anchors": anchors,
                 "matched_anchor_count": matched_anchor_count,
                 "required_match_count": required_match_count,
@@ -367,22 +469,22 @@ def _resolve_quality_stage(runtime_context: Mapping[str, Any]) -> Optional[str]:
 
 
 def _build_runtime_pressure(runtime_context: Mapping[str, Any]) -> Dict[str, Any]:
-    character_states = _normalize_runtime_items(runtime_context.get("character_state_ledger"), limit=6)
-    relationship_states = _normalize_runtime_items(runtime_context.get("relationship_state_ledger"), limit=6)
-    foreshadow_states = _normalize_runtime_items(runtime_context.get("foreshadow_state_ledger"), limit=6)
-    organization_states = _normalize_runtime_items(runtime_context.get("organization_state_ledger"), limit=6)
-    career_states = _normalize_runtime_items(runtime_context.get("career_state_ledger"), limit=6)
+    character_state_entries = _normalize_runtime_context_items(runtime_context.get("character_state_ledger"), limit=6)
+    relationship_state_entries = _normalize_runtime_context_items(runtime_context.get("relationship_state_ledger"), limit=6)
+    foreshadow_state_entries = _normalize_runtime_context_items(runtime_context.get("foreshadow_state_ledger"), limit=6)
+    organization_state_entries = _normalize_runtime_context_items(runtime_context.get("organization_state_ledger"), limit=6)
+    career_state_entries = _normalize_runtime_context_items(runtime_context.get("career_state_ledger"), limit=6)
     return {
-        "character_state_count": len(character_states),
-        "relationship_state_count": len(relationship_states),
-        "foreshadow_state_count": len(foreshadow_states),
-        "organization_state_count": len(organization_states),
-        "career_state_count": len(career_states),
-        "character_state_items": character_states[:3],
-        "relationship_state_items": relationship_states[:3],
-        "foreshadow_state_items": foreshadow_states[:3],
-        "organization_state_items": organization_states[:3],
-        "career_state_items": career_states[:3],
+        "character_state_count": len(character_state_entries),
+        "relationship_state_count": len(relationship_state_entries),
+        "foreshadow_state_count": len(foreshadow_state_entries),
+        "organization_state_count": len(organization_state_entries),
+        "career_state_count": len(career_state_entries),
+        "character_state_items": [_stringify_runtime_context_item(item) for item in character_state_entries[:3]],
+        "relationship_state_items": [_stringify_runtime_context_item(item) for item in relationship_state_entries[:3]],
+        "foreshadow_state_items": [_stringify_runtime_context_item(item) for item in foreshadow_state_entries[:3]],
+        "organization_state_items": [_stringify_runtime_context_item(item) for item in organization_state_entries[:3]],
+        "career_state_items": [_stringify_runtime_context_item(item) for item in career_state_entries[:3]],
     }
 
 
@@ -912,28 +1014,28 @@ def _aggregate_quality_runtime_context(history: Sequence[Mapping[str, Any]]) -> 
         [entry for ctx in contexts[-3:] for entry in _normalize_runtime_items(ctx.get("character_focus"), limit=4)],
         limit=4,
     )
-    merged["foreshadow_payoff_plan"] = _normalize_runtime_items(
-        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_items(ctx.get("foreshadow_payoff_plan"), limit=6)],
+    merged["foreshadow_payoff_plan"] = _normalize_runtime_context_items(
+        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_context_items(ctx.get("foreshadow_payoff_plan"), limit=6)],
         limit=6,
     )
-    merged["character_state_ledger"] = _normalize_runtime_items(
-        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_items(ctx.get("character_state_ledger"), limit=4)],
+    merged["character_state_ledger"] = _normalize_runtime_context_items(
+        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_context_items(ctx.get("character_state_ledger"), limit=4)],
         limit=4,
     )
-    merged["relationship_state_ledger"] = _normalize_runtime_items(
-        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_items(ctx.get("relationship_state_ledger"), limit=4)],
+    merged["relationship_state_ledger"] = _normalize_runtime_context_items(
+        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_context_items(ctx.get("relationship_state_ledger"), limit=4)],
         limit=4,
     )
-    merged["foreshadow_state_ledger"] = _normalize_runtime_items(
-        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_items(ctx.get("foreshadow_state_ledger"), limit=4)],
+    merged["foreshadow_state_ledger"] = _normalize_runtime_context_items(
+        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_context_items(ctx.get("foreshadow_state_ledger"), limit=4)],
         limit=4,
     )
-    merged["organization_state_ledger"] = _normalize_runtime_items(
-        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_items(ctx.get("organization_state_ledger"), limit=4)],
+    merged["organization_state_ledger"] = _normalize_runtime_context_items(
+        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_context_items(ctx.get("organization_state_ledger"), limit=4)],
         limit=4,
     )
-    merged["career_state_ledger"] = _normalize_runtime_items(
-        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_items(ctx.get("career_state_ledger"), limit=4)],
+    merged["career_state_ledger"] = _normalize_runtime_context_items(
+        [entry for ctx in contexts[-3:] for entry in _normalize_runtime_context_items(ctx.get("career_state_ledger"), limit=4)],
         limit=4,
     )
     chapter_numbers = [int(value) for value in (_safe_float(ctx.get("current_chapter_number")) for ctx in contexts) if value is not None]
@@ -1474,8 +1576,8 @@ def _build_volume_goal_completion_summary(summary: Mapping[str, Any]) -> Dict[st
 
 def _build_foreshadow_payoff_delay_summary(summary: Mapping[str, Any]) -> Dict[str, Any]:
     runtime_context = _extract_quality_runtime_context(summary)
-    foreshadow_payoff_plan = _normalize_runtime_items(runtime_context.get("foreshadow_payoff_plan"), limit=6)
-    foreshadow_state_ledger = _normalize_runtime_items(runtime_context.get("foreshadow_state_ledger"), limit=6)
+    foreshadow_payoff_plan = _normalize_runtime_context_item_texts(runtime_context.get("foreshadow_payoff_plan"), limit=6)
+    foreshadow_state_ledger = _normalize_runtime_context_item_texts(runtime_context.get("foreshadow_state_ledger"), limit=6)
     recent_payoff_rate = _safe_float(summary.get("avg_payoff_chain_rate"))
     pacing_imbalance = summary.get("pacing_imbalance") if isinstance(summary.get("pacing_imbalance"), Mapping) else {}
     recent_payoff_momentum = _safe_float(pacing_imbalance.get("recent_payoff_momentum"))

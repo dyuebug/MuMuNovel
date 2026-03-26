@@ -166,18 +166,39 @@ async def test_should_build_project_continuity_ledger_from_persisted_story_state
     async with continuity_session_factory() as session:
         ledger = await build_project_continuity_ledger(session, project.id)
 
-    assert any(item.startswith("Lin:") for item in ledger.character_state_ledger)
-    assert any(item.startswith("Su:") and "missing" in item for item in ledger.character_state_ledger)
-    assert any(item.startswith("Rui:") for item in ledger.character_state_ledger)
-    assert any(item.startswith("Lin/Su:") for item in ledger.relationship_state_ledger)
+    assert any(isinstance(item, dict) and item.get("label") == "Lin" for item in ledger.character_state_ledger)
     assert any(
-        item.startswith("Rui/Lin:") or item.startswith("Lin/Rui:")
+        isinstance(item, dict) and item.get("label") == "Su" and item.get("status") == "missing"
+        for item in ledger.character_state_ledger
+    )
+    assert any(
+        isinstance(item, dict) and item.get("label") == "Rui"
+        for item in ledger.character_state_ledger
+    )
+    assert any(
+        isinstance(item, dict) and item.get("label") == "Lin/Su"
         for item in ledger.relationship_state_ledger
     )
-    assert any(item.startswith("hidden key") for item in ledger.foreshadow_state_ledger)
-    assert any(item.startswith("archive cipher") for item in ledger.foreshadow_state_ledger)
-    assert any(item.startswith("ShadowGuild:") for item in ledger.organization_state_ledger)
-    assert any(item.startswith("Lin/Strategist:") for item in ledger.career_state_ledger)
+    assert any(
+        isinstance(item, dict) and item.get("label") in {"Rui/Lin", "Lin/Rui"}
+        for item in ledger.relationship_state_ledger
+    )
+    assert any(
+        isinstance(item, dict) and item.get("label") == "hidden key" and item.get("status") == "planted"
+        for item in ledger.foreshadow_state_ledger
+    )
+    assert any(
+        isinstance(item, dict) and item.get("label") == "archive cipher"
+        for item in ledger.foreshadow_state_ledger
+    )
+    assert any(
+        isinstance(item, dict) and item.get("label") == "ShadowGuild"
+        for item in ledger.organization_state_ledger
+    )
+    assert any(
+        isinstance(item, dict) and item.get("label") == "Lin/Strategist"
+        for item in ledger.career_state_ledger
+    )
 
 
 async def test_should_fill_story_packet_with_project_continuity_without_overriding_explicit_ledgers(
@@ -202,19 +223,51 @@ async def test_should_fill_story_packet_with_project_continuity_without_overridi
             source_label="continuity-override",
         )
 
-    assert any(item.startswith("Lin:") for item in packet.blueprint.character_state_ledger)
-    assert any(item.startswith("Lin/Su:") for item in packet.blueprint.relationship_state_ledger)
-    assert any(item.startswith("hidden key") for item in packet.blueprint.foreshadow_state_ledger)
-    assert any(item.startswith("ShadowGuild:") for item in packet.blueprint.organization_state_ledger)
-    assert any(item.startswith("Lin/Strategist:") for item in packet.blueprint.career_state_ledger)
+    assert any(
+        isinstance(item, dict) and item.get("label") == "Lin"
+        for item in packet.blueprint.character_state_ledger
+    )
+    assert any(
+        isinstance(item, dict) and item.get("label") == "Lin/Su"
+        for item in packet.blueprint.relationship_state_ledger
+    )
+    assert any(
+        isinstance(item, dict) and item.get("label") == "hidden key"
+        for item in packet.blueprint.foreshadow_state_ledger
+    )
+    assert any(
+        isinstance(item, dict) and item.get("label") == "ShadowGuild"
+        for item in packet.blueprint.organization_state_ledger
+    )
+    assert any(
+        isinstance(item, dict) and item.get("label") == "Lin/Strategist"
+        for item in packet.blueprint.career_state_ledger
+    )
+
+    prompt_fields = packet.to_prompt_fields()
+    assert any(item.startswith("Lin:") for item in prompt_fields["story_character_state_ledger"])
+    assert any(item.startswith("Lin/Su:") for item in prompt_fields["story_relationship_state_ledger"])
+    assert any("status=planted" in item for item in prompt_fields["story_foreshadow_state_ledger"])
 
     assert override_packet.blueprint.character_state_ledger == (
         "CustomHero: keep the oath visible in every confrontation",
     )
-    assert any(item.startswith("Lin/Su:") for item in override_packet.blueprint.relationship_state_ledger)
-    assert any(item.startswith("hidden key") for item in override_packet.blueprint.foreshadow_state_ledger)
-    assert any(item.startswith("ShadowGuild:") for item in override_packet.blueprint.organization_state_ledger)
-    assert any(item.startswith("Lin/Strategist:") for item in override_packet.blueprint.career_state_ledger)
+    assert any(
+        isinstance(item, dict) and item.get("label") == "Lin/Su"
+        for item in override_packet.blueprint.relationship_state_ledger
+    )
+    assert any(
+        isinstance(item, dict) and item.get("label") == "hidden key"
+        for item in override_packet.blueprint.foreshadow_state_ledger
+    )
+    assert any(
+        isinstance(item, dict) and item.get("label") == "ShadowGuild"
+        for item in override_packet.blueprint.organization_state_ledger
+    )
+    assert any(
+        isinstance(item, dict) and item.get("label") == "Lin/Strategist"
+        for item in override_packet.blueprint.career_state_ledger
+    )
 
 
 async def test_should_reuse_project_continuity_ledger_within_same_transaction(
