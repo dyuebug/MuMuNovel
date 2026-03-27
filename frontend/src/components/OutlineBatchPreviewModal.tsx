@@ -44,7 +44,7 @@ export default function OutlineBatchPreviewModal({
       title={
         <Space>
           <CheckCircleOutlined style={{ color: 'var(--color-success)' }} />
-          <span>????????</span>
+          <span>批量展开预览</span>
         </Space>
       }
       open={visible}
@@ -52,19 +52,19 @@ export default function OutlineBatchPreviewModal({
       onCancel={onCancel}
       width={1200}
       centered
-      okText="?????????"
-      cancelText="????"
+      okText="确认创建章节"
+      cancelText="暂不创建"
       okButtonProps={{ danger: true }}
     >
       <div>
         <div style={{ marginBottom: 16 }}>
-          <Tag color="blue">???: {data.total_outlines_expanded} ???</Tag>
+          <Tag color="blue">已展开大纲：{data.total_outlines_expanded} 条</Tag>
           <Tag color="green">
-            ????: {data.expansion_results.reduce((sum: number, result: OutlineExpansionResponse) => sum + result.actual_chapter_count, 0)}
+            计划创建章节：{data.expansion_results.reduce((sum: number, result: OutlineExpansionResponse) => sum + result.actual_chapter_count, 0)} 章
           </Tag>
-          <Tag color="orange">???????????</Tag>
+          <Tag color="orange">待确认创建</Tag>
           {data.skipped_outlines && data.skipped_outlines.length > 0 ? (
-            <Tag color="warning">??: {data.skipped_outlines.length} ???</Tag>
+            <Tag color="warning">跳过：{data.skipped_outlines.length} 条</Tag>
           ) : null}
         </div>
 
@@ -79,7 +79,7 @@ export default function OutlineBatchPreviewModal({
             }}
           >
             <div style={{ fontWeight: 500, marginBottom: 8, color: 'var(--color-warning)' }}>
-              ?? ???????????????
+              以下大纲已跳过
             </div>
             <Space direction="vertical" size="small" style={{ width: '100%' }}>
               {data.skipped_outlines.map((skipped, idx: number) => (
@@ -100,7 +100,7 @@ export default function OutlineBatchPreviewModal({
               overflowY: 'auto',
             }}
           >
-            <div style={{ fontWeight: 500, marginBottom: 8, color: '#666' }}>????</div>
+            <div style={{ fontWeight: 500, marginBottom: 8, color: '#666' }}>大纲列表</div>
             <List
               size="small"
               dataSource={data.expansion_results}
@@ -143,7 +143,7 @@ export default function OutlineBatchPreviewModal({
             }}
           >
             <div style={{ fontWeight: 500, marginBottom: 8, color: '#666' }}>
-              ???? ({selectedOutline?.actual_chapter_count || 0} ?)
+              章节规划（{selectedOutline?.actual_chapter_count || 0} 章）
             </div>
             {selectedOutline ? (
               <List
@@ -179,23 +179,23 @@ export default function OutlineBatchPreviewModal({
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', paddingLeft: 12 }}>
-            <div style={{ fontWeight: 500, marginBottom: 12, color: '#666' }}>????</div>
+            <div style={{ fontWeight: 500, marginBottom: 12, color: '#666' }}>章节详情</div>
             {selectedChapter ? (
               <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                <Card size="small" title="????" bordered={false}>
+                <Card size="small" title="剧情摘要" bordered={false}>
                   {selectedChapter.plot_summary}
                 </Card>
-                <Card size="small" title="????" bordered={false}>
+                <Card size="small" title="叙事目标" bordered={false}>
                   {selectedChapter.narrative_goal}
                 </Card>
-                <Card size="small" title="????" bordered={false}>
+                <Card size="small" title="关键事件" bordered={false}>
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
                     {(selectedChapter.key_events as string[]).map((event: string, eventIdx: number) => (
                       <div key={eventIdx}>? {event}</div>
                     ))}
                   </Space>
                 </Card>
-                <Card size="small" title="????" bordered={false}>
+                <Card size="small" title="关注角色" bordered={false}>
                   <Space wrap>
                     {(selectedChapter.character_focus as string[]).map((character: string, characterIdx: number) => (
                       <Tag key={characterIdx} color="purple">{character}</Tag>
@@ -203,15 +203,15 @@ export default function OutlineBatchPreviewModal({
                   </Space>
                 </Card>
                 {selectedChapter.scenes && selectedChapter.scenes.length > 0 ? (
-                  <Card size="small" title="??" bordered={false}>
+                  <Card size="small" title="场景列表" bordered={false}>
                     <Space direction="vertical" size="small" style={{ width: '100%' }}>
                       {selectedChapter.scenes.map((scene, sceneIdx: number) => {
                         const currentScene = scene as SceneInfo;
                         return (
                           <Card key={sceneIdx} size="small" style={{ backgroundColor: '#fafafa' }}>
-                            <div><strong>???</strong>{currentScene.location}</div>
-                            <div><strong>???</strong>{currentScene.characters.join('?')}</div>
-                            <div><strong>???</strong>{currentScene.purpose}</div>
+                            <div><strong>地点：</strong>{currentScene.location}</div>
+                            <div><strong>角色：</strong>{currentScene.characters.join('、')}</div>
+                            <div><strong>目的：</strong>{currentScene.purpose}</div>
                           </Card>
                         );
                       })}
@@ -220,7 +220,7 @@ export default function OutlineBatchPreviewModal({
                 ) : null}
               </Space>
             ) : (
-              <Empty description="?????????" />
+              <Empty description="请选择一个章节查看详情" />
             )}
           </div>
         </div>

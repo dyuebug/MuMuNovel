@@ -48,9 +48,9 @@ const getStatusColor = (status: string): string => {
 
 const getStatusText = (status: string): string => {
   const texts: Record<string, string> = {
-    draft: '??',
-    writing: '???',
-    completed: '???',
+    draft: '草稿',
+    writing: '写作中',
+    completed: '已完成',
   };
 
   return texts[status] || status;
@@ -69,7 +69,7 @@ const renderAnalysisStatus = (task?: AnalysisTask) => {
     case 'pending':
       return (
         <Tag icon={<SyncOutlined spin />} color="processing">
-          ???
+          等待分析
         </Tag>
       );
     case 'running': {
@@ -80,20 +80,20 @@ const renderAnalysisStatus = (task?: AnalysisTask) => {
           color={isRetrying ? 'warning' : 'processing'}
           title={task.error_message || undefined}
         >
-          {isRetrying ? `??? ${task.progress}%` : `??? ${task.progress}%`}
+          {isRetrying ? `重试中 ${task.progress}%` : `分析中 ${task.progress}%`}
         </Tag>
       );
     }
     case 'completed':
       return (
         <Tag icon={<CheckCircleOutlined />} color="success">
-          ???
+          分析完成
         </Tag>
       );
     case 'failed':
       return (
         <Tag icon={<CloseCircleOutlined />} color="error" title={task.error_message || undefined}>
-          ??
+          分析失败
         </Tag>
       );
     default:
@@ -126,7 +126,7 @@ function ChapterListItem({
   const hasMorePreview = Boolean(chapter.content && chapter.content.length > previewLimit);
   const titleText = variant === 'flat'
     ? `#${chapter.chapter_number} ${chapter.title}`
-    : `?${chapter.chapter_number}??${chapter.title}`;
+    : `第${chapter.chapter_number}章：${chapter.title}`;
 
   const itemStyle: CSSProperties = variant === 'flat'
     ? {
@@ -146,8 +146,8 @@ function ChapterListItem({
         alignItems: isMobile ? 'flex-start' : 'center',
       };
 
-  const analysisButtonTitle = !hasContent ? '???????' : isAnalyzing ? '???...' : '????';
-  const analysisButtonText = isAnalyzing ? '???' : '??';
+  const analysisButtonTitle = !hasContent ? '暂无内容，无法分析' : isAnalyzing ? '分析中...' : '分析章节';
+  const analysisButtonText = isAnalyzing ? '分析中' : '分析';
 
   const desktopActions = isMobile ? undefined : [
     (
@@ -157,9 +157,9 @@ function ChapterListItem({
         icon={<ReadOutlined />}
         onClick={() => onOpenReader(chapter)}
         disabled={!hasContent}
-        title={!hasContent ? '????' : '??'}
+        title={!hasContent ? '暂无内容可阅读' : '阅读'}
       >
-        ??
+        阅读
       </Button>
     ),
     (
@@ -169,7 +169,7 @@ function ChapterListItem({
         icon={<EditOutlined />}
         onClick={() => onOpenEditor(chapter.id)}
       >
-        ??
+        编辑
       </Button>
     ),
     (
@@ -192,7 +192,7 @@ function ChapterListItem({
         icon={<SettingOutlined />}
         onClick={() => onOpenSettings(chapter.id)}
       >
-        ??
+        设置
       </Button>
     ),
     ...(showOutlineActions
@@ -200,15 +200,15 @@ function ChapterListItem({
           (
             <Popconfirm
               key="delete"
-              title="??????"
-              description="?????????????"
+              title="确认删除"
+              description="删除后无法恢复，确认继续吗？"
               onConfirm={() => onDeleteChapter(chapter.id)}
-              okText="??"
-              cancelText="??"
+              okText="确认删除"
+              cancelText="取消"
               okButtonProps={{ danger: true }}
             >
               <Button type="text" danger icon={<DeleteOutlined />}>
-                ??
+                删除
               </Button>
             </Popconfirm>
           ),
@@ -240,14 +240,14 @@ function ChapterListItem({
                 {renderAnalysisStatus(analysisTask)}
                 {!canGenerate ? (
                   <Tag icon={<LockOutlined />} color="warning" title={generateDisabledReason}>
-                    ?????
+                    暂不可生成
                   </Tag>
                 ) : null}
                 {showOutlineActions ? (
                   <Space size={4}>
                     {chapter.expansion_plan ? (
                       <InfoCircleOutlined
-                        title="??????"
+                        title="查看扩写计划"
                         style={{ color: 'var(--color-primary)', cursor: 'pointer', fontSize: 16 }}
                         onClick={(event) => {
                           event.stopPropagation();
@@ -256,7 +256,7 @@ function ChapterListItem({
                       />
                     ) : null}
                     <FormOutlined
-                      title={chapter.expansion_plan ? '??????' : '??????'}
+                      title={chapter.expansion_plan ? '编辑章节规划' : '新建章节规划'}
                       style={{ color: 'var(--color-success)', cursor: 'pointer', fontSize: 16 }}
                       onClick={(event) => {
                         event.stopPropagation();
@@ -275,7 +275,7 @@ function ChapterListItem({
                 {hasMorePreview ? '...' : ''}
               </div>
             ) : (
-              <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>????</span>
+              <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>暂无正文</span>
             )
           }
         />
@@ -288,14 +288,14 @@ function ChapterListItem({
               onClick={() => onOpenReader(chapter)}
               size="small"
               disabled={!hasContent}
-              title={!hasContent ? '????' : '??'}
+              title={!hasContent ? '暂无内容可阅读' : '阅读'}
             />
             <Button
               type="text"
               icon={<EditOutlined />}
               onClick={() => onOpenEditor(chapter.id)}
               size="small"
-              title="??"
+              title="编辑"
             />
             <Button
               type="text"
@@ -311,15 +311,15 @@ function ChapterListItem({
               icon={<SettingOutlined />}
               onClick={() => onOpenSettings(chapter.id)}
               size="small"
-              title="??"
+              title="设置"
             />
             {showOutlineActions ? (
               <Popconfirm
-                title="??????"
-                description="?????????????"
+                title="确认删除"
+                description="删除后无法恢复，确认继续吗？"
                 onConfirm={() => onDeleteChapter(chapter.id)}
-                okText="??"
-                cancelText="??"
+                okText="确认删除"
+                cancelText="取消"
                 okButtonProps={{ danger: true }}
               >
                 <Button
@@ -327,7 +327,7 @@ function ChapterListItem({
                   danger
                   icon={<DeleteOutlined />}
                   size="small"
-                  title="??"
+                  title="删除"
                 />
               </Popconfirm>
             ) : null}

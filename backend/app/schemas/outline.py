@@ -53,40 +53,40 @@ class OutlineResponse(BaseModel):
 
 
 class OutlineGenerateRequest(BaseModel):
-    """AI????????? - ???????????"""
+    """AI大纲生成请求模型 - 用于生成项目章节大纲"""
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: str = Field(..., description="??ID")
-    genre: Optional[str] = Field(None, description="????????????????")
-    theme: str = Field(..., description="????")
-    chapter_count: int = Field(..., ge=1, description="????")
-    narrative_perspective: str = Field(..., description="????")
-    world_context: Optional[dict] = Field(None, description="?????")
-    characters_context: Optional[list] = Field(None, description="????")
-    target_words: int = Field(100000, description="????")
-    requirements: Optional[str] = Field(None, description="??????")
-    provider: Optional[str] = Field(None, description="AI???")
-    model: Optional[str] = Field(None, description="AI??")
-    mode: OutlineGenerateModeValue = Field("auto", description="????: auto(????), new(????), continue(??)")
-    story_direction: Optional[str] = Field(None, description="????????(?????)")
-    plot_stage: PlotStageValue = Field("development", description="????: development(??), climax(??), ending(??)")
-    keep_existing: bool = Field(False, description="????????(???)")
-    enable_mcp: bool = Field(True, description="????MCP??????????????")
+    project_id: str = Field(..., description="项目ID")
+    genre: Optional[str] = Field(None, description="小说类型")
+    theme: str = Field(..., description="故事主题")
+    chapter_count: int = Field(..., ge=1, description="计划章节数")
+    narrative_perspective: str = Field(..., description="叙事视角")
+    world_context: Optional[dict] = Field(None, description="世界观上下文")
+    characters_context: Optional[list] = Field(None, description="角色上下文")
+    target_words: int = Field(100000, description="目标总字数")
+    requirements: Optional[str] = Field(None, description="补充要求")
+    provider: Optional[str] = Field(None, description="AI提供商")
+    model: Optional[str] = Field(None, description="AI模型")
+    mode: OutlineGenerateModeValue = Field("auto", description="生成模式：auto(自动判断)、new(新建大纲)、continue(续写大纲)")
+    story_direction: Optional[str] = Field(None, description="故事发展方向（用于续写）")
+    plot_stage: PlotStageValue = Field("development", description="剧情阶段：development(发展)、climax(高潮)、ending(结局)")
+    keep_existing: bool = Field(False, description="是否保留现有大纲内容（预留字段）")
+    enable_mcp: bool = Field(True, description="是否启用MCP工具增强")
     creative_mode: Optional[CreativeModeValue] = Field(
         None,
-        description="?????balanced/hook/emotion/suspense/relationship/payoff???",
+        description="创作模式：balanced/hook/emotion/suspense/relationship/payoff",
     )
     story_focus: Optional[StoryFocusValue] = Field(
         None,
-        description="??????advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff???",
+        description="结构侧重点：advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff",
     )
-    story_creation_brief: Optional[str] = Field(None, description="?????????", max_length=1200)
+    story_creation_brief: Optional[str] = Field(None, description="创作总控摘要", max_length=1200)
     quality_preset: Optional[QualityPresetValue] = Field(
         None,
-        description="?????balanced/plot_drive/immersive/emotion_drama/clean_prose???",
+        description="质量预设：balanced/plot_drive/immersive/emotion_drama/clean_prose",
     )
-    quality_notes: Optional[str] = Field(None, description="?????????", max_length=600)
+    quality_notes: Optional[str] = Field(None, description="质量补充偏好", max_length=600)
 
     @field_validator(
         "mode",

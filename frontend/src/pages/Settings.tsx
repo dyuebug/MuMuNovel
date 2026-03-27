@@ -642,7 +642,7 @@ export default function SettingsPage() {
     } catch (error) {
       const errorMsg = (
         error as { response?: { data?: { detail?: string } } } | undefined
-      )?.response?.data?.detail || '????????';
+      )?.response?.data?.detail || '请求失败，请稍后重试';
       setWebResearchTestResult({
         success: false,
         provider,
@@ -1160,7 +1160,7 @@ export default function SettingsPage() {
               items={[
                 {
                   key: 'current',
-                  label: '????',
+                  label: '当前配置',
                   children: activeTab === 'current' ? (
                     <Suspense fallback={settingsLazyFallback}>
                       <LazySettingsCurrentTab

@@ -26,8 +26,8 @@ export const buildStoryBeatPlannerPrompt = (
   }
 
   const title = scope === 'batch'
-    ? '??????????????'
-    : '????????????';
+    ? '批量章节节拍规划'
+    : '单章节节拍规划';
 
   return [title, ...entries.map((item) => `- ${item.label}: ${item.value}`)].join('\n');
 };
@@ -71,8 +71,8 @@ export const buildStorySceneOutlinePrompt = (
   }
 
   const title = scope === 'batch'
-    ? '??????????????'
-    : '????????????';
+    ? '批量章节场景规划'
+    : '单章节场景规划';
 
   return [title, ...entries.map((item) => `${item.index}. ${item.label}: ${item.value}`)].join('\n');
 };
@@ -92,7 +92,7 @@ export const buildStoryCreationPromptLayerLabels = (parts: {
   beat?: string;
   scene?: string;
 }): string[] => [
-  parts.summary?.trim() ? '??' : '',
-  parts.beat?.trim() ? '????' : '',
-  parts.scene?.trim() ? '????' : '',
+  parts.summary?.trim() ? '简介' : '',
+  parts.beat?.trim() ? '节拍' : '',
+  parts.scene?.trim() ? '场景' : '',
 ].filter((item): item is string => Boolean(item));

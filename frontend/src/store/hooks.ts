@@ -145,9 +145,9 @@ export async function loadProjectChapters(projectId?: string, options: RefreshCo
       markCollectionLoaded('chapters', id);
       return chapters;
     } catch (error) {
-      console.error('????????:', error);
+      console.error('加载章节失败:', error);
       if (!options.silent) {
-        message.error('????????');
+        message.error('加载章节失败');
       }
       return [];
     }
@@ -376,7 +376,7 @@ export function useChapterSync() {
   const updateChapter = useStore((state) => state.updateChapter);
   const removeChapter = useStore((state) => state.removeChapter);
 
-  // ??????
+  // 刷新章节
   const refreshChapters = useCallback(async (projectId?: string) => {
     return loadProjectChapters(projectId);
   }, []);

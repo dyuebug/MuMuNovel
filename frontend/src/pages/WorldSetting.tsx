@@ -378,7 +378,7 @@ export default function WorldSetting() {
             <Descriptions.Item label="默认剧情阶段">
               {resolveOptionLabel(PLOT_STAGE_OPTIONS, currentProject.default_plot_stage)}
             </Descriptions.Item>
-            <Descriptions.Item label="??????">
+            <Descriptions.Item label="默认质量预设">
               <Flex vertical gap={2}>
                 <span>{resolveOptionLabel(QUALITY_PRESET_OPTIONS, currentProject.default_quality_preset)}</span>
                 {resolveOptionDescription(QUALITY_PRESET_OPTIONS, currentProject.default_quality_preset) && (
@@ -729,16 +729,16 @@ export default function WorldSetting() {
 
           <Card
             size="small"
-            title="??????"
+            title="默认创作偏好"
             style={{ marginBottom: 0, background: 'var(--color-fill-quaternary)' }}
           >
             <Form.Item
-              label="??????"
+              label="默认创作模式"
               name="default_creative_mode"
-              extra="???????????????????????????????"
+              extra="控制整体更偏钩子、情绪、悬念、关系或爽点回收"
             >
               <Select
-                placeholder="?????????????"
+                placeholder="不额外偏置，保持均衡"
                 allowClear
                 optionLabelProp="label"
               >
@@ -752,11 +752,11 @@ export default function WorldSetting() {
             </Form.Item>
 
             <Form.Item
-              label="???????"
+              label="默认结构侧重点"
               name="default_story_focus"
             >
               <Select
-                placeholder="?????????????????"
+                placeholder="不额外偏置，保持均衡"
                 allowClear
                 optionLabelProp="label"
               >
@@ -770,11 +770,11 @@ export default function WorldSetting() {
             </Form.Item>
 
             <Form.Item
-              label="??????"
+              label="默认剧情阶段"
               name="default_plot_stage"
             >
               <Select
-                placeholder="?????????????"
+                placeholder="留空时按具体场景判断"
                 allowClear
                 optionLabelProp="label"
               >
@@ -788,21 +788,21 @@ export default function WorldSetting() {
             </Form.Item>
 
             <Form.Item
-              label="????????"
+              label="默认创作总控"
               name="default_story_creation_brief"
-              extra="?????????????????????????"
+              extra="用几句话定义这个项目长期遵循的创作重心、推进节奏或核心约束"
             >
               <TextArea
                 rows={4}
-                placeholder="?????????????????????????????????????"
+                placeholder="例如：始终围绕主角的目标、阻力与代价推进，优先保证钩子和回报闭环。"
                 showCount
                 maxLength={1200}
               />
             </Form.Item>
 
             <Form.Item
-              label="??????"
-              extra="?????????????????????????????"
+              label="默认质量预设"
+              extra="为大纲与章节生成施加统一的质量偏好"
             >
               <Form.Item name="default_quality_preset" hidden>
                 <Input />
@@ -827,9 +827,9 @@ export default function WorldSetting() {
                   }}
                 >
                   <Flex vertical gap={8}>
-                    <Typography.Text strong>?????</Typography.Text>
+                    <Typography.Text strong>不额外施压</Typography.Text>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      ????????????????????????????
+                      保持模型默认质量策略，不额外施加统一偏好。
                     </Typography.Text>
                   </Flex>
                 </Card>
@@ -856,10 +856,10 @@ export default function WorldSetting() {
                           </div>
                         </div>
                         <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
-                          ???{option.bestFor}
+                          适合：{option.bestFor}
                         </div>
                         <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>
-                          ???{option.caution}
+                          注意：{option.caution}
                         </div>
                       </Flex>
                     </Card>
@@ -877,18 +877,18 @@ export default function WorldSetting() {
               >
                 <Flex vertical gap={6}>
                   <Typography.Text strong>
-                    ?????{selectedDefaultQualityPresetOption?.label || '?????'}
+                    当前预设：{selectedDefaultQualityPresetOption?.label || '不额外施压'}
                   </Typography.Text>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {selectedDefaultQualityPresetOption?.description || '?????????????????????????????????'}
+                    {selectedDefaultQualityPresetOption?.description || '未选择时将沿用模型默认质量策略，不额外施加统一偏好。'}
                   </Typography.Text>
                   {selectedDefaultQualityPresetOption && (
                     <>
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        ???{selectedDefaultQualityPresetOption.bestFor}
+                        适合：{selectedDefaultQualityPresetOption.bestFor}
                       </Typography.Text>
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        ???{selectedDefaultQualityPresetOption.caution}
+                        注意：{selectedDefaultQualityPresetOption.caution}
                       </Typography.Text>
                     </>
                   )}
@@ -897,13 +897,13 @@ export default function WorldSetting() {
             </Form.Item>
 
             <Form.Item
-              label="????????"
+              label="默认额外质量要求"
               name="default_quality_notes"
-              extra="??????????????????????????????????????"
+              extra="补充你长期想保留或压制的写作倾向，例如减少说明句、加强动作反馈等"
             >
               <TextArea
                 rows={3}
-                placeholder="??????????????????????????????????????"
+                placeholder="例如：减少解释性旁白，优先用动作和对话推进信息；章尾必须保留牵引。"
                 showCount
                 maxLength={600}
               />

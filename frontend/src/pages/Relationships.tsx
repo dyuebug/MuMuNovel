@@ -31,10 +31,10 @@ interface RelationshipType {
 }
 
 const categoryLabels: Record<string, string> = {
-  family: '????',
-  social: '????',
-  professional: '????',
-  hostile: '????'
+  family: '家族关系',
+  social: '社交关系',
+  professional: '职业关系',
+  hostile: '敌对关系'
 };
 
 export default function Relationships() {

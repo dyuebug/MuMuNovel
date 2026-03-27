@@ -56,21 +56,21 @@ export default function SettingsPresetsTab({
     <Spin spinning={presetsLoading}>
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Text type="secondary">???? API ?????????????</Text>
+          <Text type="secondary">管理多个 API 配置预设，快速切换不同服务商与模型</Text>
           <Space>
             <Button icon={<CopyOutlined />} onClick={onCreateFromCurrent}>
-              ?????
+              复制当前配置
             </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={onCreatePreset}>
-              ????
+              新建预设
             </Button>
           </Space>
         </div>
 
         {presets.length === 0 ? (
-          <Empty description="??????" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '40px 0' }}>
+          <Empty description="暂无配置预设" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '40px 0' }}>
             <Button type="primary" icon={<PlusOutlined />} onClick={onCreatePreset}>
-              ???????
+              创建第一个预设
             </Button>
           </Empty>
         ) : (
@@ -91,7 +91,7 @@ export default function SettingsPresetsTab({
                   actions={[
                     !isActive ? (
                       <Button key="activate" type="link" onClick={() => onActivatePreset(preset.id, preset.name)}>
-                        ??
+                        激活
                       </Button>
                     ) : null,
                     <Button
@@ -101,21 +101,21 @@ export default function SettingsPresetsTab({
                       loading={testingPresetId === preset.id}
                       onClick={() => onTestPreset(preset.id)}
                     >
-                      ??
+                      测试
                     </Button>,
                     <Button key="edit" type="link" icon={<EditOutlined />} onClick={() => onEditPreset(preset)}>
-                      ??
+                      编辑
                     </Button>,
                     <Popconfirm
                       key="delete"
-                      title="?????????"
+                      title="确定要删除这个预设吗？"
                       onConfirm={() => onDeletePreset(preset.id)}
                       disabled={isActive}
-                      okText="??"
-                      cancelText="??"
+                      okText="确定"
+                      cancelText="取消"
                     >
                       <Button type="link" danger icon={<DeleteOutlined />} disabled={isActive}>
-                        ??
+                        删除
                       </Button>
                     </Popconfirm>,
                   ].filter(Boolean)}
@@ -127,7 +127,7 @@ export default function SettingsPresetsTab({
                     title={
                       <Space>
                         <span style={{ fontWeight: 'bold' }}>{preset.name}</span>
-                        {isActive ? <Tag color="success">???</Tag> : null}
+                        {isActive ? <Tag color="success">已激活</Tag> : null}
                       </Space>
                     }
                     description={
@@ -138,11 +138,11 @@ export default function SettingsPresetsTab({
                             {preset.config.api_provider.toUpperCase()}
                           </Tag>
                           <Tag>{preset.config.llm_model}</Tag>
-                          <Tag>??: {preset.config.temperature}</Tag>
+                          <Tag>温度: {preset.config.temperature}</Tag>
                           <Tag>Tokens: {preset.config.max_tokens}</Tag>
                         </Space>
                         <div style={{ fontSize: '12px', color: '#999' }}>
-                          ???: {new Date(preset.created_at).toLocaleString()}
+                          创建时间: {new Date(preset.created_at).toLocaleString()}
                         </div>
                       </Space>
                     }

@@ -98,13 +98,13 @@ type ChapterEditorModalContentProps = {
 const getNarrativePerspectiveText = (perspective?: string): string => {
   switch (perspective) {
     case 'first_person':
-      return '????';
+      return '第一人称';
     case 'third_person':
-      return '????';
+      return '第三人称';
     case 'omniscient':
-      return '????';
+      return '全知视角';
     default:
-      return '????';
+      return '未设定';
   }
 };
 
@@ -203,7 +203,7 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
     const newContent = currentContent.substring(0, startPos) + newText + currentContent.substring(endPos);
     editorForm.setFieldsValue({ content: newContent });
     setPartialRegenerateModalVisible(false);
-    message.success('???????????');
+    message.success('已应用重写内容');
   }, [editorForm]);
 
   const handleTextSelection = useCallback(() => {
@@ -337,8 +337,8 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
   return (
     <Form form={editorForm} layout="vertical" onFinish={handleEditorSubmit}>
       <Form.Item
-        label="????"
-        tooltip="????????????"
+        label="章节标题"
+        tooltip="当前标题仅供查看，修改请前往章节设置"
         style={{ marginBottom: isMobile ? 16 : 12 }}
       >
         <Space.Compact style={{ width: '100%' }}>
@@ -355,17 +355,17 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
                 disabled={!currentEditingCanGenerate}
                 danger={!currentEditingCanGenerate}
                 style={{ fontWeight: 'bold' }}
-                title={!currentEditingCanGenerate ? currentEditingGenerateDisabledReason : '????????'}
+                title={!currentEditingCanGenerate ? currentEditingGenerateDisabledReason : '继续生成章节内容'}
               >
-                {isMobile ? '??' : '????'}
+                {isMobile ? '续写' : '继续生成'}
               </Button>
               <Button
                 icon={<FundOutlined />}
                 onClick={() => handleShowAnalysis(currentEditingChapter.id)}
                 disabled={!canAnalyzeCurrentChapter}
-                title={canAnalyzeCurrentChapter ? '????????????' : '??????????'}
+                title={canAnalyzeCurrentChapter ? '查看章节分析' : '暂无内容，无法分析'}
               >
-                {isMobile ? '??' : '????'}
+                {isMobile ? '分析' : '分析章节'}
               </Button>
             </>
           ) : null}
@@ -373,12 +373,12 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
       </Form.Item>
 
       {renderCompactSettingFlow(
-        '???????????????????????????',
-        '?????????????????????????????????',
-        ['????', '????', '????', '????'],
+        '生成前先确认本章创作设置。',
+        '写作风格、叙事视角和剧情阶段会直接影响续写结果。',
+        ['确认标题', '选择风格', '设置视角', '设置阶段'],
       )}
 
-      <Card size="small" title="????" style={{ marginBottom: 12 }}>
+      <Card size="small" title="本章创作设置" style={{ marginBottom: 12 }}>
         <div
           style={{
             display: isMobile ? 'block' : 'flex',
@@ -387,13 +387,13 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
           }}
         >
           <Form.Item
-            label="????"
-            tooltip="????????????????????"
+            label="写作风格"
+            tooltip="选择用于本章续写的写作风格"
             required
             style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
           >
             <Select
-              placeholder="???????"
+              placeholder="请选择写作风格"
               value={selectedStyleId}
               onChange={setSelectedStyleId}
               status={!selectedStyleId ? 'error' : undefined}
@@ -401,44 +401,44 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
               {writingStyles.map((style: any) => (
                 <Select.Option key={style.id} value={style.id}>
                   {style.name}
-                  {style.is_default ? ' (??)' : ''}
+                  {style.is_default ? '（默认）' : ''}
                 </Select.Option>
               ))}
             </Select>
             {!selectedStyleId ? (
-              <div style={{ color: '#ff4d4f', fontSize: 12, marginTop: 4 }}>???????</div>
+              <div style={{ color: '#ff4d4f', fontSize: 12, marginTop: 4 }}>请选择写作风格</div>
             ) : null}
           </Form.Item>
 
           <Form.Item
-            label="????"
-            tooltip="????????????????/?????????"
+            label="叙事视角"
+            tooltip="留空则沿用项目默认视角，也可临时覆盖本章视角"
             style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
           >
             <Select
-              placeholder={`???????${getNarrativePerspectiveText(currentProjectNarrativePerspective)}`}
+              placeholder={`留空则沿用项目视角：${getNarrativePerspectiveText(currentProjectNarrativePerspective)}`}
               value={temporaryNarrativePerspective}
               onChange={setTemporaryNarrativePerspective}
               allowClear
             >
-              <Select.Option value="first_person">????</Select.Option>
-              <Select.Option value="third_person">????</Select.Option>
-              <Select.Option value="omniscient">????</Select.Option>
+              <Select.Option value="first_person">第一人称</Select.Option>
+              <Select.Option value="third_person">第三人称</Select.Option>
+              <Select.Option value="omniscient">全知视角</Select.Option>
             </Select>
             {temporaryNarrativePerspective ? (
               <div style={{ color: 'var(--color-success)', fontSize: 12, marginTop: 4 }}>
-                ?????{getNarrativePerspectiveText(temporaryNarrativePerspective)}
+                当前选择：{getNarrativePerspectiveText(temporaryNarrativePerspective)}
               </div>
             ) : null}
           </Form.Item>
 
           <Form.Item
-            label="????"
-            tooltip="????????????????????"
+            label="剧情阶段"
+            tooltip="帮助系统判断当前章节更像铺陈、高潮还是收束回收"
             style={{ flex: 1, marginBottom: isMobile ? 16 : 0 }}
           >
             <Select
-              placeholder="???????"
+              placeholder="请选择剧情阶段"
               value={selectedPlotStage}
               onChange={setSelectedPlotStage}
               allowClear
@@ -452,10 +452,10 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
               ))}
             </Select>
             <Space size={8} style={{ marginTop: 8 }}>
-              <Button size="small" onClick={applyInferredSinglePlotStage}>??????</Button>
+              <Button size="small" onClick={applyInferredSinglePlotStage}>应用推断阶段</Button>
               {selectedPlotStage ? (
                 <span style={{ color: 'var(--color-success)', fontSize: 12 }}>
-                  ????{CREATION_PLOT_STAGE_OPTIONS.find((item: any) => item.value === selectedPlotStage)?.label || selectedPlotStage}
+                  已应用：{CREATION_PLOT_STAGE_OPTIONS.find((item: any) => item.value === selectedPlotStage)?.label || selectedPlotStage}
                 </span>
               ) : null}
             </Space>
@@ -466,12 +466,12 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
       <ChapterEditorAiSection sectionProps={aiSectionProps} />
 
       {renderCompactStoryControlHeader(
-        '????',
+        '局部智能重写',
         hasPartialSelection
-          ? `?? ${selectedRegenerateCount} ?????????????`
-          : '????????????????????',
+          ? `已选 ${selectedRegenerateCount} 字，可直接发起局部重写`
+          : '先选中一段正文，再使用局部重写',
         {
-          tagText: hasPartialSelection ? `?? ${selectedRegenerateCount} ?` : '??????',
+          tagText: hasPartialSelection ? `已选 ${selectedRegenerateCount} 字` : '未选择文本',
           tagColor: hasPartialSelection ? 'blue' : 'default',
           style: { marginBottom: 8 },
           action: (
@@ -480,9 +480,9 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
               icon={<FormOutlined />}
               onClick={handleOpenPartialRegenerate}
               disabled={!hasPartialSelection}
-              title={hasPartialSelection ? '?????????????' : '?????????????'}
+              title={hasPartialSelection ? '对选中文本执行局部重写' : '请先选中文本后再重写'}
             >
-              {isMobile ? '????' : '???????'}
+              {isMobile ? '重写' : '局部智能重写'}
             </Button>
           ),
         },
@@ -491,7 +491,7 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
         <TextArea
           ref={contentTextAreaRef}
           rows={isMobile ? 12 : 20}
-          placeholder="???????..."
+          placeholder="请在这里编辑章节正文..."
           style={{ fontFamily: 'monospace', fontSize: isMobile ? 12 : 14 }}
         />
       </Form.Item>
@@ -535,21 +535,21 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
           {renderCompactSelectionSummary(
             [
               {
-                label: '??',
-                value: hasPartialSelection ? `?? ${selectedRegenerateCount} ???????` : '??????????',
+                label: '选中',
+                value: hasPartialSelection ? `已选 ${selectedRegenerateCount} 字用于重写` : '未选择任何文本',
                 color: hasPartialSelection ? 'blue' : 'default',
               },
               {
-                label: '??',
-                value: '???????',
+                label: '模式',
+                value: '局部智能重写',
                 color: 'green',
               },
             ],
             { style: { marginBottom: 0, flex: 1, minWidth: 0 } },
           )}
           <Space.Compact style={{ width: isMobile ? '100%' : 'auto' }} block={isMobile}>
-            <Button onClick={onCloseEditor}>??</Button>
-            <Button type="primary" htmlType="submit">????</Button>
+            <Button onClick={onCloseEditor}>取消</Button>
+            <Button type="primary" htmlType="submit">保存更改</Button>
           </Space.Compact>
         </div>
       </Form.Item>
