@@ -754,8 +754,8 @@ async def check_function_calling_support(data: ApiTestRequest):
         logger.error(f"❌ Function Calling 检测配置错误: {error_msg}")
         return {
             "success": False,
-            "supported": False,
-            "message": "配置错误",
+            "supported": None,
+            "message": "配置错误，暂时无法确认模型能力",
             "error": error_msg,
             "error_type": "ConfigurationError",
             "suggestions": [
@@ -764,7 +764,60 @@ async def check_function_calling_support(data: ApiTestRequest):
                 "请验证所选提供商与配置是否匹配"
             ]
         }
-        
+
+    except httpx.HTTPStatusError as e:
+        error_msg = str(e)
+        status_code = e.response.status_code if e.response is not None else None
+
+        logger.error(f"❌ Function Calling 检测遇到 HTTP 错误: {error_msg}")
+        logger.error(f"  - HTTP 状态码: {status_code}")
+
+        if status_code is not None and status_code >= 500:
+            message = f"上游服务暂时不可用（HTTP {status_code}）"
+            suggestions = [
+                "检测请求已发出，但上游 API 服务返回了 5xx 错误",
+                "建议：稍后重试，或检查代理/网关是否稳定",
+                "提示：这类错误通常不能直接判定为模型不支持 Function Calling"
+            ]
+        elif status_code == 429:
+            message = "请求过于频繁，暂时无法确认模型能力"
+            suggestions = [
+                "API 服务触发了限流，请稍后再试",
+                "建议：检查当前账号配额、并发限制或代理限流策略",
+                "提示：限流错误不能直接判定为模型不支持 Function Calling"
+            ]
+        elif status_code == 401:
+            message = "认证失败，暂时无法确认模型能力"
+            suggestions = [
+                "API Key 认证失败",
+                "请检查 API Key 是否正确且有效",
+                "请确认 API Key 是否有足够的权限"
+            ]
+        elif status_code == 404:
+            message = "接口地址或模型不可用，暂时无法确认模型能力"
+            suggestions = [
+                "请检查 API Base URL 是否正确",
+                "请确认模型名称是否正确",
+                "如果使用代理服务，请确认其支持当前接口路径"
+            ]
+        else:
+            message = "检测失败，暂时无法确认模型能力"
+            suggestions = [
+                "请检查 API 服务返回的状态码和错误详情",
+                "建议：确认代理、网关和模型路由配置是否正确",
+                "提示：请求失败时不能直接判定为模型不支持 Function Calling"
+            ]
+
+        return {
+            "success": False,
+            "supported": None,
+            "message": message,
+            "error": error_msg,
+            "error_type": "HTTPStatusError",
+            "http_status": status_code,
+            "suggestions": suggestions,
+        }
+
     except TimeoutError as e:
         error_msg = str(e)
         logger.error(f"❌ Function Calling 检测超时: {error_msg}")
@@ -817,8 +870,8 @@ async def check_function_calling_support(data: ApiTestRequest):
         
         return {
             "success": False,
-            "supported": False,
-            "message": "Function Calling 检测失败",
+            "supported": None,
+            "message": "Function Calling 检测失败，暂时无法确认模型能力",
             "error": error_msg,
             "error_type": error_type,
             "suggestions": suggestions

@@ -36,6 +36,15 @@ import type { MCPPlugin, MCPTool } from '../types';
 
 const { Paragraph, Text, Title } = Typography;
 const { TextArea } = Input;
+type ModelSupportStatus = 'unknown' | 'supported' | 'unsupported';
+
+const resolveFunctionCallingStatus = (result: { success: boolean; supported?: boolean | null }): ModelSupportStatus => {
+  if (!result.success || result.supported === null || result.supported === undefined) {
+    return 'unknown';
+  }
+
+  return result.supported ? 'supported' : 'unsupported';
+};
 
 export default function MCPPluginsPage() {
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
@@ -82,7 +91,7 @@ export default function MCPPluginsPage() {
   const [testingPluginId, setTestingPluginId] = useState<string | null>(null);
   const [viewingTools, setViewingTools] = useState<{ pluginId: string; tools: MCPTool[] } | null>(null);
   const [checkingFunctionCalling, setCheckingFunctionCalling] = useState(false);
-  const [modelSupportStatus, setModelSupportStatus] = useState<'unknown' | 'supported' | 'unsupported'>('unknown');
+  const [modelSupportStatus, setModelSupportStatus] = useState<ModelSupportStatus>('unknown');
 
   useEffect(() => {
     const initPage = async () => {
@@ -147,7 +156,7 @@ export default function MCPPluginsPage() {
             } else {
               // 配置未变更，恢复验证状态（根据缓存的状态恢复）
               const cachedStatus = verifiedConfig.status || 'supported';
-              setModelSupportStatus(cachedStatus as 'unknown' | 'supported' | 'unsupported');
+              setModelSupportStatus(cachedStatus as ModelSupportStatus);
             }
           } catch (e) {
             console.error('Failed to parse verified config:', e);
@@ -425,17 +434,21 @@ export default function MCPPluginsPage() {
         llm_model: settings.llm_model,
       });
 
-      // 无论成功失败，都缓存当前测试的配置和状态
-      const configToCache = {
-        provider: settings.api_provider,
-        baseUrl: settings.api_base_url,
-        model: settings.llm_model,
-        status: result.success && result.supported ? 'supported' : 'unsupported',
-        testedAt: new Date().toISOString()
-      };
-      localStorage.setItem('mcp_verified_config', JSON.stringify(configToCache));
+      const nextStatus = resolveFunctionCallingStatus(result);
 
-      if (result.success && result.supported) {
+      // 仅在检测结果明确时写入缓存，避免 502/网络异常覆盖已有的有效验证结果
+      if (nextStatus !== 'unknown') {
+        const configToCache = {
+          provider: settings.api_provider,
+          baseUrl: settings.api_base_url,
+          model: settings.llm_model,
+          status: nextStatus,
+          testedAt: new Date().toISOString()
+        };
+        localStorage.setItem('mcp_verified_config', JSON.stringify(configToCache));
+      }
+
+      if (nextStatus === 'supported') {
         setModelSupportStatus('supported');
 
         modal.success({
@@ -502,7 +515,7 @@ export default function MCPPluginsPage() {
             </div>
           ),
         });
-      } else {
+      } else if (nextStatus === 'unsupported') {
         setModelSupportStatus('unsupported');
         modal.warning({
           title: '❌ Function Calling 支持检测',
@@ -560,11 +573,59 @@ export default function MCPPluginsPage() {
             </div>
           ),
         });
+      } else {
+        setModelSupportStatus('unknown');
+        modal.warning({
+          title: '⚠️ Function Calling 检测未完成',
+          centered: true,
+          width: isMobile ? '95%' : 700,
+          content: (
+            <div style={{ padding: '8px 0' }}>
+              <div style={{ marginBottom: 16 }}>
+                <Alert
+                  message={result.message || '本次检测未能确认当前模型是否支持 Function Calling'}
+                  type="warning"
+                  showIcon
+                />
+              </div>
+
+              {result.error && (
+                <div style={{
+                  padding: 16,
+                  background: statusStyles.warning.bg,
+                  border: `1px solid ${statusStyles.warning.border}`,
+                  borderRadius: 8,
+                  marginBottom: 16
+                }}>
+                  <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 8 }}>错误信息:</Text>
+                  <Text style={{ fontSize: 13, fontFamily: 'monospace' }}>
+                    {result.error}
+                  </Text>
+                </div>
+              )}
+
+              {result.suggestions && result.suggestions.length > 0 && (
+                <div style={{
+                  padding: 16,
+                  background: statusStyles.info.bg,
+                  border: `1px solid ${statusStyles.info.border}`,
+                  borderRadius: 8
+                }}>
+                  <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 8 }}>💡 建议:</Text>
+                  <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
+                    {result.suggestions.map((s: string, i: number) => (
+                      <li key={i} style={{ marginBottom: 4 }}>{s}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ),
+        });
       }
     } catch (error) {
       console.error('Check function calling failed:', error);
       message.error('检测失败，请稍后重试');
-      setModelSupportStatus('unsupported');
     } finally {
       setCheckingFunctionCalling(false);
     }
