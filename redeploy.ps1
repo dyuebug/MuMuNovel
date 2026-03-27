@@ -225,7 +225,7 @@ function Invoke-LoggedCommand {
     Write-LogLine("Command start [$Label]: $commandDisplay")
     $startedAt = Get-Date
     $captured = @()
-    & cmd.exe /d /c "$commandDisplay 2>&1" | Tee-Object -Variable captured
+    & cmd.exe /d /c "$commandDisplay 2>&1" | Tee-Object -Variable captured | Out-Host
     $exitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
     $durationMs = [int][Math]::Round(((Get-Date) - $startedAt).TotalMilliseconds)
     $outputText = ($captured | Out-String).Trim()
