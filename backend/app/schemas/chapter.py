@@ -82,7 +82,7 @@ class ChapterListResponse(BaseModel):
 
 
 class ProjectChapterQualityTrendItem(BaseModel):
-    """??????????"""
+    """项目章节质量趋势条目"""
     chapter_id: str
     chapter_number: int
     title: str
@@ -93,7 +93,7 @@ class ProjectChapterQualityTrendItem(BaseModel):
 
 
 class ProjectChapterQualityTrendResponse(BaseModel):
-    """???????????"""
+    """项目章节质量趋势响应"""
     project_id: str
     has_metrics: bool
     total_chapters: int
@@ -146,47 +146,47 @@ class BatchAnalyzeUnanalyzedResponse(BaseModel):
 
 
 class ChapterGenerateRequest(BaseModel):
-    """AI???????????"""
+    """AI章节生成请求模型"""
 
     model_config = ConfigDict(extra="forbid")
 
-    style_id: Optional[int] = Field(None, description="????ID????????????")
+    style_id: Optional[int] = Field(None, description="写作风格ID；为空时使用项目默认配置")
     target_word_count: Optional[int] = Field(
         3000,
-        description="???????3000?",
+        description="目标字数，默认3000字",
         ge=500,
         le=10000,
     )
-    enable_analysis: bool = Field(True, description="????????")
-    enable_mcp: bool = Field(True, description="????MCP????????????")
+    enable_analysis: bool = Field(True, description="是否在生成后自动执行章节分析")
+    enable_mcp: bool = Field(True, description="是否启用MCP工具增强")
     enable_web_research: Optional[bool] = Field(
         None,
-        description="?????????? Exa/Grok ????????????????",
+        description="是否启用联网检索增强（通过 Exa/Grok 补充参考）",
     )
-    web_research_query: Optional[str] = Field(None, description="????????????? query")
-    model: Optional[str] = Field(None, description="?????AI???????????????")
-    narrative_perspective: Optional[str] = Field(None, description="???????first_person/third_person/omniscient???????????")
+    web_research_query: Optional[str] = Field(None, description="联网检索查询词；为空时自动生成 query")
+    model: Optional[str] = Field(None, description="指定本次生成使用的AI模型")
+    narrative_perspective: Optional[str] = Field(None, description="叙事视角，可选 first_person/third_person/omniscient")
     creative_mode: Optional[CreativeModeValue] = Field(
         None,
-        description="?????balanced/hook/emotion/suspense/relationship/payoff???",
+        description="创作模式：balanced/hook/emotion/suspense/relationship/payoff",
     )
     story_focus: Optional[StoryFocusValue] = Field(
         None,
-        description="??????advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff???",
+        description="结构侧重点：advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff",
     )
     plot_stage: Optional[PlotStageValue] = Field(
         None,
-        description="?????development/climax/ending???",
+        description="剧情阶段：development/climax/ending",
     )
-    story_creation_brief: Optional[str] = Field(None, description="?????????", max_length=1200)
+    story_creation_brief: Optional[str] = Field(None, description="本轮创作总控摘要", max_length=1200)
     quality_preset: Optional[QualityPresetValue] = Field(
         None,
-        description="?????balanced/plot_drive/immersive/emotion_drama/clean_prose???",
+        description="质量预设：balanced/plot_drive/immersive/emotion_drama/clean_prose",
     )
-    quality_notes: Optional[str] = Field(None, description="?????????", max_length=600)
-    story_repair_summary: Optional[str] = Field(None, description="???????????????")
-    story_repair_targets: Optional[list[str]] = Field(None, description="?????????????????")
-    story_preserve_strengths: Optional[list[str]] = Field(None, description="????????????????")
+    quality_notes: Optional[str] = Field(None, description="质量补充偏好", max_length=600)
+    story_repair_summary: Optional[str] = Field(None, description="剧情质量修复摘要")
+    story_repair_targets: Optional[list[str]] = Field(None, description="剧情质量修复目标")
+    story_preserve_strengths: Optional[list[str]] = Field(None, description="需要保留的既有优势")
 
     @field_validator(
         "creative_mode",
@@ -211,49 +211,49 @@ class ChapterGenerateRequest(BaseModel):
 
 
 class BatchGenerateRequest(BaseModel):
-    """???????????"""
+    """批量章节生成请求模型"""
 
     model_config = ConfigDict(extra="forbid")
 
-    start_chapter_number: int = Field(..., description="??????")
-    count: int = Field(..., description="??????", ge=1, le=20)
-    style_id: Optional[int] = Field(None, description="????ID")
+    start_chapter_number: int = Field(..., description="起始章节号")
+    count: int = Field(..., description="生成章节数", ge=1, le=20)
+    style_id: Optional[int] = Field(None, description="写作风格ID")
     target_word_count: Optional[int] = Field(
         3000,
-        description="???????3000?",
+        description="目标字数，默认3000字",
         ge=500,
         le=10000,
     )
-    enable_analysis: bool = Field(False, description="????????")
-    enable_mcp: bool = Field(True, description="????MCP????????????")
+    enable_analysis: bool = Field(False, description="是否在生成后自动执行章节分析")
+    enable_mcp: bool = Field(True, description="是否启用MCP工具增强")
     enable_web_research: Optional[bool] = Field(
         None,
-        description="?????????? Exa/Grok ????????????????",
+        description="是否启用联网检索增强（通过 Exa/Grok 补充参考）",
     )
-    web_research_query: Optional[str] = Field(None, description="????????????? query")
-    max_retries: int = Field(3, description="???????????", ge=0, le=5)
-    model: Optional[str] = Field(None, description="?????AI???????????????")
+    web_research_query: Optional[str] = Field(None, description="联网检索查询词；为空时自动生成 query")
+    max_retries: int = Field(3, description="失败时的最大重试次数", ge=0, le=5)
+    model: Optional[str] = Field(None, description="指定本次生成使用的AI模型")
     creative_mode: Optional[CreativeModeValue] = Field(
         None,
-        description="?????balanced/hook/emotion/suspense/relationship/payoff???",
+        description="创作模式：balanced/hook/emotion/suspense/relationship/payoff",
     )
     story_focus: Optional[StoryFocusValue] = Field(
         None,
-        description="??????advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff???",
+        description="结构侧重点：advance_plot/deepen_character/escalate_conflict/reveal_mystery/relationship_shift/foreshadow_payoff",
     )
     plot_stage: Optional[PlotStageValue] = Field(
         None,
-        description="?????development/climax/ending???",
+        description="剧情阶段：development/climax/ending",
     )
-    story_creation_brief: Optional[str] = Field(None, description="?????????", max_length=1200)
+    story_creation_brief: Optional[str] = Field(None, description="本轮创作总控摘要", max_length=1200)
     quality_preset: Optional[QualityPresetValue] = Field(
         None,
-        description="?????balanced/plot_drive/immersive/emotion_drama/clean_prose???",
+        description="质量预设：balanced/plot_drive/immersive/emotion_drama/clean_prose",
     )
-    quality_notes: Optional[str] = Field(None, description="?????????", max_length=600)
-    story_repair_summary: Optional[str] = Field(None, description="???????????????")
-    story_repair_targets: Optional[list[str]] = Field(None, description="?????????????????")
-    story_preserve_strengths: Optional[list[str]] = Field(None, description="????????????????")
+    quality_notes: Optional[str] = Field(None, description="质量补充偏好", max_length=600)
+    story_repair_summary: Optional[str] = Field(None, description="剧情质量修复摘要")
+    story_repair_targets: Optional[list[str]] = Field(None, description="剧情质量修复目标")
+    story_preserve_strengths: Optional[list[str]] = Field(None, description="需要保留的既有优势")
 
     @field_validator(
         "creative_mode",

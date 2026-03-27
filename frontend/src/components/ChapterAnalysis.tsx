@@ -581,7 +581,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
                           {qualityMetricsSummary?.overall_score_trend && (
                             <Tag color={qualityMetricsSummary.overall_score_trend === 'rising' ? 'green' : qualityMetricsSummary.overall_score_trend === 'falling' ? 'red' : 'blue'}>
-                              ???{getQualityTrendLabel(qualityMetricsSummary.overall_score_trend)}
+                              趋势：{getQualityTrendLabel(qualityMetricsSummary.overall_score_trend)}
                               {typeof qualityMetricsSummary.overall_score_delta === 'number' ? ` ${qualityMetricsSummary.overall_score_delta > 0 ? '+' : ''}${qualityMetricsSummary.overall_score_delta.toFixed(1)}` : ''}
                             </Tag>
                           )}

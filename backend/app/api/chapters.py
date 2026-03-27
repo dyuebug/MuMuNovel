@@ -1737,7 +1737,7 @@ def _build_generation_history_payload(
     attempt_state: Optional[str] = None,
     story_runtime_contract: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """?????????? payload?"""
+    """构建章节生成历史记录 payload"""
     payload = build_chapter_generation_quality_history_payload(
         content,
         metrics,

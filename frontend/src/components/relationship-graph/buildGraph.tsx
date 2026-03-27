@@ -136,10 +136,10 @@ const buildFlowEdge = (
   opts?: BuildFlowEdgeOptions,
 ): Edge => {
   const edgeColor = getRelationshipEdgeColor(relationship, status === 'active', relationshipTypes, token);
-  const isOrgMemberLink = relationship.startsWith('?????');
-  const isCareerMainLink = relationship.startsWith('????');
-  const isCareerSubLink = relationship.startsWith('????');
-  const isCareerClassLink = relationship.startsWith('?????');
+  const isOrgMemberLink = relationship.startsWith('组织成员·');
+  const isCareerMainLink = relationship.startsWith('主职业·');
+  const isCareerSubLink = relationship.startsWith('副职业·');
+  const isCareerClassLink = relationship.startsWith('职业分组·');
 
   return {
     id: edgeId,
@@ -293,7 +293,7 @@ export const buildRelationshipGraph = ({
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>
         <ApartmentOutlined style={{ fontSize: 24, color: token.colorSuccess, marginBottom: 4 }} />
         <div style={{ fontWeight: 600, fontSize: 14, color: token.colorText, maxWidth: '90%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</div>
-        <div style={{ fontSize: 11, color: token.colorTextSecondary, marginTop: 2 }}>{detail?.organization_type || '??'}</div>
+        <div style={{ fontSize: 11, color: token.colorTextSecondary, marginTop: 2 }}>{detail?.organization_type || '组织'}</div>
       </div>
     ) : (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>
@@ -306,7 +306,7 @@ export const buildRelationshipGraph = ({
         )}
         <div style={{ fontWeight: 600, fontSize: 13, color: token.colorText, maxWidth: '90%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</div>
         <div style={{ fontSize: 11, color: baseColor, marginTop: 2, transform: 'scale(0.9)' }}>
-          {node.role_type === 'protagonist' ? '??' : node.role_type === 'antagonist' ? '??' : '??'}
+          {node.role_type === 'protagonist' ? '主角' : node.role_type === 'antagonist' ? '反派' : '配角'}
         </div>
       </div>
     );
@@ -331,7 +331,7 @@ export const buildRelationshipGraph = ({
     data: {
       label: (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ fontSize: 11, color: token.colorWarning, marginBottom: 2 }}>???</div>
+          <div style={{ fontSize: 11, color: token.colorWarning, marginBottom: 2 }}>主职业</div>
           <div style={{ fontWeight: 600, fontSize: 13, color: token.colorText }}>{career.name}</div>
         </div>
       ),
@@ -347,7 +347,7 @@ export const buildRelationshipGraph = ({
     data: {
       label: (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ fontSize: 11, color: token.colorInfo, marginBottom: 2 }}>???</div>
+          <div style={{ fontSize: 11, color: token.colorInfo, marginBottom: 2 }}>副职业</div>
           <div style={{ fontWeight: 600, fontSize: 13, color: token.colorText }}>{career.name}</div>
         </div>
       ),
@@ -363,7 +363,7 @@ export const buildRelationshipGraph = ({
       type: 'default',
       position: { x: 0, y: 0 },
       data: {
-        label: '?????',
+        label: '主职业分组',
         type: 'career_group',
       },
       style: getCareerGroupStyle('main'),
@@ -375,7 +375,7 @@ export const buildRelationshipGraph = ({
       type: 'default',
       position: { x: 0, y: 0 },
       data: {
-        label: '?????',
+        label: '副职业分组',
         type: 'career_group',
       },
       style: getCareerGroupStyle('sub'),
@@ -383,8 +383,8 @@ export const buildRelationshipGraph = ({
   }
 
   const allNodes: Node[] = [...baseNodes, ...careerGroupNodes, ...mainCareerNodes, ...subCareerNodes];
-  const orgMemberLinks = graphData.links.filter((link) => link.relationship.startsWith('?????'));
-  const memberRelationLinks = graphData.links.filter((link) => !link.relationship.startsWith('?????'));
+  const orgMemberLinks = graphData.links.filter((link) => link.relationship.startsWith('组织成员·'));
+  const memberRelationLinks = graphData.links.filter((link) => !link.relationship.startsWith('组织成员·'));
   const orgMemberEdges: Edge[] = orgMemberLinks.map((link) =>
     buildFlowEdge(
       `${link.source}-${link.target}-${link.relationship}`,
@@ -405,7 +405,7 @@ export const buildRelationshipGraph = ({
         `${GROUP_MAIN_CAREER_NODE_ID}-${node.id}`,
         GROUP_MAIN_CAREER_NODE_ID,
         node.id,
-        '????????',
+        '职业分组·主职业',
         'active',
         0,
         relationshipTypes,
@@ -418,7 +418,7 @@ export const buildRelationshipGraph = ({
         `${GROUP_SUB_CAREER_NODE_ID}-${node.id}`,
         GROUP_SUB_CAREER_NODE_ID,
         node.id,
-        '????????',
+        '职业分组·副职业',
         'active',
         0,
         relationshipTypes,
@@ -441,13 +441,13 @@ export const buildRelationshipGraph = ({
       if (character.main_career_id) {
         const careerNodeId = `career-main-${character.main_career_id}`;
         if (mainCareerNodeIds.has(careerNodeId)) {
-          const careerName = careerNameMap[character.main_career_id] || '????';
+          const careerName = careerNameMap[character.main_career_id] || '未知职业';
           careerToCharacterEdges.push(
             buildFlowEdge(
               `${careerNodeId}-${character.id}-main`,
               careerNodeId,
               character.id,
-              `????${careerName}`,
+              `主职业·${careerName}`,
               'active',
               100,
               relationshipTypes,
@@ -461,13 +461,13 @@ export const buildRelationshipGraph = ({
       safeParseSubCareers(character.sub_careers).forEach((sub) => {
         const careerNodeId = `career-sub-${sub.career_id}`;
         if (subCareerNodeIds.has(careerNodeId)) {
-          const careerName = careerNameMap[sub.career_id] || '?????';
+          const careerName = careerNameMap[sub.career_id] || '未知副职业';
           careerToCharacterEdges.push(
             buildFlowEdge(
               `${careerNodeId}-${character.id}-sub-${sub.stage || 1}`,
               careerNodeId,
               character.id,
-              `????${careerName}`,
+              `副职业·${careerName}`,
               'active',
               80,
               relationshipTypes,

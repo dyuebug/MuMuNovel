@@ -34,10 +34,10 @@ export function renderCompactPresetRecommendationBlock(
       }}
     >
       {renderCompactStoryControlHeader(
-        '????',
-        '??????????????????????',
+        '已应用预设',
+        '当前已启用的创作预设会影响生成提示词和章节节奏。',
         {
-          tagText: `? ${items.length} ?`,
+          tagText: `共 ${items.length} 项`,
           tagColor: 'green',
           style: { marginBottom: 10 },
         },

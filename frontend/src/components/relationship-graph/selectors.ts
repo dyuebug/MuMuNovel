@@ -12,15 +12,15 @@ import type {
 } from './types';
 
 const EDGE_CATEGORY_META: Record<string, EdgeCategoryMeta> = {
-  organization: { label: '????', colorPreset: 'primary', order: 1 },
-  career_main: { label: '?????', colorPreset: 'warning', order: 2 },
-  career_sub: { label: '?????', colorPreset: 'info', order: 3 },
-  career_group: { label: '????', colorPreset: 'textTertiary', order: 4 },
-  family: { label: '????', colorPreset: 'warning', order: 5 },
-  hostile: { label: '????', colorPreset: 'error', order: 6 },
-  professional: { label: '????', colorPreset: 'info', order: 7 },
-  social: { label: '????', colorPreset: 'success', order: 8 },
-  default: { label: '????', colorPreset: 'textTertiary', order: 99 },
+  organization: { label: '组织成员', colorPreset: 'primary', order: 1 },
+  career_main: { label: '主职业关联', colorPreset: 'warning', order: 2 },
+  career_sub: { label: '副职业关联', colorPreset: 'info', order: 3 },
+  career_group: { label: '职业分组', colorPreset: 'textTertiary', order: 4 },
+  family: { label: '家族关系', colorPreset: 'warning', order: 5 },
+  hostile: { label: '敌对关系', colorPreset: 'error', order: 6 },
+  professional: { label: '职业关系', colorPreset: 'info', order: 7 },
+  social: { label: '社交关系', colorPreset: 'success', order: 8 },
+  default: { label: '其他关系', colorPreset: 'textTertiary', order: 99 },
 };
 
 export const safeParseSubCareers = (raw: CharacterDetail['sub_careers']): CharacterCareerRef[] => {
@@ -55,7 +55,7 @@ export const getEdgeCategory = (edge: Edge) =>
 
 export const getEdgeCategoryMeta = (category: string): EdgeCategoryMeta =>
   EDGE_CATEGORY_META[category] || {
-    label: `${category}??`,
+    label: `${category}关系`,
     colorPreset: 'textTertiary',
     order: 999,
   };
@@ -90,19 +90,19 @@ export const getRelationshipEdgeColor = (
 ) => {
   const inactiveColor = token.colorBorder;
 
-  if (relationshipName.startsWith('?????')) {
+  if (relationshipName.startsWith('组织成员·')) {
     return isActive ? token.colorPrimary : inactiveColor;
   }
 
-  if (relationshipName.startsWith('????')) {
+  if (relationshipName.startsWith('主职业·')) {
     return isActive ? token.colorWarning : inactiveColor;
   }
 
-  if (relationshipName.startsWith('????')) {
+  if (relationshipName.startsWith('副职业·')) {
     return isActive ? token.colorInfo : inactiveColor;
   }
 
-  if (relationshipName.startsWith('?????')) {
+  if (relationshipName.startsWith('职业分组·')) {
     return isActive ? token.colorTextTertiary : inactiveColor;
   }
 

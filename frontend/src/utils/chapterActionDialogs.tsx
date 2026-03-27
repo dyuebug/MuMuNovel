@@ -8,7 +8,7 @@ import ManualChapterCreateFormContent from '../components/ManualChapterCreateFor
 import { CREATION_PLOT_STAGE_OPTIONS } from '../utils/creationPresetsCore';
 import type { ExpansionPlanData } from '../types';
 
-const resolveOptionLabel = (options: any[], value: string | undefined, fallback = '???') => {
+const resolveOptionLabel = (options: any[], value: string | undefined, fallback = '未选择') => {
   if (!value) return fallback;
   return options.find((item) => item.value === value)?.label || value;
 };
@@ -43,7 +43,7 @@ export const openContinueGenerateDialog = ({
   };
 
   const instance = modal.confirm({
-    title: '??????',
+    title: '确认继续生成',
     width: 700,
     centered: true,
     content: (
@@ -56,9 +56,9 @@ export const openContinueGenerateDialog = ({
         previousChapters={previousChapters}
       />
     ),
-    okText: '????',
+    okText: '继续生成',
     okButtonProps: { danger: true },
-    cancelText: '??',
+    cancelText: '取消',
     onOk: async () => {
       instance.update({
         okButtonProps: { danger: true, loading: true },
@@ -70,7 +70,7 @@ export const openContinueGenerateDialog = ({
 
       try {
         if (!selectedStyleId) {
-          message.error('?????????');
+          message.error('请先选择写作风格');
           instance.update(restoreState);
           return;
         }
@@ -111,19 +111,19 @@ export const openManualCreateChapterDialog = ({
         ...values,
       });
 
-      message.success('???????');
+      message.success('章节创建成功');
       await refreshChapters();
       const updatedProject = await projectApi.getProject(currentProject.id);
       setCurrentProject(updatedProject);
       manualCreateForm.resetFields();
     } catch (error: any) {
-      message.error(`???????${error?.message || '????'}`);
+      message.error(`章节创建失败：${error?.message || '未知错误'}`);
       throw error;
     }
   };
 
   modal.confirm({
-    title: '??????',
+    title: '手动创建章节',
     width: 600,
     centered: true,
     content: (
@@ -133,15 +133,15 @@ export const openManualCreateChapterDialog = ({
         sortedOutlines={sortedOutlines}
       />
     ),
-    okText: '????',
-    cancelText: '??',
+    okText: '创建章节',
+    cancelText: '取消',
     onOk: async () => {
       const values = await manualCreateForm.validateFields();
       const conflictChapter = chapters.find((chapter: any) => chapter.chapter_number === values.chapter_number);
 
       if (conflictChapter) {
         modal.confirm({
-          title: '??????',
+          title: '章节编号冲突',
           icon: <InfoCircleOutlined style={{ color: '#ff4d4f' }} />,
           width: 500,
           centered: true,
@@ -152,9 +152,9 @@ export const openManualCreateChapterDialog = ({
               statusText={getStatusText(conflictChapter.status)}
             />
           ),
-          okText: '????????',
+          okText: '删除原章节并创建',
           okButtonProps: { danger: true },
-          cancelText: '??',
+          cancelText: '取消',
           onOk: async () => {
             await handleDeleteChapter(conflictChapter.id);
             await new Promise((resolve) => setTimeout(resolve, 300));
@@ -185,7 +185,7 @@ export const openExpansionPlanPreviewDialog = ({
       title: (
         <Space style={{ flexWrap: 'wrap' }}>
           <InfoCircleOutlined style={{ color: 'var(--color-primary)' }} />
-          <span style={{ wordBreak: 'break-word' }}>{`? ${chapter.chapter_number} ?????`}</span>
+          <span style={{ wordBreak: 'break-word' }}>{`第 ${chapter.chapter_number} 章扩写计划`}</span>
         </Space>
       ),
       width: isMobile ? 'calc(100vw - 32px)' : 800,
@@ -210,10 +210,10 @@ export const openExpansionPlanPreviewDialog = ({
           planData={planData}
         />
       ),
-      okText: '???',
+      okText: '关闭',
     });
   } catch (error) {
     console.error('Failed to load expansion plan:', error);
-    message.error('?????????');
+    message.error('加载扩写计划失败');
   }
 };

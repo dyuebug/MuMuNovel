@@ -493,7 +493,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
                   )}
                   {(qualityGateCounts?.blocked ?? 0) > 0 && <Tag color="red">人工复核 {(qualityGateCounts?.blocked ?? 0)}</Tag>}
                   {(qualityGateCounts?.repairable ?? 0) > 0 && <Tag color="orange">自动修复 {(qualityGateCounts?.repairable ?? 0)}</Tag>}
-                  {(qualityGateCounts?.pass ?? 0) > 0 && <Tag color="green">?? {(qualityGateCounts?.pass ?? 0)}</Tag>}
+                  {(qualityGateCounts?.pass ?? 0) > 0 && <Tag color="green">通过 {(qualityGateCounts?.pass ?? 0)}</Tag>}
                   {continuityWarningCount > 0 && <Tag color="gold">连续性预警 {continuityWarningCount}</Tag>}
                 </div>
 

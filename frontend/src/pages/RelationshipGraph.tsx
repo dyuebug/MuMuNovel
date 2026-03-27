@@ -166,7 +166,7 @@ export default function RelationshipGraph() {
     }
   }, [projectId, relationshipTypes, graphTheme]);
 
-  // ? relationshipTypes ???????????
+  // 当 relationshipTypes 变化时重新加载图谱数据
   useEffect(() => {
     void loadGraphData();
   }, [loadGraphData]);

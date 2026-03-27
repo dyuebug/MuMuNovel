@@ -450,20 +450,20 @@ function buildStoryRepairTargetCardFromGuidance(
     return undefined;
   }
 
-  const scopeLabel = options?.scope === 'batch' ? '????' : '????';
-  const priorityTarget = repairTargets[0] || guidance.weakest_metric_label || `${scopeLabel}???`;
-  const focusHint = focusAreas.length > 0 ? `?????${focusAreas.join(' / ')}?` : '';
+  const scopeLabel = options?.scope === 'batch' ? '批量章节' : '当前章节';
+  const priorityTarget = repairTargets[0] || guidance.weakest_metric_label || `${scopeLabel}质量`;
+  const focusHint = focusAreas.length > 0 ? `优先关注${focusAreas.join(' / ')}` : '';
   const applyHint = focusAreas.length > 0
-    ? `???${focusAreas.join(' / ')}??????????????????????`
-    : '????????????????????';
+    ? `建议围绕${focusAreas.join(' / ')}补强，并重新组织关键桥段与结果反馈`
+    : '建议先补强当前最弱项，再决定是否重新生成';
 
   return {
-    title: options?.scope === 'batch' ? '???????' : '???????',
-    summary: [repairSummary, focusHint, preserveStrengths[0] ? `?????${preserveStrengths[0]}` : ''].filter(Boolean).join(' '),
-    repairSummary: repairSummary || `${scopeLabel}?????${priorityTarget}???????????`,
+    title: options?.scope === 'batch' ? '批量修复建议' : '章节修复建议',
+    summary: [repairSummary, focusHint, preserveStrengths[0] ? `保留优势：${preserveStrengths[0]}` : ''].filter(Boolean).join(' '),
+    repairSummary: repairSummary || `${scopeLabel}需要优先修复「${priorityTarget}」相关问题`,
     priorityTarget,
     repairTargets,
-    preserveStrengths: preserveStrengths.length > 0 ? preserveStrengths : ['???????????????????????'],
+    preserveStrengths: preserveStrengths.length > 0 ? preserveStrengths : ['保持当前已经成立的角色动机、冲突后果与章节钩子'],
     antiPattern: buildRepairAntiPattern(options?.activePresetId ?? undefined),
     applyHint,
   };

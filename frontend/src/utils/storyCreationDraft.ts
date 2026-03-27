@@ -39,51 +39,51 @@ export const EMPTY_STORY_SCENE_OUTLINE_DRAFT: StorySceneOutlineDraft = {
 export const STORY_BEAT_PLANNER_FIELDS: Array<StoryDraftField<StoryBeatPlannerDraft>> = [
   {
     key: 'openingHook',
-    label: '????',
-    placeholder: '????????????????????',
+    label: '开篇钩子',
+    placeholder: '用一句话写清本章开头最抓人的钩子',
   },
   {
     key: 'chapterGoal',
-    label: '????',
-    placeholder: '???????????????',
+    label: '章节目标',
+    placeholder: '写清本章主角最想达成的目标',
   },
   {
     key: 'conflictPressure',
-    label: '????',
-    placeholder: '????????????',
+    label: '冲突压力',
+    placeholder: '写清本章最核心的阻碍、压力或代价',
   },
   {
     key: 'turningPoint',
-    label: '???',
-    placeholder: '????????????',
+    label: '转折点',
+    placeholder: '写清中段或后段出现的关键变化',
   },
   {
     key: 'endingHook',
-    label: '????',
-    placeholder: '????????????',
+    label: '结尾钩子',
+    placeholder: '写清章尾留下的悬念、回报或牵引',
   },
 ];
 
 export const STORY_SCENE_OUTLINE_FIELDS: Array<StoryDraftField<StorySceneOutlineDraft>> = [
   {
     key: 'setupScene',
-    label: '??????',
-    placeholder: '????????????',
+    label: '铺垫场景',
+    placeholder: '描述开场场景如何铺垫目标与局势',
   },
   {
     key: 'confrontationScene',
-    label: '??????',
-    placeholder: '???????????',
+    label: '对抗场景',
+    placeholder: '描述主要冲突如何升级并压迫角色',
   },
   {
     key: 'reversalScene',
-    label: '??????',
-    placeholder: '?????????',
+    label: '反转场景',
+    placeholder: '描述关键反转如何改变局面',
   },
   {
     key: 'payoffScene',
-    label: '??????',
-    placeholder: '??????????????',
+    label: '回收场景',
+    placeholder: '描述结尾如何回收前文并抛出下一章牵引',
   },
 ];
 
@@ -223,19 +223,19 @@ export const buildStoryCreationSnapshotDiffLabels = (
   const labels: string[] = [];
 
   if (normalizeOptionalText(snapshot.storyCreationBriefDraft) !== normalizeOptionalText(currentDraft.storyCreationBriefDraft)) {
-    labels.push('??');
+    labels.push('简介');
   }
 
   if (!areStoryBeatPlannerDraftsEqual(snapshot.beatPlannerDraft, currentDraft.beatPlannerDraft)) {
-    labels.push('????');
+    labels.push('节拍');
   }
 
   if (!areStorySceneOutlineDraftsEqual(snapshot.sceneOutlineDraft, currentDraft.sceneOutlineDraft)) {
-    labels.push('????');
+    labels.push('场景');
   }
 
   if (!areStoryCreationDraftMetaFieldsEqual(snapshot, currentDraft, { includeNarrativePerspective })) {
-    labels.push('??');
+    labels.push('参数');
   }
 
   return labels;

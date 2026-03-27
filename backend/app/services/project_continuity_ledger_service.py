@@ -507,7 +507,7 @@ def _build_career_state_items(
 
 
 async def build_project_continuity_ledger(db_session: AsyncSession, project_id: Optional[str], *, limit: int = 4) -> ProjectContinuityLedger:
-    """????????????????????? continuity ledger?"""
+    """构建项目 continuity ledger，汇总角色、关系、伏笔等关键连续性状态。"""
     if not project_id:
         return ProjectContinuityLedger()
 

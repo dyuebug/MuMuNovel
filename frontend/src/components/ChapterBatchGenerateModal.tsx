@@ -350,14 +350,14 @@ const batchSelectedCreativeModeLabel = batchSelectedCreativeMode
   : "批量保留优势";
 const batchSelectedStoryFocusLabel = batchSelectedStoryFocus
   ? (STORY_FOCUS_OPTIONS.find((item: any) => item.value === batchSelectedStoryFocus)?.label || batchSelectedStoryFocus)
-  : '????';
+  : '保持结构均衡';
 const batchSelectedPlotStageLabel = batchSelectedPlotStage
   ? (CREATION_PLOT_STAGE_OPTIONS.find((item: any) => item.value === batchSelectedPlotStage)?.label || batchSelectedPlotStage)
-  : '????';
+  : '按具体场景判断';
 const batchSelectedModelLabel = batchSelectedModel
   ? (normalizedAvailableModels.find((item) => item.value === batchSelectedModel)?.label || batchSelectedModel)
-  : '????';
-const batchQualityAnalysisLabel = batchEnableAnalysis === false ? '???' : '????';
+  : '项目默认';
+const batchQualityAnalysisLabel = batchEnableAnalysis === false ? '关闭' : '开启';
 
 const batchQualityProfileItems = useMemo(
   () => getQualityProfileDisplayItems(batchProgress?.quality_profile_summary),
@@ -978,7 +978,7 @@ const batchStoryInsightCards = useMemo(
   promptCharCount={batchStoryCreationPromptCharCount}
   isVerbose={isBatchStoryCreationPromptVerbose}
   onCopy={() => void copyStoryCreationPrompt(resolvedBatchStoryCreationBrief, 'batch')}
-  placeholder="???????????"
+  placeholder="提示词将显示在此"
 />
                     <StoryCreationSnapshotPanel
                       scopeLabel="batch"
@@ -1079,7 +1079,7 @@ const batchStoryInsightCards = useMemo(
                 {renderCompactListCard(
                   "章节分段",
                   batchVolumePacingPlan.segments.map(
-                    (segment: any) => `?${segment.startChapter}-${segment.endChapter}? ? ${segment.label}?${segment.mission}`,
+                    (segment: any) => `第${segment.startChapter}-${segment.endChapter}章 · ${segment.label}：${segment.mission}`,
                   ),
                   { tagText: `${batchVolumePacingPlan.segments.length}段` },
                 )}

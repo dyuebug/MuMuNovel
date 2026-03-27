@@ -35,7 +35,7 @@ const safeParseStringArray = (raw: unknown): string[] => {
       }
     } catch {
       return raw
-        .split(/[?,?]/)
+        .split(/[，,]/)
         .map((item) => item.trim())
         .filter(Boolean);
     }
@@ -113,9 +113,9 @@ function RelationshipGraphDetailPanel({
           <Space align="start">
             <TrophyOutlined style={{ color: token.colorWarning, marginTop: 4 }} />
             <div>
-              <Text strong>????</Text>
+              <Text strong>职业节点</Text>
               <p style={{ ...clampTextStyle(2), marginTop: 2 }}>
-                ?????????/?????????????????????????
+                该节点用于展示职业体系中的职业，可通过连线查看角色与职业的关联。
               </p>
             </div>
           </Space>
@@ -143,40 +143,40 @@ function RelationshipGraphDetailPanel({
         }}
       >
         <Text strong style={{ fontSize: 14, color: token.colorText }}>
-          ????
+          职业信息
         </Text>
         <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
           {nodeDetail.main_career_id ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Tag color="gold" style={{ margin: 0, borderRadius: 12, padding: '0 10px', fontWeight: 500 }}>???</Tag>
+              <Tag color="gold" style={{ margin: 0, borderRadius: 12, padding: '0 10px', fontWeight: 500 }}>主职业</Tag>
               <span style={{ fontSize: 14, color: token.colorText }}>
                 {careerNameMap[nodeDetail.main_career_id]?.name || nodeDetail.main_career_id}
-                {nodeDetail.main_career_stage ? <span style={{ color: token.colorTextTertiary, marginLeft: 4 }}>?{nodeDetail.main_career_stage}?</span> : ''}
+                {nodeDetail.main_career_stage ? <span style={{ color: token.colorTextTertiary, marginLeft: 4 }}>（第{nodeDetail.main_career_stage}阶）</span> : ''}
               </span>
             </div>
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Tag style={{ margin: 0, borderRadius: 12, padding: '0 10px' }}>???</Tag>
-              <span style={{ fontSize: 14, color: token.colorTextTertiary }}>???</span>
+              <Tag style={{ margin: 0, borderRadius: 12, padding: '0 10px' }}>主职业</Tag>
+              <span style={{ fontSize: 14, color: token.colorTextTertiary }}>未设置</span>
             </div>
           )}
 
           {subCareerData.length > 0 ? (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-              <Tag color="cyan" style={{ margin: 0, borderRadius: 12, padding: '0 10px', fontWeight: 500 }}>???</Tag>
+              <Tag color="cyan" style={{ margin: 0, borderRadius: 12, padding: '0 10px', fontWeight: 500 }}>副职业</Tag>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1 }}>
                 {subCareerData.map((sub, index) => (
                   <span key={`${sub.career_id}-${index}`} style={{ fontSize: 14, color: token.colorText, background: token.colorBgContainer, border: `1px solid ${token.colorBorderSecondary}`, borderRadius: token.borderRadiusSM, padding: '0 6px' }}>
                     {careerNameMap[sub.career_id]?.name || sub.career_id}
-                    {sub.stage ? <span style={{ color: token.colorTextTertiary, marginLeft: 4 }}>?{sub.stage}</span> : ''}
+                    {sub.stage ? <span style={{ color: token.colorTextTertiary, marginLeft: 4 }}>（第{sub.stage}阶）</span> : ''}
                   </span>
                 ))}
               </div>
             </div>
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Tag style={{ margin: 0, borderRadius: 12, padding: '0 10px' }}>???</Tag>
-              <span style={{ fontSize: 14, color: token.colorTextTertiary }}>???</span>
+              <Tag style={{ margin: 0, borderRadius: 12, padding: '0 10px' }}>副职业</Tag>
+              <span style={{ fontSize: 14, color: token.colorTextTertiary }}>未设置</span>
             </div>
           )}
         </div>
@@ -219,12 +219,12 @@ function RelationshipGraphDetailPanel({
         title={
           <Space>
             {nodeDetail.is_organization ? <ApartmentOutlined /> : <UserOutlined />}
-            <span>{nodeDetail.is_organization ? '????' : '????'}</span>
+            <span>{nodeDetail.is_organization ? '组织详情' : '角色详情'}</span>
           </Space>
         }
         extra={
           <Button type="text" size="small" onClick={onClose}>
-            ?
+            关闭
           </Button>
         }
       >
@@ -308,14 +308,14 @@ function RelationshipGraphDetailPanel({
                   style={{ borderRadius: 12, padding: '0 10px', fontWeight: 500 }}
                 >
                   {nodeDetail.role_type === 'protagonist'
-                    ? '??'
+                    ? '主角'
                     : nodeDetail.role_type === 'antagonist'
-                      ? '??'
-                      : '??'}
+                      ? '反派'
+                      : '配角'}
                 </Tag>
               )}
               {nodeDetail.gender && !nodeDetail.is_organization && <Tag style={{ borderRadius: 12, padding: '0 10px' }}>{nodeDetail.gender}</Tag>}
-              {nodeDetail.age && !nodeDetail.is_organization && <Tag style={{ borderRadius: 12, padding: '0 10px' }}>{nodeDetail.age}?</Tag>}
+              {nodeDetail.age && !nodeDetail.is_organization && <Tag style={{ borderRadius: 12, padding: '0 10px' }}>{nodeDetail.age}岁</Tag>}
             </Space>
           </div>
 
@@ -323,9 +323,9 @@ function RelationshipGraphDetailPanel({
             {!nodeDetail.is_organization ? (
               <>
                 {renderCareerTags()}
-                <InfoField label="????" value={nodeDetail.appearance} rows={2} />
-                <InfoField label="????" value={nodeDetail.personality} rows={3} />
-                <InfoField label="????" value={nodeDetail.background} rows={4} />
+                <InfoField label="外貌特征" value={nodeDetail.appearance} rows={2} />
+                <InfoField label="性格特点" value={nodeDetail.personality} rows={3} />
+                <InfoField label="背景故事" value={nodeDetail.background} rows={4} />
 
                 {traitList.length > 0 && (
                   <div
@@ -339,7 +339,7 @@ function RelationshipGraphDetailPanel({
                     }}
                   >
                     <Text strong style={{ fontSize: 14, color: token.colorText }}>
-                      ????
+                      特征标签
                     </Text>
                     <Space size={[6, 8]} wrap style={{ marginTop: 10 }}>
                       {traitList.slice(0, 12).map((trait, index) => (
@@ -353,10 +353,10 @@ function RelationshipGraphDetailPanel({
               </>
             ) : (
               <>
-                <InfoField label="????" value={nodeDetail.organization_type} rows={2} />
-                <InfoField label="????" value={nodeDetail.organization_purpose} rows={3} />
-                <InfoField label="???" value={nodeDetail.location} rows={2} />
-                <InfoField label="????" value={nodeDetail.motto} rows={2} />
+                <InfoField label="组织类型" value={nodeDetail.organization_type} rows={2} />
+                <InfoField label="组织宗旨" value={nodeDetail.organization_purpose} rows={3} />
+                <InfoField label="所在地" value={nodeDetail.location} rows={2} />
+                <InfoField label="格言/口号" value={nodeDetail.motto} rows={2} />
 
                 {nodeDetail.power_level !== undefined && nodeDetail.power_level !== null && (
                   <div
@@ -370,7 +370,7 @@ function RelationshipGraphDetailPanel({
                     }}
                   >
                     <Text strong style={{ fontSize: 14, color: token.colorText }}>
-                      ????
+                      势力等级
                     </Text>
                     <div style={{ ...clampTextStyle(1), fontSize: 18, color: token.colorWarning, fontWeight: 'bold' }}>
                       {nodeDetail.power_level}<span style={{ fontSize: 14, color: token.colorTextTertiary, fontWeight: 'normal' }}>/100</span>
@@ -390,7 +390,7 @@ function RelationshipGraphDetailPanel({
                     }}
                   >
                     <Text strong style={{ fontSize: 14, color: token.colorText }}>
-                      ????
+                      组织成员
                     </Text>
                     <Space size={[6, 8]} wrap style={{ marginTop: 10 }}>
                       {orgMembers.slice(0, 16).map((member, index) => (

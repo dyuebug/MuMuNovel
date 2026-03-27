@@ -1360,7 +1360,7 @@ export default function Characters() {
         <Suspense fallback={null}>
           <LazyCharacterFormModal
             open={isEditModalOpen}
-            title={editingCharacter.is_organization ? '????' : '????'}
+            title={editingCharacter.is_organization ? '编辑组织' : '编辑角色'}
             mode="edit"
             entityType={editingCharacter.is_organization ? 'organization' : 'character'}
             form={editForm}
@@ -1368,26 +1368,26 @@ export default function Characters() {
             record={editingCharacter}
             mainCareers={mainCareers}
             subCareers={subCareers}
-            submitText="??"
+            submitText="保存"
             onCancel={closeEditModal}
             onFinish={handleUpdateCharacter}
           />
         </Suspense>
       ) : null}
 
-      {/* ??????/????? */}
+      {/* 新建角色/组织 */}
       {isCreateModalOpen ? (
         <Suspense fallback={null}>
           <LazyCharacterFormModal
             open={isCreateModalOpen}
-            title={createType === 'character' ? '????' : '????'}
+            title={createType === 'character' ? '新建角色' : '新建组织'}
             mode="create"
             entityType={createType === 'character' ? 'character' : 'organization'}
             form={createForm}
             isMobile={isMobile}
             mainCareers={mainCareers}
             subCareers={subCareers}
-            submitText="??"
+            submitText="创建"
             onCancel={closeCreateModal}
             onFinish={handleCreateCharacter}
           />

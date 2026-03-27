@@ -138,8 +138,8 @@ const normalizeStoryCreationSnapshot = (value: unknown): StoryCreationSnapshot |
     label: typeof snapshot.label === 'string' && snapshot.label.trim()
       ? snapshot.label.trim()
       : reason === 'generate'
-        ? '????'
-        : '????',
+        ? '自动快照'
+        : '手动快照',
     prompt: normalizedPrompt || undefined,
     promptLayerLabels: normalizedLayerLabels,
     promptCharCount: normalizedPromptCharCount,

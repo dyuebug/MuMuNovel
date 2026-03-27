@@ -77,7 +77,7 @@ function renderFacetEvidence(items: ChapterCandidateDraftQualityEvidence[]) {
   }
   return (
     <div style={{ marginTop: 8 }}>
-      <Text type="secondary">????</Text>
+      <Text type="secondary">证据说明</Text>
       <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 6 }}>
         {items.map((item, index) => (
           <Card key={`${item.item}-${index}`} size="small" style={{ background: 'rgba(0,0,0,0.02)' }}>

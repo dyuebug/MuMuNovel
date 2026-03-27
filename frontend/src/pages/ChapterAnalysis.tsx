@@ -899,14 +899,14 @@ const ChapterAnalysis: React.FC = () => {
                         { tagText: `${candidateFailedMetricLabels.length}项`, tagColor: 'red', style: { marginBottom: 10 } },
                       )}
                       {candidateApplyRisk && renderCompactSettingHint(
-                        '????????',
-                        candidateApplyRisk.summary || '???????????? / ??????????',
+                        '应用风险',
+                        candidateApplyRisk.summary || '应用前请先确认角色状态、关键设定与章节事实是否一致。',
                         { tone: 'warning', style: { marginBottom: 10 } },
                       )}
                       {candidateApplyRiskItems.length > 0 && renderCompactListCard(
-                        '?????',
+                        '风险清单',
                         candidateApplyRiskItems,
-                        { tagText: `${candidateApplyRiskItems.length}?`, tagColor: 'orange', style: { marginBottom: 10 } },
+                        { tagText: `${candidateApplyRiskItems.length}项`, tagColor: 'orange', style: { marginBottom: 10 } },
                       )}
                       {candidateDraft.content_preview && (
                         <div
