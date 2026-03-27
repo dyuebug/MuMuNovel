@@ -361,8 +361,9 @@ export const settingsApi = {
   checkFunctionCalling: (params: { api_key: string; api_base_url: string; provider: string; llm_model: string }) =>
     api.post<unknown, {
       success: boolean;
-      supported: boolean;
+      supported: boolean | null;
       message: string;
+      http_status?: number;
       response_time_ms?: number;
       provider?: string;
       model?: string;
