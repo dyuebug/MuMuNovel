@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
 from typing import List, AsyncGenerator, Dict, Any, Optional
+from collections.abc import Mapping
 import json
 
 from app.database import get_db
@@ -80,6 +81,26 @@ from app.utils.sse_response import SSEResponse, create_sse_response, WizardProgr
 
 router = APIRouter(prefix="/outlines", tags=["大纲管理"])
 logger = get_logger(__name__)
+
+def _dump_model_like_payload(value: Any) -> Dict[str, Any]:
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        if isinstance(dumped, Mapping):
+            return dict(dumped)
+        raise TypeError("model_dump() must return a mapping")
+
+    legacy_dump = getattr(value, "dict", None)
+    if callable(legacy_dump):
+        dumped = legacy_dump()
+        if isinstance(dumped, Mapping):
+            return dict(dumped)
+        raise TypeError("dict() must return a mapping")
+
+    if isinstance(value, Mapping):
+        return dict(value)
+
+    raise TypeError(f"Unsupported outline chapter plan payload type: {type(value).__name__}")
 
 
 def _build_chapters_brief(outlines: List[Outline], max_recent: int = 20) -> str:
@@ -2823,8 +2844,8 @@ async def create_chapters_from_existing_plans(
         # 创建展开服务实例
         expansion_service = PlotExpansionService(user_ai_service)
         
-        # 将Pydantic模型转换为字典列表
-        chapter_plans_dict = [plan.model_dump() for plan in plans_request.chapter_plans]
+        # ????????????????? Pydantic ??????? dict
+        chapter_plans_dict = [_dump_model_like_payload(plan) for plan in plans_request.chapter_plans]
         
         # 直接使用传入的规划创建章节记录（不调用AI）
         created_chapters = await expansion_service.create_chapters_from_plans(
