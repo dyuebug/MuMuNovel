@@ -2860,7 +2860,8 @@ def build_story_quality_trend_block(
     if pacing_summary:
         append_section(0, "pacing_imbalance_summary", f"- \u957f\u7bc7\u8282\u594f\u4fe1\u53f7\uff1a{pacing_summary}")
     if pacing_signal_lines:
-        append_section(1, "pacing_imbalance_signals", f"- \u5f53\u524d\u8981\u76ef\u4f4f\u7684\u957f\u7bc7\u8282\u594f\u5f02\u5e38\uff1a{'\uff1b'.join(pacing_signal_lines)}\u3002")
+        pacing_signal_text = "；".join(pacing_signal_lines)
+        append_section(1, "pacing_imbalance_signals", f"- \u5f53\u524d\u8981\u76ef\u4f4f\u7684\u957f\u7bc7\u8282\u594f\u5f02\u5e38\uff1a{pacing_signal_text}\u3002")
     if normalized_pacing_targets:
         append_section(0, "pacing_imbalance_targets", f"- \u672c\u7ae0\u4f18\u5148\u4fee\u590d\u8fd9\u4e9b\u957f\u7bc7\u8282\u594f\u95ee\u9898\uff1a{' / '.join(normalized_pacing_targets)}\u3002")
         append_section(0, "pacing_guardrail", "- \u8282\u594f\u786c\u8981\u6c42\uff1a\u672c\u7ae0\u5fc5\u987b\u540c\u65f6\u5b8c\u6210\u201c\u63a8\u8fdb\u4e00\u4ef6\u4e8b + \u56de\u6536\u4e00\u4ef6\u4e8b + \u7559\u4e0b\u4e0b\u4e00\u6b65\u7275\u5f15\u201d\u3002")
