@@ -13,44 +13,44 @@ from app.schemas.quality import (
 
 
 SAMPLE_GUIDANCE = {
-    "summary": "?????????????",
-    "repair_targets": ["????????????", "???????????"],
-    "preserve_strengths": ["???????????"],
+    "summary": "需要补强兑现链路",
+    "repair_targets": ["补足伏笔回收", "强化冲突升级"],
+    "preserve_strengths": ["保留对白节奏"],
     "focus_areas": ["conflict", "payoff"],
     "weakest_metric_key": "payoff_chain_rate",
-    "weakest_metric_label": "????",
+    "weakest_metric_label": "兑现链",
     "weakest_metric_value": 61.0,
 }
 
 SAMPLE_GATE = {
     "status": "repairable",
     "decision": "auto_repair",
-    "label": "???",
-    "summary": "????????????????????????",
-    "reason": "?? 2 ??????",
+    "label": "可修复",
+    "summary": "两项关键指标低于阈值，需要补写桥接与回收",
+    "reason": "共 2 项指标偏低",
     "overall_score": 78.5,
     "weak_metric_count": 2,
     "failed_metrics": [
         {
             "key": "payoff_chain_rate",
-            "label": "????",
+            "label": "兑现链",
             "value": 61.0,
             "threshold": 62.0,
             "gap": 1.0,
             "focus_area": "payoff",
-            "repair_target": "??????",
+            "repair_target": "补足回收",
         }
     ],
     "focus_areas": ["conflict", "payoff"],
-    "repair_targets": ["??????", "??????"],
+    "repair_targets": ["补足回收", "强化冲突"],
     "can_auto_repair": True,
     "recommended_action": "bridge_scene",
-    "recommended_action_label": "??????",
+    "recommended_action_label": "补桥接场景",
     "quality_runtime_pressure": {
         "foreshadow_state_count": 2,
         "character_state_count": 1,
-        "foreshadow_state_items": ["????"],
-        "character_state_items": ["????????"],
+        "foreshadow_state_items": ["旧怀表"],
+        "character_state_items": ["林秋开始怀疑"],
     },
 }
 
@@ -67,7 +67,7 @@ SAMPLE_METRICS = {
         "plot_stage": "development",
         "chapter_count": 18,
         "current_chapter_number": 7,
-        "character_focus": ["??", "??"],
+        "character_focus": ["林秋", "沈砚"],
     },
     "repair_guidance": SAMPLE_GUIDANCE,
     "quality_gate": SAMPLE_GATE,
@@ -92,7 +92,7 @@ def test_should_normalize_story_quality_metrics_payload_into_nested_models():
     assert payload.quality_gate.status == "repairable"
     assert payload.quality_gate.failed_metrics[0].key == "payoff_chain_rate"
     assert payload.quality_gate.quality_runtime_pressure is not None
-    assert payload.quality_gate.quality_runtime_pressure.foreshadow_state_items == ["????"]
+    assert payload.quality_gate.quality_runtime_pressure.foreshadow_state_items == ["旧怀表"]
     dumped = payload.model_dump(exclude_none=True)
     assert dumped["story_runtime_contract"]["blueprint"]["chapter_count"] == 18
     assert dumped["extra_signal"]["enabled"] is True
@@ -126,7 +126,7 @@ def test_should_parse_batch_generate_status_response_with_typed_quality_payloads
     assert response.latest_quality_metrics.quality_gate.status == "repairable"
     assert isinstance(response.quality_metrics_summary, ChapterQualityMetricsSummary)
     assert response.quality_metrics_summary.repair_guidance is not None
-    assert response.quality_metrics_summary.repair_guidance.summary.startswith("????")
+    assert response.quality_metrics_summary.repair_guidance.summary.startswith("需要")
     assert isinstance(response.active_story_repair_payload, ActiveStoryRepairPayload)
     assert response.active_story_repair_payload.quality_gate is not None
     assert response.active_story_repair_payload.quality_gate.decision == "auto_repair"

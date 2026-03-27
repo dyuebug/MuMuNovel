@@ -12,22 +12,22 @@ SAMPLE_RUNTIME_CONTRACT = {
         "creative_mode": "balanced",
         "story_focus": "conflict",
         "plot_stage": "opening",
-        "story_creation_brief": "???????????",
+        "story_creation_brief": "强化冲突推进",
         "quality_preset": "cinematic",
-        "quality_notes": "???????????",
+        "quality_notes": "保持电影感节奏",
     },
     "blueprint": {
-        "long_term_goal": "????????????",
+        "long_term_goal": "夺回失落王城",
         "chapter_count": 24,
         "current_chapter_number": 3,
         "target_word_count": 3200,
-        "character_focus_names": ["??", "??"],
-        "foreshadow_payoff_plan": ["????", "????"],
-        "character_state_ledger": [{"name": "??", "state": "??????"}],
-        "relationship_state_ledger": [{"pair": "??-??", "state": "????"}],
-        "foreshadow_state_ledger": [{"name": "????", "status": "??"}],
-        "organization_state_ledger": [{"name": "????", "state": "????"}],
-        "career_state_ledger": [{"name": "???", "state": "?????"}],
+        "character_focus_names": ["林秋", "沈砚"],
+        "foreshadow_payoff_plan": ["怀表异响", "密信回收"],
+        "character_state_ledger": [{"name": "林秋", "state": "开始怀疑盟友"}],
+        "relationship_state_ledger": [{"pair": "林秋-沈砚", "state": "暂时结盟"}],
+        "foreshadow_state_ledger": [{"name": "旧怀表", "status": "未回收"}],
+        "organization_state_ledger": [{"name": "巡夜司", "state": "暗中调查"}],
+        "career_state_ledger": [{"name": "暗卫线", "state": "身份暴露"}],
     },
 }
 
@@ -62,7 +62,7 @@ def test_should_build_chapter_generation_quality_history_payload_with_runtime_co
     assert payload.story_runtime_snapshot["plot_stage"] == "opening"
     assert payload.story_runtime_snapshot["chapter_count"] == 24
     assert payload.story_runtime_snapshot["current_chapter_number"] == 3
-    assert payload.story_runtime_snapshot["character_focus"] == ["??", "??"]
+    assert payload.story_runtime_snapshot["character_focus"] == ["林秋", "沈砚"]
     assert payload.quality_metrics.quality_runtime_context is not None
     assert payload.quality_metrics.quality_runtime_context.model_dump(exclude_none=True) == payload.story_runtime_snapshot
     assert payload.quality_metrics.repair_guidance is not None

@@ -384,18 +384,18 @@ async def test_should_build_context_with_expected_builder_during_generate_stream
     calls = {"many": 0, "one": 0}
 
     class FakeContext:
-        chapter_outline = "????"
+        chapter_outline = "夜巡篇大纲"
         continuation_point = None
         previous_chapter_summary = ""
         chapter_characters = (
-            "??????\n- ??A\n"
-            "????????\n- ??A???????\n"
-            "????????\n- ??A/??B???????"
+            "角色状态\n- 角色A\n"
+            "人物动态\n- 角色A承担巡查任务\n"
+            "关系动态\n- 角色A/角色B暂时同盟"
         )
-        chapter_careers = "??A????"
+        chapter_careers = "角色A：巡夜人"
         foreshadow_reminders = (
-            "????????\n- ???????\n"
-            "????????\n- ??????????????"
+            "伏笔提醒\n- 神秘怀表\n"
+            "回收线索\n- 留意阁楼钥匙的来源"
         )
         relevant_memories = ""
         recent_chapters_context = ""
@@ -521,25 +521,25 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
         chapters_session_factory,
         project_id=project.id,
         chapter_number=1,
-        title="??????",
+        title="待生成章节",
     )
 
     calls: list[dict[str, Any]] = []
     quality_metric_calls: list[dict[str, Any]] = []
 
     class FakeContext:
-        chapter_outline = "????"
+        chapter_outline = "夜巡篇大纲"
         continuation_point = None
         previous_chapter_summary = ""
         chapter_characters = (
-            "??????\n- ??A\n"
-            "????????\n- ??A???????\n"
-            "????????\n- ??A/??B???????"
+            "角色状态\n- 角色A\n"
+            "人物动态\n- 角色A承担巡查任务\n"
+            "关系动态\n- 角色A/角色B暂时同盟"
         )
-        chapter_careers = "??A????"
+        chapter_careers = "角色A：巡夜人"
         foreshadow_reminders = (
-            "????????\n- ???????\n"
-            "????????\n- ??????????????"
+            "伏笔提醒\n- 神秘怀表\n"
+            "回收线索\n- 留意阁楼钥匙的来源"
         )
         relevant_memories = ""
         recent_chapters_context = ""
@@ -553,7 +553,7 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
             return FakeContext()
 
     async def fake_get_template(*args, **kwargs):
-        return "??"
+        return "模板"
 
     def fake_format_prompt(template, **kwargs):
         return "mock-generate-prompt"
@@ -577,7 +577,7 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
     monkeypatch.setattr(chapters_api.asyncio, "sleep", fake_sleep)
 
     fake_ai_service.calls.clear()
-    fake_ai_service.chunks = ["???", "???"]
+    fake_ai_service.chunks = ["继续", "创作"]
 
     response = await chapters_client.post(
         f"/api/chapters/{chapter.id}/generate-stream",
@@ -599,16 +599,16 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
     assert calls[0]["project_id"] == project.id
     assert calls[0]["task_id"] == result_data["analysis_task_id"]
     assert isinstance(calls[0]["story_packet"], StoryPacket)
-    assert calls[0]["chapter_content_override"] == "??????"
-    assert calls[0]["chapter_word_count_override"] == len("??????")
+    assert calls[0]["chapter_content_override"] == "继续创作"
+    assert calls[0]["chapter_word_count_override"] == len("继续创作")
 
     assert quality_metric_calls
     runtime_context = quality_metric_calls[0]["quality_runtime_context"]
     assert runtime_context["current_chapter_number"] == 1
     assert runtime_context["target_word_count"] == 500
-    assert "??A???????" in runtime_context["character_state_ledger"]
-    assert "??A/??B???????" in runtime_context["relationship_state_ledger"]
-    assert "??????????????" in runtime_context["foreshadow_state_ledger"]
+    assert "角色A承担巡查任务" in runtime_context["character_state_ledger"]
+    assert "角色A/角色B暂时同盟" in runtime_context["relationship_state_ledger"]
+    assert "留意阁楼钥匙的来源" in runtime_context["foreshadow_state_ledger"]
 
     async with chapters_session_factory() as session:
         saved_chapter = await session.get(Chapter, chapter.id)
@@ -923,18 +923,18 @@ async def test_generate_single_chapter_for_batch_should_build_runtime_context_wi
     quality_metric_calls: list[dict[str, Any]] = []
 
     class FakeContext:
-        chapter_outline = "??????"
+        chapter_outline = "批量生成大纲"
         continuation_point = None
         previous_chapter_summary = ""
         chapter_characters = (
-            "??????\n- ??A\n"
-            "????????\n- ??A????????\n"
-            "????????\n- ??A/??B???????"
+            "角色状态\n- 角色A\n"
+            "人物动态\n- 角色A正在追查线索\n"
+            "关系动态\n- 角色A/角色B互相试探"
         )
-        chapter_careers = "??A????"
+        chapter_careers = "角色A：巡夜人"
         foreshadow_reminders = (
-            "????????\n- ??????\n"
-            "????????\n- ???????????????"
+            "伏笔提醒\n- 失踪账册\n"
+            "回收线索\n- 下一章需要兑现账册来源"
         )
         relevant_memories = ""
         recent_chapters_context = ""
@@ -987,7 +987,7 @@ async def test_generate_single_chapter_for_batch_should_build_runtime_context_wi
     monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
 
     fake_ai_service.calls.clear()
-    fake_ai_service.chunks = ["????", "????"]
+    fake_ai_service.chunks = ["批量", "正文"]
 
     async with chapters_session_factory() as session:
         db_chapter = await session.get(Chapter, chapter.id)
@@ -1005,8 +1005,8 @@ async def test_generate_single_chapter_for_batch_should_build_runtime_context_wi
             write_lock=chapters_api.Lock(),
         )
 
-        assert result["full_content"] == "????????"
-        assert result["word_count"] == len("????????")
+        assert result["full_content"] == "批量正文"
+        assert result["word_count"] == len("批量正文")
         assert db_chapter.content is None
         assert db_chapter.word_count == 0
         assert db_project.current_words == 0
@@ -1021,9 +1021,9 @@ async def test_generate_single_chapter_for_batch_should_build_runtime_context_wi
     runtime_context = quality_metric_calls[0]["quality_runtime_context"]
     assert runtime_context["current_chapter_number"] == 1
     assert runtime_context["target_word_count"] == 600
-    assert "??A????????" in runtime_context["character_state_ledger"]
-    assert "??A/??B???????" in runtime_context["relationship_state_ledger"]
-    assert "???????????????" in runtime_context["foreshadow_state_ledger"]
+    assert "角色A正在追查线索" in runtime_context["character_state_ledger"]
+    assert "角色A/角色B互相试探" in runtime_context["relationship_state_ledger"]
+    assert "下一章需要兑现账册来源" in runtime_context["foreshadow_state_ledger"]
     assert result["quality_metrics"]["quality_runtime_context"] == runtime_context
 
 
@@ -2415,7 +2415,7 @@ async def test_should_auto_fill_story_repair_payload_from_chapter_quality_histor
         chapters_session_factory,
         project_id=project.id,
         chapter_number=1,
-        title="????????????",
+        title="待补修章节预览",
         content=None,
         outline_id=outline.id,
     )
@@ -2490,13 +2490,13 @@ async def test_should_merge_manual_story_repair_summary_with_history_fallback_fo
         chapters_session_factory,
         project_id=project.id,
         order_index=1,
-        title="????????",
+        title="当前大纲",
     )
     chapter = await create_chapter(
         chapters_session_factory,
         project_id=project.id,
         chapter_number=1,
-        title="?????????????",
+        title="待补修章节",
         content=None,
         outline_id=outline.id,
     )
@@ -2565,33 +2565,33 @@ async def test_should_auto_fill_story_repair_payload_from_previous_chapter_histo
         chapters_session_factory,
         project_id=project.id,
         order_index=1,
-        title="????",
+        title="开篇",
     )
     outline2 = await create_outline(
         chapters_session_factory,
         project_id=project.id,
         order_index=2,
-        title="??????",
+        title="追查线索",
     )
     outline3 = await create_outline(
         chapters_session_factory,
         project_id=project.id,
         order_index=3,
-        title="??????",
+        title="收束回响",
     )
     previous_chapter = await create_chapter(
         chapters_session_factory,
         project_id=project.id,
         chapter_number=1,
-        title="???",
-        content="???????",
+        title="上章",
+        content="上一章正文",
         outline_id=outline1.id,
     )
     await create_chapter(
         chapters_session_factory,
         project_id=project.id,
         chapter_number=2,
-        title="???",
+        title="次章",
         content=None,
         outline_id=outline2.id,
     )
@@ -2599,7 +2599,7 @@ async def test_should_auto_fill_story_repair_payload_from_previous_chapter_histo
         chapters_session_factory,
         project_id=project.id,
         chapter_number=3,
-        title="???",
+        title="终章",
         content=None,
         outline_id=outline3.id,
     )
