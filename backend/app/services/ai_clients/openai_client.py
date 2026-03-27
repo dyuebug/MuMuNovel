@@ -2,6 +2,8 @@
 import json
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
+import httpx
+
 from app.logger import get_logger
 from .base_client import BaseAIClient
 
@@ -36,6 +38,21 @@ class OpenAIClient(BaseAIClient):
     def _use_responses_api(self) -> bool:
         """Whether this profile should use /responses wire API."""
         return self.compat_profile in self._responses_profiles
+
+    @staticmethod
+    def _should_fallback_from_responses(
+        error: httpx.HTTPStatusError,
+        tools: Optional[list],
+    ) -> bool:
+        """Whether tool-calling requests should retry via /chat/completions."""
+        if not tools:
+            return False
+
+        status_code = error.response.status_code if error.response is not None else None
+        if status_code is None:
+            return False
+
+        return status_code >= 500 or status_code in {404, 405, 415, 422}
 
     def _build_headers(self) -> Dict[str, str]:
         """Build request headers based on provider profile."""
@@ -78,10 +95,14 @@ class OpenAIClient(BaseAIClient):
         tools: Optional[list] = None,
         tool_choice: Optional[str] = None,
         stream: bool = False,
+        use_responses_api: Optional[bool] = None,
     ) -> Dict[str, Any]:
         cleaned_tools = self._sanitize_tools(tools)
 
-        if self._use_responses_api():
+        if use_responses_api is None:
+            use_responses_api = self._use_responses_api()
+
+        if use_responses_api:
             payload: Dict[str, Any] = {
                 "model": model,
                 "input": messages,
@@ -285,19 +306,52 @@ class OpenAIClient(BaseAIClient):
         tools: Optional[list] = None,
         tool_choice: Optional[str] = None,
     ) -> Dict[str, Any]:
-        payload = self._build_payload(messages, model, temperature, max_tokens, tools, tool_choice)
+        use_responses_api = self._use_responses_api()
+        payload = self._build_payload(
+            messages,
+            model,
+            temperature,
+            max_tokens,
+            tools,
+            tool_choice,
+            use_responses_api=use_responses_api,
+        )
 
         logger.debug(f"OpenAI request payload: {json.dumps(payload, ensure_ascii=False, indent=2)}")
 
-        endpoint = "/responses" if self._use_responses_api() else "/chat/completions"
-        data = await self._request_with_retry("POST", endpoint, payload)
+        endpoint = "/responses" if use_responses_api else "/chat/completions"
+        try:
+            data = await self._request_with_retry("POST", endpoint, payload)
+        except httpx.HTTPStatusError as exc:
+            if use_responses_api and self._should_fallback_from_responses(exc, tools):
+                status_code = exc.response.status_code if exc.response is not None else "unknown"
+                logger.warning(
+                    f"Responses API tool request returned HTTP {status_code}; retrying via /chat/completions"
+                )
+                use_responses_api = False
+                endpoint = "/chat/completions"
+                payload = self._build_payload(
+                    messages,
+                    model,
+                    temperature,
+                    max_tokens,
+                    tools,
+                    tool_choice,
+                    use_responses_api=False,
+                )
+                logger.debug(
+                    f"OpenAI fallback payload: {json.dumps(payload, ensure_ascii=False, indent=2)}"
+                )
+                data = await self._request_with_retry("POST", endpoint, payload)
+            else:
+                raise
 
         logger.debug(f"OpenAI raw response: {json.dumps(data, ensure_ascii=False, indent=2)}")
 
-        if not self._use_responses_api() and isinstance(data, dict) and data.get("_raw_sse_text"):
+        if not use_responses_api and isinstance(data, dict) and data.get("_raw_sse_text"):
             return self._parse_chat_completions_sse_text(str(data.get("_raw_sse_text") or ""))
 
-        if self._use_responses_api():
+        if use_responses_api:
             tool_calls = self._extract_response_tool_calls(data)
             status = data.get("status")
             if tool_calls:

@@ -1,5 +1,6 @@
 ﻿import json
 
+import httpx
 import pytest
 from unittest.mock import AsyncMock
 
@@ -149,6 +150,80 @@ async def test_should_parse_function_call_from_responses_payload():
     assert result["tool_calls"][0]["id"] == "call_1"
     assert result["tool_calls"][0]["function"]["name"] == "get_weather"
     assert json.loads(result["tool_calls"][0]["function"]["arguments"])["city"] == "Beijing"
+
+
+@pytest.mark.asyncio
+async def test_should_fallback_to_chat_completions_when_responses_returns_bad_gateway_for_tools():
+    client = OpenAIClient(
+        api_key="sk-test",
+        base_url="https://free.9e.nz/v1",
+        compat_profile="sub2api",
+    )
+
+    responses_error = httpx.HTTPStatusError(
+        "Server error '502 Bad Gateway' for url 'https://free.9e.nz/responses'",
+        request=httpx.Request("POST", "https://free.9e.nz/responses"),
+        response=httpx.Response(502, request=httpx.Request("POST", "https://free.9e.nz/responses")),
+    )
+    client._request_with_retry = AsyncMock(
+        side_effect=[
+            responses_error,
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_chat_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": '{"city":"Beijing"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            },
+        ]
+    )
+
+    result = await client.chat_completion(
+        messages=[{"role": "user", "content": "weather"}],
+        model="gpt-5.3-codex",
+        temperature=0.2,
+        max_tokens=128,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+        tool_choice="auto",
+    )
+
+    assert client._request_with_retry.await_count == 2
+    first_call = client._request_with_retry.await_args_list[0].args
+    second_call = client._request_with_retry.await_args_list[1].args
+
+    assert first_call[1] == "/responses"
+    assert "input" in first_call[2]
+    assert second_call[1] == "/chat/completions"
+    assert "messages" in second_call[2]
+    assert second_call[2]["tool_choice"] == "auto"
+
+    assert result["finish_reason"] == "tool_calls"
+    assert result["tool_calls"] is not None
+    assert result["tool_calls"][0]["id"] == "call_chat_1"
 
 
 @pytest.mark.asyncio
