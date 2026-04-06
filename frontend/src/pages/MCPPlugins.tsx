@@ -46,6 +46,164 @@ const resolveFunctionCallingStatus = (result: { success: boolean; supported?: bo
   return result.supported ? 'supported' : 'unsupported';
 };
 
+type EndpointDiagnostics = {
+  primary_endpoint?: string;
+  backup_endpoints?: string[];
+  configured_endpoint_count?: number;
+  fallback_strategy?: string;
+  auto_failover_enabled?: boolean;
+};
+
+type TransportDiagnostics = {
+  summary?: {
+    total_attempts?: number;
+    successful_attempts?: number;
+    api_modes_tried?: string[];
+    backup_endpoint_used?: boolean;
+    api_mode_fallback_used?: boolean;
+    forced_chat_completions?: boolean;
+    normalized_base_url_used?: boolean;
+  };
+  attempts?: Array<{
+    api_mode?: string;
+    endpoint_role?: string;
+    base_url?: string;
+    endpoint_path?: string;
+    attempt_number?: number;
+    max_attempts?: number;
+    result?: string;
+    status_code?: number;
+    error_type?: string;
+    will_retry_same_endpoint?: boolean;
+    will_failover?: boolean;
+  }>;
+};
+
+const UNSUPPORTED_STATUS_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
+
+const isUnsupportedStatusCacheExpired = (verifiedConfig: { status?: string; testedAt?: string | null }) => {
+  if (verifiedConfig.status !== 'unsupported') {
+    return false;
+  }
+
+  const testedAt = typeof verifiedConfig.testedAt === 'string' ? verifiedConfig.testedAt.trim() : '';
+  if (!testedAt) {
+    return true;
+  }
+
+  const testedAtMs = Date.parse(testedAt);
+  if (!Number.isFinite(testedAtMs)) {
+    return true;
+  }
+
+  return Date.now() - testedAtMs >= UNSUPPORTED_STATUS_CACHE_TTL_MS;
+};
+
+const normalizeBackupUrls = (urls: unknown): string[] => {
+  if (!Array.isArray(urls)) {
+    return [];
+  }
+
+  return urls
+    .map((url) => (typeof url === 'string' ? url.trim() : ''))
+    .filter(Boolean);
+};
+
+const buildVerifiedConfig = (settings: {
+  api_provider?: string | null;
+  provider_type?: string | null;
+  api_base_url?: string | null;
+  llm_model?: string | null;
+  api_backup_urls?: string[] | null;
+  fallback_strategy?: string | null;
+}) => ({
+  provider: settings.provider_type || settings.api_provider || '',
+  baseUrl: settings.api_base_url || '',
+  model: settings.llm_model || '',
+  backupUrls: normalizeBackupUrls(settings.api_backup_urls),
+  fallbackStrategy: settings.fallback_strategy || 'auto',
+});
+
+const renderEndpointDiagnostics = (details: Record<string, any> | undefined, colorBgLayout: string) => {
+  const diagnostics = details?.endpoint_diagnostics as EndpointDiagnostics | undefined;
+  if (!diagnostics) {
+    return null;
+  }
+
+  const backupEndpoints = normalizeBackupUrls(diagnostics.backup_endpoints);
+
+  return (
+    <div style={{ marginBottom: 12, padding: 12, background: colorBgLayout, borderRadius: 8 }}>
+      <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>Endpoint diagnostics</Text>
+      <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+        <div>Primary endpoint: <Text code>{diagnostics.primary_endpoint || 'Not set'}</Text></div>
+        <div>Backup endpoints: <Text strong>{backupEndpoints.length}</Text></div>
+        <div>Strategy: <Text strong>{diagnostics.fallback_strategy || 'auto'}</Text></div>
+        <div>Auto failover: <Text strong>{diagnostics.auto_failover_enabled ? 'Enabled' : 'Disabled'}</Text></div>
+      </div>
+      {backupEndpoints.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>Backup endpoint list</Text>
+          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            {backupEndpoints.map((url, index) => (
+              <Text code key={`${url}-${index}`} style={{ width: '100%', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                {url}
+              </Text>
+            ))}
+          </Space>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const renderTransportDiagnostics = (details: Record<string, any> | undefined, colorBgLayout: string) => {
+  const diagnostics = details?.transport_diagnostics as TransportDiagnostics | undefined;
+  if (!diagnostics) {
+    return null;
+  }
+
+  const summary = diagnostics.summary ?? {};
+  const attempts = Array.isArray(diagnostics.attempts) ? diagnostics.attempts.slice(-3) : [];
+  const apiModes = Array.isArray(summary.api_modes_tried) ? summary.api_modes_tried : [];
+
+  return (
+    <div style={{ marginBottom: 12, padding: 12, background: colorBgLayout, borderRadius: 8 }}>
+      <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>Transport diagnostics</Text>
+      <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+        <div>Total attempts: <Text strong>{summary.total_attempts ?? 0}</Text></div>
+        <div>Successful attempts: <Text strong>{summary.successful_attempts ?? 0}</Text></div>
+        <div>API modes tried: <Text strong>{apiModes.length > 0 ? apiModes.join(' -> ') : 'Unknown'}</Text></div>
+        <div>Backup endpoint used: <Text strong>{summary.backup_endpoint_used ? 'Yes' : 'No'}</Text></div>
+        <div>API mode fallback: <Text strong>{summary.api_mode_fallback_used ? 'Yes' : 'No'}</Text></div>
+        <div>Forced chat completions: <Text strong>{summary.forced_chat_completions ? 'Yes' : 'No'}</Text></div>
+        <div>Normalized base URL used: <Text strong>{summary.normalized_base_url_used ? 'Yes' : 'No'}</Text></div>
+      </div>
+      {attempts.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>Recent attempts</Text>
+          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            {attempts.map((attempt, index) => (
+              <div key={`${attempt.base_url || 'attempt'}-${attempt.attempt_number || index}-${index}`} style={{ fontSize: 12, lineHeight: 1.6 }}>
+                <Text code>{attempt.api_mode || 'unknown'}</Text>
+                {' '}
+                <Text strong>{attempt.result || 'unknown'}</Text>
+                {' ? '}
+                <Text>{attempt.endpoint_role || 'primary'}</Text>
+                {' ? '}
+                <Text>{attempt.attempt_number || 1}/{attempt.max_attempts || 1}</Text>
+                {attempt.status_code ? <> {' ? '}<Text>HTTP {attempt.status_code}</Text></> : null}
+                {attempt.error_type ? <> {' ? '}<Text type="danger">{attempt.error_type}</Text></> : null}
+                <div style={{ wordBreak: 'break-all' }}><Text code>{`${attempt.base_url || ''}${attempt.endpoint_path || ''}` || 'Unknown endpoint'}</Text></div>
+              </div>
+            ))}
+          </Space>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function MCPPluginsPage() {
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [form] = Form.useForm();
@@ -110,17 +268,17 @@ export default function MCPPluginsPage() {
         if (verifiedConfigStr) {
           try {
             const verifiedConfig = JSON.parse(verifiedConfigStr);
-            const currentConfig = {
-              provider: settings.api_provider,
-              baseUrl: settings.api_base_url,
-              model: settings.llm_model
-            };
+            const currentConfig = buildVerifiedConfig(settings);
+            const cachedConfig = buildVerifiedConfig({
+              api_provider: verifiedConfig.provider,
+              api_base_url: verifiedConfig.baseUrl,
+              llm_model: verifiedConfig.model,
+              api_backup_urls: verifiedConfig.backupUrls,
+              fallback_strategy: verifiedConfig.fallbackStrategy,
+            });
 
-            // 比较关键配置是否发生变更
-            const isConfigChanged =
-              verifiedConfig.provider !== currentConfig.provider ||
-              verifiedConfig.baseUrl !== currentConfig.baseUrl ||
-              verifiedConfig.model !== currentConfig.model;
+            // 深度比较缓存配置与当前配置是否一致
+            const isConfigChanged = JSON.stringify(cachedConfig) !== JSON.stringify(currentConfig);
 
             if (isConfigChanged) {
               // 配置已变更
@@ -154,9 +312,15 @@ export default function MCPPluginsPage() {
               // 清除旧的验证状态
               localStorage.removeItem('mcp_verified_config');
             } else {
-              // 配置未变更，恢复验证状态（根据缓存的状态恢复）
-              const cachedStatus = verifiedConfig.status || 'supported';
-              setModelSupportStatus(cachedStatus as ModelSupportStatus);
+              // 旧的 unsupported 检测缓存只保留短期有效，过期后提示重新检测
+              if (isUnsupportedStatusCacheExpired(verifiedConfig)) {
+                localStorage.removeItem('mcp_verified_config');
+                setModelSupportStatus('unknown');
+                message.info('模型能力检测缓存已过期，请重新检测');
+              } else {
+                const cachedStatus = verifiedConfig.status || 'supported';
+                setModelSupportStatus(cachedStatus as ModelSupportStatus);
+              }
             }
           } catch (e) {
             console.error('Failed to parse verified config:', e);
@@ -430,8 +594,10 @@ export default function MCPPluginsPage() {
       const result = await settingsApi.checkFunctionCalling({
         api_key: settings.api_key,
         api_base_url: settings.api_base_url || '',
-        provider: settings.api_provider || 'openai',
+        provider: settings.provider_type || settings.api_provider || 'openai',
         llm_model: settings.llm_model,
+        api_backup_urls: normalizeBackupUrls(settings.api_backup_urls),
+        fallback_strategy: settings.fallback_strategy || 'auto',
       });
 
       const nextStatus = resolveFunctionCallingStatus(result);
@@ -439,11 +605,9 @@ export default function MCPPluginsPage() {
       // 仅在检测结果明确时写入缓存，避免 502/网络异常覆盖已有的有效验证结果
       if (nextStatus !== 'unknown') {
         const configToCache = {
-          provider: settings.api_provider,
-          baseUrl: settings.api_base_url,
-          model: settings.llm_model,
+          ...buildVerifiedConfig(settings),
           status: nextStatus,
-          testedAt: new Date().toISOString()
+          testedAt: new Date().toISOString(),
         };
         localStorage.setItem('mcp_verified_config', JSON.stringify(configToCache));
       }
@@ -492,6 +656,9 @@ export default function MCPPluginsPage() {
                   </div>
                 </div>
               )}
+
+              {renderEndpointDiagnostics(result.details, token.colorBgLayout)}
+                {renderTransportDiagnostics(result.details, token.colorBgLayout)}
 
               {result.tool_calls && result.tool_calls.length > 0 && (
                 <div style={{ marginBottom: 12 }}>
@@ -555,6 +722,9 @@ export default function MCPPluginsPage() {
                 </div>
               )}
 
+              {renderEndpointDiagnostics(result.details, token.colorBgLayout)}
+                {renderTransportDiagnostics(result.details, token.colorBgLayout)}
+
               {result.suggestions && result.suggestions.length > 0 && (
                 <div style={{
                   padding: 16,
@@ -603,6 +773,9 @@ export default function MCPPluginsPage() {
                   </Text>
                 </div>
               )}
+
+              {renderEndpointDiagnostics(result.details, token.colorBgLayout)}
+                {renderTransportDiagnostics(result.details, token.colorBgLayout)}
 
               {result.suggestions && result.suggestions.length > 0 && (
                 <div style={{

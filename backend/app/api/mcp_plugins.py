@@ -369,29 +369,6 @@ async def create_plugin_simple(
         raise HTTPException(status_code=500, detail=f"创建插件失败: {str(e)}")
 
 
-@router.get("/{plugin_id}", response_model=MCPPluginResponse)
-async def get_plugin(
-    plugin_id: str,
-    user: User = Depends(require_login),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    获取插件详情
-    """
-    result = await db.execute(
-        select(MCPPlugin).where(
-            MCPPlugin.id == plugin_id,
-            MCPPlugin.user_id == user.user_id
-        )
-    )
-    plugin = result.scalar_one_or_none()
-    
-    if not plugin:
-        raise HTTPException(status_code=404, detail="插件不存在")
-    
-    return plugin
-
-
 @router.put("/{plugin_id}", response_model=MCPPluginResponse)
 async def update_plugin(
     plugin_id: str,
@@ -818,6 +795,30 @@ async def clear_cache(
         "message": message,
         "timestamp": datetime.now().isoformat()
     }
+
+
+@router.get("/{plugin_id}", response_model=MCPPluginResponse)
+async def get_plugin(
+    plugin_id: str,
+    user: User = Depends(require_login),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取插件详情
+    """
+    result = await db.execute(
+        select(MCPPlugin).where(
+            MCPPlugin.id == plugin_id,
+            MCPPlugin.user_id == user.user_id
+        )
+    )
+    plugin = result.scalar_one_or_none()
+    
+    if not plugin:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    
+    return plugin
+
 
 
 @router.get("/{plugin_id}/tools")
