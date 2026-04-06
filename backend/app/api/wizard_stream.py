@@ -1,7 +1,7 @@
 """项目创建向导流式API - 使用SSE避免超时"""
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import func, select
 from typing import Dict, Any, AsyncGenerator, Optional
 from datetime import datetime
 import json
@@ -75,6 +75,7 @@ def _merge_wizard_outline_requirements(
     quality_trend_guidance: Optional[str] = None,
     guidance: Optional[StoryGenerationGuidance] = None,
     story_packet: Optional[StoryPacket] = None,
+    compact_mode: bool = False,
 ) -> str:
     return build_outline_generation_requirements(
         base_requirements,
@@ -89,6 +90,7 @@ def _merge_wizard_outline_requirements(
         guidance=guidance,
         story_packet=story_packet,
         opening_outline_count=outline_count,
+        compact_mode=compact_mode,
     )
 
 
@@ -347,6 +349,7 @@ async def world_building_generator(
                     provider=provider,
                     model=model,
                     tool_choice="required",
+                    auto_mcp=enable_mcp,
                 ):
                     chunk_count += 1
                     accumulated_text += chunk
@@ -675,6 +678,7 @@ async def career_system_generator(
                     prompt=career_prompt,
                     provider=provider,
                     model=model,
+                    auto_mcp=enable_mcp,
                 ):
                     chunk_count += 1
                     career_response += chunk
@@ -1073,6 +1077,7 @@ async def characters_generator(
                         provider=provider,
                         model=model,
                         tool_choice="required",
+                        auto_mcp=enable_mcp,
                     ):
                         chunk_count += 1
                         accumulated_text += chunk
@@ -1673,6 +1678,7 @@ async def outline_generator(
             quality_preset=story_packet.guidance.quality_preset,
             quality_notes=story_packet.guidance.quality_notes,
             story_packet=story_packet,
+            compact_mode=True,
         )
         
         # 获取自定义提示词模板
@@ -1715,7 +1721,7 @@ async def outline_generator(
             requirements=outline_requirements,
             external_assets=outline_research_assets,
             reference_assets=outline_research_assets,
-            **story_packet.to_prompt_fields(),
+            **story_packet.to_prompt_fields(exclude=("chapter_count",)),
         )
         outline_system_prompt = _build_outline_runtime_system_prompt(
             project=project,
@@ -1734,6 +1740,7 @@ async def outline_generator(
             system_prompt=outline_system_prompt,
             provider=provider,
             model=model,
+            auto_mcp=enable_mcp,
         ):
             chunk_count += 1
             accumulated_text += chunk
@@ -1783,8 +1790,18 @@ async def outline_generator(
         
         # 保存大纲到数据库
         yield await tracker.saving("保存大纲到数据库...")
+        existing_outline_max_result = await db.execute(
+            select(func.max(Outline.order_index)).where(Outline.project_id == project_id)
+        )
+        existing_outline_max = existing_outline_max_result.scalar_one() or 0
+        existing_chapter_count_result = await db.execute(
+            select(func.count(Chapter.id)).where(Chapter.project_id == project_id)
+        )
+        existing_chapter_count = existing_chapter_count_result.scalar_one() or 0
+
         created_outlines = []
-        for index, outline_item in enumerate(outline_data[:outline_count], 1):
+        outline_order_start = int(existing_outline_max) + 1
+        for index, outline_item in enumerate(outline_data[:outline_count], outline_order_start):
             outline = Outline(
                 project_id=project_id,
                 title=outline_item.get("title", f"第{index}节"),
@@ -1801,51 +1818,6 @@ async def outline_generator(
         
         logger.info(f"✅ 成功创建{len(created_outlines)}个大纲节点")
         
-        # 🎭 角色校验：检查大纲structure中的characters是否存在对应角色
-        yield await tracker.saving("🎭 校验角色信息...", 0.5)
-        try:
-            from app.services.auto_character_service import get_auto_character_service
-            
-            auto_char_service = get_auto_character_service(user_ai_service)
-            char_check_result = await auto_char_service.check_and_create_missing_characters(
-                project_id=project_id,
-                outline_data_list=outline_data[:outline_count],
-                db=db,
-                user_id=user_id,
-                enable_mcp=enable_mcp
-            )
-            if char_check_result["created_count"] > 0:
-                created_names = [c.name for c in char_check_result["created_characters"]]
-                logger.info(f"🎭 向导大纲：自动创建了 {char_check_result['created_count']} 个角色: {', '.join(created_names)}")
-                yield await tracker.saving(
-                    f"🎭 自动创建了 {char_check_result['created_count']} 个角色: {', '.join(created_names)}",
-                    0.6
-                )
-        except Exception as e:
-            logger.error(f"⚠️ 向导大纲角色校验失败（不影响主流程）: {e}")
-        
-        # 🏛️ 组织校验：检查大纲structure中的characters（type=organization）是否存在对应组织
-        yield await tracker.saving("🏛️ 校验组织信息...", 0.55)
-        try:
-            from app.services.auto_organization_service import get_auto_organization_service
-            
-            auto_org_service = get_auto_organization_service(user_ai_service)
-            org_check_result = await auto_org_service.check_and_create_missing_organizations(
-                project_id=project_id,
-                outline_data_list=outline_data[:outline_count],
-                db=db,
-                user_id=user_id,
-                enable_mcp=enable_mcp
-            )
-            if org_check_result["created_count"] > 0:
-                created_names = [c.name for c in org_check_result["created_organizations"]]
-                logger.info(f"🏛️ 向导大纲：自动创建了 {org_check_result['created_count']} 个组织: {', '.join(created_names)}")
-                yield await tracker.saving(
-                    f"🏛️ 自动创建了 {org_check_result['created_count']} 个组织: {', '.join(created_names)}",
-                    0.65
-                )
-        except Exception as e:
-            logger.error(f"⚠️ 向导大纲组织校验失败（不影响主流程）: {e}")
         
         # 根据项目的大纲模式决定是否自动创建章节
         created_chapters = []
@@ -1878,7 +1850,7 @@ async def outline_generator(
         
         # 更新项目信息
         # wizard_step: 0=未开始, 1=世界观已完成, 2=职业体系已完成, 3=角色已完成, 4=大纲已完成
-        project.chapter_count = len(created_chapters)  # 记录实际创建的章节数
+        project.chapter_count = existing_chapter_count + len(created_chapters)  # 保留已有章节并累加本次创建
         project.narrative_perspective = narrative_perspective
         project.target_words = target_words
         project.status = "writing"
@@ -1898,7 +1870,25 @@ async def outline_generator(
         
         await db.commit()
         db_committed = True
+
+        postprocess_scheduled = False
+        try:
+            from app.api.outlines import _schedule_outline_postprocess_background
+
+            _schedule_outline_postprocess_background(
+                outline_data=outline_data[:outline_count],
+                project_id=project_id,
+                user_ai_service=user_ai_service,
+                user_id=user_id,
+                enable_mcp=enable_mcp,
+            )
+            postprocess_scheduled = True
+            logger.info("?? ???????????????/???????????")
+            yield await tracker.saving("??????????/??...", 0.92)
+        except Exception as e:
+            logger.error(f"?? ????????????????????: {e}", exc_info=True)
         
+        logger.info(f"?? ?????????")
         logger.info(f"📊 向导大纲生成完成：")
         logger.info(f"  - 创建大纲节点：{len(created_outlines)} 个")
         logger.info(f"  - 创建章节：{len(created_chapters)} 个")
@@ -1920,7 +1910,8 @@ async def outline_generator(
             "outline_count": len(created_outlines),
             "chapter_count": len(created_chapters),
             "outline_mode": project.outline_mode,
-            "research_query": str(outline_research_bundle.get("query") or ""),
+            "research_assets": outline_research_assets,
+            "outline_postprocess_scheduled": postprocess_scheduled,
             "research_assets": outline_research_assets,
             "outlines": [
                 {
@@ -2043,6 +2034,7 @@ async def world_building_regenerate_generator(
                     provider=provider,
                     model=model,
                     tool_choice="required",
+                    auto_mcp=enable_mcp,
                 ):
                     chunk_count += 1
                     accumulated_text += chunk

@@ -1,6 +1,9 @@
+from pydantic import BaseModel
+
 from app.models.project import Project
 from app.services.story_repair_payload_service import StoryRepairPayload
 from app.services.chapter_quality_context_service import (
+    ChapterGenerationIntent,
     StoryGenerationGuidance,
     StoryPacket,
     build_analysis_quality_kwargs,
@@ -82,6 +85,106 @@ def test_should_build_story_packet_from_mapping_and_project_defaults():
     }
 
 
+class _ChapterGenerateRequestStub(BaseModel):
+    style_id: int | None = None
+    target_word_count: int = 1600
+    enable_analysis: bool = True
+    enable_mcp: bool = False
+    web_research_query: str | None = None
+    story_creation_brief: str | None = "Keep the pressure visible"
+    quality_preset: str | None = "plot_drive"
+    quality_notes: str | None = "Reduce exposition"
+
+
+def test_should_not_treat_request_model_repr_as_story_runtime_items():
+    project = Project(
+        title="test-project",
+        user_id="user-1",
+        default_creative_mode="hook",
+        default_story_focus="advance_plot",
+        default_plot_stage="development",
+    )
+
+    packet = build_story_generation_packet(
+        project,
+        source=_ChapterGenerateRequestStub(),
+        source_label="chapter-generate-request",
+    )
+
+    assert packet.blueprint.character_focus_names == ()
+    assert packet.blueprint.foreshadow_payoff_plan == ()
+    assert packet.blueprint.character_state_ledger == ()
+    assert packet.blueprint.relationship_state_ledger == ()
+    assert packet.blueprint.foreshadow_state_ledger == ()
+    assert packet.blueprint.organization_state_ledger == ()
+    assert packet.blueprint.career_state_ledger == ()
+
+
+def test_should_extract_relationship_ledger_by_matching_section_only():
+    project = Project(
+        title="test-project",
+        user_id="user-1",
+        default_creative_mode="hook",
+        default_story_focus="advance_plot",
+        default_plot_stage="development",
+    )
+
+    packet = build_story_generation_packet(
+        project,
+        source={
+            "chapter_characters": (
+                "角色/组织参考：\n"
+                "- 角色：林验｜定位=protagonist\n"
+                "- 组织：直播平台青秒｜城区头部直播平台\n"
+                "关系动态\n"
+                "- 林验/沈雾：互相试探但暂时同盟\n"
+            )
+        },
+        source_label="chapter-generate-request",
+    )
+
+    assert packet.blueprint.character_state_ledger == ()
+    assert packet.blueprint.relationship_state_ledger == ("林验/沈雾：互相试探但暂时同盟",)
+    assert packet.blueprint.organization_state_ledger == ()
+
+
+def test_should_not_treat_chapter_object_repr_as_character_focus():
+    project = Project(
+        title="test-project",
+        user_id="user-1",
+        default_creative_mode="hook",
+        default_story_focus="advance_plot",
+        default_plot_stage="development",
+    )
+    packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="development",
+        ),
+        source="chapter-generate-request",
+    )
+
+    class ChapterStub:
+        chapter_number = 3
+
+        def __repr__(self) -> str:
+            return "<Chapter(id=chapter-1, chapter_number=3, title=Test)>"
+
+    intent = build_chapter_generation_intent(
+        story_packet=packet,
+        quality_profile={"genre": "mystery"},
+        project=project,
+        chapter=ChapterStub(),
+        chapter_context=None,
+        target_word_count=1600,
+    )
+
+    runtime_context = intent.build_quality_runtime_context()
+
+    assert runtime_context["character_focus"] == []
+
+
 
 def test_should_round_trip_story_packet_runtime_contract():
     packet = StoryPacket.from_guidance(
@@ -119,6 +222,27 @@ def test_should_round_trip_story_packet_runtime_contract():
     assert contract["version"] == 1
     assert restored == packet
 
+
+
+def test_should_allow_story_packet_prompt_fields_to_exclude_duplicate_keys():
+    packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+        ),
+        source="outline-generate-request",
+    ).with_blueprint(
+        chapter_count=12,
+        target_word_count=2600,
+    )
+
+    prompt_fields = packet.to_prompt_fields()
+    filtered_fields = packet.to_prompt_fields(exclude=("chapter_count",))
+
+    assert prompt_fields["chapter_count"] == 12
+    assert "chapter_count" not in filtered_fields
+    assert filtered_fields["target_word_count"] == 2600
+    assert filtered_fields["creative_mode"] == "hook"
 
 
 def test_should_build_story_runtime_contract_from_intent_snapshot():
@@ -621,6 +745,7 @@ def test_should_build_prompt_quality_kwargs_from_story_repair_payload_object():
     assert "优先补强冲突折返与兑现节奏" in kwargs["story_repair_target_block"]
     assert "升级代价" in kwargs["story_repair_target_block"]
     assert "保留对白辨识度" in kwargs["story_repair_target_block"]
+    assert "Conflict repair hard rule" in kwargs["story_repair_target_block"]
 
 
 
@@ -708,6 +833,57 @@ def test_should_forward_quality_metrics_summary_into_intent_prompt_kwargs():
     assert "最近节奏稳定度均值：7.8/10" in prompt_kwargs["story_quality_trend_block"]
     assert "hidden-key" in prompt_kwargs["story_quality_trend_block"]
 
+
+
+def test_should_reuse_runtime_story_packet_across_intent_exports(monkeypatch):
+    packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="development",
+            quality_preset="tight_prose",
+        ),
+        source="chapter-generate-request",
+    )
+    project = Project(title="intent-cache", user_id="user-1", chapter_count=12, genre="mystery")
+    chapter = type("ChapterStub", (), {"chapter_number": 4})()
+
+    blueprint_call_count = 0
+    original_method = ChapterGenerationIntent._build_story_packet_blueprint_kwargs
+
+    def tracked_blueprint_kwargs(self):
+        nonlocal blueprint_call_count
+        blueprint_call_count += 1
+        return original_method(self)
+
+    monkeypatch.setattr(
+        ChapterGenerationIntent,
+        "_build_story_packet_blueprint_kwargs",
+        tracked_blueprint_kwargs,
+    )
+
+    intent = build_chapter_generation_intent(
+        story_packet=packet,
+        quality_profile={"genre": "mystery", "style_name": "low_ai_serial"},
+        project=project,
+        chapter=chapter,
+        chapter_context=None,
+        target_word_count=2200,
+        quality_history_context={
+            "foreshadow_payoff_plan": ["recover the hidden ledger hint"],
+            "character_state_ledger": ["Wenzhao: begins doubting the setup"],
+        },
+    )
+
+    prompt_kwargs = intent.build_prompt_quality_kwargs()
+    runtime_contract = intent.build_story_runtime_contract()
+    runtime_context = intent.build_quality_runtime_context()
+
+    assert blueprint_call_count == 1
+    assert "2200" in prompt_kwargs["story_pacing_budget_block"]
+    assert runtime_contract["blueprint"]["target_word_count"] == 2200
+    assert runtime_context["target_word_count"] == 2200
+    assert runtime_context["style_name"] == "low_ai_serial"
 
 def test_should_apply_story_repair_guidance_defaults_when_request_has_no_explicit_overrides():
     project = Project(
@@ -832,3 +1008,36 @@ def test_should_include_genre_and_style_profile_in_quality_runtime_context():
     assert runtime_context["style_preset_id"] == "low_ai_serial"
     assert runtime_context["style_profile"] == "low_ai_serial"
     assert runtime_context["quality_preset"] == "plot_drive"
+
+
+
+def test_should_build_story_quality_hard_guard_block_with_runtime_focus():
+    kwargs = build_prompt_quality_kwargs(
+        {"genre": "悬疑"},
+        guidance=StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="foreshadow_payoff",
+            plot_stage="climax",
+            story_creation_brief="突出代价与抉择",
+            quality_preset="tight_prose",
+            quality_notes="减少说明句",
+        ),
+        story_long_term_goal="守住密钥，避免敌方提前封锁",
+        story_character_focus=["闻昭", "陵秋"],
+        story_foreshadow_payoff_plan=["回应旧书编号的来源"],
+        story_character_state_ledger=["闻昭：被迫在公开直播与保命之间抉择"],
+        story_relationship_state_ledger=["闻昭/陵秋：互信尚未建立"],
+    )
+
+    block = kwargs["story_quality_hard_guard_block"]
+    assert "【章节硬约束】" in block
+    assert "守住密钥" in block
+    assert "闻昭" in block
+    assert "开篇前 20%-25% 内必须出现明确目标、异常、受阻点三者之一" in block
+    assert "推进→受阻→决断→代价/反弹" in block
+    assert "触发条件→规则生效→限制/代价→局势变化" in block
+    assert "至少把 1 条角色状态账本写成现场动作、迟疑、失手或代价" in block
+    assert "至少把 1 条关系状态账本写成试探对白、站位位移或信任波动" in block
+    assert "最后一段必须留下新的前压" in block
+    assert "回应旧书编号的来源" in block
+    assert "高潮阶段" in block

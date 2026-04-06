@@ -436,6 +436,36 @@ def test_should_raise_rule_grounding_threshold_for_tech_xianxia_profile():
 
 
 
+def test_should_route_severely_over_budget_candidate_to_auto_repair_even_when_scores_are_high():
+    quality_gate = build_quality_gate_decision(
+        {
+            "overall_score": 96.9,
+            "conflict_chain_hit_rate": 100.0,
+            "rule_grounding_hit_rate": 100.0,
+            "outline_alignment_rate": 100.0,
+            "dialogue_naturalness_rate": 74.0,
+            "opening_hook_rate": 100.0,
+            "payoff_chain_rate": 100.0,
+            "cliffhanger_rate": 100.0,
+            "candidate_selection": {
+                "word_count": 1896,
+                "target_word_count": 1200,
+            },
+            "quality_runtime_context": {
+                "plot_stage": "development",
+                "quality_preset": "plot_drive",
+                "story_focus": "advance_plot",
+                "creative_mode": "hook",
+            },
+        },
+        scope="chapter",
+    )
+
+    assert quality_gate["decision"] == "auto_repair"
+    assert quality_gate["allow_save"] is False
+    assert "字数严重偏离目标窗口" in str(quality_gate["reason"])
+
+
 def test_should_aggregate_continuity_preflight_from_history_summary():
     summary = build_quality_metrics_summary(
         [

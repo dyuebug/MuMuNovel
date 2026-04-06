@@ -252,3 +252,32 @@ def test_should_merge_wizard_outline_requirements_with_quality_trend_guidance():
     assert "\u4fdd\u7559\u53cc\u7ebf\u5e76\u8fdb" in merged
     assert "\u3010\u5927\u7eb2\u8fd1\u671f\u8d28\u91cf\u8d8b\u52bf\u3011" in merged
     assert "\u540e\u7eed\u7ae0\u8282\u8981\u4f18\u5148\u56de\u6536\u65e7\u627f\u8bfa" in merged
+
+
+
+def test_should_build_compact_outline_requirements_when_requested():
+    full_text = _merge_outline_requirements(
+        "保留双线并进",
+        creative_mode="hook",
+        story_focus="advance_plot",
+        plot_stage="development",
+        chapter_count=6,
+        story_creation_brief="突出代价与抉择",
+        quality_preset="plot_drive",
+        quality_notes="减少说明句",
+    )
+    compact_text = _merge_outline_requirements(
+        "保留双线并进",
+        compact_mode=True,
+        creative_mode="hook",
+        story_focus="advance_plot",
+        plot_stage="development",
+        chapter_count=6,
+        story_creation_brief="突出代价与抉择",
+        quality_preset="plot_drive",
+        quality_notes="减少说明句",
+    )
+
+    assert "保留双线并进" in compact_text
+    assert "突出代价与抉择" in compact_text
+    assert len(compact_text) < len(full_text)

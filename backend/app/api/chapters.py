@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Query, Backgroun
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
+from sqlalchemy.exc import IntegrityError
 import json
 import asyncio
 import re
@@ -106,11 +107,32 @@ from app.services.story_runtime_serialization_service import (
 )
 from app.services.chapter_candidate_rerank_service import (
     attach_candidate_selection_metadata,
+    build_candidate_pool_summary,
     build_candidate_retry_prompt_suffix,
     build_candidate_retry_strategy_suffix,
     build_candidate_selection_metadata,
+    build_targeted_final_repair_suffix,
+    build_word_budget_repair_suffix,
+    is_candidate_word_count_in_target_window,
+    normalize_candidate_quality_gate_plan,
     resolve_candidate_retry_temperature,
+    resolve_targeted_final_repair_char_limit,
+    resolve_targeted_final_repair_max_tokens,
+    resolve_targeted_final_repair_temperature,
+    resolve_word_budget_repair_char_limit,
+    resolve_word_budget_repair_max_tokens,
+    resolve_word_budget_repair_temperature,
     select_best_generation_candidate,
+    select_targeted_final_repair_seed_candidate,
+    should_adopt_targeted_final_repair_candidate,
+    should_apply_followup_targeted_final_repair,
+    should_apply_targeted_final_repair,
+    should_keep_targeted_final_repair_candidate,
+    should_keep_word_budget_repair_candidate,
+    should_apply_word_budget_repair,
+    should_relax_word_budget_repair_limits,
+    should_prefer_targeted_final_repair_candidate,
+    should_prefer_word_budget_repair_candidate,
     should_generate_additional_candidate,
 )
 from app.services.project_quality_trend_snapshot_store import (
@@ -137,6 +159,10 @@ project_quality_trend_cache: dict[str, Dict[str, Any]] = {}
 project_quality_trend_lock = Lock()
 PROJECT_QUALITY_TREND_CACHE_MAX_SIZE = 128
 CHAPTER_CANDIDATE_RERANK_LIMIT = 2
+CHAPTER_STREAM_HEARTBEAT_INTERVAL_SECONDS = 10.0
+RESPONSES_TEXT_GENERATION_PROVIDERS = {"sub2api", "openai_responses"}
+CHAPTER_GENERATION_TRANSPORT_RETRY_CAP = 2
+CHAPTER_GENERATION_FIRST_CHUNK_TIMEOUT = 20.0
 task_workflow_state_cache: dict[str, Dict[str, Any]] = {}
 task_workflow_lock = Lock()
 _SNAPSHOT_UNSET = object()
@@ -159,18 +185,236 @@ def _normalize_json_payload(value: Any) -> Any:
     return str(value)
 
 
+
+def _build_outline_structure_runtime_sources(outline: Optional[Outline]) -> Dict[str, Any]:
+    structure_text = getattr(outline, "structure", None)
+    if not isinstance(structure_text, str) or not structure_text.strip():
+        return {}
+
+    try:
+        structure = json.loads(structure_text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+
+    if not isinstance(structure, dict):
+        return {}
+
+    character_focus: List[str] = []
+    character_state_ledger: List[str] = []
+    organization_state_ledger: List[str] = []
+    for item in structure.get("characters") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        item_type = str(item.get("type") or "character").strip().lower()
+        if not name:
+            continue
+        if item_type == "organization":
+            if name not in organization_state_ledger:
+                organization_state_ledger.append(f"{name}: active in this chapter outline")
+            continue
+        if name not in character_focus:
+            character_focus.append(name)
+        entry = f"{name}: active in this chapter outline"
+        if entry not in character_state_ledger:
+            character_state_ledger.append(entry)
+
+    runtime_sources: Dict[str, Any] = {}
+    if character_focus:
+        runtime_sources["character_focus"] = character_focus[:4]
+    if character_state_ledger:
+        runtime_sources["character_state_ledger"] = character_state_ledger[:4]
+    if organization_state_ledger:
+        runtime_sources["organization_state_ledger"] = organization_state_ledger[:4]
+    return runtime_sources
+
+
 async def _collect_generation_candidate_output(
     ai_service: AIService,
     generate_kwargs: Dict[str, Any],
+    *,
+    candidate_index: int = 1,
+    max_output_chars: Optional[int] = None,
+    runtime_state: Optional[Dict[str, Any]] = None,
 ) -> tuple[str, List[str]]:
     full_content = ""
     chunks: List[str] = []
+    candidate_total = candidate_index
+    if runtime_state is not None:
+        candidate_total = max(int(runtime_state.get("candidate_total") or candidate_index), candidate_index)
+        _sync_generation_runtime_state(
+            runtime_state,
+            candidate_index=candidate_index,
+            candidate_total=candidate_total,
+            current_chars=0,
+            chunk_count=0,
+        )
     async for chunk in ai_service.generate_text_stream(**generate_kwargs):
         full_content += chunk
         chunks.append(chunk)
+        if runtime_state is not None:
+            _sync_generation_runtime_state(
+                runtime_state,
+                candidate_index=candidate_index,
+                candidate_total=candidate_total,
+                current_chars=len(full_content),
+                chunk_count=len(chunks),
+            )
+        if max_output_chars and len(full_content) >= max_output_chars:
+            break
         await asyncio.sleep(0)
+    if max_output_chars and len(full_content) > max_output_chars:
+        full_content = _trim_text_to_sentence_boundary(full_content, hard_limit=max_output_chars)
+        chunks = [full_content] if full_content else []
     return full_content, chunks
 
+
+def _resolve_generation_attempt_labels(
+    candidate_index: int,
+    *,
+    is_word_budget_repair: bool = False,
+) -> tuple[str, str]:
+    normalized_candidate_index = max(int(candidate_index or 1), 1)
+    if is_word_budget_repair:
+        return "word_budget_repair", "word_budget_repair"
+    if normalized_candidate_index > 1:
+        return "rerank_retry", "rerank_candidate"
+    return "single_pass", "initial_candidate"
+
+
+def _sync_generation_runtime_state(
+    runtime_state: Optional[Dict[str, Any]],
+    *,
+    candidate_index: int,
+    candidate_total: int,
+    current_chars: Optional[int] = None,
+    chunk_count: Optional[int] = None,
+    generation_path: Optional[str] = None,
+    attempt_kind: Optional[str] = None,
+    rerank_used: Optional[bool] = None,
+    word_budget_repair_used: Optional[bool] = None,
+    winner_candidate_index: Optional[int] = None,
+) -> None:
+    if runtime_state is None:
+        return
+
+    normalized_candidate_index = max(int(candidate_index or 1), 1)
+    normalized_candidate_total = max(int(candidate_total or normalized_candidate_index), normalized_candidate_index)
+    runtime_state["candidate_index"] = normalized_candidate_index
+    runtime_state["candidate_total"] = normalized_candidate_total
+    runtime_state["candidate_count"] = normalized_candidate_total
+
+    if current_chars is not None:
+        normalized_chars = max(int(current_chars or 0), 0)
+        runtime_state["current_chars"] = normalized_chars
+        runtime_state["word_count"] = normalized_chars
+    if chunk_count is not None:
+        runtime_state["chunk_count"] = max(int(chunk_count or 0), 0)
+    if isinstance(generation_path, str) and generation_path.strip():
+        runtime_state["generation_path"] = generation_path.strip()
+    if isinstance(attempt_kind, str) and attempt_kind.strip():
+        runtime_state["attempt_kind"] = attempt_kind.strip()
+    if rerank_used is not None:
+        runtime_state["rerank_used"] = bool(rerank_used)
+    if word_budget_repair_used is not None:
+        runtime_state["word_budget_repair_used"] = bool(word_budget_repair_used)
+    if winner_candidate_index is not None:
+        runtime_state["winner_candidate_index"] = max(int(winner_candidate_index or 1), 1)
+
+def _build_generation_candidate_record(
+    *,
+    full_content: str,
+    candidate_chunks: List[str],
+    target_word_count: int,
+    source: str,
+    generation_label: str,
+    candidate_index: int,
+    candidate_offset: int,
+    quality_evaluator: Callable[[str], Dict[str, Any]],
+    quality_gate_plan_builder: Callable[[Dict[str, Any], int], Dict[str, Any]],
+    generation_path: str,
+    attempt_kind: str,
+) -> Dict[str, Any]:
+    full_content, removed_meta_lines = _sanitize_generated_narrative_text(full_content)
+    if removed_meta_lines > 0:
+        logger.warning(
+            f"Sanitized {removed_meta_lines} workflow/meta lines: {generation_label}, candidate={candidate_index}"
+        )
+    if not full_content.strip():
+        raise ValueError(f"{generation_label} generated empty narrative after sanitization")
+    if _contains_chapter_workflow_meta_text(full_content):
+        raise ValueError(f"{generation_label} generated workflow/meta text")
+
+    candidate_word_count = len(full_content)
+    quality_metrics = quality_evaluator(full_content)
+    initial_quality_gate_plan = quality_gate_plan_builder(quality_metrics, candidate_offset)
+    initial_quality_gate_plan = normalize_candidate_quality_gate_plan(
+        initial_quality_gate_plan,
+        word_count=candidate_word_count,
+        target_word_count=target_word_count,
+        quality_metrics=quality_metrics,
+    )
+    if isinstance(initial_quality_gate_plan.get("quality_gate"), dict):
+        quality_metrics["quality_gate"] = initial_quality_gate_plan["quality_gate"]
+    selection_metadata = build_candidate_selection_metadata(
+        quality_metrics,
+        word_count=candidate_word_count,
+        target_word_count=target_word_count,
+        candidate_index=candidate_index,
+        candidate_count=candidate_index,
+        source=source,
+        quality_gate_plan=initial_quality_gate_plan,
+        generation_path=generation_path,
+        attempt_kind=attempt_kind,
+        rerank_used=attempt_kind == "rerank_candidate",
+        word_budget_repair_used=attempt_kind == "word_budget_repair",
+    )
+    enriched_quality_metrics = attach_candidate_selection_metadata(
+        quality_metrics,
+        selection_metadata=selection_metadata,
+    )
+    quality_gate_plan = quality_gate_plan_builder(enriched_quality_metrics, candidate_offset)
+    if not isinstance(quality_gate_plan, dict) or not quality_gate_plan:
+        quality_gate_plan = initial_quality_gate_plan
+    quality_gate_plan = normalize_candidate_quality_gate_plan(
+        quality_gate_plan,
+        word_count=candidate_word_count,
+        target_word_count=target_word_count,
+        quality_metrics=enriched_quality_metrics,
+    )
+    if isinstance(quality_gate_plan.get("quality_gate"), dict):
+        enriched_quality_metrics["quality_gate"] = quality_gate_plan["quality_gate"]
+    elif isinstance(initial_quality_gate_plan.get("quality_gate"), dict):
+        enriched_quality_metrics["quality_gate"] = initial_quality_gate_plan["quality_gate"]
+    selection_metadata = build_candidate_selection_metadata(
+        enriched_quality_metrics,
+        word_count=candidate_word_count,
+        target_word_count=target_word_count,
+        candidate_index=candidate_index,
+        candidate_count=candidate_index,
+        source=source,
+        quality_gate_plan=quality_gate_plan,
+        generation_path=generation_path,
+        attempt_kind=attempt_kind,
+        rerank_used=attempt_kind == "rerank_candidate",
+        word_budget_repair_used=attempt_kind == "word_budget_repair",
+    )
+    enriched_quality_metrics = attach_candidate_selection_metadata(
+        enriched_quality_metrics,
+        selection_metadata=selection_metadata,
+    )
+
+    candidate_summary = full_content[:300].replace("\n", " ") if full_content else ""
+    return {
+        "candidate_index": candidate_index,
+        "full_content": full_content,
+        "word_count": candidate_word_count,
+        "summary_preview": candidate_summary,
+        "quality_metrics": enriched_quality_metrics,
+        "quality_gate_plan": quality_gate_plan,
+        "candidate_chunks": candidate_chunks,
+        **selection_metadata,
+    }
 
 async def _generate_best_ranked_candidate(
     *,
@@ -182,6 +426,7 @@ async def _generate_best_ranked_candidate(
     quality_evaluator: Callable[[str], Dict[str, Any]],
     quality_gate_plan_builder: Callable[[Dict[str, Any], int], Dict[str, Any]],
     max_candidates: int = CHAPTER_CANDIDATE_RERANK_LIMIT,
+    runtime_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     resolved_max_candidates = max(int(max_candidates or 1), 1)
     base_prompt = str(base_generate_kwargs.get("prompt") or "")
@@ -193,9 +438,35 @@ async def _generate_best_ranked_candidate(
     candidates: List[Dict[str, Any]] = []
     retry_suffix = ""
     retry_temperature: Optional[float] = None
+    word_budget_repair_used = False
+    initial_generation_path, initial_attempt_kind = _resolve_generation_attempt_labels(1)
+    _sync_generation_runtime_state(
+        runtime_state,
+        candidate_index=1,
+        candidate_total=resolved_max_candidates,
+        current_chars=0,
+        chunk_count=0,
+        generation_path=initial_generation_path,
+        attempt_kind=initial_attempt_kind,
+        rerank_used=False,
+        word_budget_repair_used=False,
+    )
 
     for candidate_offset in range(resolved_max_candidates):
         candidate_index = candidate_offset + 1
+        generation_path, attempt_kind = _resolve_generation_attempt_labels(candidate_index)
+        _sync_generation_runtime_state(
+            runtime_state,
+            candidate_index=candidate_index,
+            candidate_total=resolved_max_candidates,
+            current_chars=0,
+            chunk_count=0,
+            generation_path=generation_path,
+            attempt_kind=attempt_kind,
+            rerank_used=candidate_index > 1,
+            word_budget_repair_used=False,
+        )
+
         current_generate_kwargs = dict(base_generate_kwargs)
         if retry_suffix:
             current_generate_kwargs["prompt"] = f"{base_prompt}\n\n{retry_suffix}".strip()
@@ -205,47 +476,22 @@ async def _generate_best_ranked_candidate(
         full_content, candidate_chunks = await _collect_generation_candidate_output(
             ai_service,
             current_generate_kwargs,
-        )
-        full_content, removed_meta_lines = _sanitize_generated_narrative_text(full_content)
-        if removed_meta_lines > 0:
-            logger.warning(
-                f"Sanitized {removed_meta_lines} workflow/meta lines: {generation_label}, candidate={candidate_index}"
-            )
-        if not full_content.strip():
-            raise ValueError(f"{generation_label} generated empty narrative after sanitization")
-        if _contains_chapter_workflow_meta_text(full_content):
-            raise ValueError(f"{generation_label} generated workflow/meta text")
-
-        candidate_word_count = len(full_content)
-        quality_metrics = quality_evaluator(full_content)
-        quality_gate_plan = quality_gate_plan_builder(quality_metrics, candidate_offset)
-        selection_metadata = build_candidate_selection_metadata(
-            quality_metrics,
-            word_count=candidate_word_count,
-            target_word_count=target_word_count,
             candidate_index=candidate_index,
-            candidate_count=candidate_index,
+            runtime_state=runtime_state,
+        )
+        candidate = _build_generation_candidate_record(
+            full_content=full_content,
+            candidate_chunks=candidate_chunks,
+            target_word_count=target_word_count,
             source=source,
-            quality_gate_plan=quality_gate_plan,
+            generation_label=generation_label,
+            candidate_index=candidate_index,
+            candidate_offset=candidate_offset,
+            quality_evaluator=quality_evaluator,
+            quality_gate_plan_builder=quality_gate_plan_builder,
+            generation_path=generation_path,
+            attempt_kind=attempt_kind,
         )
-        enriched_quality_metrics = attach_candidate_selection_metadata(
-            quality_metrics,
-            selection_metadata=selection_metadata,
-        )
-        if isinstance(quality_gate_plan.get("quality_gate"), dict):
-            enriched_quality_metrics["quality_gate"] = quality_gate_plan["quality_gate"]
-
-        candidate_summary = full_content[:300].replace("\n", " ") if full_content else ""
-        candidate = {
-            "candidate_index": candidate_index,
-            "full_content": full_content,
-            "word_count": candidate_word_count,
-            "summary_preview": candidate_summary,
-            "quality_metrics": enriched_quality_metrics,
-            "quality_gate_plan": quality_gate_plan,
-            "candidate_chunks": candidate_chunks,
-            **selection_metadata,
-        }
         candidates.append(candidate)
 
         if not should_generate_additional_candidate(
@@ -256,12 +502,12 @@ async def _generate_best_ranked_candidate(
             break
 
         retry_prompt_suffix = build_candidate_retry_prompt_suffix(
-            quality_gate_plan,
+            candidate.get("quality_gate_plan"),
             attempt_index=candidate_index + 1,
         )
         retry_strategy_suffix = build_candidate_retry_strategy_suffix(
-            quality_gate_plan,
-            quality_metrics=enriched_quality_metrics,
+            candidate.get("quality_gate_plan"),
+            quality_metrics=candidate.get("quality_metrics"),
             attempt_index=candidate_index + 1,
             source=source,
         )
@@ -273,39 +519,829 @@ async def _generate_best_ranked_candidate(
         retry_suffix = "\n\n".join(retry_suffix_parts).strip()
         retry_temperature = resolve_candidate_retry_temperature(
             base_temperature,
-            quality_metrics=enriched_quality_metrics,
-            quality_gate_plan=quality_gate_plan,
+            quality_metrics=candidate.get("quality_metrics"),
+            quality_gate_plan=candidate.get("quality_gate_plan"),
             attempt_index=candidate_index + 1,
         )
         if not retry_suffix:
             break
 
     selected_candidate = select_best_generation_candidate(candidates) or dict(candidates[-1])
+    should_run_word_budget_repair = should_apply_word_budget_repair(selected_candidate)
+    if should_run_word_budget_repair:
+        try:
+            repair_attempt_index = len(candidates) + 1
+            repair_suffix = build_word_budget_repair_suffix(
+                quality_metrics=selected_candidate.get("quality_metrics"),
+                quality_gate_plan=selected_candidate.get("quality_gate_plan"),
+                current_content=selected_candidate.get("full_content"),
+                target_word_count=target_word_count,
+                attempt_index=repair_attempt_index,
+                source=source,
+            )
+            if repair_suffix:
+                repair_source_word_count = int(selected_candidate.get("word_count") or 0)
+                relax_content_budget = should_relax_word_budget_repair_limits(
+                    selected_candidate.get("quality_gate_plan")
+                )
+                repair_prompt_sections = [
+                    base_prompt,
+                    repair_suffix,
+                    "Previous draft to rewrite:\n<<<CHAPTER_DRAFT",
+                    str(selected_candidate.get("full_content") or ""),
+                    "CHAPTER_DRAFT>>>",
+                ]
+                repair_generate_kwargs = dict(base_generate_kwargs)
+                repair_generate_kwargs["prompt"] = "\n\n".join(
+                    section.strip()
+                    for section in repair_prompt_sections
+                    if isinstance(section, str) and section.strip()
+                )
+                repair_generate_kwargs["temperature"] = resolve_word_budget_repair_temperature(
+                    base_temperature,
+                    quality_metrics=selected_candidate.get("quality_metrics"),
+                )
+                repair_generate_kwargs["max_tokens"] = resolve_word_budget_repair_max_tokens(
+                    target_word_count,
+                    current_word_count=repair_source_word_count,
+                    relax_content_budget=relax_content_budget,
+                )
+                repair_generation_path, repair_attempt_kind = _resolve_generation_attempt_labels(
+                    repair_attempt_index,
+                    is_word_budget_repair=True,
+                )
+                _sync_generation_runtime_state(
+                    runtime_state,
+                    candidate_index=repair_attempt_index,
+                    candidate_total=repair_attempt_index,
+                    current_chars=0,
+                    chunk_count=0,
+                    generation_path=repair_generation_path,
+                    attempt_kind=repair_attempt_kind,
+                    rerank_used=False,
+                    word_budget_repair_used=True,
+                )
+                repaired_content, repaired_chunks = await _collect_generation_candidate_output(
+                    ai_service,
+                    repair_generate_kwargs,
+                    candidate_index=repair_attempt_index,
+                    max_output_chars=resolve_word_budget_repair_char_limit(
+                        target_word_count,
+                        relax_content_budget=relax_content_budget,
+                    ),
+                    runtime_state=runtime_state,
+                )
+                repair_candidate = _build_generation_candidate_record(
+                    full_content=repaired_content,
+                    candidate_chunks=repaired_chunks,
+                    target_word_count=target_word_count,
+                    source=source,
+                    generation_label=f"{generation_label}-budget-repair",
+                    candidate_index=repair_attempt_index,
+                    candidate_offset=repair_attempt_index - 1,
+                    quality_evaluator=quality_evaluator,
+                    quality_gate_plan_builder=quality_gate_plan_builder,
+                    generation_path=repair_generation_path,
+                    attempt_kind=repair_attempt_kind,
+                )
+                repair_candidate_quality_metrics = dict(repair_candidate.get("quality_metrics") or {})
+                repair_candidate_selection = dict(repair_candidate_quality_metrics.get("candidate_selection") or {})
+                repair_candidate_selection["repair_seed_candidate_index"] = max(
+                    int(selected_candidate.get("candidate_index") or 1),
+                    1,
+                )
+                repair_seed_generation_path = str(selected_candidate.get("generation_path") or "").strip()
+                repair_seed_attempt_kind = str(selected_candidate.get("attempt_kind") or "").strip()
+                if repair_seed_generation_path:
+                    repair_candidate_selection["repair_seed_generation_path"] = repair_seed_generation_path
+                if repair_seed_attempt_kind:
+                    repair_candidate_selection["repair_seed_attempt_kind"] = repair_seed_attempt_kind
+                repair_candidate_quality_metrics["candidate_selection"] = repair_candidate_selection
+                repair_candidate["quality_metrics"] = repair_candidate_quality_metrics
+                if should_keep_word_budget_repair_candidate(selected_candidate, repair_candidate):
+                    candidates.append(repair_candidate)
+                    word_budget_repair_used = True
+                    reranked_candidate = select_best_generation_candidate(candidates) or repair_candidate
+                    if should_prefer_word_budget_repair_candidate(reranked_candidate, repair_candidate):
+                        selected_candidate = repair_candidate
+                    else:
+                        selected_candidate = reranked_candidate
+        except Exception as exc:
+            logger.warning(
+                f"Word-budget repair pass failed for {generation_label}: {type(exc).__name__}: {exc}"
+            )
+
+    deferred_followup_targeted_repair_seed_candidate = None
+    if should_apply_targeted_final_repair(selected_candidate):
+        try:
+            final_repair_attempt_index = len(candidates) + 1
+            final_repair_suffix = build_targeted_final_repair_suffix(
+                quality_metrics=selected_candidate.get("quality_metrics"),
+                quality_gate_plan=selected_candidate.get("quality_gate_plan"),
+                target_word_count=target_word_count,
+                attempt_index=final_repair_attempt_index,
+                source=source,
+            )
+            if final_repair_suffix:
+                final_repair_prompt_sections = [
+                    base_prompt,
+                    final_repair_suffix,
+                    "Previous draft to rewrite:\n<<<CHAPTER_DRAFT",
+                    str(selected_candidate.get("full_content") or ""),
+                    "CHAPTER_DRAFT>>>",
+                ]
+                final_repair_generate_kwargs = dict(base_generate_kwargs)
+                final_repair_generate_kwargs["prompt"] = "\n\n".join(
+                    section.strip()
+                    for section in final_repair_prompt_sections
+                    if isinstance(section, str) and section.strip()
+                )
+                final_repair_generate_kwargs["temperature"] = resolve_targeted_final_repair_temperature(
+                    base_temperature,
+                    quality_gate_plan=selected_candidate.get("quality_gate_plan"),
+                )
+                final_repair_generate_kwargs["max_tokens"] = resolve_targeted_final_repair_max_tokens(
+                    target_word_count,
+                    current_word_count=int(selected_candidate.get("word_count") or 0),
+                )
+                final_repair_generation_path = "targeted_quality_repair"
+                final_repair_attempt_kind = "targeted_quality_repair"
+                _sync_generation_runtime_state(
+                    runtime_state,
+                    candidate_index=final_repair_attempt_index,
+                    candidate_total=final_repair_attempt_index,
+                    current_chars=0,
+                    chunk_count=0,
+                    generation_path=final_repair_generation_path,
+                    attempt_kind=final_repair_attempt_kind,
+                    rerank_used=False,
+                    word_budget_repair_used=False,
+                )
+                final_repaired_content, final_repaired_chunks = await _collect_generation_candidate_output(
+                    ai_service,
+                    final_repair_generate_kwargs,
+                    candidate_index=final_repair_attempt_index,
+                    max_output_chars=resolve_targeted_final_repair_char_limit(target_word_count),
+                    runtime_state=runtime_state,
+                )
+                final_repair_candidate = _build_generation_candidate_record(
+                    full_content=final_repaired_content,
+                    candidate_chunks=final_repaired_chunks,
+                    target_word_count=target_word_count,
+                    source=source,
+                    generation_label=f"{generation_label}-targeted-repair",
+                    candidate_index=final_repair_attempt_index,
+                    candidate_offset=final_repair_attempt_index - 1,
+                    quality_evaluator=quality_evaluator,
+                    quality_gate_plan_builder=quality_gate_plan_builder,
+                    generation_path=final_repair_generation_path,
+                    attempt_kind=final_repair_attempt_kind,
+                )
+                final_repair_quality_metrics = dict(final_repair_candidate.get("quality_metrics") or {})
+                final_repair_selection = dict(final_repair_quality_metrics.get("candidate_selection") or {})
+                final_repair_selection["repair_seed_candidate_index"] = max(
+                    int(selected_candidate.get("candidate_index") or 1),
+                    1,
+                )
+                repair_seed_generation_path = str(selected_candidate.get("generation_path") or "").strip()
+                repair_seed_attempt_kind = str(selected_candidate.get("attempt_kind") or "").strip()
+                if repair_seed_generation_path:
+                    final_repair_selection["repair_seed_generation_path"] = repair_seed_generation_path
+                if repair_seed_attempt_kind:
+                    final_repair_selection["repair_seed_attempt_kind"] = repair_seed_attempt_kind
+                final_repair_quality_metrics["candidate_selection"] = final_repair_selection
+                final_repair_candidate["quality_metrics"] = final_repair_quality_metrics
+                repair_seed_candidate = selected_candidate
+                if should_keep_targeted_final_repair_candidate(repair_seed_candidate, final_repair_candidate):
+                    candidates.append(final_repair_candidate)
+                    if (
+                        should_adopt_targeted_final_repair_candidate(repair_seed_candidate, final_repair_candidate)
+                        and should_prefer_targeted_final_repair_candidate(repair_seed_candidate, final_repair_candidate)
+                    ):
+                        selected_candidate = final_repair_candidate
+                    elif should_apply_followup_targeted_final_repair(final_repair_candidate):
+                        deferred_followup_targeted_repair_seed_candidate = final_repair_candidate
+        except Exception as exc:
+            logger.warning(
+                f"Targeted quality repair pass failed for {generation_label}: {type(exc).__name__}: {exc}"
+            )
+
+    winner_candidate_index = int(selected_candidate.get("candidate_index") or 1)
+    selected_attempt_kind = str(selected_candidate.get("attempt_kind") or "").strip()
+    selected_generation_path = str(selected_candidate.get("generation_path") or "").strip()
+    word_budget_repair_used = (
+        selected_attempt_kind == "word_budget_repair"
+        or selected_generation_path == "word_budget_repair"
+    )
+    rerank_used = winner_candidate_index > 1 and not word_budget_repair_used
+    final_attempt_kind = str(
+        selected_attempt_kind
+        or _resolve_generation_attempt_labels(
+            winner_candidate_index,
+            is_word_budget_repair=word_budget_repair_used,
+        )[1]
+    )
+    final_generation_path = (
+        selected_generation_path
+        or (
+            "word_budget_repair"
+            if word_budget_repair_used
+            else "rerank_retry" if rerank_used else "single_pass"
+        )
+    )
+
     final_quality_metrics = dict(selected_candidate.get("quality_metrics") or {})
-    final_quality_gate_plan = quality_gate_plan_builder(final_quality_metrics, 0)
+    provisional_quality_gate_plan = (
+        dict(selected_candidate.get("quality_gate_plan") or {})
+        if isinstance(selected_candidate.get("quality_gate_plan"), dict)
+        else {}
+    )
     final_selection_metadata = build_candidate_selection_metadata(
         final_quality_metrics,
         word_count=int(selected_candidate.get("word_count") or 0),
         target_word_count=target_word_count,
-        candidate_index=int(selected_candidate.get("candidate_index") or 1),
+        candidate_index=winner_candidate_index,
         candidate_count=len(candidates),
         source=source,
-        quality_gate_plan=final_quality_gate_plan,
+        quality_gate_plan=provisional_quality_gate_plan,
+        generation_path=final_generation_path,
+        attempt_kind=final_attempt_kind,
+        rerank_used=rerank_used,
+        word_budget_repair_used=word_budget_repair_used,
+        winner_candidate_index=winner_candidate_index,
     )
     final_quality_metrics = attach_candidate_selection_metadata(
         final_quality_metrics,
         selection_metadata=final_selection_metadata,
     )
+    final_quality_gate_plan = quality_gate_plan_builder(final_quality_metrics, 0)
+    final_quality_gate_plan = normalize_candidate_quality_gate_plan(
+        final_quality_gate_plan,
+        word_count=int(selected_candidate.get("word_count") or 0),
+        target_word_count=target_word_count,
+        quality_metrics=final_quality_metrics,
+    )
     if isinstance(final_quality_gate_plan.get("quality_gate"), dict):
         final_quality_metrics["quality_gate"] = final_quality_gate_plan["quality_gate"]
+    final_selection_metadata = build_candidate_selection_metadata(
+        final_quality_metrics,
+        word_count=int(selected_candidate.get("word_count") or 0),
+        target_word_count=target_word_count,
+        candidate_index=winner_candidate_index,
+        candidate_count=len(candidates),
+        source=source,
+        quality_gate_plan=final_quality_gate_plan,
+        generation_path=final_generation_path,
+        attempt_kind=final_attempt_kind,
+        rerank_used=rerank_used,
+        word_budget_repair_used=word_budget_repair_used,
+        winner_candidate_index=winner_candidate_index,
+    )
+    final_quality_metrics = attach_candidate_selection_metadata(
+        final_quality_metrics,
+        selection_metadata=final_selection_metadata,
+    )
 
     selected_candidate.update(final_selection_metadata)
     selected_candidate["quality_metrics"] = final_quality_metrics
     selected_candidate["quality_gate_plan"] = final_quality_gate_plan
+
+    final_quality_gate = (
+        final_quality_gate_plan.get("quality_gate")
+        if isinstance(final_quality_gate_plan.get("quality_gate"), dict)
+        else {}
+    )
+    if str(final_quality_gate.get("decision") or "").strip() != "allow_save":
+        repair_candidates = [
+            dict(candidate)
+            for candidate in candidates
+            if isinstance(candidate, dict)
+            and (
+                str(candidate.get("attempt_kind") or "").strip() == "word_budget_repair"
+                or str(candidate.get("generation_path") or "").strip() == "word_budget_repair"
+            )
+        ]
+        if repair_candidates:
+            best_word_budget_repair_candidate = (
+                select_best_generation_candidate(repair_candidates) or dict(repair_candidates[-1])
+            )
+            if (
+                int(best_word_budget_repair_candidate.get("candidate_index") or 0) != winner_candidate_index
+                and should_prefer_word_budget_repair_candidate(selected_candidate, best_word_budget_repair_candidate)
+            ):
+                selected_candidate = dict(best_word_budget_repair_candidate)
+                winner_candidate_index = int(selected_candidate.get("candidate_index") or 1)
+                selected_attempt_kind = str(selected_candidate.get("attempt_kind") or "").strip()
+                selected_generation_path = str(selected_candidate.get("generation_path") or "").strip()
+                word_budget_repair_used = (
+                    selected_attempt_kind == "word_budget_repair"
+                    or selected_generation_path == "word_budget_repair"
+                )
+                rerank_used = winner_candidate_index > 1 and not word_budget_repair_used
+                final_attempt_kind = str(
+                    selected_attempt_kind
+                    or _resolve_generation_attempt_labels(
+                        winner_candidate_index,
+                        is_word_budget_repair=word_budget_repair_used,
+                    )[1]
+                )
+                final_generation_path = (
+                    selected_generation_path
+                    or (
+                        "word_budget_repair"
+                        if word_budget_repair_used
+                        else "rerank_retry" if rerank_used else "single_pass"
+                    )
+                )
+                final_quality_metrics = dict(selected_candidate.get("quality_metrics") or {})
+                provisional_quality_gate_plan = (
+                    dict(selected_candidate.get("quality_gate_plan") or {})
+                    if isinstance(selected_candidate.get("quality_gate_plan"), dict)
+                    else {}
+                )
+                final_selection_metadata = build_candidate_selection_metadata(
+                    final_quality_metrics,
+                    word_count=int(selected_candidate.get("word_count") or 0),
+                    target_word_count=target_word_count,
+                    candidate_index=winner_candidate_index,
+                    candidate_count=len(candidates),
+                    source=source,
+                    quality_gate_plan=provisional_quality_gate_plan,
+                    generation_path=final_generation_path,
+                    attempt_kind=final_attempt_kind,
+                    rerank_used=rerank_used,
+                    word_budget_repair_used=word_budget_repair_used,
+                    winner_candidate_index=winner_candidate_index,
+                )
+                final_quality_metrics = attach_candidate_selection_metadata(
+                    final_quality_metrics,
+                    selection_metadata=final_selection_metadata,
+                )
+                final_quality_gate_plan = quality_gate_plan_builder(final_quality_metrics, 0)
+                final_quality_gate_plan = normalize_candidate_quality_gate_plan(
+                    final_quality_gate_plan,
+                    word_count=int(selected_candidate.get("word_count") or 0),
+                    target_word_count=target_word_count,
+                    quality_metrics=final_quality_metrics,
+                )
+                if isinstance(final_quality_gate_plan.get("quality_gate"), dict):
+                    final_quality_metrics["quality_gate"] = final_quality_gate_plan["quality_gate"]
+                final_selection_metadata = build_candidate_selection_metadata(
+                    final_quality_metrics,
+                    word_count=int(selected_candidate.get("word_count") or 0),
+                    target_word_count=target_word_count,
+                    candidate_index=winner_candidate_index,
+                    candidate_count=len(candidates),
+                    source=source,
+                    quality_gate_plan=final_quality_gate_plan,
+                    generation_path=final_generation_path,
+                    attempt_kind=final_attempt_kind,
+                    rerank_used=rerank_used,
+                    word_budget_repair_used=word_budget_repair_used,
+                    winner_candidate_index=winner_candidate_index,
+                )
+                final_quality_metrics = attach_candidate_selection_metadata(
+                    final_quality_metrics,
+                    selection_metadata=final_selection_metadata,
+                )
+                selected_candidate.update(final_selection_metadata)
+                selected_candidate["quality_metrics"] = final_quality_metrics
+                selected_candidate["quality_gate_plan"] = final_quality_gate_plan
+
+    targeted_final_repair_seed_candidate = None
+    if should_apply_followup_targeted_final_repair(selected_candidate):
+        targeted_final_repair_seed_candidate = selected_candidate
+    elif deferred_followup_targeted_repair_seed_candidate is not None:
+        targeted_final_repair_seed_candidate = deferred_followup_targeted_repair_seed_candidate
+    elif str(selected_candidate.get("attempt_kind") or "").strip() != "targeted_quality_repair":
+        targeted_final_repair_seed_candidate = select_targeted_final_repair_seed_candidate(
+            selected_candidate,
+            candidates,
+        )
+    if targeted_final_repair_seed_candidate:
+        try:
+            final_repair_attempt_index = len(candidates) + 1
+            final_repair_suffix = build_targeted_final_repair_suffix(
+                quality_metrics=targeted_final_repair_seed_candidate.get("quality_metrics"),
+                quality_gate_plan=targeted_final_repair_seed_candidate.get("quality_gate_plan"),
+                target_word_count=target_word_count,
+                attempt_index=final_repair_attempt_index,
+                source=source,
+            )
+            if final_repair_suffix:
+                final_repair_prompt_sections = [
+                    base_prompt,
+                    final_repair_suffix,
+                    "Previous draft to rewrite:\n<<<CHAPTER_DRAFT",
+                    str(targeted_final_repair_seed_candidate.get("full_content") or ""),
+                    "CHAPTER_DRAFT>>>",
+                ]
+                final_repair_generate_kwargs = dict(base_generate_kwargs)
+                final_repair_generate_kwargs["prompt"] = "\n\n".join(
+                    section.strip()
+                    for section in final_repair_prompt_sections
+                    if isinstance(section, str) and section.strip()
+                )
+                final_repair_generate_kwargs["temperature"] = resolve_targeted_final_repair_temperature(
+                    base_temperature,
+                    quality_gate_plan=targeted_final_repair_seed_candidate.get("quality_gate_plan"),
+                )
+                final_repair_generate_kwargs["max_tokens"] = resolve_targeted_final_repair_max_tokens(
+                    target_word_count,
+                    current_word_count=int(targeted_final_repair_seed_candidate.get("word_count") or 0),
+                )
+                final_repair_generation_path = "targeted_quality_repair"
+                final_repair_attempt_kind = "targeted_quality_repair"
+                _sync_generation_runtime_state(
+                    runtime_state,
+                    candidate_index=final_repair_attempt_index,
+                    candidate_total=final_repair_attempt_index,
+                    current_chars=0,
+                    chunk_count=0,
+                    generation_path=final_repair_generation_path,
+                    attempt_kind=final_repair_attempt_kind,
+                    rerank_used=False,
+                    word_budget_repair_used=False,
+                )
+                final_repaired_content, final_repaired_chunks = await _collect_generation_candidate_output(
+                    ai_service,
+                    final_repair_generate_kwargs,
+                    candidate_index=final_repair_attempt_index,
+                    max_output_chars=resolve_targeted_final_repair_char_limit(target_word_count),
+                    runtime_state=runtime_state,
+                )
+                final_repair_candidate = _build_generation_candidate_record(
+                    full_content=final_repaired_content,
+                    candidate_chunks=final_repaired_chunks,
+                    target_word_count=target_word_count,
+                    source=source,
+                    generation_label=f"{generation_label}-targeted-repair-post-finalize",
+                    candidate_index=final_repair_attempt_index,
+                    candidate_offset=final_repair_attempt_index - 1,
+                    quality_evaluator=quality_evaluator,
+                    quality_gate_plan_builder=quality_gate_plan_builder,
+                    generation_path=final_repair_generation_path,
+                    attempt_kind=final_repair_attempt_kind,
+                )
+                final_repair_quality_metrics = dict(final_repair_candidate.get("quality_metrics") or {})
+                final_repair_selection = dict(final_repair_quality_metrics.get("candidate_selection") or {})
+                final_repair_selection["repair_seed_candidate_index"] = max(
+                    int(targeted_final_repair_seed_candidate.get("candidate_index") or 1),
+                    1,
+                )
+                repair_seed_generation_path = str(targeted_final_repair_seed_candidate.get("generation_path") or "").strip()
+                repair_seed_attempt_kind = str(targeted_final_repair_seed_candidate.get("attempt_kind") or "").strip()
+                if repair_seed_generation_path:
+                    final_repair_selection["repair_seed_generation_path"] = repair_seed_generation_path
+                if repair_seed_attempt_kind:
+                    final_repair_selection["repair_seed_attempt_kind"] = repair_seed_attempt_kind
+                final_repair_quality_metrics["candidate_selection"] = final_repair_selection
+                final_repair_candidate["quality_metrics"] = final_repair_quality_metrics
+                current_winner_candidate = selected_candidate
+                repair_seed_candidate = targeted_final_repair_seed_candidate
+                if should_keep_targeted_final_repair_candidate(repair_seed_candidate, final_repair_candidate):
+                    candidates.append(final_repair_candidate)
+                    if (
+                        should_adopt_targeted_final_repair_candidate(repair_seed_candidate, final_repair_candidate)
+                        and should_prefer_targeted_final_repair_candidate(current_winner_candidate, final_repair_candidate)
+                    ):
+                        selected_candidate = final_repair_candidate
+                winner_candidate_index = int(selected_candidate.get("candidate_index") or 1)
+                selected_attempt_kind = str(selected_candidate.get("attempt_kind") or "").strip()
+                selected_generation_path = str(selected_candidate.get("generation_path") or "").strip()
+                word_budget_repair_used = (
+                    selected_attempt_kind == "word_budget_repair"
+                    or selected_generation_path == "word_budget_repair"
+                )
+                rerank_used = winner_candidate_index > 1 and not word_budget_repair_used
+                final_attempt_kind = str(
+                    selected_attempt_kind
+                    or _resolve_generation_attempt_labels(
+                        winner_candidate_index,
+                        is_word_budget_repair=word_budget_repair_used,
+                    )[1]
+                )
+                final_generation_path = (
+                    selected_generation_path
+                    or (
+                        "word_budget_repair"
+                        if word_budget_repair_used
+                        else "rerank_retry" if rerank_used else "single_pass"
+                    )
+                )
+                final_quality_metrics = dict(selected_candidate.get("quality_metrics") or {})
+                provisional_quality_gate_plan = (
+                    dict(selected_candidate.get("quality_gate_plan") or {})
+                    if isinstance(selected_candidate.get("quality_gate_plan"), dict)
+                    else {}
+                )
+                final_selection_metadata = build_candidate_selection_metadata(
+                    final_quality_metrics,
+                    word_count=int(selected_candidate.get("word_count") or 0),
+                    target_word_count=target_word_count,
+                    candidate_index=winner_candidate_index,
+                    candidate_count=len(candidates),
+                    source=source,
+                    quality_gate_plan=provisional_quality_gate_plan,
+                    generation_path=final_generation_path,
+                    attempt_kind=final_attempt_kind,
+                    rerank_used=rerank_used,
+                    word_budget_repair_used=word_budget_repair_used,
+                    winner_candidate_index=winner_candidate_index,
+                )
+                final_quality_metrics = attach_candidate_selection_metadata(
+                    final_quality_metrics,
+                    selection_metadata=final_selection_metadata,
+                )
+                final_quality_gate_plan = quality_gate_plan_builder(final_quality_metrics, 0)
+                final_quality_gate_plan = normalize_candidate_quality_gate_plan(
+                    final_quality_gate_plan,
+                    word_count=int(selected_candidate.get("word_count") or 0),
+                    target_word_count=target_word_count,
+                    quality_metrics=final_quality_metrics,
+                )
+                if isinstance(final_quality_gate_plan.get("quality_gate"), dict):
+                    final_quality_metrics["quality_gate"] = final_quality_gate_plan["quality_gate"]
+                final_selection_metadata = build_candidate_selection_metadata(
+                    final_quality_metrics,
+                    word_count=int(selected_candidate.get("word_count") or 0),
+                    target_word_count=target_word_count,
+                    candidate_index=winner_candidate_index,
+                    candidate_count=len(candidates),
+                    source=source,
+                    quality_gate_plan=final_quality_gate_plan,
+                    generation_path=final_generation_path,
+                    attempt_kind=final_attempt_kind,
+                    rerank_used=rerank_used,
+                    word_budget_repair_used=word_budget_repair_used,
+                    winner_candidate_index=winner_candidate_index,
+                )
+                final_quality_metrics = attach_candidate_selection_metadata(
+                    final_quality_metrics,
+                    selection_metadata=final_selection_metadata,
+                )
+                selected_candidate.update(final_selection_metadata)
+                selected_candidate["quality_metrics"] = final_quality_metrics
+                selected_candidate["quality_gate_plan"] = final_quality_gate_plan
+
+                followup_targeted_repair_seed_candidate = (
+                    selected_candidate if should_apply_followup_targeted_final_repair(selected_candidate) else None
+                )
+                if followup_targeted_repair_seed_candidate:
+                    followup_repair_attempt_index = len(candidates) + 1
+                    followup_repair_suffix = build_targeted_final_repair_suffix(
+                        quality_metrics=followup_targeted_repair_seed_candidate.get("quality_metrics"),
+                        quality_gate_plan=followup_targeted_repair_seed_candidate.get("quality_gate_plan"),
+                        target_word_count=target_word_count,
+                        attempt_index=followup_repair_attempt_index,
+                        source=source,
+                    )
+                    if followup_repair_suffix:
+                        followup_repair_prompt_sections = [
+                            base_prompt,
+                            followup_repair_suffix,
+                            "Previous draft to rewrite:\n<<<CHAPTER_DRAFT",
+                            str(followup_targeted_repair_seed_candidate.get("full_content") or ""),
+                            "CHAPTER_DRAFT>>>",
+                        ]
+                        followup_repair_generate_kwargs = dict(base_generate_kwargs)
+                        followup_repair_generate_kwargs["prompt"] = "\n\n".join(
+                            section.strip()
+                            for section in followup_repair_prompt_sections
+                            if isinstance(section, str) and section.strip()
+                        )
+                        followup_repair_generate_kwargs["temperature"] = resolve_targeted_final_repair_temperature(
+                            base_temperature,
+                            quality_gate_plan=followup_targeted_repair_seed_candidate.get("quality_gate_plan"),
+                        )
+                        followup_repair_generate_kwargs["max_tokens"] = resolve_targeted_final_repair_max_tokens(
+                            target_word_count,
+                            current_word_count=int(followup_targeted_repair_seed_candidate.get("word_count") or 0),
+                        )
+                        followup_repair_generation_path = "targeted_quality_repair"
+                        followup_repair_attempt_kind = "targeted_quality_repair"
+                        _sync_generation_runtime_state(
+                            runtime_state,
+                            candidate_index=followup_repair_attempt_index,
+                            candidate_total=followup_repair_attempt_index,
+                            current_chars=0,
+                            chunk_count=0,
+                            generation_path=followup_repair_generation_path,
+                            attempt_kind=followup_repair_attempt_kind,
+                            rerank_used=False,
+                            word_budget_repair_used=False,
+                        )
+                        followup_repaired_content, followup_repaired_chunks = await _collect_generation_candidate_output(
+                            ai_service,
+                            followup_repair_generate_kwargs,
+                            candidate_index=followup_repair_attempt_index,
+                            max_output_chars=resolve_targeted_final_repair_char_limit(target_word_count),
+                            runtime_state=runtime_state,
+                        )
+                        followup_repair_candidate = _build_generation_candidate_record(
+                            full_content=followup_repaired_content,
+                            candidate_chunks=followup_repaired_chunks,
+                            target_word_count=target_word_count,
+                            source=source,
+                            generation_label=f"{generation_label}-targeted-repair-followup",
+                            candidate_index=followup_repair_attempt_index,
+                            candidate_offset=followup_repair_attempt_index - 1,
+                            quality_evaluator=quality_evaluator,
+                            quality_gate_plan_builder=quality_gate_plan_builder,
+                            generation_path=followup_repair_generation_path,
+                            attempt_kind=followup_repair_attempt_kind,
+                        )
+                        followup_repair_quality_metrics = dict(followup_repair_candidate.get("quality_metrics") or {})
+                        followup_repair_selection = dict(followup_repair_quality_metrics.get("candidate_selection") or {})
+                        followup_repair_selection["repair_seed_candidate_index"] = max(
+                            int(followup_targeted_repair_seed_candidate.get("candidate_index") or 1),
+                            1,
+                        )
+                        repair_seed_generation_path = str(followup_targeted_repair_seed_candidate.get("generation_path") or "").strip()
+                        repair_seed_attempt_kind = str(followup_targeted_repair_seed_candidate.get("attempt_kind") or "").strip()
+                        if repair_seed_generation_path:
+                            followup_repair_selection["repair_seed_generation_path"] = repair_seed_generation_path
+                        if repair_seed_attempt_kind:
+                            followup_repair_selection["repair_seed_attempt_kind"] = repair_seed_attempt_kind
+                        followup_repair_quality_metrics["candidate_selection"] = followup_repair_selection
+                        followup_repair_candidate["quality_metrics"] = followup_repair_quality_metrics
+                        repair_seed_candidate = followup_targeted_repair_seed_candidate
+                        if should_keep_targeted_final_repair_candidate(repair_seed_candidate, followup_repair_candidate):
+                            candidates.append(followup_repair_candidate)
+                            if (
+                                should_adopt_targeted_final_repair_candidate(repair_seed_candidate, followup_repair_candidate)
+                                and should_prefer_targeted_final_repair_candidate(repair_seed_candidate, followup_repair_candidate)
+                            ):
+                                selected_candidate = followup_repair_candidate
+                        winner_candidate_index = int(selected_candidate.get("candidate_index") or 1)
+                        selected_attempt_kind = str(selected_candidate.get("attempt_kind") or "").strip()
+                        selected_generation_path = str(selected_candidate.get("generation_path") or "").strip()
+                        word_budget_repair_used = (
+                            selected_attempt_kind == "word_budget_repair"
+                            or selected_generation_path == "word_budget_repair"
+                        )
+                        rerank_used = winner_candidate_index > 1 and not word_budget_repair_used
+                        final_attempt_kind = str(
+                            selected_attempt_kind
+                            or _resolve_generation_attempt_labels(
+                                winner_candidate_index,
+                                is_word_budget_repair=word_budget_repair_used,
+                            )[1]
+                        )
+                        final_generation_path = (
+                            selected_generation_path
+                            or (
+                                "word_budget_repair"
+                                if word_budget_repair_used
+                                else "rerank_retry" if rerank_used else "single_pass"
+                            )
+                        )
+                        final_quality_metrics = dict(selected_candidate.get("quality_metrics") or {})
+                        provisional_quality_gate_plan = (
+                            dict(selected_candidate.get("quality_gate_plan") or {})
+                            if isinstance(selected_candidate.get("quality_gate_plan"), dict)
+                            else {}
+                        )
+                        final_selection_metadata = build_candidate_selection_metadata(
+                            final_quality_metrics,
+                            word_count=int(selected_candidate.get("word_count") or 0),
+                            target_word_count=target_word_count,
+                            candidate_index=winner_candidate_index,
+                            candidate_count=len(candidates),
+                            source=source,
+                            quality_gate_plan=provisional_quality_gate_plan,
+                            generation_path=final_generation_path,
+                            attempt_kind=final_attempt_kind,
+                            rerank_used=rerank_used,
+                            word_budget_repair_used=word_budget_repair_used,
+                            winner_candidate_index=winner_candidate_index,
+                        )
+                        final_quality_metrics = attach_candidate_selection_metadata(
+                            final_quality_metrics,
+                            selection_metadata=final_selection_metadata,
+                        )
+                        final_quality_gate_plan = quality_gate_plan_builder(final_quality_metrics, 0)
+                        final_quality_gate_plan = normalize_candidate_quality_gate_plan(
+                            final_quality_gate_plan,
+                            word_count=int(selected_candidate.get("word_count") or 0),
+                            target_word_count=target_word_count,
+                            quality_metrics=final_quality_metrics,
+                        )
+                        if isinstance(final_quality_gate_plan.get("quality_gate"), dict):
+                            final_quality_metrics["quality_gate"] = final_quality_gate_plan["quality_gate"]
+                        final_selection_metadata = build_candidate_selection_metadata(
+                            final_quality_metrics,
+                            word_count=int(selected_candidate.get("word_count") or 0),
+                            target_word_count=target_word_count,
+                            candidate_index=winner_candidate_index,
+                            candidate_count=len(candidates),
+                            source=source,
+                            quality_gate_plan=final_quality_gate_plan,
+                            generation_path=final_generation_path,
+                            attempt_kind=final_attempt_kind,
+                            rerank_used=rerank_used,
+                            word_budget_repair_used=word_budget_repair_used,
+                            winner_candidate_index=winner_candidate_index,
+                        )
+                        final_quality_metrics = attach_candidate_selection_metadata(
+                            final_quality_metrics,
+                            selection_metadata=final_selection_metadata,
+                        )
+                        selected_candidate.update(final_selection_metadata)
+                        selected_candidate["quality_metrics"] = final_quality_metrics
+                        selected_candidate["quality_gate_plan"] = final_quality_gate_plan
+        except Exception as exc:
+            logger.warning(
+                f"Post-finalize targeted quality repair pass failed for {generation_label}: {type(exc).__name__}: {exc}"
+            )
+
     selected_candidate["candidate_count"] = len(candidates)
     selected_candidate["rerank_pool_size"] = len(candidates)
+    final_candidate_selection = (
+        dict(final_quality_metrics.get("candidate_selection") or {})
+        if isinstance(final_quality_metrics.get("candidate_selection"), dict)
+        else {}
+    )
+    candidate_pool_summary = build_candidate_pool_summary(
+        candidates,
+        winner_candidate_index=winner_candidate_index,
+        repair_seed_candidate_index=int(final_candidate_selection.get("repair_seed_candidate_index") or 0) or None,
+    )
+    if candidate_pool_summary:
+        selected_candidate["candidate_pool_summary"] = candidate_pool_summary
+        final_quality_metrics = dict(selected_candidate.get("quality_metrics") or {})
+        final_quality_metrics["candidate_pool_summary"] = candidate_pool_summary
+        selected_candidate["quality_metrics"] = final_quality_metrics
+    _sync_generation_runtime_state(
+        runtime_state,
+        candidate_index=winner_candidate_index,
+        candidate_total=len(candidates),
+        current_chars=int(selected_candidate.get("word_count") or 0),
+        chunk_count=len(selected_candidate.get("candidate_chunks") or []),
+        generation_path=final_generation_path,
+        attempt_kind=final_attempt_kind,
+        rerank_used=rerank_used,
+        word_budget_repair_used=word_budget_repair_used,
+        winner_candidate_index=winner_candidate_index,
+    )
     return selected_candidate
 
+async def _clear_task_runtime_caches(task_id: str) -> None:
+    async with task_quality_lock:
+        task_quality_metrics_cache.pop(task_id, None)
+    async with task_workflow_lock:
+        task_workflow_state_cache.pop(task_id, None)
+
+
+async def _batch_task_exists(db_session: AsyncSession, task_id: str) -> bool:
+    task_exists_result = await db_session.execute(
+        select(BatchGenerationTask.id).where(BatchGenerationTask.id == task_id)
+    )
+    return task_exists_result.scalar_one_or_none() is not None
+
+
+async def _create_analysis_task_safely(
+    db_session: AsyncSession,
+    *,
+    chapter_id: str,
+    user_id: str,
+    project_id: str,
+    log_context: str,
+) -> Optional[AnalysisTask]:
+    chapter_exists_result = await db_session.execute(
+        select(Chapter.id).where(Chapter.id == chapter_id)
+    )
+    if chapter_exists_result.scalar_one_or_none() is None:
+        logger.info(f"Skip analysis task creation because chapter no longer exists: {chapter_id} ({log_context})")
+        return None
+
+    project_exists_result = await db_session.execute(
+        select(Project.id).where(Project.id == project_id)
+    )
+    if project_exists_result.scalar_one_or_none() is None:
+        logger.info(f"Skip analysis task creation because project no longer exists: {project_id} ({log_context})")
+        return None
+
+    analysis_task = AnalysisTask(
+        chapter_id=chapter_id,
+        user_id=user_id,
+        project_id=project_id,
+        status='pending',
+        progress=0,
+    )
+    db_session.add(analysis_task)
+    try:
+        await db_session.commit()
+    except IntegrityError:
+        await db_session.rollback()
+        logger.info(
+            f"Skip analysis task creation because chapter/project disappeared during commit: "
+            f"chapter={chapter_id}, project={project_id}, context={log_context}"
+        )
+        return None
+
+    await db_session.refresh(analysis_task)
+    return analysis_task
 
 async def _upsert_batch_generation_snapshot(
     db_session: AsyncSession,
@@ -315,8 +1351,13 @@ async def _upsert_batch_generation_snapshot(
     quality_metrics_history: Any = _SNAPSHOT_UNSET,
     quality_metrics_summary: Any = _SNAPSHOT_UNSET,
     workflow_runtime_state: Any = _SNAPSHOT_UNSET,
-) -> BatchGenerationSnapshot:
+) -> Optional[BatchGenerationSnapshot]:
     """Persist the latest task-level quality snapshot for recovery after restarts."""
+    if not await _batch_task_exists(db_session, task_id):
+        await _clear_task_runtime_caches(task_id)
+        logger.info(f"Skip batch snapshot persistence because task no longer exists: {task_id}")
+        return None
+
     result = await db_session.execute(
         select(BatchGenerationSnapshot).where(BatchGenerationSnapshot.batch_task_id == task_id)
     )
@@ -348,7 +1389,13 @@ async def _upsert_batch_generation_snapshot(
             did_change = True
 
     if did_change:
-        await db_session.commit()
+        try:
+            await db_session.commit()
+        except IntegrityError:
+            await db_session.rollback()
+            await _clear_task_runtime_caches(task_id)
+            logger.warning(f"Skip batch snapshot persistence because task disappeared during commit: {task_id}")
+            return None
     return snapshot
 
 
@@ -1157,6 +2204,15 @@ async def _update_task_workflow_runtime_state(
         snapshot = dict(current)
         snapshot["updated_at"] = datetime.now().isoformat()
 
+        if event_type == "chapter_start":
+            for field_name in (
+                "pre_compaction_total_length",
+                "context_budget_limit",
+                "compaction_applied",
+                "compaction_details",
+            ):
+                snapshot.pop(field_name, None)
+
         if event_type:
             snapshot["last_event"] = event_type
         if message is not None:
@@ -1173,6 +2229,47 @@ async def _update_task_workflow_runtime_state(
             snapshot["current_retry_count"] = event.get("current_retry_count")
         if event.get("max_retries") is not None:
             snapshot["max_retries"] = event.get("max_retries")
+
+        for field_name, minimum in (
+            ("candidate_index", 1),
+            ("candidate_count", 1),
+            ("word_count", 0),
+            ("winner_candidate_index", 1),
+        ):
+            raw_value = event.get(field_name)
+            if raw_value is None:
+                continue
+            try:
+                snapshot[field_name] = max(int(raw_value), minimum)
+            except (TypeError, ValueError):
+                continue
+
+        for field_name, minimum in (
+            ("pre_compaction_total_length", 0),
+            ("context_budget_limit", 0),
+        ):
+            raw_value = event.get(field_name)
+            if raw_value is None:
+                continue
+            try:
+                snapshot[field_name] = max(int(raw_value), minimum)
+            except (TypeError, ValueError):
+                continue
+
+        for field_name in ("generation_path", "attempt_kind"):
+            raw_value = event.get(field_name)
+            if isinstance(raw_value, str) and raw_value.strip():
+                snapshot[field_name] = raw_value.strip()
+
+        for field_name in ("rerank_used", "word_budget_repair_used", "compaction_applied"):
+            raw_value = event.get(field_name)
+            if raw_value is not None:
+                snapshot[field_name] = bool(raw_value)
+
+        compaction_details = event.get("compaction_details")
+        if isinstance(compaction_details, dict):
+            snapshot["compaction_details"] = _normalize_json_payload(compaction_details)
+
         if phase:
             snapshot["phase"] = phase
 
@@ -1180,7 +2277,6 @@ async def _update_task_workflow_runtime_state(
 
     if db_session is not None:
         await _persist_task_workflow_runtime_snapshot(db_session, task_id, snapshot)
-
 
 async def _set_task_active_story_repair_payload(
     task_id: str,
@@ -1300,32 +2396,116 @@ async def publish_task_stream_event(
 
 
 def _extract_rule_keywords(world_rules: Optional[str], limit: int = 10) -> List[str]:
-    """从世界规则文本提取关键词。"""
+    """Extract compact rule-grounding keywords from rule text."""
     if not world_rules:
         return []
 
-    raw_words = re.findall(r"[\u4e00-\u9fff]{2,}", world_rules)
     stop_words = {
         "可以", "必须", "不能", "需要", "出现", "进行", "影响", "通过", "以及", "如果", "然后",
         "这个", "那个", "没有", "时候", "因为", "所以", "因此", "规则", "系统", "角色", "世界",
+        "章节", "本章", "当前", "阶段", "重点", "提示", "要求", "设定", "巡夜署",
     }
+    cue_words = (
+        "规则", "边界", "限制", "条件", "代价", "回检", "登记", "文本", "污染", "改写",
+        "反写", "触发", "反噬", "诵读", "校对", "命令", "权限", "封印", "倒计时", "纠错",
+        "观看", "记录", "热度", "实体", "伤人", "危险", "绑定", "认主", "断页", "直播",
+        "\u8f6c\u8ff0", "\u76ee\u51fb", "\u5bf9\u5e94", "\u526f\u672c", "\u6d3b\u9875\u534f\u8bae", "\u5931\u58f0",
+    )
+    constraint_words = (
+        "不能", "不得", "否则", "代价", "伤害", "伤及", "失声", "流血", "说破", "公开", "只要", "一旦", "只能",
+    )
+
+    segments = [
+        segment.strip()
+        for segment in re.split(r"[???!??;?,??:/??()??\[\]\n]+", world_rules)
+        if segment and segment.strip()
+    ]
+    priority_segments = [
+        segment for segment in segments
+        if any(cue in segment for cue in cue_words) or any(token in segment for token in constraint_words)
+    ]
+    working_segments = priority_segments or segments
+
     keywords: List[str] = []
     seen: set[str] = set()
-    for word in raw_words:
-        if word in stop_words:
-            continue
-        if word in seen:
-            continue
-        seen.add(word)
-        keywords.append(word)
-        if len(keywords) >= limit:
-            break
-    return keywords
 
+    def _append_keyword(candidate: str) -> bool:
+        normalized = candidate.strip()
+        if len(normalized) < 2 or normalized in stop_words or normalized in seen:
+            return False
+        seen.add(normalized)
+        keywords.append(normalized)
+        return len(keywords) >= limit
+
+    anchored_patterns = (
+        r"(?:不能|不得)[^，。；]{2,12}",
+        r"(?:否则|只要|一旦|只能)[^，。；]{2,12}",
+        r"[^，。；]{2,10}(?:代价|纠错|失声|流血|伤害|伤及|反噬)",
+        r"(?:直接说破|录屏公开|伤害最近者|轻则失声|重则流血|高热度记录未切断)",
+        r"[^，。；]{2,10}会让[^，。；]{2,10}",
+        r"[^，。；]{2,10}会造成[^，。；]{2,10}",
+        r"[^，。；]{1,8}越[^，。；]{1,8}越[^，。；]{1,8}",
+    )
+
+    for segment in working_segments:
+        compact = re.sub(r"\s+", "", segment)
+        if not compact:
+            continue
+
+        candidates: List[str] = []
+        if len(compact) <= 8:
+            candidates.append(compact)
+        else:
+            for pattern in anchored_patterns:
+                candidates.extend(re.findall(pattern, compact))
+            for cue in cue_words:
+                start_index = 0
+                while True:
+                    pos = compact.find(cue, start_index)
+                    if pos < 0:
+                        break
+                    candidates.append(cue)
+                    left = max(0, pos - 3)
+                    right = min(len(compact), pos + len(cue) + 4)
+                    candidates.append(compact[left:right])
+                    start_index = pos + len(cue)
+            for part in re.split(r"(?:必须|不能|不得|需要|如果|否则|一旦|只要|只能|即可|就会|就能|导致|引发|迫使|代价)", compact):
+                stripped = part.strip()
+                if 2 <= len(stripped) <= 10:
+                    candidates.append(stripped)
+            if not candidates:
+                candidates.extend([compact[:6], compact[-6:]])
+
+        for candidate in candidates:
+            if _append_keyword(candidate):
+                return keywords
+
+    return keywords
 
 def _split_sentences(text: str) -> List[str]:
     parts = re.split(r"[。！？!?；;\n]+", text)
     return [part.strip() for part in parts if part.strip()]
+
+
+def _trim_text_to_sentence_boundary(text: str, *, hard_limit: int, lookback_chars: int = 220) -> str:
+    normalized_text = str(text or "")
+    if hard_limit <= 0 or len(normalized_text) <= hard_limit:
+        return normalized_text.strip()
+
+    search_start = max(0, hard_limit - max(int(lookback_chars or 0), 80))
+    best_boundary_index = -1
+    for boundary_char in ("。", "！", "？", "!", "?", "；", ";", "\n"):
+        boundary_index = normalized_text.rfind(boundary_char, search_start, hard_limit + 1)
+        if boundary_index > best_boundary_index:
+            best_boundary_index = boundary_index
+
+    if best_boundary_index >= search_start:
+        return normalized_text[: best_boundary_index + 1].strip()
+
+    trimmed_text = normalized_text[:hard_limit].rstrip("，,、 ")
+    if trimmed_text and trimmed_text[-1] not in {"。", "！", "？", "!", "?", "；", ";"}:
+        trimmed_text += "。"
+    return trimmed_text.strip()
 
 
 _CHAPTER_WORKFLOW_META_PATTERNS = (
@@ -1455,64 +2635,232 @@ def _sanitize_generated_narrative_text(text: str) -> tuple[str, int]:
 
 
 def _calc_conflict_chain_rate(text: str) -> Dict[str, Any]:
-    """计算“目标受阻→选择→代价”链条命中率。"""
+    """Calculate objective-obstacle-choice-cost chain coverage."""
     sentences = _split_sentences(text)
     if not sentences:
-        return {"hit_rate": 0.0, "hit_count": 0, "expected_count": 1}
+        return {"hit_rate": 0.0, "hit_count": 0, "expected_count": 1, "applicable": True}
 
-    obstacle_words = ["受阻", "拦住", "失败", "危机", "危险", "封锁", "卡住", "失联", "追上", "崩溃", "中断"]
-    choice_words = ["选择", "决定", "只能", "必须", "打算", "转而", "改走", "赌一把", "咬牙", "拍板"]
-    cost_words = ["代价", "损失", "牺牲", "受伤", "暴露", "麻烦", "后果", "风险", "拖慢", "失去"]
+    obstacle_words = [
+        "受阻", "拦住", "拦下", "失败", "危机", "危险", "封锁", "卡住", "失联", "崩溃", "中断",
+        "断电", "封禁", "违约", "催债", "堵住", "失控", "逼近", "困住", "被困", "锁死", "围住",
+        "逼迫", "压住", "扣下", "扣住", "不行", "红灯", "终止", "拖活人进去", "接管", "归零",
+        "追责", "失控翻倍", "错误样本", "拍门声", "全城公开",
+        "异常固化倒计时", "门影", "超阈值", "复核", "底稿追索",
+        "断不了", "失灵", "热门", "顶上热门", "破万", "封控", "热度没断", "热度回来了", "认主",
+    ]
+    choice_words = [
+        "选择", "决定", "只能", "必须", "打算", "转而", "改走", "赌一把", "咬牙", "拍板",
+        "开播", "接听", "下楼", "下去", "推门", "按下", "避开", "硬着头皮", "反锁", "还是",
+        "换招", "抢过", "拽了下来", "往里走", "继续播", "戴上", "跨进去", "抢主持权限",
+        "主持回归", "拉下总闸", "拽下", "输入", "前往", "完成现场更正", "挂临时观察员身份",
+        "给这玩意编个解释", "把手机重新举正", "对着镜头硬挤出笑", "让他们信这不是鬼门",
+        "跑", "断流", "交出", "不交", "对准", "给我", "收线", "控它", "扯断页", "把镜头",
+    ]
+    cost_words = [
+        "代价", "损失", "牺牲", "受伤", "暴露", "麻烦", "后果", "风险", "拖慢", "失去",
+        "违约金", "封号", "扣走", "刺痛", "发麻", "卡死", "丢命", "出事", "退路", "接管",
+        "认出来", "不能让他出去", "合死", "破万", "押金", "死", "拖进去", "抵押", "真记忆",
+        "错误样本", "全城公开", "失控翻倍",
+        "在线人数掉到", "红字边缘开始发灰", "绑定见证人", "重新渗了出来", "鲜得刺眼",
+        "反噬", "绑上", "绑上了", "优先找你", "住址", "实名", "手机号", "先到你家", "伤人", "它认主了", "认主",
+    ]
 
     expected_count = max(1, len(text) // 900)
     hit_count = 0
 
-    for idx in range(max(0, len(sentences) - 2)):
-        s1 = sentences[idx]
-        if not any(word in s1 for word in obstacle_words):
+    for idx, _ in enumerate(sentences):
+        obstacle_window = " ".join(sentences[idx: idx + 4])
+        choice_window = " ".join(sentences[idx: idx + 6])
+        cost_window = " ".join(sentences[idx: idx + 10])
+        if not any(word in obstacle_window for word in obstacle_words):
             continue
-        s2_window = " ".join(sentences[idx + 1: idx + 3])
-        s3_window = " ".join(sentences[idx + 1: idx + 4])
-        if any(word in s2_window for word in choice_words) and any(word in s3_window for word in cost_words):
+        if any(word in choice_window for word in choice_words) and any(word in cost_window for word in cost_words):
             hit_count += 1
+
+    if hit_count < expected_count and sentences:
+        obstacle_window = " ".join(sentences[: max(4, int(len(sentences) * 0.6))])
+        choice_window = " ".join(sentences[max(0, int(len(sentences) * 0.25)): max(1, int(len(sentences) * 0.85))])
+        cost_window = " ".join(sentences[max(0, int(len(sentences) * 0.45)):])
+        if (
+            any(word in obstacle_window for word in obstacle_words)
+            and any(word in choice_window for word in choice_words)
+            and any(word in cost_window for word in cost_words)
+        ):
+            hit_count = min(expected_count, hit_count + 1)
 
     hit_rate = min(1.0, hit_count / max(expected_count, 1))
     return {
         "hit_rate": round(hit_rate, 4),
         "hit_count": hit_count,
-        "expected_count": expected_count
+        "expected_count": expected_count,
+        "applicable": True,
     }
+
+_WORLD_RULE_PLACEHOLDER_VALUES = {
+    "未设置",
+    "未设定",
+    "暂无",
+    "暂无设定",
+    "未设置世界规则",
+    "未设定世界规则",
+    "???",
+    "???????",
+    "?????",
+    "???????",
+    "??????",
+}
+
+def _normalize_world_rules_text(value: Optional[str]) -> str:
+    text = str(value or "").strip()
+    if not text or text in _WORLD_RULE_PLACEHOLDER_VALUES:
+        return ""
+    return text
+
+
+def _extract_outline_rule_hints(chapter_outline: Optional[str], limit: int = 4) -> List[str]:
+    if not chapter_outline:
+        return []
+
+    hints: List[str] = []
+    seen: set[str] = set()
+    current_section = ""
+    cue_tokens = (
+        "\u89c4\u5219", "\u8fb9\u754c", "\u9650\u5236", "\u89e6\u53d1", "\u53cd\u566c",
+        "\u767b\u8bb0", "\u6539\u5199", "\u6c61\u67d3", "\u8bf5\u8bfb", "\u6821\u5bf9", "\u7ea0\u9519",
+    )
+    constraint_tokens = (
+        "\u4e0d\u80fd", "\u4e0d\u5f97", "\u5426\u5219", "\u4ee3\u4ef7", "\u4f24\u53ca", "\u4f24\u5bb3", "\u5931\u58f0", "\u6d41\u8840",
+        "\u8bf4\u7834", "\u516c\u5f00", "\u53ea\u8981", "\u4e00\u65e6", "\u624d\u4f1a", "\u5c31\u4f1a", "\u4f1a\u628a",
+    )
+
+    for raw_line in str(chapter_outline or "").splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        section_match = re.match("^\u3010(?P<title>[^\u3011]+)\u3011$", stripped)
+        if section_match:
+            current_section = section_match.group("title")
+            continue
+        normalized = stripped.lstrip("-").strip()
+        if not normalized:
+            continue
+
+        sentence_candidates = _split_sentences(normalized) if len(normalized) > 80 else [normalized]
+        for sentence in sentence_candidates:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            in_rule_section = any(token in current_section for token in ("\u89c4\u5219", "\u8fb9\u754c", "\u9650\u5236"))
+            has_rule_cue = any(token in sentence for token in cue_tokens)
+            has_constraint = any(token in sentence for token in constraint_tokens)
+            if not (in_rule_section or (has_rule_cue and has_constraint)):
+                continue
+            if sentence not in seen:
+                seen.add(sentence)
+                hints.append(sentence)
+                if len(hints) >= limit:
+                    return hints
+    return hints
+
+def _resolve_rule_grounding_source_text(
+    world_rules: Optional[str],
+    *,
+    chapter_outline: Optional[str] = None,
+    quality_runtime_context: Optional[Dict[str, Any]] = None,
+) -> str:
+    explicit_rules = _normalize_world_rules_text(world_rules)
+    if explicit_rules:
+        return explicit_rules
+
+    if isinstance(quality_runtime_context, dict):
+        for key in ("world_rules", "world_rule_hints", "rule_impact", "world_rule_trigger"):
+            value = quality_runtime_context.get(key)
+            if isinstance(value, str):
+                normalized = _normalize_world_rules_text(value)
+                if normalized:
+                    return normalized
+            elif isinstance(value, list):
+                items = [str(item).strip() for item in value if str(item).strip()]
+                if items:
+                    return "\n".join(items[:4])
+
+    outline_hints = _extract_outline_rule_hints(chapter_outline)
+    if outline_hints:
+        return "\n".join(outline_hints)
+
+    return ""
 
 
 def _calc_rule_grounding_rate(text: str, world_rules: Optional[str]) -> Dict[str, Any]:
-    """计算世界规则落地命中率（规则关键词 + 因果触发）。"""
+    """????????????????? + ??????"""
     keywords = _extract_rule_keywords(world_rules)
     if not keywords:
+        "- ?????? 1 ?????????????????????????????????",
         return {
             "hit_rate": 0.0,
             "hit_count": 0,
-            "expected_count": 1,
+            "expected_count": 0,
             "matched_keywords": [],
+            "applicable": False,
+            "skipped_reason": "no_world_rules",
         }
 
-    causal_words = ["导致", "所以", "因此", "结果", "触发", "引发", "迫使", "只能", "不得不", "于是"]
+    causal_words = ["\u5bfc\u81f4", "\u6240\u4ee5", "\u56e0\u6b64", "\u7ed3\u679c", "\u89e6\u53d1", "\u5f15\u53d1", "\u8feb\u4f7f", "\u53ea\u80fd", "\u4e0d\u5f97\u4e0d", "\u4e8e\u662f", "\u53ea\u8981", "\u4e00\u65e6", "\u5426\u5219", "\u5c31\u5f97", "\u624d\u4f1a", "\u624d\u80fd", "过不了", "不只是", "还可能"]
+    causal_patterns = [
+        re.compile(r"\u53ea\u8981.+\u5c31"),
+        re.compile(r"\u4e00\u65e6.+\u5c31"),
+        re.compile(r"\u8c01.+\u5c31\u5f97"),
+        re.compile(r"\u767d\u706f\u4e00\u4eae.+\u5c31\u662f"),
+    ]
     sentences = _split_sentences(text)
     expected_count = max(1, len(text) // 1100)
 
     matched_keywords: List[str] = []
     grounded_events = 0
+    implicit_rule_event = False
+    rule_cue_words = [
+        "\u89c4\u5219", "\u9650\u5236", "\u8fb9\u754c", "\u4ee3\u4ef7", "\u89e6\u53d1", "\u6539\u5199", "\u6c61\u67d3", "\u767b\u8bb0", "\u8bf5\u8bfb", "\u6821\u5bf9", "\u53cd\u566c", "\u5ba3\u8bfb", "\u5ba1\u8bfb", "\u89c1\u8bc1\u4eba", "\u767d\u706f", "\u7ea0\u9519", "\u70ed\u5ea6", "\u89c2\u770b", "\u8bb0\u5f55", "\u770b\u89c1", "\u8bb0\u4e0b", "\u56f4\u89c2", "\u5b9e\u4f53", "\u4f24\u4eba", "\u8ba4\u4e3b", "\u7ed1\u5b9a",
+        "\u8f6c\u8ff0", "\u76ee\u51fb", "\u5bf9\u5e94", "\u526f\u672c", "\u6d3b\u9875\u534f\u8bae", "\u5931\u58f0", "校验", "复核", "公共镜头", "直播画面", "样本",
+    ]
     for sentence in sentences:
         sentence_keywords = [kw for kw in keywords if kw in sentence]
-        if not sentence_keywords:
+        has_rule_cue = any(cue in sentence for cue in rule_cue_words)
+        if not sentence_keywords and not has_rule_cue:
             continue
         for kw in sentence_keywords:
             if kw not in matched_keywords:
                 matched_keywords.append(kw)
-        if any(causal in sentence for causal in causal_words):
+        if has_rule_cue and not sentence_keywords and "__implicit_rule_cue__" not in matched_keywords:
+            matched_keywords.append("__implicit_rule_cue__")
+        has_causal = any(causal in sentence for causal in causal_words) or any(pattern.search(sentence) for pattern in causal_patterns)
+        if has_causal:
             grounded_events += 1
 
-    # 综合关键词覆盖和因果触发
+    if grounded_events == 0 and sentences:
+        speech_words = ["\u8bf4\u4e86", "\u8bf4\u51fa", "\u8bf4\u7834", "\u5f00\u53e3", "\u558a\u51fa", "\u521a\u8bf4\u51fa"]
+        consequence_words = [
+            "\u7ea0\u6b63", "\u4ee3\u4ef7", "\u8840\u53e3", "\u6d41\u8840", "\u5931\u58f0", "\u79bb\u4ed6\u6700\u8fd1", "\u6700\u8fd1\u7684\u4eba", "\u6328\u7684\u5374\u662f", "\u88c2\u5f00", "\u89c4\u5219", "封号", "反咬", "锁定", "待复核",
+            "暂缓", "第二证据成立", "流量切断", "打赏通道关闭", "高危未核验",
+        ]
+        implicit_rule_words = [
+            "\u8f6c\u8ff0", "\u76ee\u51fb", "\u5bf9\u5e94", "\u526f\u672c", "\u6d3b\u9875\u534f\u8bae", "\u5931\u58f0", "校验", "复核", "反咬", "封号", "样本",
+            "第二证据", "第二媒介", "三源交叉", "平台不认", "直播链路",
+        ]
+        for idx in range(len(sentences)):
+            window = " ".join(sentences[max(0, idx - 1): idx + 2])
+            has_speech_trigger = any(word in window for word in speech_words)
+            has_rule_contract = any(word in window for word in implicit_rule_words)
+            has_consequence = any(word in window for word in consequence_words)
+            if (has_speech_trigger and has_consequence) or (has_rule_contract and has_consequence):
+                grounded_events = 1
+                implicit_rule_event = True
+                if "__implicit_rule_event__" not in matched_keywords:
+                    matched_keywords.append("__implicit_rule_event__")
+                break
+
     keyword_coverage = len(matched_keywords) / max(min(4, len(keywords)), 1)
+    if implicit_rule_event:
+        keyword_coverage = max(keyword_coverage, 0.5)
     event_rate = grounded_events / max(expected_count, 1)
     hit_rate = min(1.0, 0.5 * keyword_coverage + 0.5 * event_rate)
 
@@ -1521,64 +2869,214 @@ def _calc_rule_grounding_rate(text: str, world_rules: Optional[str]) -> Dict[str
         "hit_count": grounded_events,
         "expected_count": expected_count,
         "matched_keywords": matched_keywords[:6],
+        "applicable": True,
     }
+
+def _extract_outline_anchor_tokens(anchor: str, limit: int = 12) -> List[str]:
+    """Extract stable keywords from prose-style outline anchors."""
+    stop_tokens = {
+        "章节概要", "剧情摘要", "关键事件", "情节要点", "叙事目标", "规则影响", "角色投择",
+        "人物转折", "对话钩子", "角色焦点", "小爽点", "本章", "这一章", "这里", "继续",
+    }
+    split_chars = "的了着过把将让给在向对跟与和并而或但却被因于从到往里上下前后再还又先就都也仍会要想"
+    candidates: List[str] = []
+
+    for chunk in re.split(r'[??????()??"????\s]+', anchor or ""):
+        for token in re.findall(r"[一-鿿]{2,16}", chunk):
+            if token in stop_tokens:
+                continue
+            pieces = [token]
+            for ch in split_chars:
+                next_pieces: List[str] = []
+                for piece in pieces:
+                    next_pieces.extend([part for part in piece.split(ch) if part])
+                pieces = next_pieces or pieces
+            for piece in pieces:
+                if len(piece) < 2 or piece in stop_tokens:
+                    continue
+                candidates.append(piece)
+                if len(piece) > 6:
+                    candidates.extend([piece[:4], piece[-4:]])
+                elif len(piece) > 4:
+                    candidates.extend([piece[:3], piece[-3:]])
+
+    tokens: List[str] = []
+    seen: set[str] = set()
+    for token in sorted(candidates, key=len, reverse=True):
+        if len(token) < 2 or token in stop_tokens or token in seen:
+            continue
+        seen.add(token)
+        tokens.append(token)
+        if len(tokens) >= limit:
+            break
+    return tokens
+
+
+def _expand_anchor_match_tokens(tokens: List[str], limit: int = 24) -> List[str]:
+    expanded: List[str] = []
+    seen: set[str] = set()
+
+    def _append(token: str) -> None:
+        normalized = token.strip()
+        if len(normalized) < 2 or normalized in seen:
+            return
+        seen.add(normalized)
+        expanded.append(normalized)
+
+    for token in tokens:
+        _append(token)
+        if len(token) >= 4:
+            max_width = min(4, len(token))
+            for width in range(2, max_width + 1):
+                for start in range(0, len(token) - width + 1):
+                    _append(token[start:start + width])
+        if len(expanded) >= limit:
+            break
+    return expanded[:limit]
 
 
 def _calc_outline_alignment_rate(text: str, chapter_outline: Optional[str]) -> Dict[str, Any]:
-    """计算章节正文对本章大纲锚点的覆盖情况。"""
+    """Calculate how well chapter body covers outline anchors."""
     anchors = _extract_outline_anchor_lines(chapter_outline, max_lines=8)
     if not anchors:
-        return {"hit_rate": 0.0, "hit_count": 0, "expected_count": 1}
+        return {
+            "hit_rate": 0.0,
+            "hit_count": 0,
+            "expected_count": 0,
+            "matched_anchors": [],
+            "applicable": False,
+            "skipped_reason": "no_outline_anchors",
+        }
 
-    compact_text = text.replace("\n", "")
+    compact_text = re.sub(r"\s+", "", text or "")
     hit_count = 0
+    matched_anchors: List[str] = []
+    relevant_anchors = 0
     for anchor in anchors:
-        key_tokens = re.findall(r"[\u4e00-\u9fff]{2,}", anchor)
+        key_tokens = _expand_anchor_match_tokens(_extract_outline_anchor_tokens(anchor))
         if not key_tokens:
             continue
-        # 一个锚点命中：至少1个核心词出现在正文
-        if any(token in compact_text for token in key_tokens[:3]):
+        relevant_anchors += 1
+        matched_tokens = [token for token in key_tokens if token in compact_text]
+        long_match = any(len(token) >= 4 and token in compact_text for token in key_tokens)
+        strong_match = any(len(token) >= 3 for token in matched_tokens)
+        if long_match or (len(matched_tokens) >= 2 and strong_match) or len(matched_tokens) >= 3:
             hit_count += 1
+            matched_anchors.append(anchor[:120])
 
-    expected_count = max(1, len(anchors))
-    hit_rate = min(1.0, hit_count / expected_count)
+    if relevant_anchors <= 0:
+        return {
+            "hit_rate": 0.0,
+            "hit_count": 0,
+            "expected_count": 0,
+            "matched_anchors": [],
+            "applicable": False,
+            "skipped_reason": "no_anchor_tokens",
+        }
+
+    expected_count = max(1, min(relevant_anchors, 5))
+    effective_hits = min(hit_count, expected_count)
+    hit_rate = min(1.0, effective_hits / expected_count)
     return {
         "hit_rate": round(hit_rate, 4),
         "hit_count": hit_count,
-        "expected_count": expected_count
+        "expected_count": expected_count,
+        "matched_anchors": matched_anchors[:6],
+        "applicable": True,
     }
+
+def _extract_dialogue_segments(text: str) -> List[str]:
+    """Extract quoted dialogue spans from common Chinese quotation marks."""
+    if not text:
+        return []
+
+    pattern = (
+        "\u201c[^\u201d\n]{1,120}\u201d|"
+        "\u2018[^\u2019\n]{1,120}\u2019|"
+        "\u300c[^\u300d\n]{1,120}\u300d|"
+        "\u300e[^\u300f\n]{1,120}\u300f|"
+        '"[^"\n]{1,120}"'
+    )
+    quote_pairs = {
+        "\u201c": "\u201d",
+        "\u2018": "\u2019",
+        "\u300c": "\u300d",
+        "\u300e": "\u300f",
+        '"': '"',
+    }
+
+    segments: List[str] = []
+    for match in re.finditer(pattern, text):
+        token = match.group(0).strip()
+        if len(token) < 2:
+            continue
+        closing = quote_pairs.get(token[0])
+        if not closing or token[-1] != closing:
+            continue
+        segment = token[1:-1].strip()
+        if segment:
+            segments.append(segment)
+    return segments
+
 
 
 def _calc_dialogue_naturalness_rate(text: str) -> Dict[str, Any]:
-    """估算对白自然度（短句比例 + 打断/停顿标记）。"""
-    quotes = re.findall(r"[“\"]([^”\"]+)[”\"]", text)
+    """???????????? + ??/???? + ??/??????"""
+    quotes = _extract_dialogue_segments(text)
     if not quotes:
-        return {"hit_rate": 0.0, "total_dialogues": 0, "short_ratio": 0.0}
+        return {
+            "hit_rate": 0.0,
+            "total_dialogues": 0,
+            "short_ratio": 0.0,
+            "interrupt_ratio": 0.0,
+            "pressure_ratio": 0.0,
+            "applicable": True,
+        }
 
     total = len(quotes)
+    interrupt_markers = ["…", "——", "？", "！", "嗯", "啊"]
+    pressure_markers = [
+        "？", "！", "别", "快", "马上", "立刻", "还我", "给我",
+        "闭嘴", "谁", "为什么", "怎么", "什么", "要么", "选，快", "选,快",
+        "撤", "快念", "你确定", "别砸", "不认", "不算", "停播", "收尸", "申诉", "下去",
+    ]
     short_count = sum(1 for q in quotes if len(q.strip()) <= 28)
-    interrupt_count = sum(1 for q in quotes if any(mark in q for mark in ["…", "——", "？", "！", "嗯", "啊"]))
+    interrupt_count = sum(1 for q in quotes if any(mark in q for mark in interrupt_markers))
+    pressure_count = sum(1 for q in quotes if any(mark in q for mark in pressure_markers))
     short_ratio = short_count / total
     interrupt_ratio = interrupt_count / total
-    hit_rate = min(1.0, 0.7 * short_ratio + 0.3 * interrupt_ratio)
+    pressure_ratio = pressure_count / total
+    base_rate = min(1.0, 0.7 * short_ratio + 0.3 * interrupt_ratio)
+    hit_rate = min(1.0, base_rate + 0.05 * pressure_ratio)
     return {
         "hit_rate": round(hit_rate, 4),
         "total_dialogues": total,
         "short_ratio": round(short_ratio, 4),
+        "interrupt_ratio": round(interrupt_ratio, 4),
+        "pressure_ratio": round(pressure_ratio, 4),
+        "applicable": True,
     }
 
 
 def _calc_opening_hook_rate(text: str) -> Dict[str, Any]:
-    """估算开场钩子命中率（前300字内的异常/冲突/任务压力）。"""
+    """Estimate opening hook coverage in the first 300 chars."""
     opening = (text or "")[:300]
     if not opening.strip():
-        return {"hit_rate": 0.0, "matched_markers": [], "window_length": 0}
+        return {"hit_rate": 0.0, "matched_markers": [], "window_length": 0, "applicable": True}
 
     markers = {
-        "异常": ["忽然", "突然", "竟然", "不对劲", "异样", "反常", "通缉", "失控", "闯进"],
-        "危险": ["危险", "杀", "追", "爆炸", "血", "死", "失火", "崩塌", "袭来", "警报"],
-        "任务": ["必须", "限时", "任务", "deadline", "命令", "抓紧", "今晚", "立刻", "马上"],
-        "冲突": ["吵", "质问", "拦住", "对峙", "打断", "撕破脸", "冲突", "反驳", "拍桌", "开战"],
+        "异常": [
+            "忽然", "突然", "竟然", "不对劲", "异样", "反常", "通缉", "失控", "闯进", "错误编号",
+            "猴红字幕", "红字", "现场复核", "校验字", "猝红", "重检申请", "受理", "倒退", "吞字", "错位",
+            "问题是", "根本没", "不存在", "空无一人", "多出来", "少了一个", "对不上", "硬生生", "另一块", "直播画面",
+            "热榜", "围观", "警戒线", "红色提示", "突然冲上", "弹窗", "弹出", "晃动", "火警通道", "只有一句话",
+        ],
+        "危险": [
+            "危险", "杀", "追", "爆炸", "血", "死", "失火", "崩塌", "袭来", "警报", "失踪", "事故", "滚水", "黑屏",
+            "覆盖", "改写", "擦掉", "变浅", "污染", "锁定", "反噬", "拖进", "尖叫",
+        ],
+        "任务": ["必须", "限时", "任务", "deadline", "命令", "抓紧", "今晚", "立刻", "马上", "现场复核", "先校验", "别回头", "先撤", "报警", "请确认", "确认母本身份"],
+        "冲突": ["吅", "质问", "拦住", "对峙", "打断", "撕破脸", "冲突", "反驳", "拍桌", "开战", "别", "只能", "按住"],
     }
 
     matched: List[str] = []
@@ -1591,64 +3089,252 @@ def _calc_opening_hook_rate(text: str) -> Dict[str, Any]:
         "hit_rate": round(hit_rate, 4),
         "matched_markers": matched,
         "window_length": len(opening),
+        "applicable": True,
     }
 
 
-def _calc_payoff_chain_rate(text: str) -> Dict[str, Any]:
-    """估算“小爽点链条”命中率（铺垫→爆发→反馈）。"""
+def _extract_payoff_chain_hints(
+    chapter_outline: Optional[str] = None,
+    quality_runtime_context: Optional[Dict[str, Any]] = None,
+    limit: int = 4,
+) -> List[str]:
+    hints: List[str] = []
+    seen: set[str] = set()
+
+    if isinstance(quality_runtime_context, dict):
+        runtime_items = quality_runtime_context.get("foreshadow_payoff_plan") or []
+        if isinstance(runtime_items, list):
+            for item in runtime_items:
+                normalized = ""
+                if isinstance(item, str):
+                    normalized = item.strip()
+                elif isinstance(item, dict):
+                    normalized = " ".join(
+                        str(item.get(key) or "").strip()
+                        for key in ("setup", "payoff", "summary", "trigger", "resolution")
+                        if str(item.get(key) or "").strip()
+                    )
+                else:
+                    normalized = str(item or "").strip()
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    hints.append(normalized[:120])
+                    if len(hints) >= limit:
+                        return hints
+
+    priority_tokens = (
+        "\u5c0f\u723d\u70b9", "\u7ae0\u5c3e", "\u94a9\u5b50", "\u6298\u8fd4", "\u6551\u4eba", "\u6321\u4e86\u4e00\u4e0b", "\u5c38\u4f53", "\u951a\u70b9", "\u6301\u5200\u4eba",
+    )
+    general_tokens = (
+        "\u53cd\u9988", "\u56de\u6536", "\u5151\u73b0", "\u60ac\u5ff5", "\u7b2c\u4e00\u9875", "\u6551\u4e0b", "\u53cd\u6251", "\u7ffb\u76d8",
+    )
+    scored_candidates: List[Tuple[int, str]] = []
+    for raw_line in str(chapter_outline or "").splitlines():
+        normalized = raw_line.lstrip("- ").strip()
+        if not normalized or normalized.startswith("\u3010"):
+            continue
+        score = sum(3 for token in priority_tokens if token in normalized)
+        score += sum(1 for token in general_tokens if token in normalized)
+        if score > 0:
+            scored_candidates.append((score, normalized[:120]))
+
+    for sentence in _split_sentences(chapter_outline or ""):
+        normalized = sentence.strip()
+        if not normalized:
+            continue
+        score = sum(3 for token in priority_tokens if token in normalized)
+        score += sum(1 for token in general_tokens if token in normalized)
+        if score > 0:
+            scored_candidates.append((score, normalized[:120]))
+
+    for _score, candidate in sorted(scored_candidates, key=lambda item: (-item[0], len(item[1]))):
+        if candidate not in seen:
+            seen.add(candidate)
+            hints.append(candidate)
+            if len(hints) >= limit:
+                break
+    return hints
+
+def _calc_payoff_chain_rate(
+    text: str,
+    *,
+    chapter_outline: Optional[str] = None,
+    quality_runtime_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Estimate setup-burst-feedback payoff coverage."""
     sentences = _split_sentences(text)
     if not sentences:
-        return {"hit_rate": 0.0, "hit_count": 0, "expected_count": 1}
+        return {"hit_rate": 0.0, "hit_count": 0, "expected_count": 1, "applicable": True}
 
-    setup_words = ["原本", "本来", "一直", "眼看", "刚要", "正要", "谁知", "没想到", "偏偏"]
-    burst_words = ["突然", "当场", "直接", "瞬间", "反手", "竟然", "立刻", "翻盘", "突破", "赢了", "拿下"]
-    feedback_words = ["愣住", "哗然", "脸色变", "看傻", "松了口气", "发麻", "欢呼", "安静下来", "炸开了锅"]
+    setup_words = [
+        "原本", "本来", "一直", "眼看", "刚要", "正要", "谁知", "没想到", "偏偏", "被逼", "刚想", "没来得及",
+        "早废了", "刚把", "认定", "旧伤", "页印", "提示词",
+        "校验失败", "底稿偏差", "编号页", "见证人数超过阈值",
+    ]
+    burst_words = [
+        "突然", "当场", "直接", "瞬间", "反手", "竟然", "立刻", "翻盘", "突破", "赢了", "拿下", "触发",
+        "飙升", "反锁", "卡住", "炸开", "猛地", "终于", "弹出", "找到", "踹开", "揀起",
+        "二次复核启动", "触发底稿追索", "暗柜弹开", "红字猛地放大", "绑定见证人",
+    ]
+    feedback_words = [
+        "愣住", "哗然", "脸色变", "看傻", "松了口气", "发麻", "欢呼", "安静下来", "炸开了锅", "礼物", "打赏", "热度",
+        "刷满", "弹幕", "观众数", "破万", "认主", "借书证", "锁死",
+        "在线人数掉到", "发灰", "脸色沉下去", "呼吸停了一瞬", "鲜得刺眼",
+    ]
 
     expected_count = max(1, len(text) // 1800)
     hit_count = 0
 
     for idx in range(max(0, len(sentences) - 2)):
-        s1 = sentences[idx]
-        s2_window = " ".join(sentences[idx: idx + 3])
-        s3_window = " ".join(sentences[idx: idx + 4])
-        if any(word in s1 for word in setup_words) and any(word in s2_window for word in burst_words) and any(word in s3_window for word in feedback_words):
+        setup_window = " ".join(sentences[max(0, idx - 1): idx + 1])
+        burst_window = " ".join(sentences[idx: idx + 3])
+        feedback_window = " ".join(sentences[idx: idx + 5])
+        if (
+            any(word in setup_window for word in setup_words)
+            and any(word in burst_window for word in burst_words)
+            and any(word in feedback_window for word in feedback_words)
+        ):
             hit_count += 1
+
+    compact_text = re.sub(r"\s+", "", text or "")
+    if hit_count == 0 and compact_text:
+        early_window = compact_text[: max(1, int(len(compact_text) * 0.6))]
+        late_window = compact_text[max(0, int(len(compact_text) * 0.35)):]
+        if (
+            any(word in early_window for word in setup_words)
+            and any(word in late_window for word in burst_words)
+            and any(word in late_window for word in feedback_words)
+        ):
+            hit_count = 1
+
+    if hit_count == 0:
+        for hint in _extract_payoff_chain_hints(
+            chapter_outline=chapter_outline,
+            quality_runtime_context=quality_runtime_context,
+        ):
+            key_tokens = _expand_anchor_match_tokens(_extract_outline_anchor_tokens(hint, limit=8))
+            if not key_tokens:
+                continue
+            matched_tokens = [token for token in key_tokens if token in compact_text]
+            if (
+                len(matched_tokens) >= 2
+                or any(len(token) >= 4 and token in compact_text for token in key_tokens)
+            ):
+                hit_count = 1
+                break
 
     hit_rate = min(1.0, hit_count / max(expected_count, 1))
     return {
         "hit_rate": round(hit_rate, 4),
         "hit_count": hit_count,
         "expected_count": expected_count,
+        "applicable": True,
     }
 
 
 def _calc_cliffhanger_rate(text: str) -> Dict[str, Any]:
-    """估算章尾钩子命中率（结尾信息缺口/危险临门/反转/选择未决）。"""
-    ending = (text or "")[-220:]
+    """Estimate whether the ending leaves a strong unresolved pull."""
+    ending = (text or "")[-360:]
     if not ending.strip():
-        return {"hit_rate": 0.0, "matched_markers": [], "window_length": 0}
+        return {"hit_rate": 0.0, "matched_markers": [], "window_length": 0, "applicable": True}
 
+    ending_compact = re.sub(r"\s+", "", ending)
     markers = {
-        "信息缺口": ["怎么会", "原来", "却发现", "门后", "那个人", "竟是", "真相", "秘密"],
-        "危险临门": ["脚步声", "逼近", "枪口", "刀", "下一秒", "扑来", "追上", "要出事"],
-        "身份反转": ["竟然是你", "身份", "卧底", "叛徒", "冒名", "伪装", "认出来"],
-        "选择未决": ["该不该", "要不要", "只能", "必须选", "下一步", "还没决定", "伸向", "停在半空"],
+        "info_gap": [
+            "\u600e\u4e48\u4f1a", "\u539f\u6765", "\u5374\u53d1\u73b0", "\u95e8\u540e", "\u90a3\u4e2a\u4eba", "\u7adf\u662f", "\u771f\u76f8", "\u79d8\u5bc6", "\u7533\u8bf7\u4eba",
+            "\u539f\u59cb\u62cd\u6444\u5730", "\u5ba1\u6821\u5b98", "\u501f\u9605\u65e5\u671f\u5199\u7740", "\u5f39\u5e55\u6ca1\u6709\u540d\u5b57", "\u540c\u4e00\u53e5\u8bdd", "\u7b2c\u4e00\u9875",
+            "\u5e95\u7a3f\u8ffd\u7d22", "\u7ed1\u5b9a\u89c1\u8bc1\u4eba", "\u5ba1\u8bfb\u51c6\u5907", "\u5ba1\u8bfb\u5ba4", "\u4e0a\u4f20\u7aef\u4e0d\u5728", "\u5728\u2014\u2014", "\u56fe\u6837\u4e00\u6837",
+            "\u964c\u751f\u5730\u5740", "\u964c\u751f\u95e8\u724c", "04:44", "\u6bcd\u672c\u8eab\u4efd", "\u521d\u59cb\u7f16\u5f55\u8005",
+            "\u9694\u7a7a\u89c2\u770b", "\u53e6\u4e00\u7aef", "\u5b9e\u65f6\u6279\u6ce8", "\u540d\u5b57\u88ab\u955c\u5934\u62c9\u6e05", "\u4e0d\u8be5\u51fa\u73b0\u7684\u540d\u5b57",
+            "\u90a3\u7b2c\u4e8c\u4e2a", "\u4e3a\u4ec0\u4e48\u662f\u4f60", "来电显示", "只有一行字", "另一\u4e2a\u95fb\u5ddd", "另一个自己", "待复核", "三个林检", "只有两个人", "分明只有两个人",
+            "新的标注", "异常叙事", "追认记录", "源头编号", "发件人：", "发送时间：", "定时消息", "机主信息全空", "下一段预告", "预告自动跳出",
+            "不是手机里出来的", "在他背后", "在她背后", "真的站着", "同样穿校服",
+        ],
+        "danger": [
+            "脚步声", "逼近", "枪口", "刀", "下一秒", "扑来", "追上", "要出事", "拍门声", "全城公开",
+            "逾时", "一个不少", "大门轰地合死", "不能让他出去", "倒计时归零",
+            "重新渗了出来", "鲜得刺眼", "别让他们读", "白灯一亮", "亮起一片惨白",
+            "\u5148\u5230\u4f60\u5bb6", "\u70ed\u5ea6\u56de\u6765\u4e86", "\u6e17\u51fa\u65b0\u7684\u8840", "\u53c8\u8d77\u4e00\u6ce2\u8f6c\u64ad", "\u5012\u8ba1\u65f6", "\u516d\u5341\u79d2",
+            "驳回失败", "见证人已锁定", "自己亮起", "自己响起", "自己亮了", "锁屏弹出", "胸口一片血",
+        ],
+        "identity_twist": [
+            "\u7adf\u7136\u662f\u4f60", "\u8eab\u4efd", "\u5367\u5e95", "\u53db\u5f92", "\u5192\u540d", "\u4f2a\u88c5", "\u8ba4\u51fa\u6765", "\u8ba4\u4e3b",
+            "\u9519\u4f4d\u8005", "\u540d\u5b57\u5374\u4e0d\u662f", "\u8bc1\u4ef6\u7167", "\u65e7\u7248\u7ad9\u52a1\u5458\u8bc1\u4ef6\u7167", "另一个闻川", "另一个我", "和他穿一样",
+            "被追认为", "追认成", "见证人是你", "你才是见证人",
+        ],
+        "choice_pending": [
+            "该不该", "要不要", "只能", "必须选", "下一步", "还没决定", "伸向", "停在半空", "二十分钟内", "前往", "完成现场更正",
+            "\u8981\u4e48", "\u9009\uff0c\u5feb", "\u9009,\u5feb", "\u7ee7\u7eed\u6539", "\u4e0a\u53bb\u6293\u4eba", "\u5929\u4eae\u524d", "\u53bb\u8fd9\u513f", "\u665a\u4e00\u6b65", "04:44", "\u8bf7\u786e\u8ba4", "\u786e\u8ba4\u6bcd\u672c\u8eab\u4efd",
+        ],
+        "escalation": [
+            "书认主了", "观众数疯了一样往上跳", "瞬间破万", "密密麻麻往上滚", "开始校对第一页", "开始校对",
+            "\u8d26\u53f7\u540d", "\u5b9e\u540d", "\u624b\u673a\u53f7", "\u4f4f\u5740", "\u8f6c\u64ad", "\u70ed\u5ea6\u56de\u6765\u4e86", "\u65b0\u7684\u4efb\u52a1", "\u518d\u6b21\u5237\u65b0", "第二轮现实校验已开启",
+            "第二轮复核", "见证人已加入", "接入中", "已标记", "二级关注对象已标记",
+            "公开追认", "全网同步", "升级为", "异常叙事已锁定",
+        ],
     }
-    weak_endings = ["总之", "他明白了", "命运将会", "一切都会好起来", "故事还在继续"]
+    weak_endings = [
+        "总之", "他明白了", "命运将会", "一切都会好起来", "故事还在继续",
+    ]
 
     matched: List[str] = []
     for label, words in markers.items():
-        if any(word in ending for word in words):
+        if any(word in ending_compact for word in words):
             matched.append(label)
 
-    if any(word in ending for word in weak_endings):
-        return {"hit_rate": 0.0, "matched_markers": [], "window_length": len(ending)}
+    if any(word in ending_compact for word in weak_endings):
+        return {"hit_rate": 0.0, "matched_markers": [], "window_length": len(ending), "applicable": True}
 
     hit_rate = min(1.0, len(matched) / 2) if matched else 0.0
     return {
         "hit_rate": round(hit_rate, 4),
         "matched_markers": matched,
         "window_length": len(ending),
+        "applicable": True,
+    }
+
+def _calc_applicable_quality_overall(metric_entries: List[Tuple[Dict[str, Any], float]]) -> float:
+    """只对适用指标进行加权，避免缺失规则/锚点时被误判为 0 分。"""
+    weighted_sum = 0.0
+    total_weight = 0.0
+
+    for metric, weight in metric_entries:
+        if not isinstance(metric, dict):
+            continue
+        if metric.get("applicable", True) is False:
+            continue
+        hit_rate = float(metric.get("hit_rate") or 0.0)
+        weighted_sum += hit_rate * float(weight)
+        total_weight += float(weight)
+
+    if total_weight <= 0:
+        return 0.0
+    return weighted_sum / total_weight
+
+
+def _calculate_chapter_generation_max_tokens(target_word_count: int) -> int:
+    """按目标字数计算更保守的生成预算，尽量压制章节超写。"""
+    safe_target = max(200, int(target_word_count or 0))
+    calculated_max_tokens = int(safe_target * 0.6)
+    return max(700, min(calculated_max_tokens, 8000))
+
+
+def _build_chapter_generation_request_options(ai_service: AIService) -> Optional[Dict[str, Any]]:
+    normalized_provider = str(getattr(ai_service, "api_provider", "") or "").strip().lower()
+    if normalized_provider not in RESPONSES_TEXT_GENERATION_PROVIDERS:
+        return None
+
+    retry_cfg = getattr(getattr(ai_service, "config", None), "retry", None)
+    configured_retry_budget = int(
+        getattr(retry_cfg, "max_retries", CHAPTER_GENERATION_TRANSPORT_RETRY_CAP)
+        or CHAPTER_GENERATION_TRANSPORT_RETRY_CAP
+    )
+    transport_max_retries = max(1, min(configured_retry_budget, CHAPTER_GENERATION_TRANSPORT_RETRY_CAP))
+    return {
+        "prefer_chat_completions": True,
+        "transport_max_retries": transport_max_retries,
+        "first_chunk_timeout": CHAPTER_GENERATION_FIRST_CHUNK_TIMEOUT,
+        "allow_non_stream_fallback": False,
     }
 
 
@@ -1658,24 +3344,33 @@ def compute_story_quality_metrics(
     world_rules: Optional[str],
     quality_runtime_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """计算章节正文质量指标，并附带运行时上下文与修复建议。"""
+    """Compute chapter quality metrics with runtime context."""
+    resolved_world_rules = _resolve_rule_grounding_source_text(
+        world_rules,
+        chapter_outline=chapter_outline,
+        quality_runtime_context=quality_runtime_context,
+    )
     conflict = _calc_conflict_chain_rate(content)
-    rule_grounding = _calc_rule_grounding_rate(content, world_rules)
+    rule_grounding = _calc_rule_grounding_rate(content, resolved_world_rules)
     outline_alignment = _calc_outline_alignment_rate(content, chapter_outline)
     dialogue = _calc_dialogue_naturalness_rate(content)
     opening_hook = _calc_opening_hook_rate(content)
-    payoff_chain = _calc_payoff_chain_rate(content)
+    payoff_chain = _calc_payoff_chain_rate(
+        content,
+        chapter_outline=chapter_outline,
+        quality_runtime_context=quality_runtime_context,
+    )
     cliffhanger = _calc_cliffhanger_rate(content)
 
-    overall = (
-        conflict["hit_rate"] * 0.26 +
-        rule_grounding["hit_rate"] * 0.22 +
-        outline_alignment["hit_rate"] * 0.18 +
-        dialogue["hit_rate"] * 0.12 +
-        opening_hook["hit_rate"] * 0.10 +
-        payoff_chain["hit_rate"] * 0.07 +
-        cliffhanger["hit_rate"] * 0.05
-    )
+    overall = _calc_applicable_quality_overall([
+        (conflict, 0.26),
+        (rule_grounding, 0.22),
+        (outline_alignment, 0.18),
+        (dialogue, 0.12),
+        (opening_hook, 0.10),
+        (payoff_chain, 0.07),
+        (cliffhanger, 0.05),
+    ])
 
     metrics = {
         "overall_score": round(overall * 100, 1),
@@ -2495,6 +4190,18 @@ async def _build_batch_task_workflow_snapshot(
         "progress": max(0, min(progress_value, 100)),
         "last_event": runtime.get("last_event"),
         "last_message": runtime.get("last_message"),
+        "candidate_index": runtime.get("candidate_index"),
+        "candidate_count": runtime.get("candidate_count"),
+        "word_count": runtime.get("word_count"),
+        "generation_path": runtime.get("generation_path"),
+        "attempt_kind": runtime.get("attempt_kind"),
+        "rerank_used": runtime.get("rerank_used") if isinstance(runtime.get("rerank_used"), bool) else None,
+        "word_budget_repair_used": runtime.get("word_budget_repair_used") if isinstance(runtime.get("word_budget_repair_used"), bool) else None,
+        "winner_candidate_index": runtime.get("winner_candidate_index"),
+        "pre_compaction_total_length": runtime.get("pre_compaction_total_length"),
+        "context_budget_limit": runtime.get("context_budget_limit"),
+        "compaction_applied": runtime.get("compaction_applied") if isinstance(runtime.get("compaction_applied"), bool) else None,
+        "compaction_details": runtime.get("compaction_details") if isinstance(runtime.get("compaction_details"), dict) else None,
     }
     active_story_repair_payload = runtime.get("active_story_repair_payload")
     return {
@@ -2502,6 +4209,83 @@ async def _build_batch_task_workflow_snapshot(
         "execution_mode": "interactive",
         "checkpoint": checkpoint,
         "active_story_repair_payload": dict(active_story_repair_payload) if isinstance(active_story_repair_payload, dict) else None,
+    }
+
+
+def _restore_story_repair_payload_from_active_snapshot(
+    active_story_repair_payload: Any,
+) -> Optional[StoryRepairPayload]:
+    if not isinstance(active_story_repair_payload, dict):
+        return None
+    return normalize_story_repair_payload(
+        summary=active_story_repair_payload.get("summary"),
+        targets=active_story_repair_payload.get("repair_targets"),
+        strengths=active_story_repair_payload.get("preserve_strengths"),
+    )
+
+
+def _build_batch_task_terminal_status(
+    task: BatchGenerationTask,
+    *,
+    workflow_snapshot: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    failed_chapters = task.failed_chapters if isinstance(task.failed_chapters, list) else []
+    latest_failed = next(
+        (
+            item
+            for item in reversed(failed_chapters)
+            if isinstance(item, dict)
+        ),
+        None,
+    )
+    active_story_repair_payload = None
+    if isinstance(workflow_snapshot, dict):
+        candidate_payload = workflow_snapshot.get("active_story_repair_payload")
+        if isinstance(candidate_payload, dict):
+            active_story_repair_payload = candidate_payload
+
+    terminal_reason: Optional[str] = None
+    terminal_label: Optional[str] = None
+    review_required = False
+
+    if task.status == "completed":
+        terminal_reason = "completed"
+        terminal_label = "已完成"
+    elif task.status == "cancelled":
+        terminal_reason = "cancelled"
+        terminal_label = "已取消"
+    elif task.status == "failed":
+        quality_gate_decision = None
+        quality_gate_label = None
+        failure_phase = None
+        if isinstance(latest_failed, dict):
+            raw_decision = latest_failed.get("quality_gate_decision")
+            raw_label = latest_failed.get("quality_gate_label")
+            raw_phase = latest_failed.get("phase")
+            quality_gate_decision = raw_decision if isinstance(raw_decision, str) and raw_decision else None
+            quality_gate_label = raw_label if isinstance(raw_label, str) and raw_label else None
+            failure_phase = raw_phase if isinstance(raw_phase, str) and raw_phase else None
+
+        if quality_gate_decision is None and isinstance(active_story_repair_payload, dict):
+            raw_decision = active_story_repair_payload.get("quality_gate_decision")
+            quality_gate_decision = raw_decision if isinstance(raw_decision, str) and raw_decision else None
+        if quality_gate_label is None and isinstance(active_story_repair_payload, dict):
+            raw_label = active_story_repair_payload.get("quality_gate_label")
+            quality_gate_label = raw_label if isinstance(raw_label, str) and raw_label else None
+
+        if quality_gate_decision == "manual_review" or failure_phase == "quality_blocked":
+            terminal_reason = "manual_review"
+            terminal_label = quality_gate_label or "需人工复核"
+            review_required = True
+        else:
+            terminal_reason = "error"
+            terminal_label = "执行失败"
+
+    return {
+        "terminal_reason": terminal_reason,
+        "terminal_label": terminal_label,
+        "review_required": review_required,
+        "can_resume": task.status in {"failed", "cancelled"},
     }
 
 
@@ -2616,11 +4400,15 @@ async def _resolve_generation_story_repair_state_for_batch(
     story_repair_summary: Optional[str] = None,
     story_repair_targets: Optional[List[str]] = None,
     story_preserve_strengths: Optional[List[str]] = None,
+    active_story_repair_payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    explicit_payload = normalize_story_repair_payload(
-        story_repair_summary,
-        story_repair_targets,
-        story_preserve_strengths,
+    explicit_payload = merge_story_repair_payload(
+        normalize_story_repair_payload(
+            story_repair_summary,
+            story_repair_targets,
+            story_preserve_strengths,
+        ),
+        _restore_story_repair_payload_from_active_snapshot(active_story_repair_payload),
     )
 
     previous_chapter_ids = await _load_recent_previous_chapter_ids(
@@ -2757,7 +4545,11 @@ def _resolve_quality_gate_execution_plan(
     current_story_repair_payload: Optional[StoryRepairPayload],
     scope: str,
 ) -> Dict[str, Any]:
-    quality_gate = _resolve_quality_gate_from_metrics(quality_metrics, scope=scope)
+    quality_gate = _resolve_quality_gate_from_metrics(
+        quality_metrics,
+        scope=scope,
+        prefer_embedded_quality_gate=False,
+    )
     if not quality_gate:
         return {
             "action": "continue",
@@ -2858,6 +4650,7 @@ async def _resolve_generation_story_repair_payload_for_batch(
     story_repair_summary: Optional[str] = None,
     story_repair_targets: Optional[List[str]] = None,
     story_preserve_strengths: Optional[List[str]] = None,
+    active_story_repair_payload: Optional[Dict[str, Any]] = None,
 ) -> Optional[StoryRepairPayload]:
     state = await _resolve_generation_story_repair_state_for_batch(
         db_session,
@@ -2866,7 +4659,7 @@ async def _resolve_generation_story_repair_payload_for_batch(
         story_repair_summary=story_repair_summary,
         story_repair_targets=story_repair_targets,
         story_preserve_strengths=story_preserve_strengths,
-        active_story_repair_payload=active_story_repair_snapshot,
+        active_story_repair_payload=active_story_repair_payload,
     )
     return state.get("payload")
 
@@ -3081,43 +4874,82 @@ async def _load_latest_candidate_draft_attempt(
 
 
 def _extract_outline_anchor_lines(chapter_outline: Optional[str], max_lines: int = 10) -> List[str]:
-    """从章节大纲文本中提取剧情锚点，供运行时系统提示词约束使用。"""
+    """Extract outline anchors from both headed and prose summaries."""
     if not chapter_outline:
         return []
 
+    section_capture_limits = {
+        "章节概要": 1,
+        "剧情摘要": 1,
+        "场景设定": 2,
+        "关键事件": 4,
+        "情节要点": 5,
+        "叙事目标": 1,
+        "冲突主线": 2,
+        "角色抉择": 2,
+        "代价/风险": 2,
+        "规则影响点": 2,
+        "对话钩子": 2,
+        "人物转折": 2,
+        "角色焦点": 2,
+        "情感基调": 1,
+    }
     keywords = (
         "章节概要", "剧情摘要", "关键事件", "情节要点", "叙事目标",
-        "冲突", "规则影响", "角色抉择", "代价", "人物转折", "对话钩子", "角色焦点",
+        "冲突", "规则影响", "角色投择", "角色抉择", "代价", "人物转折",
+        "对话钩子", "角色焦点", "场景设定", "情感基调",
+    )
+    sentence_cues = (
+        "目标", "冲突", "阻力", "规则", "决定", "代价", "反馈", "小爽点", "悬念", "章尾",
+        "反转", "异常", "认主", "借书证", "页印", "回声", "机位", "禁播", "校对", "封门",
     )
 
     raw_lines = [line.strip() for line in chapter_outline.splitlines() if line.strip()]
-    anchors: List[str] = []
+    section_anchors: List[str] = []
     capture_bullet_count = 0
 
     for line in raw_lines:
         if line.startswith("【") and line.endswith("】"):
             section_name = line[1:-1].strip()
             if any(key in section_name for key in keywords):
-                anchors.append(f"{section_name}：")
-                capture_bullet_count = 2
+                capture_bullet_count = section_capture_limits.get(section_name, 3)
             else:
                 capture_bullet_count = 0
             continue
 
-        if capture_bullet_count > 0:
-            cleaned = line.lstrip("- ").strip()
-            if cleaned:
-                anchors.append(cleaned)
-                capture_bullet_count -= 1
+        cleaned = line.lstrip("- ").strip()
+        if not cleaned:
             continue
 
-        if any(key in line for key in keywords):
-            anchors.append(line.lstrip("- ").strip())
+        if capture_bullet_count > 0:
+            section_anchors.append(cleaned[:120])
+            capture_bullet_count -= 1
+            continue
 
-    # 去重并截断，避免系统提示词过长
+        if any(key in cleaned for key in keywords):
+            parts = [part.strip() for part in re.split(r"[:：]", cleaned, maxsplit=1)]
+            if len(parts) == 2 and parts[1] and any(key in parts[0] for key in keywords):
+                section_anchors.append(parts[1][:120])
+                continue
+            if cleaned.endswith((":", "：")):
+                continue
+            section_anchors.append(cleaned[:120])
+
+    sentence_anchors: List[str] = []
+    for sentence in _split_sentences(chapter_outline):
+        normalized = sentence.lstrip("- ").strip()
+        if len(normalized) < 8:
+            continue
+        cue_score = sum(1 for cue in sentence_cues if cue in normalized)
+        if cue_score <= 0 and len(normalized) < 24:
+            continue
+        sentence_anchors.append(normalized[:120])
+
+    source_anchors = section_anchors if section_anchors else sentence_anchors
+
     deduped: List[str] = []
     seen: set[str] = set()
-    for item in anchors:
+    for item in [*source_anchors, *sentence_anchors]:
         normalized = item.strip()
         if normalized and normalized not in seen:
             seen.add(normalized)
@@ -3126,7 +4958,6 @@ def _extract_outline_anchor_lines(chapter_outline: Optional[str], max_lines: int
             break
 
     return deduped
-
 
 def _detect_style_profile(
     style_name: Optional[str],
@@ -3161,6 +4992,8 @@ def _build_chapter_runtime_system_prompt(
     previous_summary: Optional[str] = None,
     style_name: Optional[str] = None,
     style_preset_id: Optional[str] = None,
+    target_word_count: Optional[int] = None,
+    story_runtime_contract: Optional[Dict[str, Any]] = None,
 ) -> str:
     """构建章节生成运行时系统提示词（风格、世界锚点、剧情锚点与护栏）。"""
     style_profile = _detect_style_profile(
@@ -3183,11 +5016,55 @@ def _build_chapter_runtime_system_prompt(
     )
 
     previous_summary_block = (
-        f"【📌 上章回执】\n- {previous_summary[:200]}\n\n"
+        f"【📋 上章回执】\n- {previous_summary[:200]}\n\n"
         if previous_summary else ""
     )
 
+    organization_ledger_source: List[str] = []
+    if isinstance(story_runtime_contract, dict):
+        runtime_blueprint = story_runtime_contract.get("blueprint")
+        if isinstance(runtime_blueprint, dict):
+            organization_ledger_source = runtime_blueprint.get("organization_state_ledger") or []
+        if not organization_ledger_source:
+            organization_ledger_source = story_runtime_contract.get("organization_state_ledger") or []
+
+    organization_state_ledger = [
+        str(item).strip()
+        for item in organization_ledger_source
+        if str(item).strip()
+    ][:4]
+    organization_continuity_block = (
+        "【🏛️ 组织连续性（本章必须落地）】\n"
+        + "\n".join(f"- {entry}" for entry in organization_state_ledger)
+        + "\n- 以上组织不能只停留在背景设定里，至少让其中 1-2 个组织通过命令、权限、封锁、资源调度、公开通报或现场约束进入当前冲突。\n"
+        + "- 若组织已在本章大纲里激活，就必须在正文中体现其动作、压力来源或实际影响，不能只由角色转述。\n\n"
+        if organization_state_ledger
+        else ""
+    )
+
+    safe_target_word_count = max(200, int(target_word_count or 0)) if target_word_count else None
+    target_lower_bound = (
+        max(200, min(safe_target_word_count - 120, int(safe_target_word_count * 0.9)))
+        if safe_target_word_count
+        else None
+    )
+    target_upper_bound = (
+        max(
+            (target_lower_bound or 200) + 80,
+            min(safe_target_word_count + 150, int(safe_target_word_count * 1.15)),
+        )
+        if safe_target_word_count
+        else None
+    )
+
     guard_lines = [
+        (
+            f"- 字数是硬约束：目标约{safe_target_word_count}字，理想范围 {target_lower_bound}-{target_upper_bound} 字；一旦接近上限就立刻收束。"
+            if safe_target_word_count and target_lower_bound and target_upper_bound
+            else "- 字数控制优先于铺陈，避免越写越散、越收越晚。"
+        ),
+        "- 当主冲突结果和章尾钩子已经成立时立即停笔，不补尾声、复盘、世界观讲解或重复心理总结。",
+        "- 若素材过多，优先保留“目标→阻力→选择→代价/钩子”主链，砍掉支线说明和背景补课。",
         "- 只输出章节正文，不输出流程说明、调度术语、策略说明或自我评注",
         "- 发生信息冲突时按优先级处理：本章大纲 > 上章回执 > 最近上下文 > 相关记忆",
         "- 信息不足时先补最小动作闭环：目标→阻力→选择→即时后果，避免空泛总结",
@@ -3203,6 +5080,10 @@ def _build_chapter_runtime_system_prompt(
         "- 保留少量口语颗粒和不完美句，不要把每句都修成工整书面句",
         "- 避免模板化开头和总结腔，如“总之/综上/值得注意的是/在这个过程中”",
         "- 禁止出现“执行X.X/调用Agent/方案A-B/复盘”这类流程文本",
+        "- Mid-scene must include one obstruction or misread that forces a choice and immediately pays a cost; do not let the chapter glide forward without friction.",
+        "- If character and relationship ledgers exist, explicitly carry at least one character-state item and one relationship-state item into on-page action, stance, dialogue, or cost.",
+        "- The final paragraph must leave a fresh unresolved push: an information gap, approaching danger, identity shift, or pending choice.",
+        "- Avoid soft landing endings like 'in short', 'everything will be fine', 'the story continues', or 'he finally understood'; the last line must pin down next-step pressure.",
     ]
 
     if style_profile == "low_ai_serial":
@@ -3227,7 +5108,7 @@ def _build_chapter_runtime_system_prompt(
 - 氛围基调：{project.world_atmosphere or '未设定'}
 - 世界规则：{project.world_rules or '未设定'}
 
-{outline_anchor_block}{previous_summary_block}【创作护栏】
+{outline_anchor_block}{previous_summary_block}{organization_continuity_block}【创作护栏】
 {chr(10).join(guard_lines)}
 """
 
@@ -4085,6 +5966,10 @@ async def analyze_chapter_background(
     generation_guidance: Optional[StoryGenerationGuidance] = None,
     chapter_content_override: Optional[str] = None,
     chapter_word_count_override: Optional[int] = None,
+    story_repair_summary: Optional[str] = None,
+    story_repair_targets: Optional[list[str]] = None,
+    story_preserve_strengths: Optional[list[str]] = None,
+    story_repair_payload: Optional[StoryRepairPayload] = None,
 ) -> bool:
     """
     后台异步分析章节（支持并发，使用锁保护数据库写入）
@@ -4274,7 +6159,7 @@ async def analyze_chapter_background(
                         # 更新任务状态，保持 running 但更新 started_at 以重置超时计时器
                         task_retry.status = 'running'
                         task_retry.started_at = datetime.now()  # 重置开始时间，防止超时检测误判
-                        task_retry.progress = 25 + attempt * 5  # 根据重试次数更新进度
+                        task_retry.progress = min(70, 35 + attempt * 15)  # 根据重试次数更新进度
                         task_retry.error_message = f"正在重试({attempt}/{max_retries})：{error_reason[:100]}"
                         await db_session.commit()
                         logger.info(f"🔄 分析任务重试状态已更新: 尝试 {attempt}/{max_retries}, 等待 {wait_time}s, 原因: {error_reason[:50]}...")
@@ -4282,6 +6167,11 @@ async def analyze_chapter_background(
                 logger.warning(f"⚠️ 更新重试状态失败: {callback_error}")
         
         # 3. 使用PlotAnalyzer分析章节（传入已有伏笔列表、角色信息和重试回调）
+        async with write_lock:
+            task.progress = 30
+            task.error_message = '正在调用AI分析章节...'
+            await db_session.commit()
+
         analyzer = PlotAnalyzer(ai_service)
         analysis_result = await analyzer.analyze_chapter(
             chapter_number=chapter.chapter_number,
@@ -4304,30 +6194,40 @@ async def analyze_chapter_background(
             logger.error(f"❌ AI分析失败: {chapter_id}, 原因: {analysis_error_message}")
             return False
         
-        checker_result = await _run_chapter_text_checker(
-            ai_service=ai_service,
-            db_session=db_session,
-            user_id=user_id,
-            chapter_number=chapter.chapter_number,
-            chapter_title=chapter.title or "",
-            chapter_content=effective_chapter_content,
-            chapter_outline=chapter_outline_text,
-            characters_info=characters_info,
-            world_rules=project.world_rules or "",
-            quality_profile=analysis_quality_profile,
-            generation_guidance=analysis_guidance,
-        )
-        reviser_result = await _run_chapter_text_reviser(
-            ai_service=ai_service,
-            db_session=db_session,
-            user_id=user_id,
-            chapter_number=chapter.chapter_number,
-            chapter_title=chapter.title or "",
-            chapter_content=effective_chapter_content,
-            checker_result=checker_result or {},
-            quality_profile=analysis_quality_profile,
-            generation_guidance=analysis_guidance,
-        )
+        skip_followup_enrichment = analysis_result.get("analysis_mode") == "heuristic_fallback"
+        checker_result = None
+        reviser_result = None
+        if skip_followup_enrichment:
+            logger.warning(
+                "?? ??????????????????????????????: %s",
+        "- ??????????????????????????????????????",
+                analysis_result.get("fallback_reason") or "unknown",
+            )
+        else:
+            checker_result = await _run_chapter_text_checker(
+                ai_service=ai_service,
+                db_session=db_session,
+                user_id=user_id,
+                chapter_number=chapter.chapter_number,
+                chapter_title=chapter.title or "",
+                chapter_content=effective_chapter_content,
+                chapter_outline=chapter_outline_text,
+                characters_info=characters_info,
+                world_rules=project.world_rules or "",
+                quality_profile=analysis_quality_profile,
+                generation_guidance=analysis_guidance,
+            )
+            reviser_result = await _run_chapter_text_reviser(
+                ai_service=ai_service,
+                db_session=db_session,
+                user_id=user_id,
+                chapter_number=chapter.chapter_number,
+                chapter_title=chapter.title or "",
+                chapter_content=effective_chapter_content,
+                checker_result=checker_result or {},
+                quality_profile=analysis_quality_profile,
+                generation_guidance=analysis_guidance,
+            )
 
         analysis_report_text = analyzer.generate_analysis_summary(analysis_result)
         checker_report_text = _build_checker_report_text(checker_result)
@@ -4673,6 +6573,7 @@ async def analyze_chapter_background(
                 async with write_lock:
                     task.progress = 100
                     task.status = 'completed'
+                    task.error_message = None
                     task.completed_at = datetime.now()
                     await db_session.commit()
                     update_success = True
@@ -4827,6 +6728,16 @@ async def generate_chapter_content_stream(
                 # 获取项目的大纲模式
                 outline_mode = project.outline_mode if project else 'one-to-many'
                 logger.info(f"📋 项目大纲模式: {outline_mode}")
+
+                from app.api.outlines import cancel_outline_postprocess_tasks
+
+                cancelled_postprocess_tasks = cancel_outline_postprocess_tasks(current_chapter.project_id)
+                if cancelled_postprocess_tasks:
+                    logger.info(
+                        "Cancelled %s outline postprocess task(s) for project %s before chapter generation",
+                        cancelled_postprocess_tasks,
+                        current_chapter.project_id,
+                    )
                 
                 # 获取对应的大纲（优先使用 chapter.outline_id 直接关联）
                 if current_chapter.outline_id:
@@ -4928,6 +6839,7 @@ async def generate_chapter_content_stream(
                     logger.info(f"  - 伏笔提醒: {chapter_context.context_stats.get('foreshadow_length', 0)} 字符")
                     logger.info(f"  - 总长度: {chapter_context.context_stats.get('total_length', 0)} 字符")
             
+                outline_runtime_sources = _build_outline_structure_runtime_sources(outline)
                 generation_runtime = _build_chapter_generation_runtime_bundle(
                     story_packet=story_packet,
                     quality_profile=quality_profile,
@@ -4936,6 +6848,9 @@ async def generate_chapter_content_stream(
                     chapter_context=chapter_context,
                     target_word_count=target_word_count,
                     story_repair_state=story_repair_state,
+                    character_focus_source=outline_runtime_sources or None,
+                    character_state_source=outline_runtime_sources or None,
+                    organization_state_source=outline_runtime_sources or None,
                 )
                 generation_intent = generation_runtime.generation_intent
                 prompt_quality_kwargs = generation_runtime.prompt_quality_kwargs
@@ -5076,18 +6991,19 @@ async def generate_chapter_content_stream(
                     previous_summary=chapter_context.previous_chapter_summary,
                     style_name=style_name,
                     style_preset_id=style_preset_id,
+                    target_word_count=target_word_count,
+                        story_runtime_contract=story_runtime_contract,
                 )
                 if style_content:
                     logger.info(f"✅ 已将写作风格注入系统提示词（{len(style_content)}字符）")
                 
                 # 🔢 计算 max_tokens 限制
-                # 中文字符约 1.5-2 个 token，使用 2.5 倍系数确保有足够空间完成段落
-                # 同时设置上限防止过长，下限确保基本可用
-                calculated_max_tokens = int(target_word_count * 3)
-                calculated_max_tokens = max(2000, min(calculated_max_tokens, 16000))  # 限制在 2000-16000 之间
+                # 中文生成更接近“字数≈token”的量级，预算过宽会显著放大超写风险
+                calculated_max_tokens = _calculate_chapter_generation_max_tokens(target_word_count)
                 logger.info(f"📊 目标字数: {target_word_count}, 计算 max_tokens: {calculated_max_tokens}")
                 
                 # 准备生成参数
+                request_options = _build_chapter_generation_request_options(user_ai_service)
                 generate_kwargs = {
                     "prompt": prompt,
                     "system_prompt": system_prompt_with_style,
@@ -5102,6 +7018,8 @@ async def generate_chapter_content_stream(
                         )
                     ),
                 }
+                if request_options is not None:
+                    generate_kwargs["request_options"] = request_options
                 if custom_model:
                     logger.info(f"  使用自定义模型: {custom_model}")
                     generate_kwargs["model"] = custom_model
@@ -5147,17 +7065,58 @@ async def generate_chapter_content_stream(
                         current_story_repair_payload=story_repair_state.get("payload"),
                         scope="chapter",
                     )
-
-                selected_candidate = await _generate_best_ranked_candidate(
-                    ai_service=user_ai_service,
-                    base_generate_kwargs=generate_kwargs,
-                    target_word_count=target_word_count,
-                    source="chapter",
-                    generation_label=f"chapter_id={chapter_id}",
-                    quality_evaluator=evaluate_candidate_quality,
-                    quality_gate_plan_builder=build_candidate_quality_gate_plan,
-                    max_candidates=CHAPTER_CANDIDATE_RERANK_LIMIT,
+                candidate_runtime_state: Dict[str, Any] = {
+                    "candidate_total": CHAPTER_CANDIDATE_RERANK_LIMIT,
+                    "candidate_count": CHAPTER_CANDIDATE_RERANK_LIMIT,
+                    "candidate_index": 1,
+                    "current_chars": 0,
+                    "word_count": 0,
+                    "chunk_count": 0,
+                    "generation_path": "single_pass",
+                    "attempt_kind": "initial_candidate",
+                    "rerank_used": False,
+                    "word_budget_repair_used": False,
+                    "winner_candidate_index": None,
+                }
+                selected_candidate_task = asyncio.create_task(
+                    _generate_best_ranked_candidate(
+                        ai_service=user_ai_service,
+                        base_generate_kwargs=generate_kwargs,
+                        target_word_count=target_word_count,
+                        source="chapter",
+                        generation_label=f"chapter_id={chapter_id}",
+                        quality_evaluator=evaluate_candidate_quality,
+                        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+                        max_candidates=CHAPTER_CANDIDATE_RERANK_LIMIT,
+                        runtime_state=candidate_runtime_state,
+                    )
                 )
+                try:
+                    while True:
+                        try:
+                            selected_candidate = await asyncio.wait_for(
+                                asyncio.shield(selected_candidate_task),
+                                timeout=CHAPTER_STREAM_HEARTBEAT_INTERVAL_SECONDS,
+                            )
+                            break
+                        except asyncio.TimeoutError:
+                            current_chars = max(int(candidate_runtime_state.get("current_chars") or 0), 0)
+                            candidate_index = max(int(candidate_runtime_state.get("candidate_index") or 1), 1)
+                            candidate_total = max(
+                                int(candidate_runtime_state.get("candidate_total") or CHAPTER_CANDIDATE_RERANK_LIMIT),
+                                1,
+                            )
+                            yield await tracker.generating(
+                                current_chars=current_chars,
+                                estimated_total=target_word_count,
+                                message=f"??????? {candidate_index}/{candidate_total} ?... ({current_chars}??)",
+                                retry_count=max(candidate_index - 1, 0),
+                                max_retries=max(candidate_total - 1, 1),
+                            )
+                            yield await tracker.heartbeat()
+                finally:
+                    if not selected_candidate_task.done():
+                        selected_candidate_task.cancel()
                 full_content = str(selected_candidate.get("full_content") or "")
                 candidate_word_count = int(selected_candidate.get("word_count") or len(full_content))
                 quality_metrics = selected_candidate.get("quality_metrics")
@@ -5185,6 +7144,12 @@ async def generate_chapter_content_stream(
                 quality_metrics = _attach_story_runtime_contract(quality_metrics, story_runtime_contract)
 
                 draft_attempt = None
+                provisional_draft_saved = False
+                provisional_draft_allowed = (
+                    quality_gate_action == "retry"
+                    and not str(previous_content or "").strip()
+                    and previous_word_count <= 0
+                )
                 if quality_gate_requires_followup:
                     quality_gate_decision = quality_gate_snapshot.get("decision") if isinstance(quality_gate_snapshot, dict) else None
                     draft_attempt = _build_chapter_draft_attempt(
@@ -5203,6 +7168,15 @@ async def generate_chapter_content_stream(
                         f"Quality gate requires follow-up: chapter_id={chapter_id}, "
                         f"action={quality_gate_action}, decision={quality_gate_decision}"
                     )
+                    if provisional_draft_allowed:
+                        for chunk in selected_candidate.get("candidate_chunks") or []:
+                            yield await tracker.generating_chunk(chunk)
+                        current_chapter.content = full_content
+                        new_word_count = candidate_word_count
+                        current_chapter.word_count = new_word_count
+                        current_chapter.status = previous_status or "draft"
+                        project.current_words = project.current_words - previous_word_count + new_word_count
+                        provisional_draft_saved = True
                 else:
                     for chunk in selected_candidate.get("candidate_chunks") or []:
                         yield await tracker.generating_chunk(chunk)
@@ -5216,7 +7190,7 @@ async def generate_chapter_content_stream(
                 history = GenerationHistory(
                     project_id=current_chapter.project_id,
                     chapter_id=current_chapter.id,
-                    prompt=f"章节生成: 第{current_chapter.chapter_number}章 {current_chapter.title}",
+                    prompt=f"????: ?{current_chapter.chapter_number}? {current_chapter.title}",
                     generated_content=_build_generation_history_payload(
                         full_content,
                         quality_metrics,
@@ -5234,13 +7208,17 @@ async def generate_chapter_content_stream(
                 await db_session.refresh(current_chapter)
 
                 if content_applied:
-                    logger.info(f"✅ 章节 {chapter_id} 已保存，字数 {candidate_word_count}")
+                    logger.info(f"? ?? {chapter_id} ?????? {candidate_word_count}")
+                elif provisional_draft_saved:
+                    logger.info(
+                        f"?? ?? {chapter_id} ?????????????????? {candidate_word_count}"
+                    )
                 else:
                     logger.info(
-                        f"⚠️ 章节 {chapter_id} 生成了 {candidate_word_count} 字候选稿，未覆盖原状态 previous_status={previous_status}"
+                        f"?? ?? {chapter_id} ??? {candidate_word_count} ??????????? previous_status={previous_status}"
                     )
 
-                # 尝试自动落地本章命中的待埋伏笔
+                # ???????????????
                 if content_applied:
                     try:
                         plant_result = await foreshadow_service.auto_plant_pending_foreshadows(
@@ -5251,9 +7229,9 @@ async def generate_chapter_content_stream(
                             chapter_content=full_content
                         )
                         if plant_result.get('planted_count', 0) > 0:
-                            logger.info(f"✅ 自动植入伏笔数量: {plant_result['planted_count']}")
+                            logger.info(f"? ????????: {plant_result['planted_count']}")
                     except Exception as plant_error:
-                        logger.warning(f"⚠️ 自动植入伏笔失败: {str(plant_error)}")
+                        logger.warning(f"?? ????????: {str(plant_error)}")
 
                 task_id = None
                 should_schedule_analysis = enable_analysis or quality_gate_requires_followup
@@ -5264,21 +7242,19 @@ async def generate_chapter_content_stream(
                     elif quality_gate_action == "manual_review":
                         analysis_reason = "quality_gate_manual_review"
 
-                    analysis_task = AnalysisTask(
+                    analysis_task = await _create_analysis_task_safely(
+                        db_session,
                         chapter_id=chapter_id,
                         user_id=current_user_id,
                         project_id=project.id,
-                        status='pending',
-                        progress=0
+                        log_context=f"stream:{analysis_reason}",
                     )
-                    db_session.add(analysis_task)
-                    await db_session.commit()
-                    await db_session.refresh(analysis_task)
-
-                    task_id = analysis_task.id
-                    logger.info(f"✅ 已创建分析任务: {task_id} (reason={analysis_reason})")
+                    if analysis_task is not None:
+                        task_id = analysis_task.id
+                        logger.info(f"Created analysis task: {task_id} (reason={analysis_reason})")
 
                     await asyncio.sleep(0.05)
+
 
                     background_tasks.add_task(
                         analyze_chapter_background,
@@ -5322,6 +7298,14 @@ async def generate_chapter_content_stream(
                     })
 
                 # 推送最终结果
+                candidate_draft_summary = None
+                if quality_gate_requires_followup and draft_attempt is not None:
+                    candidate_draft_summary = _build_candidate_draft_payload(
+                        draft_attempt=draft_attempt,
+                        chapter_updated_at=current_chapter.updated_at,
+                        include_full_text=False,
+                    )
+
                 yield await tracker.result(
                     build_chapter_generation_stream_result_payload(
                         word_count=candidate_word_count,
@@ -5334,6 +7318,7 @@ async def generate_chapter_content_stream(
                         saved_word_count=current_chapter.word_count or 0,
                         hard_gate_blocked=quality_gate_requires_followup,
                         story_runtime_contract=story_runtime_contract,
+                        candidate_draft=candidate_draft_summary,
                     )
                 )
 
@@ -5351,30 +7336,25 @@ async def generate_chapter_content_stream(
                             'message': analysis_started_message
                         }
                     )
+                yield await tracker.done()
 
                 # 流程结束
                 
                 break  # 退出async for db_session循环
         
         except GeneratorExit:
-            # SSE连接断开
-            logger.warning("章节生成器被提前关闭（SSE断开）")
-            if db_session and not db_committed:
-                try:
-                    if db_session.in_transaction():
-                        await db_session.rollback()
-                        logger.info("章节生成事务已回滚（GeneratorExit）")
-                except Exception as e:
-                    logger.error(f"GeneratorExit回滚失败: {str(e)}")
+            # Let get_db handle rollback/close to avoid racing cleanup during SSE disconnects
+            logger.warning("Chapter stream generator closed early (SSE disconnect)")
+            db_session = None
         except Exception as e:
-            logger.error(f"流式创作章节失败: {str(e)}")
+            logger.error(f"Chapter stream generation failed: {e}")
             if db_session and not db_committed:
                 try:
                     if db_session.in_transaction():
                         await db_session.rollback()
-                        logger.info("章节生成事务已回滚（异常）")
+                        logger.info("?????????????")
                 except Exception as rollback_error:
-                    logger.error(f"回滚失败: {str(rollback_error)}")
+                    logger.error(f"????: {str(rollback_error)}")
             yield await tracker.error(str(e))
         finally:
             # 确保数据库会话被正确关闭
@@ -6419,25 +8399,23 @@ async def trigger_chapter_analysis(
         source_label="manual-analysis-request",
     )
 
-    # 创建分析任务
-    analysis_task = AnalysisTask(
+    # ??????
+    analysis_task = await _create_analysis_task_safely(
+        db,
         chapter_id=chapter_id,
         user_id=user_id,
         project_id=project.id,
-        status='pending',
-        progress=0
+        log_context="manual-analysis",
     )
-    db.add(analysis_task)
-    await db.commit()
-    
+    if analysis_task is None:
+        raise HTTPException(status_code=409, detail="Chapter or project was deleted before analysis task creation")
+
     task_id = analysis_task.id
-    logger.info(f"📋 创建分析任务: {task_id}, 章节: {chapter_id}")
-    
-    # 刷新数据库会话，确保其他会话可以看到新任务
-    await db.refresh(analysis_task)
-    
-    # 短暂延迟确保SQLite WAL完成写入（让其他会话可见）
+    logger.info(f"Created analysis task: {task_id}, chapter={chapter_id}")
+
+    # ??????SQLite WAL?????????????
     await asyncio.sleep(3)
+    
     
     # 直接启动后台分析（并发执行）
     background_tasks.add_task(
@@ -6645,6 +8623,7 @@ async def get_batch_generation_status(
 
     quality_snapshot = await _get_task_quality_metrics_snapshot(batch_id, db_session=db)
     workflow_snapshot = await _build_batch_task_workflow_snapshot(task, db_session=db)
+    terminal_status = _build_batch_task_terminal_status(task, workflow_snapshot=workflow_snapshot)
     
     return BatchGenerateStatusResponse(
         batch_id=task.id,
@@ -6666,6 +8645,10 @@ async def get_batch_generation_status(
         latest_quality_metrics=quality_snapshot.get("latest"),
         quality_metrics_summary=quality_snapshot.get("summary"),
         active_story_repair_payload=workflow_snapshot.get("active_story_repair_payload"),
+        terminal_reason=terminal_status["terminal_reason"],
+        terminal_label=terminal_status["terminal_label"],
+        review_required=terminal_status["review_required"],
+        can_resume=terminal_status["can_resume"],
     )
 
 
@@ -6937,11 +8920,15 @@ async def resume_batch_generation(
     if not can_generate:
         raise HTTPException(status_code=400, detail=f"Resume blocked by prerequisites: {error_msg}")
 
+    source_workflow_snapshot = await _get_task_workflow_runtime_snapshot(source_task.id, db_session=db)
+    source_active_story_repair_payload = source_workflow_snapshot.get("active_story_repair_payload") if isinstance(source_workflow_snapshot, dict) else None
     resumed_story_repair_state = await _resolve_generation_story_repair_state_for_batch(
         db,
         project_id=source_task.project_id,
         before_chapter_number=first_chapter.chapter_number,
+        active_story_repair_payload=source_active_story_repair_payload if isinstance(source_active_story_repair_payload, dict) else None,
     )
+    resumed_story_repair_payload = resumed_story_repair_state.get("payload")
 
     resumed_task = BatchGenerationTask(
         project_id=source_task.project_id,
@@ -6991,6 +8978,7 @@ async def resume_batch_generation(
             batch_id=resumed_task.id,
             user_id=user_id,
             ai_service=user_ai_service,
+            story_repair_payload=resumed_story_repair_payload if isinstance(resumed_story_repair_payload, StoryRepairPayload) else None,
         ),
     )
 
@@ -7413,11 +9401,24 @@ async def execute_batch_generation_in_order(
                             "type": "progress",
                             "message": f"正在保存第 {chapter.chapter_number} 章结果",
                             "progress": 80 if not should_run_analysis else 70,
+                            "progress": 80 if not should_run_analysis else 70,
                             "status": "running",
                             "phase": "saving" if not should_run_analysis else "generating",
                             "current_retry_count": retry_count,
                             "max_retries": task.max_retries,
                         })
+
+                    if not await _batch_task_exists(db_session, batch_id):
+                        await _clear_task_runtime_caches(batch_id)
+                        logger.info(f"Stop batch generation because task no longer exists: {batch_id}")
+                        return
+                    chapter_exists_result = await db_session.execute(
+                        select(Chapter.id).where(Chapter.id == chapter_id)
+                    )
+                    if chapter_exists_result.scalar_one_or_none() is None:
+                        await _clear_task_runtime_caches(batch_id)
+                        logger.info(f"Stop batch generation because chapter no longer exists: {chapter_id}")
+                        return
 
                     if should_run_analysis:
                         analysis_success, analysis_error = await _run_batch_chapter_analysis(
@@ -7434,6 +9435,10 @@ async def execute_batch_generation_in_order(
                             story_packet=batch_story_packet,
                             chapter_content_override=generated_content,
                             chapter_word_count_override=generated_word_count,
+                            story_repair_summary=story_repair_summary,
+                            story_repair_targets=story_repair_targets,
+                            story_preserve_strengths=story_preserve_strengths,
+                            story_repair_payload=active_story_repair_payload,
                         )
                         if not analysis_success:
                             failed_info = {
@@ -7847,6 +9852,7 @@ async def generate_single_chapter_for_batch(
     logger.info(f"  - 衔接锚点长度: {len(chapter_context.continuation_point or '')} 字符")
     logger.info(f"  - 相关记忆: {chapter_context.context_stats.get('memory_count', 0)} 条")
     logger.info(f"  - 总上下文长度: {chapter_context.context_stats.get('total_length', 0)} 字符")
+    outline_runtime_sources = _build_outline_structure_runtime_sources(outline)
     generation_runtime = _build_chapter_generation_runtime_bundle(
         story_packet=effective_story_packet,
         quality_profile=quality_profile,
@@ -7857,6 +9863,9 @@ async def generate_single_chapter_for_batch(
         story_repair_state=story_repair_state,
         story_repair_payload=story_repair_payload,
         active_story_repair_payload=active_story_repair_snapshot,
+        character_focus_source=outline_runtime_sources or None,
+        character_state_source=outline_runtime_sources or None,
+        organization_state_source=outline_runtime_sources or None,
     )
     generation_intent = generation_runtime.generation_intent
     prompt_quality_kwargs = generation_runtime.prompt_quality_kwargs
@@ -7980,19 +9989,20 @@ async def generate_single_chapter_for_batch(
         previous_summary=chapter_context.previous_chapter_summary,
         style_name=style_name,
         style_preset_id=style_preset_id,
+        target_word_count=target_word_count,
+                        story_runtime_contract=story_runtime_contract,
     )
     if style_content:
         logger.info(f"✅ 批量生成 - 已将写作风格注入系统提示词（{len(style_content)}字符）")
     
     # 🔢 计算 max_tokens 限制（批量生成）
-    # 中文字符约 1.5-2 个 token，使用 2.5 倍系数确保有足够空间完成段落
-    # 同时设置上限防止过长，下限确保基本可用
-    calculated_max_tokens = int(target_word_count * 3)
-    calculated_max_tokens = max(2000, min(calculated_max_tokens, 16000))  # 限制在 2000-16000 之间
+    # 与单章生成保持一致，降低批量场景下的超写和尾部发散
+    calculated_max_tokens = _calculate_chapter_generation_max_tokens(target_word_count)
     logger.info(f"📊 批量生成 - 目标字数: {target_word_count}, 计算 max_tokens: {calculated_max_tokens}")
     
     # Build generation kwargs
     # candidate generation payload
+    request_options = _build_chapter_generation_request_options(ai_service)
     generate_kwargs = {
         "prompt": prompt,
         "system_prompt": system_prompt_with_style,
@@ -8006,6 +10016,8 @@ async def generate_single_chapter_for_batch(
             )
         ),
     }
+    if request_options is not None:
+        generate_kwargs["request_options"] = request_options
     # Override model when the task explicitly requests one
     if custom_model:
         generate_kwargs["model"] = custom_model
@@ -8057,20 +10069,128 @@ async def generate_single_chapter_for_batch(
             scope="batch",
         )
 
-    selected_candidate = await _generate_best_ranked_candidate(
-        ai_service=ai_service,
-        base_generate_kwargs=generate_kwargs,
-        target_word_count=target_word_count,
-        source="batch",
-        generation_label=f"chapter={chapter.chapter_number}",
-        quality_evaluator=evaluate_candidate_quality,
-        quality_gate_plan_builder=build_candidate_quality_gate_plan,
-        max_candidates=CHAPTER_CANDIDATE_RERANK_LIMIT if retry_count <= 0 else 1,
-    )
+    candidate_runtime_state: Dict[str, Any] = {
+        "candidate_total": CHAPTER_CANDIDATE_RERANK_LIMIT if retry_count <= 0 else 1,
+        "candidate_count": CHAPTER_CANDIDATE_RERANK_LIMIT if retry_count <= 0 else 1,
+        "candidate_index": 1,
+        "current_chars": 0,
+        "word_count": 0,
+        "chunk_count": 0,
+        "generation_path": "single_pass",
+        "attempt_kind": "initial_candidate",
+        "rerank_used": False,
+        "word_budget_repair_used": False,
+        "winner_candidate_index": None,
+    }
+    if stream_task_id and stream_chunks:
+        selected_candidate_task = asyncio.create_task(
+            _generate_best_ranked_candidate(
+                ai_service=ai_service,
+                base_generate_kwargs=generate_kwargs,
+                target_word_count=target_word_count,
+                source="batch",
+                generation_label=f"chapter={chapter.chapter_number}",
+                quality_evaluator=evaluate_candidate_quality,
+                quality_gate_plan_builder=build_candidate_quality_gate_plan,
+                max_candidates=CHAPTER_CANDIDATE_RERANK_LIMIT if retry_count <= 0 else 1,
+                runtime_state=candidate_runtime_state,
+            )
+        )
+        try:
+            while True:
+                try:
+                    selected_candidate = await asyncio.wait_for(
+                        asyncio.shield(selected_candidate_task),
+                        timeout=CHAPTER_STREAM_HEARTBEAT_INTERVAL_SECONDS,
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    current_chars = max(int(candidate_runtime_state.get("current_chars") or 0), 0)
+                    candidate_index = max(int(candidate_runtime_state.get("candidate_index") or 1), 1)
+                    candidate_total = max(int(candidate_runtime_state.get("candidate_total") or 1), 1)
+                    candidate_count = max(int(candidate_runtime_state.get("candidate_count") or candidate_total), 1)
+                    generation_path = str(candidate_runtime_state.get("generation_path") or "single_pass")
+                    attempt_kind = str(candidate_runtime_state.get("attempt_kind") or "initial_candidate")
+                    rerank_used = bool(candidate_runtime_state.get("rerank_used"))
+                    word_budget_repair_used = bool(candidate_runtime_state.get("word_budget_repair_used"))
+                    progress = 35 + int(min(current_chars / max(target_word_count, 1), 1.0) * 25)
+                    if candidate_index > 1:
+                        progress = max(progress, 40 + (candidate_index - 1) * 5)
+                    progress = min(progress, 70)
+                    await publish_task_stream_event(stream_task_id, {
+                        "type": "progress",
+                        "chapter_id": chapter.id,
+                        "chapter_number": chapter.chapter_number,
+                        "message": (
+                            f"Generating chapter {chapter.chapter_number} candidate "
+                            f"{candidate_index}/{candidate_total} ({current_chars} chars)"
+                        ),
+                        "progress": progress,
+                        "status": "running",
+                        "phase": "generating",
+                        "candidate_index": candidate_index,
+                        "candidate_count": candidate_count,
+                        "word_count": current_chars,
+                        "generation_path": generation_path,
+                        "attempt_kind": attempt_kind,
+                        "rerank_used": rerank_used,
+                        "word_budget_repair_used": word_budget_repair_used,
+                    }, db_session=db_session)
+        finally:
+            if not selected_candidate_task.done():
+                selected_candidate_task.cancel()
+    else:
+        selected_candidate = await _generate_best_ranked_candidate(
+            ai_service=ai_service,
+            base_generate_kwargs=generate_kwargs,
+            target_word_count=target_word_count,
+            source="batch",
+            generation_label=f"chapter={chapter.chapter_number}",
+            quality_evaluator=evaluate_candidate_quality,
+            quality_gate_plan_builder=build_candidate_quality_gate_plan,
+            max_candidates=CHAPTER_CANDIDATE_RERANK_LIMIT if retry_count <= 0 else 1,
+        )
     full_content = str(selected_candidate.get("full_content") or "")
     candidate_word_count = int(selected_candidate.get("word_count") or len(full_content))
     quality_metrics = selected_candidate.get("quality_metrics")
     quality_gate_plan = selected_candidate.get("quality_gate_plan") or {}
+    chapter_context_stats = (
+        dict(chapter_context.context_stats)
+        if isinstance(getattr(chapter_context, "context_stats", None), dict)
+        else {}
+    )
+
+    if stream_task_id:
+        winner_candidate_index = int(
+            selected_candidate.get("winner_candidate_index")
+            or selected_candidate.get("candidate_index")
+            or 1
+        )
+        await publish_task_stream_event(stream_task_id, {
+            "type": "progress",
+            "chapter_id": chapter.id,
+            "chapter_number": chapter.chapter_number,
+            "message": (
+                f"Selected chapter {chapter.chapter_number} candidate "
+                f"{winner_candidate_index}/{int(selected_candidate.get('candidate_count') or 1)} "
+                f"({candidate_word_count} chars)"
+            ),
+            "progress": 70,
+            "status": "running",
+            "phase": "generating",
+            "candidate_index": int(selected_candidate.get("candidate_index") or 1),
+            "candidate_count": int(selected_candidate.get("candidate_count") or 1),
+            "word_count": candidate_word_count,
+            "generation_path": selected_candidate.get("generation_path"),
+            "attempt_kind": selected_candidate.get("attempt_kind"),
+            "rerank_used": bool(selected_candidate.get("rerank_used")),
+            "word_budget_repair_used": bool(selected_candidate.get("word_budget_repair_used")),
+            "winner_candidate_index": winner_candidate_index,
+            "pre_compaction_total_length": chapter_context_stats.get("pre_compaction_total_length"),
+            "context_budget_limit": chapter_context_stats.get("context_budget_limit"),
+            "compaction_applied": chapter_context_stats.get("compaction_applied"),
+            "compaction_details": chapter_context_stats.get("compaction_details"),
+        }, db_session=db_session)
 
     if stream_task_id and stream_chunks and str(quality_gate_plan.get("action") or "continue") == "continue":
         for chunk in selected_candidate.get("candidate_chunks") or []:
@@ -8166,6 +10286,10 @@ async def _run_batch_chapter_analysis(
     generation_guidance: Optional[StoryGenerationGuidance] = None,
     chapter_content_override: Optional[str] = None,
     chapter_word_count_override: Optional[int] = None,
+    story_repair_summary: Optional[str] = None,
+    story_repair_targets: Optional[list[str]] = None,
+    story_preserve_strengths: Optional[list[str]] = None,
+    story_repair_payload: Optional[StoryRepairPayload] = None,
 ) -> Tuple[bool, Optional[str]]:
     """执行批量章节分析，支持质量门禁阻断时分析候选稿。"""
     logger.info(f"🔍 开始同步分析章节: 第{chapter.chapter_number}章")
@@ -8189,16 +10313,15 @@ async def _run_batch_chapter_analysis(
                 logger.info(f"🔄 重试分析章节 (第{analysis_retry_count}次): 第{chapter.chapter_number}章")
 
             async with write_lock:
-                analysis_task = AnalysisTask(
+                analysis_task = await _create_analysis_task_safely(
+                    db_session,
                     chapter_id=chapter.id,
                     user_id=user_id,
                     project_id=project_id,
-                    status='pending',
-                    progress=0
+                    log_context=f"batch:{batch_id}",
                 )
-                db_session.add(analysis_task)
-                await db_session.commit()
-                await db_session.refresh(analysis_task)
+            if analysis_task is None:
+                return False, "Chapter or project was deleted before analysis"
 
             analysis_result = await analyze_chapter_background(
                 chapter_id=chapter.id,
@@ -8211,6 +10334,10 @@ async def _run_batch_chapter_analysis(
                 generation_guidance=generation_guidance,
                 chapter_content_override=chapter_content_override,
                 chapter_word_count_override=chapter_word_count_override,
+                story_repair_summary=story_repair_summary,
+                story_repair_targets=story_repair_targets,
+                story_preserve_strengths=story_preserve_strengths,
+                story_repair_payload=story_repair_payload,
             )
             if not analysis_result:
                 raise Exception("分析函数返回失败")
@@ -8387,6 +10514,7 @@ async def regenerate_chapter_stream(
                 source=effective_regenerate_request,
                 source_label="chapter-regenerate-request",
             )
+            outline_runtime_sources = _build_outline_structure_runtime_sources(outline)
             generation_runtime = _build_chapter_generation_runtime_bundle(
                 story_packet=regeneration_story_packet,
                 quality_profile=quality_profile,
@@ -8397,9 +10525,15 @@ async def regenerate_chapter_stream(
                 story_repair_state=story_repair_state,
                 story_repair_payload=story_repair_payload,
                 active_story_repair_payload=story_repair_state.get("active_story_repair_payload"),
-                character_state_source=characters_info_with_careers,
+                character_focus_source=outline_runtime_sources or None,
+                character_state_source=(
+                    {**outline_runtime_sources, "chapter_characters": characters_info_with_careers}
+                    if outline_runtime_sources
+                    else characters_info_with_careers
+                ),
                 relationship_state_source=characters_info_with_careers,
                 foreshadow_state_source=outline.content if outline else chapter.summary,
+                organization_state_source=outline_runtime_sources or None,
             )
             generation_guidance = generation_runtime.generation_guidance
             generation_intent = generation_runtime.generation_intent

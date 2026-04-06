@@ -3,10 +3,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
 from typing import List, AsyncGenerator, Dict, Any, Optional
+from collections import defaultdict
 from collections.abc import Mapping
+import copy
 import json
+import asyncio
+import re
 
-from app.database import get_db
+from app.database import get_db, get_session_factory
 from app.api.common import verify_project_access
 from app.models.outline import Outline
 from app.models.project import Project
@@ -74,6 +78,10 @@ from app.services.story_quality_feedback_service import (
     build_quality_metrics_summary,
     extract_quality_metrics_from_history_payload,
 )
+from app.services.outline_quality_summary_snapshot_store import (
+    load_outline_quality_summary_snapshot,
+    persist_outline_quality_summary_snapshot,
+)
 from app.services.outline_requirement_service import build_outline_generation_requirements
 from app.logger import get_logger
 from app.api.settings import get_user_ai_service
@@ -81,6 +89,40 @@ from app.utils.sse_response import SSEResponse, create_sse_response, WizardProgr
 
 router = APIRouter(prefix="/outlines", tags=["大纲管理"])
 logger = get_logger(__name__)
+
+RESPONSES_TEXT_GENERATION_PROVIDERS = {"sub2api", "openai_responses"}
+OUTLINE_GENERATION_TRANSPORT_RETRY_CAP = 2
+OUTLINE_GENERATION_FIRST_CHUNK_TIMEOUT = 20.0
+
+
+outline_quality_summary_cache: dict[str, Dict[str, Any]] = {}
+outline_quality_summary_lock = asyncio.Lock()
+OUTLINE_QUALITY_SUMMARY_CACHE_MAX_SIZE = 128
+
+
+def _build_outline_generation_request_options(
+    ai_service: AIService,
+    provider: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    normalized_provider = str(provider or getattr(ai_service, "api_provider", "") or "").strip().lower()
+    if normalized_provider not in RESPONSES_TEXT_GENERATION_PROVIDERS:
+        return None
+
+    retry_cfg = getattr(getattr(ai_service, "config", None), "retry", None)
+    configured_retry_budget = int(
+        getattr(retry_cfg, "max_retries", OUTLINE_GENERATION_TRANSPORT_RETRY_CAP)
+        or OUTLINE_GENERATION_TRANSPORT_RETRY_CAP
+    )
+    transport_max_retries = max(1, min(configured_retry_budget, OUTLINE_GENERATION_TRANSPORT_RETRY_CAP))
+    return {
+        "prefer_chat_completions": True,
+        "transport_max_retries": transport_max_retries,
+        "first_chunk_timeout": OUTLINE_GENERATION_FIRST_CHUNK_TIMEOUT,
+        "allow_non_stream_fallback": False,
+    }
+
+_outline_postprocess_tasks: set[asyncio.Task] = set()
+_outline_postprocess_tasks_by_project: Dict[str, set[asyncio.Task]] = {}
 
 def _dump_model_like_payload(value: Any) -> Dict[str, Any]:
     model_dump = getattr(value, "model_dump", None)
@@ -117,6 +159,165 @@ def _build_characters_info(characters: List[Character]) -> str:
         for char in characters
     ])
 
+
+OUTLINE_CONTINUE_RECENT_LIMIT = 8
+OUTLINE_CONTINUE_SUMMARY_LIMIT = 220
+OUTLINE_CONTINUE_DETAIL_CHARACTER_LIMIT = 10
+OUTLINE_CONTINUE_RELATION_LIMIT = 4
+OUTLINE_CONTINUE_MEMBER_LIMIT = 4
+OUTLINE_CONTINUE_OVERVIEW_LIMIT = 8
+
+
+def _truncate_outline_context_text(value: Any, *, limit: int = 160) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _dedupe_outline_names(names: List[str], *, limit: Optional[int] = None) -> List[str]:
+    unique_names: List[str] = []
+    seen_names: set[str] = set()
+    for raw_name in names:
+        name = str(raw_name or "").strip()
+        if not name or name in seen_names:
+            continue
+        seen_names.add(name)
+        unique_names.append(name)
+        if limit is not None and len(unique_names) >= limit:
+            break
+    return unique_names
+
+
+def _extract_outline_characters_from_payload(raw_characters: Any, *, limit: int = 4) -> tuple[List[str], List[str]]:
+    character_names: List[str] = []
+    organization_names: List[str] = []
+
+    if isinstance(raw_characters, list):
+        for item in raw_characters:
+            if isinstance(item, Mapping):
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                if str(item.get("type") or "").strip() == "organization":
+                    organization_names.append(name)
+                else:
+                    character_names.append(name)
+            else:
+                name = str(item or "").strip()
+                if name:
+                    character_names.append(name)
+    elif isinstance(raw_characters, Mapping):
+        name = str(raw_characters.get("name") or "").strip()
+        if name:
+            if str(raw_characters.get("type") or "").strip() == "organization":
+                organization_names.append(name)
+            else:
+                character_names.append(name)
+    else:
+        name = str(raw_characters or "").strip()
+        if name:
+            character_names.append(name)
+
+    return (
+        _dedupe_outline_names(character_names, limit=limit),
+        _dedupe_outline_names(organization_names, limit=limit),
+    )
+
+
+def _format_outline_context_value(
+    value: Any,
+    *,
+    max_items: int = 3,
+    item_limit: int = 48,
+    total_limit: int = 160,
+) -> str:
+    if value is None:
+        return ""
+
+    if isinstance(value, list):
+        items = []
+        for item in value[:max_items]:
+            compact_item = _truncate_outline_context_text(item, limit=item_limit)
+            if compact_item:
+                items.append(compact_item)
+        return _truncate_outline_context_text("；".join(items), limit=total_limit)
+
+    if isinstance(value, Mapping):
+        parts: List[str] = []
+        for key, raw_value in list(value.items())[:max_items]:
+            compact_value = _truncate_outline_context_text(raw_value, limit=item_limit)
+            if compact_value:
+                parts.append(f"{key}:{compact_value}")
+        return _truncate_outline_context_text("；".join(parts), limit=total_limit)
+
+    return _truncate_outline_context_text(value, limit=total_limit)
+
+
+def _collect_outline_focus_names(
+    latest_outlines: List[Outline],
+    characters: List[Character],
+    story_direction: str,
+    requirements: str,
+    *,
+    limit: int = 8,
+) -> List[str]:
+    focus_names: List[str] = []
+    recent_slice = latest_outlines[-6:] if len(latest_outlines) > 6 else latest_outlines
+
+    for outline in reversed(recent_slice):
+        structure_raw = getattr(outline, "structure", None)
+        if not structure_raw:
+            continue
+        try:
+            structure_data = json.loads(structure_raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(structure_data, Mapping):
+            continue
+        character_names, organization_names = _extract_outline_characters_from_payload(
+            structure_data.get("characters"),
+            limit=limit,
+        )
+        focus_names.extend(character_names)
+        focus_names.extend(organization_names)
+
+    query_text = "\n".join(part for part in [story_direction or "", requirements or ""] if part)
+    if query_text:
+        for char in characters:
+            name = str(getattr(char, "name", "") or "").strip()
+            if name and name in query_text:
+                focus_names.append(name)
+
+    return _dedupe_outline_names(focus_names, limit=limit)
+
+
+def _sort_characters_for_outline_context(characters: List[Character], focus_names: List[str]) -> List[Character]:
+    focus_order = {name: index for index, name in enumerate(focus_names)}
+    indexed_characters = list(enumerate(characters))
+
+    def _sort_key(item: tuple[int, Character]) -> tuple[int, int, int, int, int]:
+        index, character = item
+        name = str(getattr(character, "name", "") or "").strip()
+        return (
+            0 if name in focus_order else 1,
+            focus_order.get(name, 10_000),
+            0 if getattr(character, "role_type", "") == "protagonist" else 1,
+            0 if not getattr(character, "is_organization", False) else 1,
+            index,
+        )
+
+    return [character for _, character in sorted(indexed_characters, key=_sort_key)]
+
+
+def _build_outline_character_overview(character: Character) -> str:
+    entity_type = "??" if getattr(character, "is_organization", False) else "??"
+    role_type = str(getattr(character, "role_type", "") or "???").strip()
+    return f"{character.name}?{entity_type}?{role_type}?"
 
 def _pick_outline_field(data: Dict[str, Any], keys: List[str]) -> Any:
     """按候选字段顺序提取值。"""
@@ -158,6 +359,8 @@ def _merge_outline_requirements(
     quality_trend_guidance: Optional[str] = None,
     guidance: Optional[StoryGenerationGuidance] = None,
     story_packet: Optional[StoryPacket] = None,
+    *,
+    compact_mode: bool = False,
 ) -> str:
     """Merge freeform requirements with outline quality guidance."""
     return build_outline_generation_requirements(
@@ -174,6 +377,7 @@ def _merge_outline_requirements(
         quality_trend_guidance=quality_trend_guidance,
         guidance=guidance,
         story_packet=story_packet,
+        compact_mode=compact_mode,
     )
 
 
@@ -201,6 +405,108 @@ def _build_outline_memory_guidance(memory_context: Optional[Dict[str, Any]]) -> 
     return "【连载记忆与伏笔约束】\n" + "\n\n".join(parts)
 
 
+def _build_outline_quality_summary_cache_key(project_id: str, chapter_limit: int) -> str:
+    return f"{project_id}:{chapter_limit}"
+
+
+
+def _build_outline_quality_summary_chapter_keys(recent_chapters: List[Any]) -> list[tuple[str, int]]:
+    chapter_keys: list[tuple[str, int]] = []
+    for row in recent_chapters:
+        chapter_id = str(getattr(row, "id", "") or "").strip()
+        if not chapter_id:
+            continue
+        try:
+            chapter_number = int(getattr(row, "chapter_number", 0) or 0)
+        except (TypeError, ValueError):
+            chapter_number = 0
+        chapter_keys.append((chapter_id, chapter_number))
+    return chapter_keys
+
+
+
+def _normalize_outline_quality_summary_chapter_keys(value: Any) -> list[tuple[str, int]]:
+    normalized: list[tuple[str, int]] = []
+    for item in value or []:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        chapter_id = str(item[0] or "").strip()
+        if not chapter_id:
+            continue
+        try:
+            chapter_number = int(item[1] or 0)
+        except (TypeError, ValueError):
+            chapter_number = 0
+        normalized.append((chapter_id, chapter_number))
+    return normalized
+
+
+
+def _serialize_outline_quality_summary_timestamp(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        serialized = isoformat()
+        return str(serialized).strip() or None
+    serialized = str(value).strip()
+    return serialized or None
+
+
+
+def _build_outline_quality_summary_snapshot(
+    *,
+    chapter_keys: list[tuple[str, int]],
+    history_count: int,
+    latest_history_created_at: Any,
+    summary: Dict[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "chapter_keys": chapter_keys,
+        "history_count": max(int(history_count or 0), 0),
+        "history_latest_created_at": _serialize_outline_quality_summary_timestamp(latest_history_created_at),
+        "summary": dict(summary) if isinstance(summary, dict) else {},
+    }
+
+
+
+def _is_outline_quality_summary_snapshot_fresh(
+    cached_snapshot: Optional[Dict[str, Any]],
+    *,
+    chapter_keys: list[tuple[str, int]],
+    history_count: int,
+    latest_history_created_at: Any,
+) -> bool:
+    if not isinstance(cached_snapshot, dict):
+        return False
+    if _normalize_outline_quality_summary_chapter_keys(cached_snapshot.get("chapter_keys")) != chapter_keys:
+        return False
+    if int(cached_snapshot.get("history_count") or 0) != max(int(history_count or 0), 0):
+        return False
+    cached_latest = _serialize_outline_quality_summary_timestamp(cached_snapshot.get("history_latest_created_at"))
+    current_latest = _serialize_outline_quality_summary_timestamp(latest_history_created_at)
+    if cached_latest != current_latest:
+        return False
+    return isinstance(cached_snapshot.get("summary"), dict)
+
+
+
+async def _store_outline_quality_summary_snapshot(
+    *,
+    cache_key: str,
+    project_id: str,
+    chapter_limit: int,
+    snapshot: Dict[str, Any],
+) -> None:
+    async with outline_quality_summary_lock:
+        outline_quality_summary_cache[cache_key] = snapshot
+        persist_outline_quality_summary_snapshot(project_id, chapter_limit, snapshot)
+        while len(outline_quality_summary_cache) > OUTLINE_QUALITY_SUMMARY_CACHE_MAX_SIZE:
+            oldest_key = next(iter(outline_quality_summary_cache))
+            outline_quality_summary_cache.pop(oldest_key, None)
+
+
+
 async def _load_outline_quality_summary(
     db: AsyncSession,
     project_id: str,
@@ -217,6 +523,49 @@ async def _load_outline_quality_summary(
     chapter_ids = [row.id for row in recent_chapters if getattr(row, "id", None)]
     if not chapter_ids:
         return {}
+
+    chapter_keys = _build_outline_quality_summary_chapter_keys(recent_chapters)
+    history_meta_result = await db.execute(
+        select(
+            func.count(GenerationHistory.id),
+            func.max(GenerationHistory.created_at),
+        ).where(
+            GenerationHistory.project_id == project_id,
+            GenerationHistory.chapter_id.in_(chapter_ids),
+        )
+    )
+    history_count, latest_history_created_at = history_meta_result.one()
+    cache_key = _build_outline_quality_summary_cache_key(project_id, chapter_limit)
+
+    async with outline_quality_summary_lock:
+        cached_snapshot = outline_quality_summary_cache.get(cache_key)
+        if cached_snapshot is None:
+            persisted_snapshot = load_outline_quality_summary_snapshot(project_id, chapter_limit)
+            if isinstance(persisted_snapshot, dict):
+                outline_quality_summary_cache[cache_key] = persisted_snapshot
+                cached_snapshot = persisted_snapshot
+        if _is_outline_quality_summary_snapshot_fresh(
+            cached_snapshot,
+            chapter_keys=chapter_keys,
+            history_count=int(history_count or 0),
+            latest_history_created_at=latest_history_created_at,
+        ):
+            return dict(cached_snapshot.get("summary") or {})
+
+    if int(history_count or 0) <= 0:
+        empty_summary: Dict[str, Any] = {}
+        await _store_outline_quality_summary_snapshot(
+            cache_key=cache_key,
+            project_id=project_id,
+            chapter_limit=chapter_limit,
+            snapshot=_build_outline_quality_summary_snapshot(
+                chapter_keys=chapter_keys,
+                history_count=0,
+                latest_history_created_at=latest_history_created_at,
+                summary=empty_summary,
+            ),
+        )
+        return empty_summary
 
     history_result = await db.execute(
         select(GenerationHistory)
@@ -239,8 +588,20 @@ async def _load_outline_quality_summary(
             break
 
     metrics_history = [metrics_by_chapter[chapter_id] for chapter_id in chapter_ids if chapter_id in metrics_by_chapter]
-    summary = build_quality_metrics_summary(metrics_history, scope="outline")
-    return dict(summary) if isinstance(summary, dict) else {}
+    resolved_summary = build_quality_metrics_summary(metrics_history, scope="outline")
+    summary = dict(resolved_summary) if isinstance(resolved_summary, dict) else {}
+    await _store_outline_quality_summary_snapshot(
+        cache_key=cache_key,
+        project_id=project_id,
+        chapter_limit=chapter_limit,
+        snapshot=_build_outline_quality_summary_snapshot(
+            chapter_keys=chapter_keys,
+            history_count=int(history_count or 0),
+            latest_history_created_at=latest_history_created_at,
+            summary=summary,
+        ),
+    )
+    return summary
 
 
 def _build_outline_quality_repair_guidance_from_summary(summary: Dict[str, Any]) -> str:
@@ -750,6 +1111,48 @@ async def delete_outline(
 
 
 
+async def _build_outline_continue_static_context(
+    user_id: str,
+    project: Project,
+    latest_outlines: List[Outline],
+    characters: List[Character],
+    story_direction: str,
+    requirements: str,
+    db: AsyncSession,
+    *,
+    prebuilt_quality_guidance_bundle: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    warmup_context = await _build_outline_continue_context(
+        user_id=user_id,
+        project=project,
+        latest_outlines=latest_outlines,
+        characters=characters,
+        current_chapter=max(int(getattr(latest_outlines[-1], "order_index", 0) or 0), 1) if latest_outlines else 1,
+        chapter_count=1,
+        plot_stage="development",
+        story_direction=story_direction,
+        requirements=requirements,
+        db=db,
+        prebuilt_quality_guidance_bundle=prebuilt_quality_guidance_bundle,
+        skip_memory_guidance=True,
+    )
+    warmed_stats = warmup_context.get("stats") if isinstance(warmup_context.get("stats"), Mapping) else {}
+    return {
+        "project_info": str(warmup_context.get("project_info") or "").strip(),
+        "characters_info": str(warmup_context.get("characters_info") or "").strip(),
+        "quality_repair_guidance": str(warmup_context.get("quality_repair_guidance") or "").strip(),
+        "quality_trend_guidance": str(warmup_context.get("quality_trend_guidance") or "").strip(),
+        "stats": {
+            "characters_count": warmed_stats.get("characters_count", len(characters)),
+            "characters_info_length": warmed_stats.get("characters_info_length", 0),
+            "detailed_characters_count": warmed_stats.get("detailed_characters_count", 0),
+            "compacted_characters_count": warmed_stats.get("compacted_characters_count", 0),
+            "quality_repair_guidance_length": warmed_stats.get("quality_repair_guidance_length", 0),
+            "quality_trend_guidance_length": warmed_stats.get("quality_trend_guidance_length", 0),
+        },
+    }
+
+
 async def _build_outline_continue_context(
     user_id: str,
     project: Project,
@@ -760,7 +1163,11 @@ async def _build_outline_continue_context(
     plot_stage: str,
     story_direction: str,
     requirements: str,
-    db: AsyncSession
+    db: AsyncSession,
+    *,
+    prebuilt_quality_guidance_bundle: Optional[Dict[str, Any]] = None,
+    prebuilt_static_context: Optional[Dict[str, Any]] = None,
+    skip_memory_guidance: bool = False,
 ) -> dict:
     """
     构建大纲续写上下文（简化版）
@@ -799,8 +1206,14 @@ async def _build_outline_continue_context(
             'memory_guidance_length': 0,
             'quality_repair_guidance_length': 0,
             'quality_trend_guidance_length': 0,
+            'recent_outlines_length': 0,
+            'characters_info_length': 0,
+            'detailed_characters_count': 0,
+            'compacted_characters_count': 0,
         }
     }
+    memory_character_names: List[str] = []
+    static_context = prebuilt_static_context if isinstance(prebuilt_static_context, Mapping) and prebuilt_static_context else None
     
     try:
         # 1. 项目基础信息
@@ -817,219 +1230,314 @@ async def _build_outline_continue_context(
         ]
         context['project_info'] = "\n".join(project_info_parts)
         
-        # 2. 最近10章的完整大纲structure（解析JSON转化为文本）
-        recent_count = min(10, len(latest_outlines))
+        # 2. ?????????????
+        recent_count = min(OUTLINE_CONTINUE_RECENT_LIMIT, len(latest_outlines))
         if recent_count > 0:
             recent_outlines = latest_outlines[-recent_count:]
             context['stats']['recent_outlines_count'] = recent_count
-            
-            outline_texts = []
-            outline_texts.append(f"【最近{recent_count}章大纲详情】")
-            
+
+            outline_texts = [f"\u3010\u6700\u8fd1{recent_count}\u7ae0\u5927\u7eb2\u8be6\u60c5\u3011"]
+
             for outline in recent_outlines:
-                outline_text = f"\n第{outline.order_index}章《{outline.title}》"
-                
-                # 尝试解析structure字段
+                outline_text = f"\n\u7b2c{outline.order_index}\u7ae0\u300a{outline.title}\u300b"
+
                 if outline.structure:
                     try:
                         structure_data = json.loads(outline.structure)
-                        
-                        # 提取各个字段（使用实际存储的字段名）
-                        if structure_data.get('summary'):
-                            outline_text += f"\n  概要：{structure_data['summary']}"
-                        
-                        # key_points 对应 关键事件
-                        if structure_data.get('key_points'):
-                            events = structure_data['key_points']
-                            if isinstance(events, list):
-                                outline_text += f"\n  关键事件：{', '.join(events)}"
-                            else:
-                                outline_text += f"\n  关键事件：{events}"
-                        
-                        # characters 对应 重点角色/组织（兼容新旧格式）
-                        if structure_data.get('characters'):
-                            chars = structure_data['characters']
-                            if isinstance(chars, list):
-                                # 新格式：[{"name": "xxx", "type": "character"/"organization"}]
-                                # 旧格式：["角色名1", "角色名2"]
-                                char_names = []
-                                org_names = []
-                                for c in chars:
-                                    if isinstance(c, dict):
-                                        name = c.get('name', '')
-                                        if c.get('type') == 'organization':
-                                            org_names.append(name)
-                                        else:
-                                            char_names.append(name)
-                                    elif isinstance(c, str):
-                                        char_names.append(c)
-                                if char_names:
-                                    outline_text += f"\n  重点角色：{', '.join(char_names)}"
-                                if org_names:
-                                    outline_text += f"\n  涉及组织：{', '.join(org_names)}"
-                            else:
-                                outline_text += f"\n  重点角色：{chars}"
-                        
-                        # emotion 对应 情感基调
-                        if structure_data.get('emotion'):
-                            outline_text += f"\n  情感基调：{structure_data['emotion']}"
-                        
-                        # goal 对应 叙事目标
-                        if structure_data.get('goal'):
-                            outline_text += f"\n  叙事目标：{structure_data['goal']}"
-                        
-                        # scenes 场景信息（可选显示）
-                        if structure_data.get('scenes'):
-                            scenes = structure_data['scenes']
-                            if isinstance(scenes, list) and scenes:
-                                outline_text += f"\n  场景：{', '.join(scenes)}"
-                            
                     except json.JSONDecodeError:
-                        # 如果解析失败，使用content字段
-                        outline_text += f"\n  内容：{outline.content}"
+                        structure_data = None
+
+                    if isinstance(structure_data, Mapping):
+                        summary_text = _truncate_outline_context_text(
+                            structure_data.get('summary'),
+                            limit=OUTLINE_CONTINUE_SUMMARY_LIMIT,
+                        )
+                        if summary_text:
+                            outline_text += f"\n  \u6982\u8981\uff1a{summary_text}"
+
+                        events_text = _format_outline_context_value(
+                            structure_data.get('key_points'),
+                            max_items=3,
+                            item_limit=36,
+                            total_limit=120,
+                        )
+                        if events_text:
+                            outline_text += f"\n  \u5173\u952e\u4e8b\u4ef6\uff1a{events_text}"
+
+                        character_names, organization_names = _extract_outline_characters_from_payload(
+                            structure_data.get('characters'),
+                            limit=4,
+                        )
+                        if character_names:
+                            outline_text += f"\n  \u91cd\u70b9\u89d2\u8272\uff1a{'?'.join(character_names)}"
+                        if organization_names:
+                            outline_text += f"\n  \u6d89\u53ca\u7ec4\u7ec7\uff1a{'?'.join(organization_names)}"
+
+                        emotion_text = _truncate_outline_context_text(structure_data.get('emotion'), limit=40)
+                        if emotion_text:
+                            outline_text += f"\n  \u60c5\u611f\u57fa\u8c03\uff1a{emotion_text}"
+
+                        goal_text = _truncate_outline_context_text(structure_data.get('goal'), limit=80)
+                        if goal_text:
+                            outline_text += f"\n  \u53d9\u4e8b\u76ee\u6807\uff1a{goal_text}"
+
+                        scenes_text = _format_outline_context_value(
+                            structure_data.get('scenes'),
+                            max_items=2,
+                            item_limit=24,
+                            total_limit=72,
+                        )
+                        if scenes_text:
+                            outline_text += f"\n  \u573a\u666f\uff1a{scenes_text}"
+                    else:
+                        outline_text += f"\n  \u5185\u5bb9\uff1a{_truncate_outline_context_text(outline.content, limit=OUTLINE_CONTINUE_SUMMARY_LIMIT)}"
                 else:
-                    # 没有structure，使用content
-                    outline_text += f"\n  内容：{outline.content}"
-                
+                    outline_text += f"\n  \u5185\u5bb9\uff1a{_truncate_outline_context_text(outline.content, limit=OUTLINE_CONTINUE_SUMMARY_LIMIT)}"
+
                 outline_texts.append(outline_text)
-            
+
             context['recent_outlines'] = "\n".join(outline_texts)
-            logger.info(f"  ✅ 最近大纲：{recent_count}章")
-        
-        # 3. 所有角色的全部信息(包括职业信息)
-        if characters:
-            from app.models.career import Career, CharacterCareer
-            
-            char_texts = []
-            char_texts.append("【角色信息】")
-            
-            for char in characters:
-                char_text = f"\n{char.name}（{'组织' if char.is_organization else '角色'}，{char.role_type}）"
-                
-                if char.personality:
-                    char_text += f"\n  性格特点：{char.personality}"
-                
-                if char.background:
-                    char_text += f"\n  背景故事：{char.background}"
-                
-                if char.appearance:
-                    char_text += f"\n  外貌描述：{char.appearance}"
-                
-                if char.traits:
-                    char_text += f"\n  特征标签：{char.traits}"
-                
-                # 从 character_relationships 表查询关系
+            context['stats']['recent_outlines_length'] = len(context['recent_outlines'])
+            logger.info(f"  \u2705 \u6700\u8fd1\u5927\u7eb2\uff1a{recent_count}\u7ae0\uff0c\u957f\u5ea6 {context['stats']['recent_outlines_length']} \u5b57\u7b26")
+        # 3. ?????????(??????)
+        if static_context:
+            context['characters_info'] = str(static_context.get('characters_info') or '').strip()
+            static_stats = static_context.get('stats') if isinstance(static_context.get('stats'), Mapping) else {}
+            for stat_key in (
+                'characters_count',
+                'characters_info_length',
+                'detailed_characters_count',
+                'compacted_characters_count',
+            ):
+                if stat_key in static_stats:
+                    context['stats'][stat_key] = static_stats[stat_key]
+        else:
+            if characters:
+                from app.models.career import Career, CharacterCareer
                 from sqlalchemy import or_
-                rels_result = await db.execute(
-                    select(CharacterRelationship).where(
-                        CharacterRelationship.project_id == project.id,
-                        or_(
-                            CharacterRelationship.character_from_id == char.id,
-                            CharacterRelationship.character_to_id == char.id
+
+                character_ids = [char.id for char in characters if getattr(char, "id", None)]
+                organization_character_ids = [
+                    char.id for char in characters if char.is_organization and getattr(char, "id", None)
+                ]
+                non_organization_character_ids = [
+                    char.id for char in characters if not char.is_organization and getattr(char, "id", None)
+                ]
+                character_name_map = {
+                    char.id: char.name
+                    for char in characters
+                    if getattr(char, "id", None) and getattr(char, "name", None)
+                }
+                relationships_by_character_id: Dict[str, List[CharacterRelationship]] = defaultdict(list)
+                organization_by_character_id: Dict[str, Organization] = {}
+                members_by_organization_id: Dict[str, List[tuple[OrganizationMember, str]]] = defaultdict(list)
+                career_by_character_id: Dict[str, tuple[Career, CharacterCareer]] = {}
+
+                if character_ids:
+                    rels_result = await db.execute(
+                        select(CharacterRelationship)
+                        .where(
+                            CharacterRelationship.project_id == project.id,
+                            or_(
+                                CharacterRelationship.character_from_id.in_(character_ids),
+                                CharacterRelationship.character_to_id.in_(character_ids),
+                            ),
                         )
+                        .order_by(CharacterRelationship.created_at.asc(), CharacterRelationship.id.asc())
                     )
-                )
-                rels = rels_result.scalars().all()
-                if rels:
-                    # 收集相关角色名称
-                    related_ids = set()
-                    for r in rels:
-                        related_ids.add(r.character_from_id)
-                        related_ids.add(r.character_to_id)
-                    related_ids.discard(char.id)
-                    if related_ids:
-                        names_result = await db.execute(
-                            select(Character.id, Character.name).where(Character.id.in_(related_ids))
+                    for relationship in rels_result.scalars().all():
+                        if relationship.character_from_id in character_name_map:
+                            relationships_by_character_id[relationship.character_from_id].append(relationship)
+                        if (
+                            relationship.character_to_id in character_name_map
+                            and relationship.character_to_id != relationship.character_from_id
+                        ):
+                            relationships_by_character_id[relationship.character_to_id].append(relationship)
+
+                if organization_character_ids:
+                    organization_result = await db.execute(
+                        select(Organization)
+                        .where(
+                            Organization.project_id == project.id,
+                            Organization.character_id.in_(organization_character_ids),
                         )
-                        name_map = {row.id: row.name for row in names_result}
-                        rel_parts = []
-                        for r in rels:
-                            if r.character_from_id == char.id:
-                                target_name = name_map.get(r.character_to_id, "未知")
-                            else:
-                                target_name = name_map.get(r.character_from_id, "未知")
-                            rel_name = r.relationship_name or "相关"
-                            rel_parts.append(f"与{target_name}：{rel_name}")
-                        char_text += f"\n  关系网络：{'；'.join(rel_parts)}"
-                
-                # 组织特有字段
-                if char.is_organization:
-                    if char.organization_type:
-                        char_text += f"\n  组织类型：{char.organization_type}"
-                    if char.organization_purpose:
-                        char_text += f"\n  组织宗旨：{char.organization_purpose}"
-                    # 从 OrganizationMember 表动态查询组织成员
-                    org_result = await db.execute(
-                        select(Organization).where(Organization.character_id == char.id)
+                        .order_by(Organization.created_at.asc(), Organization.id.asc())
                     )
-                    org = org_result.scalar_one_or_none()
-                    if org:
+                    organizations = organization_result.scalars().all()
+                    organization_by_character_id = {
+                        organization.character_id: organization
+                        for organization in organizations
+                        if organization.character_id
+                    }
+                    organization_ids = [
+                        organization.id for organization in organizations if getattr(organization, "id", None)
+                    ]
+                    if organization_ids:
                         members_result = await db.execute(
-                            select(OrganizationMember, Character.name).join(
-                                Character, OrganizationMember.character_id == Character.id
-                            ).where(OrganizationMember.organization_id == org.id)
+                            select(OrganizationMember, Character.name)
+                            .join(Character, OrganizationMember.character_id == Character.id)
+                            .where(OrganizationMember.organization_id.in_(organization_ids))
+                            .order_by(OrganizationMember.created_at.asc(), OrganizationMember.id.asc())
                         )
-                        members = members_result.all()
-                        if members:
-                            member_parts = [f"{name}（{m.position}）" for m, name in members]
-                            char_text += f"\n  组织成员：{'、'.join(member_parts)}"
-                
-                # 查询角色的职业信息
-                if not char.is_organization:
-                    try:
-                        career_result = await db.execute(
-                            select(Career, CharacterCareer)
-                            .join(CharacterCareer, Career.id == CharacterCareer.career_id)
-                            .where(CharacterCareer.character_id == char.id)
+                        for organization_member, member_name in members_result.all():
+                            members_by_organization_id[organization_member.organization_id].append(
+                                (organization_member, member_name)
+                            )
+
+                if non_organization_character_ids:
+                    career_result = await db.execute(
+                        select(Career, CharacterCareer)
+                        .join(CharacterCareer, Career.id == CharacterCareer.career_id)
+                        .where(
+                            CharacterCareer.character_id.in_(non_organization_character_ids),
+                            Career.project_id == project.id,
                         )
-                        career_data = career_result.first()
-                        
+                        .order_by(CharacterCareer.created_at.asc(), CharacterCareer.id.asc())
+                    )
+                    for career, character_career in career_result.all():
+                        career_by_character_id.setdefault(character_career.character_id, (career, character_career))
+
+                focus_names = _collect_outline_focus_names(
+                    latest_outlines,
+                    characters,
+                    story_direction,
+                    requirements,
+                )
+                ordered_characters = _sort_characters_for_outline_context(characters, focus_names)
+                detailed_characters = ordered_characters[:OUTLINE_CONTINUE_DETAIL_CHARACTER_LIMIT]
+                compacted_characters = ordered_characters[OUTLINE_CONTINUE_DETAIL_CHARACTER_LIMIT:]
+                memory_character_names = [
+                    str(getattr(char, "name", "") or "").strip()
+                    for char in detailed_characters[:8]
+                    if str(getattr(char, "name", "") or "").strip()
+                ]
+                context['stats']['detailed_characters_count'] = len(detailed_characters)
+                context['stats']['compacted_characters_count'] = len(compacted_characters)
+
+                char_texts = ["\u3010\u89d2\u8272\u4fe1\u606f\u3011"]
+
+                for char in detailed_characters:
+                    char_text = f"\n{_build_outline_character_overview(char)}"
+
+                    if char.personality:
+                        char_text += f"\n  \u6027\u683c\u7279\u70b9\uff1a{_truncate_outline_context_text(char.personality, limit=72)}"
+
+                    if char.background:
+                        char_text += f"\n  \u80cc\u666f\u6545\u4e8b\uff1a{_truncate_outline_context_text(char.background, limit=96)}"
+
+                    if char.appearance:
+                        char_text += f"\n  \u5916\u8c8c\u63cf\u8ff0\uff1a{_truncate_outline_context_text(char.appearance, limit=56)}"
+
+                    if char.traits:
+                        char_text += f"\n  \u7279\u5f81\u6807\u7b7e\uff1a{_truncate_outline_context_text(char.traits, limit=56)}"
+
+                    rels = relationships_by_character_id.get(char.id, [])
+                    if rels:
+                        rel_parts = []
+                        for relationship in rels[:OUTLINE_CONTINUE_RELATION_LIMIT]:
+                            if relationship.character_from_id == char.id:
+                                target_name = character_name_map.get(relationship.character_to_id, "未知")
+                            else:
+                                target_name = character_name_map.get(relationship.character_from_id, "未知")
+                            rel_name = _truncate_outline_context_text(
+                                relationship.relationship_name or "相关",
+                                limit=24,
+                            )
+                            rel_parts.append(f"与{target_name}：{rel_name}")
+                        if rel_parts:
+                            relation_suffix = ""
+                            if len(rels) > OUTLINE_CONTINUE_RELATION_LIMIT:
+                                relation_suffix = f"\uff1b\u5176\u4f59{len(rels) - OUTLINE_CONTINUE_RELATION_LIMIT}\u6761\u7565"
+                            char_text += f"\n  \u5173\u7cfb\u7f51\u7edc\uff1a{'?'.join(rel_parts)}{relation_suffix}"
+
+                    if char.is_organization:
+                        if char.organization_type:
+                            char_text += f"\n  \u7ec4\u7ec7\u7c7b\u578b\uff1a{_truncate_outline_context_text(char.organization_type, limit=36)}"
+                        if char.organization_purpose:
+                            char_text += f"\n  \u7ec4\u7ec7\u5b97\u65e8\uff1a{_truncate_outline_context_text(char.organization_purpose, limit=72)}"
+                        organization = organization_by_character_id.get(char.id)
+                        if organization is not None:
+                            members = members_by_organization_id.get(organization.id, [])
+                            if members:
+                                member_parts = [
+                                    f"{name}（{member.position}）"
+                                    for member, name in members[:OUTLINE_CONTINUE_MEMBER_LIMIT]
+                                ]
+                                member_suffix = ""
+                                if len(members) > OUTLINE_CONTINUE_MEMBER_LIMIT:
+                                    member_suffix = f"\uff1b\u5176\u4f59{len(members) - OUTLINE_CONTINUE_MEMBER_LIMIT}\u4eba\u7565"
+                                char_text += f"\n  \u7ec4\u7ec7\u6210\u5458\uff1a{'?'.join(member_parts)}{member_suffix}"
+                    else:
+                        career_data = career_by_character_id.get(char.id)
                         if career_data:
                             career, char_career = career_data
-                            char_text += f"\n  职业：{career.name}"
+                            char_text += f"\n  \u804c\u4e1a\uff1a{_truncate_outline_context_text(career.name, limit=32)}"
                             if char_career.current_stage:
                                 char_text += f"（{char_career.current_stage}阶段）"
                             if char_career.career_type:
-                                char_text += f"\n  职业类型：{char_career.career_type}"
-                    except Exception as e:
-                        logger.warning(f"查询角色 {char.name} 的职业信息失败: {str(e)}")
-                
-                char_texts.append(char_text)
-            
-            context['characters_info'] = "\n".join(char_texts)
-            logger.info(f"  ✅ 角色信息：{len(characters)}个角色")
+                                char_text += f"\n  \u804c\u4e1a\u7c7b\u578b\uff1a{_truncate_outline_context_text(char_career.career_type, limit=20)}"
+
+                    char_texts.append(char_text)
+
+                if compacted_characters:
+                    overview_characters = compacted_characters[:OUTLINE_CONTINUE_OVERVIEW_LIMIT]
+                    overview_text = "\uff1b".join(
+                        _build_outline_character_overview(character)
+                        for character in overview_characters
+                    )
+                    omitted_count = len(compacted_characters) - len(overview_characters)
+                    suffix = f"\uff1b\u5176\u4f59{omitted_count}\u4e2a\u89d2\u8272\u7565" if omitted_count > 0 else ""
+                    char_texts.append(f"\n\u5176\u4f59\u89d2\u8272\u901f\u89c8\uff1a{overview_text}{suffix}")
+
+                context['characters_info'] = "\n".join(char_texts)
+                context['stats']['characters_info_length'] = len(context['characters_info'])
+                logger.info(
+                    f"  \u2705 \u89d2\u8272\u4fe1\u606f\uff1a\u603b{len(characters)}\u4e2a\uff0c\u8be6\u7ec6{len(detailed_characters)}\u4e2a\uff0c\u538b\u7f29{len(compacted_characters)}\u4e2a\uff0c"
+                    f"\u957f\u5ea6 {context['stats']['characters_info_length']} \u5b57\u7b26"
+                )
+            else:
+                context['characters_info'] = "\u3010\u89d2\u8272\u4fe1\u606f\u3011\n\u6682\u65e0\u89d2\u8272\u4fe1\u606f"
+        if not skip_memory_guidance:
+            try:
+                memory_query = "\n".join(
+                    part for part in [story_direction or "", requirements or "", _build_chapters_brief(latest_outlines, max_recent=5)] if part
+                )
+                character_names = memory_character_names or [char.name for char in characters[:8] if getattr(char, "name", None)]
+                memory_context = await memory_service.build_context_for_generation(
+                    user_id=user_id,
+                    project_id=project.id,
+                    current_chapter=current_chapter,
+                    chapter_outline=memory_query or project.theme or project.title,
+                    character_names=character_names,
+                )
+                context['memory_guidance'] = _build_outline_memory_guidance(memory_context)
+            except Exception as memory_error:
+                logger.warning(f"?? ??????????????????: {memory_error}")
+                context['memory_guidance'] = ''
         else:
-            context['characters_info'] = "【角色信息】\n暂无角色信息"
-        
-        # 4. 记忆与伏笔摘要
-        try:
-            memory_query = "\n".join(
-                part for part in [story_direction or "", requirements or "", _build_chapters_brief(latest_outlines, max_recent=5)] if part
-            )
-            character_names = [char.name for char in characters[:8] if getattr(char, 'name', None)]
-            memory_context = await memory_service.build_context_for_generation(
-                user_id=user_id,
-                project_id=project.id,
-                current_chapter=current_chapter,
-                chapter_outline=memory_query or project.theme or project.title,
-                character_names=character_names,
-            )
-            context['memory_guidance'] = _build_outline_memory_guidance(memory_context)
-        except Exception as memory_error:
-            logger.warning(f"⚠️ 构建大纲续写记忆摘要失败，已回退为空: {memory_error}")
             context['memory_guidance'] = ''
 
-        try:
-            quality_guidance_bundle = await _build_outline_quality_guidance_bundle(
-                db,
-                project.id,
-            )
-            context['quality_repair_guidance'] = str(quality_guidance_bundle.get('quality_repair_guidance') or '').strip()
-            context['quality_trend_guidance'] = str(quality_guidance_bundle.get('quality_trend_guidance') or '').strip()
-        except Exception as repair_error:
-            logger.warning(f"⚠️ 构建大纲续写质量指导失败，已回退为空: {repair_error}")
-            context['quality_repair_guidance'] = ''
-            context['quality_trend_guidance'] = ''
+        if static_context:
+            context['quality_repair_guidance'] = str(static_context.get('quality_repair_guidance') or '').strip()
+            context['quality_trend_guidance'] = str(static_context.get('quality_trend_guidance') or '').strip()
+            static_stats = static_context.get('stats') if isinstance(static_context.get('stats'), Mapping) else {}
+            for stat_key in ('quality_repair_guidance_length', 'quality_trend_guidance_length'):
+                if stat_key in static_stats:
+                    context['stats'][stat_key] = static_stats[stat_key]
+        else:
+            try:
+                quality_guidance_bundle = prebuilt_quality_guidance_bundle
+                if quality_guidance_bundle is None:
+                    quality_guidance_bundle = await _build_outline_quality_guidance_bundle(
+                        db,
+                        project.id,
+                    )
+                context['quality_repair_guidance'] = str(quality_guidance_bundle.get('quality_repair_guidance') or '').strip()
+                context['quality_trend_guidance'] = str(quality_guidance_bundle.get('quality_trend_guidance') or '').strip()
+            except Exception as repair_error:
+                logger.warning(f"?? ??????????????????: {repair_error}")
+                context['quality_repair_guidance'] = ''
+                context['quality_trend_guidance'] = ''
 
         user_input_parts = [
             "【用户输入】",
@@ -1052,6 +1560,8 @@ async def _build_outline_continue_context(
             len(context['quality_trend_guidance']),
             len(context['user_input'])
         ])
+        context['stats']['recent_outlines_length'] = len(context['recent_outlines'])
+        context['stats']['characters_info_length'] = len(context['characters_info'])
         context['stats']['memory_guidance_length'] = len(context['memory_guidance'])
         context['stats']['quality_repair_guidance_length'] = len(context['quality_repair_guidance'])
         context['stats']['quality_trend_guidance_length'] = len(context['quality_trend_guidance'])
@@ -1071,7 +1581,8 @@ async def _check_and_create_missing_characters_from_outlines(
     user_ai_service: AIService,
     user_id: str = None,
     enable_mcp: bool = True,
-    tracker = None
+    tracker = None,
+    commit_per_item: bool = False
 ) -> dict:
     """
     大纲生成/续写后，校验structure中的characters是否存在对应角色，
@@ -1106,7 +1617,8 @@ async def _check_and_create_missing_characters_from_outlines(
             db=db,
             user_id=user_id,
             enable_mcp=enable_mcp,
-            progress_callback=progress_cb
+            progress_callback=progress_cb,
+            commit_per_item=commit_per_item
         )
         
         if result["created_count"] > 0:
@@ -1129,7 +1641,8 @@ async def _check_and_create_missing_organizations_from_outlines(
     user_ai_service: AIService,
     user_id: str = None,
     enable_mcp: bool = True,
-    tracker = None
+    tracker = None,
+    commit_per_item: bool = False
 ) -> dict:
     """
     大纲生成/续写后，校验structure中的characters（type=organization）是否存在对应组织，
@@ -1163,7 +1676,8 @@ async def _check_and_create_missing_organizations_from_outlines(
             db=db,
             user_id=user_id,
             enable_mcp=enable_mcp,
-            progress_callback=progress_cb
+            progress_callback=progress_cb,
+            commit_per_item=commit_per_item
         )
         
         if result["created_count"] > 0:
@@ -1177,6 +1691,126 @@ async def _check_and_create_missing_organizations_from_outlines(
     except Exception as e:
         logger.error(f"⚠️ 【组织校验】校验失败（不影响主流程）: {e}", exc_info=True)
         return {"created_count": 0, "created_organizations": []}
+
+
+async def _run_outline_postprocess_background(
+    outline_data: list,
+    project_id: str,
+    user_ai_service: AIService,
+    user_id: str | None,
+    enable_mcp: bool,
+) -> None:
+    """大纲生成后在后台补齐角色/组织详情，避免阻塞首个响应。"""
+    session_key = user_id or f"outline-postprocess-{project_id}"
+
+    def _clone_ai_service(db_session: AsyncSession) -> AIService:
+        cloned_service = copy.copy(user_ai_service)
+        cloned_service.user_id = user_id or getattr(user_ai_service, "user_id", None)
+        cloned_service.db_session = db_session
+        cloned_service._cached_tools = None
+        cloned_service._tools_loaded = False
+        return cloned_service
+
+    async def _run_characters(session_factory) -> None:
+        async with session_factory() as character_db:
+            await _check_and_create_missing_characters_from_outlines(
+                outline_data=outline_data,
+                project_id=project_id,
+                db=character_db,
+                user_ai_service=_clone_ai_service(character_db),
+                user_id=user_id,
+                enable_mcp=enable_mcp,
+                tracker=None,
+                commit_per_item=True,
+            )
+            character_in_transaction = getattr(character_db, "in_transaction", None)
+            if not callable(character_in_transaction) or character_in_transaction():
+                await character_db.commit()
+
+    async def _run_organizations(session_factory) -> None:
+        async with session_factory() as organization_db:
+            await _check_and_create_missing_organizations_from_outlines(
+                outline_data=outline_data,
+                project_id=project_id,
+                db=organization_db,
+                user_ai_service=_clone_ai_service(organization_db),
+                user_id=user_id,
+                enable_mcp=enable_mcp,
+                tracker=None,
+                commit_per_item=True,
+            )
+            organization_in_transaction = getattr(organization_db, "in_transaction", None)
+            if not callable(organization_in_transaction) or organization_in_transaction():
+                await organization_db.commit()
+
+    try:
+        session_factory = await get_session_factory(session_key)
+        results = await asyncio.gather(
+            _run_characters(session_factory),
+            _run_organizations(session_factory),
+            return_exceptions=True,
+        )
+
+        failures = [result for result in results if isinstance(result, Exception)]
+        if failures:
+            raise failures[0]
+
+        logger.info("✅ 大纲角色/组织后台补全完成")
+    except Exception as exc:
+        logger.error(f"❌ 大纲角色/组织后台补全失败: {exc}", exc_info=True)
+
+
+def cancel_outline_postprocess_tasks(project_id: str) -> int:
+    tasks = _outline_postprocess_tasks_by_project.pop(project_id, set())
+    cancelled = 0
+    for task in list(tasks):
+        _outline_postprocess_tasks.discard(task)
+        if task.done():
+            continue
+        task.cancel()
+        cancelled += 1
+    return cancelled
+
+
+def _schedule_outline_postprocess_background(
+    outline_data: list,
+    project_id: str,
+    user_ai_service: AIService,
+    user_id: str | None,
+    enable_mcp: bool,
+) -> None:
+    """Schedule outline postprocess work without blocking the first response."""
+    task = asyncio.create_task(
+        _run_outline_postprocess_background(
+            outline_data=outline_data,
+            project_id=project_id,
+            user_ai_service=user_ai_service,
+            user_id=user_id,
+            enable_mcp=enable_mcp,
+        )
+    )
+    _outline_postprocess_tasks.add(task)
+    project_tasks = _outline_postprocess_tasks_by_project.setdefault(project_id, set())
+    project_tasks.add(task)
+
+    def _cleanup(done_task: asyncio.Task) -> None:
+        _outline_postprocess_tasks.discard(done_task)
+        tracked_tasks = _outline_postprocess_tasks_by_project.get(project_id)
+        if tracked_tasks is not None:
+            tracked_tasks.discard(done_task)
+            if not tracked_tasks:
+                _outline_postprocess_tasks_by_project.pop(project_id, None)
+        try:
+            done_task.result()
+        except asyncio.CancelledError:
+            logger.info(
+                'Outline postprocess task cancelled for project %s',
+                project_id,
+            )
+        except Exception:
+            pass
+
+    task.add_done_callback(_cleanup)
 
 
 class JSONParseError(Exception):
@@ -1367,21 +2001,19 @@ async def new_outline_generator(
         
         yield await tracker.loading(f"准备生成{chapter_count}章大纲...", 0.6)
         
-        # 获取角色信息
+        # 预加载续写静态上下文，减少批次内重复拼装
         characters_result = await db.execute(
             select(Character).where(Character.project_id == project_id)
         )
         characters = characters_result.scalars().all()
         characters_info = _build_characters_info(characters)
-        
-        # 设置用户信息以启用MCP
+
         user_id_for_mcp = data.get("user_id")
         if user_id_for_mcp:
             user_ai_service.user_id = user_id_for_mcp
             user_ai_service.db_session = db
-        
-        # 使用提示词模板
-        yield await tracker.preparing("准备AI提示词...")
+
+        yield await tracker.preparing("准备 AI 生成大纲...")
         template = await PromptService.get_template("OUTLINE_CREATE", user_id_for_mcp, db)
         story_packet = await build_story_generation_packet_with_project_continuity(
             db,
@@ -1395,8 +2027,9 @@ async def new_outline_generator(
                 project.id,
             )
         except Exception as quality_error:
-            logger.warning(f"⚠️ 构建大纲质量趋势指导失败，已回退为空: {quality_error}")
+            logger.warning(f"Build outline-create quality guidance failed: {quality_error}")
             quality_guidance_bundle = {}
+
         prompt = PromptService.format_prompt(
             template,
             title=project.title,
@@ -1417,33 +2050,34 @@ async def new_outline_generator(
                 story_packet=story_packet,
             ),
             mcp_references="",
-            **story_packet.to_prompt_fields(),
+            **story_packet.to_prompt_fields(exclude=("chapter_count",)), 
         )
         outline_system_prompt = _build_outline_runtime_system_prompt(
             project=project,
             chapter_count=chapter_count,
             is_continuation=False
         )
-        logger.debug(f"NEW提示词: {prompt}")
-        # 添加调试日志
+        logger.debug(f"New outline prompt: {prompt}")
+
         model_param = data.get("model")
         provider_param = data.get("provider")
-        logger.info(f"=== 大纲生成AI调用参数 ===")
-        logger.info(f"  provider参数: {provider_param}")
-        logger.info(f"  model参数: {model_param}")
-        
-        # ✅ 流式生成（带字数统计和进度）
+        outline_request_options = _build_outline_generation_request_options(user_ai_service, provider_param)
+        logger.info("=== Outline create AI call ===")
+        logger.info(f"  provider: {provider_param}")
+        logger.info(f"  model: {model_param}")
+
         estimated_total = chapter_count * 1000
         accumulated_text = ""
         chunk_count = 0
-        
+
         yield await tracker.generating(current_chars=0, estimated_total=estimated_total)
-        
         async for chunk in user_ai_service.generate_text_stream(
             prompt=prompt,
             system_prompt=outline_system_prompt,
             provider=provider_param,
-            model=model_param
+            model=model_param,
+            auto_mcp=enable_mcp,
+            request_options=outline_request_options,
         ):
             chunk_count += 1
             accumulated_text += chunk
@@ -1504,7 +2138,8 @@ async def new_outline_generator(
                     prompt=retry_prompt,
                     system_prompt=outline_system_prompt,
                     provider=provider_param,
-                    model=model_param
+                    model=model_param,
+                    auto_mcp=enable_mcp,
                 ):
                     chunk_count += 1
                     accumulated_text += chunk
@@ -1609,48 +2244,6 @@ async def new_outline_generator(
             project_id, outline_data, db, start_index=1
         )
         
-        # 🎭 角色校验：检查大纲structure中的characters是否存在对应角色
-        yield await tracker.saving("🎭 校验角色信息...", 0.7)
-        try:
-            char_check_result = await _check_and_create_missing_characters_from_outlines(
-                outline_data=outline_data,
-                project_id=project_id,
-                db=db,
-                user_ai_service=user_ai_service,
-                user_id=data.get("user_id"),
-                enable_mcp=data.get("enable_mcp", True),
-                tracker=tracker
-            )
-            if char_check_result["created_count"] > 0:
-                created_names = [c.name for c in char_check_result["created_characters"]]
-                yield await tracker.saving(
-                    f"🎭 自动创建了 {char_check_result['created_count']} 个角色: {', '.join(created_names)}",
-                    0.8
-                )
-        except Exception as e:
-            logger.error(f"⚠️ 角色校验失败（不影响主流程）: {e}")
-        
-        # 🏛️ 组织校验：检查大纲structure中的characters（type=organization）是否存在对应组织
-        yield await tracker.saving("🏛️ 校验组织信息...", 0.75)
-        try:
-            org_check_result = await _check_and_create_missing_organizations_from_outlines(
-                outline_data=outline_data,
-                project_id=project_id,
-                db=db,
-                user_ai_service=user_ai_service,
-                user_id=data.get("user_id"),
-                enable_mcp=data.get("enable_mcp", True),
-                tracker=tracker
-            )
-            if org_check_result["created_count"] > 0:
-                created_names = [c.name for c in org_check_result["created_organizations"]]
-                yield await tracker.saving(
-                    f"🏛️ 自动创建了 {org_check_result['created_count']} 个组织: {', '.join(created_names)}",
-                    0.85
-                )
-        except Exception as e:
-            logger.error(f"⚠️ 组织校验失败（不影响主流程）: {e}")
-        
         # 记录历史
         history = GenerationHistory(
             project_id=project_id,
@@ -1666,6 +2259,15 @@ async def new_outline_generator(
         for outline in outlines:
             await db.refresh(outline)
         
+
+        _schedule_outline_postprocess_background(
+            outline_data=outline_data,
+            project_id=project_id,
+            user_ai_service=user_ai_service,
+            user_id=data.get("user_id"),
+            enable_mcp=data.get("enable_mcp", True),
+        )
+        yield await tracker.saving("保存大纲并启动角色/组织后处理...", 0.72)
         logger.info(f"全新生成完成 - {len(outlines)} 章")
         
         yield await tracker.complete()
@@ -1721,6 +2323,7 @@ async def continue_outline_generator(
         project_id = data.get("project_id")
         # 确保chapter_count是整数（前端可能传字符串）
         total_chapters_to_generate = int(data.get("chapter_count", 5))
+        enable_mcp = data.get("enable_mcp", True)
         
         # 验证项目
         yield await tracker.loading("加载项目信息...", 0.2)
@@ -1758,8 +2361,6 @@ async def continue_outline_generator(
             select(Character).where(Character.project_id == project_id)
         )
         characters = characters_result.scalars().all()
-        characters_info = _build_characters_info(characters)
-
         # 分批配置
         batch_size = 5
         total_batches = (total_chapters_to_generate + batch_size - 1) // batch_size
@@ -1771,8 +2372,44 @@ async def continue_outline_generator(
             "ending": "解决主要冲突，收束伏笔，给出结局"
         }
         stage_instruction = stage_instructions.get(data.get("plot_stage", "development"), "")
+        template = await PromptService.get_template("OUTLINE_CONTINUE", user_id, db)
+        latest_outlines = list(existing_outlines)
+        if user_id:
+            user_ai_service.user_id = user_id
+            user_ai_service.db_session = db
+
+        model_param = data.get("model")
+        provider_param = data.get("provider")
+        outline_request_options = _build_outline_generation_request_options(user_ai_service, provider_param)
+        story_packet = await build_story_generation_packet_with_project_continuity(
+            db,
+            project,
+            source=data,
+            source_label="outline-continue-request",
+        )
+        story_packet_prompt_fields = story_packet.to_prompt_fields(exclude=("chapter_count",))
+        prebuilt_quality_guidance_bundle: Optional[Dict[str, Any]] = None
+        try:
+            prebuilt_quality_guidance_bundle = await _build_outline_quality_guidance_bundle(db, project.id)
+        except Exception as quality_prefetch_error:
+            logger.warning(f"Prefetch outline quality guidance failed; will retry during context build: {quality_prefetch_error}")
         
         # === 批次生成阶段 ===
+        prebuilt_continue_static_context: Optional[Dict[str, Any]] = None
+        try:
+            prebuilt_continue_static_context = await _build_outline_continue_static_context(
+                user_id=user_id,
+                project=project,
+                latest_outlines=latest_outlines,
+                characters=characters,
+                story_direction=data.get("story_direction", "自然延续"),
+                requirements=data.get("requirements", ""),
+                db=db,
+                prebuilt_quality_guidance_bundle=prebuilt_quality_guidance_bundle,
+            )
+        except Exception as static_context_error:
+            logger.warning(f"Prefetch outline static context failed; will rebuild in-batch: {static_context_error}")
+
         all_new_outlines = []
         current_start_chapter = last_chapter_number + 1
         
@@ -1793,13 +2430,6 @@ async def continue_outline_generator(
                 message=f"📝 第{str(batch_num + 1)}/{str(total_batches)}批: 生成第{str(current_start_chapter)}-{str(current_start_chapter + current_batch_size - 1)}章"
             )
             
-            # 获取最新的大纲列表（包括之前批次生成的）
-            latest_result = await db.execute(
-                select(Outline)
-                .where(Outline.project_id == project_id)
-                .order_by(Outline.order_index)
-            )
-            latest_outlines = latest_result.scalars().all()
             
             # 🚀 使用新的简化上下文构建
             context = await _build_outline_continue_context(
@@ -1812,7 +2442,9 @@ async def continue_outline_generator(
                 plot_stage=data.get("plot_stage", "development"),
                 story_direction=data.get("story_direction", "自然延续"),
                 requirements=data.get("requirements", ""),
-                db=db
+                db=db,
+                prebuilt_quality_guidance_bundle=prebuilt_quality_guidance_bundle,
+                prebuilt_static_context=prebuilt_continue_static_context,
             )
             
             # 日志统计
@@ -1822,28 +2454,25 @@ async def continue_outline_generator(
                        f"角色{stats['characters_count']}个, "
                        f"长度{stats['total_length']}字符")
             
-            # 设置用户信息以启用MCP
-            if user_id:
-                user_ai_service.user_id = user_id
-                user_ai_service.db_session = db
-            
             yield await tracker.generating(
                 current_chars=0,
                 estimated_total=estimated_chars_per_batch,
                 message=f"🤖 调用AI生成第{str(batch_num + 1)}批..."
             )
             
-            # 使用标准续写提示词模板（简化版）
-            template = await PromptService.get_template("OUTLINE_CONTINUE", user_id, db)
-            story_packet = await build_story_generation_packet_with_project_continuity(
-                db,
-                project,
-                source=data,
-                source_label="outline-continue-request",
+            # Use the compact continuation prompt contract
+            merged_requirements = _merge_outline_requirements(
+                data.get("requirements"),
+                compact_mode=True,
+                chapter_count=current_batch_size,
+                memory_guidance=context.get('memory_guidance'),
+                quality_repair_guidance=context.get('quality_repair_guidance'),
+                quality_trend_guidance=context.get('quality_trend_guidance'),
+                story_packet=story_packet,
             )
             prompt = PromptService.format_prompt(
                 template,
-                # 基础信息
+                # Basic project fields
                 title=project.title,
                 theme=project.theme or "未设定",
                 genre=project.genre or "通用",
@@ -1852,39 +2481,40 @@ async def continue_outline_generator(
                 location=project.world_location or "未设定",
                 atmosphere=project.world_atmosphere or "未设定",
                 rules=project.world_rules or "未设定",
-                # 上下文信息
+                # Context fields
                 recent_outlines=context['recent_outlines'],
                 characters_info=context['characters_info'],
-                # 续写参数
+                # Continuation parameters
                 chapter_count=current_batch_size,
                 start_chapter=current_start_chapter,
                 end_chapter=current_start_chapter + current_batch_size - 1,
                 current_chapter_count=len(latest_outlines),
                 plot_stage_instruction=stage_instruction,
                 story_direction=data.get("story_direction", "自然延续"),
-                requirements=_merge_outline_requirements(
-                    data.get("requirements"),
-                    chapter_count=current_batch_size,
-                    memory_guidance=context.get('memory_guidance'),
-                    quality_repair_guidance=context.get('quality_repair_guidance'),
-                    quality_trend_guidance=context.get('quality_trend_guidance'),
-                    story_packet=story_packet,
-                ),
+                requirements=merged_requirements,
                 mcp_references="",
-                **story_packet.to_prompt_fields()
+                **story_packet_prompt_fields
             )
             outline_system_prompt = _build_outline_runtime_system_prompt(
                 project=project,
                 chapter_count=current_batch_size,
                 is_continuation=True
             )
-            logger.debug(f" 续写提示词: {prompt}")
-            # 调用AI生成当前批次
-            model_param = data.get("model")
-            provider_param = data.get("provider")
-            logger.info(f"=== 续写批次{batch_num + 1} AI调用参数 ===")
-            logger.info(f"  provider参数: {provider_param}")
-            logger.info(f"  model参数: {model_param}")
+            logger.info(
+                f"[outline batch {batch_num + 1}] prompt lengths: "
+                f"recent={stats.get('recent_outlines_length', 0)}, "
+                f"characters={stats.get('characters_info_length', 0)}, "
+                f"memory={stats.get('memory_guidance_length', 0)}, "
+                f"quality_repair={stats.get('quality_repair_guidance_length', 0)}, "
+                f"quality_trend={stats.get('quality_trend_guidance_length', 0)}, "
+                f"requirements={len(merged_requirements)}, "
+                f"prompt={len(prompt)}, system={len(outline_system_prompt)}"
+            )
+            logger.debug(f"Outline continuation prompt: {prompt}")
+            # Call AI for the current batch
+            logger.info(f"=== Outline batch {batch_num + 1} AI call ===")
+            logger.info(f"  provider: {provider_param}")
+            logger.info(f"  model: {model_param}")
             
             # 流式生成并累积文本
             accumulated_text = ""
@@ -1894,7 +2524,9 @@ async def continue_outline_generator(
                 prompt=prompt,
                 system_prompt=outline_system_prompt,
                 provider=provider_param,
-                model=model_param
+                model=model_param,
+                auto_mcp=enable_mcp,
+                request_options=outline_request_options,
             ):
                 chunk_count += 1
                 accumulated_text += chunk
@@ -1957,7 +2589,9 @@ async def continue_outline_generator(
                         prompt=retry_prompt,
                         system_prompt=outline_system_prompt,
                         provider=provider_param,
-                        model=model_param
+                        model=model_param,
+                        auto_mcp=enable_mcp,
+                        request_options=outline_request_options,
                     ):
                         chunk_count += 1
                         accumulated_text += chunk
@@ -1977,54 +2611,58 @@ async def continue_outline_generator(
             batch_outlines = await _save_outlines(
                 project_id, outline_data, db, start_index=current_start_chapter
             )
+            defer_postprocess_for_batch = batch_num == total_batches - 1
             
-            # 🎭 角色校验：检查本批大纲structure中的characters是否存在对应角色
-            try:
-                char_check_result = await _check_and_create_missing_characters_from_outlines(
-                    outline_data=outline_data,
-                    project_id=project_id,
-                    db=db,
-                    user_ai_service=user_ai_service,
-                    user_id=user_id,
-                    enable_mcp=data.get("enable_mcp", True),
-                    tracker=tracker
+            if defer_postprocess_for_batch:
+                logger.info(
+                    "?%s???/???????????????????",
+                    batch_num + 1,
                 )
-                if char_check_result["created_count"] > 0:
-                    created_names = [c.name for c in char_check_result["created_characters"]]
-                    yield await tracker.saving(
-                        f"🎭 第{str(batch_num + 1)}批：自动创建了 {char_check_result['created_count']} 个角色: {', '.join(created_names)}",
-                        (batch_num + 1) / total_batches * 0.5
+            else:
+                # ?? ???????????structure??characters????????
+                try:
+                    char_check_result = await _check_and_create_missing_characters_from_outlines(
+                        outline_data=outline_data,
+                        project_id=project_id,
+                        db=db,
+                        user_ai_service=user_ai_service,
+                        user_id=user_id,
+                        enable_mcp=enable_mcp,
+                        tracker=tracker
                     )
-                    # 更新角色列表（供后续批次使用）
-                    characters.extend(char_check_result["created_characters"])
-                    characters_info = _build_characters_info(characters)
-            except Exception as e:
-                logger.error(f"⚠️ 第{batch_num + 1}批角色校验失败（不影响主流程）: {e}")
-            
-            # 🏛️ 组织校验：检查本批大纲structure中的characters（type=organization）是否存在对应组织
-            try:
-                org_check_result = await _check_and_create_missing_organizations_from_outlines(
-                    outline_data=outline_data,
-                    project_id=project_id,
-                    db=db,
-                    user_ai_service=user_ai_service,
-                    user_id=user_id,
-                    enable_mcp=data.get("enable_mcp", True),
-                    tracker=tracker
-                )
-                if org_check_result["created_count"] > 0:
-                    created_names = [c.name for c in org_check_result["created_organizations"]]
-                    yield await tracker.saving(
-                        f"🏛️ 第{str(batch_num + 1)}批：自动创建了 {org_check_result['created_count']} 个组织: {', '.join(created_names)}",
-                        (batch_num + 1) / total_batches * 0.55
+                    if char_check_result["created_count"] > 0:
+                        created_names = [c.name for c in char_check_result["created_characters"]]
+                        yield await tracker.saving(
+                            f"?? ?{str(batch_num + 1)}??????? {char_check_result['created_count']} ???: {', '.join(created_names)}",
+                            (batch_num + 1) / total_batches * 0.5
+                        )
+                        # ???????????????
+                        characters.extend(char_check_result["created_characters"])
+                except Exception as e:
+                    logger.error(f"?? ?{batch_num + 1}???????????????: {e}")
+                
+                # ??? ???????????structure??characters?type=organization?????????
+                try:
+                    org_check_result = await _check_and_create_missing_organizations_from_outlines(
+                        outline_data=outline_data,
+                        project_id=project_id,
+                        db=db,
+                        user_ai_service=user_ai_service,
+                        user_id=user_id,
+                        enable_mcp=enable_mcp,
+                        tracker=tracker
                     )
-                    # 更新角色列表（组织也是Character，供后续批次使用）
-                    characters.extend(org_check_result["created_organizations"])
-                    characters_info = _build_characters_info(characters)
-            except Exception as e:
-                logger.error(f"⚠️ 第{batch_num + 1}批组织校验失败（不影响主流程）: {e}")
+                    if org_check_result["created_count"] > 0:
+                        created_names = [c.name for c in org_check_result["created_organizations"]]
+                        yield await tracker.saving(
+                            f"??? ?{str(batch_num + 1)}??????? {org_check_result['created_count']} ???: {', '.join(created_names)}",
+                            (batch_num + 1) / total_batches * 0.55
+                        )
+                        # ???????????Character?????????
+                        characters.extend(org_check_result["created_organizations"])
+                except Exception as e:
+                    logger.error(f"?? ?{batch_num + 1}???????????????: {e}")
             
-            # 记录历史
             history = GenerationHistory(
                 project_id=project_id,
                 prompt=f"[续写批次{batch_num + 1}/{total_batches}] {str(prompt)[:500]}",
@@ -2038,6 +2676,20 @@ async def continue_outline_generator(
             
             for outline in batch_outlines:
                 await db.refresh(outline)
+            latest_outlines.extend(batch_outlines)
+            
+            if defer_postprocess_for_batch:
+                _schedule_outline_postprocess_background(
+                    outline_data=outline_data,
+                    project_id=project_id,
+                    user_ai_service=user_ai_service,
+                    user_id=user_id,
+                    enable_mcp=enable_mcp,
+                )
+                yield await tracker.saving(
+                    f"?? ?{str(batch_num + 1)}???/????????????????",
+                    min((batch_num + 1) / total_batches * 0.6, 0.95)
+                )
             
             all_new_outlines.extend(batch_outlines)
             current_start_chapter += current_batch_size

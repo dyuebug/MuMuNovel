@@ -1,7 +1,7 @@
 """章节上下文构建服务 - 实现RTCO框架的智能上下文构建"""
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Sequence
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import json
@@ -108,6 +108,334 @@ def _merge_reference_blocks(*blocks: Optional[str]) -> Optional[str]:
         seen.add(text)
         merged.append(text)
     return "\n\n".join(merged) if merged else None
+
+
+def _split_context_blocks(text: Optional[str]) -> List[List[str]]:
+    blocks: List[List[str]] = []
+    current: List[str] = []
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            if current:
+                blocks.append(current)
+                current = []
+            continue
+        current.append(line)
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def _compact_recent_chapters_context(
+    text: Optional[str],
+    *,
+    max_chapters: int = 4,
+    max_length: int = 960,
+    line_preview_length: int = 180,
+) -> Optional[str]:
+    lines = [str(line or "").strip() for line in str(text or "").splitlines() if str(line or "").strip()]
+    if not lines:
+        return None
+
+    header = lines[0] if lines[0].startswith("\u3010") else "\u3010\u6700\u8fd1\u7ae0\u8282\u89c4\u5212\u3011"
+    chapter_lines = lines[1:] if lines[0].startswith("\u3010") else lines
+    if len(chapter_lines) > max_chapters:
+        chapter_lines = chapter_lines[-max_chapters:]
+
+    compact_lines = [header]
+    compact_lines.extend(
+        _preview_text(line, max_length=line_preview_length)
+        for line in chapter_lines
+        if line
+    )
+    result = "\n".join(line for line in compact_lines if line)
+    return _preview_text(result, max_length=max_length) if result else None
+
+
+def _compact_bulleted_reference_block(
+    text: Optional[str],
+    *,
+    max_items: int,
+    max_length: int,
+    detail_lines_per_item: int = 2,
+    line_preview_length: int = 96,
+) -> Optional[str]:
+    lines = [raw_line.rstrip() for raw_line in str(text or "").splitlines()]
+    if not lines:
+        return None
+
+    header_lines: List[str] = []
+    items: List[List[str]] = []
+    current_item: List[str] = []
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("\u3010"):
+            if current_item:
+                items.append(current_item)
+                current_item = []
+            if line not in header_lines:
+                header_lines.append(line)
+            continue
+        if line.startswith("- "):
+            if current_item:
+                items.append(current_item)
+            current_item = [line]
+            continue
+        if current_item:
+            current_item.append(line)
+        elif header_lines:
+            current_item = [line]
+        else:
+            header_lines.append(line)
+    if current_item:
+        items.append(current_item)
+
+    selected_lines: List[str] = list(header_lines)
+    for item in items[:max_items]:
+        selected_lines.append(_preview_text(item[0], max_length=line_preview_length))
+        for detail in item[1:1 + detail_lines_per_item]:
+            selected_lines.append(_preview_text(detail, max_length=line_preview_length))
+
+    result = "\n".join(line for line in selected_lines if line)
+    return _preview_text(result, max_length=max_length) if result else None
+
+
+def _compact_entity_context(
+    text: Optional[str],
+    *,
+    max_blocks: int,
+    max_length: int,
+    max_lines_per_block: int = 6,
+    line_preview_length: int = 96,
+    preferred_prefixes: Optional[Sequence[str]] = None,
+    priority_names: Optional[Sequence[str]] = None,
+) -> Optional[str]:
+    blocks = _split_context_blocks(text)
+    if not blocks:
+        return None
+
+    normalized_priority_names = [
+        str(name or "").strip().lower()
+        for name in (priority_names or [])
+        if str(name or "").strip()
+    ]
+    ordered_blocks = blocks
+    if normalized_priority_names:
+        indexed_blocks = list(enumerate(blocks))
+        indexed_blocks.sort(
+            key=lambda item: (
+                0 if any(name in item[1][0].lower() for name in normalized_priority_names) else 1,
+                item[0],
+            )
+        )
+        ordered_blocks = [block for _, block in indexed_blocks]
+
+    compact_blocks: List[str] = []
+    active_prefixes = tuple(prefix.strip() for prefix in (preferred_prefixes or ()) if prefix)
+    for block in ordered_blocks[:max_blocks]:
+        header = _preview_text(block[0].strip(), max_length=line_preview_length)
+        detail_lines = [line.strip() for line in block[1:] if line.strip()]
+        selected_details: List[str] = []
+        seen_lines: set[str] = set()
+
+        for prefix in active_prefixes:
+            for line in detail_lines:
+                if line in seen_lines or not line.startswith(prefix):
+                    continue
+                selected_details.append(_preview_text(line, max_length=line_preview_length))
+                seen_lines.add(line)
+                if len(selected_details) >= max_lines_per_block - 1:
+                    break
+            if len(selected_details) >= max_lines_per_block - 1:
+                break
+
+        if len(selected_details) < max_lines_per_block - 1:
+            for line in detail_lines:
+                if line in seen_lines:
+                    continue
+                selected_details.append(_preview_text(line, max_length=line_preview_length))
+                seen_lines.add(line)
+                if len(selected_details) >= max_lines_per_block - 1:
+                    break
+
+        compact_block_lines = [header]
+        compact_block_lines.extend(selected_details)
+        compact_blocks.append("\n".join(line for line in compact_block_lines if line))
+
+    result = "\n\n".join(block for block in compact_blocks if block)
+    return _preview_text(result, max_length=max_length) if result else None
+
+
+def _compact_tail_text(text: Optional[str], *, max_length: int) -> Optional[str]:
+    value = str(text or "").strip()
+    if not value:
+        return None
+    if len(value) <= max_length:
+        return value
+    return value[-max_length:]
+
+
+def _resolve_context_compaction_profile(target_word_count: int, mode: str) -> Dict[str, int]:
+    resolved_target = max(int(target_word_count or 3000), 1200)
+    if mode == "one-to-one":
+        total_limit = max(3600, min(5200, int(resolved_target * 1.55)))
+        return {
+            "total": total_limit,
+            "chapter_characters": 1280,
+            "chapter_careers": 560,
+            "foreshadow_reminders": 420,
+            "relevant_memories": 760,
+            "character_arc_snapshot": 520,
+            "continuation_point": 420,
+            "previous_chapter_summary": 220,
+            "reference_items": 5,
+            "recent_chapters_context": 0,
+            "recent_chapters_count": 0,
+        }
+
+    total_limit = max(4800, min(6800, int(resolved_target * 1.85)))
+    return {
+        "total": total_limit,
+        "chapter_characters": 1500,
+        "chapter_careers": 720,
+        "foreshadow_reminders": 520,
+        "relevant_memories": 860,
+        "character_arc_snapshot": 560,
+        "continuation_point": 420,
+        "previous_chapter_summary": 220,
+        "reference_items": 6,
+        "recent_chapters_context": 960,
+        "recent_chapters_count": 4,
+    }
+
+
+def _compact_generation_context(
+    context: Any,
+    *,
+    mode: str,
+    target_word_count: int,
+    priority_names: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    profile = _resolve_context_compaction_profile(target_word_count, mode)
+    before_total = context.get_total_context_length()
+
+    oversized_fields = {
+        field_name: len(str(getattr(context, field_name) or ""))
+        for field_name in profile.keys()
+        if field_name not in {"total", "reference_items", "recent_chapters_count"}
+        and len(str(getattr(context, field_name, None) or "")) > profile[field_name]
+    }
+    if before_total <= profile["total"] and not oversized_fields:
+        return {
+            "applied": False,
+            "before": before_total,
+            "after": before_total,
+            "limit": profile["total"],
+            "details": {},
+        }
+
+    details: Dict[str, Dict[str, int]] = {}
+
+    def maybe_replace(field_name: str, new_value: Optional[str]) -> None:
+        current_value = str(getattr(context, field_name, None) or "")
+        candidate = str(new_value or "").strip()
+        if not current_value or not candidate or len(candidate) >= len(current_value):
+            return
+        setattr(context, field_name, candidate)
+        details[field_name] = {
+            "before": len(current_value),
+            "after": len(candidate),
+        }
+
+    if profile["recent_chapters_context"]:
+        maybe_replace(
+            "recent_chapters_context",
+            _compact_recent_chapters_context(
+                getattr(context, "recent_chapters_context", None),
+                max_chapters=profile["recent_chapters_count"],
+                max_length=profile["recent_chapters_context"],
+            ),
+        )
+    maybe_replace(
+        "chapter_careers",
+        _compact_entity_context(
+            getattr(context, "chapter_careers", None),
+            max_blocks=3,
+            max_length=profile["chapter_careers"],
+            max_lines_per_block=6,
+            line_preview_length=92,
+            preferred_prefixes=("??:", "??:", "????:", "????:", "?????:", "????:"),
+        ),
+    )
+    maybe_replace(
+        "foreshadow_reminders",
+        _compact_bulleted_reference_block(
+            getattr(context, "foreshadow_reminders", None),
+            max_items=profile["reference_items"],
+            max_length=profile["foreshadow_reminders"],
+            detail_lines_per_item=2,
+            line_preview_length=92,
+        ),
+    )
+    maybe_replace(
+        "relevant_memories",
+        _compact_bulleted_reference_block(
+            getattr(context, "relevant_memories", None),
+            max_items=profile["reference_items"],
+            max_length=profile["relevant_memories"],
+            detail_lines_per_item=1,
+            line_preview_length=92,
+        ),
+    )
+    maybe_replace(
+        "continuation_point",
+        _compact_tail_text(
+            getattr(context, "continuation_point", None),
+            max_length=profile["continuation_point"],
+        ),
+    )
+    maybe_replace(
+        "previous_chapter_summary",
+        _preview_text(
+            getattr(context, "previous_chapter_summary", None),
+            max_length=profile["previous_chapter_summary"],
+        ),
+    )
+
+    if context.get_total_context_length() > profile["total"]:
+        maybe_replace(
+            "chapter_characters",
+            _compact_entity_context(
+                getattr(context, "chapter_characters", None),
+                max_blocks=6,
+                max_length=profile["chapter_characters"],
+                max_lines_per_block=6,
+                line_preview_length=92,
+                preferred_prefixes=("????", "????", "????", "????", "???", "???", "??", "??"),
+                priority_names=priority_names,
+            ),
+        )
+        maybe_replace(
+            "character_arc_snapshot",
+            _compact_bulleted_reference_block(
+                getattr(context, "character_arc_snapshot", None),
+                max_items=max(3, profile["reference_items"] - 2),
+                max_length=profile["character_arc_snapshot"],
+                detail_lines_per_item=1,
+                line_preview_length=88,
+            ),
+        )
+
+    after_total = context.get_total_context_length()
+    return {
+        "applied": after_total < before_total,
+        "before": before_total,
+        "after": after_total,
+        "limit": profile["total"],
+        "details": details,
+    }
 
 
 def _extract_query_focus_lines(
@@ -399,6 +727,82 @@ def build_character_arc_snapshot(
         return None
 
     return "【角色弧光快照】\n" + "\n".join(lines)
+
+
+def _load_outline_structure_characters(outline: Optional[Outline]) -> List[Any]:
+    structure_text = getattr(outline, "structure", None)
+    if not isinstance(structure_text, str) or not structure_text.strip():
+        return []
+
+    try:
+        structure = json.loads(structure_text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+
+    raw_characters = structure.get("characters") if isinstance(structure, dict) else None
+    return raw_characters if isinstance(raw_characters, list) else []
+
+
+def _extract_outline_structure_entity_names(outline: Optional[Outline]) -> List[str]:
+    names: List[str] = []
+    for item in _load_outline_structure_characters(outline):
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+        else:
+            name = str(item or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _build_outline_structure_character_fallback(
+    outline: Optional[Outline],
+    filter_character_names: Optional[List[str]] = None,
+) -> str:
+    raw_characters = _load_outline_structure_characters(outline)
+    if not raw_characters:
+        return "暂无角色/组织信息"
+
+    allowed_names = {str(name).strip() for name in (filter_character_names or []) if str(name).strip()}
+    lines = ["角色/组织参考："]
+
+    for item in raw_characters[:10]:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            item_type = str(item.get("type") or "character").strip().lower()
+            role = str(item.get("role") or item.get("role_type") or "").strip()
+            summary = _preview_text(
+                item.get("summary")
+                or item.get("description")
+                or item.get("background")
+                or item.get("goal")
+                or item.get("current_state"),
+                max_length=72,
+            )
+        else:
+            name = str(item).strip()
+            item_type = "character"
+            role = ""
+            summary = ""
+
+        if not name:
+            continue
+        if allowed_names and name not in allowed_names:
+            continue
+
+        entity_label = "组织" if item_type == "organization" else "角色"
+        details = []
+        if role:
+            details.append(f"定位={role}")
+        if summary:
+            details.append(summary)
+
+        line = f"- {entity_label}：{name}"
+        if details:
+            line += "｜" + "｜".join(details)
+        lines.append(line)
+
+    return "\n".join(lines) if len(lines) > 1 else "暂无角色/组织信息"
 
 
 def _to_brief_lines(value: Any, max_items: int = 5) -> List[str]:
@@ -804,8 +1208,20 @@ class OneToManyContextBuilder:
             context.relevant_memories,
             context.character_arc_snapshot,
         )
-        logger.info(f"  ✅ P2-相关记忆: {len(context.relevant_memories or '')}字符")
-        # === 统计信息 ===
+        logger.info(f"  [P2 memories] {len(context.relevant_memories or '')} chars")
+
+        compaction_result = _compact_generation_context(
+            context,
+            mode="one-to-many",
+            target_word_count=target_word_count,
+            priority_names=focus_character_names,
+        )
+        if compaction_result["applied"]:
+            logger.info(
+                f"[1-N compact] context trimmed: {compaction_result['before']} -> {compaction_result['after']} chars, "
+                f"details: {compaction_result['details']}"
+            )
+        # === context stats ===
         context.context_stats = {
             "mode": "one-to-many",
             "chapter_number": chapter_number,
@@ -819,10 +1235,14 @@ class OneToManyContextBuilder:
             "memory_query_preview": _preview_text(memory_query_text, max_length=120) if memory_query_text else None,
             "memories_length": len(context.relevant_memories or ""),
             "foreshadow_length": len(context.foreshadow_reminders or ""),
+            "pre_compaction_total_length": compaction_result["before"],
+            "context_budget_limit": compaction_result["limit"],
+            "compaction_applied": compaction_result["applied"],
+            "compaction_details": compaction_result["details"],
             "total_length": context.get_total_context_length()
         }
         
-        logger.info(f"📊 [1-N模式] 上下文构建完成: 总长度 {context.context_stats['total_length']} 字符")
+        logger.info(f"[1-N context] total length: {context.context_stats['total_length']} chars")
         
         return context
 
@@ -932,31 +1352,53 @@ class OneToManyContextBuilder:
         """构建1-N模式的角色信息（完整版：含年龄、外貌、背景、关系、组织、职业）+ 独立职业详情"""
         from sqlalchemy import or_
         
-        # 获取所有角色
+        # Query all characters
         characters_result = await db.execute(
             select(Character).where(Character.project_id == project.id)
         )
         all_characters = characters_result.scalars().all()
-        
+
+        explicit_filter_names = [
+            str(name).strip()
+            for name in (filter_character_names or [])
+            if str(name).strip()
+        ]
+        outline_entity_names = _extract_outline_structure_entity_names(outline)
+        outline_fallback_names = explicit_filter_names or outline_entity_names or None
+
         if not all_characters:
-            return "暂无角色信息", None
-        
-        # 构建全局角色名称映射（用于关系查询）
+            outline_fallback = _build_outline_structure_character_fallback(
+                outline,
+                filter_character_names=outline_fallback_names,
+            )
+            return outline_fallback, None
+
+        # Build character id/name map for relationship lookup
         all_char_map = {c.id: c.name for c in all_characters}
-        
-        # 从章节扩写计划中抽取角色焦点，作为 expansion_plan 的兜底输入
+
+        # Fallback to expansion-plan focus names when no explicit filter is provided
         if filter_character_names is None:
             filter_character_names = self._extract_character_focus_names_from_expansion_plan(chapter)
-        
-        # 筛选角色
+
+        normalized_filter_names = [
+            str(name).strip()
+            for name in (filter_character_names or [])
+            if str(name).strip()
+        ]
+
+        # Filter relevant characters
         characters = all_characters
-        if filter_character_names:
-            characters = [c for c in all_characters if c.name in filter_character_names]
-        
+        if normalized_filter_names:
+            characters = [c for c in all_characters if c.name in normalized_filter_names]
+
         if not characters:
-            return "暂无相关角色", None
-        
-        # 限制最多10个角色
+            outline_fallback = _build_outline_structure_character_fallback(
+                outline,
+                filter_character_names=outline_fallback_names or normalized_filter_names or None,
+            )
+            return outline_fallback if outline_fallback != "暂无角色信息" else "暂无相关角色", None
+
+        # Limit to at most 10 characters
         characters = characters[:10]
         character_ids = [c.id for c in characters]
         
@@ -1157,6 +1599,23 @@ class OneToManyContextBuilder:
             characters_info_parts.append("\n".join(info_lines))
         
         characters_result_str = "\n\n".join(characters_info_parts)
+        represented_names = {c.name for c in characters if getattr(c, "name", None)}
+        missing_outline_names = [
+            name
+            for name in (outline_fallback_names or [])
+            if name not in represented_names
+        ]
+        if missing_outline_names:
+            outline_fallback = _build_outline_structure_character_fallback(
+                outline,
+                filter_character_names=missing_outline_names,
+            )
+            if outline_fallback != "暂无角色信息":
+                characters_result_str = (
+                    f"{characters_result_str}\n\n{outline_fallback}"
+                    if characters_result_str
+                    else outline_fallback
+                )
         logger.info(f"  ✅ [1-N完整版] 构建了 {len(characters_info_parts)} 个角色信息，总长度: {len(characters_result_str)} 字符")
         
         # === 构建独立职业详情 ===
@@ -1632,6 +2091,24 @@ class OneToOneContextBuilder:
         """
         self.memory_service = memory_service
         self.foreshadow_service = foreshadow_service
+
+    async def _get_character_arc_snapshot(
+        self,
+        project_id: str,
+        chapter_number: int,
+        db: AsyncSession,
+        filter_character_names: Optional[List[str]] = None,
+    ) -> Optional[str]:
+        shared_builder = OneToManyContextBuilder(
+            memory_service=self.memory_service,
+            foreshadow_service=self.foreshadow_service,
+        )
+        return await shared_builder._get_character_arc_snapshot(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            db=db,
+            filter_character_names=filter_character_names,
+        )
     
     async def _get_relevant_memories_enhanced(
         self,
@@ -1771,16 +2248,16 @@ class OneToOneContextBuilder:
                 pass
         
         if character_names:
-            # 获取角色基本信息
+            # ????????
             characters_result = await db.execute(
                 select(Character)
                 .where(Character.project_id == project.id)
                 .where(Character.name.in_(character_names))
             )
             characters = characters_result.scalars().all()
-            
+
             if characters:
-                # 复用 1-N 的角色详情构建逻辑，保证 1-1 输出结构一致
+                # ?? 1-N ???????????? 1-1 ??????
                 shared_character_builder = OneToManyContextBuilder(
                     memory_service=self.memory_service,
                     foreshadow_service=self.foreshadow_service,
@@ -1797,13 +2274,16 @@ class OneToOneContextBuilder:
                 logger.info(f"  ✅ P1-角色信息: {len(context.chapter_characters)}字符")
                 logger.info(f"  ✅ P1-职业信息: {len(context.chapter_careers or '')}字符")
             else:
-                context.chapter_characters = "暂无角色信息"
+                context.chapter_characters = _build_outline_structure_character_fallback(
+                    outline,
+                    filter_character_names=character_names,
+                )
                 context.chapter_careers = None
-                logger.info(f"  ⚠️ P1-角色信息: 筛选后无匹配角色")
+                logger.info(f"  ⚠️ P1-角色信息: 数据库未命中，回退到大纲结构，长度 {len(context.chapter_characters)}字符")
         else:
-            context.chapter_characters = "暂无角色信息"
+            context.chapter_characters = _build_outline_structure_character_fallback(outline)
             context.chapter_careers = None
-            logger.info(f"  ⚠️ P1-角色信息: 无")
+            logger.info(f"  ⚠️ P1-角色信息: 使用大纲回退，长度 {len(context.chapter_characters)}字符")
 
         context.character_arc_snapshot = await self._get_character_arc_snapshot(
             project_id=project.id,
@@ -1859,8 +2339,20 @@ class OneToOneContextBuilder:
             context.relevant_memories,
             context.character_arc_snapshot,
         )
+
+        compaction_result = _compact_generation_context(
+            context,
+            mode="one-to-one",
+            target_word_count=target_word_count,
+            priority_names=character_names,
+        )
+        if compaction_result["applied"]:
+            logger.info(
+                f"[1-1 compact] context trimmed: {compaction_result['before']} -> {compaction_result['after']} chars, "
+                f"details: {compaction_result['details']}"
+            )
         
-        # === 统计信息 ===
+        # === context stats ===
         context.context_stats = {
             "mode": "one-to-one",
             "chapter_number": chapter_number,
@@ -1875,10 +2367,14 @@ class OneToOneContextBuilder:
             "memory_query_length": len(memory_query_text or ""),
             "memory_query_preview": _preview_text(memory_query_text, max_length=120) if memory_query_text else None,
             "memories_length": len(context.relevant_memories or ""),
+            "pre_compaction_total_length": compaction_result["before"],
+            "context_budget_limit": compaction_result["limit"],
+            "compaction_applied": compaction_result["applied"],
+            "compaction_details": compaction_result["details"],
             "total_length": context.get_total_context_length()
         }
         
-        logger.info(f"📊 [1-1模式] 上下文构建完成: 总长度 {context.context_stats['total_length']} 字符")
+        logger.info(f"[1-1 context] total length: {context.context_stats['total_length']} chars")
         
         return context
     

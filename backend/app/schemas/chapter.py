@@ -286,7 +286,7 @@ class BatchGenerateResponse(BaseModel):
 
 
 class BatchGenerateStatusResponse(BaseModel):
-    """批量生成状态响应模型"""
+    """??????????"""
     batch_id: str
     status: str
     total: int
@@ -295,7 +295,7 @@ class BatchGenerateStatusResponse(BaseModel):
     current_chapter_number: Optional[int] = None
     current_retry_count: Optional[int] = None
     max_retries: Optional[int] = None
-    failed_chapters: list[dict] = []
+    failed_chapters: list[dict] = Field(default_factory=list)
     created_at: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
@@ -306,7 +306,10 @@ class BatchGenerateStatusResponse(BaseModel):
     latest_quality_metrics: Optional[ChapterLatestQualityMetrics] = None
     quality_metrics_summary: Optional[ChapterQualityMetricsSummary] = None
     active_story_repair_payload: Optional[ActiveStoryRepairPayload] = None
-
+    terminal_reason: Optional[str] = None
+    terminal_label: Optional[str] = None
+    review_required: bool = False
+    can_resume: bool = False
 
 class SceneData(BaseModel):
     """场景数据模型"""

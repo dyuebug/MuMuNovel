@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 from pathlib import Path
 from pydantic import BaseModel
 from datetime import datetime
+import hashlib
 import httpx
 import json
 import time
@@ -23,6 +24,7 @@ from app.user_manager import User
 from app.logger import get_logger
 from app.config import settings as app_settings, PROJECT_ROOT
 from app.services.ai_service import AIService, create_user_ai_service, create_user_ai_service_with_mcp
+from app.services.ai_config import AIClientConfig, HTTPClientConfig, RetryConfig, RateLimitConfig
 from app.services.chapter_web_research_service import chapter_web_research_service
 
 logger = get_logger(__name__)
@@ -47,6 +49,126 @@ WEB_RESEARCH_DEFAULTS = {
     "web_research_grok_base_url": "",
     "web_research_grok_model": "grok-4.1-fast",
 }
+
+
+PROBE_CACHE_TTL_SECONDS = 90
+DEFAULT_PROBE_READ_TIMEOUT_SECONDS = 10.0
+_probe_result_cache: Dict[str, Dict[str, Any]] = {}
+RESPONSES_TEXT_PROBE_PROVIDERS = {'sub2api', 'openai_responses'}
+OPENAI_COMPATIBLE_V1_PROBE_PROVIDERS = {'openai', 'openai_responses', 'newapi', 'custom', 'sub2api'}
+
+
+def clear_probe_result_cache() -> None:
+    _probe_result_cache.clear()
+
+
+def _hash_probe_secret(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def _build_probe_cache_key(
+    probe_kind: str,
+    *,
+    api_key: str,
+    api_base_url: str,
+    provider: str,
+    llm_model: str,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    backup_urls: Optional[List[str]] = None,
+    fallback_strategy: Optional[str] = None,
+) -> str:
+    payload = {
+        "kind": probe_kind,
+        "api_key_hash": _hash_probe_secret(api_key),
+        "api_base_url": str(api_base_url or "").strip().rstrip("/"),
+        "provider": str(provider or "").strip().lower(),
+        "llm_model": str(llm_model or "").strip(),
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "backup_urls": [str(url or "").strip().rstrip("/") for url in (backup_urls or []) if str(url or "").strip()],
+        "fallback_strategy": str(fallback_strategy or "auto").strip().lower() or "auto",
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _clone_probe_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    return json.loads(json.dumps(result, ensure_ascii=False))
+
+
+def _mark_probe_result_cached(result: Dict[str, Any], age_seconds: float) -> Dict[str, Any]:
+    cloned = _clone_probe_result(result)
+    cloned["cached"] = True
+    cloned["cache_age_ms"] = round(max(age_seconds, 0.0) * 1000, 2)
+    details = cloned.get("details")
+    if isinstance(details, dict):
+        details["cached"] = True
+        details["cache_age_ms"] = cloned["cache_age_ms"]
+    return cloned
+
+
+def _get_cached_probe_result(cache_key: str) -> Optional[Dict[str, Any]]:
+    record = _probe_result_cache.get(cache_key)
+    if not isinstance(record, dict):
+        return None
+    cached_at = float(record.get("cached_at") or 0.0)
+    age_seconds = time.time() - cached_at
+    if age_seconds > PROBE_CACHE_TTL_SECONDS:
+        _probe_result_cache.pop(cache_key, None)
+        return None
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
+        _probe_result_cache.pop(cache_key, None)
+        return None
+    return _mark_probe_result_cached(payload, age_seconds)
+
+
+def _should_cache_probe_result(payload: Dict[str, Any]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    if payload.get("success") is True:
+        return True
+
+    if payload.get("supported") is None:
+        return False
+
+    error_type = str(payload.get("error_type") or "").strip()
+    http_status_raw = payload.get("http_status")
+    try:
+        http_status = int(http_status_raw) if http_status_raw is not None else None
+    except (TypeError, ValueError):
+        http_status = None
+
+    if error_type in {"TimeoutError", "ReadTimeout", "ConnectTimeout", "PoolTimeout"}:
+        return False
+
+    if error_type == "HTTPStatusError" and http_status in {429}:
+        return False
+
+    if error_type == "HTTPStatusError" and http_status is not None and http_status >= 500:
+        return False
+
+    return True
+
+
+def _store_probe_result(cache_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    cloned = _clone_probe_result(payload)
+    cloned["cached"] = False
+    details = cloned.get("details")
+    if isinstance(details, dict):
+        details.setdefault("cached", False)
+
+    if _should_cache_probe_result(cloned):
+        _probe_result_cache[cache_key] = {"cached_at": time.time(), "payload": cloned}
+    else:
+        _probe_result_cache.pop(cache_key, None)
+
+    return _clone_probe_result(cloned)
 
 
 def normalize_env_api_key(api_key: Optional[str]) -> str:
@@ -76,6 +198,128 @@ def read_env_defaults() -> Dict[str, Any]:
         "temperature": app_settings.default_temperature,
         "max_tokens": app_settings.default_max_tokens,
     }
+
+
+def _should_route_probe_via_chat_completions(provider: str, api_base_url: str) -> bool:
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_base_url = str(api_base_url or "").strip().rstrip("/")
+    return bool(normalized_base_url) and normalized_provider in OPENAI_COMPATIBLE_V1_PROBE_PROVIDERS
+
+
+def _should_prefer_normalized_v1_probe_candidate(provider: str, api_base_url: str) -> bool:
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_base_url = str(api_base_url or "").strip().rstrip("/")
+    return (
+        bool(normalized_base_url)
+        and normalized_provider in OPENAI_COMPATIBLE_V1_PROBE_PROVIDERS
+        and not normalized_base_url.endswith("/v1")
+    )
+
+
+def _build_api_connection_probe_request_options(provider: str, api_base_url: str) -> Optional[Dict[str, Any]]:
+    request_options: Dict[str, Any] = {
+        "transport_max_retries": 1,
+        "read_timeout": DEFAULT_PROBE_READ_TIMEOUT_SECONDS,
+    }
+    if _should_route_probe_via_chat_completions(provider, api_base_url):
+        request_options["prefer_chat_completions"] = True
+    if _should_prefer_normalized_v1_probe_candidate(provider, api_base_url):
+        request_options["prefer_normalized_v1_candidate"] = True
+    return request_options
+
+
+def _build_function_calling_probe_request_options(provider: str, api_base_url: str) -> Optional[Dict[str, Any]]:
+    request_options: Dict[str, Any] = {
+        "transport_max_retries": 1,
+        "read_timeout": DEFAULT_PROBE_READ_TIMEOUT_SECONDS,
+    }
+    if _should_route_probe_via_chat_completions(provider, api_base_url):
+        request_options["prefer_chat_completions"] = True
+    if _should_prefer_normalized_v1_probe_candidate(provider, api_base_url):
+        request_options["prefer_normalized_v1_candidate"] = True
+    return request_options
+
+
+def build_probe_ai_config() -> AIClientConfig:
+    """Build a lightweight client config for fast settings probes."""
+    return AIClientConfig(
+        http=HTTPClientConfig(
+            connect_timeout=8.0,
+            read_timeout=20.0,
+            write_timeout=8.0,
+            pool_timeout=8.0,
+            max_keepalive_connections=10,
+            max_connections=20,
+            keepalive_expiry=30.0,
+        ),
+        retry=RetryConfig(
+            max_retries=1,
+            base_delay=0.1,
+            max_delay=0.5,
+            exponential_base=2,
+        ),
+        rate_limit=RateLimitConfig(
+            max_concurrent_requests=1,
+            request_delay=0.0,
+        ),
+    )
+
+
+def _normalize_probe_backup_urls(value: Optional[List[str]]) -> List[str]:
+    normalized_urls: List[str] = []
+    for item in value or []:
+        normalized = str(item or "").strip().rstrip("/")
+        if normalized and normalized not in normalized_urls:
+            normalized_urls.append(normalized)
+    return normalized_urls
+
+
+def _build_probe_endpoint_diagnostics(
+    *,
+    api_base_url: str,
+    backup_urls: Optional[List[str]],
+    fallback_strategy: Optional[str],
+) -> Dict[str, Any]:
+    normalized_primary = str(api_base_url or "").strip().rstrip("/")
+    normalized_backups = _normalize_probe_backup_urls(backup_urls)
+    normalized_strategy = str(fallback_strategy or "auto").strip().lower() or "auto"
+    return {
+        "primary_endpoint": normalized_primary,
+        "backup_endpoints": normalized_backups,
+        "configured_endpoint_count": (1 if normalized_primary else 0) + len(normalized_backups),
+        "fallback_strategy": normalized_strategy,
+        "auto_failover_enabled": normalized_strategy == "auto" and bool(normalized_backups),
+    }
+
+
+def _extract_probe_transport_diagnostics(service: Optional[Any], provider: str) -> Optional[Dict[str, Any]]:
+    if service is None or not hasattr(service, "get_transport_diagnostics"):
+        return None
+    try:
+        diagnostics = service.get_transport_diagnostics(provider)
+    except Exception as exc:
+        logger.warning("Failed to collect probe transport diagnostics for provider %s: %s", provider, exc)
+        return None
+    return diagnostics if isinstance(diagnostics, dict) and diagnostics else None
+
+
+def _build_probe_details(
+    *,
+    api_base_url: str,
+    backup_urls: Optional[List[str]],
+    fallback_strategy: Optional[str],
+    transport_diagnostics: Optional[Dict[str, Any]] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    details = dict(extra or {})
+    details["endpoint_diagnostics"] = _build_probe_endpoint_diagnostics(
+        api_base_url=api_base_url,
+        backup_urls=backup_urls,
+        fallback_strategy=fallback_strategy,
+    )
+    if transport_diagnostics:
+        details["transport_diagnostics"] = transport_diagnostics
+    return details
 
 
 def build_default_web_research_settings() -> Dict[str, Any]:
@@ -590,6 +834,8 @@ class ApiTestRequest(BaseModel):
     llm_model: str
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
+    api_backup_urls: Optional[List[str]] = None
+    fallback_strategy: Optional[str] = "auto"
 
 
 class WebResearchTestRequest(BaseModel):
@@ -624,6 +870,21 @@ async def check_function_calling_support(data: ApiTestRequest):
     api_base_url = data.api_base_url
     provider = data.provider
     llm_model = data.llm_model
+    api_backup_urls = _normalize_probe_backup_urls(data.api_backup_urls)
+    fallback_strategy = str(data.fallback_strategy or "auto").strip().lower() or "auto"
+    cache_key = _build_probe_cache_key(
+        "function_calling",
+        api_key=api_key,
+        api_base_url=api_base_url,
+        provider=provider,
+        llm_model=llm_model,
+        backup_urls=api_backup_urls,
+        fallback_strategy=fallback_strategy,
+    )
+    cached_result = _get_cached_probe_result(cache_key)
+    if cached_result is not None:
+        logger.info("Using cached function-calling probe result")
+        return cached_result
     
     try:
         start_time = time.time()
@@ -652,34 +913,46 @@ async def check_function_calling_support(data: ApiTestRequest):
             }
         }]
         
-        # 测试提示：故意设计一个需要调用工具的问题
-        test_prompt = "请告诉我北京现在的天气情况如何？"
+        # Force a tool call instead of allowing a plain-text fallback.
+        test_prompt = (
+            "Do not explain or answer directly. "
+            "Call the get_weather tool immediately for city=Beijing "
+            "and unit=celsius."
+        )
         
-        logger.info(f"🧪 开始检测 Function Calling 支持")
-        logger.info(f"  - 提供商: {provider}")
-        logger.info(f"  - 模型: {llm_model}")
-        logger.info(f"  - 测试工具: get_weather")
+        logger.info("Start Function Calling probe")
+        logger.info(f"  - Provider: {provider}")
+        logger.info(f"  - Model: {llm_model}")
+        logger.info("  - Test Tool: get_weather")
         
-        # 创建临时 AI 服务实例进行测试
+        probe_config = build_probe_ai_config()
+        probe_max_tokens = 64
+        probe_request_options = _build_function_calling_probe_request_options(provider, api_base_url)
+
+        # Build a lightweight AI service for probing
         test_service = AIService(
             api_provider=provider,
             api_key=api_key,
             api_base_url=api_base_url,
             default_model=llm_model,
-            default_temperature=0.3,  # 使用较低温度以获得更确定的行为
-            default_max_tokens=200
+            default_temperature=0.3,
+            default_max_tokens=probe_max_tokens,
+            config=probe_config,
+            backup_urls=api_backup_urls,
+            fallback_strategy=fallback_strategy,
         )
         
-        # 发送带工具的测试请求
+        # Execute the probe with the real tool definition.
         response = await test_service.generate_text(
             prompt=test_prompt,
             provider=provider,
             model=llm_model,
             temperature=0.3,
-            max_tokens=200,
+            max_tokens=probe_max_tokens,
             tools=test_tools,
-            tool_choice="auto",  # 让模型自动决定是否使用工具
-            auto_mcp=False  # 禁用 MCP 自动加载
+            tool_choice="required",
+            auto_mcp=False,
+            request_options=probe_request_options,
         )
         
         end_time = time.time()
@@ -712,22 +985,30 @@ async def check_function_calling_support(data: ApiTestRequest):
         logger.info(f"  - finish_reason: {finish_reason}")
         logger.info(f"  - 支持状态: {'✅ 支持' if supported else '❌ 不支持'}")
         
-        # 构建详细的返回信息
+        transport_diagnostics = _extract_probe_transport_diagnostics(test_service, provider)
+
+        # 构建检测结果
         result = {
             "success": True,
             "supported": supported,
-            "message": "✅ 模型支持 Function Calling" if supported else "❌ 模型不支持 Function Calling",
+            "message": "✅ 支持 Function Calling" if supported else "❌ 不支持 Function Calling",
             "response_time_ms": response_time,
             "provider": provider,
             "model": llm_model,
-            "details": {
-                "finish_reason": finish_reason,
-                "has_tool_calls": bool(tool_calls),
-                "tool_call_count": len(tool_calls) if tool_calls else 0,
-                "test_tool": "get_weather",
-                "test_prompt": test_prompt,
-                "response_type": "tool_calls" if supported else "text"
-            }
+            "details": _build_probe_details(
+                api_base_url=api_base_url,
+                backup_urls=api_backup_urls,
+                fallback_strategy=fallback_strategy,
+                transport_diagnostics=transport_diagnostics,
+                extra={
+                    "finish_reason": finish_reason,
+                    "has_tool_calls": bool(tool_calls),
+                    "tool_call_count": len(tool_calls) if tool_calls else 0,
+                    "test_tool": "get_weather",
+                    "test_prompt": test_prompt,
+                    "response_type": "tool_calls" if supported else "text",
+                },
+            )
         }
         
         # 添加工具调用详情
@@ -747,12 +1028,12 @@ async def check_function_calling_support(data: ApiTestRequest):
                 "说明：模型返回了文本回复而非工具调用，表明不支持该功能"
             ]
         
-        return result
+        return _store_probe_result(cache_key, result)
         
     except ValueError as e:
         error_msg = str(e)
         logger.error(f"❌ Function Calling 检测配置错误: {error_msg}")
-        return {
+        result = {
             "success": False,
             "supported": None,
             "message": "配置错误，暂时无法确认模型能力",
@@ -762,8 +1043,16 @@ async def check_function_calling_support(data: ApiTestRequest):
                 "请检查 API Key 是否正确",
                 "请确认 API Base URL 格式是否正确",
                 "请验证所选提供商与配置是否匹配"
-            ]
+            ],
+            "details": {
+                "endpoint_diagnostics": _build_probe_endpoint_diagnostics(
+                    api_base_url=api_base_url,
+                    backup_urls=api_backup_urls,
+                    fallback_strategy=fallback_strategy,
+                ),
+            },
         }
+        return _store_probe_result(cache_key, result)
 
     except httpx.HTTPStatusError as e:
         error_msg = str(e)
@@ -808,7 +1097,7 @@ async def check_function_calling_support(data: ApiTestRequest):
                 "提示：请求失败时不能直接判定为模型不支持 Function Calling"
             ]
 
-        return {
+        result = {
             "success": False,
             "supported": None,
             "message": message,
@@ -816,12 +1105,20 @@ async def check_function_calling_support(data: ApiTestRequest):
             "error_type": "HTTPStatusError",
             "http_status": status_code,
             "suggestions": suggestions,
+            "details": {
+                "endpoint_diagnostics": _build_probe_endpoint_diagnostics(
+                    api_base_url=api_base_url,
+                    backup_urls=api_backup_urls,
+                    fallback_strategy=fallback_strategy,
+                ),
+            },
         }
+        return _store_probe_result(cache_key, result)
 
     except TimeoutError as e:
         error_msg = str(e)
         logger.error(f"❌ Function Calling 检测超时: {error_msg}")
-        return {
+        result = {
             "success": False,
             "supported": None,
             "message": "检测超时",
@@ -831,8 +1128,16 @@ async def check_function_calling_support(data: ApiTestRequest):
                 "请检查网络连接是否正常",
                 "请确认 API 服务是否可访问",
                 "建议：稍后重试或使用其他网络环境"
-            ]
+            ],
+            "details": {
+                "endpoint_diagnostics": _build_probe_endpoint_diagnostics(
+                    api_base_url=api_base_url,
+                    backup_urls=api_backup_urls,
+                    fallback_strategy=fallback_strategy,
+                ),
+            },
         }
+        return _store_probe_result(cache_key, result)
         
     except Exception as e:
         error_msg = str(e)
@@ -868,182 +1173,240 @@ async def check_function_calling_support(data: ApiTestRequest):
                 "提示：查看详细错误信息以获取更多线索"
             ]
         
-        return {
+        result = {
             "success": False,
             "supported": None,
             "message": "Function Calling 检测失败，暂时无法确认模型能力",
             "error": error_msg,
             "error_type": error_type,
-            "suggestions": suggestions
+            "suggestions": suggestions,
+            "details": {
+                "endpoint_diagnostics": _build_probe_endpoint_diagnostics(
+                    api_base_url=api_base_url,
+                    backup_urls=api_backup_urls,
+                    fallback_strategy=fallback_strategy,
+                ),
+            },
         }
+        return _store_probe_result(cache_key, result)
 
 
 @router.post("/test")
 async def test_api_connection(data: ApiTestRequest):
     """
-    测试 API 连接和配置是否正确
-    
+    Test API connectivity and basic text generation.
+
     Args:
-        data: 包含 API 配置的请求数据（包括 temperature 和 max_tokens）
-    
+        data: API probe payload with optional temperature and max_tokens.
+
     Returns:
-        测试结果包含状态、响应时间和详细信息
+        Probe result including latency, preview, and endpoint diagnostics.
     """
     api_key = data.api_key
     api_base_url = data.api_base_url
     provider = data.provider
     llm_model = data.llm_model
-    # 使用前端传递的参数，如果未传递则使用默认值
+    api_backup_urls = _normalize_probe_backup_urls(data.api_backup_urls)
+    fallback_strategy = str(data.fallback_strategy or "auto").strip().lower() or "auto"
     temperature = data.temperature if data.temperature is not None else 0.7
     max_tokens = data.max_tokens if data.max_tokens is not None else 2000
-    import time
-    
+    probe_max_tokens = min(max_tokens, 64)
+    cache_key = _build_probe_cache_key(
+        "api_connection",
+        api_key=api_key,
+        api_base_url=api_base_url,
+        provider=provider,
+        llm_model=llm_model,
+        temperature=temperature,
+        max_tokens=probe_max_tokens,
+        backup_urls=api_backup_urls,
+        fallback_strategy=fallback_strategy,
+    )
+    cached_result = _get_cached_probe_result(cache_key)
+    if cached_result is not None:
+        logger.info("Using cached API connection probe result")
+        return cached_result
+
+    test_service: Optional[AIService] = None
+
     try:
         start_time = time.time()
-        
-        # 创建临时 AI 服务实例，使用前端传递的参数
+
+        probe_config = build_probe_ai_config()
+
         test_service = AIService(
             api_provider=provider,
             api_key=api_key,
             api_base_url=api_base_url,
             default_model=llm_model,
             default_temperature=temperature,
-            default_max_tokens=max_tokens
+            default_max_tokens=probe_max_tokens,
+            config=probe_config,
+            backup_urls=api_backup_urls,
+            fallback_strategy=fallback_strategy,
         )
-        
-        # 发送简单的测试请求
-        test_prompt = "请用一句话回复：测试成功"
-        
-        logger.info(f"🧪 开始测试 API 连接")
-        logger.info(f"  - 提供商: {provider}")
-        logger.info(f"  - 模型: {llm_model}")
+
+        test_prompt = "Reply with exactly: TEST_OK"
+
+        logger.info("Start API connection probe")
+        logger.info(f"  - Provider: {provider}")
+        logger.info(f"  - Model: {llm_model}")
         logger.info(f"  - Base URL: {api_base_url}")
         logger.info(f"  - Temperature: {temperature}")
         logger.info(f"  - Max Tokens: {max_tokens}")
-        
+        logger.info(f"  - Probe Max Tokens: {probe_max_tokens}")
+
+        probe_request_options = _build_api_connection_probe_request_options(provider, api_base_url)
+
         response = await test_service.generate_text(
             prompt=test_prompt,
             provider=provider,
             model=llm_model,
             temperature=temperature,
-            max_tokens=max_tokens,
-            auto_mcp=False  # 测试时不加载MCP工具
+            max_tokens=probe_max_tokens,
+            auto_mcp=False,
+            request_options=probe_request_options,
         )
-        
+
         end_time = time.time()
-        response_time = round((end_time - start_time) * 1000, 2)  # 转换为毫秒
-        
-        logger.info(f"✅ API 测试成功")
-        logger.info(f"  - 响应时间: {response_time}ms")
-        
-        # 安全地处理响应内容（确保是字符串）
-        response_str = str(response) if response else 'N/A'
-        logger.info(f"  - 响应内容: {response_str[:100]}")
-        
-        return {
+        response_time = round((end_time - start_time) * 1000, 2)
+
+        logger.info(f"API probe succeeded in {response_time}ms")
+
+        response_str = str(response) if response else "N/A"
+        logger.info(f"  - Response preview: {response_str[:100]}")
+
+        transport_diagnostics = _extract_probe_transport_diagnostics(test_service, provider)
+        result = {
             "success": True,
-            "message": "API 连接测试成功",
+            "message": "API connection test succeeded",
             "response_time_ms": response_time,
             "provider": provider,
             "model": llm_model,
             "response_preview": response_str[:100] if len(response_str) > 100 else response_str,
-            "details": {
-                "api_available": True,
-                "model_accessible": True,
-                "response_valid": bool(response),
-                "temperature": temperature,
-                "max_tokens": max_tokens
-            }
+            "details": _build_probe_details(
+                api_base_url=api_base_url,
+                backup_urls=api_backup_urls,
+                fallback_strategy=fallback_strategy,
+                transport_diagnostics=transport_diagnostics,
+                extra={
+                    "api_available": True,
+                    "model_accessible": True,
+                    "response_valid": bool(response),
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "probe_max_tokens": probe_max_tokens,
+                },
+            ),
         }
-        
+        return _store_probe_result(cache_key, result)
+
     except ValueError as e:
-        # 配置错误
         error_msg = str(e)
-        logger.error(f"❌ API 配置错误: {error_msg}")
-        return {
+        logger.error(f"API configuration error: {error_msg}")
+        transport_diagnostics = _extract_probe_transport_diagnostics(test_service, provider)
+        result = {
             "success": False,
-            "message": "API 配置错误",
+            "message": "API configuration error",
             "error": error_msg,
             "error_type": "ConfigurationError",
             "suggestions": [
-                "请检查 API Key 是否正确",
-                "请确认 API Base URL 格式正确",
-                "请验证所选提供商是否匹配"
-            ]
+                "Check whether the API key is correct",
+                "Confirm the API base URL format is valid",
+                "Verify the selected provider matches the current configuration",
+            ],
+            "details": _build_probe_details(
+                api_base_url=api_base_url,
+                backup_urls=api_backup_urls,
+                fallback_strategy=fallback_strategy,
+                transport_diagnostics=transport_diagnostics,
+            ),
         }
-        
+        return _store_probe_result(cache_key, result)
+
     except TimeoutError as e:
-        # 超时错误
         error_msg = str(e)
-        logger.error(f"❌ API 请求超时: {error_msg}")
-        return {
+        logger.error(f"API timeout: {error_msg}")
+        transport_diagnostics = _extract_probe_transport_diagnostics(test_service, provider)
+        result = {
             "success": False,
-            "message": "API 请求超时",
+            "message": "API request timed out",
             "error": error_msg,
             "error_type": "TimeoutError",
             "suggestions": [
-                "请检查网络连接",
-                "请确认 API Base URL 是否可访问",
-                "如果使用代理，请检查代理设置"
-            ]
+                "Check whether the network connection is stable",
+                "Confirm the API base URL is reachable",
+                "If the proxy is slow, retry later or switch to a backup endpoint",
+            ],
+            "details": _build_probe_details(
+                api_base_url=api_base_url,
+                backup_urls=api_backup_urls,
+                fallback_strategy=fallback_strategy,
+                transport_diagnostics=transport_diagnostics,
+            ),
         }
-        
+        return _store_probe_result(cache_key, result)
+
     except Exception as e:
-        # 其他错误
         error_msg = str(e)
         error_type = type(e).__name__
-        
-        logger.error(f"❌ API 测试失败: {error_msg}")
-        logger.error(f"  - 错误类型: {error_type}")
-        
-        # 分析错误原因并提供建议
-        suggestions = []
+
+        logger.error(f"API probe failed: {error_msg}")
+        logger.error(f"  - Error type: {error_type}")
+
         if "blocked" in error_msg.lower():
             suggestions = [
-                "请求被 API 提供商阻止",
-                "可能原因：API Key 被限制或地区限制",
-                "建议：检查 API Key 状态和账户余额",
-                "建议：尝试更换 API Base URL 或使用代理"
+                "The upstream API request was blocked or rejected",
+                "Check whether the API key has permission for the target model",
+                "Confirm the API key is bound to the expected proxy or gateway",
+                "Verify the API base URL and gateway policy are consistent",
             ]
         elif "unauthorized" in error_msg.lower() or "401" in error_msg:
             suggestions = [
-                "API Key 认证失败",
-                "建议：检查 API Key 是否正确",
-                "建议：确认 API Key 是否过期"
+                "API key authentication failed",
+                "Check whether the API key is correct and active",
+                "Confirm the API key has sufficient permission",
             ]
         elif "not found" in error_msg.lower() or "404" in error_msg:
             suggestions = [
-                "API 端点不存在或模型不可用",
-                "建议：检查 API Base URL 是否正确",
-                "建议：确认模型名称是否正确"
+                "The API endpoint or model could not be found",
+                "Confirm the API base URL is correct",
+                "Verify the target model exists on the current service",
             ]
         elif "rate limit" in error_msg.lower() or "429" in error_msg:
             suggestions = [
-                "API 请求频率超限",
-                "建议：稍后重试",
-                "建议：升级 API 套餐"
+                "The API request hit a rate limit",
+                "Retry later after the rate limit window resets",
+                "Consider reducing concurrency or switching to a backup endpoint",
             ]
         elif "insufficient" in error_msg.lower() or "quota" in error_msg.lower():
             suggestions = [
-                "API 配额不足",
-                "建议：检查账户余额",
-                "建议：充值或升级套餐"
+                "The API quota appears to be exhausted",
+                "Check the account balance or quota usage",
+                "Confirm the current key is allowed to use this model",
             ]
         else:
             suggestions = [
-                "请检查所有配置参数是否正确",
-                "请确认网络连接正常",
-                "请查看详细错误信息"
+                "An unknown error occurred during the request",
+                "Check the network and configuration parameters",
+                "Review the detailed error message for more clues",
             ]
-        
-        return {
+
+        result = {
             "success": False,
-            "message": "API 测试失败",
+            "message": "API test failed",
             "error": error_msg,
             "error_type": error_type,
-            "suggestions": suggestions
+            "suggestions": suggestions,
+            "details": {
+                "endpoint_diagnostics": _build_probe_endpoint_diagnostics(
+                    api_base_url=api_base_url,
+                    backup_urls=api_backup_urls,
+                    fallback_strategy=fallback_strategy,
+                ),
+            },
         }
-
+        return _store_probe_result(cache_key, result)
 
 @router.post("/test-web-research")
 async def test_web_research_connection(data: WebResearchTestRequest):

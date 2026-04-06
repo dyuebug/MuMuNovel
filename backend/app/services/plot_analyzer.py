@@ -1,5 +1,6 @@
 """剧情分析服务 - 自动分析章节的钩子、伏笔、冲突等元素"""
 from typing import Dict, Any, List, Optional, Callable, Awaitable
+from collections import Counter
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.ai_service import AIService
 from app.services.prompt_service import prompt_service, PromptService
@@ -8,8 +9,20 @@ from app.logger import get_logger
 import json
 import re
 import asyncio
+import httpx
 
 logger = get_logger(__name__)
+
+ANALYSIS_CONTENT_CHAR_LIMIT = 6000
+ANALYSIS_TOKEN_BUFFER = 600
+ANALYSIS_MIN_MAX_TOKENS = 2200
+ANALYSIS_MAX_MAX_TOKENS = 3200
+ANALYSIS_ATTEMPT_TIMEOUT_SECONDS = 75
+ANALYSIS_TRANSPORT_READ_TIMEOUT_SECONDS = 45
+ANALYSIS_TRANSPORT_MAX_RETRIES = 1
+ANALYSIS_FALLBACK_SUMMARY_CHAR_LIMIT = 180
+ANALYSIS_FALLBACK_POINT_LIMIT = 3
+ANALYSIS_FALLBACK_SENTENCE_LIMIT = 4
 
 # 重试回调类型定义
 OnRetryCallback = Callable[[int, int, int, str], Awaitable[None]]
@@ -77,20 +90,213 @@ class PlotAnalyzer:
     def _set_last_error(self, message: str) -> str:
         self.last_error_message = message
         return message
+
+    @staticmethod
+    def _describe_exception(error: Exception) -> str:
+        message = str(error).strip()
+        if message:
+            return message
+        return type(error).__name__
     
     @staticmethod
     def _build_retry_prompt(prompt: str, last_error: str, attempt: int) -> str:
-        """为 JSON 解析失败构造更严格的重试提示词。"""
-        retry_reason = (last_error or "上一轮返回内容无法解析为 JSON")[:200]
+        """构建 JSON 解析失败后的重试提示词。"""
+        retry_reason = (last_error or "返回内容不是有效 JSON")[:200]
         return (
             f"{prompt}\n\n"
-            f"第 {attempt} 次尝试失败，原因：{retry_reason}\n"
-            "请严格只返回合法的 JSON 对象。\n"
+            f"第 {attempt} 次重试，上一轮失败原因：{retry_reason}\n"
+            "请严格返回合法 JSON：\n"
             "- 不要使用 markdown 代码块\n"
-            "- 不要附加解释\n"
-            "- 不要输出任何额外文本\n"
-            "- 字段名必须与要求完全一致"
+            "- 不要添加解释文字\n"
+            "- 不要省略必填字段\n"
+            "- 不要截断或输出不完整 JSON"
         )
+
+    @staticmethod
+    def _split_sentences(content: str) -> List[str]:
+        normalized = re.sub(r"\s+", " ", (content or "").strip())
+        if not normalized:
+            return []
+        parts = re.split(r"(?<=[。！？!?])\s*", normalized)
+        return [part.strip() for part in parts if part.strip()]
+
+    @staticmethod
+    def _split_paragraphs(content: str) -> List[str]:
+        if not content:
+            return []
+        return [part.strip() for part in re.split(r"\n\s*\n+", content) if part.strip()]
+
+    @staticmethod
+    def _trim_excerpt(text: str, limit: int = 80) -> str:
+        normalized = re.sub(r"\s+", " ", (text or "").strip())
+        if len(normalized) <= limit:
+            return normalized
+        return normalized[:limit].rstrip("，。！？!?；;：:、 ") + "…"
+
+    @staticmethod
+    def _pick_keyword(text: str, limit: int = 18) -> str:
+        normalized = re.sub(r"\s+", "", (text or "").strip())
+        return normalized[:limit]
+
+    @staticmethod
+    def _safe_score(value: float, *, minimum: int = 4, maximum: int = 8) -> int:
+        bounded = max(float(minimum), min(float(maximum), value))
+        return int(round(bounded))
+
+    def _build_heuristic_fallback_analysis(
+        self,
+        *,
+        chapter_number: int,
+        title: str,
+        content: str,
+        word_count: int,
+        failure_reason: str,
+    ) -> Dict[str, Any]:
+        paragraphs = self._split_paragraphs(content)
+        sentences = self._split_sentences(content)
+        effective_units = paragraphs or sentences or ([content.strip()] if (content or '').strip() else [])
+        point_units = effective_units[:ANALYSIS_FALLBACK_POINT_LIMIT]
+        summary_source = "；".join(self._trim_excerpt(unit, 56) for unit in point_units if unit)
+        summary = summary_source[:ANALYSIS_FALLBACK_SUMMARY_CHAR_LIMIT] or self._trim_excerpt(content, 120)
+
+        hook_candidates: List[Dict[str, Any]] = []
+        seen_keywords: set[str] = set()
+        sentence_pool: List[tuple[str, str]] = []
+        if sentences:
+            sentence_pool.append(("开篇", sentences[0]))
+            if len(sentences) > 1:
+                sentence_pool.append(("结尾", sentences[-1]))
+            for sentence in sentences[1:ANALYSIS_FALLBACK_SENTENCE_LIMIT]:
+                if re.search(r"(秘密|异变|异常|线索|危机|警讯|封街|失踪|未知|预兆|真相|反常|忽然|突然|竟然)", sentence):
+                    sentence_pool.append(("中段", sentence))
+        for position, sentence in sentence_pool:
+            keyword = self._pick_keyword(sentence)
+            if not keyword or keyword in seen_keywords:
+                continue
+            seen_keywords.add(keyword)
+            hook_candidates.append({
+                "type": "悬念",
+                "content": self._trim_excerpt(sentence, 70),
+                "strength": 6 if position != "结尾" else 7,
+                "position": position,
+                "keyword": keyword,
+            })
+            if len(hook_candidates) >= 2:
+                break
+
+        foreshadow_candidates: List[Dict[str, Any]] = []
+        for sentence in sentences[: max(ANALYSIS_FALLBACK_SENTENCE_LIMIT + 2, 6)]:
+            if not re.search(r"(似乎|隐约|预示|线索|秘密|异变|异常|征兆|不祥|钟声|灰潮|账册|裂口)", sentence):
+                continue
+            keyword = self._pick_keyword(sentence)
+            if not keyword:
+                continue
+            foreshadow_candidates.append({
+                "type": "planted",
+                "content": self._trim_excerpt(sentence, 80),
+                "keyword": keyword,
+                "strength": 5,
+                "reference_foreshadow_id": None,
+            })
+            if len(foreshadow_candidates) >= 2:
+                break
+
+        plot_points: List[Dict[str, Any]] = []
+        for idx, unit in enumerate(point_units, 1):
+            keyword = self._pick_keyword(unit)
+            plot_points.append({
+                "type": "事件推进",
+                "content": self._trim_excerpt(unit, 90),
+                "keyword": keyword,
+                "importance": 6 if idx == 1 else 5,
+            })
+
+        conflict_markers = re.findall(r"(冲突|对峙|争执|阻止|拒绝|威胁|危机|封街|拦下|失败|代价|受阻|追赶|敌意|质疑|反击)", content or "")
+        conflict_level = self._safe_score(4.8 + min(len(conflict_markers), 4) * 0.6)
+        conflict_types = [marker for marker, _count in Counter(conflict_markers).most_common(3)]
+        if not conflict_types and conflict_level >= 6:
+            conflict_types = ["外部阻碍"]
+
+        emotion_keywords = {
+            "紧张": ["紧张", "警讯", "危机", "追赶", "封街", "灰潮"],
+            "压迫": ["压迫", "失控", "封锁", "威胁", "代价"],
+            "希望": ["希望", "机会", "转机", "合作", "成功"],
+            "疑惧": ["秘密", "异变", "异常", "未知", "不祥"],
+        }
+        emotion_scores = {
+            emotion: sum((content or "").count(token) for token in tokens)
+            for emotion, tokens in emotion_keywords.items()
+        }
+        primary_emotion = max(emotion_scores, key=emotion_scores.get) if any(emotion_scores.values()) else "紧张"
+        emotion_intensity = self._safe_score(5.0 + min(sum(1 for char in (content or "") if char in "！？!?"), 6) * 0.35)
+
+        dialogue_chars = sum((content or "").count(mark) for mark in ['“', '”', '「', '」', '『', '』', '"'])
+        dialogue_ratio = round(min(0.55, max(0.05, dialogue_chars / max(len(content or ""), 1) * 6.0)), 3)
+        description_ratio = round(max(0.2, min(0.9, 1 - dialogue_ratio)), 3)
+
+        pacing = "moderate"
+        if len(sentences) >= 10 or conflict_level >= 7:
+            pacing = "fast"
+        elif len(sentences) <= 3 and word_count <= 600:
+            pacing = "slow"
+
+        scores = {
+            "overall": self._safe_score(5.8 + min(len(plot_points), 3) * 0.25 + (0.4 if conflict_level >= 6 else 0)),
+            "pacing": self._safe_score(5.5 + (0.5 if pacing == "moderate" else 0.2 if pacing == "fast" else -0.2)),
+            "engagement": self._safe_score(5.6 + min(len(hook_candidates), 2) * 0.5),
+            "coherence": self._safe_score(5.8 + (0.4 if len(plot_points) >= 2 else 0.1)),
+        }
+
+        scenes = [
+            {
+                "summary": self._trim_excerpt(unit, 80),
+                "purpose": "推进情节",
+                "index": idx,
+            }
+            for idx, unit in enumerate(point_units[:2], 1)
+        ]
+
+        suggestions = [
+            f"【快速分析】上游 AI 分析未在时限内完成，已自动切换为规则摘要模式；建议稍后补跑深度分析。原因：{failure_reason[:120]}",
+        ]
+        if conflict_level < 6:
+            suggestions.append("补强本章的直接阻力与代价，让主角目标与阻碍发生更明确的正面碰撞。")
+        if dialogue_ratio < 0.08:
+            suggestions.append("可适当加入高信息密度对话，用角色交锋承载设定与冲突，减少纯说明段。")
+        if word_count > 1400:
+            suggestions.append("正文明显偏长，可压缩重复铺陈，把关键事件控制在 2-3 个连续动作单元内。")
+        elif word_count < 600:
+            suggestions.append("正文偏短，可补一段推进结果或代价反馈，增强章节回报感。")
+        suggestions = suggestions[:4]
+
+        return {
+            "analysis_mode": "heuristic_fallback",
+            "fallback_reason": failure_reason,
+            "plot_stage": "发展" if chapter_number > 1 else "开篇",
+            "summary": summary or f"第{chapter_number}章《{title or f'第{chapter_number}章'}》的快速分析摘要",
+            "hooks": hook_candidates,
+            "foreshadows": foreshadow_candidates,
+            "plot_points": plot_points,
+            "conflict": {
+                "level": conflict_level,
+                "types": conflict_types,
+                "description": self._trim_excerpt(summary or content, 90),
+                "parties": [],
+                "resolution_progress": 0.3 if chapter_number <= 1 else 0.5,
+            },
+            "emotional_arc": {
+                "primary_emotion": primary_emotion,
+                "intensity": emotion_intensity,
+            },
+            "character_states": [],
+            "organization_states": [],
+            "scenes": scenes,
+            "pacing": pacing,
+            "scores": scores,
+            "dialogue_ratio": dialogue_ratio,
+            "description_ratio": description_ratio,
+            "suggestions": suggestions,
+        }
 
     async def analyze_chapter(
         self,
@@ -100,7 +306,7 @@ class PlotAnalyzer:
         word_count: int,
         user_id: str = None,
         db: AsyncSession = None,
-        max_retries: int = 3,
+        max_retries: int = 2,
         existing_foreshadows: Optional[List[Dict[str, Any]]] = None,
         on_retry: Optional[OnRetryCallback] = None,
         characters_info: str = "",
@@ -120,49 +326,21 @@ class PlotAnalyzer:
     ) -> Optional[Dict[str, Any]]:
         """
         分析单章内容（带重试机制）
-        
-        Args:
-            chapter_number: 章节号
-            title: 章节标题
-            content: 章节内容
-            word_count: 字数
-            user_id: 用户ID（用于获取自定义提示词）
-            db: 数据库会话（用于查询自定义提示词）
-            max_retries: 最大重试次数，默认3次
-            existing_foreshadows: 已埋入的伏笔列表（用于回收匹配）
-            on_retry: 重试时的回调函数，参数为 (当前重试次数, 最大重试次数, 等待秒数, 错误原因)
-            characters_info: 项目角色信息文本（用于角色名称匹配）
-            genre: 小说题材（用于统一质量画像）
-            style_name: 写作风格名称（用于统一质量画像）
-            style_preset_id: 写作风格预设ID（用于统一质量画像）
-            style_content: 写作风格正文（用于统一质量画像）
-            external_assets: 外部摘要资产（用于统一质量画像）
-            reference_assets: 外部参考摘要资产别名（用于统一质量画像）
-            mcp_references: MCP能力摘要文本（用于 prompt 层参考，不暴露来源）
-        
-        Returns:
-            分析结果字典,失败返回None
         """
         logger.info(f"🔍 开始分析第{chapter_number}章: {title}")
-        
-        # 如果内容过长,截取前8000字(避免超token)
-        analysis_content = content[:8000] if len(content) > 8000 else content
-        
-        # 获取自定义提示词模板
+
+        analysis_content = content[:ANALYSIS_CONTENT_CHAR_LIMIT] if len(content) > ANALYSIS_CONTENT_CHAR_LIMIT else content
+
         try:
             if user_id and db:
                 template = await PromptService.get_template("PLOT_ANALYSIS", user_id, db)
             else:
-                # 降级到系统默认模板
                 template = PromptService.PLOT_ANALYSIS
         except Exception as e:
             logger.warning(f"⚠️ 获取提示词模板失败，使用默认模板: {str(e)}")
             template = PromptService.PLOT_ANALYSIS
-        
-        # 格式化已有伏笔列表
+
         foreshadows_text = self._format_existing_foreshadows(existing_foreshadows)
-        
-        # 格式化提示词
         quality_context = build_chapter_quality_prompt_context(
             genre=genre,
             style_name=style_name,
@@ -189,32 +367,41 @@ class PlotAnalyzer:
             _template_key="PLOT_ANALYSIS",
             **quality_context,
         )
-        
+
         self.last_error_message = None
         last_error = None
-        analysis_max_tokens = max(4000, min(max(word_count or 0, len(analysis_content)) + 1000, 8000))
+        analysis_max_tokens = max(
+            ANALYSIS_MIN_MAX_TOKENS,
+            min(max(word_count or 0, len(analysis_content)) + ANALYSIS_TOKEN_BUFFER, ANALYSIS_MAX_MAX_TOKENS),
+        )
         logger.debug(f"章节分析提示词: {prompt}")
         logger.info(f"章节分析 max_tokens: {analysis_max_tokens}")
+
         for attempt in range(1, max_retries + 1):
             try:
-                # 调用 AI 进行分析
                 current_prompt = prompt if attempt == 1 else self._build_retry_prompt(prompt, last_error or "", attempt)
                 logger.info(f"  调用AI分析(内容长度: {len(analysis_content)}字, 尝试 {attempt}/{max_retries})...")
-                response = await self.ai_service.generate_text(
-                    prompt=current_prompt,
-                    temperature=0.2,
-                    max_tokens=analysis_max_tokens,
-                    auto_mcp=False,
-                    handle_tool_calls=False,
+                response = await asyncio.wait_for(
+                    self.ai_service.generate_text(
+                        prompt=current_prompt,
+                        temperature=0.2,
+                        max_tokens=analysis_max_tokens,
+                        auto_mcp=False,
+                        handle_tool_calls=False,
+                        request_options={
+                            "read_timeout": ANALYSIS_TRANSPORT_READ_TIMEOUT_SECONDS,
+                            "transport_max_retries": ANALYSIS_TRANSPORT_MAX_RETRIES,
+                            "prefer_chat_completions": True,
+                        },
+                    ),
+                    timeout=ANALYSIS_ATTEMPT_TIMEOUT_SECONDS,
                 )
                 accumulated_text = response.get("content", "") or ""
                 if not accumulated_text or len(accumulated_text.strip()) < 10:
-                    logger.warning(f"⚠️ AI响应为空或过短(长度: {len(accumulated_text)}), 尝试 {attempt}/{max_retries}")
                     last_error = self._set_last_error("AI响应为空或过短")
                     if attempt < max_retries:
                         wait_time = min(2 ** attempt, 10)
                         logger.info(f"  ⏳ 等待 {wait_time} 秒后重试...")
-                        # 调用重试回调，通知调用方正在重试
                         if on_retry:
                             try:
                                 await on_retry(attempt, max_retries, wait_time, last_error)
@@ -222,17 +409,18 @@ class PlotAnalyzer:
                                 logger.warning(f"⚠️ 重试回调执行失败: {callback_error}")
                         await asyncio.sleep(wait_time)
                         continue
-                    else:
-                        logger.error(f"❌ 第{chapter_number}章分析失败: AI响应为空，已达最大重试次数")
-                        return None
-                
-                # 提取内容
+                    fallback_reason = self._set_last_error("AI响应为空或过短，已切换快速规则分析")
+                    logger.warning(f"⚠️ 第{chapter_number}章分析失败: AI响应为空，已切换快速规则分析")
+                    return self._build_heuristic_fallback_analysis(
+                        chapter_number=chapter_number,
+                        title=title,
+                        content=analysis_content,
+                        word_count=word_count,
+                        failure_reason=fallback_reason,
+                    )
+
                 response_text = accumulated_text
-                logger.debug(f"  收到AI响应，长度: {len(response_text)} 字符")
-                
-                # 解析JSON结果
                 analysis_result = self._parse_analysis_response(response_text)
-                
                 if analysis_result:
                     logger.info(f"✅ 第{chapter_number}章分析完成 (尝试 {attempt}/{max_retries})")
                     logger.info(f"  - 钩子: {len(analysis_result.get('hooks', []))}个")
@@ -240,33 +428,11 @@ class PlotAnalyzer:
                     logger.info(f"  - 情节点: {len(analysis_result.get('plot_points', []))}个")
                     logger.info(f"  - 整体评分: {analysis_result.get('scores', {}).get('overall', 'N/A')}")
                     return analysis_result
-                else:
-                    # JSON解析失败，重试
-                    logger.warning(f"⚠️ JSON解析失败, 尝试 {attempt}/{max_retries}")
-                    last_error = self._set_last_error("AI返回格式异常，章节分析JSON解析失败")
-                    if attempt < max_retries:
-                        wait_time = min(2 ** attempt, 10)
-                        logger.info(f"  ⏳ 等待 {wait_time} 秒后重试...")
-                        # 调用重试回调，通知调用方正在重试
-                        if on_retry:
-                            try:
-                                await on_retry(attempt, max_retries, wait_time, last_error)
-                            except Exception as callback_error:
-                                logger.warning(f"⚠️ 重试回调执行失败: {callback_error}")
-                        await asyncio.sleep(wait_time)
-                        continue
-                    else:
-                        logger.error(f"❌ 第{chapter_number}章分析失败: JSON解析错误，已达最大重试次数")
-                        return None
-                    
-            except Exception as e:
-                last_error = self._set_last_error(str(e))
-                logger.error(f"❌ 章节分析异常(尝试 {attempt}/{max_retries}): {last_error}")
-                
+
+                last_error = self._set_last_error("AI返回格式异常，章节分析JSON解析失败")
                 if attempt < max_retries:
                     wait_time = min(2 ** attempt, 10)
                     logger.info(f"  ⏳ 等待 {wait_time} 秒后重试...")
-                    # 调用重试回调，通知调用方正在重试
                     if on_retry:
                         try:
                             await on_retry(attempt, max_retries, wait_time, last_error)
@@ -274,15 +440,62 @@ class PlotAnalyzer:
                             logger.warning(f"⚠️ 重试回调执行失败: {callback_error}")
                     await asyncio.sleep(wait_time)
                     continue
-                else:
-                    logger.error(f"❌ 第{chapter_number}章分析失败: {last_error}，已达最大重试次数")
-                    return None
-        
-        # 不应该到达这里，但作为安全措施
-        self._set_last_error(last_error or "章节分析失败，未获取到有效结果")
-        logger.error(f"❌ 第{chapter_number}章分析失败: {last_error}")
-        return None
-    
+                fallback_reason = self._set_last_error("AI返回格式异常，已切换快速规则分析")
+                logger.warning(f"⚠️ 第{chapter_number}章分析失败: JSON解析错误，已切换快速规则分析")
+                return self._build_heuristic_fallback_analysis(
+                    chapter_number=chapter_number,
+                    title=title,
+                    content=analysis_content,
+                    word_count=word_count,
+                    failure_reason=fallback_reason,
+                )
+
+            except (asyncio.TimeoutError, httpx.TimeoutException):
+                last_error = self._set_last_error("章节分析请求超时（上游响应过慢）")
+                logger.error(f"❌ 章节分析超时(尝试 {attempt}/{max_retries}): {last_error}")
+                fallback_reason = self._set_last_error(f"{last_error}，已切换快速规则分析")
+                logger.warning(f"⚠️ 第{chapter_number}章分析超时，直接切换快速规则分析: {fallback_reason}")
+                return self._build_heuristic_fallback_analysis(
+                    chapter_number=chapter_number,
+                    title=title,
+                    content=analysis_content,
+                    word_count=word_count,
+                    failure_reason=fallback_reason,
+                )
+
+            except Exception as e:
+                last_error = self._set_last_error(self._describe_exception(e))
+                logger.error(f"❌ 章节分析异常(尝试 {attempt}/{max_retries}): {last_error}")
+                if attempt < max_retries:
+                    wait_time = min(2 ** attempt, 10)
+                    logger.info(f"  ⏳ 等待 {wait_time} 秒后重试...")
+                    if on_retry:
+                        try:
+                            await on_retry(attempt, max_retries, wait_time, last_error)
+                        except Exception as callback_error:
+                            logger.warning(f"⚠️ 重试回调执行失败: {callback_error}")
+                    await asyncio.sleep(wait_time)
+                    continue
+                fallback_reason = self._set_last_error(f"{last_error}，已切换快速规则分析")
+                logger.warning(f"⚠️ 第{chapter_number}章分析失败: {last_error}，已切换快速规则分析")
+                return self._build_heuristic_fallback_analysis(
+                    chapter_number=chapter_number,
+                    title=title,
+                    content=analysis_content,
+                    word_count=word_count,
+                    failure_reason=fallback_reason,
+                )
+
+        fallback_reason = self._set_last_error((last_error or "章节分析失败，未获取到有效结果") + "，已切换快速规则分析")
+        logger.warning(f"⚠️ 第{chapter_number}章分析未拿到有效结果，改用快速规则分析: {fallback_reason}")
+        return self._build_heuristic_fallback_analysis(
+            chapter_number=chapter_number,
+            title=title,
+            content=analysis_content,
+            word_count=word_count,
+            failure_reason=fallback_reason,
+        )
+
     def _format_existing_foreshadows(self, foreshadows: Optional[List[Dict[str, Any]]]) -> str:
         """
         格式化已有伏笔列表，用于注入到分析提示词中
@@ -634,6 +847,11 @@ class PlotAnalyzer:
         """
         try:
             lines = ["=== 章节分析报告 ===\n"]
+            if analysis.get('analysis_mode') == 'heuristic_fallback':
+                fallback_reason = str(analysis.get('fallback_reason') or '上游 AI 分析未完成')
+                lines.append("【分析模式】快速规则分析（自动降级）")
+                lines.append(f"  原因: {fallback_reason[:160]}")
+                lines.append("")
             
             # 整体评分
             scores = analysis.get('scores', {})

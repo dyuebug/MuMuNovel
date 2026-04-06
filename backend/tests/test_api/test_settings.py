@@ -11,6 +11,13 @@ from app.models.settings import Settings
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+def clear_probe_cache_fixture():
+    settings_api.clear_probe_result_cache()
+    yield
+    settings_api.clear_probe_result_cache()
+
+
 def build_settings_payload(**overrides):
     payload = {
         "api_provider": "openai",
@@ -574,15 +581,263 @@ async def test_should_test_api_connection_successfully(async_client, monkeypatch
     assert isinstance(body["response_time_ms"], (int, float))
     assert len(body["response_preview"]) == 100
     assert captured["call_kwargs"]["auto_mcp"] is False
+    assert body["details"]["endpoint_diagnostics"]["primary_endpoint"] == "https://api.openai.com/v1"
+    assert body["details"]["endpoint_diagnostics"]["backup_endpoints"] == []
 
+
+async def test_should_prefer_chat_completions_for_sub2api_api_connection_probe(async_client, monkeypatch):
+    captured = {}
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            captured["init_kwargs"] = kwargs
+
+        async def generate_text(self, **kwargs):
+            captured["call_kwargs"] = kwargs
+            return {"content": "????", "tool_calls": None, "finish_reason": "stop"}
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+
+    response = await async_client.post(
+        "/api/settings/test",
+        json=build_api_test_payload(
+            provider="sub2api",
+            api_base_url="https://free.9e.nz",
+            llm_model="gpt-5.4",
+        ),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert captured["call_kwargs"]["request_options"]["prefer_chat_completions"] is True
+    assert captured["call_kwargs"]["request_options"]["transport_max_retries"] == 1
+
+
+async def test_should_prefer_chat_completions_for_sub2api_function_calling_probe(async_client, monkeypatch):
+    captured = {}
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            captured["init_kwargs"] = kwargs
+
+        async def generate_text(self, **kwargs):
+            captured["call_kwargs"] = kwargs
+            return {
+                "finish_reason": "tool_calls",
+                "tool_calls": [
+                    {
+                        "id": "call_001",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city":"??"}'},
+                    }
+                ],
+                "content": "",
+            }
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+
+    response = await async_client.post(
+        "/api/settings/check-function-calling",
+        json=build_api_test_payload(
+            provider="sub2api",
+            api_base_url="https://free.9e.nz",
+            llm_model="gpt-5.4",
+        ),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["supported"] is True
+    assert captured["call_kwargs"]["request_options"]["prefer_chat_completions"] is True
+    assert captured["call_kwargs"]["request_options"]["transport_max_retries"] == 1
+    assert captured["call_kwargs"]["max_tokens"] == 64
+    assert captured["call_kwargs"]["tool_choice"] == "required"
+
+
+
+async def test_should_enable_normalized_v1_candidate_for_custom_api_connection_probe(async_client, monkeypatch):
+    captured = {}
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            captured["init_kwargs"] = kwargs
+
+        async def generate_text(self, **kwargs):
+            captured["call_kwargs"] = kwargs
+            return {"content": "TEST_OK", "tool_calls": None, "finish_reason": "stop"}
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+
+    response = await async_client.post(
+        "/api/settings/test",
+        json=build_api_test_payload(
+            provider="custom",
+            api_base_url="https://gateway.example.com",
+            llm_model="gpt-4.1",
+        ),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    request_options = captured["call_kwargs"]["request_options"]
+    assert request_options["prefer_chat_completions"] is True
+    assert request_options["prefer_normalized_v1_candidate"] is True
+    assert request_options["transport_max_retries"] == 1
+    assert request_options["read_timeout"] == 10.0
+
+
+async def test_should_enable_normalized_v1_candidate_for_custom_function_calling_probe(async_client, monkeypatch):
+    captured = {}
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            captured["init_kwargs"] = kwargs
+
+        async def generate_text(self, **kwargs):
+            captured["call_kwargs"] = kwargs
+            return {
+                "finish_reason": "tool_calls",
+                "tool_calls": [
+                    {
+                        "id": "call_001",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city":"Beijing"}'},
+                    }
+                ],
+                "content": "",
+            }
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+
+    response = await async_client.post(
+        "/api/settings/check-function-calling",
+        json=build_api_test_payload(
+            provider="custom",
+            api_base_url="https://gateway.example.com",
+            llm_model="gpt-4.1",
+        ),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["supported"] is True
+    request_options = captured["call_kwargs"]["request_options"]
+    assert request_options["prefer_chat_completions"] is True
+    assert request_options["prefer_normalized_v1_candidate"] is True
+    assert request_options["transport_max_retries"] == 1
+    assert request_options["read_timeout"] == 10.0
+    assert captured["call_kwargs"]["max_tokens"] == 64
+    assert captured["call_kwargs"]["tool_choice"] == "required"
+
+async def test_should_pass_backup_urls_and_fallback_strategy_to_api_connection_probe(async_client, monkeypatch):
+    captured = {}
+    backup_urls = [
+        "https://backup-1.example.com/v1",
+        "https://backup-2.example.com/v1",
+    ]
+
+    transport_diagnostics = {
+        "events": [{"type": "api_mode_selected", "api_mode": "chat_completions"}],
+        "attempts": [{"result": "success", "api_mode": "chat_completions"}],
+        "summary": {"total_attempts": 1},
+    }
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            captured["init_kwargs"] = kwargs
+
+        async def generate_text(self, **kwargs):
+            return {"content": "????", "tool_calls": None, "finish_reason": "stop"}
+
+        def get_transport_diagnostics(self, provider=None):
+            return transport_diagnostics
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+
+    response = await async_client.post(
+        "/api/settings/test",
+        json=build_api_test_payload(
+            api_backup_urls=backup_urls,
+            fallback_strategy="manual",
+        ),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert captured["init_kwargs"]["backup_urls"] == backup_urls
+    assert captured["init_kwargs"]["fallback_strategy"] == "manual"
+    assert body["details"]["endpoint_diagnostics"]["backup_endpoints"] == backup_urls
+    assert body["details"]["endpoint_diagnostics"]["fallback_strategy"] == "manual"
+    assert body["details"]["transport_diagnostics"] == transport_diagnostics
+    assert body["details"]["transport_diagnostics"] == transport_diagnostics
+
+
+async def test_should_pass_backup_urls_and_fallback_strategy_to_function_calling_probe(async_client, monkeypatch):
+    captured = {}
+    backup_urls = ["https://backup-1.example.com/v1"]
+
+    transport_diagnostics = {
+        "events": [{"type": "api_mode_selected", "api_mode": "responses"}],
+        "attempts": [{"result": "success", "api_mode": "responses"}],
+        "summary": {"total_attempts": 1},
+    }
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            captured["init_kwargs"] = kwargs
+
+        async def generate_text(self, **kwargs):
+            return {
+                "finish_reason": "tool_calls",
+                "tool_calls": [
+                    {
+                        "id": "call_001",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city":"??"}'},
+                    }
+                ],
+                "content": "",
+            }
+
+        def get_transport_diagnostics(self, provider=None):
+            return transport_diagnostics
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+
+    response = await async_client.post(
+        "/api/settings/check-function-calling",
+        json=build_api_test_payload(
+            api_backup_urls=backup_urls,
+            fallback_strategy="manual",
+        ),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["supported"] is True
+    assert captured["init_kwargs"]["backup_urls"] == backup_urls
+    assert captured["init_kwargs"]["fallback_strategy"] == "manual"
+    assert body["details"]["endpoint_diagnostics"]["backup_endpoints"] == backup_urls
+    assert body["details"]["endpoint_diagnostics"]["fallback_strategy"] == "manual"
+
+    assert body["details"]["transport_diagnostics"] == transport_diagnostics
 
 async def test_should_return_timeout_error_when_api_test_times_out(async_client, monkeypatch):
+    transport_diagnostics = {
+        "events": [{"type": "api_mode_selected", "api_mode": "chat_completions"}],
+        "attempts": [{"result": "network_error", "api_mode": "chat_completions"}],
+        "summary": {"total_attempts": 1},
+    }
+
     class FakeAIService:
         def __init__(self, **kwargs):
             return None
 
         async def generate_text(self, **kwargs):
             raise TimeoutError("request timeout")
+
+        def get_transport_diagnostics(self, provider=None):
+            return transport_diagnostics
 
     monkeypatch.setattr(settings_api, "AIService", FakeAIService)
 
@@ -595,6 +850,8 @@ async def test_should_return_timeout_error_when_api_test_times_out(async_client,
     assert body["success"] is False
     assert body["error_type"] == "TimeoutError"
     assert "timeout" in body["error"]
+    assert body["details"]["endpoint_diagnostics"]["primary_endpoint"] == "https://api.openai.com/v1"
+    assert body["details"]["endpoint_diagnostics"]["backup_endpoints"] == []
 
 
 @pytest.mark.parametrize("error_message", ["401 unauthorized", "404 not found", "429 rate limit"])
@@ -621,6 +878,8 @@ async def test_should_return_failure_for_common_api_errors(
     assert body["success"] is False
     assert body["error_type"] == "RuntimeError"
     assert error_message in body["error"]
+    assert body["details"]["endpoint_diagnostics"]["primary_endpoint"] == "https://api.openai.com/v1"
+    assert body["details"]["endpoint_diagnostics"]["fallback_strategy"] == "auto"
 
 
 async def test_should_test_web_research_connection(async_client, monkeypatch):
@@ -686,6 +945,7 @@ async def test_should_detect_function_calling_support_when_tool_calls_present(as
     assert body["supported"] is True
     assert body["details"]["has_tool_calls"] is True
     assert body["details"]["tool_call_count"] == 1
+    assert body["details"]["endpoint_diagnostics"]["primary_endpoint"] == "https://api.openai.com/v1"
 
 
 async def test_should_mark_function_calling_unsupported_when_plain_text(async_client, monkeypatch):
@@ -729,6 +989,9 @@ async def test_should_return_timeout_for_function_calling_check(async_client, mo
     assert body["supported"] is None
     assert body["error_type"] == "TimeoutError"
 
+    assert body["details"]["endpoint_diagnostics"]["primary_endpoint"] == "https://api.openai.com/v1"
+    assert body["details"]["endpoint_diagnostics"]["backup_endpoints"] == []
+    assert body["details"]["endpoint_diagnostics"]["fallback_strategy"] == "auto"
 
 async def test_should_return_empty_presets_list_when_no_presets(async_client):
     response = await async_client.get("/api/settings/presets")
@@ -820,3 +1083,198 @@ async def test_should_activate_preset_and_apply_config_to_main_settings(async_cl
         temperature=0.9,
         max_tokens=512,
     )
+
+
+
+async def test_should_cache_api_connection_probe_results(async_client, monkeypatch):
+    calls = {"count": 0}
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            return None
+
+        async def generate_text(self, **kwargs):
+            calls["count"] += 1
+            return {"content": "测试成功", "tool_calls": None, "finish_reason": "stop"}
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+
+    first = await async_client.post("/api/settings/test", json=build_api_test_payload())
+    second = await async_client.post("/api/settings/test", json=build_api_test_payload())
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["cached"] is False
+    assert second.json()["cached"] is True
+    assert calls["count"] == 1
+
+
+async def test_should_normalize_api_connection_probe_cache_key_by_probe_max_tokens(async_client, monkeypatch):
+    calls = {"count": 0}
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            return None
+
+        async def generate_text(self, **kwargs):
+            calls["count"] += 1
+            return {"content": "????", "tool_calls": None, "finish_reason": "stop"}
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+
+    first = await async_client.post(
+        "/api/settings/test",
+        json=build_api_test_payload(max_tokens=128),
+    )
+    second = await async_client.post(
+        "/api/settings/test",
+        json=build_api_test_payload(max_tokens=4096),
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["cached"] is False
+    assert second.json()["cached"] is True
+    assert calls["count"] == 1
+    assert first.json()["details"]["probe_max_tokens"] == 64
+    assert second.json()["details"]["probe_max_tokens"] == 64
+
+
+async def test_should_cache_function_calling_probe_results(async_client, monkeypatch):
+    calls = {"count": 0}
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            return None
+
+        async def generate_text(self, **kwargs):
+            calls["count"] += 1
+            return {
+                "finish_reason": "tool_calls",
+                "tool_calls": [{"id": "call_001", "type": "function", "function": {"name": "get_weather", "arguments": '{\"city\":\"北京\"}'}}],
+                "content": "",
+            }
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+
+    first = await async_client.post("/api/settings/check-function-calling", json=build_api_test_payload())
+    second = await async_client.post("/api/settings/check-function-calling", json=build_api_test_payload())
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["cached"] is False
+    assert second.json()["cached"] is True
+    assert calls["count"] == 1
+
+async def test_should_not_reuse_api_connection_probe_cache_when_backup_urls_change(async_client, monkeypatch):
+    calls = {"count": 0}
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            return None
+
+        async def generate_text(self, **kwargs):
+            calls["count"] += 1
+            return {"content": "????", "tool_calls": None, "finish_reason": "stop"}
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+
+    first = await async_client.post(
+        "/api/settings/test",
+        json=build_api_test_payload(api_backup_urls=["https://backup-a.example.com/v1"]),
+    )
+    second = await async_client.post(
+        "/api/settings/test",
+        json=build_api_test_payload(api_backup_urls=["https://backup-b.example.com/v1"]),
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["cached"] is False
+    assert second.json()["cached"] is False
+    assert calls["count"] == 2
+
+
+async def test_should_not_reuse_function_calling_probe_cache_when_fallback_strategy_changes(async_client, monkeypatch):
+    calls = {"count": 0}
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            return None
+
+        async def generate_text(self, **kwargs):
+            calls["count"] += 1
+            return {
+                "finish_reason": "tool_calls",
+                "tool_calls": [{"id": "call_001", "type": "function", "function": {"name": "get_weather", "arguments": '{\"city\":\"??\"}'}}],
+                "content": "",
+            }
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+
+    first = await async_client.post(
+        "/api/settings/check-function-calling",
+        json=build_api_test_payload(
+            api_backup_urls=["https://backup-a.example.com/v1"],
+            fallback_strategy="auto",
+        ),
+    )
+    second = await async_client.post(
+        "/api/settings/check-function-calling",
+        json=build_api_test_payload(
+            api_backup_urls=["https://backup-a.example.com/v1"],
+            fallback_strategy="manual",
+        ),
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["cached"] is False
+    assert second.json()["cached"] is False
+    assert calls["count"] == 2
+
+
+async def test_should_not_cache_api_connection_probe_timeout(async_client, monkeypatch):
+    calls = {"count": 0}
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            return None
+
+        async def generate_text(self, **kwargs):
+            calls["count"] += 1
+            raise TimeoutError("request timeout")
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+
+    first = await async_client.post("/api/settings/test", json=build_api_test_payload())
+    second = await async_client.post("/api/settings/test", json=build_api_test_payload())
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["cached"] is False
+    assert second.json()["cached"] is False
+    assert calls["count"] == 2
+
+
+async def test_should_not_cache_function_calling_probe_timeout(async_client, monkeypatch):
+    calls = {"count": 0}
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            return None
+
+        async def generate_text(self, **kwargs):
+            calls["count"] += 1
+            raise TimeoutError("call timeout")
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+
+    first = await async_client.post("/api/settings/check-function-calling", json=build_api_test_payload())
+    second = await async_client.post("/api/settings/check-function-calling", json=build_api_test_payload())
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["cached"] is False
+    assert second.json()["cached"] is False
+    assert calls["count"] == 2

@@ -2086,6 +2086,32 @@ def build_quality_gate_decision(
         continuity_preflight=continuity_preflight,
     )
 
+    candidate_selection = metrics.get("candidate_selection") if isinstance(metrics.get("candidate_selection"), Mapping) else {}
+    severe_word_budget_pressure = False
+    severe_word_budget_reason = ""
+    if isinstance(candidate_selection, Mapping):
+        target_word_count = int(candidate_selection.get("target_word_count") or 0)
+        current_word_count = int(candidate_selection.get("word_count") or 0)
+        if target_word_count > 0 and current_word_count > 0:
+            target_lower_bound = max(
+                200,
+                min(target_word_count - 120, int(target_word_count * 0.9)),
+            )
+            target_upper_bound = max(
+                target_lower_bound + 80,
+                min(target_word_count + 150, int(target_word_count * 1.15)),
+            )
+            severe_upper_bound = max(target_upper_bound + 120, int(target_upper_bound * 1.1))
+            severe_lower_bound = max(200, min(target_lower_bound - 120, int(target_lower_bound * 0.9)))
+            severe_word_budget_pressure = (
+                current_word_count > severe_upper_bound
+                or (0 < current_word_count < severe_lower_bound)
+            )
+            if severe_word_budget_pressure:
+                severe_word_budget_reason = (
+                    f"字数严重偏离目标窗口（当前 {current_word_count}，目标 {target_word_count}，理想范围 {target_lower_bound}-{target_upper_bound}）"
+                )
+
     blocked_reasons: list[str] = []
     if overall_score is not None and overall_score < float(thresholds["manual_review_score"]):
         blocked_reasons.append(f"总分 {overall_score:.1f} 低于人工复核线")
@@ -2106,13 +2132,15 @@ def build_quality_gate_decision(
             summary = f"{scope_label}在{stage_label}阶段暂不建议直接保存，建议先人工复核再决定是否重写。"
         else:
             summary = f"{scope_label}暂不建议直接保存，建议先人工复核再决定是否重写。"
-    elif weak_metric_count > int(thresholds.get("allow_save_weak_metric_count") or 0) or (
+    elif severe_word_budget_pressure or weak_metric_count > int(thresholds.get("allow_save_weak_metric_count") or 0) or (
         overall_score is not None and overall_score < float(thresholds["allow_save_score"])
     ):
         status = "repairable"
         decision = "auto_repair"
         label = "可修复"
-        if weak_metric_count > 0:
+        if severe_word_budget_pressure:
+            reason = severe_word_budget_reason
+        elif weak_metric_count > 0:
             reason = f"存在 {weak_metric_count} 个待修复弱项"
         else:
             reason = "综合分未达直接保存阈值"

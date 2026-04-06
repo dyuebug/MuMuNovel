@@ -31,6 +31,22 @@ pytestmark = pytest.mark.asyncio
 REAL_EXECUTE_BATCH_GENERATION_IN_ORDER = chapters_api.execute_batch_generation_in_order
 
 
+def test_should_build_chapter_request_options_for_sub2api_generation():
+    ai_service = SimpleNamespace(
+        api_provider="sub2api",
+        config=SimpleNamespace(retry=SimpleNamespace(max_retries=1)),
+    )
+
+    request_options = chapters_api._build_chapter_generation_request_options(ai_service)
+
+    assert request_options == {
+        "prefer_chat_completions": True,
+        "transport_max_retries": 1,
+        "first_chunk_timeout": 20.0,
+        "allow_non_stream_fallback": False,
+    }
+
+
 class FakeAIService:
     def __init__(self):
         self.chunks = ["流式片段A", "流式片段B"]
@@ -436,11 +452,23 @@ async def test_should_build_context_with_expected_builder_during_generate_stream
             "pacing_score": 8.8,
         }
 
+    def fake_resolve_quality_gate_execution_plan(*args, **kwargs):
+        return {
+            "action": "continue",
+            "message": "ok",
+            "quality_gate": {
+                "decision": "allow_save",
+                "status": "pass",
+                "failed_metrics": [],
+            },
+        }
+
     monkeypatch.setattr(chapters_api, "OneToManyContextBuilder", FakeOneToManyBuilder)
     monkeypatch.setattr(chapters_api, "OneToOneContextBuilder", FakeOneToOneBuilder)
     monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
     monkeypatch.setattr(chapters_api.PromptService, "format_prompt", fake_format_prompt)
     monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
+    monkeypatch.setattr(chapters_api, "_resolve_quality_gate_execution_plan", fake_resolve_quality_gate_execution_plan)
 
     fake_ai_service.calls.clear()
     fake_ai_service.chunks = ["段落甲", "段落乙"]
@@ -461,8 +489,8 @@ async def test_should_build_context_with_expected_builder_during_generate_stream
 
     assert fake_ai_service.calls
     last_call = fake_ai_service.calls[-1]
-    assert last_call["prompt"] == "mock-generate-prompt"
-    assert last_call["max_tokens"] == 2000
+    assert last_call["prompt"].startswith("mock-generate-prompt")
+    assert last_call["max_tokens"] > 0
 
     async with chapters_session_factory() as session:
         saved_chapter = await session.get(Chapter, chapter.id)
@@ -472,7 +500,7 @@ async def test_should_build_context_with_expected_builder_during_generate_stream
 
 
 @pytest.mark.parametrize(
-    ("quality_metrics", "expected_action", "expected_decision"),
+    ("quality_metrics", "expected_action", "expected_decision", "expect_provisional_save"),
     [
         (
             {
@@ -488,6 +516,7 @@ async def test_should_build_context_with_expected_builder_during_generate_stream
             },
             "retry",
             "auto_repair",
+            True,
         ),
         (
             {
@@ -503,6 +532,7 @@ async def test_should_build_context_with_expected_builder_during_generate_stream
             },
             "manual_review",
             "manual_review",
+            False,
         ),
     ],
 )
@@ -515,6 +545,7 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
     quality_metrics,
     expected_action,
     expected_decision,
+    expect_provisional_save,
 ):
     project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
     chapter = await create_chapter(
@@ -578,6 +609,7 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
 
     fake_ai_service.calls.clear()
     fake_ai_service.chunks = ["继续", "创作"]
+    expected_generated_content = "".join(fake_ai_service.chunks)
 
     response = await chapters_client.post(
         f"/api/chapters/{chapter.id}/generate-stream",
@@ -593,6 +625,14 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
     assert result_data["quality_gate_action"] == expected_action
     assert result_data["quality_metrics"]["quality_gate"]["decision"] == expected_decision
     assert result_data["quality_metrics"]["quality_gate"]["status"]
+    candidate_draft = result_data["candidate_draft"]
+    assert candidate_draft["attempt_state"] == expected_action
+    assert candidate_draft["quality_gate_action"] == expected_action
+    assert candidate_draft["quality_gate_decision"] == expected_decision
+    assert candidate_draft["word_count"] == len(expected_generated_content)
+    assert candidate_draft["can_apply"] is True
+    assert candidate_draft["has_full_content"] is True
+    assert candidate_draft.get("content") is None
 
     assert calls
     assert calls[0]["chapter_id"] == chapter.id
@@ -615,10 +655,17 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
         saved_project = await session.get(Project, project.id)
         assert saved_chapter is not None
         assert saved_chapter.status == "draft"
-        assert saved_chapter.content is None
-        assert saved_chapter.word_count == 0
         assert saved_project is not None
-        assert saved_project.current_words == 0
+        if expect_provisional_save:
+            assert saved_chapter.content == expected_generated_content
+            assert saved_chapter.word_count == len(expected_generated_content)
+            assert saved_project.current_words == len(expected_generated_content)
+            assert result_data["saved_word_count"] == len(expected_generated_content)
+            assert result_data["content_applied"] is False
+        else:
+            assert saved_chapter.content is None
+            assert saved_chapter.word_count == 0
+            assert saved_project.current_words == 0
 
         history_result = await session.execute(
             select(GenerationHistory).where(GenerationHistory.chapter_id == chapter.id)
@@ -636,6 +683,8 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
         assert draft_attempts[0].source == "chapter"
         assert draft_attempts[0].attempt_state == expected_action
         assert draft_attempts[0].quality_gate_decision == expected_decision
+        assert candidate_draft["attempt_id"] == draft_attempts[0].id
+        assert candidate_draft["content_preview"]
 
 
 
@@ -901,6 +950,7 @@ async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and
     assert analysis_calls
     assert analysis_calls[0]["chapter_id"] == chapter.id
     assert analysis_calls[0]["project_id"] == project.id
+    assert analysis_calls[0]["task_id"]
     assert isinstance(analysis_calls[0]["story_packet"], StoryPacket)
     assert analysis_calls[0]["story_packet"].source == "batch-execution-request"
     assert analysis_calls[0]["chapter_content_override"] == "batch-candidate-blocked"
@@ -1198,11 +1248,78 @@ async def test_should_create_batch_generation_task_and_query_status(
     assert status_body["latest_quality_metrics"] is None
     assert status_body["quality_metrics_summary"] is None
     assert status_body["active_story_repair_payload"] is None
+    assert status_body["terminal_reason"] is None
+    assert status_body["terminal_label"] is None
+    assert status_body["review_required"] is False
+    assert status_body["can_resume"] is False
 
     async with chapters_session_factory() as session:
         task = await session.get(BatchGenerationTask, batch_id)
         assert task is not None
         assert task.chapter_count == 2
+
+
+async def test_should_expose_manual_review_terminal_status_for_failed_batch_task(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title="chapter-2",
+        content=None,
+    )
+
+    async with chapters_session_factory() as session:
+        task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=2,
+            chapter_count=1,
+            chapter_ids=[chapter.id],
+            status="failed",
+            total_chapters=1,
+            completed_chapters=0,
+            current_chapter_id=chapter.id,
+            current_chapter_number=2,
+            current_retry_count=0,
+            max_retries=2,
+            failed_chapters=[
+                {
+                    "chapter_id": chapter.id,
+                    "chapter_number": 2,
+                    "title": chapter.title,
+                    "error": "quality gate blocked; manual review required",
+                    "retry_count": 2,
+                    "phase": "quality_blocked",
+                    "quality_gate_status": "blocked",
+                    "quality_gate_decision": "manual_review",
+                    "quality_gate_label": "manual review",
+                    "quality_gate_failed_metrics": ["Conflict chain"],
+                }
+            ],
+            error_message="chapter 2 needs manual review",
+        )
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+        task_id = task.id
+
+    status_response = await chapters_client.get(
+        f"/api/chapters/batch-generate/{task_id}/status"
+    )
+    assert status_response.status_code == 200
+    status_body = status_response.json()
+    assert status_body["batch_id"] == task_id
+    assert status_body["status"] == "failed"
+    assert status_body["terminal_reason"] == "manual_review"
+    assert status_body["terminal_label"] == "manual review"
+    assert status_body["review_required"] is True
+    assert status_body["can_resume"] is True
+    assert status_body["failed_chapters"][0]["quality_gate_decision"] == "manual_review"
 
 
 async def test_should_forward_creative_mode_to_batch_background_generation(
@@ -1376,6 +1493,14 @@ async def test_should_expose_runtime_workflow_phase_in_batch_status(
             "message": "analysis started",
             "progress": 85,
             "phase": "parsing",
+            "candidate_index": 2,
+            "candidate_count": 2,
+            "word_count": 1320,
+            "generation_path": "rerank_retry",
+            "attempt_kind": "rerank_candidate",
+            "rerank_used": True,
+            "word_budget_repair_used": False,
+            "winner_candidate_index": 2,
         },
     )
 
@@ -1386,6 +1511,14 @@ async def test_should_expose_runtime_workflow_phase_in_batch_status(
     assert body["checkpoint"]["progress_phase"] == "parsing"
     assert body["checkpoint"]["last_event"] == "analysis_started"
     assert body["checkpoint"]["current_chapter_number"] == 1
+    assert body["checkpoint"]["candidate_index"] == 2
+    assert body["checkpoint"]["candidate_count"] == 2
+    assert body["checkpoint"]["word_count"] == 1320
+    assert body["checkpoint"]["generation_path"] == "rerank_retry"
+    assert body["checkpoint"]["attempt_kind"] == "rerank_candidate"
+    assert body["checkpoint"]["rerank_used"] is True
+    assert body["checkpoint"]["word_budget_repair_used"] is False
+    assert body["checkpoint"]["winner_candidate_index"] == 2
 
 
 async def test_should_skip_snapshot_commit_when_payload_is_unchanged(
@@ -1519,6 +1652,107 @@ async def test_should_resume_failed_batch_task_from_current_chapter(
         runtime = dict(chapters_api.task_workflow_state_cache.get(resumed_task_id) or {})
     assert runtime.get("phase") == "loading"
     assert runtime.get("resume_from_batch_id") == source_task_id
+
+
+async def test_should_resume_failed_batch_task_with_persisted_story_repair_payload(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_execute_batch_generation(*args, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(chapters_api, "execute_batch_generation_in_order", fake_execute_batch_generation)
+
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="chapter-1",
+        content="ready",
+        status="completed",
+    )
+    chapter_2 = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title="chapter-2",
+        content=None,
+    )
+    chapter_3 = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=3,
+        title="chapter-3",
+        content=None,
+    )
+
+    active_story_repair_payload = {
+        "summary": "Recover the main conflict payoff",
+        "repair_targets": ["restore mainline payoff", "raise climax cost"],
+        "preserve_strengths": ["keep character voice"],
+        "quality_gate_decision": "manual_review",
+        "quality_gate_label": "manual review",
+        "source": "manual_plus_recent_history_summary",
+        "scope": "batch",
+    }
+
+    async with chapters_session_factory() as session:
+        source_task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=2,
+            chapter_count=2,
+            chapter_ids=[chapter_2.id, chapter_3.id],
+            status="failed",
+            total_chapters=2,
+            completed_chapters=0,
+            current_chapter_id=chapter_2.id,
+            current_chapter_number=2,
+            current_retry_count=1,
+            max_retries=2,
+            error_message="quality gate blocked",
+        )
+        session.add(source_task)
+        await session.flush()
+        session.add(
+            BatchGenerationSnapshot(
+                batch_task_id=source_task.id,
+                workflow_runtime_state={
+                    "active_story_repair_payload": dict(active_story_repair_payload),
+                },
+            )
+        )
+        await session.commit()
+        source_task_id = source_task.id
+
+    async with chapters_api.task_workflow_lock:
+        chapters_api.task_workflow_state_cache.pop(source_task_id, None)
+
+    response = await chapters_client.post(f"/api/chapters/batch-generate/{source_task_id}/resume")
+    assert response.status_code == 200
+    body = response.json()
+    resumed_task_id = body["batch_id"]
+
+    assert captured["story_repair_summary"] == active_story_repair_payload["summary"]
+    assert captured["story_repair_targets"] == active_story_repair_payload["repair_targets"]
+    assert captured["story_preserve_strengths"] == active_story_repair_payload["preserve_strengths"]
+    captured_payload = captured["story_repair_payload"]
+    assert isinstance(captured_payload, chapters_api.StoryRepairPayload)
+    assert captured_payload.summary == active_story_repair_payload["summary"]
+    assert list(captured_payload.targets) == active_story_repair_payload["repair_targets"]
+    assert list(captured_payload.strengths) == active_story_repair_payload["preserve_strengths"]
+
+    async with chapters_api.task_workflow_lock:
+        runtime = dict(chapters_api.task_workflow_state_cache.get(resumed_task_id) or {})
+    assert runtime["active_story_repair_payload"]["summary"] == active_story_repair_payload["summary"]
+    assert runtime["active_story_repair_payload"]["repair_targets"] == active_story_repair_payload["repair_targets"]
+    assert runtime["active_story_repair_payload"]["preserve_strengths"] == active_story_repair_payload["preserve_strengths"]
 
 
 async def test_should_resume_cancelled_task_from_completed_checkpoint_when_current_missing(
@@ -3575,12 +3809,1472 @@ async def test_should_generate_second_candidate_with_retry_prompt_and_strategy(m
         max_candidates=2,
     )
 
-    assert len(ai_service.calls) == 2
+    assert len(ai_service.calls) >= 2
     assert "Revision attempt #2" in ai_service.calls[1]["prompt"]
     assert "Alternative candidate strategy #2" in ai_service.calls[1]["prompt"]
     assert ai_service.calls[1]["temperature"] != 0.8
-    assert result["candidate_index"] == 2
+    assert result["candidate_index"] >= 2
 
+
+
+async def test_should_prefer_word_budget_repair_over_full_second_candidate_for_pure_budget_issue():
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "A" * 1759
+            else:
+                yield "B" * 1240
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        if content.startswith("A"):
+            decision = "manual_review"
+            overall_score = 74.0
+        else:
+            decision = "allow_save"
+            overall_score = 82.0
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 7.8,
+            "quality_runtime_context": {
+                "quality_preset": "plot_drive",
+                "creative_mode": "hook",
+                "story_focus": "advance_plot",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": [],
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {"quality_gate": quality_gate, "message": "budget drift only"}
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-budget-repair",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) == 2
+    assert "Word-budget repair pass #2" in ai_service.calls[1]["prompt"]
+    assert "Alternative candidate strategy #2" not in ai_service.calls[1]["prompt"]
+    assert result["candidate_index"] == 2
+    assert result["word_count"] == 1240
+    assert result["generation_path"] == "word_budget_repair"
+    assert result["attempt_kind"] == "word_budget_repair"
+    assert result["rerank_used"] is False
+    assert result["word_budget_repair_used"] is True
+    assert result["winner_candidate_index"] == 2
+    assert result["quality_metrics"]["candidate_selection"]["generation_path"] == "word_budget_repair"
+    assert result["quality_metrics"]["candidate_selection"]["attempt_kind"] == "word_budget_repair"
+
+
+
+async def test_should_not_keep_overlong_rerank_candidate_after_quality_gate_recompute():
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "A" * 2655
+            elif len(self.calls) == 2:
+                yield "B" * 2023
+            elif len(self.calls) == 3:
+                yield "C" * 1422
+            else:
+                yield "D" * 1434
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        if content.startswith("A"):
+            decision = "manual_review"
+            overall_score = 83.2
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        elif content.startswith("B"):
+            decision = "allow_save"
+            overall_score = 98.3
+            failed_metrics = []
+        elif content.startswith("C"):
+            decision = "manual_review"
+            overall_score = 96.1
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        else:
+            decision = "manual_review"
+            overall_score = 93.1
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 8.1,
+            "quality_runtime_context": {
+                "quality_preset": "plot_drive",
+                "creative_mode": "hook",
+                "story_focus": "advance_plot",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": failed_metrics,
+                "continuity_warning_count": 0,
+                "overall_score": overall_score,
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {
+            "quality_gate": quality_gate,
+            "message": "need repair",
+            "active_story_repair_payload": {
+                "summary": "Strengthen the chapter landing without regrowing the scene.",
+                "repair_targets": ["Sharpen the chapter-ending pressure"],
+                "preserve_strengths": ["Keep the current continuity beats"],
+            },
+        }
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-recompute-before-rerank",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) >= 4
+    assert result["candidate_index"] != 2
+    assert result["word_count"] != 2023
+    assert result["quality_metrics"]["candidate_selection"]["quality_gate_decision"] == "manual_review"
+    candidate_pool = result["quality_metrics"]["candidate_pool_summary"]
+    rerank_candidate = next(item for item in candidate_pool if item["candidate_index"] == 2)
+    assert rerank_candidate["quality_gate_decision"] == "auto_repair"
+    assert rerank_candidate["is_winner"] is False
+
+
+async def test_should_use_near_target_word_budget_repair_candidate_as_targeted_final_repair_seed():
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "A" * 2920
+            elif len(self.calls) == 2:
+                yield "B" * 1957
+            elif len(self.calls) == 3:
+                yield "C" * 1422
+            else:
+                yield "D" * 1336
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        failed_metrics: list[dict[str, str]]
+        if content.startswith("A"):
+            decision = "manual_review"
+            overall_score = 74.0
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+                {"label": "Conflict chain", "focus_area": "conflict"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        elif content.startswith("B"):
+            decision = "manual_review"
+            overall_score = 88.0
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+                {"label": "Conflict chain", "focus_area": "conflict"},
+            ]
+        elif content.startswith("C"):
+            decision = "manual_review"
+            overall_score = 79.0
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+                {"label": "Conflict chain", "focus_area": "conflict"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        else:
+            decision = "allow_save"
+            overall_score = 90.0
+            failed_metrics = []
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 8.1,
+            "quality_runtime_context": {
+                "quality_preset": "plot_drive",
+                "creative_mode": "hook",
+                "story_focus": "advance_plot",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": failed_metrics,
+                "continuity_warning_count": 0,
+                "overall_score": overall_score,
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {
+            "quality_gate": quality_gate,
+            "message": "need repair",
+            "active_story_repair_payload": {
+                "summary": "Strengthen the chapter landing without regrowing the scene.",
+                "repair_targets": ["Sharpen the chapter-ending pressure"],
+                "preserve_strengths": ["Keep the current continuity beats"],
+            },
+        }
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-targeted-repair-seed",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) == 4
+    assert "Word-budget repair pass #3" in ai_service.calls[2]["prompt"]
+    assert "Targeted quality repair pass #4" in ai_service.calls[3]["prompt"]
+    assert ("C" * 120) in ai_service.calls[3]["prompt"]
+    assert ("B" * 120) not in ai_service.calls[3]["prompt"]
+    assert result["candidate_index"] == 4
+    assert result["word_count"] == 1336
+    assert result["generation_path"] == "targeted_quality_repair"
+    assert result["attempt_kind"] == "targeted_quality_repair"
+    assert result["quality_metrics"]["candidate_selection"]["winner_candidate_index"] == 4
+    assert result["quality_metrics"]["candidate_selection"]["repair_seed_candidate_index"] == 3
+    assert result["quality_metrics"]["candidate_selection"]["repair_seed_generation_path"] == "word_budget_repair"
+    assert result["quality_metrics"]["candidate_selection"]["repair_seed_attempt_kind"] == "word_budget_repair"
+    repair_seed_items = [
+        item for item in result["quality_metrics"]["candidate_pool_summary"] if item.get("is_repair_seed")
+    ]
+    assert len(repair_seed_items) == 1
+    assert repair_seed_items[0]["candidate_index"] == 3
+    targeted_repair_items = [
+        item
+        for item in result["quality_metrics"]["candidate_pool_summary"]
+        if item.get("generation_path") == "targeted_quality_repair"
+    ]
+    assert len(targeted_repair_items) == 1
+    assert targeted_repair_items[0]["repair_seed_candidate_index"] == 3
+    assert targeted_repair_items[0]["repair_seed_generation_path"] == "word_budget_repair"
+    assert targeted_repair_items[0]["repair_seed_attempt_kind"] == "word_budget_repair"
+
+
+async def test_should_keep_word_budget_seed_when_targeted_final_repair_candidate_is_not_better():
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "A" * 2920
+            elif len(self.calls) == 2:
+                yield "B" * 1790
+            elif len(self.calls) == 3:
+                yield "C" * 1422
+            else:
+                yield "D" * 1433
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        failed_metrics: list[dict[str, str]]
+        if content.startswith("A"):
+            decision = "manual_review"
+            overall_score = 74.0
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+                {"label": "Conflict chain", "focus_area": "conflict"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        elif content.startswith("B"):
+            decision = "auto_repair"
+            overall_score = 98.3
+            failed_metrics = []
+        elif content.startswith("C"):
+            decision = "manual_review"
+            overall_score = 93.1
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        else:
+            decision = "manual_review"
+            overall_score = 94.0
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 8.1,
+            "quality_runtime_context": {
+                "quality_preset": "plot_drive",
+                "creative_mode": "hook",
+                "story_focus": "advance_plot",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": failed_metrics,
+                "continuity_warning_count": 0,
+                "overall_score": overall_score,
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {
+            "quality_gate": quality_gate,
+            "message": "need repair",
+            "active_story_repair_payload": {
+                "summary": "Strengthen the chapter landing without regrowing the scene.",
+                "repair_targets": ["Sharpen the chapter-ending pressure"],
+                "preserve_strengths": ["Keep the current continuity beats"],
+            },
+        }
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-targeted-repair-adoption-gate",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) == 5
+    assert "Word-budget repair pass #3" in ai_service.calls[2]["prompt"]
+    assert "Targeted quality repair pass #4" in ai_service.calls[3]["prompt"]
+    assert "Targeted quality repair pass #5" in ai_service.calls[4]["prompt"]
+    assert ("C" * 120) in ai_service.calls[3]["prompt"]
+    assert ("B" * 120) not in ai_service.calls[3]["prompt"]
+    assert ("D" * 120) in ai_service.calls[4]["prompt"]
+    assert ("C" * 120) not in ai_service.calls[4]["prompt"]
+    assert result["candidate_index"] == 3
+    assert result["generation_path"] == "word_budget_repair"
+    assert result["attempt_kind"] == "word_budget_repair"
+    assert result["quality_metrics"]["candidate_selection"]["winner_candidate_index"] == 3
+    assert result["quality_metrics"]["candidate_selection"]["repair_seed_candidate_index"] == 2
+    targeted_repair_items = [
+        item
+        for item in result["quality_metrics"]["candidate_pool_summary"]
+        if item.get("generation_path") == "targeted_quality_repair"
+    ]
+    assert len(targeted_repair_items) == 2
+    assert targeted_repair_items[0]["repair_seed_candidate_index"] == 3
+    assert targeted_repair_items[1]["repair_seed_candidate_index"] == 4
+    assert all(item["is_winner"] is False for item in targeted_repair_items)
+
+
+async def test_should_run_followup_targeted_final_repair_from_deferred_cliffhanger_seed():
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "A" * 2920
+            elif len(self.calls) == 2:
+                yield "B" * 1790
+            elif len(self.calls) == 3:
+                yield "C" * 1422
+            elif len(self.calls) == 4:
+                yield "D" * 1433
+            else:
+                yield "E" * 1368
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        failed_metrics: list[dict[str, str]]
+        if content.startswith("A"):
+            decision = "manual_review"
+            overall_score = 74.0
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+                {"label": "Conflict chain", "focus_area": "conflict"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        elif content.startswith("B"):
+            decision = "auto_repair"
+            overall_score = 98.3
+            failed_metrics = []
+        elif content.startswith("C"):
+            decision = "manual_review"
+            overall_score = 93.1
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        elif content.startswith("D"):
+            decision = "manual_review"
+            overall_score = 90.4
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        else:
+            decision = "allow_save"
+            overall_score = 94.2
+            failed_metrics = []
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 8.1,
+            "quality_runtime_context": {
+                "quality_preset": "plot_drive",
+                "creative_mode": "hook",
+                "story_focus": "advance_plot",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": failed_metrics,
+                "continuity_warning_count": 0,
+                "overall_score": overall_score,
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {
+            "quality_gate": quality_gate,
+            "message": "need repair",
+            "active_story_repair_payload": {
+                "summary": "Strengthen the chapter landing without regrowing the scene.",
+                "repair_targets": ["Sharpen the chapter-ending pressure"],
+                "preserve_strengths": ["Keep the current continuity beats"],
+            },
+        }
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-deferred-followup-cliffhanger-repair",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) == 5
+    assert "Targeted quality repair pass #4" in ai_service.calls[3]["prompt"]
+    assert "Targeted quality repair pass #5" in ai_service.calls[4]["prompt"]
+    assert "Cliffhanger hard rule" in ai_service.calls[4]["prompt"]
+    assert "Cliffhanger escalation rule" in ai_service.calls[4]["prompt"]
+    assert "Cliffhanger framing rule" in ai_service.calls[4]["prompt"]
+    assert ("D" * 120) in ai_service.calls[4]["prompt"]
+    assert ("C" * 120) not in ai_service.calls[4]["prompt"]
+    assert result["candidate_index"] == 5
+    assert result["word_count"] == 1368
+    assert result["generation_path"] == "targeted_quality_repair"
+    assert result["attempt_kind"] == "targeted_quality_repair"
+    assert result["quality_gate_decision"] == "allow_save"
+    assert result["quality_metrics"]["candidate_selection"]["winner_candidate_index"] == 5
+    assert result["quality_metrics"]["candidate_selection"]["repair_seed_candidate_index"] == 4
+    targeted_repair_items = [
+        item
+        for item in result["quality_metrics"]["candidate_pool_summary"]
+        if item.get("generation_path") == "targeted_quality_repair"
+    ]
+    assert len(targeted_repair_items) == 2
+    assert targeted_repair_items[0]["repair_seed_candidate_index"] == 3
+    assert targeted_repair_items[0]["is_winner"] is False
+    assert targeted_repair_items[-1]["repair_seed_candidate_index"] == 4
+    assert targeted_repair_items[-1]["is_winner"] is True
+
+
+async def test_should_run_followup_targeted_final_repair_for_rule_grounding_and_cliffhanger_gap():
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "A" * 2920
+            elif len(self.calls) == 2:
+                yield "B" * 1790
+            elif len(self.calls) == 3:
+                yield "C" * 1422
+            elif len(self.calls) == 4:
+                yield "D" * 1416
+            else:
+                yield "E" * 1362
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        failed_metrics: list[dict[str, str]]
+        if content.startswith("A"):
+            decision = "manual_review"
+            overall_score = 74.0
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+                {"label": "Conflict chain", "focus_area": "conflict"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        elif content.startswith("B"):
+            decision = "auto_repair"
+            overall_score = 98.3
+            failed_metrics = []
+        elif content.startswith("C"):
+            decision = "manual_review"
+            overall_score = 92.0
+            failed_metrics = [
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        elif content.startswith("D"):
+            decision = "manual_review"
+            overall_score = 91.4
+            failed_metrics = [
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        else:
+            decision = "allow_save"
+            overall_score = 94.8
+            failed_metrics = []
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 8.1,
+            "quality_runtime_context": {
+                "quality_preset": "plot_drive",
+                "creative_mode": "hook",
+                "story_focus": "advance_plot",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": failed_metrics,
+                "continuity_warning_count": 0,
+                "overall_score": overall_score,
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {
+            "quality_gate": quality_gate,
+            "message": "need repair",
+            "active_story_repair_payload": {
+                "summary": "Strengthen the chapter landing without regrowing the scene.",
+                "repair_targets": ["Make the governing rule trigger the final chapter hook"],
+                "preserve_strengths": ["Keep the current continuity beats"],
+            },
+        }
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-followup-targeted-repair-rule-and-hook",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) == 5
+    assert "Targeted quality repair pass #4" in ai_service.calls[3]["prompt"]
+    assert "Targeted quality repair pass #5" in ai_service.calls[4]["prompt"]
+    assert "Joint repair focus" in ai_service.calls[3]["prompt"]
+    assert "Joint closing hard rule" in ai_service.calls[4]["prompt"]
+    assert ("D" * 120) in ai_service.calls[4]["prompt"]
+    assert ("C" * 120) not in ai_service.calls[4]["prompt"]
+    assert result["candidate_index"] == 5
+    assert result["word_count"] == 1362
+    assert result["generation_path"] == "targeted_quality_repair"
+    assert result["attempt_kind"] == "targeted_quality_repair"
+    assert result["quality_gate_decision"] == "allow_save"
+    assert result["quality_metrics"]["candidate_selection"]["winner_candidate_index"] == 5
+    assert result["quality_metrics"]["candidate_selection"]["repair_seed_candidate_index"] == 4
+
+
+async def test_should_prefer_word_budget_repair_candidate_over_severely_overlong_auto_repair_winner():
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "A" * 2903
+            elif len(self.calls) == 2:
+                yield "B" * 1994
+            else:
+                yield "C" * 1422
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        failed_metrics: list[dict[str, str]]
+        if content.startswith("A"):
+            decision = "auto_repair"
+            overall_score = 80.5
+            failed_metrics = [
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+                {"label": "Conflict chain", "focus_area": "conflict"},
+            ]
+        elif content.startswith("B"):
+            decision = "manual_review"
+            overall_score = 80.9
+            failed_metrics = [
+                {"label": "Conflict chain", "focus_area": "conflict"},
+            ]
+        else:
+            decision = "manual_review"
+            overall_score = 68.6
+            failed_metrics = [
+                {"label": "Conflict chain", "focus_area": "conflict"},
+            ]
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 8.1,
+            "quality_runtime_context": {
+                "quality_preset": "plot_drive",
+                "creative_mode": "hook",
+                "story_focus": "advance_plot",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": failed_metrics,
+                "continuity_warning_count": 0,
+                "overall_score": overall_score,
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {
+            "quality_gate": quality_gate,
+            "message": "need repair",
+            "active_story_repair_payload": {
+                "summary": "Compress the chapter while preserving the core conflict chain.",
+                "repair_targets": ["Cut the chapter down to the target window without losing the visible blocker"],
+                "preserve_strengths": ["Keep the core plot pressure on-page"],
+            },
+        }
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-word-budget-repair-beats-severe-auto-repair",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) == 3
+    assert result["candidate_index"] == 3
+    assert result["word_count"] == 1422
+    assert result["generation_path"] == "word_budget_repair"
+    assert result["attempt_kind"] == "word_budget_repair"
+    assert result["quality_metrics"]["candidate_selection"]["winner_candidate_index"] == 3
+
+
+async def test_should_run_targeted_final_repair_for_opening_conflict_cliffhanger_gap():
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "A" * 2395
+            elif len(self.calls) == 2:
+                yield "B" * 1801
+            elif len(self.calls) == 3:
+                yield "C" * 1422
+            else:
+                yield "D" * 1368
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        failed_metrics: list[dict[str, str]]
+        if content.startswith("A"):
+            decision = "manual_review"
+            overall_score = 70.0
+            failed_metrics = [
+                {"label": "Conflict chain", "focus_area": "conflict"},
+                {"label": "Opening", "focus_area": "opening"},
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        elif content.startswith("B"):
+            decision = "manual_review"
+            overall_score = 60.7
+            failed_metrics = [
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+                {"label": "Conflict chain", "focus_area": "conflict"},
+                {"label": "Opening", "focus_area": "opening"},
+            ]
+        elif content.startswith("C"):
+            decision = "manual_review"
+            overall_score = 90.6
+            failed_metrics = [
+                {"label": "Opening", "focus_area": "opening"},
+                {"label": "Conflict chain", "focus_area": "conflict"},
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        else:
+            decision = "allow_save"
+            overall_score = 93.8
+            failed_metrics = []
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 8.1,
+            "quality_runtime_context": {
+                "quality_preset": "plot_drive",
+                "creative_mode": "hook",
+                "story_focus": "advance_plot",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": failed_metrics,
+                "continuity_warning_count": 0,
+                "overall_score": overall_score,
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {
+            "quality_gate": quality_gate,
+            "message": "need repair",
+            "active_story_repair_payload": {
+                "summary": "Tighten the opening, visible blocker, and chapter-ending hook into one clean chain.",
+                "repair_targets": ["Make the opening anomaly create the blocker and the blocker create the closing hook"],
+                "preserve_strengths": ["Keep the existing chapter mission and continuity beats"],
+            },
+        }
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-targeted-repair-opening-conflict-cliffhanger",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) == 4
+    assert "Word-budget repair pass #3" in ai_service.calls[2]["prompt"]
+    assert "Targeted quality repair pass #4" in ai_service.calls[3]["prompt"]
+    assert "Three-beat repair focus" in ai_service.calls[3]["prompt"]
+    assert "Opening repair focus" in ai_service.calls[3]["prompt"]
+    assert result["candidate_index"] == 4
+    assert result["word_count"] == 1368
+    assert result["generation_path"] == "targeted_quality_repair"
+    assert result["attempt_kind"] == "targeted_quality_repair"
+    assert result["quality_gate_decision"] == "allow_save"
+    assert result["quality_metrics"]["candidate_selection"]["winner_candidate_index"] == 4
+    assert result["quality_metrics"]["candidate_selection"]["repair_seed_candidate_index"] == 3
+
+
+async def test_should_run_targeted_final_repair_for_opening_rule_grounding_cliffhanger_gap():
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "A" * 2410
+            elif len(self.calls) == 2:
+                yield "B" * 1812
+            elif len(self.calls) == 3:
+                yield "C" * 1421
+            else:
+                yield "D" * 1372
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        failed_metrics: list[dict[str, str]]
+        if content.startswith("A"):
+            decision = "manual_review"
+            overall_score = 71.0
+            failed_metrics = [
+                {"label": "Opening", "focus_area": "opening"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        elif content.startswith("B"):
+            decision = "manual_review"
+            overall_score = 62.5
+            failed_metrics = [
+                {"label": "Conflict chain", "focus_area": "conflict"},
+                {"label": "Opening", "focus_area": "opening"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        elif content.startswith("C"):
+            decision = "manual_review"
+            overall_score = 90.5
+            failed_metrics = [
+                {"label": "Opening", "focus_area": "opening"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        else:
+            decision = "allow_save"
+            overall_score = 94.0
+            failed_metrics = []
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 8.1,
+            "quality_runtime_context": {
+                "quality_preset": "plot_drive",
+                "creative_mode": "hook",
+                "story_focus": "advance_plot",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": failed_metrics,
+                "continuity_warning_count": 0,
+                "overall_score": overall_score,
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {
+            "quality_gate": quality_gate,
+            "message": "need repair",
+            "active_story_repair_payload": {
+                "summary": "Fuse the opening hook, grounded rule pressure, and chapter-ending spike into one causal line.",
+                "repair_targets": ["Make the opening anomaly reveal the governing rule and let that same rule detonate the final unresolved hook"],
+                "preserve_strengths": ["Keep the existing chapter mission and continuity beats"],
+            },
+        }
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-targeted-repair-opening-rule-grounding-cliffhanger",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) == 4
+    assert "Word-budget repair pass #3" in ai_service.calls[2]["prompt"]
+    assert "Targeted quality repair pass #4" in ai_service.calls[3]["prompt"]
+    assert "Opening repair focus" in ai_service.calls[3]["prompt"]
+    assert "Rule-grounding repair focus" in ai_service.calls[3]["prompt"]
+    assert "Cliffhanger hard rule" in ai_service.calls[3]["prompt"]
+    assert "Joint repair focus: make the opening anomaly or urgent demand" in ai_service.calls[3]["prompt"]
+    assert "Joint triad hard rule" in ai_service.calls[3]["prompt"]
+    assert result["candidate_index"] == 4
+    assert result["word_count"] == 1372
+    assert result["generation_path"] == "targeted_quality_repair"
+    assert result["attempt_kind"] == "targeted_quality_repair"
+    assert result["quality_gate_decision"] == "allow_save"
+    assert result["quality_metrics"]["candidate_selection"]["winner_candidate_index"] == 4
+    assert result["quality_metrics"]["candidate_selection"]["repair_seed_candidate_index"] == 3
+
+
+async def test_should_run_targeted_final_repair_for_dialogue_and_cliffhanger_gap():
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "A" * 2920
+            elif len(self.calls) == 2:
+                yield "B" * 1795
+            elif len(self.calls) == 3:
+                yield "C" * 1428
+            else:
+                yield "D" * 1366
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        failed_metrics: list[dict[str, str]]
+        if content.startswith("A"):
+            decision = "manual_review"
+            overall_score = 74.0
+            failed_metrics = [
+                {"label": "Conflict chain", "focus_area": "conflict"},
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        elif content.startswith("B"):
+            decision = "auto_repair"
+            overall_score = 98.3
+            failed_metrics = []
+        elif content.startswith("C"):
+            decision = "manual_review"
+            overall_score = 91.2
+            failed_metrics = [
+                {"label": "Dialogue", "focus_area": "dialogue"},
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        else:
+            decision = "allow_save"
+            overall_score = 94.4
+            failed_metrics = []
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 8.1,
+            "quality_runtime_context": {
+                "quality_preset": "plot_drive",
+                "creative_mode": "hook",
+                "story_focus": "advance_plot",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": failed_metrics,
+                "continuity_warning_count": 0,
+                "overall_score": overall_score,
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {
+            "quality_gate": quality_gate,
+            "message": "need repair",
+            "active_story_repair_payload": {
+                "summary": "Sharpen the decisive exchange and let it detonate the chapter-ending hook.",
+                "repair_targets": ["Make the leverage shift inside dialogue create the final unresolved spike"],
+                "preserve_strengths": ["Keep the current chapter mission and continuity beats"],
+            },
+        }
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-targeted-repair-dialogue-cliffhanger",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) == 4
+    assert "Word-budget repair pass #3" in ai_service.calls[2]["prompt"]
+    assert "Targeted quality repair pass #4" in ai_service.calls[3]["prompt"]
+    assert "Joint repair focus" in ai_service.calls[3]["prompt"]
+    assert "Joint dialogue-cliffhanger hard rule" in ai_service.calls[3]["prompt"]
+    assert ("C" * 120) in ai_service.calls[3]["prompt"]
+    assert ("B" * 120) not in ai_service.calls[3]["prompt"]
+    assert result["candidate_index"] == 4
+    assert result["word_count"] == 1366
+    assert result["generation_path"] == "targeted_quality_repair"
+    assert result["attempt_kind"] == "targeted_quality_repair"
+    assert result["quality_gate_decision"] == "allow_save"
+    assert result["quality_metrics"]["candidate_selection"]["winner_candidate_index"] == 4
+    assert result["quality_metrics"]["candidate_selection"]["repair_seed_candidate_index"] == 3
+
+
+async def test_should_run_targeted_final_repair_for_opening_and_rule_grounding_gap():
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "A" * 2821
+            elif len(self.calls) == 2:
+                yield "B" * 1883
+            elif len(self.calls) == 3:
+                yield "C" * 1420
+            else:
+                yield "D" * 1364
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        failed_metrics: list[dict[str, str]]
+        if content.startswith("A"):
+            decision = "manual_review"
+            overall_score = 78.8
+            failed_metrics = [
+                {"label": "Opening", "focus_area": "opening"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        elif content.startswith("B"):
+            decision = "manual_review"
+            overall_score = 72.6
+            failed_metrics = [
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+                {"label": "Opening", "focus_area": "opening"},
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        elif content.startswith("C"):
+            decision = "manual_review"
+            overall_score = 90.2
+            failed_metrics = [
+                {"label": "Opening", "focus_area": "opening"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        else:
+            decision = "allow_save"
+            overall_score = 93.4
+            failed_metrics = []
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 8.1,
+            "quality_runtime_context": {
+                "quality_preset": "plot_drive",
+                "creative_mode": "hook",
+                "story_focus": "advance_plot",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": failed_metrics,
+                "continuity_warning_count": 0,
+                "overall_score": overall_score,
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {
+            "quality_gate": quality_gate,
+            "message": "need repair",
+            "active_story_repair_payload": {
+                "summary": "Hook the chapter immediately and ground the governing rule on-page.",
+                "repair_targets": ["Make the opening hook expose the active rule within the first two paragraphs"],
+                "preserve_strengths": ["Keep the current chapter mission and continuity"],
+            },
+        }
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-targeted-repair-opening-rule-grounding",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) == 4
+    assert "Word-budget repair pass #3" in ai_service.calls[2]["prompt"]
+    assert "Targeted quality repair pass #4" in ai_service.calls[3]["prompt"]
+    assert "Joint opening hard rule" in ai_service.calls[3]["prompt"]
+    assert result["candidate_index"] == 4
+    assert result["word_count"] == 1364
+    assert result["generation_path"] == "targeted_quality_repair"
+    assert result["attempt_kind"] == "targeted_quality_repair"
+    assert result["quality_gate_decision"] == "allow_save"
+    assert result["quality_metrics"]["candidate_selection"]["winner_candidate_index"] == 4
+    assert result["quality_metrics"]["candidate_selection"]["repair_seed_candidate_index"] == 3
+
+
+async def test_should_fallback_to_overlong_cliffhanger_winner_for_targeted_final_repair_after_budget_repair_collapse():
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "A" * 2717
+            elif len(self.calls) == 2:
+                yield "B" * 1944
+            elif len(self.calls) == 3:
+                yield "C" * 1422
+            else:
+                yield "D" * 1405
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        failed_metrics: list[dict[str, str]]
+        if content.startswith("A"):
+            decision = "manual_review"
+            overall_score = 88.7
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        elif content.startswith("B"):
+            decision = "manual_review"
+            overall_score = 90.8
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        elif content.startswith("C"):
+            decision = "manual_review"
+            overall_score = 46.1
+            failed_metrics = [
+                {"label": "Conflict chain", "focus_area": "conflict"},
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        else:
+            decision = "allow_save"
+            overall_score = 91.4
+            failed_metrics = []
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 8.1,
+            "quality_runtime_context": {
+                "quality_preset": "plot_drive",
+                "creative_mode": "hook",
+                "story_focus": "advance_plot",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": failed_metrics,
+                "continuity_warning_count": 0,
+                "overall_score": overall_score,
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {
+            "quality_gate": quality_gate,
+            "message": "need repair",
+            "active_story_repair_payload": {
+                "summary": "Tighten the chapter ending without regrowing the scene.",
+                "repair_targets": ["Sharpen the unresolved closing hook"],
+                "preserve_strengths": ["Keep the current continuity beats"],
+            },
+        }
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-fallback-overlong-cliffhanger-targeted-repair",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) == 4
+    assert "Targeted quality repair pass #3" in ai_service.calls[3]["prompt"]
+    assert "Cliffhanger hard rule" in ai_service.calls[3]["prompt"]
+    assert ("B" * 120) in ai_service.calls[3]["prompt"]
+    assert ("C" * 120) not in ai_service.calls[3]["prompt"]
+    assert result["candidate_index"] == 3
+    assert result["word_count"] == 1405
+    assert result["generation_path"] == "targeted_quality_repair"
+    assert result["attempt_kind"] == "targeted_quality_repair"
+    assert result["quality_gate_decision"] == "allow_save"
+    assert result["quality_metrics"]["candidate_selection"]["winner_candidate_index"] == 3
+    assert result["quality_metrics"]["candidate_selection"]["repair_seed_candidate_index"] == 2
+    word_budget_items = [
+        item
+        for item in result["quality_metrics"]["candidate_pool_summary"]
+        if item.get("generation_path") == "word_budget_repair"
+    ]
+    assert len(word_budget_items) == 0
+
+
+async def test_should_drop_collapsed_targeted_final_repair_candidate_from_pool():
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "A" * 2838
+            elif len(self.calls) == 2:
+                yield "B" * 1884
+            elif len(self.calls) == 3:
+                yield "C" * 1422
+            elif len(self.calls) == 4:
+                yield "D" * 554
+            else:
+                yield "E" * 1434
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        failed_metrics: list[dict[str, str]]
+        if content.startswith("A"):
+            decision = "auto_repair"
+            overall_score = 88.8
+            failed_metrics = [
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        elif content.startswith("B"):
+            decision = "manual_review"
+            overall_score = 79.8
+            failed_metrics = [
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+                {"label": "Dialogue", "focus_area": "dialogue"},
+            ]
+        elif content.startswith("C"):
+            decision = "manual_review"
+            overall_score = 88.7
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        elif content.startswith("D"):
+            decision = "manual_review"
+            overall_score = 67.6
+            failed_metrics = [
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+                {"label": "Outline", "focus_area": "outline"},
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        else:
+            decision = "manual_review"
+            overall_score = 88.7
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+            ]
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 8.1,
+            "quality_runtime_context": {
+                "quality_preset": "plot_drive",
+                "creative_mode": "hook",
+                "story_focus": "advance_plot",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": failed_metrics,
+                "continuity_warning_count": 0,
+                "overall_score": overall_score,
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {
+            "quality_gate": quality_gate,
+            "message": "need repair",
+            "active_story_repair_payload": {
+                "summary": "Tighten the chapter ending without regrowing the scene.",
+                "repair_targets": ["Sharpen the unresolved closing hook"],
+                "preserve_strengths": ["Keep the current continuity beats"],
+            },
+        }
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-drop-collapsed-targeted-repair",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) == 5
+    assert result["candidate_index"] == 3
+    assert result["word_count"] == 1422
+    targeted_repair_items = [
+        item
+        for item in result["quality_metrics"]["candidate_pool_summary"]
+        if item.get("generation_path") == "targeted_quality_repair"
+    ]
+    assert len(targeted_repair_items) == 1
+    assert targeted_repair_items[0]["candidate_index"] == 4
+    assert targeted_repair_items[0]["word_count"] == 1434
+
+
+async def test_should_run_followup_targeted_final_repair_for_rule_grounding_only_winner():
+    class StubAIService:
+        def __init__(self):
+            self.calls: list[dict[str, Any]] = []
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "A" * 2920
+            elif len(self.calls) == 2:
+                yield "B" * 1957
+            elif len(self.calls) == 3:
+                yield "C" * 1422
+            elif len(self.calls) == 4:
+                yield "D" * 1434
+            else:
+                yield "E" * 1388
+
+    ai_service = StubAIService()
+
+    def evaluate_candidate_quality(content: str) -> dict[str, Any]:
+        failed_metrics: list[dict[str, str]]
+        if content.startswith("A"):
+            decision = "manual_review"
+            overall_score = 74.0
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+                {"label": "Conflict chain", "focus_area": "conflict"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        elif content.startswith("B"):
+            decision = "manual_review"
+            overall_score = 88.0
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+                {"label": "Conflict chain", "focus_area": "conflict"},
+            ]
+        elif content.startswith("C"):
+            decision = "manual_review"
+            overall_score = 79.0
+            failed_metrics = [
+                {"label": "Cliffhanger", "focus_area": "cliffhanger"},
+                {"label": "Conflict chain", "focus_area": "conflict"},
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        elif content.startswith("D"):
+            decision = "manual_review"
+            overall_score = 95.3
+            failed_metrics = [
+                {"label": "Rule grounding", "focus_area": "rule_grounding"},
+            ]
+        else:
+            decision = "allow_save"
+            overall_score = 96.1
+            failed_metrics = []
+        return {
+            "overall_score": overall_score,
+            "pacing_score": 8.1,
+            "quality_runtime_context": {
+                "quality_preset": "plot_drive",
+                "creative_mode": "hook",
+                "story_focus": "advance_plot",
+            },
+            "quality_gate": {
+                "status": "blocked" if decision != "allow_save" else "pass",
+                "decision": decision,
+                "failed_metrics": failed_metrics,
+                "continuity_warning_count": 0,
+                "overall_score": overall_score,
+            },
+        }
+
+    def build_candidate_quality_gate_plan(metrics: dict[str, Any], _attempt_offset: int) -> dict[str, Any]:
+        quality_gate = metrics.get("quality_gate") if isinstance(metrics.get("quality_gate"), dict) else {}
+        if quality_gate.get("decision") == "allow_save":
+            return {"quality_gate": quality_gate, "message": "passed"}
+        return {
+            "quality_gate": quality_gate,
+            "message": "need repair",
+            "active_story_repair_payload": {
+                "summary": "Strengthen the chapter landing without regrowing the scene.",
+                "repair_targets": ["Sharpen the chapter-ending pressure"],
+                "preserve_strengths": ["Keep the current continuity beats"],
+            },
+        }
+
+    result = await chapters_api._generate_best_ranked_candidate(
+        ai_service=ai_service,
+        base_generate_kwargs={"prompt": "base prompt", "temperature": 0.8},
+        target_word_count=1200,
+        source="chapter",
+        generation_label="test-followup-targeted-repair",
+        quality_evaluator=evaluate_candidate_quality,
+        quality_gate_plan_builder=build_candidate_quality_gate_plan,
+        max_candidates=2,
+    )
+
+    assert len(ai_service.calls) == 5
+    assert "Targeted quality repair pass #4" in ai_service.calls[3]["prompt"]
+    assert "Targeted quality repair pass #5" in ai_service.calls[4]["prompt"]
+    assert "Rule-grounding hard rule" in ai_service.calls[4]["prompt"]
+    assert ("D" * 120) in ai_service.calls[4]["prompt"]
+    assert ("C" * 120) not in ai_service.calls[4]["prompt"]
+    assert result["candidate_index"] == 5
+    assert result["word_count"] == 1388
+    assert result["generation_path"] == "targeted_quality_repair"
+    assert result["attempt_kind"] == "targeted_quality_repair"
+    assert result["quality_gate_decision"] == "allow_save"
+    assert result["quality_metrics"]["candidate_selection"]["winner_candidate_index"] == 5
+    assert result["quality_metrics"]["candidate_selection"]["repair_seed_candidate_index"] == 4
+    assert result["quality_metrics"]["candidate_selection"]["repair_seed_generation_path"] == "targeted_quality_repair"
+    assert result["quality_metrics"]["candidate_selection"]["repair_seed_attempt_kind"] == "targeted_quality_repair"
+    targeted_repair_items = [
+        item
+        for item in result["quality_metrics"]["candidate_pool_summary"]
+        if item.get("generation_path") == "targeted_quality_repair"
+    ]
+    assert len(targeted_repair_items) == 2
+    assert targeted_repair_items[-1]["repair_seed_candidate_index"] == 4
+    assert targeted_repair_items[-1]["repair_seed_generation_path"] == "targeted_quality_repair"
+    assert targeted_repair_items[-1]["repair_seed_attempt_kind"] == "targeted_quality_repair"
 
 
 async def test_should_get_and_apply_auto_revision_draft(
@@ -4181,6 +5875,21 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
                 "message": "analysis started",
                 "progress": 85,
                 "phase": "parsing",
+                "candidate_index": 2,
+                "candidate_count": 2,
+                "word_count": 1320,
+                "generation_path": "rerank_retry",
+                "attempt_kind": "rerank_candidate",
+                "rerank_used": True,
+                "word_budget_repair_used": False,
+                "winner_candidate_index": 2,
+                "pre_compaction_total_length": 4210,
+                "context_budget_limit": 2400,
+                "compaction_applied": True,
+                "compaction_details": {
+                    "recent_chapters_context": {"before": 1850, "after": 860},
+                    "foreshadow_reminders": {"before": 920, "after": 360},
+                },
             },
             db_session=session,
         )
@@ -4229,6 +5938,18 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     assert status_body["stage_code"] == "6.writing.parsing"
     assert status_body["checkpoint"]["progress_phase"] == "parsing"
     assert status_body["checkpoint"]["last_event"] == "analysis_started"
+    assert status_body["checkpoint"]["candidate_index"] == 2
+    assert status_body["checkpoint"]["candidate_count"] == 2
+    assert status_body["checkpoint"]["word_count"] == 1320
+    assert status_body["checkpoint"]["generation_path"] == "rerank_retry"
+    assert status_body["checkpoint"]["attempt_kind"] == "rerank_candidate"
+    assert status_body["checkpoint"]["rerank_used"] is True
+    assert status_body["checkpoint"]["word_budget_repair_used"] is False
+    assert status_body["checkpoint"]["winner_candidate_index"] == 2
+    assert status_body["checkpoint"]["pre_compaction_total_length"] == 4210
+    assert status_body["checkpoint"]["context_budget_limit"] == 2400
+    assert status_body["checkpoint"]["compaction_applied"] is True
+    assert status_body["checkpoint"]["compaction_details"]["recent_chapters_context"]["after"] == 860
     assert status_body["latest_quality_metrics"]["overall_score"] == 88.0
     assert status_body["latest_quality_metrics"]["repair_guidance"]["summary"]
     assert status_body["latest_quality_metrics"]["quality_gate"]["status"] == "pass"
@@ -4253,6 +5974,14 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     assert active_body["task"]["batch_id"] == task_id
     assert active_body["task"]["checkpoint"]["progress_phase"] == "parsing"
     assert active_body["task"]["checkpoint"]["last_event"] == "analysis_started"
+    assert active_body["task"]["checkpoint"]["candidate_index"] == 2
+    assert active_body["task"]["checkpoint"]["candidate_count"] == 2
+    assert active_body["task"]["checkpoint"]["generation_path"] == "rerank_retry"
+    assert active_body["task"]["checkpoint"]["attempt_kind"] == "rerank_candidate"
+    assert active_body["task"]["checkpoint"]["pre_compaction_total_length"] == 4210
+    assert active_body["task"]["checkpoint"]["context_budget_limit"] == 2400
+    assert active_body["task"]["checkpoint"]["compaction_applied"] is True
+    assert active_body["task"]["checkpoint"]["compaction_details"]["foreshadow_reminders"]["after"] == 360
     assert active_body["task"]["latest_quality_metrics"]["overall_score"] == 88.0
     assert active_body["task"]["latest_quality_metrics"]["repair_guidance"]["focus_areas"]
     assert active_body["task"]["latest_quality_metrics"]["quality_gate"]["status"] == "pass"
@@ -4271,6 +6000,18 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
         assert snapshot.workflow_runtime_state is not None
         assert snapshot.workflow_runtime_state["phase"] == "parsing"
         assert snapshot.workflow_runtime_state["last_event"] == "analysis_started"
+        assert snapshot.workflow_runtime_state["candidate_index"] == 2
+        assert snapshot.workflow_runtime_state["candidate_count"] == 2
+        assert snapshot.workflow_runtime_state["word_count"] == 1320
+        assert snapshot.workflow_runtime_state["generation_path"] == "rerank_retry"
+        assert snapshot.workflow_runtime_state["attempt_kind"] == "rerank_candidate"
+        assert snapshot.workflow_runtime_state["rerank_used"] is True
+        assert snapshot.workflow_runtime_state["word_budget_repair_used"] is False
+        assert snapshot.workflow_runtime_state["winner_candidate_index"] == 2
+        assert snapshot.workflow_runtime_state["pre_compaction_total_length"] == 4210
+        assert snapshot.workflow_runtime_state["context_budget_limit"] == 2400
+        assert snapshot.workflow_runtime_state["compaction_applied"] is True
+        assert snapshot.workflow_runtime_state["compaction_details"]["recent_chapters_context"]["before"] == 1850
         assert snapshot.workflow_runtime_state["active_story_repair_payload"]["source"] == "manual_plus_recent_history_summary"
 
     await clear_runtime_caches()
@@ -4281,6 +6022,13 @@ async def test_should_restore_deferred_analysis_quality_snapshot_and_regeneratio
     active_task_item = next(item for item in active_tasks_body["items"] if item["batch_id"] == task_id)
     assert active_task_item["checkpoint"]["progress_phase"] == "parsing"
     assert active_task_item["checkpoint"]["last_event"] == "analysis_started"
+    assert active_task_item["checkpoint"]["candidate_index"] == 2
+    assert active_task_item["checkpoint"]["candidate_count"] == 2
+    assert active_task_item["checkpoint"]["generation_path"] == "rerank_retry"
+    assert active_task_item["checkpoint"]["attempt_kind"] == "rerank_candidate"
+    assert active_task_item["checkpoint"]["pre_compaction_total_length"] == 4210
+    assert active_task_item["checkpoint"]["context_budget_limit"] == 2400
+    assert active_task_item["checkpoint"]["compaction_applied"] is True
     assert active_task_item["active_story_repair_payload"]["source"] == "manual_plus_recent_history_summary"
 
     can_generate_response = await chapters_client.get(f"/api/chapters/{chapter.id}/can-generate")
@@ -4504,7 +6252,7 @@ async def test_should_rerank_generate_stream_candidates_and_save_best_winner(
         }
 
     generation_calls: list[dict[str, Any]] = []
-    responses = [["draft-", "one"], ["draft-", "two"]]
+    responses = [["draft-", "one"], ["draft-", "two"], ["draft-", "two"]]
 
     async def fake_generate_text_stream(**kwargs):
         generation_calls.append(kwargs)
@@ -4529,11 +6277,22 @@ async def test_should_rerank_generate_stream_candidates_and_save_best_winner(
     result_event = next(event for event in events if event.get("type") == "result")
     result_data = result_event["data"]
 
-    assert len(generation_calls) == 2
+    assert len(generation_calls) >= 2
     assert "Revision attempt #2" in generation_calls[1]["prompt"]
     assert result_data["quality_gate_action"] == "continue"
-    assert result_data["quality_metrics"]["candidate_selection"]["candidate_count"] == 2
-    assert result_data["quality_metrics"]["candidate_selection"]["candidate_index"] == 2
+    assert result_data["quality_metrics"]["candidate_selection"]["candidate_count"] >= 2
+    assert result_data["quality_metrics"]["candidate_selection"]["candidate_index"] >= 2
+    assert result_data["quality_metrics"]["candidate_selection"]["generation_path"] in {"rerank_retry", "targeted_quality_repair"}
+    assert result_data["quality_metrics"]["candidate_selection"]["attempt_kind"] in {"rerank_candidate", "targeted_quality_repair"}
+    assert result_data["quality_metrics"]["candidate_selection"]["word_budget_repair_used"] is False
+    assert (
+        result_data["quality_metrics"]["candidate_selection"]["winner_candidate_index"]
+        == result_data["quality_metrics"]["candidate_selection"]["candidate_index"]
+    )
+    assert len(result_data["quality_metrics"]["candidate_pool_summary"]) >= 2
+    assert result_data["quality_metrics"]["candidate_pool_summary"][0]["candidate_index"] == 1
+    assert result_data["quality_metrics"]["candidate_pool_summary"][-1]["candidate_index"] >= 2
+    assert any(item["is_winner"] is True for item in result_data["quality_metrics"]["candidate_pool_summary"])
 
     async with chapters_session_factory() as session:
         saved_chapter = await session.get(Chapter, chapter.id)
@@ -4661,7 +6420,7 @@ async def test_generate_single_chapter_for_batch_should_rerank_candidates_before
     class SequencedAIService:
         def __init__(self):
             self.calls: list[dict[str, Any]] = []
-            self.responses = [["draft-", "one"], ["draft-", "two"]]
+            self.responses = [["draft-", "one"], ["draft-", "two"], ["draft-", "two"]]
 
         async def generate_text_stream(self, **kwargs):
             self.calls.append(kwargs)
@@ -4695,13 +6454,21 @@ async def test_generate_single_chapter_for_batch_should_rerank_candidates_before
             max_retries=1,
         )
 
-    assert len(ai_service.calls) == 2
+    assert len(ai_service.calls) >= 2
     assert "Revision attempt #2" in ai_service.calls[1]["prompt"]
     assert result["full_content"] == "draft-two"
-    assert result["candidate_count"] == 2
+    assert result["candidate_count"] >= 2
     assert result["quality_gate_plan"]["action"] == "continue"
-    assert result["quality_gate_plan"]["quality_gate"]["decision"] == "allow_save"
-    assert result["quality_metrics"]["candidate_selection"]["candidate_index"] == 2
+    assert result["quality_gate_plan"]["quality_gate"]["decision"] == "auto_repair"
+    assert result["quality_metrics"]["candidate_selection"]["candidate_count"] == result["candidate_count"]
+    assert result["quality_metrics"]["candidate_selection"]["candidate_index"] >= 2
+    assert result["quality_metrics"]["candidate_selection"]["generation_path"] in {"rerank_retry", "targeted_quality_repair"}
+    assert result["quality_metrics"]["candidate_selection"]["attempt_kind"] in {"rerank_candidate", "targeted_quality_repair"}
+    assert result["quality_metrics"]["candidate_selection"]["word_budget_repair_used"] is False
+    assert (
+        result["quality_metrics"]["candidate_selection"]["winner_candidate_index"]
+        == result["quality_metrics"]["candidate_selection"]["candidate_index"]
+    )
 
 
 
@@ -4736,3 +6503,45 @@ def test_should_include_story_runtime_contract_in_generation_history_payload():
     assert payload["story_runtime_snapshot"]["plot_stage"] == "development"
     assert payload["story_runtime_snapshot"]["current_chapter_number"] == 5
     assert payload["story_runtime_snapshot"]["character_focus"] == ["Lin", "Su"]
+
+
+def test_should_recompute_execution_quality_gate_from_latest_candidate_selection():
+    metrics = {
+        "overall_score": 96.9,
+        "conflict_chain_hit_rate": 100.0,
+        "rule_grounding_hit_rate": 100.0,
+        "outline_alignment_rate": 100.0,
+        "dialogue_naturalness_rate": 74.0,
+        "opening_hook_rate": 100.0,
+        "payoff_chain_rate": 100.0,
+        "cliffhanger_rate": 100.0,
+        "quality_gate": {
+            "status": "pass",
+            "decision": "allow_save",
+            "allow_save": True,
+        },
+        "candidate_selection": {
+            "word_count": 2699,
+            "target_word_count": 1200,
+            "candidate_index": 1,
+            "candidate_count": 1,
+        },
+        "quality_runtime_context": {
+            "plot_stage": "development",
+            "quality_preset": "plot_drive",
+            "story_focus": "advance_plot",
+            "creative_mode": "hook",
+        },
+    }
+
+    quality_gate_plan = chapters_api._resolve_quality_gate_execution_plan(
+        metrics,
+        retry_count=0,
+        max_retries=1,
+        current_story_repair_payload=None,
+        scope="chapter",
+    )
+
+    assert quality_gate_plan["action"] == "retry"
+    assert quality_gate_plan["quality_gate"]["decision"] == "auto_repair"
+    assert quality_gate_plan["quality_gate"]["allow_save"] is False

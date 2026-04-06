@@ -65,7 +65,36 @@ def resolve_outline_guidance(
     )
 
 
-def build_outline_guidance_blocks(active_guidance: StoryGenerationGuidance) -> list[str]:
+def build_compact_outline_guidance_blocks(active_guidance: StoryGenerationGuidance) -> list[str]:
+    creative_mode = active_guidance.creative_mode
+    story_focus = active_guidance.story_focus
+    plot_stage = active_guidance.plot_stage
+
+    blocks = [
+        build_quality_preference_block(active_guidance.quality_preset, active_guidance.quality_notes, scene=OUTLINE_SCENE),
+        build_creative_mode_block(creative_mode, scene=OUTLINE_SCENE),
+        build_story_focus_block(story_focus, scene=OUTLINE_SCENE),
+        build_narrative_blueprint_block(creative_mode, story_focus, scene=OUTLINE_SCENE, plot_stage=plot_stage),
+        build_story_objective_card_block(creative_mode, story_focus, scene=OUTLINE_SCENE, plot_stage=plot_stage),
+        build_story_result_card_block(creative_mode, story_focus, scene=OUTLINE_SCENE, plot_stage=plot_stage),
+        build_story_payoff_chain_card_block(creative_mode, story_focus, scene=OUTLINE_SCENE, plot_stage=plot_stage),
+        build_story_rule_grounding_card_block(creative_mode, story_focus, scene=OUTLINE_SCENE, plot_stage=plot_stage),
+        build_story_opening_hook_card_block(creative_mode, story_focus, scene=OUTLINE_SCENE, plot_stage=plot_stage),
+        build_story_cliffhanger_card_block(creative_mode, story_focus, scene=OUTLINE_SCENE, plot_stage=plot_stage),
+        build_story_character_arc_card_block(creative_mode, story_focus, scene=OUTLINE_SCENE, plot_stage=plot_stage),
+        build_story_execution_checklist_block(creative_mode, story_focus, scene=OUTLINE_SCENE, plot_stage=plot_stage),
+    ]
+    return [str(block).strip() for block in blocks if str(block or "").strip()]
+
+
+def build_outline_guidance_blocks(active_guidance: StoryGenerationGuidance, *, compact_mode: bool = False) -> list[str]:
+    creative_mode = active_guidance.creative_mode
+    story_focus = active_guidance.story_focus
+    plot_stage = active_guidance.plot_stage
+
+    if compact_mode:
+        return build_compact_outline_guidance_blocks(active_guidance)
+
     creative_mode = active_guidance.creative_mode
     story_focus = active_guidance.story_focus
     plot_stage = active_guidance.plot_stage
@@ -115,6 +144,7 @@ def build_outline_generation_requirements(
     base_requirements: Optional[str],
     *,
     chapter_count: Optional[int] = None,
+    compact_mode: bool = False,
     creative_mode: Optional[str] = None,
     story_focus: Optional[str] = None,
     plot_stage: Optional[str] = None,
@@ -151,9 +181,10 @@ def build_outline_generation_requirements(
             quality_repair_guidance=quality_repair_guidance,
             quality_trend_guidance=quality_trend_guidance,
             scene=OUTLINE_SCENE,
+            compact_mode=compact_mode,
         ),
     )
-    parts.extend(build_outline_guidance_blocks(active_guidance))
+    parts.extend(build_outline_guidance_blocks(active_guidance, compact_mode=compact_mode))
     if opening_outline_count is not None and opening_outline_count > 0:
         _append_if_present(parts, build_opening_outline_constraints_block(opening_outline_count))
     return "\n\n".join(parts)

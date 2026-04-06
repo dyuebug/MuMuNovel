@@ -1,5 +1,6 @@
 import logging
 from app.api.outlines import _merge_outline_requirements
+from app.services.chapter_quality_context_service import StoryBlueprint, StoryGenerationGuidance, StoryPacket
 from app.services.prompt_service import (
     QUALITY_PREFERENCE_SPECS,
     QUALITY_RUNTIME_TRACKING_TAG,
@@ -401,6 +402,7 @@ def test_should_build_story_repair_target_block():
     assert "优先补强冲突抬压" in block
     assert "写实受阻" in block
     assert "保留对白辨识度" in block
+    assert "Conflict repair hard rule" in block
 
 
 def test_should_inject_story_repair_target_block_into_chapter_quality_contract():
@@ -416,6 +418,7 @@ def test_should_inject_story_repair_target_block_into_chapter_quality_contract()
 
     assert "【修复目标卡】" in blocks["story_repair_target_block"]
     assert "补强章尾钩子" in blocks["story_repair_target_block"]
+    assert "Ending repair hard rule" in blocks["story_repair_target_block"]
     assert "保留人物火花" in blocks["story_repair_target_block"]
     assert "【修复目标卡】" in blocks["quality_contract_block"]
 
@@ -462,6 +465,9 @@ def test_should_build_story_execution_checklist_block_with_stage_hint():
     assert "- 加压：" in block
     assert "- 转折：" in block
     assert "- 收束：" in block
+    assert "前 20%-25% 内至少给出目标、异常或受阻点之一" in block
+    assert "推进→受阻→决断→代价/反弹" in block
+    assert "设定规则的触发、限制或反噬" in block
     assert "高潮阶段" in block
 
 
@@ -578,6 +584,8 @@ def test_should_build_story_rule_grounding_card_block_with_stage_hint():
     assert "- 触发条件：" in block
     assert "- 代价/限制：" in block
     assert "- 场景表现：" in block
+    assert "- 硬指标：" in block
+    assert "触发条件→规则生效→限制/代价→局势变化" in block
     assert "- 阶段提醒：" in block
     assert "- 避免：" in block
     assert "发展阶段" in block
@@ -887,6 +895,9 @@ def test_should_build_story_opening_hook_card_block_with_stage_hint():
     assert "- 第一击：" in block
     assert "- 麻烦种子：" in block
     assert "- 未决问题：" in block
+    assert "- 硬指标：" in block
+    assert "开篇前 20%-25% 内至少落地 1 个抓手" in block
+    assert "前 120-180 字内同时出现两类抓手" in block
     assert "- 阶段提醒：" in block
     assert "- 避免：" in block
     assert "发展阶段" in block
@@ -946,6 +957,8 @@ def test_should_build_story_cliffhanger_card_block_with_stage_hint():
     assert "- 未决点：" in block
     assert "- 下一步逼力：" in block
     assert "- 余味：" in block
+    assert "- 硬指标：" in block
+    assert "最后一段至少落下 2 类尾钩信号" in block
     assert "- 阶段提醒：" in block
     assert "- 避免：" in block
     assert "高潮阶段" in block
@@ -1296,6 +1309,68 @@ def test_should_merge_outline_quality_trend_guidance_into_requirements():
     assert "\u540e\u7eed\u7ae0\u8282\u8981\u52a0\u5f3a\u65e7\u627f\u8bfa\u56de\u6536" in merged
 
 
+
+def test_should_compact_outline_runtime_requirements_when_compact_mode_enabled():
+    story_packet = StoryPacket.from_guidance(
+        StoryGenerationGuidance(
+            creative_mode="hook",
+            story_focus="advance_plot",
+            plot_stage="development",
+            story_creation_brief="Keep pressure visible and make each outline resolve into a clear choice." * 8,
+            quality_preset="plot_drive",
+            quality_notes="Prioritize end hooks and payoff continuity." * 6,
+        ),
+        blueprint=StoryBlueprint(
+            long_term_goal="Seize the harbor map before the blockade closes and expose the traitor behind the ceasefire." * 6,
+            chapter_count=60,
+            character_focus_names=("Lin", "Su", "Gu", "Cheng"),
+            foreshadow_payoff_plan=(
+                "Recover the black box clue and reveal the real purpose of the warehouse key." * 3,
+                "Break the false ceasefire deal in mid-arc and force a new faction collision." * 3,
+            ),
+            character_state_ledger=(
+                "Lin: exhausted but still forced to lead or the whole line collapses." * 3,
+                "Su: outwardly cooperative but increasingly doubtful about the intel source." * 3,
+            ),
+            relationship_state_ledger=(
+                "Lin/Su: alliance remains, but trust boundaries are much tighter now." * 3,
+            ),
+            foreshadow_state_ledger=(
+                "Black box: still unopened, but multiple factions already know it matters." * 3,
+            ),
+            organization_state_ledger=(
+                "Night Patrol: stronger dock control now triggers a sharper black-market backlash." * 3,
+            ),
+            career_state_ledger=(
+                "Lin/Field Strategist: broader command authority now comes with higher exposure." * 3,
+            ),
+        ),
+    )
+
+    kwargs = dict(
+        base_requirements="Keep the mainline moving and cash in the previous volume promises without info drift." * 20,
+        creative_mode="hook",
+        story_focus="advance_plot",
+        chapter_count=5,
+        memory_guidance="[serialized memory]\n" + "\n\n".join([
+            "Recent conflict: after the harbor lockdown, the team was forced onto underground routes." * 8,
+            "Character state: Lin and Su are starting to split on how to read the intel source." * 8,
+            "Foreshadows: the black box key, false ceasefire, and hidden ally line all need forward motion." * 8,
+        ]),
+        quality_repair_guidance="[repair]\n- Weakest point: end hook (score 61).\n- Fix: end each chapter with a fresh danger or unresolved choice." * 4,
+        quality_trend_guidance="[trend]\n- Upcoming outlines should strengthen payoff continuity and world-rule grounding." * 4,
+        story_packet=story_packet,
+    )
+
+    merged_full = _merge_outline_requirements(**kwargs, compact_mode=False)
+    merged_compact = _merge_outline_requirements(**kwargs, compact_mode=True)
+
+    assert len(merged_compact) < len(merged_full)
+    assert len(merged_full) - len(merged_compact) >= 400
+    assert "Keep the mainline moving" in merged_compact
+    assert "[repair]" in merged_compact
+    assert "[serialized memory]" in merged_compact
+    assert "【长线目标锚点】" in merged_compact
 def test_should_build_story_blueprint_blocks():
     assert "【长线目标锚点】" in build_story_long_term_goal_block(
         "The lead must seize the capital before the enemy closes in."
@@ -1530,3 +1605,17 @@ def test_should_use_tighter_optional_budget_for_regeneration_templates():
 
     assert generation_budget == 3000
     assert regeneration_budget == 2200
+
+
+
+def test_should_inject_story_quality_hard_guard_block_into_generation_quality_contract():
+    blocks = PromptService._build_quality_runtime_blocks(
+        "CHAPTER_GENERATION_ONE_TO_MANY",
+        creative_mode="hook",
+        story_focus="advance_plot",
+        plot_stage="development",
+        story_quality_hard_guard_block="【章节硬约束】\n- 本章必须推进主线并让局势升级。",
+    )
+
+    assert "【章节硬约束】" in blocks["story_quality_hard_guard_block"]
+    assert "【章节硬约束】" in blocks["quality_contract_block"]

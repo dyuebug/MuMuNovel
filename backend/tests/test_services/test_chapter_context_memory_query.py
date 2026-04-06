@@ -3,7 +3,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.services.chapter_context_service import (
+    OneToManyContext,
     OneToManyContextBuilder,
+    OneToOneContext,
+    _compact_generation_context,
     build_memory_query_text,
 )
 
@@ -243,3 +246,94 @@ async def test_should_budget_and_diversify_relevant_memories_for_prompt():
     assert "林澈因为误判导致苏离受伤" in result
     assert "港口巡夜人提到第十二章会出现一把假钥匙" in result
     assert "街市里一段无关紧要的闲谈" not in result
+
+
+def test_should_compact_one_to_many_context_when_optional_blocks_exceed_budget():
+    recent_context = "?Recent Plans?\n" + "\n".join(
+        f"Chapter {index}: " + ("recent-plot-" * 18)
+        for index in range(1, 9)
+    )
+    chapter_careers = "\n\n".join(
+        [
+            "Strategist (career)\n  Description: " + ("plan-and-counter " * 16) + "\n  Category: planner\n  Stage System: 1-init\n  Requirement: calm judgment",
+            "Scout (career)\n  Description: " + ("stealth-and-tracking " * 14) + "\n  Category: recon\n  Stage System: 1-observe\n  World Rule: cannot expose route",
+            "Broker (career)\n  Description: " + ("exchange-and-leverage " * 14) + "\n  Category: network\n  Stage System: 1-contact\n  Special Ability: rumor weaving",
+        ]
+    )
+    relevant_memories = "?Relevant Memories?\n" + "\n".join(
+        f"- Memory {index}: " + ("harbor-key-pressure " * 8)
+        for index in range(1, 9)
+    )
+    foreshadow = "?Foreshadow?\n" + "\n".join(
+        f"- Foreshadow {index}: " + ("payoff-window " * 6)
+        for index in range(1, 8)
+    )
+
+    context = OneToManyContext(
+        chapter_outline="Outline: " + ("advance the harbor mission " * 20),
+        recent_chapters_context=recent_context,
+        continuation_point="C" * 500,
+        previous_chapter_summary="Summary " * 45,
+        target_word_count=1800,
+        chapter_number=8,
+        chapter_title="Harbor",
+        chapter_characters="?Focus Hero?\n  Current State: under pressure\n  Relationship: trust is unstable\n\n" + "\n\n".join(
+            f"?Support {index}?\n  Current State: side-thread-{index}\n  Background: " + ("detail " * 18)
+            for index in range(1, 7)
+        ),
+        chapter_careers=chapter_careers,
+        relevant_memories=relevant_memories,
+        foreshadow_reminders=foreshadow,
+        character_arc_snapshot="?Character Arc?\n- Focus Hero: doubt keeps rising\n- Ally: still hiding motives",
+    )
+
+    result = _compact_generation_context(
+        context,
+        mode="one-to-many",
+        target_word_count=1800,
+        priority_names=["Focus Hero"],
+    )
+
+    assert result["applied"] is True
+    assert result["after"] < result["before"]
+    assert "Chapter 8:" in context.recent_chapters_context
+    assert "Chapter 1:" not in context.recent_chapters_context
+    assert "chapter_careers" in result["details"]
+
+
+def test_should_prioritize_focus_character_when_one_to_one_context_needs_compaction():
+    chapter_characters = "\n\n".join(
+        [
+            f"?Support {index}?\n  Background: " + ("support-detail " * 36) + "\n  Current State: drifting\n  Relationship: scattered alliances"
+            for index in range(1, 10)
+        ]
+        + [
+            "?Focus Hero?\n  Current State: boxed in by the guild\n  Relationship: trust with ally is fractured\n  Main Career: strategist",
+        ]
+    )
+
+    context = OneToOneContext(
+        chapter_outline="Outline: " + ("tight infiltration turn " * 16),
+        target_word_count=1200,
+        chapter_number=3,
+        chapter_title="Vault",
+        continuation_point="T" * 500,
+        previous_chapter_summary="Bridge summary " * 30,
+        chapter_characters=chapter_characters,
+        chapter_careers="Strategist (career)\n  Description: " + ("career-detail " * 40),
+        foreshadow_reminders="?Foreshadow?\n- Delayed key payoff\n  Resolve it soon",
+        relevant_memories="?Relevant Memories?\n- Harbor loss changed the mission\n- Ally hesitation exposed the route",
+        character_arc_snapshot="?Character Arc?\n- Focus Hero: cannot retreat anymore",
+    )
+
+    result = _compact_generation_context(
+        context,
+        mode="one-to-one",
+        target_word_count=1200,
+        priority_names=["Focus Hero"],
+    )
+
+    assert result["applied"] is True
+    assert result["after"] < result["before"]
+    assert "?Focus Hero?" in context.chapter_characters
+    assert len(context.chapter_characters) < len(chapter_characters)
