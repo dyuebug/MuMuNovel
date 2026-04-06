@@ -39,6 +39,7 @@ class ChapterGenerationStreamResultPayload(BaseModel):
     saved_word_count: int
     hard_gate_blocked: bool = False
     story_runtime_contract: Optional[Dict[str, Any]] = None
+    candidate_draft: Optional[Dict[str, Any]] = None
 
 
 class ChapterRegenerationStreamResultPayload(BaseModel):
@@ -102,6 +103,7 @@ def build_chapter_generation_stream_result_payload(
     saved_word_count: int,
     hard_gate_blocked: bool,
     story_runtime_contract: Optional[Dict[str, Any]] = None,
+    candidate_draft: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     normalized_contract = attach_story_runtime_result_payload({}, story_runtime_contract).get("story_runtime_contract")
     payload = ChapterGenerationStreamResultPayload(
@@ -115,6 +117,7 @@ def build_chapter_generation_stream_result_payload(
         saved_word_count=saved_word_count,
         hard_gate_blocked=hard_gate_blocked,
         story_runtime_contract=normalized_contract if isinstance(normalized_contract, dict) else None,
+        candidate_draft=dict(candidate_draft) if isinstance(candidate_draft, dict) and candidate_draft else None,
     )
     return payload.model_dump(exclude_none=True)
 

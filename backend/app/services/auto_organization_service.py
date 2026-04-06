@@ -57,12 +57,13 @@ class AutoOrganizationService:
         existing_organizations: List[Dict[str, Any]],
         db: AsyncSession,
         user_id: str,
-        enable_mcp: bool
+        enable_mcp: bool,
+        template: Optional[str] = None,
     ) -> Dict[str, Any]:
         """生成组织详细信息"""
         
-        # 构建组织生成提示词
-        template = await PromptService.get_template(
+        # ?????????
+        resolved_template = template or await PromptService.get_template(
             "AUTO_ORGANIZATION_GENERATION",
             user_id,
             db
@@ -72,7 +73,7 @@ class AutoOrganizationService:
         existing_chars_summary = self._build_character_summary(existing_characters)
         
         prompt = PromptService.format_prompt(
-            template,
+            resolved_template,
             title=project.title,
             genre=project.genre or "未设定",
             theme=project.theme or "未设定",
@@ -93,6 +94,7 @@ class AutoOrganizationService:
             organization_data = await self.ai_service.call_with_json_retry(
                 prompt=prompt,
                 max_retries=3,
+                auto_mcp=enable_mcp,
             )
             
             org_name = organization_data.get('name', '未知')
@@ -233,7 +235,8 @@ class AutoOrganizationService:
         db: AsyncSession,
         user_id: str = None,
         enable_mcp: bool = True,
-        progress_callback: Optional[Callable[[str], Awaitable[None]]] = None
+        progress_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+        commit_per_item: bool = False
     ) -> Dict[str, Any]:
         """
         根据大纲structure中的characters字段（type=organization）校验项目是否存在对应组织，
@@ -313,7 +316,9 @@ class AutoOrganizationService:
                 "created_count": 0
             }
         
-        logger.info(f"⚠️ 【组织校验】发现 {len(missing_names)} 个缺失组织: {', '.join(missing_names)}")
+        missing_name_list = sorted(missing_names)
+        missing_name_display = ", ".join(missing_name_list)
+        logger.info(f"Missing organizations ({len(missing_name_list)}): {missing_name_display}")
         
         # 4. 获取项目信息
         project_result = await db.execute(
@@ -334,12 +339,20 @@ class AutoOrganizationService:
         )
         existing_characters = list(all_chars_result.scalars().all())
         
+        organization_ids = [char.id for char in existing_org_characters]
+        organization_by_character_id = {}
+        if organization_ids:
+            organization_result = await db.execute(
+                select(Organization).where(Organization.character_id.in_(organization_ids))
+            )
+            organization_by_character_id = {
+                organization.character_id: organization
+                for organization in organization_result.scalars().all()
+            }
+
         existing_organizations = []
         for char in existing_org_characters:
-            org_result = await db.execute(
-                select(Organization).where(Organization.character_id == char.id)
-            )
-            org = org_result.scalar_one_or_none()
+            org = organization_by_character_id.get(char.id)
             if org:
                 existing_organizations.append({
                     "name": char.name,
@@ -349,15 +362,21 @@ class AutoOrganizationService:
                     "location": org.location,
                     "motto": org.motto
                 })
-        
-        # 6. 为每个缺失的组织生成并创建组织信息
+
+        prompt_template = await PromptService.get_template(
+            "AUTO_ORGANIZATION_GENERATION",
+            user_id,
+            db
+        )
+
+        # 6. ?????????????????
         created_organizations = []
         
-        for idx, org_name in enumerate(missing_names):
+        for idx, org_name in enumerate(missing_name_list):
             try:
                 if progress_callback:
                     await progress_callback(
-                        f"🏛️ [{idx+1}/{len(missing_names)}] 自动创建组织：{org_name}..."
+                        f"🏛️ [{idx+1}/{len(missing_name_list)}] 自动创建组织：{org_name}..."
                     )
                 
                 # 构建组织规格（基于大纲上下文）
@@ -371,7 +390,7 @@ class AutoOrganizationService:
                     "importance": "medium"
                 }
                 
-                logger.info(f"  🤖 [{idx+1}/{len(missing_names)}] 生成组织详情: {org_name}")
+                logger.info(f"  🤖 [{idx+1}/{len(missing_name_list)}] 生成组织详情: {org_name}")
                 
                 # 生成组织详细信息
                 organization_data = await self._generate_organization_details(
@@ -381,7 +400,8 @@ class AutoOrganizationService:
                     existing_organizations=existing_organizations,
                     db=db,
                     user_id=user_id,
-                    enable_mcp=enable_mcp
+                    enable_mcp=enable_mcp,
+                    template=prompt_template,
                 )
                 
                 # 确保使用大纲中的组织名称
@@ -389,7 +409,7 @@ class AutoOrganizationService:
                 
                 if progress_callback:
                     await progress_callback(
-                        f"💾 [{idx+1}/{len(missing_names)}] 保存组织：{org_name}..."
+                        f"💾 [{idx+1}/{len(missing_name_list)}] 保存组织：{org_name}..."
                     )
                 
                 # 创建组织记录
@@ -409,14 +429,14 @@ class AutoOrganizationService:
                     "location": organization.location,
                     "motto": organization.motto
                 })
-                logger.info(f"  ✅ [{idx+1}/{len(missing_names)}] 组织创建成功: {org_character.name}")
+                logger.info(f"  ✅ [{idx+1}/{len(missing_name_list)}] 组织创建成功: {org_character.name}")
                 
                 # 建立成员关系
                 members_data = organization_data.get("initial_members", [])
                 if members_data:
                     if progress_callback:
                         await progress_callback(
-                            f"🔗 [{idx+1}/{len(missing_names)}] 建立 {len(members_data)} 个成员关系：{org_name}..."
+                            f"🔗 [{idx+1}/{len(missing_name_list)}] 建立 {len(members_data)} 个成员关系：{org_name}..."
                         )
                     
                     await self._create_member_relationships(
@@ -429,26 +449,29 @@ class AutoOrganizationService:
                 
                 if progress_callback:
                     await progress_callback(
-                        f"✅ [{idx+1}/{len(missing_names)}] 组织创建完成：{org_name}"
+                        f"✅ [{idx+1}/{len(missing_name_list)}] 组织创建完成：{org_name}"
                     )
+
+                if commit_per_item:
+                    await db.commit()
                 
             except Exception as e:
                 logger.error(f"  ❌ 创建组织 {org_name} 失败: {e}", exc_info=True)
                 if progress_callback:
                     await progress_callback(
-                        f"⚠️ [{idx+1}/{len(missing_names)}] 组织 {org_name} 创建失败"
+                        f"⚠️ [{idx+1}/{len(missing_name_list)}] 组织 {org_name} 创建失败"
                     )
                 continue
         
         # 7. flush 到数据库（让调用方 commit）
-        if created_organizations:
+        if created_organizations and not commit_per_item:
             await db.flush()
         
-        logger.info(f"🎉 【组织校验】完成: 发现 {len(missing_names)} 个缺失组织，成功创建 {len(created_organizations)} 个")
+        logger.info(f"?? ????????: ?? {len(missing_name_list)} ?????????? {len(created_organizations)} ?")
         
         return {
             "created_organizations": created_organizations,
-            "missing_names": list(missing_names),
+            "missing_names": list(missing_name_list),
             "created_count": len(created_organizations)
         }
 

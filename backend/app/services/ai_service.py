@@ -185,6 +185,14 @@ class AIService:
             return self._gemini_provider
         raise ValueError(f"Provider {original_provider} (归一化为 {p}) 未初始化")
 
+    def get_transport_diagnostics(self, provider: Optional[str] = None) -> Dict[str, Any]:
+        prov = self._get_provider(provider)
+        client = getattr(prov, "client", None)
+        if client is None or not hasattr(client, "get_transport_diagnostics"):
+            return {}
+        diagnostics = client.get_transport_diagnostics()
+        return diagnostics if isinstance(diagnostics, dict) else {}
+
     async def _prepare_mcp_tools(self, auto_mcp: bool = True, force_refresh: bool = False) -> Optional[List[Dict]]:
         """
         预处理MCP工具
@@ -319,15 +327,18 @@ class AIService:
                 
                 # 继续调用AI
                 prov = self._get_provider(kwargs.get("provider"))
-                next_response = await prov.generate(
-                    prompt=prompt,
-                    model=kwargs.get("model") or self.default_model,
-                    temperature=kwargs.get("temperature") or self.default_temperature,
-                    max_tokens=kwargs.get("max_tokens") or self.default_max_tokens,
-                    system_prompt=kwargs.get("system_prompt") or self.default_system_prompt,
-                    tools=None if tool_choice == "none" else self._cached_tools,
-                    tool_choice=tool_choice,
-                )
+                provider_kwargs = {
+                    "prompt": prompt,
+                    "model": kwargs.get("model") or self.default_model,
+                    "temperature": kwargs.get("temperature") or self.default_temperature,
+                    "max_tokens": kwargs.get("max_tokens") or self.default_max_tokens,
+                    "system_prompt": kwargs.get("system_prompt") or self.default_system_prompt,
+                    "tools": None if tool_choice == "none" else self._cached_tools,
+                    "tool_choice": tool_choice,
+                }
+                if kwargs.get("request_options") is not None:
+                    provider_kwargs["request_options"] = kwargs.get("request_options")
+                next_response = await prov.generate(**provider_kwargs)
                 
                 tool_calls = next_response.get("tool_calls", [])
                 
@@ -358,6 +369,7 @@ class AIService:
         auto_mcp: bool = True,
         handle_tool_calls: bool = True,
         mcp_max_rounds: Optional[int] = None,
+        request_options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         生成文本（自动支持MCP工具）
@@ -374,6 +386,7 @@ class AIService:
             auto_mcp: 是否自动加载MCP工具（默认True）
             handle_tool_calls: 是否自动处理工具调用（默认True）
             mcp_max_rounds: 最大工具调用轮数（None使用默认值3）
+            request_options: 底层传输层请求选项（如 read_timeout/transport_max_retries）
             
         Returns:
             包含生成内容的字典
@@ -387,15 +400,18 @@ class AIService:
             tools = await self._prepare_mcp_tools(auto_mcp=auto_mcp)
         
         prov = self._get_provider(provider)
-        response = await prov.generate(
-            prompt=prompt,
-            model=model or self.default_model,
-            temperature=temperature or self.default_temperature,
-            max_tokens=max_tokens or self.default_max_tokens,
-            system_prompt=system_prompt or self.default_system_prompt,
-            tools=tools,
-            tool_choice=tool_choice,
-        )
+        provider_kwargs = {
+            "prompt": prompt,
+            "model": model or self.default_model,
+            "temperature": temperature or self.default_temperature,
+            "max_tokens": max_tokens or self.default_max_tokens,
+            "system_prompt": system_prompt or self.default_system_prompt,
+            "tools": tools,
+            "tool_choice": tool_choice,
+        }
+        if request_options is not None:
+            provider_kwargs["request_options"] = request_options
+        response = await prov.generate(**provider_kwargs)
         
         # 处理工具调用
         if handle_tool_calls and response.get("tool_calls"):
@@ -408,6 +424,7 @@ class AIService:
                 max_tokens=max_tokens,
                 system_prompt=system_prompt,
                 tool_choice=tool_choice,
+                request_options=request_options,
                 max_rounds=mcp_max_rounds,
             )
         
@@ -424,6 +441,7 @@ class AIService:
         tool_choice: Optional[str] = None,
         auto_mcp: bool = True,
         mcp_max_rounds: Optional[int] = None,
+        request_options: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         流式生成文本（自动支持MCP工具）
@@ -466,6 +484,7 @@ class AIService:
             tools=tools_to_use,
             tool_choice=tool_choice,
             user_id=self.user_id,
+            request_options=request_options,
         ):
             yield chunk
 
@@ -480,6 +499,7 @@ class AIService:
         model: Optional[str] = None,
         expected_type: Optional[str] = None,
         auto_mcp: bool = True,
+        request_options: Optional[Dict[str, Any]] = None,
     ) -> Union[Dict, List]:
         """
         带重试的 JSON 调用（自动支持MCP工具）
@@ -512,6 +532,7 @@ class AIService:
                 system_prompt=system_prompt,
                 auto_mcp=auto_mcp,
                 handle_tool_calls=True,
+                request_options=request_options,
             )
             
             last_response = result.get("content", "")

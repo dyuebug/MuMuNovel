@@ -38,6 +38,42 @@ class AutoCharacterService:
             lines.append(" ".join(parts))
         
         return "\n".join(lines)
+
+    async def _build_careers_info(self, project_id: str, db: AsyncSession) -> str:
+        """构建职业信息提示，帮助角色生成与现有职业体系对齐。"""
+        from app.models.career import Career
+
+        careers_result = await db.execute(
+            select(Career)
+            .where(Career.project_id == project_id)
+            .order_by(Career.type, Career.name)
+        )
+        careers = careers_result.scalars().all()
+        if not careers:
+            return ""
+
+        careers_info = ""
+        main_careers = [career for career in careers if career.type == "main"]
+        sub_careers = [career for career in careers if career.type == "sub"]
+
+        if main_careers:
+            careers_info += "\n\n【主职业信息（请与 career_info 保持一致）】\n"
+            for career in main_careers:
+                careers_info += f"- 名称: {career.name}, 最大阶段: {career.max_stage}"
+                if career.description:
+                    careers_info += f", 描述: {career.description[:50]}"
+                careers_info += "\n"
+
+        if sub_careers:
+            careers_info += "\n【副职业信息（请与 career_info 保持一致）】\n"
+            for career in sub_careers[:5]:
+                careers_info += f"- 名称: {career.name}, 最大阶段: {career.max_stage}"
+                if career.description:
+                    careers_info += f", 描述: {career.description[:50]}"
+                careers_info += "\n"
+
+        careers_info += "\n【注意】角色职业必须与现有职业体系保持一致。\n"
+        return careers_info
     
     async def _generate_character_details(
         self,
@@ -46,45 +82,16 @@ class AutoCharacterService:
         existing_characters: List[Character],
         db: AsyncSession,
         user_id: str,
-        enable_mcp: bool
+        enable_mcp: bool,
+        template: Optional[str] = None,
+        careers_info: Optional[str] = None,
     ) -> Dict[str, Any]:
         """生成角色详细信息"""
         
-        # 🎯 获取项目职业列表
-        from app.models.career import Career
-        careers_result = await db.execute(
-            select(Career)
-            .where(Career.project_id == project.id)
-            .order_by(Career.type, Career.name)
-        )
-        careers = careers_result.scalars().all()
+        resolved_careers_info = careers_info if careers_info is not None else await self._build_careers_info(project.id, db)
         
-        # 构建职业信息摘要（包含最高阶段信息）
-        careers_info = ""
-        if careers:
-            main_careers = [c for c in careers if c.type == 'main']
-            sub_careers = [c for c in careers if c.type == 'sub']
-            
-            if main_careers:
-                careers_info += "\n\n可用主职业列表（请在career_info中填写职业名称和阶段）：\n"
-                for career in main_careers:
-                    careers_info += f"- 名称: {career.name}, 最高阶段: {career.max_stage}阶"
-                    if career.description:
-                        careers_info += f", 描述: {career.description[:50]}"
-                    careers_info += "\n"
-            
-            if sub_careers:
-                careers_info += "\n可用副职业列表（请在career_info中填写职业名称和阶段）：\n"
-                for career in sub_careers[:5]:
-                    careers_info += f"- 名称: {career.name}, 最高阶段: {career.max_stage}阶"
-                    if career.description:
-                        careers_info += f", 描述: {career.description[:50]}"
-                    careers_info += "\n"
-            
-            careers_info += "\n⚠️ 重要提示：生成角色时，职业阶段不能超过该职业的最高阶段！\n"
-        
-        # 构建角色生成提示词
-        template = await PromptService.get_template(
+        # ?????????
+        resolved_template = template or await PromptService.get_template(
             "AUTO_CHARACTER_GENERATION",
             user_id,
             db
@@ -93,7 +100,7 @@ class AutoCharacterService:
         existing_chars_summary = self._build_character_summary(existing_characters)
         
         prompt = PromptService.format_prompt(
-            template,
+            resolved_template,
             title=project.title,
             genre=project.genre or "未设定",
             theme=project.theme or "未设定",
@@ -101,7 +108,7 @@ class AutoCharacterService:
             location=project.world_location or "未设定",
             atmosphere=project.world_atmosphere or "未设定",
             rules=project.world_rules or "未设定",
-            existing_characters=existing_chars_summary + careers_info,
+            existing_characters=existing_chars_summary + resolved_careers_info,
             plot_context="根据剧情需要引入的新角色",
             character_specification=json.dumps(spec, ensure_ascii=False, indent=2),
             mcp_references=""  # MCP工具通过AI服务自动加载
@@ -113,7 +120,8 @@ class AutoCharacterService:
         try:
             character_data = await self.ai_service.call_with_json_retry(
                 prompt=prompt,
-                max_retries=2,  # 减少重试次数以加快速度
+                max_retries=2,
+                auto_mcp=enable_mcp,
             )
             
             char_name = character_data.get('name', '未知')
@@ -354,7 +362,8 @@ class AutoCharacterService:
         db: AsyncSession,
         user_id: str = None,
         enable_mcp: bool = True,
-        progress_callback: Optional[Callable[[str], Awaitable[None]]] = None
+        progress_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+        commit_per_item: bool = False
     ) -> Dict[str, Any]:
         """
         根据大纲structure中的characters字段校验项目是否存在对应角色，
@@ -437,7 +446,9 @@ class AutoCharacterService:
                 "created_count": 0
             }
         
-        logger.info(f"⚠️ 【角色校验】发现 {len(missing_names)} 个缺失角色: {', '.join(missing_names)}")
+        missing_name_list = sorted(missing_names)
+        missing_name_display = ", ".join(missing_name_list)
+        logger.info(f"Missing characters ({len(missing_name_list)}): {missing_name_display}")
         
         # 4. 获取项目信息
         project_result = await db.execute(
@@ -452,14 +463,21 @@ class AutoCharacterService:
                 "created_count": 0
             }
         
-        # 5. 为每个缺失的角色生成并创建角色信息
+        prompt_template = await PromptService.get_template(
+            "AUTO_CHARACTER_GENERATION",
+            user_id,
+            db
+        )
+        cached_careers_info = await self._build_careers_info(project.id, db)
+
+        # 5. ?????????????????
         created_characters = []
         
-        for idx, char_name in enumerate(missing_names):
+        for idx, char_name in enumerate(missing_name_list):
             try:
                 if progress_callback:
                     await progress_callback(
-                        f"🎭 [{idx+1}/{len(missing_names)}] 自动创建角色：{char_name}..."
+                        f"🎭 [{idx+1}/{len(missing_name_list)}] 自动创建角色：{char_name}..."
                     )
                 
                 # 构建角色规格（基于大纲上下文）
@@ -473,7 +491,7 @@ class AutoCharacterService:
                     "importance": "medium"
                 }
                 
-                logger.info(f"  🤖 [{idx+1}/{len(missing_names)}] 生成角色详情: {char_name}")
+                logger.info(f"  🤖 [{idx+1}/{len(missing_name_list)}] 生成角色详情: {char_name}")
                 
                 # 生成角色详细信息
                 character_data = await self._generate_character_details(
@@ -482,7 +500,9 @@ class AutoCharacterService:
                     existing_characters=list(existing_characters) + created_characters,
                     db=db,
                     user_id=user_id,
-                    enable_mcp=enable_mcp
+                    enable_mcp=enable_mcp,
+                    template=prompt_template,
+                    careers_info=cached_careers_info,
                 )
                 
                 # 确保使用大纲中的角色名称
@@ -490,7 +510,7 @@ class AutoCharacterService:
                 
                 if progress_callback:
                     await progress_callback(
-                        f"💾 [{idx+1}/{len(missing_names)}] 保存角色：{char_name}..."
+                        f"💾 [{idx+1}/{len(missing_name_list)}] 保存角色：{char_name}..."
                     )
                 
                 # 创建角色记录
@@ -501,14 +521,14 @@ class AutoCharacterService:
                 )
                 
                 created_characters.append(character)
-                logger.info(f"  ✅ [{idx+1}/{len(missing_names)}] 角色创建成功: {character.name}")
+                logger.info(f"  ✅ [{idx+1}/{len(missing_name_list)}] 角色创建成功: {character.name}")
                 
                 # 建立关系
                 relationships_data = character_data.get("relationships") or character_data.get("relationships_array", [])
                 if relationships_data:
                     if progress_callback:
                         await progress_callback(
-                            f"🔗 [{idx+1}/{len(missing_names)}] 建立 {len(relationships_data)} 个关系：{char_name}..."
+                            f"🔗 [{idx+1}/{len(missing_name_list)}] 建立 {len(relationships_data)} 个关系：{char_name}..."
                         )
                     
                     await self._create_relationships(
@@ -521,26 +541,29 @@ class AutoCharacterService:
                 
                 if progress_callback:
                     await progress_callback(
-                        f"✅ [{idx+1}/{len(missing_names)}] 角色创建完成：{char_name}"
+                        f"✅ [{idx+1}/{len(missing_name_list)}] 角色创建完成：{char_name}"
                     )
+
+                if commit_per_item:
+                    await db.commit()
                 
             except Exception as e:
                 logger.error(f"  ❌ 创建角色 {char_name} 失败: {e}", exc_info=True)
                 if progress_callback:
                     await progress_callback(
-                        f"⚠️ [{idx+1}/{len(missing_names)}] 角色 {char_name} 创建失败"
+                        f"⚠️ [{idx+1}/{len(missing_name_list)}] 角色 {char_name} 创建失败"
                     )
                 continue
         
         # 6. flush 到数据库（让调用方 commit）
-        if created_characters:
+        if created_characters and not commit_per_item:
             await db.flush()
         
-        logger.info(f"🎉 【角色校验】完成: 发现 {len(missing_names)} 个缺失角色，成功创建 {len(created_characters)} 个")
+        logger.info(f"?? ????????: ?? {len(missing_name_list)} ?????????? {len(created_characters)} ?")
         
         return {
             "created_characters": created_characters,
-            "missing_names": list(missing_names),
+            "missing_names": list(missing_name_list),
             "created_count": len(created_characters)
         }
 

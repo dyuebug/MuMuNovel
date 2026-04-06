@@ -98,6 +98,36 @@ def test_should_build_generation_stream_result_payload_without_none_fields():
     assert "quality_gate_message" not in payload
 
 
+def test_should_build_generation_stream_result_payload_with_candidate_draft():
+    candidate_draft = {
+        "attempt_id": "draft-attempt-001",
+        "word_count": 2888,
+        "can_apply": True,
+        "has_full_content": True,
+        "content_preview": "?????",
+    }
+
+    payload = build_chapter_generation_stream_result_payload(
+        word_count=2888,
+        analysis_task_id="analysis-task-001",
+        quality_metrics=SAMPLE_QUALITY_METRICS,
+        quality_gate_action="manual_review",
+        quality_gate_message="??????",
+        content_applied=False,
+        chapter_status="draft",
+        saved_word_count=0,
+        hard_gate_blocked=True,
+        story_runtime_contract=SAMPLE_RUNTIME_CONTRACT,
+        candidate_draft=candidate_draft,
+    )
+
+    assert payload["analysis_task_id"] == "analysis-task-001"
+    assert payload["candidate_draft"] == candidate_draft
+    assert payload["quality_gate_action"] == "manual_review"
+    assert payload["hard_gate_blocked"] is True
+
+
+
 def test_should_build_regeneration_stream_result_payload_without_none_fields():
     payload = build_chapter_regeneration_stream_result_payload(
         task_id="regen-task-001",

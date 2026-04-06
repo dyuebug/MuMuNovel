@@ -23,6 +23,7 @@ class AnthropicProvider(BaseAIProvider):
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         tool_choice: Optional[str] = None,
+        request_options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         messages = [{"role": "user", "content": prompt}]
         return await self.client.chat_completion(
@@ -45,6 +46,7 @@ class AnthropicProvider(BaseAIProvider):
         tools: Optional[List[Dict]] = None,
         tool_choice: Optional[str] = None,
         user_id: Optional[str] = None,
+        request_options: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
         # 如果有工具，使用真正的流式工具调用
         if tools:

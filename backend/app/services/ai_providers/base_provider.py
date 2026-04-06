@@ -16,6 +16,7 @@ class BaseAIProvider(ABC):
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
         tool_choice: Optional[str] = None,
+        request_options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """生成文本"""
         pass
@@ -31,6 +32,7 @@ class BaseAIProvider(ABC):
         tools: Optional[List[Dict]] = None,
         tool_choice: Optional[str] = None,
         user_id: Optional[str] = None,
+        request_options: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
         """流式生成"""
         pass

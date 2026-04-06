@@ -240,6 +240,36 @@ def test_should_route_to_specific_provider_when_provider_is_initialized(
     assert runtime_service._get_provider(provider_name) is target_provider
 
 
+async def test_should_forward_request_options_when_generate_text_stream_uses_provider(runtime_service):
+    class FakeProvider:
+        def __init__(self):
+            self.calls = []
+
+        async def generate_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            yield "chunk-a"
+            yield "chunk-b"
+
+    provider = FakeProvider()
+    runtime_service._get_provider = Mock(return_value=provider)
+    runtime_service._prepare_mcp_tools = AsyncMock(return_value=None)
+
+    request_options = {
+        "prefer_chat_completions": True,
+        "transport_max_retries": 1,
+    }
+
+    chunks = []
+    async for chunk in runtime_service.generate_text_stream(
+        prompt="测试",
+        request_options=request_options,
+    ):
+        chunks.append(chunk)
+
+    assert chunks == ["chunk-a", "chunk-b"]
+    assert provider.calls[0]["request_options"] == request_options
+
+
 def test_should_raise_error_when_provider_not_initialized(runtime_service):
     runtime_service._openai_provider = None
     runtime_service._anthropic_provider = None
@@ -539,6 +569,32 @@ async def test_should_retry_with_hint_when_first_json_parse_failed(runtime_servi
     assert "第一次失败" in second_prompt
 
 
+
+async def test_should_forward_request_options_when_json_retry_uses_generate_text(runtime_service, mocker):
+    runtime_service.generate_text = AsyncMock(return_value={"content": '{"ok":true}'})
+    mocker.patch.object(
+        ai_service,
+        "parse_json",
+        return_value={"ok": True},
+    )
+    request_options = {
+        "read_timeout": 30,
+        "transport_max_retries": 1,
+        "prefer_chat_completions": True,
+    }
+
+    result = await runtime_service.call_with_json_retry(
+        prompt="return json",
+        auto_mcp=False,
+        request_options=request_options,
+    )
+
+    assert result == {"ok": True}
+    call_kwargs = runtime_service.generate_text.await_args.kwargs
+    assert call_kwargs["request_options"] == request_options
+    assert call_kwargs["auto_mcp"] is False
+
+
 async def test_should_raise_error_when_json_parse_failed_after_max_retries(runtime_service, mocker):
     runtime_service.generate_text = AsyncMock(return_value={"content": "无效JSON"})
     mocker.patch.object(
@@ -674,3 +730,33 @@ def test_should_create_ai_service_with_mcp_when_call_create_user_ai_service_with
         backup_urls=["https://backup.anthropic/v1"],
         fallback_strategy="manual",
     )
+
+
+@pytest.mark.asyncio
+async def test_should_forward_request_options_when_generate_text_uses_transport_override(runtime_service):
+    runtime_service._openai_provider.generate = AsyncMock(return_value={"content": "ok"})
+    request_options = {"read_timeout": 45, "transport_max_retries": 1}
+
+    result = await runtime_service.generate_text(
+        prompt="测试",
+        auto_mcp=False,
+        handle_tool_calls=False,
+        request_options=request_options,
+    )
+
+    assert result["content"] == "ok"
+    assert runtime_service._openai_provider.generate.await_args.kwargs["request_options"] == request_options
+
+def test_should_return_transport_diagnostics_from_provider_client(runtime_service):
+    diagnostics = {"summary": {"total_attempts": 2}}
+    provider_client = Mock()
+    provider_client.get_transport_diagnostics.return_value = diagnostics
+    provider = Mock(client=provider_client)
+    runtime_service._get_provider = Mock(return_value=provider)
+
+    result = runtime_service.get_transport_diagnostics("sub2api")
+
+    assert result == diagnostics
+    runtime_service._get_provider.assert_called_once_with("sub2api")
+    provider_client.get_transport_diagnostics.assert_called_once_with()
+
