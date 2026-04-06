@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useBusyNavigationGuard } from '../hooks/useBusyNavigationGuard';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Form, Input, InputNumber, Select, Button, Card,
@@ -30,6 +31,11 @@ export default function ProjectWizardNew() {
   const [currentStep, setCurrentStep] = useState<'form' | 'generating'>('form');
   const [generationConfig, setGenerationConfig] = useState<GenerationConfig | null>(null);
   const [resumeProjectId, setResumeProjectId] = useState<string | null>(null);
+  const {
+    setBusy: setIsGenerationBusy,
+    releaseBusy: releaseGenerationBusy,
+    shouldDisableNavigation,
+  } = useBusyNavigationGuard();
 
   useEffect(() => {
     const handleResize = () => {
@@ -129,6 +135,7 @@ export default function ProjectWizardNew() {
       outline_research_query: values.outline_research_query,
     };
 
+    setResumeProjectId(null);
     setGenerationConfig(config);
     setCurrentStep('generating');
   };
@@ -136,12 +143,15 @@ export default function ProjectWizardNew() {
   // 生成完成回调
   const handleComplete = (projectId: string) => {
     console.log('项目创建完成:', projectId);
+    releaseGenerationBusy();
   };
 
   // 返回表单页面
   const handleBack = () => {
     setCurrentStep('form');
     setGenerationConfig(null);
+    setResumeProjectId(null);
+    releaseGenerationBusy();
   };
 
   // 渲染表单页面
@@ -533,7 +543,7 @@ export default function ProjectWizardNew() {
             icon={<ArrowLeftOutlined />}
             onClick={() => navigate('/')}
             size={isMobile ? 'middle' : 'large'}
-            disabled={currentStep === 'generating'}
+            disabled={shouldDisableNavigation(currentStep === 'generating')}
             style={{
               background: `color-mix(in srgb, ${token.colorWhite} 20%, transparent)`,
               borderColor: `color-mix(in srgb, ${token.colorWhite} 30%, transparent)`,
@@ -569,6 +579,8 @@ export default function ProjectWizardNew() {
             storagePrefix="wizard"
             onComplete={handleComplete}
             onBack={handleBack}
+            onBusyChange={setIsGenerationBusy}
+            backButtonText="返回向导首页"
             isMobile={isMobile}
             resumeProjectId={resumeProjectId || undefined}
           />

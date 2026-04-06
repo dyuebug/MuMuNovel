@@ -25,7 +25,7 @@ import {
   UnorderedListOutlined,
 } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { backgroundTaskApi, chapterApi, chapterBatchTaskApi, chapterSingleTaskApi } from '../services/api';
+import { backgroundTaskApi, chapterApi, chapterBatchTaskApi, chapterSingleTaskApi, getBatchManualReviewInfo } from '../services/api';
 import { useStore } from '../store';
 import { OPEN_BACKGROUND_TASK_CENTER_EVENT } from '../constants/backgroundTaskEvents';
 import {
@@ -45,6 +45,16 @@ const statusMeta: Record<TrackedBackgroundTask['status'], { color: string; label
   completed: { color: 'success', label: '已完成' },
   failed: { color: 'error', label: '失败' },
   cancelled: { color: 'warning', label: '已取消' },
+};
+
+const getTaskStatusMeta = (task: TrackedBackgroundTask): { color: string; label: string } => {
+  if (task.status === 'failed' && task.reviewRequired) {
+    return {
+      color: 'warning',
+      label: task.terminalLabel || '需人工复核',
+    };
+  }
+  return statusMeta[task.status];
 };
 
 const terminalStatuses = new Set<TrackedBackgroundTask['status']>(['completed', 'failed', 'cancelled']);
@@ -76,6 +86,201 @@ type TaskGroup = {
 type FailureReasonTag = {
   label: string;
   color: string;
+};
+
+type TaskCheckpointCompactionDetail = {
+  before?: number | null;
+  after?: number | null;
+};
+
+type TaskCheckpoint = {
+  current_chapter_number?: number | null;
+  candidate_index?: number | null;
+  candidate_count?: number | null;
+  word_count?: number | null;
+  generation_path?: string | null;
+  attempt_kind?: string | null;
+  rerank_used?: boolean | null;
+  word_budget_repair_used?: boolean | null;
+  winner_candidate_index?: number | null;
+  pre_compaction_total_length?: number | null;
+  context_budget_limit?: number | null;
+  compaction_applied?: boolean | null;
+  compaction_details?: Record<string, TaskCheckpointCompactionDetail> | null;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+);
+
+const toFiniteNumber = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+const toNullableBoolean = (value: unknown): boolean | null => (
+  typeof value === 'boolean' ? value : null
+);
+
+const normalizeCompactionDetails = (
+  value: unknown,
+): Record<string, TaskCheckpointCompactionDetail> | null => {
+  if (!isRecord(value)) return null;
+
+  const entries = Object.entries(value).reduce<Record<string, TaskCheckpointCompactionDetail>>((acc, [key, detail]) => {
+    if (!isRecord(detail)) return acc;
+    acc[key] = {
+      before: toFiniteNumber(detail.before),
+      after: toFiniteNumber(detail.after),
+    };
+    return acc;
+  }, {});
+
+  return entries;
+};
+
+const contextCompactionFieldLabels: Record<string, string> = {
+  recent_chapters_context: '最近章节规划',
+  chapter_careers: '职业体系',
+  foreshadow_reminders: '伏笔提醒',
+  relevant_memories: '相关记忆',
+  chapter_characters: '角色信息',
+  character_arc_snapshot: '角色弧光',
+  continuation_point: '衔接锚点',
+  previous_chapter_summary: '上章摘要',
+};
+
+const getCompactionFieldNames = (checkpoint?: TaskCheckpoint | null): string[] => {
+  if (!checkpoint?.compaction_details) return [];
+  return Object.keys(checkpoint.compaction_details)
+    .map((fieldName) => contextCompactionFieldLabels[fieldName] ?? fieldName)
+    .filter(Boolean);
+};
+
+const getCompactionAfterLength = (checkpoint?: TaskCheckpoint | null): number | null => {
+  const before = checkpoint?.pre_compaction_total_length;
+  if (typeof before !== 'number') return null;
+  if (!checkpoint?.compaction_applied) return before;
+  if (!checkpoint.compaction_details) return null;
+
+  let saved = 0;
+  Object.values(checkpoint.compaction_details).forEach((detail) => {
+    if (typeof detail.before === 'number' && typeof detail.after === 'number') {
+      saved += Math.max(detail.before - detail.after, 0);
+    }
+  });
+  return Math.max(before - saved, 0);
+};
+
+const getCompactionSummary = (checkpoint?: TaskCheckpoint | null): string | null => {
+  if (!checkpoint?.compaction_applied) return null;
+
+  const before = checkpoint.pre_compaction_total_length;
+  const after = getCompactionAfterLength(checkpoint);
+  const limit = checkpoint.context_budget_limit;
+  const fieldNames = getCompactionFieldNames(checkpoint).slice(0, 3);
+  const fieldLabel = fieldNames.length > 0 ? `?${fieldNames.join('?')}?` : '';
+
+  if (typeof before === 'number' && typeof after === 'number' && typeof limit === 'number') {
+    return `上下文压缩 ${before}→${after} / ${limit}${fieldLabel}`;
+  }
+  if (typeof before === 'number' && typeof after === 'number') {
+    return `上下文压缩 ${before}→${after}${fieldLabel}`;
+  }
+  return fieldLabel ? `已压缩${fieldLabel}` : '已压缩';
+};
+
+const getGenerationPathLabel = (value?: string | null): string => {
+  switch (value) {
+    case 'single_pass':
+      return '单轮直出';
+    case 'rerank_retry':
+      return '重排复选';
+    case 'word_budget_repair':
+      return '字数修复';
+    default:
+      return value ? value : '';
+  }
+};
+
+const getAttemptKindLabel = (value?: string | null): string => {
+  switch (value) {
+    case 'initial_candidate':
+      return '初始候选';
+    case 'rerank_candidate':
+      return '重排候选';
+    case 'word_budget_repair':
+      return '字数修复';
+    default:
+      return value ? value : '';
+  }
+};
+
+const getTaskCheckpoint = (task: TrackedBackgroundTask): TaskCheckpoint | null => {
+  if (!isRecord(task.checkpoint)) return null;
+  return {
+    current_chapter_number: toFiniteNumber(task.checkpoint.current_chapter_number),
+    candidate_index: toFiniteNumber(task.checkpoint.candidate_index),
+    candidate_count: toFiniteNumber(task.checkpoint.candidate_count),
+    word_count: toFiniteNumber(task.checkpoint.word_count),
+    generation_path: typeof task.checkpoint.generation_path === 'string' ? task.checkpoint.generation_path : null,
+    attempt_kind: typeof task.checkpoint.attempt_kind === 'string' ? task.checkpoint.attempt_kind : null,
+    rerank_used: toNullableBoolean(task.checkpoint.rerank_used),
+    word_budget_repair_used: toNullableBoolean(task.checkpoint.word_budget_repair_used),
+    winner_candidate_index: toFiniteNumber(task.checkpoint.winner_candidate_index),
+    pre_compaction_total_length: toFiniteNumber(task.checkpoint.pre_compaction_total_length),
+    context_budget_limit: toFiniteNumber(task.checkpoint.context_budget_limit),
+    compaction_applied: toNullableBoolean(task.checkpoint.compaction_applied),
+    compaction_details: normalizeCompactionDetails(task.checkpoint.compaction_details),
+  };
+};
+
+const getTaskCheckpointSummary = (task: TrackedBackgroundTask): string | null => {
+  const checkpoint = getTaskCheckpoint(task);
+  if (!checkpoint) return null;
+
+  const parts: string[] = [];
+  if (typeof checkpoint.current_chapter_number === 'number') {
+    parts.push(`第 ${checkpoint.current_chapter_number} 章`);
+  }
+  if (typeof checkpoint.candidate_index === 'number' && typeof checkpoint.candidate_count === 'number') {
+    parts.push(`候选 ${checkpoint.candidate_index}/${checkpoint.candidate_count}`);
+  }
+  if (typeof checkpoint.word_count === 'number' && checkpoint.word_count > 0) {
+    parts.push(`${checkpoint.word_count} 字`);
+  }
+  const compactionSummary = getCompactionSummary(checkpoint);
+  if (compactionSummary) {
+    parts.push(compactionSummary);
+  }
+  return parts.length > 0 ? `检查点：${parts.join(' · ')}` : null;
+};
+
+const getTaskCheckpointTags = (task: TrackedBackgroundTask): FailureReasonTag[] => {
+  const checkpoint = getTaskCheckpoint(task);
+  if (!checkpoint) return [];
+
+  const tags: FailureReasonTag[] = [];
+  const pushTag = (label: string, color: string) => {
+    if (!label || tags.some((tag) => tag.label === label)) return;
+    tags.push({ label, color });
+  };
+
+  const generationPathLabel = getGenerationPathLabel(checkpoint.generation_path);
+  if (generationPathLabel) pushTag(generationPathLabel, 'blue');
+  const attemptKindLabel = getAttemptKindLabel(checkpoint.attempt_kind);
+  if (attemptKindLabel && attemptKindLabel !== generationPathLabel) pushTag(attemptKindLabel, 'purple');
+  if (checkpoint.rerank_used) pushTag('启用重排', 'geekblue');
+  if (checkpoint.word_budget_repair_used) pushTag('字数修复', 'orange');
+  if (checkpoint.compaction_applied) pushTag('上下文压缩', 'gold');
+  if (typeof checkpoint.winner_candidate_index === 'number') {
+    pushTag(`胜出候选 ${checkpoint.winner_candidate_index}`, 'green');
+  }
+  return tags;
 };
 
 let backgroundTasksApiSupported = true;
@@ -190,6 +395,15 @@ const groupTasksByCategory = (tasks: TrackedBackgroundTask[]): TaskGroup[] => {
 const extractFailureReasonTags = (task: TrackedBackgroundTask): FailureReasonTag[] => {
   const source = `${task.error ?? ''} ${task.message ?? ''}`.toLowerCase();
   const tags: FailureReasonTag[] = [];
+  const manualReviewInfo = (task.taskType === 'chapters_batch_generate' || task.taskType === 'chapter_single_generate')
+    ? getBatchManualReviewInfo(
+      task.failedChapters,
+      task.error,
+      task.terminalReason,
+      task.terminalLabel,
+      task.reviewRequired,
+    )
+    : null;
 
   const pushTag = (label: string, color: string) => {
     if (!tags.some((tag) => tag.label === label)) {
@@ -197,18 +411,25 @@ const extractFailureReasonTags = (task: TrackedBackgroundTask): FailureReasonTag
     }
   };
 
+  if (manualReviewInfo) {
+    pushTag(manualReviewInfo.label, 'gold');
+    if (manualReviewInfo.failedMetrics.length > 0) {
+      pushTag('\u8d28\u91cf\u95e8\u7981\u62e6\u622a', 'orange');
+    }
+  }
+
   if (!source.trim()) {
-    return [{ label: '未知原因', color: 'default' }];
+    return tags.length > 0 ? tags.slice(0, 2) : [{ label: '\u672a\u77e5\u539f\u56e0', color: 'default' }];
   }
 
   if (
     source.includes('timeout') ||
     source.includes('time out') ||
     source.includes('timed out') ||
-    source.includes('超时') ||
+    source.includes('\u8d85\u65f6') ||
     source.includes('deadline exceeded')
   ) {
-    pushTag('超时', 'gold');
+    pushTag('\u8d85\u65f6', 'gold');
   }
 
   if (
@@ -217,26 +438,26 @@ const extractFailureReasonTags = (task: TrackedBackgroundTask): FailureReasonTag
     source.includes('unauthorized') ||
     source.includes('forbidden') ||
     source.includes('permission') ||
-    source.includes('权限') ||
-    source.includes('认证') ||
+    source.includes('\u6743\u9650') ||
+    source.includes('\u8ba4\u8bc1') ||
     source.includes('token') ||
     source.includes('apikey') ||
     source.includes('api key')
   ) {
-    pushTag('权限错误', 'red');
+    pushTag('\u6743\u9650\u9519\u8bef', 'red');
   }
 
   if (
     source.includes('429') ||
     source.includes('rate limit') ||
     source.includes('quota') ||
-    source.includes('配额') ||
-    source.includes('限流') ||
-    source.includes('余额不足') ||
+    source.includes('\u914d\u989d') ||
+    source.includes('\u9650\u6d41') ||
+    source.includes('\u4f59\u989d\u4e0d\u8db3') ||
     source.includes('too many requests') ||
     source.includes('insufficient_quota')
   ) {
-    pushTag('限流/配额', 'volcano');
+    pushTag('\u9650\u6d41/\u914d\u989d', 'volcano');
   }
 
   if (
@@ -246,20 +467,20 @@ const extractFailureReasonTags = (task: TrackedBackgroundTask): FailureReasonTag
     source.includes('connect') ||
     source.includes('econn') ||
     source.includes('dns') ||
-    source.includes('网络') ||
-    source.includes('连接')
+    source.includes('\u7f51\u7edc') ||
+    source.includes('\u8fde\u63a5')
   ) {
-    pushTag('网络异常', 'cyan');
+    pushTag('\u7f51\u7edc\u5f02\u5e38', 'cyan');
   }
 
   if (
     source.includes('model') ||
-    source.includes('模型') ||
+    source.includes('\u6a21\u578b') ||
     source.includes('provider') ||
     source.includes('completion') ||
     source.includes('llm')
   ) {
-    pushTag('模型错误', 'purple');
+    pushTag('\u6a21\u578b\u9519\u8bef', 'purple');
   }
 
   if (
@@ -267,11 +488,11 @@ const extractFailureReasonTags = (task: TrackedBackgroundTask): FailureReasonTag
     source.includes('maximum context') ||
     source.includes('too long') ||
     source.includes('length') ||
-    source.includes('上下文') ||
-    source.includes('长度超限') ||
+    source.includes('\u4e0a\u4e0b\u6587') ||
+    source.includes('\u957f\u5ea6\u8d85\u9650') ||
     source.includes('token limit')
   ) {
-    pushTag('上下文过长', 'magenta');
+    pushTag('\u4e0a\u4e0b\u6587\u8fc7\u957f', 'magenta');
   }
 
   if (
@@ -279,19 +500,20 @@ const extractFailureReasonTags = (task: TrackedBackgroundTask): FailureReasonTag
     source.includes('validation') ||
     source.includes('missing') ||
     source.includes('required') ||
-    source.includes('参数') ||
-    source.includes('格式') ||
-    source.includes('校验')
+    source.includes('\u53c2\u6570') ||
+    source.includes('\u683c\u5f0f') ||
+    source.includes('\u6821\u9a8c')
   ) {
-    pushTag('参数问题', 'orange');
+    pushTag('\u53c2\u6570\u95ee\u9898', 'orange');
   }
 
   if (tags.length === 0) {
-    pushTag('未知原因', 'default');
+    pushTag('\u672a\u77e5\u539f\u56e0', 'default');
   }
 
   return tags.slice(0, 2);
 };
+
 
 const formatRelativeTime = (timestamp: number): string => {
   const diff = Date.now() - timestamp;
@@ -733,7 +955,7 @@ export default function BackgroundTaskCenter() {
 
   const canResumeTask = (task: TrackedBackgroundTask) =>
     (task.taskType === 'chapters_batch_generate' || task.taskType === 'chapter_single_generate') &&
-    (task.status === 'failed' || task.status === 'cancelled');
+    (typeof task.canResume === 'boolean' ? task.canResume : (task.status === 'failed' || task.status === 'cancelled'));
 
   const canCancelTask = (task: TrackedBackgroundTask) =>
     task.taskType !== 'chapter_analysis';
@@ -807,9 +1029,20 @@ export default function BackgroundTaskCenter() {
 
   const renderTaskItem = (task: TrackedBackgroundTask, accent: TaskSection['accent']) => {
     const active = isActiveBackgroundTask(task);
-    const status = statusMeta[task.status];
-    const hasError = task.status === 'failed' && task.error;
+    const status = getTaskStatusMeta(task);
+    const manualReviewInfo = task.status === 'failed' && (task.taskType === 'chapters_batch_generate' || task.taskType === 'chapter_single_generate')
+      ? getBatchManualReviewInfo(
+        task.failedChapters,
+        task.error,
+        task.terminalReason,
+        task.terminalLabel,
+        task.reviewRequired,
+      )
+      : null;
+    const hasError = task.status === 'failed' && Boolean(task.error || manualReviewInfo?.message);
     const failureReasonTags = task.status === 'failed' ? extractFailureReasonTags(task) : [];
+    const checkpointSummary = getTaskCheckpointSummary(task);
+    const checkpointTags = getTaskCheckpointTags(task);
     const targetRoute = getTaskDestination(task);
 
     return (
@@ -852,7 +1085,7 @@ export default function BackgroundTaskCenter() {
             size="small"
             status={
               task.status === 'failed'
-                ? 'exception'
+                ? (manualReviewInfo ? 'normal' : 'exception')
                 : task.status === 'completed'
                   ? 'success'
                   : 'active'
@@ -869,10 +1102,20 @@ export default function BackgroundTaskCenter() {
             </Text>
           ) : null}
 
-          {typeof task.checkpoint?.current_chapter_number === 'number' ? (
+          {checkpointSummary ? (
             <Text type="secondary" style={{ fontSize: 12 }}>
-              检查点：当前第 {task.checkpoint.current_chapter_number} 章
+              {checkpointSummary}
             </Text>
+          ) : null}
+
+          {checkpointTags.length > 0 ? (
+            <Space size={[6, 6]} wrap>
+              {checkpointTags.map((tag) => (
+                <Tag key={`${task.taskId}-${tag.label}`} color={tag.color}>
+                  {tag.label}
+                </Tag>
+              ))}
+            </Space>
           ) : null}
 
           {formatActiveStoryRepairLabel(task.activeStoryRepairPayload) ? (
@@ -892,8 +1135,8 @@ export default function BackgroundTaskCenter() {
                   ))}
                 </Space>
               ) : null}
-              <Text type="danger" style={{ fontSize: 12 }}>
-                {task.error}
+              <Text type={manualReviewInfo ? 'warning' : 'danger'} style={{ fontSize: 12 }}>
+                {manualReviewInfo?.message ?? task.error}
               </Text>
             </Space>
           ) : null}

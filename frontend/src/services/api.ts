@@ -323,7 +323,7 @@ export const settingsApi = {
   getAvailableModels: (params: { api_key: string; api_base_url: string; provider: string }) =>
     api.get<unknown, { provider: string; models: Array<{ value: string; label: string; description: string }>; count?: number }>('/settings/models', { params }),
 
-  testApiConnection: (params: { api_key: string; api_base_url: string; provider: string; llm_model: string; temperature?: number; max_tokens?: number }) =>
+  testApiConnection: (params: { api_key: string; api_base_url: string; provider: string; llm_model: string; temperature?: number; max_tokens?: number; api_backup_urls?: string[]; fallback_strategy?: 'auto' | 'manual' }) =>
     api.post<unknown, {
       success: boolean;
       message: string;
@@ -331,7 +331,7 @@ export const settingsApi = {
       provider?: string;
       model?: string;
       response_preview?: string;
-      details?: Record<string, boolean | number>;
+      details?: Record<string, any>;
       error?: string;
       error_type?: string;
       suggestions?: string[];
@@ -358,7 +358,7 @@ export const settingsApi = {
       suggestions?: string[];
     }>('/settings/test-web-research', params),
 
-  checkFunctionCalling: (params: { api_key: string; api_base_url: string; provider: string; llm_model: string }) =>
+  checkFunctionCalling: (params: { api_key: string; api_base_url: string; provider: string; llm_model: string; api_backup_urls?: string[]; fallback_strategy?: 'auto' | 'manual' }) =>
     api.post<unknown, {
       success: boolean;
       supported: boolean | null;
@@ -367,14 +367,7 @@ export const settingsApi = {
       response_time_ms?: number;
       provider?: string;
       model?: string;
-      details?: {
-        finish_reason?: string;
-        has_tool_calls?: boolean;
-        tool_call_count?: number;
-        test_tool?: string;
-        test_prompt?: string;
-        response_type?: string;
-      };
+      details?: Record<string, any>;
       tool_calls?: Array<{
         id?: string;
         type?: string;
@@ -943,6 +936,64 @@ export const chapterApi = {
 
 type BatchTaskRuntimeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
+export type ChapterBatchFailedChapter = Record<string, unknown>;
+
+export type ChapterBatchManualReviewInfo = {
+  label: string;
+  message: string;
+  failedMetrics: string[];
+};
+
+const isNonEmptyString = (value: unknown): value is string => (
+  typeof value === 'string' && value.trim().length > 0
+);
+
+export const getBatchManualReviewInfo = (
+  failedChapters?: Array<ChapterBatchFailedChapter> | null,
+  fallbackErrorMessage?: string | null,
+  terminalReason?: string | null,
+  terminalLabel?: string | null,
+  reviewRequired?: boolean | null,
+): ChapterBatchManualReviewInfo | null => {
+  const matched = (failedChapters || []).find((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+    const decision = typeof item.quality_gate_decision === 'string' ? item.quality_gate_decision.trim().toLowerCase() : '';
+    return decision === 'manual_review';
+  });
+
+  const fallback = String(fallbackErrorMessage || '').trim();
+  const isManualReviewTerminal = reviewRequired === true || String(terminalReason || '').trim().toLowerCase() === 'manual_review';
+
+  if (!matched && !isManualReviewTerminal) {
+    if (!fallback) return null;
+    if (!fallback.startsWith('需复核:') && !fallback.toLowerCase().includes('manual review')) return null;
+    return {
+      label: '需人工复核',
+      message: fallback,
+      failedMetrics: [],
+    };
+  }
+
+  const label = isNonEmptyString(terminalLabel)
+    ? terminalLabel.trim()
+    : matched && isNonEmptyString(matched.quality_gate_label)
+      ? matched.quality_gate_label.trim()
+      : '需人工复核';
+  const message = matched && isNonEmptyString(matched.error)
+    ? matched.error.trim()
+    : fallback || `${label}：当前候选稿需要人工复核后再决定是否保存。`;
+  const failedMetrics = matched && Array.isArray(matched.quality_gate_failed_metrics)
+    ? matched.quality_gate_failed_metrics.filter((item): item is string => isNonEmptyString(item))
+    : [];
+
+  return {
+    label,
+    message,
+    failedMetrics,
+  };
+};
+
+
 export interface ChapterBatchGenerateResponse {
   batch_id: string;
   message: string;
@@ -971,7 +1022,12 @@ export interface ChapterBatchGenerateStatusResponse {
   quality_metrics_summary?: import('../types').ChapterQualityMetricsSummary | null;
   quality_profile_summary?: import('../types').ChapterQualityProfileSummary | null;
   active_story_repair_payload?: import('../types').ActiveStoryRepairPayload | null;
+  terminal_reason?: string | null;
+  terminal_label?: string | null;
+  review_required?: boolean | null;
+  can_resume?: boolean | null;
 }
+
 
 export interface ChapterBatchActiveTask {
   batch_id: string;
@@ -1042,16 +1098,29 @@ const buildChapterGenerateTaskMessage = (
   total: number,
   completed: number,
   currentChapterNumber?: number | null,
-  errorMessage?: string | null
+  errorMessage?: string | null,
+  failedChapters?: Array<ChapterBatchFailedChapter> | null,
+  terminalReason?: string | null,
+  terminalLabel?: string | null,
+  reviewRequired?: boolean | null,
 ) => {
-  const taskName = taskType === 'chapter_single_generate' ? '单章生成' : '批量生成';
-  if (status === 'failed') return errorMessage || `${taskName}失败`;
+  const taskName = taskType === 'chapter_single_generate'
+    ? '单章生成'
+    : '批量生成';
+  if (status === 'failed') {
+    const manualReviewInfo = (taskType === 'chapters_batch_generate' || taskType === 'chapter_single_generate')
+      ? getBatchManualReviewInfo(failedChapters, errorMessage, terminalReason, terminalLabel, reviewRequired)
+      : null;
+    if (manualReviewInfo) return `${taskName}待人工复核`;
+    return errorMessage || `${taskName}失败`;
+  }
   if (status === 'cancelled') return `${taskName}已取消`;
   if (status === 'completed') return `${taskName}完成 (${completed}/${total})`;
   if (currentChapterNumber) return `${taskName}中：第 ${currentChapterNumber} 章 (${completed}/${total})`;
   if (status === 'running') return `${taskName}中 (${completed}/${total})`;
   return `${taskName}排队中 (${completed}/${total})`;
 };
+
 
 let chapterActiveTasksEndpointSupported = true;
 let backgroundTasksEndpointSupported = true;
@@ -1068,7 +1137,12 @@ const upsertChapterTaskToStore = (data: {
   stageCode?: string | null;
   executionMode?: 'interactive' | 'auto' | null;
   checkpoint?: Record<string, unknown> | null;
+  failedChapters?: Array<ChapterBatchFailedChapter> | null;
   activeStoryRepairPayload?: import('../types').ActiveStoryRepairPayload | null;
+  terminalReason?: string | null;
+  terminalLabel?: string | null;
+  reviewRequired?: boolean | null;
+  canResume?: boolean | null;
   createdAt?: string | null;
   completedAt?: string | null;
 }) => {
@@ -1087,18 +1161,28 @@ const upsertChapterTaskToStore = (data: {
       data.total,
       data.completed,
       data.currentChapterNumber,
-      data.errorMessage
+      data.errorMessage,
+      data.failedChapters ?? null,
+      data.terminalReason,
+      data.terminalLabel,
+      data.reviewRequired,
     ),
     error: data.errorMessage ?? null,
     stage_code: data.stageCode ?? undefined,
     execution_mode: data.executionMode ?? undefined,
     checkpoint: data.checkpoint ?? undefined,
+    failed_chapters: data.failedChapters ?? undefined,
     active_story_repair_payload: data.activeStoryRepairPayload ?? undefined,
+    terminal_reason: data.terminalReason,
+    terminal_label: data.terminalLabel,
+    review_required: data.reviewRequired,
+    can_resume: data.canResume,
     created_at: data.createdAt ?? now,
     updated_at: now,
     completed_at: data.completedAt ?? null,
   });
 };
+
 
 export const chapterBatchTaskApi = {
   createBatchGenerateTask: async (
@@ -1155,7 +1239,12 @@ export const chapterBatchTaskApi = {
       stageCode: status.stage_code ?? '6.writing',
       executionMode: status.execution_mode ?? 'interactive',
       checkpoint: status.checkpoint ?? undefined,
+      failedChapters: status.failed_chapters ?? undefined,
       activeStoryRepairPayload: status.active_story_repair_payload ?? undefined,
+      terminalReason: status.terminal_reason,
+      terminalLabel: status.terminal_label,
+      reviewRequired: status.review_required,
+      canResume: status.can_resume,
       createdAt: status.created_at,
       completedAt: status.completed_at,
     });
@@ -1345,7 +1434,12 @@ export const chapterSingleTaskApi = {
       stageCode: status.stage_code ?? '6.writing',
       executionMode: status.execution_mode ?? 'interactive',
       checkpoint: status.checkpoint ?? undefined,
+      failedChapters: status.failed_chapters ?? undefined,
       activeStoryRepairPayload: status.active_story_repair_payload ?? undefined,
+      terminalReason: status.terminal_reason,
+      terminalLabel: status.terminal_label,
+      reviewRequired: status.review_required,
+      canResume: status.can_resume,
       createdAt: status.created_at,
       completedAt: status.completed_at,
     });
@@ -1565,11 +1659,16 @@ export interface BackgroundTaskStatus {
   workflow_scope?: string | null;
   checkpoint?: Record<string, unknown> | null;
   active_story_repair_payload?: import('../types').ActiveStoryRepairPayload | null;
+  terminal_reason?: string | null;
+  terminal_label?: string | null;
+  review_required?: boolean | null;
+  can_resume?: boolean | null;
   created_at?: string | null;
   updated_at?: string | null;
   started_at?: string | null;
   completed_at?: string | null;
 }
+
 
 export interface BackgroundTaskListResponse {
   total: number;

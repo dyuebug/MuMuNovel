@@ -65,6 +65,42 @@ export default function SettingsCurrentTab(props: any) {
   webResearchTestResult
   } = props;
 
+  const endpointDiagnostics = testResult?.details?.endpoint_diagnostics as {
+    primary_endpoint?: string;
+    backup_endpoints?: string[];
+    configured_endpoint_count?: number;
+    fallback_strategy?: string;
+    auto_failover_enabled?: boolean;
+  } | undefined;
+  const backupEndpoints = Array.isArray(endpointDiagnostics?.backup_endpoints)
+    ? endpointDiagnostics.backup_endpoints
+    : [];
+  const transportDiagnostics = testResult?.details?.transport_diagnostics as {
+    summary?: {
+      total_attempts?: number;
+      successful_attempts?: number;
+      api_modes_tried?: string[];
+      backup_endpoint_used?: boolean;
+      api_mode_fallback_used?: boolean;
+      forced_chat_completions?: boolean;
+      normalized_base_url_used?: boolean;
+    };
+    attempts?: Array<{
+      api_mode?: string;
+      endpoint_role?: string;
+      base_url?: string;
+      endpoint_path?: string;
+      attempt_number?: number;
+      max_attempts?: number;
+      result?: string;
+      status_code?: number;
+      error_type?: string;
+    }>;
+  } | undefined;
+  const transportAttempts = Array.isArray(transportDiagnostics?.attempts)
+    ? transportDiagnostics.attempts.slice(-3)
+    : [];
+
   return (
                     <Space direction="vertical" size={isMobile ? 'middle' : 'large'} style={{ width: '100%' }}>
 
@@ -376,7 +412,11 @@ export default function SettingsCurrentTab(props: any) {
                                       <Suspense fallback={settingsLazyFallback}>
                                         <LazyEndpointListEditor
                                           endpoints={endpoints}
-                                          onChange={setEndpoints}
+                                          onChange={(nextEndpoints: any[]) => {
+                                            setEndpoints(nextEndpoints);
+                                            const primaryEndpoint = nextEndpoints.find((endpoint: any) => endpoint.type === 'primary');
+                                            form.setFieldValue('api_base_url', primaryEndpoint?.url || '');
+                                          }}
                                           loading={testingApi}
                                         />
                                       </Suspense>
@@ -968,6 +1008,85 @@ export default function SettingsCurrentTab(props: any) {
                                       )}
                                     </Space>
                                   )}
+                                  {endpointDiagnostics && (
+                                    <div
+                                      style={{
+                                        marginTop: 12,
+                                        padding: '10px 12px',
+                                        background: '#f5f5f5',
+                                        borderRadius: '6px',
+                                        border: '1px solid #d9d9d9',
+                                        fontSize: isMobile ? '12px' : '13px',
+                                      }}
+                                    >
+                                      <div style={{ fontWeight: 500, marginBottom: 6 }}>Endpoint diagnostics</div>
+                                      <div style={{ marginBottom: 4 }}>
+                                        Primary endpoint: <code style={{ wordBreak: 'break-all' }}>{endpointDiagnostics.primary_endpoint || 'Not set'}</code>
+                                      </div>
+                                      <div style={{ marginBottom: 4 }}>Backup endpoints: {backupEndpoints.length}</div>
+                                      <div style={{ marginBottom: 4 }}>Strategy: {endpointDiagnostics.fallback_strategy || 'auto'}</div>
+                                      <div>Auto failover: {endpointDiagnostics.auto_failover_enabled ? 'Enabled' : 'Disabled'}</div>
+                                      {backupEndpoints.length > 0 && (
+                                        <div style={{ marginTop: 8 }}>
+                                          <div style={{ fontWeight: 500, marginBottom: 4 }}>Backup endpoint list:</div>
+                                          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                            {backupEndpoints.map((endpoint: string, index: number) => (
+                                              <code key={`${endpoint}-${index}`} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                                                {endpoint}
+                                              </code>
+                                            ))}
+                                          </Space>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                  {transportDiagnostics && (
+                                    <div
+                                      style={{
+                                        marginTop: 12,
+                                        padding: '10px 12px',
+                                        background: '#f5f5f5',
+                                        borderRadius: '6px',
+                                        border: '1px solid #d9d9d9',
+                                        fontSize: isMobile ? '12px' : '13px',
+                                      }}
+                                    >
+                                      <div style={{ fontWeight: 500, marginBottom: 6 }}>Transport diagnostics</div>
+                                      <div style={{ marginBottom: 4 }}>Total attempts: {transportDiagnostics.summary?.total_attempts ?? 0}</div>
+                                      <div style={{ marginBottom: 4 }}>Successful attempts: {transportDiagnostics.summary?.successful_attempts ?? 0}</div>
+                                      <div style={{ marginBottom: 4 }}>API modes tried: {(transportDiagnostics.summary?.api_modes_tried || []).join(' -> ') || 'Unknown'}</div>
+                                      <div style={{ marginBottom: 4 }}>Backup endpoint used: {transportDiagnostics.summary?.backup_endpoint_used ? 'Yes' : 'No'}</div>
+                                      <div style={{ marginBottom: 4 }}>API mode fallback: {transportDiagnostics.summary?.api_mode_fallback_used ? 'Yes' : 'No'}</div>
+                                      <div style={{ marginBottom: 4 }}>Forced chat completions: {transportDiagnostics.summary?.forced_chat_completions ? 'Yes' : 'No'}</div>
+                                      <div>Normalized base URL used: {transportDiagnostics.summary?.normalized_base_url_used ? 'Yes' : 'No'}</div>
+                                      {transportAttempts.length > 0 && (
+                                        <div style={{ marginTop: 8 }}>
+                                          <div style={{ fontWeight: 500, marginBottom: 4 }}>Recent attempts:</div>
+                                          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                            {transportAttempts.map((attempt, index) => (
+                                              <div key={`${attempt.base_url || 'attempt'}-${attempt.attempt_number || index}-${index}`}>
+                                                <div>
+                                                  <code>{attempt.api_mode || 'unknown'}</code>
+                                                  {' ? '}
+                                                  <strong>{attempt.result || 'unknown'}</strong>
+                                                  {' ? '}
+                                                  {attempt.endpoint_role || 'primary'}
+                                                  {' ? '}
+                                                  {attempt.attempt_number || 1}/{attempt.max_attempts || 1}
+                                                  {attempt.status_code ? ` ? HTTP ${attempt.status_code}` : ''}
+                                                  {attempt.error_type ? ` ? ${attempt.error_type}` : ''}
+                                                </div>
+                                                <code style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                                                  {`${attempt.base_url || ''}${attempt.endpoint_path || ''}` || 'Unknown endpoint'}
+                                                </code>
+                                              </div>
+                                            ))}
+                                          </Space>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
                                 </div>
                               }
                               type={testResult.success ? 'success' : 'error'}

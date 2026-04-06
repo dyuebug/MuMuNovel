@@ -2486,7 +2486,7 @@ export default function Outline() {
     const settings = await settingsResponse.json();
 
 
-    const { api_key, api_base_url, api_provider } = settings;
+    const { api_key, api_base_url, api_provider, provider_type } = settings;
 
 
     let loadedModels: Array<{ value: string, label: string }> = [];
@@ -2504,7 +2504,7 @@ export default function Outline() {
         const modelsResponse = await fetch(
 
 
-          `/api/settings/models?api_key=${encodeURIComponent(api_key)}&api_base_url=${encodeURIComponent(api_base_url)}&provider=${api_provider}`
+          `/api/settings/models?api_key=${encodeURIComponent(api_key)}&api_base_url=${encodeURIComponent(api_base_url)}&provider=${provider_type || api_provider}`
 
 
         );

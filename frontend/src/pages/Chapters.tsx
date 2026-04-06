@@ -6,7 +6,7 @@ import { DownloadOutlined, RocketOutlined, CaretRightOutlined, BookOutlined, Plu
 
 import { useStore } from '../store';
 import { useChapterSync } from '../store/hooks';
-import { projectApi, writingStyleApi, chapterApi, chapterBatchTaskApi } from '../services/api';
+import { projectApi, writingStyleApi, chapterApi, chapterBatchTaskApi, getBatchManualReviewInfo } from '../services/api';
 import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterLatestQualityMetrics, ChapterQualityMetrics, ChapterQualityMetricsSummary, ChapterQualityProfileSummary, ActiveStoryRepairPayload, CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
 import { hasUsableApiCredentials } from '../utils/apiKey';
 import ChapterListItem from '../components/ChapterListItem';
@@ -104,6 +104,167 @@ const loadStoryCreationPersistence = () => import('../utils/storyCreationPersist
 const isAnalysisTaskInProgress = (task?: AnalysisTask | null): boolean => (
   task?.status === 'pending' || task?.status === 'running'
 );
+
+type BatchGenerationCheckpointCompactionDetail = {
+  before?: number | null;
+  after?: number | null;
+};
+
+type BatchGenerationCheckpoint = {
+  current_chapter_number?: number | null;
+  candidate_index?: number | null;
+  candidate_count?: number | null;
+  word_count?: number | null;
+  generation_path?: string | null;
+  attempt_kind?: string | null;
+  rerank_used?: boolean | null;
+  word_budget_repair_used?: boolean | null;
+  winner_candidate_index?: number | null;
+  pre_compaction_total_length?: number | null;
+  context_budget_limit?: number | null;
+  compaction_applied?: boolean | null;
+  compaction_details?: Record<string, BatchGenerationCheckpointCompactionDetail> | null;
+};
+
+const isObjectRecord = (value: unknown): value is Record<string, unknown> => (
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+);
+
+const toOptionalNumber = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+const toOptionalBoolean = (value: unknown): boolean | null => (
+  typeof value === 'boolean' ? value : null
+);
+
+const normalizeBatchGenerationCompactionDetails = (
+  value: unknown,
+): Record<string, BatchGenerationCheckpointCompactionDetail> | null => {
+  if (!isObjectRecord(value)) return null;
+
+  const entries = Object.entries(value).reduce<Record<string, BatchGenerationCheckpointCompactionDetail>>((acc, [key, detail]) => {
+    if (!isObjectRecord(detail)) return acc;
+    acc[key] = {
+      before: toOptionalNumber(detail.before),
+      after: toOptionalNumber(detail.after),
+    };
+    return acc;
+  }, {});
+
+  return entries;
+};
+
+const batchContextCompactionFieldLabels: Record<string, string> = {
+  recent_chapters_context: '最近章节规划',
+  chapter_careers: '职业体系',
+  foreshadow_reminders: '伏笔提醒',
+  relevant_memories: '相关记忆',
+  chapter_characters: '角色信息',
+  character_arc_snapshot: '角色弧光',
+  continuation_point: '衔接锚点',
+  previous_chapter_summary: '上章摘要',
+};
+
+const getBatchCompactionFieldNames = (checkpoint?: BatchGenerationCheckpoint | null): string[] => {
+  if (!checkpoint?.compaction_details) return [];
+  return Object.keys(checkpoint.compaction_details)
+    .map((fieldName) => batchContextCompactionFieldLabels[fieldName] ?? fieldName)
+    .filter(Boolean);
+};
+
+const getBatchCompactionAfterLength = (checkpoint?: BatchGenerationCheckpoint | null): number | null => {
+  const before = checkpoint?.pre_compaction_total_length;
+  if (typeof before !== 'number') return null;
+  if (!checkpoint?.compaction_applied) return before;
+  if (!checkpoint.compaction_details) return null;
+
+  let saved = 0;
+  Object.values(checkpoint.compaction_details).forEach((detail) => {
+    if (typeof detail.before === 'number' && typeof detail.after === 'number') {
+      saved += Math.max(detail.before - detail.after, 0);
+    }
+  });
+  return Math.max(before - saved, 0);
+};
+
+const buildBatchCompactionHint = (checkpoint?: BatchGenerationCheckpoint | null): string => {
+  if (!checkpoint?.compaction_applied) return '';
+
+  const before = checkpoint.pre_compaction_total_length;
+  const after = getBatchCompactionAfterLength(checkpoint);
+  const limit = checkpoint.context_budget_limit;
+  const fieldNames = getBatchCompactionFieldNames(checkpoint).slice(0, 3);
+  const fieldLabel = fieldNames.length > 0 ? `?${fieldNames.join('?')}?` : '';
+
+  if (typeof before === 'number' && typeof after === 'number' && typeof limit === 'number') {
+    return `上下文压缩 ${before}→${after}/${limit}${fieldLabel}`;
+  }
+  if (typeof before === 'number' && typeof after === 'number') {
+    return `上下文压缩 ${before}→${after}${fieldLabel}`;
+  }
+  return fieldLabel ? `已压缩${fieldLabel}` : '已压缩';
+};
+
+const normalizeBatchGenerationCheckpoint = (value: unknown): BatchGenerationCheckpoint | null => {
+  if (!isObjectRecord(value)) return null;
+  return {
+    current_chapter_number: toOptionalNumber(value.current_chapter_number),
+    candidate_index: toOptionalNumber(value.candidate_index),
+    candidate_count: toOptionalNumber(value.candidate_count),
+    word_count: toOptionalNumber(value.word_count),
+    generation_path: typeof value.generation_path === 'string' ? value.generation_path : null,
+    attempt_kind: typeof value.attempt_kind === 'string' ? value.attempt_kind : null,
+    rerank_used: toOptionalBoolean(value.rerank_used),
+    word_budget_repair_used: toOptionalBoolean(value.word_budget_repair_used),
+    winner_candidate_index: toOptionalNumber(value.winner_candidate_index),
+    pre_compaction_total_length: toOptionalNumber(value.pre_compaction_total_length),
+    context_budget_limit: toOptionalNumber(value.context_budget_limit),
+    compaction_applied: toOptionalBoolean(value.compaction_applied),
+    compaction_details: normalizeBatchGenerationCompactionDetails(value.compaction_details),
+  };
+};
+
+const getBatchGenerationPathLabel = (value?: string | null): string => {
+  switch (value) {
+    case 'single_pass':
+      return '单轮直出';
+    case 'rerank_retry':
+      return '重排复选';
+    case 'word_budget_repair':
+      return '字数修复';
+    default:
+      return value ? value : '';
+  }
+};
+
+const buildBatchGenerationCheckpointHint = (checkpoint?: BatchGenerationCheckpoint | null): string => {
+  if (!checkpoint) return '';
+  const parts: string[] = [];
+  if (typeof checkpoint.candidate_index === 'number' && typeof checkpoint.candidate_count === 'number') {
+    parts.push(`候选 ${checkpoint.candidate_index}/${checkpoint.candidate_count}`);
+  }
+  if (typeof checkpoint.word_count === 'number' && checkpoint.word_count > 0) {
+    parts.push(`${checkpoint.word_count} 字`);
+  }
+  const generationPathLabel = getBatchGenerationPathLabel(checkpoint.generation_path);
+  if (generationPathLabel) {
+    parts.push(`路径：${generationPathLabel}`);
+  }
+  if (typeof checkpoint.winner_candidate_index === 'number') {
+    parts.push(`胜出候选 ${checkpoint.winner_candidate_index}`);
+  }
+  const compactionHint = buildBatchCompactionHint(checkpoint);
+  if (compactionHint) {
+    parts.push(compactionHint);
+  }
+  return parts.join(' · ');
+};
 
 const collectActiveAnalysisChapterIds = (tasksMap: Record<string, AnalysisTask>): string[] => (
   Object.entries(tasksMap)
@@ -629,16 +790,23 @@ export default function Chapters() {
 
     current_chapter_number: number | null;
 
+    checkpoint?: BatchGenerationCheckpoint | null;
+
     estimated_time_minutes?: number;
 
     latest_quality_metrics?: ChapterLatestQualityMetrics | null;
     quality_metrics_summary?: ChapterQualityMetricsSummary | null;
     quality_profile_summary?: ChapterQualityProfileSummary | null;
+    failed_chapters?: Array<Record<string, unknown>>;
     active_story_repair_payload?: ActiveStoryRepairPayload | null;
   } | null>(null);
   const batchProgressRepairLabel = useMemo(
     () => formatActiveStoryRepairLabel(batchProgress?.active_story_repair_payload),
     [batchProgress?.active_story_repair_payload],
+  );
+  const batchProgressCheckpointLabel = useMemo(
+    () => buildBatchGenerationCheckpointHint(batchProgress?.checkpoint),
+    [batchProgress?.checkpoint],
   );
 
   const maxKnownChapterNumber = useMemo(
@@ -2235,7 +2403,7 @@ export default function Chapters() {
 
         const settings = await settingsResponse.json();
 
-        const { api_key, api_base_url, api_provider } = settings;
+        const { api_key, api_base_url, api_provider, provider_type } = settings;
         const preferredModel = normalizeOptionalSelectValue(settings.llm_model);
 
 
@@ -2246,7 +2414,7 @@ export default function Chapters() {
 
             const modelsResponse = await fetch(
 
-              `/api/settings/models?api_key=${encodeURIComponent(api_key)}&api_base_url=${encodeURIComponent(api_base_url)}&provider=${api_provider}`
+              `/api/settings/models?api_key=${encodeURIComponent(api_key)}&api_base_url=${encodeURIComponent(api_base_url)}&provider=${provider_type || api_provider}`
 
             );
 
@@ -2346,6 +2514,8 @@ export default function Chapters() {
             completed: task.completed,
 
             current_chapter_number: task.current_chapter_number ?? null,
+
+            checkpoint: normalizeBatchGenerationCheckpoint(task.checkpoint),
 
             latest_quality_metrics: (task.latest_quality_metrics as {
 
@@ -2938,11 +3108,13 @@ export default function Chapters() {
 
             key: progressMessageKey,
 
-            type: 'success',
+            type: finalResult?.content_source === 'candidate_draft' ? 'info' : 'success',
 
-            content: '生成完成。',
+            content: finalResult?.content_source === 'candidate_draft'
+              ? '\u5019\u9009\u7a3f\u5df2\u8f7d\u5165\u7f16\u8f91\u5668\u9884\u89c8\uff0c\u7b49\u5f85\u4eba\u5de5\u590d\u6838'
+              : '\u751f\u6210\u5b8c\u6210',
 
-            duration: 2,
+            duration: finalResult?.content_source === 'candidate_draft' ? 3 : 2,
 
           });
 
@@ -3237,6 +3409,18 @@ export default function Chapters() {
 
         current_chapter_number: values.startChapterNumber,
 
+        checkpoint: {
+          current_chapter_number: values.startChapterNumber,
+          candidate_index: 1,
+          candidate_count: 1,
+          word_count: 0,
+          generation_path: 'single_pass',
+          attempt_kind: 'initial_candidate',
+          rerank_used: false,
+          word_budget_repair_used: false,
+          winner_candidate_index: null,
+        },
+
         estimated_time_minutes: result.estimated_time_minutes,
 
         latest_quality_metrics: undefined,
@@ -3317,6 +3501,8 @@ export default function Chapters() {
 
           current_chapter_number: status.current_chapter_number ?? null,
 
+          checkpoint: normalizeBatchGenerationCheckpoint(status.checkpoint),
+
           latest_quality_metrics: (status.latest_quality_metrics as {
 
             overall_score?: number;
@@ -3352,6 +3538,8 @@ export default function Chapters() {
           } | null | undefined) ?? undefined,
 
           quality_profile_summary: status.quality_profile_summary ?? null,
+
+          failed_chapters: status.failed_chapters ?? [],
 
           active_story_repair_payload: status.active_story_repair_payload ?? null,
 
@@ -3445,20 +3633,46 @@ export default function Chapters() {
 
           } else if (status.status === 'failed') {
 
-            message.error(`批量生成失败：${status.error_message || '未知错误'}`);
+            const manualReviewInfo = getBatchManualReviewInfo(status.failed_chapters, status.error_message, status.terminal_reason, status.terminal_label, status.review_required);
+
+            if (manualReviewInfo) {
+
+              const manualReviewMessage = manualReviewInfo.failedMetrics.length > 0
+                ? `${manualReviewInfo.message}\uff08\u5173\u6ce8\uff1a${manualReviewInfo.failedMetrics.slice(0, 3).join('\u3001')}\uff09`
+                : manualReviewInfo.message;
+
+              message.warning(`\u6279\u91cf\u751f\u6210\u9700\u4eba\u5de5\u590d\u6838\uff1a${manualReviewMessage}`);
 
 
-            showBrowserNotification(
+              showBrowserNotification(
 
-              '批量生成失败',
+                '\u6279\u91cf\u751f\u6210\u9700\u4eba\u5de5\u590d\u6838',
 
-              status.error_message || '未知错误',
+                manualReviewMessage,
 
-              'error'
+                'info'
 
-            );
+              );
+
+            } else {
+
+              message.error(`\u6279\u91cf\u751f\u6210\u5931\u8d25\uff1a${status.error_message || '\u672a\u77e5\u9519\u8bef'}`);
+
+
+              showBrowserNotification(
+
+                '\u6279\u91cf\u751f\u6210\u5931\u8d25',
+
+                status.error_message || '\u672a\u77e5\u9519\u8bef',
+
+                'error'
+
+              );
+
+            }
 
           } else if (status.status === 'cancelled') {
+
 
             message.warning('批量生成已取消。');
 
@@ -4598,12 +4812,12 @@ export default function Chapters() {
                     batchProgress.latest_quality_metrics?.overall_score !== undefined
                       ? ` 评分：${batchProgress.latest_quality_metrics.overall_score}`
                       : ''
-                  }${batchProgressRepairLabel ? ` | ${batchProgressRepairLabel}` : ''}`
+                  }${batchProgressCheckpointLabel ? ` | ${batchProgressCheckpointLabel}` : ''}${batchProgressRepairLabel ? ` | ${batchProgressRepairLabel}` : ''}`
                 : `批量生成进行中... (${batchProgress?.completed || 0}/${batchProgress?.total || 0})${
                     batchProgress?.latest_quality_metrics?.overall_score !== undefined
                       ? ` 评分：${batchProgress.latest_quality_metrics.overall_score}`
                       : ''
-                  }${batchProgressRepairLabel ? ` | ${batchProgressRepairLabel}` : ''}`
+                  }${batchProgressCheckpointLabel ? ` | ${batchProgressCheckpointLabel}` : ''}${batchProgressRepairLabel ? ` | ${batchProgressRepairLabel}` : ''}`
             }
             title="批量生成进度"
 

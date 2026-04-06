@@ -78,6 +78,32 @@ interface NavigationData {
   } | null;
 }
 
+const getCandidateGenerationPathLabel = (value?: string | null): string => {
+  switch (value) {
+    case 'single_pass':
+      return '单轮直出';
+    case 'rerank_retry':
+      return '重排复选';
+    case 'word_budget_repair':
+      return '字数修复';
+    default:
+      return value ? value : '';
+  }
+};
+
+const getCandidateAttemptKindLabel = (value?: string | null): string => {
+  switch (value) {
+    case 'initial_candidate':
+      return '初始候选';
+    case 'rerank_candidate':
+      return '重排候选';
+    case 'word_budget_repair':
+      return '字数修复';
+    default:
+      return value ? value : '';
+  }
+};
+
 /**
  * 项目内的章节剧情分析页面
  * 显示章节列表和带标注的章节内容
@@ -370,6 +396,15 @@ const ChapterAnalysis: React.FC = () => {
       : []),
     ...(typeof candidateSelection?.selection_score === 'number'
       ? [{ label: '选择分', value: `${candidateSelection.selection_score.toFixed(1)}` }]
+      : []),
+    ...(candidateSelection?.generation_path
+      ? [{ label: '生成路径', value: getCandidateGenerationPathLabel(candidateSelection.generation_path) }]
+      : []),
+    ...(candidateSelection?.attempt_kind
+      ? [{ label: '尝试类型', value: getCandidateAttemptKindLabel(candidateSelection.attempt_kind) }]
+      : []),
+    ...(candidateSelection?.winner_candidate_index
+      ? [{ label: '胜出候选', value: `${candidateSelection.winner_candidate_index}` }]
       : []),
   ] : [];
   const weakestQualityMetric = normalizedChapterQualityMetrics ? getWeakestQualityMetric(normalizedChapterQualityMetrics) : null;

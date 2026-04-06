@@ -479,6 +479,8 @@ export function useChapterSync() {
     const completion = (async () => {
       let fullContent = '';
       let streamFailure: string | null = null;
+      let latestAnalysisTaskId: string | undefined;
+      let latestCandidateDraftSummary: Record<string, unknown> | null = null;
       const streamAbortController = new AbortController();
 
       const streamPromise = (async () => {
@@ -524,8 +526,13 @@ export function useChapterSync() {
                     `开始生成第${message.chapter_number || ''}章...`,
                     message.progress || 15
                   );
-                } else if (message.type === 'analysis_started' && onProgressUpdate) {
-                  onProgressUpdate(message.message || '章节分析中...', message.progress || 85);
+                } else if (message.type === 'analysis_started') {
+                  if (typeof message.task_id === 'string' && message.task_id.trim()) {
+                    latestAnalysisTaskId = message.task_id.trim();
+                  }
+                  if (onProgressUpdate) {
+                    onProgressUpdate(message.message || '\u7ae0\u8282\u5206\u6790\u4e2d...', message.progress || 85);
+                  }
                 } else if (message.type === 'quality_metrics' && onProgressUpdate) {
                   const qualityMessage = formatQualityMessage(message);
                   if (qualityMessage) {
@@ -539,6 +546,16 @@ export function useChapterSync() {
                         : 'Chapter is retrying with quality-repair guidance.'),
                     message.progress || (message.type === 'quality_gate_blocked' ? 95 : 74),
                   );
+                } else if (message.type === 'result') {
+                  const resultPayload = typeof message.data === 'object' && message.data !== null
+                    ? message.data as Record<string, unknown>
+                    : message as Record<string, unknown>;
+                  if (typeof resultPayload.analysis_task_id === 'string' && resultPayload.analysis_task_id.trim()) {
+                    latestAnalysisTaskId = resultPayload.analysis_task_id.trim();
+                  }
+                  if (typeof resultPayload.candidate_draft === 'object' && resultPayload.candidate_draft !== null) {
+                    latestCandidateDraftSummary = resultPayload.candidate_draft as Record<string, unknown>;
+                  }
                 } else if (message.type === 'error') {
                   streamFailure = message.error || '后台生成失败';
                 }
@@ -609,18 +626,61 @@ export function useChapterSync() {
 
             await refreshChapters();
             const latestChapter = await chapterApi.getChapter(chapterId);
-            const finalContent = latestChapter.content || '';
+            let finalContent = latestChapter.content || '';
+            let contentSource: 'chapter' | 'candidate_draft' = 'chapter';
+
+            if (!finalContent.trim()) {
+              const sseCandidateDraft = latestCandidateDraftSummary;
+              const rawCandidateFullContent = sseCandidateDraft?.['content'];
+              const rawCandidatePreviewContent = sseCandidateDraft?.['content_preview'];
+              const candidateFullContent = typeof rawCandidateFullContent === 'string'
+                ? String(rawCandidateFullContent).trim()
+                : '';
+              const candidatePreviewContent = typeof rawCandidatePreviewContent === 'string'
+                ? String(rawCandidatePreviewContent).trim()
+                : '';
+              const sseFallbackContent = candidateFullContent || candidatePreviewContent;
+
+              if (sseFallbackContent) {
+                finalContent = sseFallbackContent;
+                contentSource = 'candidate_draft';
+              } else {
+                try {
+                  const candidateDraftResponse = await chapterApi.getCandidateDraft(chapterId);
+                  const candidateDraft = candidateDraftResponse?.candidate_draft;
+                  const candidateDraftFullContent = typeof candidateDraft?.content === 'string'
+                    ? candidateDraft.content.trim()
+                    : '';
+                  const candidateDraftPreviewContent = typeof candidateDraft?.content_preview === 'string'
+                    ? candidateDraft.content_preview.trim()
+                    : '';
+                  const fallbackContent = candidateDraftFullContent || candidateDraftPreviewContent;
+                  if (fallbackContent) {
+                    finalContent = fallbackContent;
+                    contentSource = 'candidate_draft';
+                  }
+                } catch (candidateDraftError) {
+                  console.warn('\u83b7\u53d6\u5019\u9009\u7a3f\u5931\u8d25:', candidateDraftError);
+                }
+              }
+            }
 
             if (onProgress && finalContent !== fullContent) {
               onProgress(finalContent);
             }
             if (onProgressUpdate) {
-              onProgressUpdate('生成完成', 100);
+              onProgressUpdate(
+                contentSource === 'candidate_draft'
+                  ? '\u5019\u9009\u7a3f\u5df2\u540c\u6b65\u5230\u7f16\u8f91\u5668\u9884\u89c8\uff0c\u7b49\u5f85\u4eba\u5de5\u590d\u6838'
+                  : '\u751f\u6210\u5b8c\u6210',
+                100,
+              );
             }
 
             return {
               content: finalContent,
-              analysis_task_id: undefined,
+              content_source: contentSource,
+              analysis_task_id: latestAnalysisTaskId,
               generation_task_id: taskId
             };
           }

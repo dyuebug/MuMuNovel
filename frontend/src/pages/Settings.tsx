@@ -69,6 +69,7 @@ export default function SettingsPage() {
     error?: string;
     error_type?: string;
     suggestions?: string[];
+    details?: Record<string, any>;
   } | null>(null);
   const [showTestResult, setShowTestResult] = useState(false);
   const [testingWebResearchProvider, setTestingWebResearchProvider] = useState<'exa' | 'grok' | null>(null);
@@ -506,9 +507,20 @@ export default function SettingsPage() {
     setModelsFetched(false);
   };
 
+  const getEffectiveApiBaseUrl = () => {
+    const primaryEndpoint = endpoints.find(endpoint => endpoint.type === 'primary');
+    const endpointUrl = typeof primaryEndpoint?.url === 'string' ? primaryEndpoint.url.trim() : '';
+    if (endpointUrl) {
+      return endpointUrl;
+    }
+
+    const formUrl = String(form.getFieldValue('api_base_url') || '').trim();
+    return formUrl;
+  };
+
   const handleFetchModels = async (silent: boolean = false) => {
     const apiKey = form.getFieldValue('api_key');
-    const apiBaseUrl = form.getFieldValue('api_base_url');
+    const apiBaseUrl = getEffectiveApiBaseUrl();
     const provider = form.getFieldValue('api_provider');
 
     if (!hasUsableApiCredentials(apiKey, apiBaseUrl)) {
@@ -557,7 +569,7 @@ export default function SettingsPage() {
 
   const handleTestConnection = async () => {
     const apiKey = form.getFieldValue('api_key');
-    const apiBaseUrl = form.getFieldValue('api_base_url');
+    const apiBaseUrl = getEffectiveApiBaseUrl();
     const provider = form.getFieldValue('api_provider');
     const modelName = form.getFieldValue('llm_model');
     const temperature = form.getFieldValue('temperature');
@@ -578,7 +590,9 @@ export default function SettingsPage() {
         provider: provider,
         llm_model: modelName,
         temperature: temperature,
-        max_tokens: maxTokens
+        max_tokens: maxTokens,
+        api_backup_urls: endpoints.filter(endpoint => endpoint.type === 'fallback').map(endpoint => endpoint.url).filter(Boolean),
+        fallback_strategy: fallbackStrategy,
       });
 
       setTestResult(result);

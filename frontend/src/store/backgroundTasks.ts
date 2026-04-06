@@ -16,11 +16,17 @@ export interface TrackedBackgroundTask {
   executionMode?: 'interactive' | 'auto';
   workflowScope?: string;
   checkpoint?: Record<string, unknown> | null;
+  failedChapters?: Array<Record<string, unknown>>;
   activeStoryRepairPayload?: ActiveStoryRepairPayload | null;
+  terminalReason?: string | null;
+  terminalLabel?: string | null;
+  reviewRequired?: boolean;
+  canResume?: boolean;
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
 }
+
 
 interface UpsertTaskPayload {
   task_id: string;
@@ -34,11 +40,17 @@ interface UpsertTaskPayload {
   execution_mode?: 'interactive' | 'auto' | null;
   workflow_scope?: string | null;
   checkpoint?: Record<string, unknown> | null;
+  failed_chapters?: Array<Record<string, unknown>>;
   active_story_repair_payload?: ActiveStoryRepairPayload | null;
+  terminal_reason?: string | null;
+  terminal_label?: string | null;
+  review_required?: boolean | null;
+  can_resume?: boolean | null;
   created_at?: string | null;
   updated_at?: string | null;
   completed_at?: string | null;
 }
+
 
 interface BackgroundTaskState {
   tasks: Record<string, TrackedBackgroundTask>;
@@ -116,6 +128,21 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
           ? (toTimestamp(task.completed_at) ?? existing?.completedAt ?? now)
           : undefined;
 
+        const terminalReason = task.terminal_reason !== undefined
+          ? task.terminal_reason
+          : terminal ? (existing?.terminalReason ?? null) : null;
+        const terminalLabel = task.terminal_label !== undefined
+          ? task.terminal_label
+          : terminal ? (existing?.terminalLabel ?? null) : null;
+        const reviewRequired = typeof task.review_required === 'boolean'
+          ? task.review_required
+          : incomingStatus === 'failed'
+            ? (existing?.reviewRequired ?? false)
+            : false;
+        const canResume = typeof task.can_resume === 'boolean'
+          ? task.can_resume
+          : incomingStatus === 'failed' || incomingStatus === 'cancelled';
+
         const merged: TrackedBackgroundTask = {
           taskId: task.task_id,
           taskType: task.task_type ?? existing?.taskType ?? 'unknown',
@@ -128,7 +155,12 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
           executionMode: task.execution_mode ?? existing?.executionMode ?? 'interactive',
           workflowScope: task.workflow_scope ?? existing?.workflowScope,
           checkpoint: task.checkpoint ?? existing?.checkpoint ?? null,
+          failedChapters: task.failed_chapters ?? existing?.failedChapters ?? [],
           activeStoryRepairPayload: task.active_story_repair_payload ?? existing?.activeStoryRepairPayload ?? null,
+          terminalReason,
+          terminalLabel,
+          reviewRequired,
+          canResume,
           createdAt,
           updatedAt,
           completedAt,

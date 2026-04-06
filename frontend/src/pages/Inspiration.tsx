@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useBusyNavigationGuard } from '../hooks/useBusyNavigationGuard';
 import { useNavigate } from 'react-router-dom';
 import { Card, Input, Button, Space, Typography, message, Spin, Modal, theme } from 'antd';
 import { SendOutlined, ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons';
@@ -51,6 +52,11 @@ const CACHE_EXPIRY = 24 * 60 * 60 * 1000;
 const Inspiration: React.FC = () => {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState<Step>('idea');
+  const {
+    setBusy: setIsGenerationBusy,
+    releaseBusy: releaseGenerationBusy,
+    shouldDisableNavigation,
+  } = useBusyNavigationGuard();
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const { token } = theme.useToken();
 
@@ -847,12 +853,14 @@ const Inspiration: React.FC = () => {
     console.log('灵感模式项目创建完成:', projectId);
     // 确保清除缓存
     clearCache();
+    releaseGenerationBusy();
     setCurrentStep('complete');
   };
 
   // 返回对话界面
   const handleBackToChat = () => {
     clearCache();
+    releaseGenerationBusy();
     setCurrentStep('idea');
     setGenerationConfig(null);
     handleRestart();
@@ -1135,6 +1143,7 @@ const Inspiration: React.FC = () => {
             icon={<ArrowLeftOutlined />}
             onClick={handleBack}
             size={isMobile ? 'middle' : 'large'}
+            disabled={shouldDisableNavigation(currentStep === 'generating')}
             style={{
               background: `color-mix(in srgb, ${token.colorWhite} 20%, transparent)`,
               borderColor: `color-mix(in srgb, ${token.colorWhite} 30%, transparent)`,
@@ -1204,6 +1213,8 @@ const Inspiration: React.FC = () => {
             storagePrefix="inspiration"
             onComplete={handleComplete}
             onBack={handleBackToChat}
+            onBusyChange={setIsGenerationBusy}
+            backButtonText="返回灵感首页"
             isMobile={isMobile}
           />
         )}

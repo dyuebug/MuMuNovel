@@ -37,8 +37,11 @@ interface AIProjectGeneratorProps {
   storagePrefix: 'wizard' | 'inspiration';
   onComplete: (projectId: string) => void;
   onBack?: () => void;
+  onBusyChange?: (busy: boolean) => void;
   isMobile?: boolean;
   resumeProjectId?: string;
+  backButtonText?: string;
+  homeButtonText?: string;
 }
 
 type GenerationStep = 'pending' | 'processing' | 'completed' | 'error';
@@ -71,8 +74,12 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   config,
   storagePrefix,
   onComplete,
+  onBack,
+  onBusyChange,
   isMobile = false,
-  resumeProjectId
+  resumeProjectId,
+  backButtonText = '返回上一步',
+  homeButtonText = '返回首页',
 }) => {
   const navigate = useNavigate();
 
@@ -99,6 +106,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   const [worldBuildingResult, setWorldBuildingResult] = useState<WorldBuildingResult | null>(null);
   const [researchSummaries, setResearchSummaries] = useState<Partial<Record<ResearchStepKey, StepResearchSummary>>>({});
   const cancelledByUserRef = useRef(false);
+  const [isCancelled, setIsCancelled] = useState(false);
   // 【修复】操作锁，防止并发调用
   const operationLockRef = useRef(false);
 
@@ -218,15 +226,21 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     return cancelledByUserRef.current || e?.code === 'TASK_CANCELLED' || e?.name === 'TaskCancelledError' || e?.message?.includes('取消');
   };
 
+  useEffect(() => {
+    onBusyChange?.(loading || isCancelling);
+  }, [isCancelling, loading, onBusyChange]);
+
   const buildTaskOptions = (options: SSEClientOptions): SSEClientOptions => ({
     ...options,
     onTaskCreated: (taskId: string) => {
       cancelledByUserRef.current = false;
+      setIsCancelled(false);
       setCurrentTaskId(taskId);
       options.onTaskCreated?.(taskId);
     },
     onCancelled: (cancelMsg: string) => {
       cancelledByUserRef.current = true;
+      setIsCancelled(true);
       setCurrentTaskId(null);
       setProgressMessage(cancelMsg || '后台任务已取消');
       setLoading(false);
@@ -258,6 +272,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
       // 【修复】立即清理状态，移除硬编码延迟
       cancelledByUserRef.current = true;
+      setIsCancelled(true);
       setCurrentTaskId(null);
       setIsCancelling(false);
       setLoading(false);
@@ -291,6 +306,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   const handleResumeGenerate = async (data: GenerationConfig, projectIdParam: string) => {
     try {
       cancelledByUserRef.current = false;
+      setIsCancelled(false);
       setCurrentTaskId(null);
       setIsCancelling(false);
       setLoading(true);
@@ -523,6 +539,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   const handleAutoGenerate = async (data: GenerationConfig) => {
     try {
       cancelledByUserRef.current = false;
+      setIsCancelled(false);
       setCurrentTaskId(null);
       setIsCancelling(false);
       setLoading(true);
@@ -1095,6 +1112,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     generationSteps.careers === 'error' ||
     generationSteps.characters === 'error' ||
     generationSteps.outline === 'error';
+  const showTerminalActions = hasError || isCancelled;
 
   // 渲染生成进度页面
   const renderGenerating = () => (
@@ -1318,6 +1336,27 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
             disabled={loading || isCancelling}
           >
             智能重试
+          </Button>
+        </Space>
+      )}
+
+      {showTerminalActions && (
+        <Space style={{ marginTop: 16 }} wrap>
+          {onBack && (
+            <Button
+              size="large"
+              onClick={onBack}
+              disabled={loading || isCancelling}
+            >
+              {backButtonText}
+            </Button>
+          )}
+          <Button
+            size="large"
+            onClick={() => navigate('/')}
+            disabled={loading || isCancelling}
+          >
+            {homeButtonText}
           </Button>
         </Space>
       )}

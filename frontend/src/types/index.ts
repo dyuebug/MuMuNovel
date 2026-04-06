@@ -1216,6 +1216,11 @@ export interface ChapterCandidateSelectionSummary {
   word_count_fit_score?: number;
   word_count_delta?: number;
   continuity_warning_count?: number;
+  generation_path?: string;
+  attempt_kind?: string;
+  rerank_used?: boolean;
+  word_budget_repair_used?: boolean;
+  winner_candidate_index?: number;
 }
 
 export interface ChapterCandidateDraftQualityEvidence {
