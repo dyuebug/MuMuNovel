@@ -6,7 +6,7 @@ set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (
   echo.
   echo Redeploy failed with exit code %EXIT_CODE%.
-  echo See "%~dp0redeploy.log" for diagnostics.
+  echo See "%~dp0logs\ops\redeploy.log" for diagnostics.
   echo.
   echo Press any key to close this window...
   pause >nul

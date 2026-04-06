@@ -6,7 +6,7 @@ set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (
   echo.
   echo Release failed with exit code %EXIT_CODE%.
-  echo See "%~dp0release.log" for diagnostics.
+  echo See "%~dp0logs\ops\release.log" for diagnostics.
   echo.
   echo Press any key to close this window...
   pause >nul

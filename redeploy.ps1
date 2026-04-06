@@ -20,10 +20,13 @@ $AppContainerName = "mumunovel-new"
 $DbService = "postgres"
 $PostgresContainerName = "mumunovel-postgres-new"
 $MigrationPreflightTimeoutSec = 90
-$LogFilePath = Join-Path $PSScriptRoot "redeploy.log"
+$LogDirectory = Join-Path $PSScriptRoot "logs\ops"
+$LogFilePath = Join-Path $LogDirectory "redeploy.log"
 $Utf8NoBomEncoding = [System.Text.UTF8Encoding]::new($false)
 
 function Initialize-LogFile {
+    New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
+
     $header = @(
         "=== Redeploy started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ===",
         "Workspace: $PSScriptRoot",
@@ -160,10 +163,114 @@ function Get-ContainerIndexAssetPath {
     return $match.Value
 }
 
+function Get-PythonCommandSource {
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $pythonCommand) {
+        throw "python command not found. Please install Python 3 or add it to PATH before running redeploy."
+    }
+
+    return $pythonCommand.Source
+}
+
+function Get-BackendStampPythonCode {
+    return @'
+import base64
+import datetime
+import hashlib
+import json
+import pathlib
+import sys
+
+manifest = json.loads(base64.b64decode(sys.argv[1]).decode('utf-8'))
+files = {}
+
+for entry in manifest:
+    logical = entry['logical']
+    target = pathlib.Path(entry['path'])
+    if target.is_file():
+        files[logical] = target
+        continue
+    if target.is_dir():
+        for candidate in sorted(
+            (
+                item
+                for item in target.rglob('*')
+                if item.is_file()
+                and '__pycache__' not in item.parts
+                and item.suffix != '.pyc'
+            ),
+            key=lambda item: item.relative_to(target).as_posix(),
+        ):
+            relative = candidate.relative_to(target).as_posix()
+            files[f"{logical}/{relative}"] = candidate
+
+if not files:
+    sys.exit(0)
+
+hasher = hashlib.sha256()
+latest_mtime = 0.0
+for logical_name in sorted(files):
+    file_path = files[logical_name]
+    stat = file_path.stat()
+    latest_mtime = max(latest_mtime, stat.st_mtime)
+    hasher.update(logical_name.encode('utf-8'))
+    hasher.update(b'\0')
+    file_bytes = file_path.read_bytes().replace(b'\r\n', b'\n')
+    hasher.update(file_bytes)
+    hasher.update(b"\0")
+
+timestamp = datetime.datetime.fromtimestamp(latest_mtime, datetime.UTC).isoformat(timespec='seconds').replace('+00:00', 'Z')
+print(f"{timestamp} {hasher.hexdigest()[:12]} files={len(files)}")
+'@
+}
+
+function ConvertTo-BackendStampManifestBase64 {
+    param([object[]]$Manifest)
+
+    $manifestJson = $Manifest | ConvertTo-Json -Compress -Depth 4
+    return [Convert]::ToBase64String($Utf8NoBomEncoding.GetBytes($manifestJson))
+}
+
+function Get-LocalBackendStamp {
+    $pythonSource = Get-PythonCommandSource
+    $code = Get-BackendStampPythonCode
+    $manifest = @( 
+        @{ logical = 'app'; path = (Join-Path $PSScriptRoot 'backend/app') }
+        @{ logical = 'scripts/migrate.py'; path = (Join-Path $PSScriptRoot 'backend/scripts/migrate.py') }
+        @{ logical = 'entrypoint.sh'; path = (Join-Path $PSScriptRoot 'backend/scripts/entrypoint.sh') }
+        @{ logical = 'alembic'; path = (Join-Path $PSScriptRoot 'backend/alembic') }
+        @{ logical = 'alembic'; path = (Join-Path $PSScriptRoot 'backend/alembic/postgres') }
+        @{ logical = 'alembic.ini'; path = (Join-Path $PSScriptRoot 'backend/alembic-postgres.ini') }
+    )
+    $manifestBase64 = ConvertTo-BackendStampManifestBase64 -Manifest $manifest
+    $codeBase64 = [Convert]::ToBase64String($Utf8NoBomEncoding.GetBytes($code))
+    $runner = "import base64, sys; exec(base64.b64decode(sys.argv.pop(1)).decode('utf-8'))"
+    $stamp = & $pythonSource -c $runner $codeBase64 $manifestBase64 2>&1
+    $stampText = ($stamp | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "Local backend stamp command failed: $stampText"
+    }
+    return $stampText
+}
+
 function Get-ContainerBackendStamp {
-    $code = "import hashlib, pathlib, datetime; p=pathlib.Path('/app/app/api/background_tasks.py'); ts=datetime.datetime.utcfromtimestamp(p.stat().st_mtime).isoformat()+'Z'; h=hashlib.sha256(p.read_bytes()).hexdigest()[:12]; print(f'{ts} {h}')"
-    $stamp = docker exec $AppContainerName python -c $code
-    return ($stamp | Out-String).Trim()
+    $code = Get-BackendStampPythonCode
+    $manifest = @( 
+        @{ logical = 'app'; path = '/app/app' }
+        @{ logical = 'scripts/migrate.py'; path = '/app/scripts/migrate.py' }
+        @{ logical = 'entrypoint.sh'; path = '/app/entrypoint.sh' }
+        @{ logical = 'alembic'; path = '/app/alembic' }
+        @{ logical = 'alembic.ini'; path = '/app/alembic.ini' }
+    )
+    $manifestBase64 = ConvertTo-BackendStampManifestBase64 -Manifest $manifest
+    $codeBase64 = [Convert]::ToBase64String($Utf8NoBomEncoding.GetBytes($code))
+    $runner = "import base64, sys; exec(base64.b64decode(sys.argv.pop(1)).decode('utf-8'))"
+    $stamp = docker exec $AppContainerName python -c $runner $codeBase64 $manifestBase64 2>&1
+    $stampText = ($stamp | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "Container backend stamp command failed: $stampText"
+    }
+    return $stampText
 }
 
 function Get-LocalIndexAssetPath {
@@ -505,19 +612,44 @@ if (-not $isHealthy) {
 
 Write-Step "Verifying backend build stamp"
 try {
-    $backendStamp = Get-ContainerBackendStamp
-    if ($backendStamp) {
-        Write-Host "Backend stamp (UTC + sha12): $backendStamp" -ForegroundColor DarkCyan
-        Write-LogLine "Backend stamp (UTC + sha12): $backendStamp"
+    $localBackendStamp = Get-LocalBackendStamp
+    $containerBackendStamp = Get-ContainerBackendStamp
+
+    if ($localBackendStamp) {
+        Write-Host "Local backend stamp:      $localBackendStamp" -ForegroundColor DarkCyan
+        Write-LogLine "Local backend stamp: $localBackendStamp"
     }
     else {
-        Write-Host "Backend stamp unavailable (empty response)." -ForegroundColor Yellow
-        Write-LogLine "Backend stamp unavailable (empty response)."
+        Write-Host "Local backend stamp unavailable (empty response)." -ForegroundColor Yellow
+        Write-LogLine "Local backend stamp unavailable (empty response)."
+    }
+
+    if ($containerBackendStamp) {
+        Write-Host "Container backend stamp:  $containerBackendStamp" -ForegroundColor DarkCyan
+        Write-LogLine "Container backend stamp: $containerBackendStamp"
+    }
+    else {
+        Write-Host "Container backend stamp unavailable (empty response)." -ForegroundColor Yellow
+        Write-LogLine "Container backend stamp unavailable (empty response)."
+    }
+
+    if ($localBackendStamp -and $containerBackendStamp) {
+        $localBackendSignature = ($localBackendStamp -split '\s+', 2)[1]
+        $containerBackendSignature = ($containerBackendStamp -split '\s+', 2)[1]
+        if ($localBackendSignature -ne $containerBackendSignature) {
+            $errorMessage = "Redeploy finished but backend code mismatch detected. Local=$localBackendStamp Container=$containerBackendStamp"
+            Write-LogBlock $errorMessage
+            throw $errorMessage
+        }
+
+        Write-Host "Backend content signature matches workspace." -ForegroundColor Green
+        Write-LogLine "Backend content signature matches workspace."
     }
 }
 catch {
-    Write-Host "Backend stamp lookup failed: $($_.Exception.Message)" -ForegroundColor Yellow
-    Write-LogLine "Backend stamp lookup failed: $($_.Exception.Message)"
+    Write-Host "Backend stamp verification failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-LogLine "Backend stamp verification failed: $($_.Exception.Message)"
+    throw
 }
 
 if (-not $SkipAssetVerification) {

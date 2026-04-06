@@ -16,9 +16,12 @@ Set-StrictMode -Version Latest
 Set-Location -Path $PSScriptRoot
 
 $Utf8NoBomEncoding = [System.Text.UTF8Encoding]::new($false)
-$LogFilePath = Join-Path $PSScriptRoot "release.log"
+$LogDirectory = Join-Path $PSScriptRoot "logs\ops"
+$LogFilePath = Join-Path $LogDirectory "release.log"
 
 function Initialize-LogFile {
+    New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
+
     $header = @(
         "=== Release started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ===",
         "Workspace: $PSScriptRoot",
