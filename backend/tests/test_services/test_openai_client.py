@@ -1048,3 +1048,69 @@ async def test_should_failover_stream_request_to_backup_url_before_first_chunk()
     assert summary["first_chunk_latency_ms"] is not None
     assert summary["final_latency_ms"] is not None
     assert all(attempt.get("duration_ms") is not None for attempt in diagnostics["attempts"])
+
+def test_should_disable_env_proxy_for_loopback_base_url():
+    base_client_module._http_client_pool.clear()
+
+    loopback_client = OpenAIClient(
+        api_key="sk-test",
+        base_url="http://127.0.0.1:8317/v1",
+        compat_profile="sub2api",
+    )
+    external_client = OpenAIClient(
+        api_key="sk-test-external",
+        base_url="https://api.openai.com/v1",
+        compat_profile="openai",
+    )
+
+    assert loopback_client.http_client._trust_env is False
+    assert external_client.http_client._trust_env is True
+
+
+def test_should_append_docker_host_candidate_for_loopback_v1_base_url(monkeypatch):
+    monkeypatch.setattr(OpenAIClient, "_is_running_in_docker", staticmethod(lambda: True))
+
+    client = OpenAIClient(
+        api_key="sk-test",
+        base_url="http://127.0.0.1:8317/v1",
+        compat_profile="sub2api",
+    )
+
+    assert client._build_chat_completions_base_url_candidates() == [
+        "http://127.0.0.1:8317/v1",
+        "http://host.docker.internal:8317/v1",
+    ]
+
+
+def test_should_append_docker_host_candidate_for_localhost_base_url(monkeypatch):
+    monkeypatch.setattr(OpenAIClient, "_is_running_in_docker", staticmethod(lambda: True))
+
+    client = OpenAIClient(
+        api_key="sk-test",
+        base_url="http://localhost:8317",
+        compat_profile="openai",
+    )
+
+    assert client._build_chat_completions_base_url_candidates() == [
+        "http://localhost:8317",
+        "http://host.docker.internal:8317",
+        "http://localhost:8317/v1",
+        "http://host.docker.internal:8317/v1",
+    ]
+
+
+def test_should_append_http_fallback_candidates_for_local_https_gateway(monkeypatch):
+    monkeypatch.setattr(OpenAIClient, "_is_running_in_docker", staticmethod(lambda: True))
+
+    client = OpenAIClient(
+        api_key="sk-test",
+        base_url="https://127.0.0.1:8317/v1",
+        compat_profile="sub2api",
+    )
+
+    assert client._build_chat_completions_base_url_candidates() == [
+        "https://127.0.0.1:8317/v1",
+        "https://host.docker.internal:8317/v1",
+        "http://127.0.0.1:8317/v1",
+        "http://host.docker.internal:8317/v1",
+    ]

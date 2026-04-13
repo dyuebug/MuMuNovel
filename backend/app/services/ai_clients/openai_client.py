@@ -1,9 +1,11 @@
 """OpenAI client with OpenAI-compatible and Responses API support."""
 import asyncio
 import json
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -92,6 +94,50 @@ class OpenAIClient(BaseAIClient):
             or 'doctype html' in lowered
         )
 
+    @staticmethod
+    def _is_running_in_docker() -> bool:
+        """Whether the current process is running inside a Docker container."""
+        return os.path.exists('/.dockerenv')
+
+    @staticmethod
+    def _is_local_gateway_host(hostname: Optional[str]) -> bool:
+        return hostname in {'127.0.0.1', 'localhost', 'host.docker.internal'}
+
+    @staticmethod
+    def _replace_base_url_host(base_url: str, hostname: str) -> str:
+        parsed = urlsplit(base_url)
+
+        auth = ''
+        if parsed.username:
+            auth = parsed.username
+            if parsed.password:
+                auth = f'{auth}:{parsed.password}'
+            auth = f'{auth}@'
+
+        port = f':{parsed.port}' if parsed.port is not None else ''
+        netloc = f'{auth}{hostname}{port}'
+        return urlunsplit(parsed._replace(netloc=netloc))
+
+    @classmethod
+    def _build_docker_host_candidate(cls, base_url: str) -> Optional[str]:
+        """Map loopback base URLs to host.docker.internal when running in Docker."""
+        if not cls._is_running_in_docker():
+            return None
+
+        parsed = urlsplit(base_url)
+        if parsed.hostname not in {'127.0.0.1', 'localhost'}:
+            return None
+
+        return cls._replace_base_url_host(base_url, 'host.docker.internal')
+
+    @classmethod
+    def _build_http_fallback_candidate(cls, base_url: str) -> Optional[str]:
+        """Downgrade local HTTPS gateway URLs to HTTP when the proxy only serves plain HTTP."""
+        parsed = urlsplit(base_url)
+        if parsed.scheme != 'https' or not cls._is_local_gateway_host(parsed.hostname):
+            return None
+        return urlunsplit(parsed._replace(scheme='http'))
+
     def _build_chat_completions_base_url_candidates(
         self,
         prefer_normalized_v1_candidate: bool = False,
@@ -109,8 +155,22 @@ class OpenAIClient(BaseAIClient):
             if not primary.endswith('/v1'):
                 candidates.append(normalized_v1)
 
-        unique_candidates: List[str] = []
+        expanded_candidates: List[str] = []
         for candidate in candidates:
+            variant_candidates = [candidate]
+            docker_candidate = self._build_docker_host_candidate(candidate)
+            if docker_candidate:
+                variant_candidates.append(docker_candidate)
+
+            for variant_candidate in list(variant_candidates):
+                http_candidate = self._build_http_fallback_candidate(variant_candidate)
+                if http_candidate:
+                    variant_candidates.append(http_candidate)
+
+            expanded_candidates.extend(variant_candidates)
+
+        unique_candidates: List[str] = []
+        for candidate in expanded_candidates:
             if candidate not in unique_candidates:
                 unique_candidates.append(candidate)
         return unique_candidates

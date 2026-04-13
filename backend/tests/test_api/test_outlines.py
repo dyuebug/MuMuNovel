@@ -1,5 +1,5 @@
 from app.api.outlines import _dump_model_like_payload
-from app.schemas.outline import ChapterPlanItem
+from app.schemas.outline import BatchOutlineExpansionRequest, ChapterPlanItem, OutlineExpansionRequest
 import json
 from datetime import datetime, timedelta
 from typing import Any
@@ -44,6 +44,422 @@ def test_should_dump_chapter_plan_item_payload_from_mapping():
 
     assert payload["sub_index"] == 2
     assert payload["character_focus"] == ["Lin Chuan", "Su Jin"]
+
+
+
+async def test_generate_outline_stream_should_accept_mapping_payload(monkeypatch):
+    captured: dict[str, Any] = {}
+
+    class _FakeScalarResult:
+        def all(self):
+            return []
+
+    class _FakeExecuteResult:
+        def scalars(self):
+            return _FakeScalarResult()
+
+    class _FakeSession:
+        async def execute(self, *args, **kwargs):
+            return _FakeExecuteResult()
+
+    async def _fake_verify_project_access(project_id, user_id, db):
+        captured["verified_project_id"] = project_id
+        captured["verified_user_id"] = user_id
+        return None
+
+    async def _fake_new_outline_generator(payload, db, ai_service):
+        captured["payload"] = payload
+        yield "data: ok\n\n"
+
+    monkeypatch.setattr(outlines_api, "verify_project_access", _fake_verify_project_access)
+    monkeypatch.setattr(outlines_api, "new_outline_generator", _fake_new_outline_generator)
+    monkeypatch.setattr(
+        outlines_api,
+        "create_sse_response",
+        lambda generator: SimpleNamespace(body_iterator=generator),
+    )
+
+    response = await outlines_api.generate_outline_stream(
+        data={
+            "project_id": "project-1",
+            "theme": "fated showdown",
+            "chapter_count": 8,
+            "narrative_perspective": "third_person",
+            "mode": "new",
+        },
+        request=SimpleNamespace(state=SimpleNamespace(user_id="user-1")),
+        db=_FakeSession(),
+        user_ai_service=object(),
+    )
+
+    assert captured["verified_project_id"] == "project-1"
+    assert captured["verified_user_id"] == "user-1"
+    assert captured["payload"]["project_id"] == "project-1"
+    assert captured["payload"]["user_id"] == "user-1"
+    assert captured["payload"]["mode"] == "new"
+    assert response.body_iterator is not None
+
+
+async def test_generate_outline_stream_should_strip_internal_user_id_before_validation(monkeypatch):
+    captured: dict[str, Any] = {}
+
+    class _FakeScalarResult:
+        def all(self):
+            return []
+
+    class _FakeExecuteResult:
+        def scalars(self):
+            return _FakeScalarResult()
+
+    class _FakeSession:
+        async def execute(self, *args, **kwargs):
+            return _FakeExecuteResult()
+
+    async def _fake_verify_project_access(project_id, user_id, db):
+        captured["verified_project_id"] = project_id
+        captured["verified_user_id"] = user_id
+        return None
+
+    async def _fake_new_outline_generator(payload, db, ai_service):
+        captured["payload"] = payload
+        yield "data: ok\n\n"
+
+    monkeypatch.setattr(outlines_api, "verify_project_access", _fake_verify_project_access)
+    monkeypatch.setattr(outlines_api, "new_outline_generator", _fake_new_outline_generator)
+    monkeypatch.setattr(
+        outlines_api,
+        "create_sse_response",
+        lambda generator: SimpleNamespace(body_iterator=generator),
+    )
+
+    response = await outlines_api.generate_outline_stream(
+        data={
+            "project_id": "project-1",
+            "theme": "fated showdown",
+            "chapter_count": 8,
+            "narrative_perspective": "third_person",
+            "mode": "new",
+            "user_id": "user-1",
+        },
+        request=SimpleNamespace(state=SimpleNamespace(user_id=None)),
+        db=_FakeSession(),
+        user_ai_service=object(),
+    )
+
+    assert captured["verified_project_id"] == "project-1"
+    assert captured["verified_user_id"] == "user-1"
+    assert captured["payload"]["project_id"] == "project-1"
+    assert captured["payload"]["user_id"] == "user-1"
+    assert captured["payload"]["mode"] == "new"
+    assert response.body_iterator is not None
+
+
+
+async def test_expand_outline_stream_should_normalize_mapping_payload(monkeypatch):
+    captured: dict[str, Any] = {}
+    outline = SimpleNamespace(id="outline-1", project_id="project-1")
+
+    class _FakeExecuteResult:
+        def scalar_one_or_none(self):
+            return outline
+
+    class _FakeSession:
+        async def execute(self, *args, **kwargs):
+            return _FakeExecuteResult()
+
+    async def _fake_verify_project_access(project_id, user_id, db):
+        captured["verified_project_id"] = project_id
+        captured["verified_user_id"] = user_id
+        return None
+
+    async def _fake_expand_outline_generator(outline_id, payload, db, ai_service):
+        captured["outline_id"] = outline_id
+        captured["payload"] = payload
+        yield "data: ok\n\n"
+
+    monkeypatch.setattr(outlines_api, "verify_project_access", _fake_verify_project_access)
+    monkeypatch.setattr(outlines_api, "expand_outline_generator", _fake_expand_outline_generator)
+    monkeypatch.setattr(
+        outlines_api,
+        "create_sse_response",
+        lambda generator: SimpleNamespace(body_iterator=generator),
+    )
+
+    response = await outlines_api.expand_outline_to_chapters_stream(
+        outline_id="outline-1",
+        data={
+            "target_chapter_count": "4",
+            "enable_scene_analysis": "false",
+            "auto_create_chapters": "true",
+        },
+        request=SimpleNamespace(state=SimpleNamespace(user_id="user-1")),
+        db=_FakeSession(),
+        user_ai_service=object(),
+    )
+
+    assert captured["outline_id"] == "outline-1"
+    assert captured["verified_project_id"] == "project-1"
+    assert captured["verified_user_id"] == "user-1"
+    assert captured["payload"]["target_chapter_count"] == 4
+    assert captured["payload"]["enable_scene_analysis"] is False
+    assert captured["payload"]["auto_create_chapters"] is True
+    assert response.body_iterator is not None
+
+
+async def test_batch_expand_outlines_stream_should_normalize_mapping_payload(monkeypatch):
+    captured: dict[str, Any] = {}
+
+    async def _fake_verify_project_access(project_id, user_id, db):
+        captured["verified_project_id"] = project_id
+        captured["verified_user_id"] = user_id
+        return None
+
+    async def _fake_batch_expand_outlines_generator(payload, db, ai_service):
+        captured["payload"] = payload
+        yield "data: ok\n\n"
+
+    monkeypatch.setattr(outlines_api, "verify_project_access", _fake_verify_project_access)
+    monkeypatch.setattr(outlines_api, "batch_expand_outlines_generator", _fake_batch_expand_outlines_generator)
+    monkeypatch.setattr(
+        outlines_api,
+        "create_sse_response",
+        lambda generator: SimpleNamespace(body_iterator=generator),
+    )
+
+    response = await outlines_api.batch_expand_outlines_stream(
+        data={
+            "project_id": "project-1",
+            "chapters_per_outline": "5",
+            "enable_scene_analysis": "false",
+            "auto_create_chapters": "true",
+        },
+        request=SimpleNamespace(state=SimpleNamespace(user_id="user-1")),
+        db=object(),
+        user_ai_service=object(),
+    )
+
+    assert captured["verified_project_id"] == "project-1"
+    assert captured["verified_user_id"] == "user-1"
+    assert captured["payload"]["project_id"] == "project-1"
+    assert captured["payload"]["chapters_per_outline"] == 5
+    assert captured["payload"]["enable_scene_analysis"] is False
+    assert captured["payload"]["auto_create_chapters"] is True
+    assert response.body_iterator is not None
+
+
+def test_outline_expansion_request_defaults_should_match_stream_runtime():
+    single_request = OutlineExpansionRequest()
+    batch_request = BatchOutlineExpansionRequest(project_id="project-1")
+
+    assert single_request.enable_scene_analysis is True
+    assert single_request.auto_create_chapters is False
+    assert batch_request.enable_scene_analysis is True
+    assert batch_request.auto_create_chapters is False
+
+
+async def test_batch_expand_outlines_generator_should_commit_created_chapters(monkeypatch):
+    captured: dict[str, Any] = {}
+    project = SimpleNamespace(id="project-1")
+    outline = SimpleNamespace(id="outline-1", title="Outline One", project_id="project-1")
+    created_chapter = SimpleNamespace(
+        id="chapter-1",
+        chapter_number=1,
+        title="Chapter One",
+        summary="Summary",
+        outline_id="outline-1",
+        sub_index=1,
+        status="pending",
+    )
+
+    class _FakeScalars:
+        def __init__(self, items):
+            self._items = items
+
+        def all(self):
+            return list(self._items)
+
+    class _FakeExecuteResult:
+        def __init__(self, *, scalar=None, scalars=None):
+            self._scalar = scalar
+            self._scalars = scalars
+
+        def scalar_one_or_none(self):
+            return self._scalar
+
+        def scalars(self):
+            return _FakeScalars(self._scalars or [])
+
+    class _FakeSession:
+        def __init__(self):
+            self._execute_calls = 0
+            self.commit_count = 0
+
+        async def execute(self, *args, **kwargs):
+            self._execute_calls += 1
+            if self._execute_calls == 1:
+                return _FakeExecuteResult(scalar=project)
+            if self._execute_calls == 2:
+                return _FakeExecuteResult(scalars=[outline])
+            if self._execute_calls == 3:
+                return _FakeExecuteResult(scalar=None)
+            raise AssertionError(f"unexpected execute call: {self._execute_calls}")
+
+        async def commit(self):
+            self.commit_count += 1
+
+        async def rollback(self):
+            raise AssertionError("rollback should not be called in success path")
+
+        def in_transaction(self):
+            return False
+
+    class _FakePlotExpansionService:
+        def __init__(self, ai_service):
+            self.ai_service = ai_service
+
+        async def analyze_outline_for_chapters(self, **kwargs):
+            captured["enable_scene_analysis"] = kwargs["enable_scene_analysis"]
+            return [
+                {
+                    "sub_index": 1,
+                    "title": "Chapter One",
+                    "plot_summary": "Summary",
+                    "key_events": ["event"],
+                    "character_focus": ["hero"],
+                    "emotional_tone": "tense",
+                    "narrative_goal": "advance plot",
+                    "conflict_type": "external",
+                    "estimated_words": 3000,
+                    "scenes": ["scene"],
+                }
+            ]
+
+        async def create_chapters_from_plans(self, **kwargs):
+            captured["chapter_plans"] = kwargs["chapter_plans"]
+            return [created_chapter]
+
+    monkeypatch.setattr(outlines_api, "PlotExpansionService", _FakePlotExpansionService)
+
+    fake_db = _FakeSession()
+    generator = outlines_api.batch_expand_outlines_generator(
+        {"project_id": "project-1", "auto_create_chapters": True},
+        fake_db,
+        object(),
+    )
+    outputs = [event async for event in generator]
+
+    assert outputs
+    assert fake_db.commit_count == 1
+    assert captured["enable_scene_analysis"] is True
+    assert captured["chapter_plans"][0]["title"] == "Chapter One"
+
+
+async def test_batch_expand_outlines_generator_should_rollback_failed_outline_after_previous_commit(monkeypatch):
+    project = SimpleNamespace(id="project-1")
+    outlines = [
+        SimpleNamespace(id="outline-1", title="Outline One", project_id="project-1"),
+        SimpleNamespace(id="outline-2", title="Outline Two", project_id="project-1"),
+    ]
+    created_chapter = SimpleNamespace(
+        id="chapter-1",
+        chapter_number=1,
+        title="Chapter One",
+        summary="Summary",
+        outline_id="outline-1",
+        sub_index=1,
+        status="pending",
+    )
+
+    class _FakeScalars:
+        def __init__(self, items):
+            self._items = items
+
+        def all(self):
+            return list(self._items)
+
+    class _FakeExecuteResult:
+        def __init__(self, *, scalar=None, scalars=None):
+            self._scalar = scalar
+            self._scalars = scalars
+
+        def scalar_one_or_none(self):
+            return self._scalar
+
+        def scalars(self):
+            return _FakeScalars(self._scalars or [])
+
+    class _FakeSession:
+        def __init__(self):
+            self._execute_calls = 0
+            self.commit_count = 0
+            self.rollback_count = 0
+            self.transaction_active = False
+
+        async def execute(self, *args, **kwargs):
+            self._execute_calls += 1
+            if self._execute_calls == 1:
+                return _FakeExecuteResult(scalar=project)
+            if self._execute_calls == 2:
+                return _FakeExecuteResult(scalars=outlines)
+            if self._execute_calls in {3, 4}:
+                return _FakeExecuteResult(scalar=None)
+            raise AssertionError(f"unexpected execute call: {self._execute_calls}")
+
+        async def commit(self):
+            self.commit_count += 1
+            self.transaction_active = False
+
+        async def rollback(self):
+            self.rollback_count += 1
+            self.transaction_active = False
+
+        def in_transaction(self):
+            return self.transaction_active
+
+    class _FakePlotExpansionService:
+        def __init__(self, ai_service):
+            self.ai_service = ai_service
+            self.create_calls = 0
+
+        async def analyze_outline_for_chapters(self, **kwargs):
+            return [
+                {
+                    "sub_index": 1,
+                    "title": f"Plan for {kwargs['outline'].title}",
+                    "plot_summary": "Summary",
+                    "key_events": ["event"],
+                    "character_focus": ["hero"],
+                    "emotional_tone": "tense",
+                    "narrative_goal": "advance plot",
+                    "conflict_type": "external",
+                    "estimated_words": 3000,
+                    "scenes": ["scene"],
+                }
+            ]
+
+        async def create_chapters_from_plans(self, **kwargs):
+            self.create_calls += 1
+            kwargs['db'].transaction_active = True
+            if self.create_calls == 1:
+                return [created_chapter]
+            raise RuntimeError("create failed")
+
+    monkeypatch.setattr(outlines_api, "PlotExpansionService", _FakePlotExpansionService)
+
+    fake_db = _FakeSession()
+    generator = outlines_api.batch_expand_outlines_generator(
+        {"project_id": "project-1", "auto_create_chapters": True},
+        fake_db,
+        object(),
+    )
+    outputs = [event async for event in generator]
+
+    assert outputs
+    assert fake_db.commit_count == 1
+    assert fake_db.rollback_count == 1
+    assert fake_db.in_transaction() is False
+
+
 
 from fastapi import FastAPI, Request
 from httpx import ASGITransport, AsyncClient
@@ -101,7 +517,7 @@ async def test_should_reuse_outline_quality_summary_cached_snapshot(test_engine,
         session.add(project)
         await session.flush()
 
-        chapter_one = Chapter(project_id=project.id, chapter_number=1, title="?1?", content="A")
+        chapter_one = Chapter(project_id=project.id, chapter_number=1, title="Chapter 1", content="A")
         chapter_two = Chapter(project_id=project.id, chapter_number=2, title="?2?", content="B")
         chapter_three = Chapter(project_id=project.id, chapter_number=3, title="?3?", content="C")
         session.add_all([chapter_one, chapter_two, chapter_three])
@@ -213,7 +629,7 @@ async def test_should_restore_outline_quality_summary_from_persisted_snapshot_af
         session.add(project)
         await session.flush()
 
-        chapter_one = Chapter(project_id=project.id, chapter_number=1, title="?1?", content="A")
+        chapter_one = Chapter(project_id=project.id, chapter_number=1, title="Chapter 1", content="A")
         chapter_two = Chapter(project_id=project.id, chapter_number=2, title="?2?", content="B")
         session.add_all([chapter_one, chapter_two])
         await session.flush()
@@ -961,9 +1377,9 @@ async def test_should_defer_final_continue_outline_postprocess_to_background(tes
             self.calls.append(kwargs)
             yield json.dumps([
                 {
-                    "title": "?2?",
-                    "summary": "????",
-                    "content": "????",
+                    "title": "Chapter 2",
+                    "summary": "Summary placeholder",
+                    "content": "Outline content placeholder",
                 }
             ], ensure_ascii=False)
 
@@ -994,14 +1410,14 @@ async def test_should_defer_final_continue_outline_postprocess_to_background(tes
                 plot_stage="development",
                 story_creation_brief=None,
                 quality_preset="plot_drive",
-                quality_notes="???????????",
+                quality_notes="Keep the pacing tight and focused.",
             ),
             blueprint=StoryBlueprint(chapter_count=99),
         )
 
     async def fake_continue_context(*args, **kwargs):
         return {
-            "recent_outlines": "?1??????",
+            "recent_outlines": "Chapter 1 recap",
             "characters_info": "",
             "memory_guidance": "",
             "quality_repair_guidance": "",
@@ -1048,8 +1464,8 @@ async def test_should_defer_final_continue_outline_postprocess_to_background(tes
             user_id=mock_user.user_id,
             title="Deferred Continuation Project",
             description="seed project",
-            theme="????",
-            genre="????",
+            theme="suspense",
+            genre="fantasy",
             narrative_perspective="third_person",
             outline_mode="one-to-many",
         )
@@ -1058,8 +1474,8 @@ async def test_should_defer_final_continue_outline_postprocess_to_background(tes
 
         seed_outline = Outline(
             project_id=project.id,
-            title="?1?",
-            content="????",
+            title="Chapter 1",
+            content="Opening outline content",
             order_index=1,
         )
         seed_session.add(seed_outline)
@@ -1073,7 +1489,7 @@ async def test_should_defer_final_continue_outline_postprocess_to_background(tes
             "/api/outlines/generate-stream",
             json={
                 "project_id": project_id,
-                "theme": "????",
+                "theme": "suspense",
                 "chapter_count": 1,
                 "narrative_perspective": "third_person",
                 "target_words": 6000,
@@ -1091,7 +1507,7 @@ async def test_should_defer_final_continue_outline_postprocess_to_background(tes
     assert captured["scheduled_kwargs"] is not None
     assert captured["scheduled_kwargs"]["project_id"] == project_id
     assert captured["scheduled_kwargs"]["enable_mcp"] is False
-    assert captured["scheduled_kwargs"]["outline_data"][0]["title"] == "?2?"
+    assert captured["scheduled_kwargs"]["outline_data"][0]["title"] == "Chapter 2"
 
 async def test_should_build_outline_continue_context_with_bulk_prefetched_relationships_and_careers(test_engine, monkeypatch):
     async with test_engine.begin() as conn:
@@ -1258,8 +1674,8 @@ async def test_should_compact_outline_continue_context_payload_for_prompt_budget
         project = Project(
             user_id="user-2",
             title="Budget Project",
-            theme="????",
-            genre="????",
+            theme="suspense",
+            genre="fantasy",
             narrative_perspective="third_person",
         )
         session.add(project)
@@ -1269,10 +1685,10 @@ async def test_should_compact_outline_continue_context_payload_for_prompt_budget
         for index in range(12):
             character = Character(
                 project_id=project.id,
-                name=f"??{index + 1}",
+                name=f"Character {index + 1}",
                 role_type="protagonist" if index == 0 else "supporting",
-                personality="????" * 20,
-                background="????????????" * 20,
+                personality="calm and observant " * 20,
+                background="raised in the frontier city " * 20,
             )
             characters.append(character)
         session.add_all(characters)
@@ -1282,17 +1698,17 @@ async def test_should_compact_outline_continue_context_payload_for_prompt_budget
         for chapter_no in range(1, 11):
             outline = Outline(
                 project_id=project.id,
-                title=f"?{chapter_no}?",
-                content="?????????" * 40,
+                title=f"Chapter {chapter_no}",
+                content="outline body segment " * 40,
                 order_index=chapter_no,
                 structure=json.dumps(
                     {
-                        "summary": "???????????????????????" * 20,
-                        "key_points": ["????" * 10, "????" * 10, "????" * 10],
+                        "summary": "The investigation deepens with each clue found. " * 20,
+                        "key_points": ["clue" * 10, "tension" * 10, "turn" * 10],
                         "characters": [characters[0].name, characters[1].name, characters[2].name],
-                        "emotion": "???????" * 8,
-                        "goal": "???????????????" * 8,
-                        "scenes": ["???" * 8, "????" * 8, "???" * 8],
+                        "emotion": "rising tension " * 8,
+                        "goal": "push the team toward the hidden archive " * 8,
+                        "scenes": ["market " * 8, "rooftop " * 8, "archive " * 8],
                     },
                     ensure_ascii=False,
                 ),
@@ -1304,16 +1720,16 @@ async def test_should_compact_outline_continue_context_payload_for_prompt_budget
 
         async def fake_build_context_for_generation(**kwargs):
             return {
-                "recent_context": "????????????",
-                "character_states": "????????????",
-                "foreshadows": "???????",
-                "plot_points": "?????????????",
+                "recent_context": "recent outline context",
+                "character_states": "character state notes",
+                "foreshadows": "foreshadow notes",
+                "plot_points": "plot point recap",
             }
 
         async def fake_quality_guidance(*args, **kwargs):
             return {
-                "quality_repair_guidance": "??????",
-                "quality_trend_guidance": "??????",
+                "quality_repair_guidance": "repair guidance",
+                "quality_trend_guidance": "trend guidance",
             }
 
         monkeypatch.setattr(
@@ -1335,15 +1751,15 @@ async def test_should_compact_outline_continue_context_payload_for_prompt_budget
             current_chapter=11,
             chapter_count=2,
             plot_stage="development",
-            story_direction="???1???????????2??",
-            requirements="??????????????",
+            story_direction="keep chapter 11 grounded and chapter 12 escalating",
+            requirements="maintain continuity and pacing",
             db=session,
         )
 
     assert context["stats"]["recent_outlines_count"] == 8
     assert context["stats"]["detailed_characters_count"] == 10
     assert context["stats"]["compacted_characters_count"] == 2
-    assert "??????" in context["characters_info"]
+    assert "Character 10" in context["characters_info"]
     assert "..." in context["recent_outlines"]
 
 async def test_should_commit_outline_postprocess_items_incrementally_in_background(monkeypatch):

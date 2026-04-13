@@ -90,7 +90,7 @@ class AutoCharacterService:
         
         resolved_careers_info = careers_info if careers_info is not None else await self._build_careers_info(project.id, db)
         
-        # ?????????
+        # 优先复用调用方已解析的模板，避免重复读取配置
         resolved_template = template or await PromptService.get_template(
             "AUTO_CHARACTER_GENERATION",
             user_id,
@@ -470,7 +470,7 @@ class AutoCharacterService:
         )
         cached_careers_info = await self._build_careers_info(project.id, db)
 
-        # 5. ?????????????????
+        # 5. 逐个补齐缺失角色，并复用已缓存的上下文信息
         created_characters = []
         
         for idx, char_name in enumerate(missing_name_list):
@@ -559,7 +559,7 @@ class AutoCharacterService:
         if created_characters and not commit_per_item:
             await db.flush()
         
-        logger.info(f"?? ????????: ?? {len(missing_name_list)} ?????????? {len(created_characters)} ?")
+        logger.info(f"✅ 角色补全完成：检测到 {len(missing_name_list)} 个缺失角色，成功创建 {len(created_characters)} 个")
         
         return {
             "created_characters": created_characters,

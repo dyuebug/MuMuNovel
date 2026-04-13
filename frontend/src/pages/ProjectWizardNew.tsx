@@ -9,7 +9,13 @@ import {
   RocketOutlined, ArrowLeftOutlined, CheckCircleOutlined
 } from '@ant-design/icons';
 import { AIProjectGenerator, type GenerationConfig } from '../components/AIProjectGenerator';
+import {
+  GenerationExecutionSettingsPanel,
+  useGenerationExecutionSettings,
+} from '../components/GenerationExecutionSettings';
 import type { WizardBasicInfo } from '../types';
+import { isProjectWizardCompleted } from '../utils/projectWizardState';
+import { syncProjectToStoreById } from '../store/hooks';
 import {
   CREATIVE_MODE_OPTIONS,
   PLOT_STAGE_OPTIONS,
@@ -24,6 +30,8 @@ export default function ProjectWizardNew() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [form] = Form.useForm();
+  const watchedEnableMcp = Boolean(Form.useWatch('enable_mcp', form));
+  const watchedModel = Form.useWatch('model', form);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const { token } = theme.useToken();
 
@@ -31,12 +39,26 @@ export default function ProjectWizardNew() {
   const [currentStep, setCurrentStep] = useState<'form' | 'generating'>('form');
   const [generationConfig, setGenerationConfig] = useState<GenerationConfig | null>(null);
   const [resumeProjectId, setResumeProjectId] = useState<string | null>(null);
+
+  const clearWizardResumeStorage = () => {
+    localStorage.removeItem('wizard_project_id');
+    localStorage.removeItem('wizard_generation_data');
+    localStorage.removeItem('wizard_current_step');
+  };
+
+  const {
+    availableModels,
+    fetchingModels,
+    runtimeProvider,
+    currentSettingsModel,
+    loadDefaults,
+  } = useGenerationExecutionSettings();
+
   const {
     setBusy: setIsGenerationBusy,
     releaseBusy: releaseGenerationBusy,
     shouldDisableNavigation,
   } = useBusyNavigationGuard();
-
   useEffect(() => {
     const handleResize = () => {
       setIsMobile(window.innerWidth <= 768);
@@ -45,6 +67,35 @@ export default function ProjectWizardNew() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadRuntimeDefaults = async () => {
+      try {
+        const { model } = await loadDefaults();
+        if (cancelled) {
+          return;
+        }
+
+        const currentEnableMcp = form.getFieldValue('enable_mcp');
+        const currentModel = form.getFieldValue('model');
+        form.setFieldsValue({
+          enable_mcp: typeof currentEnableMcp === 'boolean' ? currentEnableMcp : true,
+          model: currentModel || model,
+        });
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('加载向导执行设置失败:', error);
+        }
+      }
+    };
+
+    void loadRuntimeDefaults();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [form, loadDefaults]);
   // 检查URL参数,如果有project_id则恢复生成
   useEffect(() => {
     const projectId = searchParams.get('project_id');
@@ -55,16 +106,25 @@ export default function ProjectWizardNew() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  // 恢复未完成项目的生成
+  // Resume unfinished wizard generation
   const handleResumeGeneration = async (projectId: string) => {
     try {
       const response = await fetch(`/api/projects/${projectId}`, {
-        credentials: 'include'
+        credentials: 'include',
       });
       if (!response.ok) {
         throw new Error('获取项目信息失败');
       }
       const project = await response.json();
+
+      if (isProjectWizardCompleted(project)) {
+        clearWizardResumeStorage();
+        setResumeProjectId(null);
+        setGenerationConfig(null);
+        setCurrentStep('form');
+        navigate(`/project/${projectId}`, { replace: true });
+        return;
+      }
 
       const config: GenerationConfig = {
         title: project.title,
@@ -73,23 +133,33 @@ export default function ProjectWizardNew() {
         genre: project.genre || '',
         narrative_perspective: project.narrative_perspective || '第三人称',
         target_words: project.target_words || 100000,
-        chapter_count: 3,
+        chapter_count: project.chapter_count || 3,
         character_count: project.character_count || 5,
+        outline_mode: project.outline_mode || 'one-to-many',
         default_creative_mode: project.default_creative_mode,
         default_story_focus: project.default_story_focus,
         default_plot_stage: project.default_plot_stage,
         default_story_creation_brief: project.default_story_creation_brief || '',
         default_quality_preset: project.default_quality_preset,
         default_quality_notes: project.default_quality_notes || '',
+        provider: runtimeProvider,
+        model: currentSettingsModel,
+        enable_mcp: true,
       };
 
       try {
+        const savedProjectId = localStorage.getItem('wizard_project_id');
         const raw = localStorage.getItem('wizard_generation_data');
-        if (raw) {
-          const saved = JSON.parse(raw);
+        if (raw && savedProjectId === projectId) {
+          const saved = JSON.parse(raw) as Partial<GenerationConfig> | null;
           if (saved && typeof saved === 'object') {
+            config.chapter_count = saved.chapter_count || config.chapter_count;
+            config.outline_mode = saved.outline_mode || config.outline_mode;
             config.enable_web_research = saved.enable_web_research;
             config.web_research_query = saved.web_research_query;
+            config.provider = saved.provider || config.provider;
+            config.model = saved.model || config.model;
+            config.enable_mcp = typeof saved.enable_mcp === 'boolean' ? saved.enable_mcp : config.enable_mcp;
             config.world_building_research_query = saved.world_building_research_query;
             config.careers_research_query = saved.careers_research_query;
             config.characters_research_query = saved.characters_research_query;
@@ -104,12 +174,12 @@ export default function ProjectWizardNew() {
       setCurrentStep('generating');
     } catch (error) {
       console.error('恢复生成失败:', error);
-      message.error('恢复生成失败,请重试');
+      message.error('恢复生成失败，请重试');
       navigate('/');
     }
   };
 
-  // 开始生成流程
+  // Start generation flow
   const handleAutoGenerate = async (values: WizardBasicInfo) => {
     const config: GenerationConfig = {
       title: values.title,
@@ -118,15 +188,18 @@ export default function ProjectWizardNew() {
       genre: values.genre,
       narrative_perspective: values.narrative_perspective,
       target_words: values.target_words || 100000,
-      chapter_count: 3, // 默认生成3章大纲
+      chapter_count: values.chapter_count || 3,
       character_count: values.character_count || 5,
-      outline_mode: values.outline_mode || 'one-to-many', // 添加大纲模式
+      outline_mode: values.outline_mode || 'one-to-many',
       default_creative_mode: values.default_creative_mode,
       default_story_focus: values.default_story_focus,
       default_plot_stage: values.default_plot_stage,
       default_story_creation_brief: values.default_story_creation_brief,
       default_quality_preset: values.default_quality_preset,
       default_quality_notes: values.default_quality_notes,
+      provider: runtimeProvider,
+      model: values.model,
+      enable_mcp: values.enable_mcp,
       enable_web_research: values.enable_web_research,
       web_research_query: values.web_research_query,
       world_building_research_query: values.world_building_research_query,
@@ -140,20 +213,32 @@ export default function ProjectWizardNew() {
     setCurrentStep('generating');
   };
 
-  // 生成完成回调
+  const syncCompletedProject = async (projectId: string) => {
+    try {
+      await syncProjectToStoreById(projectId);
+    } catch (error) {
+      console.error('同步完成项目到 store 失败:', error);
+    }
+  };
+
+  // Completion callback
   const handleComplete = (projectId: string) => {
     console.log('项目创建完成:', projectId);
+    clearWizardResumeStorage();
+    setResumeProjectId(null);
+    void syncCompletedProject(projectId);
     releaseGenerationBusy();
   };
 
-  // 返回表单页面
+  // Back to form page
   const handleBack = () => {
     setCurrentStep('form');
     setGenerationConfig(null);
     setResumeProjectId(null);
+    clearWizardResumeStorage();
     releaseGenerationBusy();
+    navigate('/wizard', { replace: true });
   };
-
   // 渲染表单页面
   const renderForm = () => (
     <Card>
@@ -176,6 +261,7 @@ export default function ProjectWizardNew() {
           target_words: 100000,
           outline_mode: 'one-to-one', // 默认为传统模式（1-1）
           default_plot_stage: 'development',
+          enable_mcp: true,
           enable_web_research: false,
         }}
       >
@@ -494,6 +580,24 @@ export default function ProjectWizardNew() {
           </Row>
         </Card>
 
+
+        <GenerationExecutionSettingsPanel
+          enableMcp={watchedEnableMcp}
+          onEnableMcpChange={(value) => form.setFieldValue('enable_mcp', value)}
+          model={watchedModel}
+          onModelChange={(value) => form.setFieldValue('model', value)}
+          fetchingModels={fetchingModels}
+          availableModels={availableModels}
+          runtimeProvider={runtimeProvider}
+          currentSettingsModel={currentSettingsModel}
+        />
+
+        <Form.Item name="enable_mcp" hidden>
+          <Input type="hidden" />
+        </Form.Item>
+        <Form.Item name="model" hidden>
+          <Input type="hidden" />
+        </Form.Item>
         <Form.Item>
           <Space direction="vertical" style={{ width: '100%' }} size={12}>
             <Button
@@ -582,7 +686,7 @@ export default function ProjectWizardNew() {
             onBusyChange={setIsGenerationBusy}
             backButtonText="返回向导首页"
             isMobile={isMobile}
-            resumeProjectId={resumeProjectId || undefined}
+            resumeProjectId={resumeProjectId ?? undefined}
           />
         )}
       </div>

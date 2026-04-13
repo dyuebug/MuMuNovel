@@ -1,7 +1,8 @@
-﻿import { Suspense, lazy, memo, useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Suspense, lazy, memo, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Button, Modal, Form, Input, Select, message, Row, Col, Empty, Tabs, Divider, Typography, Space, Checkbox, theme } from 'antd';
 import { ThunderboltOutlined, UserOutlined, TeamOutlined, PlusOutlined, ExportOutlined, ImportOutlined, DownloadOutlined } from '@ant-design/icons';
 import { useStore } from '../store';
+import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgroundTasks';
 import { useCharacterSync } from '../store/hooks';
 import { charactersPageGridConfig } from '../components/CardStyles';
 import { CharacterCard } from '../components/CharacterCard';
@@ -9,6 +10,8 @@ import type { CSSProperties } from 'react';
 import type { Character, ApiError } from '../types';
 import { backgroundTaskApi, characterApi } from '../services/api';
 import { getCachedProjectCareers, loadProjectCareers } from '../services/projectCareers';
+import { formatBackgroundTaskError } from '../utils/taskPolling';
+import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
 
 
 
@@ -166,11 +169,35 @@ interface CharacterUpdateData {
 
 
 const INITIAL_CHARACTER_RENDER_COUNT = 8;
+const CHARACTER_TASK_REFRESH_KEY_PREFIX = 'background-task-refresh:characters:';
+
+const hasCharacterTaskRefreshBeenHandled = (taskId: string): boolean => {
+  try {
+    return sessionStorage.getItem(`${CHARACTER_TASK_REFRESH_KEY_PREFIX}${taskId}`) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const markCharacterTaskRefreshHandled = (taskId: string) => {
+  try {
+    sessionStorage.setItem(`${CHARACTER_TASK_REFRESH_KEY_PREFIX}${taskId}`, '1');
+  } catch {
+    // ignore sessionStorage failures
+  }
+};
+
+const isCharacterGenerationTaskType = (taskType?: string | null): taskType is 'character_generate' | 'organization_generate' =>
+  taskType === 'character_generate' || taskType === 'organization_generate';
+
+const getCharacterGenerationSuccessMessage = (taskType: 'character_generate' | 'organization_generate') =>
+  taskType === 'organization_generate' ? '智能生成组织成功' : '智能生成角色成功';
 
 export default function Characters() {
   const { token } = theme.useToken();
   const currentProject = useStore((state) => state.currentProject);
   const storeCharacters = useStore((state) => state.characters);
+  const trackedTasks = useBackgroundTaskStore((state) => state.tasks);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isCancellingTask, setIsCancellingTask] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -189,8 +216,21 @@ export default function Characters() {
   const [selectedCharacters, setSelectedCharacters] = useState<string[]>([]);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const taskPollTimerRef = useRef<number | null>(null);
-  const currentTaskIdRef = useRef<string | null>(null);
+  const taskCreationInFlightRef = useRef(false);
+
+  const activeTrackedGenerationTask = useMemo(() => {
+    if (!currentProject?.id) {
+      return null;
+    }
+
+    return Object.values(trackedTasks)
+      .filter(
+        (task) => task.projectId === currentProject.id
+          && isCharacterGenerationTaskType(task.taskType)
+          && isActiveBackgroundTask(task)
+      )
+      .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+  }, [currentProject?.id, trackedTasks]);
 
 
 
@@ -272,11 +312,8 @@ export default function Characters() {
 
   useEffect(() => {
     return () => {
-      if (taskPollTimerRef.current) {
-        window.clearInterval(taskPollTimerRef.current);
-        taskPollTimerRef.current = null;
-      }
       currentTaskIdRef.current = null;
+      taskCreationInFlightRef.current = false;
     };
   }, []);
 
@@ -293,83 +330,98 @@ export default function Characters() {
 
 
 
-  const stopTaskPolling = () => {
-    if (taskPollTimerRef.current) {
-      window.clearInterval(taskPollTimerRef.current);
-      taskPollTimerRef.current = null;
-    }
-  };
-
-
-
-  const startTaskPolling = (taskId: string, successMessage: string) => {
-    stopTaskPolling();
-    currentTaskIdRef.current = taskId;
-    setIsCancellingTask(false);
-
-
-
-    const poll = async () => {
-      try {
-        const task = await backgroundTaskApi.getTaskStatus(taskId);
+  const { currentTaskIdRef, startTaskPolling, stopTaskPolling } = useRestorableBackgroundTaskPolling({
+    projectId: currentProject?.id,
+    activeTrackedTask: activeTrackedGenerationTask,
+    canRestore: !isGenerating && !taskCreationInFlightRef.current,
+    isMatchingTask: (task) => isCharacterGenerationTaskType(task.task_type) && (task.status === 'pending' || task.status === 'running'),
+    onRestoreTask: ({ progress: progressValue, message: messageValue }) => {
+      setIsGenerating(true);
+      setIsCancellingTask(false);
+      setProgress(progressValue || 0);
+      setProgressMessage(messageValue || '正在恢复生成任务...');
+    },
+    createPollingOptions: () => ({
+      pollTask: (currentPollingTaskId) => backgroundTaskApi.getTaskStatus(currentPollingTaskId),
+      onTask: (task) => {
         setProgress(task.progress || 0);
         setProgressMessage(task.message || '');
+      },
+      onCompleted: (task) => {
+        stopTaskPolling();
+        currentTaskIdRef.current = null;
+        setIsCancellingTask(false);
+        setIsGenerating(false);
+        markCharacterTaskRefreshHandled(task.task_id);
+        message.success(
+          isCharacterGenerationTaskType(task.task_type)
+            ? getCharacterGenerationSuccessMessage(task.task_type)
+            : '智能生成成功',
+        );
+        void refreshCharacters();
+      },
+      onFailed: (task) => {
+        stopTaskPolling();
+        currentTaskIdRef.current = null;
+        setIsCancellingTask(false);
+        setIsGenerating(false);
+        message.error(formatBackgroundTaskError(task.error, task.message, '生成失败'));
+      },
+      onCancelled: (task) => {
+        stopTaskPolling();
+        currentTaskIdRef.current = null;
+        setIsCancellingTask(false);
+        setIsGenerating(false);
+        message.info(task.message || '任务已取消');
+      },
+      onPollingError: (error) => {
+        console.error('轮询角色或组织生成任务失败:', error);
+        stopTaskPolling();
+        currentTaskIdRef.current = null;
+        setIsCancellingTask(false);
+        setIsGenerating(false);
+        setProgressMessage('生成状态同步失败，请刷新后重试');
+        void refreshCharacters();
+        message.error('生成状态同步失败，请刷新后重试');
+      },
+    }),
+  });
 
 
 
-        if (task.status === 'completed') {
-          stopTaskPolling();
-          currentTaskIdRef.current = null;
-          setIsCancellingTask(false);
-          setIsGenerating(false);
-          message.success(successMessage);
-          await refreshCharacters();
-          return;
-        }
+  useEffect(() => {
+    if (!currentProject?.id || currentTaskIdRef.current || isGenerating) {
+      return;
+    }
 
+    const completedTask = Object.values(trackedTasks)
+      .filter(
+        (task) => task.projectId === currentProject.id
+          && (task.taskType === 'character_generate' || task.taskType === 'organization_generate')
+          && task.status === 'completed'
+          && !hasCharacterTaskRefreshBeenHandled(task.taskId)
+      )
+      .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
 
+    if (!completedTask) {
+      return;
+    }
 
-        if (task.status === 'failed') {
-          stopTaskPolling();
-          currentTaskIdRef.current = null;
-          setIsCancellingTask(false);
-          setIsGenerating(false);
-          message.error(task.error || task.message || '生成失败');
-          return;
-        }
-
-
-
-        if (task.status === 'cancelled') {
-          stopTaskPolling();
-          currentTaskIdRef.current = null;
-          setIsCancellingTask(false);
-          setIsGenerating(false);
-          message.info(task.message || '后台任务已取消');
-        }
-      } catch (error) {
-        console.error('轮询后台任务状态失败:', error);
-      }
-    };
-
-
-
-    void poll();
-    taskPollTimerRef.current = window.setInterval(() => {
-      void poll();
-    }, 1500);
-  };
+    markCharacterTaskRefreshHandled(completedTask.taskId);
+    void refreshCharacters(currentProject.id);
+  }, [currentProject?.id, isGenerating, refreshCharacters, trackedTasks]);
 
 
 
   const handleGenerateBackground = async (values: { name?: string; role_type: string; background?: string }) => {
-    if (isGenerating) {
+    if (isGenerating || activeTrackedGenerationTask) {
       message.info('已有后台生成任务在运行，请稍后查看结果');
       return;
     }
 
 
 
+    taskCreationInFlightRef.current = true;
     setIsGenerating(true);
     setIsCancellingTask(false);
     setProgress(0);
@@ -392,10 +444,12 @@ export default function Characters() {
 
       message.success('后台角色生成任务已启动，可继续进行其他操作');
       currentTaskIdRef.current = task.task_id;
-      startTaskPolling(task.task_id, '智能生成角色成功');
+      startTaskPolling(task.task_id);
+      taskCreationInFlightRef.current = false;
     } catch (error: unknown) {
       stopTaskPolling();
       currentTaskIdRef.current = null;
+      taskCreationInFlightRef.current = false;
       setIsCancellingTask(false);
       setIsGenerating(false);
       const errorMessage = error instanceof Error ? error.message : '智能生成失败';
@@ -411,13 +465,14 @@ export default function Characters() {
     background?: string;
     requirements?: string;
   }) => {
-    if (isGenerating) {
+    if (isGenerating || activeTrackedGenerationTask) {
       message.info('已有后台生成任务在运行，请稍后查看结果');
       return;
     }
 
 
 
+    taskCreationInFlightRef.current = true;
     setIsGenerating(true);
     setIsCancellingTask(false);
     setProgress(0);
@@ -441,10 +496,12 @@ export default function Characters() {
 
       message.success('后台组织生成任务已启动，可继续进行其他操作');
       currentTaskIdRef.current = task.task_id;
-      startTaskPolling(task.task_id, '智能生成组织成功');
+      startTaskPolling(task.task_id);
+      taskCreationInFlightRef.current = false;
     } catch (error: unknown) {
       stopTaskPolling();
       currentTaskIdRef.current = null;
+      taskCreationInFlightRef.current = false;
       setIsCancellingTask(false);
       setIsGenerating(false);
       const errorMessage = error instanceof Error ? error.message : '智能生成失败';

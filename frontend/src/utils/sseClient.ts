@@ -20,7 +20,39 @@ export interface SSEClientOptions {
   onTaskCreated?: (taskId: string) => void;
   onComplete?: () => void;
   onConnectionError?: (error: Event) => void;
+  onHeartbeat?: () => void;
+  inactivityTimeoutMs?: number;
+  signal?: AbortSignal;
 }
+
+const DEFAULT_SSE_INACTIVITY_TIMEOUT_MS = 45000;
+
+const parseSSEBlock = (block: string): { isHeartbeat: boolean; data: string | null } => {
+  const lines = block.split(/\r?\n/);
+  const dataLines: string[] = [];
+  let isHeartbeat = false;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    if (!line) {
+      continue;
+    }
+
+    if (line.startsWith(':')) {
+      isHeartbeat = true;
+      continue;
+    }
+
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+
+  return {
+    isHeartbeat,
+    data: dataLines.length > 0 ? dataLines.join('\n') : null,
+  };
+};
 
 export class SSEClient {
   private eventSource: EventSource | null = null;
@@ -129,8 +161,11 @@ export class SSEPostClient {
   private data: any;
   private options: SSEClientOptions;
   private abortController: AbortController | null = null;
+  private externalAbortCleanup: (() => void) | null = null;
   private accumulatedContent: string = '';
   private resultData: any = null;
+  private settled = false;
+  private inactivityTimer: number | null = null;
 
   constructor(url: string, data: any, options: SSEClientOptions = {}) {
     this.url = url;
@@ -140,79 +175,205 @@ export class SSEPostClient {
 
   async connect(): Promise<any> {
     return new Promise((resolve, reject) => {
-      this.connectInternal(resolve, reject);
+      void this.connectInternal(resolve, reject);
     });
   }
 
+  private resolveOnce(resolve: (value: any) => void, value: any) {
+    if (this.settled) {
+      return;
+    }
+    this.settled = true;
+    this.clearInactivityTimer();
+    resolve(value);
+  }
+
+  private rejectOnce(reject: (reason?: any) => void, reason: any) {
+    if (this.settled) {
+      return;
+    }
+    this.settled = true;
+    this.clearInactivityTimer();
+    reject(reason);
+  }
+
+  private getInactivityTimeoutMs(): number {
+    return this.options.inactivityTimeoutMs ?? DEFAULT_SSE_INACTIVITY_TIMEOUT_MS;
+  }
+
+  private clearInactivityTimer() {
+    if (this.inactivityTimer !== null) {
+      window.clearTimeout(this.inactivityTimer);
+      this.inactivityTimer = null;
+    }
+  }
+
+  private markActivity(reject: (reason?: any) => void) {
+    this.clearInactivityTimer();
+
+    const timeoutMs = this.getInactivityTimeoutMs();
+    if (timeoutMs <= 0 || this.settled) {
+      return;
+    }
+
+    this.inactivityTimer = window.setTimeout(() => {
+      const timeoutError = new Error('SSE connection timed out due to inactivity');
+      if (this.options.onError) {
+        this.options.onError(timeoutError.message, 408);
+      }
+      this.abort();
+      this.rejectOnce(reject, timeoutError);
+    }, timeoutMs);
+  }
+
+  private handleHeartbeat(reject: (reason?: any) => void) {
+    this.markActivity(reject);
+    if (this.options.onHeartbeat) {
+      this.options.onHeartbeat();
+    }
+  }
+
+  private finalizeStream(resolve: (value: any) => void, reject: (reason?: any) => void) {
+    if (this.settled) {
+      return;
+    }
+
+    if (this.resultData) {
+      this.resolveOnce(resolve, this.resultData);
+      return;
+    }
+
+    if (this.accumulatedContent) {
+      this.resolveOnce(resolve, { content: this.accumulatedContent });
+      return;
+    }
+
+    const streamClosedError = new Error('SSE stream closed before completion');
+    if (this.options.onError) {
+      this.options.onError(streamClosedError.message);
+    }
+    this.rejectOnce(reject, streamClosedError);
+  }
+
   private async connectInternal(resolve: (value: any) => void, reject: (reason?: any) => void) {
-      try {
-        this.abortController = new AbortController();
+    try {
+      this.abortController = new AbortController();
 
-        const response = await fetch(this.url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(this.data),
-          signal: this.abortController.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const reader = response.body?.getReader();
-        const decoder = new TextDecoder();
-
-        if (!reader) {
-          throw new Error('无法获取响应流');
-        }
-
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-
-          if (done) {
-            break;
-          }
-
-          buffer += decoder.decode(value, { stream: true });
-
-          const lines = buffer.split('\n\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            if (line.trim() === '' || line.startsWith(':')) {
-              continue;
-            }
-
-            try {
-              // 解析数据
-              const dataMatch = line.match(/^data: (.+)$/m);
-              if (dataMatch) {
-                const data = JSON.parse(dataMatch[1]);
-
-                // 标准消息处理
-                const message: SSEMessage = data;
-                await this.handleMessage(message, resolve, reject);
-              }
-            } catch (error) {
-              console.error('解析SSE消息失败:', error, line);
-            }
-          }
-        }
-
-      } catch (error: any) {
-        if (error.name === 'AbortError') {
-          console.log('请求已取消');
+      if (this.options.signal) {
+        if (this.options.signal.aborted) {
+          this.abortController.abort();
         } else {
-          console.error('SSE POST请求失败:', error);
-          if (this.options.onError) {
-            this.options.onError(error.message || '请求失败');
-          }
-          reject(error);
+          const forwardAbort = () => {
+            this.abortController?.abort();
+          };
+          this.options.signal.addEventListener('abort', forwardAbort, { once: true });
+          this.externalAbortCleanup = () => {
+            this.options.signal?.removeEventListener('abort', forwardAbort);
+          };
         }
       }
+
+      const response = await fetch(this.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(this.data),
+        signal: this.abortController.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new Error('Unable to read response stream');
+      }
+
+      this.markActivity(reject);
+
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        this.markActivity(reject);
+        buffer += decoder.decode(value, { stream: true });
+
+        const blocks = buffer.split(/\r?\n\r?\n/);
+        buffer = blocks.pop() || '';
+
+        for (const block of blocks) {
+          if (!block.trim()) {
+            continue;
+          }
+
+          const parsedBlock = parseSSEBlock(block);
+
+          if (parsedBlock.isHeartbeat) {
+            this.handleHeartbeat(reject);
+          }
+
+          if (!parsedBlock.data) {
+            continue;
+          }
+
+          try {
+            const message: SSEMessage = JSON.parse(parsedBlock.data);
+            this.markActivity(reject);
+            await this.handleMessage(message, resolve, reject);
+          } catch (error) {
+            console.error('Failed to parse SSE message:', error, block);
+          }
+        }
+      }
+
+      const rest = decoder.decode();
+      if (rest) {
+        buffer += rest;
+      }
+
+      const finalBlock = buffer.trim();
+      if (finalBlock) {
+        const parsedBlock = parseSSEBlock(finalBlock);
+        if (parsedBlock.isHeartbeat) {
+          this.handleHeartbeat(reject);
+        }
+        if (parsedBlock.data) {
+          try {
+            const message: SSEMessage = JSON.parse(parsedBlock.data);
+            this.markActivity(reject);
+            await this.handleMessage(message, resolve, reject);
+          } catch (error) {
+            console.error('Failed to parse trailing SSE message:', error, finalBlock);
+          }
+        }
+      }
+
+      this.finalizeStream(resolve, reject);
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        this.clearInactivityTimer();
+        this.rejectOnce(reject, error);
+        return;
+      }
+
+      console.error('SSE POST request failed:', error);
+      if (this.options.onError) {
+        this.options.onError(error.message || 'Request failed');
+      }
+      this.rejectOnce(reject, error);
+    } finally {
+      this.clearInactivityTimer();
+      this.externalAbortCleanup?.();
+      this.externalAbortCleanup = null;
+    }
   }
 
   private async handleMessage(message: SSEMessage, resolve: (value: any) => void, reject: (reason?: any) => void) {
@@ -246,9 +407,9 @@ export class SSEPostClient {
 
       case 'error':
         if (this.options.onError) {
-          this.options.onError(message.error || '未知错误', message.code);
+          this.options.onError(message.error || 'Unknown SSE error', message.code);
         }
-        reject(new Error(message.error || '未知错误'));
+        this.rejectOnce(reject, new Error(message.error || 'Unknown SSE error'));
         break;
 
       case 'done':
@@ -256,18 +417,21 @@ export class SSEPostClient {
           this.options.onComplete();
         }
         if (this.resultData) {
-          resolve(this.resultData);
+          this.resolveOnce(resolve, this.resultData);
         } else if (this.accumulatedContent) {
-          resolve({ content: this.accumulatedContent });
+          this.resolveOnce(resolve, { content: this.accumulatedContent });
         } else {
-          resolve(true);
+          this.resolveOnce(resolve, true);
         }
         break;
     }
   }
 
   abort() {
-    if (this.abortController) {
+    this.clearInactivityTimer();
+    this.externalAbortCleanup?.();
+    this.externalAbortCleanup = null;
+    if (this.abortController && !this.abortController.signal.aborted) {
       this.abortController.abort();
     }
   }

@@ -9,6 +9,7 @@ import copy
 import json
 import asyncio
 import re
+from types import SimpleNamespace
 
 from app.database import get_db, get_session_factory
 from app.api.common import verify_project_access
@@ -98,6 +99,25 @@ OUTLINE_GENERATION_FIRST_CHUNK_TIMEOUT = 20.0
 outline_quality_summary_cache: dict[str, Dict[str, Any]] = {}
 outline_quality_summary_lock = asyncio.Lock()
 OUTLINE_QUALITY_SUMMARY_CACHE_MAX_SIZE = 128
+
+
+async def _prime_stream_generator(generator: AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
+    try:
+        first_chunk = await anext(generator)
+    except StopAsyncIteration:
+        async def _empty_generator() -> AsyncGenerator[str, None]:
+            if False:
+                yield ""
+            return
+
+        return _empty_generator()
+
+    async def _prefetched_generator() -> AsyncGenerator[str, None]:
+        yield first_chunk
+        async for chunk in generator:
+            yield chunk
+
+    return _prefetched_generator()
 
 
 def _build_outline_generation_request_options(
@@ -315,8 +335,8 @@ def _sort_characters_for_outline_context(characters: List[Character], focus_name
 
 
 def _build_outline_character_overview(character: Character) -> str:
-    entity_type = "??" if getattr(character, "is_organization", False) else "??"
-    role_type = str(getattr(character, "role_type", "") or "???").strip()
+    entity_type = "organization" if getattr(character, "is_organization", False) else "character"
+    role_type = str(getattr(character, "role_type", "") or "unknown").strip()
     return f"{character.name}?{entity_type}?{role_type}?"
 
 def _pick_outline_field(data: Dict[str, Any], keys: List[str]) -> Any:
@@ -1230,7 +1250,7 @@ async def _build_outline_continue_context(
         ]
         context['project_info'] = "\n".join(project_info_parts)
         
-        # 2. ?????????????
+        # 2. Persist generated outline data
         recent_count = min(OUTLINE_CONTINUE_RECENT_LIMIT, len(latest_outlines))
         if recent_count > 0:
             recent_outlines = latest_outlines[-recent_count:]
@@ -1299,7 +1319,7 @@ async def _build_outline_continue_context(
             context['recent_outlines'] = "\n".join(outline_texts)
             context['stats']['recent_outlines_length'] = len(context['recent_outlines'])
             logger.info(f"  \u2705 \u6700\u8fd1\u5927\u7eb2\uff1a{recent_count}\u7ae0\uff0c\u957f\u5ea6 {context['stats']['recent_outlines_length']} \u5b57\u7b26")
-        # 3. ?????????(??????)
+        # 3. Persist expansion result (if needed)
         if static_context:
             context['characters_info'] = str(static_context.get('characters_info') or '').strip()
             static_stats = static_context.get('stats') if isinstance(static_context.get('stats'), Mapping) else {}
@@ -1512,7 +1532,7 @@ async def _build_outline_continue_context(
                 )
                 context['memory_guidance'] = _build_outline_memory_guidance(memory_context)
             except Exception as memory_error:
-                logger.warning(f"?? ??????????????????: {memory_error}")
+                logger.warning(f"Failed to persist outline memory links: {memory_error}")
                 context['memory_guidance'] = ''
         else:
             context['memory_guidance'] = ''
@@ -1535,7 +1555,7 @@ async def _build_outline_continue_context(
                 context['quality_repair_guidance'] = str(quality_guidance_bundle.get('quality_repair_guidance') or '').strip()
                 context['quality_trend_guidance'] = str(quality_guidance_bundle.get('quality_trend_guidance') or '').strip()
             except Exception as repair_error:
-                logger.warning(f"?? ??????????????????: {repair_error}")
+                logger.warning(f"Failed to persist outline repair links: {repair_error}")
                 context['quality_repair_guidance'] = ''
                 context['quality_trend_guidance'] = ''
 
@@ -2615,11 +2635,11 @@ async def continue_outline_generator(
             
             if defer_postprocess_for_batch:
                 logger.info(
-                    "?%s???/???????????????????",
+                    "Batch %s finished; outline postprocess deferred to background task",
                     batch_num + 1,
                 )
             else:
-                # ?? ???????????structure??characters????????
+                # Backfill missing characters referenced by structure/character outlines
                 try:
                     char_check_result = await _check_and_create_missing_characters_from_outlines(
                         outline_data=outline_data,
@@ -2633,15 +2653,15 @@ async def continue_outline_generator(
                     if char_check_result["created_count"] > 0:
                         created_names = [c.name for c in char_check_result["created_characters"]]
                         yield await tracker.saving(
-                            f"?? ?{str(batch_num + 1)}??????? {char_check_result['created_count']} ???: {', '.join(created_names)}",
+                            f"Batch {batch_num + 1}: created {char_check_result['created_count']} missing characters: {', '.join(created_names)}",
                             (batch_num + 1) / total_batches * 0.5
                         )
-                        # ???????????????
+                        # Merge created characters into the current in-memory list
                         characters.extend(char_check_result["created_characters"])
                 except Exception as e:
-                    logger.error(f"?? ?{batch_num + 1}???????????????: {e}")
+                    logger.error(f"Batch {batch_num + 1}: failed to backfill missing organizations: {e}")
                 
-                # ??? ???????????structure??characters?type=organization?????????
+                # Backfill missing organizations referenced by structure/character outlines
                 try:
                     org_check_result = await _check_and_create_missing_organizations_from_outlines(
                         outline_data=outline_data,
@@ -2655,13 +2675,13 @@ async def continue_outline_generator(
                     if org_check_result["created_count"] > 0:
                         created_names = [c.name for c in org_check_result["created_organizations"]]
                         yield await tracker.saving(
-                            f"??? ?{str(batch_num + 1)}??????? {org_check_result['created_count']} ???: {', '.join(created_names)}",
+                            f"Batch {batch_num + 1}: created {org_check_result['created_count']} missing organizations: {', '.join(created_names)}",
                             (batch_num + 1) / total_batches * 0.55
                         )
-                        # ???????????Character?????????
+                        # Reuse the same collection because organizations share the Character model
                         characters.extend(org_check_result["created_organizations"])
                 except Exception as e:
-                    logger.error(f"?? ?{batch_num + 1}???????????????: {e}")
+                    logger.error(f"Batch {batch_num + 1}: failed to backfill missing organizations: {e}")
             
             history = GenerationHistory(
                 project_id=project_id,
@@ -2687,7 +2707,7 @@ async def continue_outline_generator(
                     enable_mcp=enable_mcp,
                 )
                 yield await tracker.saving(
-                    f"?? ?{str(batch_num + 1)}???/????????????????",
+                    f"Batch {batch_num + 1}: outline postprocess scheduled in background",
                     min((batch_num + 1) / total_batches * 0.6, 0.95)
                 )
             
@@ -2749,7 +2769,7 @@ async def continue_outline_generator(
 
 @router.post("/generate-stream", summary="AI生成/续写大纲(SSE流式)")
 async def generate_outline_stream(
-    data: OutlineGenerateRequest,
+    data: dict[str, Any],
     request: Request,
     db: AsyncSession = Depends(get_db),
     user_ai_service: AIService = Depends(get_user_ai_service)
@@ -2775,11 +2795,19 @@ async def generate_outline_stream(
         "model": "gpt-4"  // 模型名称
     }
     """
-    payload = data.model_dump(exclude_none=False)
+    normalized_data = data
+    internal_user_id = None
+    if isinstance(data, Mapping):
+        raw_payload = dict(data)
+        internal_user_id = raw_payload.pop("user_id", None)
+        normalized_data = OutlineGenerateRequest.model_validate(raw_payload)
+    payload = _dump_model_like_payload(normalized_data)
 
     # 验证项目权限
-    user_id = getattr(request.state, 'user_id', None)
+    user_id = getattr(request.state, 'user_id', None) or internal_user_id
     await verify_project_access(payload.get("project_id"), user_id, db)
+    if user_id:
+        payload["user_id"] = user_id
 
     # 获取模式
     mode = payload.get("mode", "auto")
@@ -2802,14 +2830,16 @@ async def generate_outline_stream(
 
     # 根据模式分发
     if mode == "new":
-        return create_sse_response(new_outline_generator(payload, db, user_ai_service))
+        stream = await _prime_stream_generator(new_outline_generator(payload, db, user_ai_service))
+        return create_sse_response(stream)
     if mode == "continue":
         if not existing_outlines:
             raise HTTPException(
                 status_code=400,
                 detail="没有可用的现有大纲，无法继续生成"
             )
-        return create_sse_response(continue_outline_generator(payload, db, user_ai_service, user_id))
+        stream = await _prime_stream_generator(continue_outline_generator(payload, db, user_ai_service, user_id))
+        return create_sse_response(stream)
 
     raise HTTPException(
         status_code=400,
@@ -2856,6 +2886,10 @@ async def expand_outline_generator(
         if not project:
             yield await tracker.error("项目不存在", 404)
             return
+        project_snapshot = SimpleNamespace(
+            **{key: value for key, value in vars(project).items() if not key.startswith('_')}
+        )
+
         
         yield await tracker.preparing(
             f"准备展开《{outline.title}》为 {target_chapter_count} 章..."
@@ -3065,50 +3099,56 @@ async def create_single_chapter_from_outline(
 @router.post("/{outline_id}/expand-stream", summary="展开单个大纲为多章(SSE流式)")
 async def expand_outline_to_chapters_stream(
     outline_id: str,
-    data: Dict[str, Any],
+    data: OutlineExpansionRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
     user_ai_service: AIService = Depends(get_user_ai_service)
 ):
     """
-    使用SSE流式展开单个大纲，实时推送进度
-    
-    请求体示例：
+    Expand a single outline into multiple chapters through SSE streaming.
+
+    Example payload:
     {
-        "target_chapter_count": 3,  // 目标章节数
-        "expansion_strategy": "balanced",  // balanced/climax/detail
-        "auto_create_chapters": false,  // 是否自动创建章节
-        "enable_scene_analysis": true,  // 是否启用场景分析
-        "provider": "openai",  // 可选
-        "model": "gpt-4"  // 可选
+        "target_chapter_count": 3,
+        "expansion_strategy": "balanced",
+        "auto_create_chapters": false,
+        "enable_scene_analysis": true,
+        "provider": "openai",
+        "model": "gpt-4"
     }
-    
-    进度阶段：
-    - 5% - 开始展开
-    - 10% - 加载大纲信息
-    - 15% - 加载项目信息
-    - 20% - 准备展开参数
-    - 30% - AI分析大纲（耗时）
-    - 70% - 规划生成完成
-    - 80% - 创建章节记录（如果auto_create_chapters=True）
-    - 90% - 创建完成
-    - 95% - 整理结果数据
-    - 100% - 全部完成
+
+    Progress checkpoints:
+    - 5%: validate outline
+    - 10%: load project context
+    - 15%: collect related data
+    - 20%: build prompt payload
+    - 30%: request AI expansion
+    - 70%: parse model result
+    - 80%: optionally create chapters when auto_create_chapters=True
+    - 90%: persist result
+    - 95%: finalize stream state
+    - 100%: completed
     """
-    # 获取大纲并验证权限
+    normalized_data = data
+    if isinstance(data, Mapping):
+        normalized_data = OutlineExpansionRequest.model_validate(dict(data))
+    payload = _dump_model_like_payload(normalized_data)
+
+    # Load target outline
     result = await db.execute(
         select(Outline).where(Outline.id == outline_id)
     )
     outline = result.scalar_one_or_none()
     
     if not outline:
-        raise HTTPException(status_code=404, detail="大纲不存在")
+        raise HTTPException(status_code=404, detail="Outline not found")
     
-    # 验证用户权限
+    # Verify project access
     user_id = getattr(request.state, 'user_id', None)
     await verify_project_access(outline.project_id, user_id, db)
     
-    return create_sse_response(expand_outline_generator(outline_id, data, db, user_ai_service))
+    stream = await _prime_stream_generator(expand_outline_generator(outline_id, payload, db, user_ai_service))
+    return create_sse_response(stream)
 
 
 @router.get("/{outline_id}/chapters", summary="获取大纲关联的章节")
@@ -3218,6 +3258,10 @@ async def batch_expand_outlines_generator(
             yield await tracker.error("项目不存在", 404)
             return
         
+        project_snapshot = SimpleNamespace(
+            **{key: value for key, value in vars(project).items() if not key.startswith('_')}
+        )
+
         # 获取要展开的大纲列表
         yield await tracker.loading("获取大纲列表...", 0.8)
         if outline_ids:
@@ -3242,7 +3286,12 @@ async def batch_expand_outlines_generator(
             yield await tracker.error("没有找到要展开的大纲", 404)
             return
         
-        total_outlines = len(outlines)
+        outline_snapshots = [
+            SimpleNamespace(**{key: value for key, value in vars(outline).items() if not key.startswith('_')})
+            for outline in outlines
+        ]
+
+        total_outlines = len(outline_snapshots)
         yield await tracker.preparing(
             f"共找到 {total_outlines} 个大纲，开始批量展开..."
         )
@@ -3254,7 +3303,7 @@ async def batch_expand_outlines_generator(
         total_chapters_created = 0
         skipped_outlines = []
         
-        for idx, outline in enumerate(outlines):
+        for idx, outline in enumerate(outline_snapshots):
             try:
                 # 计算当前子进度 (0.0-1.0)，用于generating阶段
                 sub_progress = idx / max(total_outlines, 1)
@@ -3296,7 +3345,7 @@ async def batch_expand_outlines_generator(
                 
                 chapter_plans = await expansion_service.analyze_outline_for_chapters(
                     outline=outline,
-                    project=project,
+                    project=project_snapshot,
                     db=db,
                     target_chapter_count=chapters_per_outline,
                     expansion_strategy=expansion_strategy,
@@ -3321,6 +3370,7 @@ async def batch_expand_outlines_generator(
                         db=db,
                         start_chapter_number=None  # 自动计算章节序号
                     )
+                    await db.commit()
                     created_chapters = [
                         {
                             "id": ch.id,
@@ -3354,6 +3404,8 @@ async def batch_expand_outlines_generator(
                 logger.info(f"大纲 {outline.title} 展开完成，生成 {len(chapter_plans)} 个章节规划")
                 
             except Exception as e:
+                if db.in_transaction():
+                    await db.rollback()
                 logger.error(f"展开大纲 {outline.id} 失败: {str(e)}", exc_info=True)
                 yield await tracker.warning(
                     f"❌ {outline.title} 展开失败: {str(e)}"
@@ -3370,8 +3422,6 @@ async def batch_expand_outlines_generator(
                 })
         
         yield await tracker.parsing("整理结果数据...")
-        
-        db_committed = True
         
         logger.info(f"批量展开完成: {len(expansion_results)} 个大纲，跳过 {len(skipped_outlines)} 个，共生成 {total_chapters_created} 个章节")
         
@@ -3403,12 +3453,12 @@ async def batch_expand_outlines_generator(
         
     except GeneratorExit:
         logger.warning("批量展开生成器被提前关闭")
-        if not db_committed and db.in_transaction():
+        if db.in_transaction():
             await db.rollback()
             logger.info("批量展开事务已回滚（GeneratorExit）")
     except Exception as e:
         logger.error(f"批量展开失败: {str(e)}")
-        if not db_committed and db.in_transaction():
+        if db.in_transaction():
             await db.rollback()
             logger.info("批量展开事务已回滚（异常）")
         yield await SSEResponse.send_error(f"批量展开失败: {str(e)}")
@@ -3416,31 +3466,37 @@ async def batch_expand_outlines_generator(
 
 @router.post("/batch-expand-stream", summary="批量展开大纲为多章(SSE流式)")
 async def batch_expand_outlines_stream(
-    data: Dict[str, Any],
+    data: BatchOutlineExpansionRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
     user_ai_service: AIService = Depends(get_user_ai_service)
 ):
     """
-    使用SSE流式批量展开大纲，实时推送每个大纲的处理进度
-    
-    请求体示例：
+    Batch expand multiple outlines into chapters through SSE streaming.
+
+    Example payload:
     {
-        "project_id": "项目ID",
-        "outline_ids": ["大纲ID1", "大纲ID2"],  // 可选，不传则展开所有大纲
-        "chapters_per_outline": 3,  // 每个大纲展开几章
-        "expansion_strategy": "balanced",  // balanced/climax/detail
-        "auto_create_chapters": false,  // 是否自动创建章节
-        "enable_scene_analysis": true,  // 是否启用场景分析
-        "provider": "openai",  // 可选
-        "model": "gpt-4"  // 可选
+        "project_id": "project-id",
+        "outline_ids": ["outline-id-1", "outline-id-2"],
+        "chapters_per_outline": 3,
+        "expansion_strategy": "balanced",
+        "auto_create_chapters": false,
+        "enable_scene_analysis": true,
+        "provider": "openai",
+        "model": "gpt-4"
     }
     """
-    # 验证用户权限
+    normalized_data = data
+    if isinstance(data, Mapping):
+        normalized_data = BatchOutlineExpansionRequest.model_validate(dict(data))
+    payload = _dump_model_like_payload(normalized_data)
+
+    # Verify project access
     user_id = getattr(request.state, 'user_id', None)
-    await verify_project_access(data.get("project_id"), user_id, db)
+    await verify_project_access(payload.get("project_id"), user_id, db)
     
-    return create_sse_response(batch_expand_outlines_generator(data, db, user_ai_service))
+    stream = await _prime_stream_generator(batch_expand_outlines_generator(payload, db, user_ai_service))
+    return create_sse_response(stream)
 
 
 @router.post("/{outline_id}/create-chapters-from-plans", response_model=CreateChaptersFromPlansResponse, summary="根据已有规划创建章节")
@@ -3496,7 +3552,7 @@ async def create_chapters_from_existing_plans(
         # 创建展开服务实例
         expansion_service = PlotExpansionService(user_ai_service)
         
-        # ????????????????? Pydantic ??????? dict
+        # Normalize possible Pydantic model instances to plain dict payloads
         chapter_plans_dict = [_dump_model_like_payload(plan) for plan in plans_request.chapter_plans]
         
         # 直接使用传入的规划创建章节记录（不调用AI）

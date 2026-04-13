@@ -6,6 +6,22 @@ import { chapterApi } from '../services/api';
 const { TextArea } = Input;
 const { Text, Paragraph } = Typography;
 
+const PARTIAL_REGENERATE_STREAM_INACTIVITY_TIMEOUT_MS = 90000;
+const PARTIAL_REGENERATE_HEARTBEAT_SUFFIX = '?????????????';
+
+const appendPartialRegenerateHeartbeatHint = (message: string) => {
+  const normalized = message.trim();
+  if (!normalized) {
+    return `????...${PARTIAL_REGENERATE_HEARTBEAT_SUFFIX}`;
+  }
+
+  if (normalized.endsWith(PARTIAL_REGENERATE_HEARTBEAT_SUFFIX)) {
+    return normalized;
+  }
+
+  return `${normalized}${PARTIAL_REGENERATE_HEARTBEAT_SUFFIX}`;
+};
+
 interface PartialRegenerateModalProps {
   visible: boolean;
   chapterId: string;
@@ -148,9 +164,13 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
           target_word_count: lengthMode === 'custom' ? customWordCount : undefined,
         },
         {
+          inactivityTimeoutMs: PARTIAL_REGENERATE_STREAM_INACTIVITY_TIMEOUT_MS,
           onProgress: (msg, prog) => {
             setProgress(prog);
             setProgressMessage(msg);
+          },
+          onHeartbeat: () => {
+            setProgressMessage((prev) => appendPartialRegenerateHeartbeatHint(prev || '????...'));
           },
           onChunk: (content) => {
             setGeneratedText(prev => prev + content);

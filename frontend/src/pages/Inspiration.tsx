@@ -5,6 +5,11 @@ import { Card, Input, Button, Space, Typography, message, Spin, Modal, theme } f
 import { SendOutlined, ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons';
 import { inspirationApi } from '../services/api';
 import { AIProjectGenerator, type GenerationConfig } from '../components/AIProjectGenerator';
+import {
+  GenerationExecutionSettingsPanel,
+  useGenerationExecutionSettings,
+} from '../components/GenerationExecutionSettings';
+import { syncProjectToStoreById } from '../store/hooks';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -90,9 +95,58 @@ const Inspiration: React.FC = () => {
 
   // 生成配置
   const [generationConfig, setGenerationConfig] = useState<GenerationConfig | null>(null);
+  const [resumeProjectId, setResumeProjectId] = useState<string | null>(null);
+  const [executionModalOpen, setExecutionModalOpen] = useState(false);
+  const [executionModel, setExecutionModel] = useState<string | undefined>();
+  const [executionEnableMcp, setExecutionEnableMcp] = useState(true);
+  const {
+    availableModels,
+    fetchingModels,
+    runtimeProvider,
+    currentSettingsModel,
+    loadDefaults,
+  } = useGenerationExecutionSettings();
+
 
   // Modal hook
   const [modal, contextHolder] = Modal.useModal();
+
+  const loadExecutionDefaults = useCallback(async () => {
+    try {
+      const { model } = await loadDefaults();
+      setExecutionEnableMcp(true);
+      setExecutionModel(model);
+    } catch (error) {
+      console.warn('加载灵感模式执行设置失败:', error);
+    }
+  }, [loadDefaults]);
+
+  const beginProjectGeneration = useCallback(() => {
+    const data = wizardData as WizardData;
+    const config: GenerationConfig = {
+      title: data.title,
+      description: data.description,
+      theme: data.theme,
+      genre: data.genre,
+      narrative_perspective: data.narrative_perspective,
+      target_words: 100000,
+      chapter_count: 3,
+      character_count: 5,
+      outline_mode: data.outline_mode,
+      provider: runtimeProvider,
+      model: executionModel,
+      enable_mcp: executionEnableMcp,
+    };
+    try {
+      localStorage.removeItem(CACHE_KEY);
+    } catch (error) {
+      console.error('清除对话缓存失败:', error);
+    }
+    setResumeProjectId(null);
+    setGenerationConfig(config);
+    setExecutionModalOpen(false);
+    setCurrentStep('generating');
+  }, [executionEnableMcp, executionModel, runtimeProvider, wizardData]);
 
   // 滚动容器引用
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -118,6 +172,18 @@ const Inspiration: React.FC = () => {
       console.error('清除缓存失败:', error);
     }
   }, []);
+
+  // Clear generation resume cache
+  const clearGenerationResumeStorage = useCallback(() => {
+    try {
+      localStorage.removeItem('inspiration_project_id');
+      localStorage.removeItem('inspiration_generation_data');
+      localStorage.removeItem('inspiration_current_step');
+    } catch (error) {
+      console.error('清除灵感模式生成恢复缓存失败:', error);
+    }
+  }, []);
+
 
   // 保存到缓存
   const saveToCache = useCallback(() => {
@@ -149,7 +215,35 @@ const Inspiration: React.FC = () => {
     }
   }, [currentStep, messages, wizardData, initialIdea, selectedOptions, lastFailedRequest]);
 
-  // 从缓存恢复
+
+  // Restore generation state from storage
+  const restoreGenerationFromStorage = useCallback((): boolean => {
+    try {
+      const storedStep = localStorage.getItem('inspiration_current_step');
+      const rawConfig = localStorage.getItem('inspiration_generation_data');
+      if (storedStep !== 'generating' || !rawConfig) {
+        return false;
+      }
+
+      const parsed = JSON.parse(rawConfig) as GenerationConfig | null;
+      if (!parsed || typeof parsed !== 'object') {
+        clearGenerationResumeStorage();
+        return false;
+      }
+
+      const storedProjectId = localStorage.getItem('inspiration_project_id');
+      setGenerationConfig(parsed);
+      setResumeProjectId(storedProjectId?.trim() ? storedProjectId : null);
+      setCurrentStep('generating');
+      message.success('已恢复上次的生成进度', 2);
+      return true;
+    } catch (error) {
+      console.error('恢复灵感模式生成进度失败:', error);
+      clearGenerationResumeStorage();
+      return false;
+    }
+  }, [clearGenerationResumeStorage]);
+
   const restoreFromCache = useCallback((): boolean => {
     try {
       const cached = localStorage.getItem(CACHE_KEY);
@@ -160,9 +254,9 @@ const Inspiration: React.FC = () => {
       const cacheData: CacheData = JSON.parse(cached);
       const age = Date.now() - cacheData.timestamp;
 
-      // 检查缓存是否过期
+      // Cache expired
       if (age > CACHE_EXPIRY) {
-        console.log('⏰ 缓存已过期，清除');
+        console.log('Cache expired, clearing');
         clearCache();
         return false;
       }
@@ -178,7 +272,6 @@ const Inspiration: React.FC = () => {
       setWizardData(cacheData.wizardData);
       setInitialIdea(cacheData.initialIdea);
       setSelectedOptions(cacheData.selectedOptions);
-      // 恢复失败请求信息，确保"重新生成"按钮可用
       if (cacheData.lastFailedRequest) {
         setLastFailedRequest(cacheData.lastFailedRequest);
       }
@@ -193,14 +286,17 @@ const Inspiration: React.FC = () => {
     }
   }, [clearCache]);
 
-  // ==================== 组件挂载时恢复缓存 ====================
+  // ==================== Restore cache on mount ====================
 
   useEffect(() => {
     if (!cacheLoaded) {
-      restoreFromCache();
+      const restoredGenerating = restoreGenerationFromStorage();
+      if (!restoredGenerating) {
+        restoreFromCache();
+      }
       setCacheLoaded(true);
     }
-  }, [cacheLoaded, restoreFromCache]);
+  }, [cacheLoaded, restoreFromCache, restoreGenerationFromStorage]);
 
   // ==================== 自动保存：状态变化时保存 ====================
 
@@ -541,28 +637,14 @@ const Inspiration: React.FC = () => {
 
         const aiMessage: Message = {
           type: 'ai',
-          content: '好的！正在为你创建项目，这可能需要几分钟时间...'
+          content: '好的！请先确认执行设置，然后开始创建项目。'
         };
         setMessages(prev => [...prev, aiMessage]);
 
-        // 清除缓存（对话完成，进入生成阶段）
-        clearCache();
-
-        // 开始生成项目
-        const data = wizardData as WizardData;
-        const config: GenerationConfig = {
-          title: data.title,
-          description: data.description,
-          theme: data.theme,
-          genre: data.genre,
-          narrative_perspective: data.narrative_perspective,
-          target_words: 100000,
-          chapter_count: 3,
-          character_count: 5,
-          outline_mode: data.outline_mode,
-        };
-        setGenerationConfig(config);
-        setCurrentStep('generating');
+        // 先加载执行设置，再进入生成阶段
+        await loadExecutionDefaults();
+        setExecutionModalOpen(true);
+        return;
         return;
       } else if (option === '🔄 重新开始') {
         handleRestart();
@@ -828,10 +910,13 @@ const Inspiration: React.FC = () => {
   };
 
   const handleRestart = () => {
-    // 清除缓存
+    // Reset conversation state
     clearCache();
+    clearGenerationResumeStorage();
 
     setCurrentStep('idea');
+    setResumeProjectId(null);
+    setGenerationConfig(null);
     setMessages([
       {
         type: 'ai',
@@ -848,20 +933,32 @@ const Inspiration: React.FC = () => {
     navigate('/projects');
   };
 
-  // 生成完成回调
+  // Completion callback
+  const syncCompletedProject = async (projectId: string) => {
+    try {
+      await syncProjectToStoreById(projectId);
+    } catch (error) {
+      console.error('同步灵感模式完成项目到 store 失败:', error);
+    }
+  };
+
   const handleComplete = (projectId: string) => {
     console.log('灵感模式项目创建完成:', projectId);
-    // 确保清除缓存
     clearCache();
+    clearGenerationResumeStorage();
+    setResumeProjectId(null);
+    void syncCompletedProject(projectId);
     releaseGenerationBusy();
     setCurrentStep('complete');
   };
 
-  // 返回对话界面
+  // Back to chat page
   const handleBackToChat = () => {
     clearCache();
+    clearGenerationResumeStorage();
     releaseGenerationBusy();
     setCurrentStep('idea');
+    setResumeProjectId(null);
     setGenerationConfig(null);
     handleRestart();
   };
@@ -1216,9 +1313,32 @@ const Inspiration: React.FC = () => {
             onBusyChange={setIsGenerationBusy}
             backButtonText="返回灵感首页"
             isMobile={isMobile}
+            resumeProjectId={resumeProjectId ?? undefined}
           />
         )}
       </div>
+
+      <Modal
+        title="执行设置"
+        open={executionModalOpen}
+        onCancel={() => setExecutionModalOpen(false)}
+        onOk={beginProjectGeneration}
+        okText="开始生成"
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <GenerationExecutionSettingsPanel
+          card={false}
+          enableMcp={executionEnableMcp}
+          onEnableMcpChange={setExecutionEnableMcp}
+          model={executionModel}
+          onModelChange={setExecutionModel}
+          fetchingModels={fetchingModels}
+          availableModels={availableModels}
+          runtimeProvider={runtimeProvider}
+          currentSettingsModel={currentSettingsModel}
+        />
+      </Modal>
     </div>
   );
 };

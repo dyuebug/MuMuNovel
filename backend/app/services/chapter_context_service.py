@@ -366,7 +366,7 @@ def _compact_generation_context(
             max_length=profile["chapter_careers"],
             max_lines_per_block=6,
             line_preview_length=92,
-            preferred_prefixes=("??:", "??:", "????:", "????:", "?????:", "????:"),
+            preferred_prefixes=("描述:", "分类:", "阶段体系:", "特殊能力:"),
         ),
     )
     maybe_replace(
@@ -413,7 +413,7 @@ def _compact_generation_context(
                 max_length=profile["chapter_characters"],
                 max_lines_per_block=6,
                 line_preview_length=92,
-                preferred_prefixes=("????", "????", "????", "????", "???", "???", "??", "??"),
+                preferred_prefixes=("当前状态", "生存状态", "主职业", "副职业", "关系网络", "组织归属", "组织类型", "组织目的"),
                 priority_names=priority_names,
             ),
         )
@@ -2248,7 +2248,7 @@ class OneToOneContextBuilder:
                 pass
         
         if character_names:
-            # ????????
+            # 优先命中数据库中的角色实体
             characters_result = await db.execute(
                 select(Character)
                 .where(Character.project_id == project.id)
@@ -2257,7 +2257,7 @@ class OneToOneContextBuilder:
             characters = characters_result.scalars().all()
 
             if characters:
-                # ?? 1-N ???????????? 1-1 ??????
+                # 复用 1-N 角色上下文构建器，避免与 1-1 路径产生漂移
                 shared_character_builder = OneToManyContextBuilder(
                     memory_service=self.memory_service,
                     foreshadow_service=self.foreshadow_service,

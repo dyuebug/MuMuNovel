@@ -600,9 +600,11 @@ def build_story_runtime_requirement_text(
     quality_trend_guidance: Optional[str] = None,
     compact_mode: bool = False,
 ) -> str:
-    """?????????????????????????"""
-    active_guidance = (story_packet.guidance if story_packet is not None else guidance) or StoryGenerationGuidance()
-    blueprint = story_packet.blueprint if story_packet is not None else StoryBlueprint()
+    """构建章节运行时要求文本，并合并剧情包与质量修复指引。"""
+    packet_guidance = getattr(story_packet, "guidance", None) if story_packet is not None else None
+    packet_blueprint = getattr(story_packet, "blueprint", None) if story_packet is not None else None
+    active_guidance = packet_guidance or guidance or StoryGenerationGuidance()
+    blueprint = packet_blueprint or StoryBlueprint()
     resolved_chapter_count = blueprint.chapter_count or _normalize_optional_int(chapter_count)
 
     block_specs = [

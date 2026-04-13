@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -47,6 +47,22 @@ import { SSEProgressModal } from './SSEProgressModal';
 
 const { TextArea } = Input;
 const { Panel } = Collapse;
+
+const REGENERATION_STREAM_INACTIVITY_TIMEOUT_MS = 90000;
+const REGENERATION_HEARTBEAT_SUFFIX = '?????????????';
+
+const appendRegenerationHeartbeatHint = (message: string) => {
+  const normalized = message.trim();
+  if (!normalized) {
+    return `???????...${REGENERATION_HEARTBEAT_SUFFIX}`;
+  }
+
+  if (normalized.endsWith(REGENERATION_HEARTBEAT_SUFFIX)) {
+    return normalized;
+  }
+
+  return `${normalized}${REGENERATION_HEARTBEAT_SUFFIX}`;
+};
 
 const FOCUS_AREA_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'pacing', label: '节奏把控' },
@@ -156,9 +172,13 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState<'idle' | 'generating' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
+  const [progressMessage, setProgressMessage] = useState('');
   const [wordCount, setWordCount] = useState(0);
   const [selectedSuggestions, setSelectedSuggestions] = useState<number[]>([]);
   const [modificationSource, setModificationSource] = useState<ModificationSource>('custom');
+  const requestAbortRef = useRef<AbortController | null>(null);
+  const requestCancelledRef = useRef(false);
+  const successTimeoutRef = useRef<number | null>(null);
 
   const repairGuidanceDisplay = getRepairGuidanceDisplay(repairGuidance);
   const effectiveQualityGate = qualityGate ?? qualityMetricsSummary?.quality_gate ?? null;
@@ -200,11 +220,20 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
 
   useEffect(() => {
     if (!visible) {
+      requestCancelledRef.current = true;
+      requestAbortRef.current?.abort();
+      requestAbortRef.current = null;
+      if (successTimeoutRef.current !== null) {
+        window.clearTimeout(successTimeoutRef.current);
+        successTimeoutRef.current = null;
+      }
       return;
     }
 
     const defaultSource: ModificationSource = hasAnalysis && suggestions.length > 0 ? 'mixed' : 'custom';
 
+    requestCancelledRef.current = false;
+    setLoading(false);
     setStatus('idle');
     setProgress(0);
     setErrorMessage('');
@@ -226,11 +255,27 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
     hasAnalysis,
     suggestions.length,
     form,
+    recommendedFocusAreas,
+    recommendedRepairDefaults,
     recommendedFocusAreasKey,
     recommendedRepairDefaultsKey,
   ]);
 
+  useEffect(() => {
+    return () => {
+      requestCancelledRef.current = true;
+      requestAbortRef.current?.abort();
+      requestAbortRef.current = null;
+      if (successTimeoutRef.current !== null) {
+        window.clearTimeout(successTimeoutRef.current);
+        successTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
   const handleSubmit = async () => {
+    let abortController: AbortController | null = null;
+
     try {
       const values = await form.validateFields();
       const hasCustomInstructions = Boolean(values.custom_instructions?.trim());
@@ -257,10 +302,20 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
         return;
       }
 
+      abortController = new AbortController();
+      requestCancelledRef.current = false;
+      requestAbortRef.current = abortController;
+      if (successTimeoutRef.current !== null) {
+        window.clearTimeout(successTimeoutRef.current);
+        successTimeoutRef.current = null;
+      }
+
       setLoading(true);
       setStatus('generating');
       setProgress(0);
       setWordCount(0);
+      setErrorMessage('');
+      setProgressMessage('???????...');
 
       const requestData: RegenerationRequest = {
         modification_source: values.modification_source,
@@ -294,43 +349,74 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
       let currentWordCount = 0;
 
       await ssePost(`/api/chapters/${chapterId}/regenerate-stream`, requestData, {
-        onProgress: (_msg: string, nextProgress: number, _status: string, nextWordCount?: number) => {
+        signal: abortController.signal,
+        inactivityTimeoutMs: REGENERATION_STREAM_INACTIVITY_TIMEOUT_MS,
+        onProgress: (msg: string, nextProgress: number, _status: string, nextWordCount?: number) => {
+          if (requestCancelledRef.current) {
+            return;
+          }
           setProgress(nextProgress);
+          setProgressMessage(msg || '???????...');
           if (nextWordCount !== undefined) {
             setWordCount(nextWordCount);
             currentWordCount = nextWordCount;
           }
         },
+        onHeartbeat: () => {
+          if (requestCancelledRef.current) {
+            return;
+          }
+          setProgressMessage((prev) => appendRegenerationHeartbeatHint(prev || '???????...'));
+        },
         onChunk: (content: string) => {
+          if (requestCancelledRef.current) {
+            return;
+          }
           accumulatedContent += content;
           currentWordCount = accumulatedContent.length;
         },
         onResult: (data: { word_count?: number }) => {
+          if (requestCancelledRef.current) {
+            return;
+          }
           setProgress(100);
           setStatus('success');
+          setProgressMessage('??????');
           const finalWordCount = data.word_count || currentWordCount;
           setWordCount(finalWordCount);
           message.success('重新生成完成。');
 
-          setTimeout(() => {
+          successTimeoutRef.current = window.setTimeout(() => {
+            if (requestCancelledRef.current) {
+              return;
+            }
             onSuccess(accumulatedContent, finalWordCount);
           }, 500);
         },
         onComplete: () => undefined,
         onError: (error: string, code?: number) => {
+          if (requestCancelledRef.current) {
+            return;
+          }
           console.error('SSE Error:', error, code);
           setStatus('error');
           setErrorMessage(error || '生成失败');
-          message.error(`生成失败: ${error || '未知错误'}`);
+          message.error(`生成失败: ${error || '生成失败'}`);
         },
       });
     } catch (error: unknown) {
-      console.error('提交失败:', error);
-      setStatus('error');
       const err = error as Error;
-      setErrorMessage(err.message || '提交失败');
-      message.error(`提交失败: ${err.message || '未知错误'}`);
+      if (requestCancelledRef.current || err.name === 'AbortError') {
+        return;
+      }
+      console.error('生成失败:', error);
+      setStatus('error');
+      setErrorMessage(err.message || '生成失败');
+      message.error(`生成失败: ${err.message || '生成失败'}`);
     } finally {
+      if (abortController && requestAbortRef.current === abortController) {
+        requestAbortRef.current = null;
+      }
       setLoading(false);
     }
   };
@@ -354,6 +440,13 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
       content: '生成正在进行中，确定要取消吗？',
       centered: true,
       onOk: () => {
+        requestCancelledRef.current = true;
+        requestAbortRef.current?.abort();
+        requestAbortRef.current = null;
+        if (successTimeoutRef.current !== null) {
+          window.clearTimeout(successTimeoutRef.current);
+          successTimeoutRef.current = null;
+        }
         setLoading(false);
         setStatus('idle');
         onCancel();
@@ -739,7 +832,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
         <SSEProgressModal
           visible={status === 'generating'}
           progress={progress}
-          message={`正在重新生成中...（已生成 ${wordCount} 字）`}
+          message={`${progressMessage || '???????...'}???? ${wordCount} ??`}
           title="重新生成章节"
           blocking={false}
         />

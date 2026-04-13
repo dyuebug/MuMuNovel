@@ -1,4 +1,6 @@
 import { authApi } from '../services/api';
+import { clearAuthStatusCache } from './authStatus';
+import { buildLoginUrlFromLocation } from './loginRedirect';
 import { message } from 'antd';
 
 /**
@@ -145,6 +147,7 @@ class SessionManager {
     this.stop();
     
     const currentPath = window.location.pathname;
+    const redirectTarget = buildLoginUrlFromLocation(window.location);
     // 如果已经在登录页或回调页，不显示错误提示
     if (currentPath === '/login' || currentPath === '/auth/callback') {
       return;
@@ -157,6 +160,8 @@ class SessionManager {
       // 即使登出失败也继续跳转
     }
     
+    clearAuthStatusCache();
+
     message.error({
       content: '登录已过期，请重新登录',
       duration: 3,
@@ -164,7 +169,7 @@ class SessionManager {
     
     // 延迟跳转，让用户看到提示
     setTimeout(() => {
-      window.location.href = `/login?redirect=${encodeURIComponent(currentPath)}`;
+      window.location.href = redirectTarget;
     }, 1000);
   }
 

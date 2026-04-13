@@ -375,7 +375,7 @@ class BookImportService:
                 await _notify(f"⚠️ 角色/组织生成失败：{str(exc)[:80]}", 92, "warning")
 
             # 标记向导完成并将项目置为创作中
-            project.wizard_step = 3
+            project.wizard_step = 4
             project.wizard_status = "completed"
             project.status = "writing"
 
@@ -1605,7 +1605,7 @@ class BookImportService:
         )
 
         # 拆书导入场景不需要继续到大纲，直接标记流程完成，避免项目列表再次跳向导生成大纲
-        project.wizard_step = 3
+        project.wizard_step = 4
         project.wizard_status = "completed"
         project.status = "writing"
 

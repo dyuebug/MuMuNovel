@@ -16,6 +16,8 @@ import {
 } from 'antd';
 import { InboxOutlined, ReloadOutlined } from '@ant-design/icons';
 import { bookImportApi } from '../services/api';
+import { MAX_CONSECUTIVE_TASK_POLL_ERRORS } from '../utils/taskPolling';
+import { syncProjectToStoreById } from '../store/hooks';
 import type {
   BookImportApplyPayload,
   BookImportPreview,
@@ -38,6 +40,14 @@ const bookImportLazyFallback = (
   </div>
 );
 
+const syncCompletedProjectToStore = async (projectId: string) => {
+  try {
+    await syncProjectToStoreById(projectId);
+  } catch (error) {
+    console.error('同步导入完成项目到 store 失败:', error);
+  }
+};
+
 const BOOK_IMPORT_CACHE_KEY = 'book_import_page_cache_v1';
 
 type BookImportPageCache = {
@@ -48,6 +58,11 @@ type BookImportPageCache = {
   applyMessage: string;
   applyError: string | null;
   isApplyComplete: boolean;
+  failedSteps: BookImportStepFailure[];
+  retrying: boolean;
+  retryProgress: number;
+  retryMessage: string;
+  importedProjectId: string | null;
   cachedAt: number;
 };
 
@@ -132,6 +147,7 @@ export default function BookImport() {
   const [retryProgress, setRetryProgress] = useState(0);
   const [retryMessage, setRetryMessage] = useState('');
   const importedProjectId = useRef<string | null>(null);
+  const taskPollErrorCountRef = useRef(0);
 
   const isTaskTerminal = useMemo(() => {
     return !!taskStatus && ['completed', 'failed', 'cancelled'].includes(taskStatus.status);
@@ -140,10 +156,10 @@ export default function BookImport() {
   const currentStep = useMemo(() => {
     if (!taskId) return 0;
     if (taskStatus && ['pending', 'running'].includes(taskStatus.status)) return 1;
-    if (applying || isApplyComplete) return 3; // 新增生成导入步骤
+    if (applying || retrying || isApplyComplete || Boolean(applyError) || failedSteps.length > 0) return 3;
     if (preview) return 2;
     return 1;
-  }, [taskId, taskStatus, preview, applying, isApplyComplete]);
+  }, [taskId, taskStatus, preview, applying, retrying, isApplyComplete, applyError, failedSteps]);
 
   const canRestart = useMemo(() => {
     return Boolean(
@@ -186,7 +202,7 @@ export default function BookImport() {
         ? Date.now() - cache.cachedAt
         : Number.POSITIVE_INFINITY;
 
-      // 超过6小时的缓存直接视为失效，避免后端重启后继续使用旧taskId
+      // 6 小时后不再恢复旧缓存，避免误接回历史 taskId
       if (cacheAgeMs > 6 * 60 * 60 * 1000) {
         clearBookImportCache();
       } else {
@@ -196,12 +212,21 @@ export default function BookImport() {
         setApplyProgress(cache.applyProgress);
         setApplyError(cache.applyError);
         setIsApplyComplete(cache.isApplyComplete);
+        const restoredFailedSteps = Array.isArray(cache.failedSteps) ? cache.failedSteps : [];
+        const hadRetryInFlight = Boolean(cache.retrying);
+        setFailedSteps(restoredFailedSteps);
+        setRetrying(false);
+        setRetryProgress(hadRetryInFlight ? 0 : (cache.retryProgress || 0));
+        setRetryMessage(hadRetryInFlight ? '' : (cache.retryMessage || ''));
+        importedProjectId.current = cache.importedProjectId || null;
         setApplyMessage(
-          cache.applyMessage || (cache.applyProgress > 0 && !cache.isApplyComplete
-            ? '已恢复页面缓存，请重新点击“确认导入”继续。'
-            : '')
+          hadRetryInFlight && restoredFailedSteps.length > 0
+            ? '检测到上次重试在刷新前中断，请重新点击“重试失败步骤”'
+            : (cache.applyMessage || (cache.applyProgress > 0 && !cache.isApplyComplete
+              ? '已恢复导入进度，请继续等待当前任务完成'
+              : ''))
         );
-        message.info('已恢复拆书导入页面缓存');
+        message.info('已恢复上次的导入进度');
       }
     }
     setCacheReady(true);
@@ -210,8 +235,8 @@ export default function BookImport() {
   useEffect(() => {
     if (!cacheReady) return;
 
-    // 导入完成后必须清理缓存，避免后续回到页面时恢复到旧任务状态
-    if (isApplyComplete) {
+    const shouldClearCompletedCache = isApplyComplete && failedSteps.length === 0 && !retrying && !applyError;
+    if (shouldClearCompletedCache) {
       clearBookImportCache();
       return;
     }
@@ -222,7 +247,12 @@ export default function BookImport() {
       preview ||
       applyError ||
       applyProgress > 0 ||
-      applyMessage
+      applyMessage ||
+      failedSteps.length > 0 ||
+      retrying ||
+      retryProgress > 0 ||
+      retryMessage ||
+      importedProjectId.current
     );
 
     if (!hasCacheData) {
@@ -233,13 +263,18 @@ export default function BookImport() {
     saveBookImportCache({
       taskId,
       taskStatus,
-      // preview 含完整章节正文，体积大，容易触发 sessionStorage 配额限制
-      // 页面恢复时可根据 taskId + taskStatus 重新拉取 preview
+      // preview 体积较大，不再写入 sessionStorage 缓存
+      // 恢复时基于 taskId + taskStatus 重新获取 preview
       preview: null,
       applyProgress,
       applyMessage,
       applyError,
       isApplyComplete,
+      failedSteps,
+      retrying,
+      retryProgress,
+      retryMessage,
+      importedProjectId: importedProjectId.current,
       cachedAt: Date.now(),
     });
   }, [
@@ -251,15 +286,22 @@ export default function BookImport() {
     applyMessage,
     applyError,
     isApplyComplete,
+    failedSteps,
+    retrying,
+    retryProgress,
+    retryMessage,
   ]);
 
   useEffect(() => {
     if (!taskId) return;
     if (isTaskTerminal) return;
 
+    taskPollErrorCountRef.current = 0;
+
     const timer = setInterval(async () => {
       try {
         const status = await bookImportApi.getTaskStatus(taskId);
+        taskPollErrorCountRef.current = 0;
         setTaskStatus(status);
       } catch (error) {
         console.error('轮询任务状态失败:', error);
@@ -273,7 +315,15 @@ export default function BookImport() {
           setApplyError(null);
           setIsApplyComplete(false);
           message.warning('拆书任务已失效（可能因服务重启），请重新上传TXT并开始解析');
+          return;
         }
+        taskPollErrorCountRef.current += 1;
+        if (taskPollErrorCountRef.current < MAX_CONSECUTIVE_TASK_POLL_ERRORS) {
+          return;
+        }
+        window.clearInterval(timer);
+        setTaskStatus((prev) => prev ? { ...prev, message: '任务状态同步失败，请刷新页面确认最新结果' } : prev);
+        message.error('拆书任务状态同步失败，请刷新页面确认最新结果');
       }
     }, 1500);
 
@@ -423,6 +473,7 @@ export default function BookImport() {
                 if (prev.length === 0) {
                   message.success(`导入成功：已生成职业${generatedCareers}个，角色/组织${generatedEntities}个`);
                   clearBookImportCache();
+                  void syncCompletedProjectToStore(result.project_id);
                   setTimeout(() => {
                     navigate(`/project/${result.project_id}/chapters`);
                   }, 1000);
@@ -492,6 +543,7 @@ export default function BookImport() {
               clearBookImportCache();
               const projectId = result.project_id || importedProjectId.current;
               if (projectId) {
+                void syncCompletedProjectToStore(projectId);
                 setTimeout(() => {
                   navigate(`/project/${projectId}/chapters`);
                 }, 1000);

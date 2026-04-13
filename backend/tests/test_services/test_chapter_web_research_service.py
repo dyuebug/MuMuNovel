@@ -242,6 +242,48 @@ async def test_should_fallback_to_direct_grok_test_when_skill_script_missing(mon
 
 
 @pytest.mark.asyncio
+async def test_should_use_direct_exa_api_for_provider_connection_even_without_base_url(monkeypatch):
+    service = ChapterWebResearchService()
+
+    async def fail_if_skill_path_used(query, runtime_config):
+        raise AssertionError("_run_exa_search should not be used for provider connection when API key is available")
+
+    async def fake_run_exa_direct_search(query, runtime_config):
+        assert query == "historical fiction writing details with reliable sources"
+        assert runtime_config.exa_api_key == "exa-test-key"
+        assert runtime_config.exa_base_url == ""
+        return {
+            "mode": "direct_search_api",
+            "results": [
+                {
+                    "title": "Direct Exa Result",
+                    "url": "https://example.com/direct-exa",
+                    "text": "direct exa preview",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(service, "_run_exa_search", fail_if_skill_path_used)
+    monkeypatch.setattr(service, "_run_exa_direct_search", fake_run_exa_direct_search)
+
+    payload = await service.test_provider_connection(
+        provider="exa",
+        overrides={
+            "enabled": True,
+            "exa_enabled": True,
+            "exa_api_key": "exa-test-key",
+            "exa_base_url": "",
+        },
+    )
+
+    assert payload["success"] is True
+    assert payload["provider"] == "exa"
+    assert payload["result_count"] == 1
+    assert payload["response_preview"] == "direct exa preview"
+    assert payload["error_type"] is None
+
+
+@pytest.mark.asyncio
 async def test_should_collect_assets_with_direct_fallback_when_skills_root_missing(monkeypatch):
     service = ChapterWebResearchService()
 

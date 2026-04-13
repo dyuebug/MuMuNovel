@@ -90,8 +90,8 @@ def test_should_build_outline_structure_character_fallback_with_organizations():
         structure=json.dumps(
             {
                 "characters": [
-                    {"name": "??", "type": "character", "role": "protagonist", "summary": "???????????????"},
-                    {"name": "????????", "type": "organization", "description": "???????????"},
+                    {"name": "Hero Lin", "type": "character", "role": "protagonist", "summary": "Leads the expedition into the ruins."},
+                    {"name": "Skywatch Guild", "type": "organization", "description": "Maintains order around the floating city."},
                 ]
             },
             ensure_ascii=False,
@@ -100,13 +100,13 @@ def test_should_build_outline_structure_character_fallback_with_organizations():
 
     result = _build_outline_structure_character_fallback(
         outline,
-        filter_character_names=["??", "????????"],
+        filter_character_names=["Hero Lin", "Skywatch Guild"],
     )
 
     assert "角色/组织参考：" in result
     assert "角色：" in result
     assert "组织：" in result
-    assert "???????????" in result
+    assert "Leads the expedition into the ruins." in result
     assert "定位=protagonist" in result
 
 
@@ -149,8 +149,8 @@ async def test_one_to_many_builder_should_fallback_to_outline_structure_when_db_
         structure=json.dumps(
             {
                 "characters": [
-                    {"name": "??", "type": "character", "role": "protagonist", "summary": "????????????"},
-                    {"name": "????????", "type": "organization", "description": "????????????"},
+                    {"name": "Hero Lin", "type": "character", "role": "protagonist", "summary": "Carries the key clue."},
+                    {"name": "Skywatch Guild", "type": "organization", "description": "Controls the harbor gates."},
                 ]
             },
             ensure_ascii=False,
@@ -170,8 +170,8 @@ async def test_one_to_many_builder_should_fallback_to_outline_structure_when_db_
 
     assert careers_info is None
     assert "角色/组织参考：" in characters_info
-    assert "??" in characters_info
-    assert "????????" in characters_info
+    assert "Hero Lin" in characters_info
+    assert "Skywatch Guild" in characters_info
 
 
 @pytest.mark.asyncio
@@ -180,8 +180,8 @@ async def test_one_to_many_builder_should_append_outline_organization_fallback_w
         structure=json.dumps(
             {
                 "characters": [
-                    {"name": "??", "type": "character", "role": "protagonist", "summary": "????????????"},
-                    {"name": "????????", "type": "organization", "description": "????????????"},
+                    {"name": "Hero Lin", "type": "character", "role": "protagonist", "summary": "Carries the key clue."},
+                    {"name": "Skywatch Guild", "type": "organization", "description": "Controls the harbor gates."},
                 ]
             },
             ensure_ascii=False,
@@ -192,7 +192,7 @@ async def test_one_to_many_builder_should_append_outline_organization_fallback_w
     db_character = Character(
         id="char-1",
         project_id="project-1",
-        name="??",
+        name="Hero Lin",
         role_type="protagonist",
         status="active",
         is_organization=False,
@@ -213,9 +213,9 @@ async def test_one_to_many_builder_should_append_outline_organization_fallback_w
     )
 
     assert careers_info is None
-    assert "??" in characters_info
+    assert "Hero Lin" in characters_info
     assert "角色/组织参考：" in characters_info
-    assert "????????" in characters_info
+    assert "Skywatch Guild" in characters_info
 
 
 @pytest.mark.asyncio
@@ -223,10 +223,10 @@ async def test_one_to_one_builder_should_fallback_to_outline_structure_when_no_d
     outline = SimpleNamespace(
         structure=json.dumps(
             {
-                "summary": "????????????????????",
+                "summary": "A tense search begins beneath the old capital.",
                 "characters": [
-                    {"name": "??", "type": "character", "role": "protagonist", "summary": "????????????"},
-                    {"name": "????????", "type": "organization", "description": "????????????"},
+                    {"name": "Hero Lin", "type": "character", "role": "protagonist", "summary": "Carries the key clue."},
+                    {"name": "Skywatch Guild", "type": "organization", "description": "Controls the harbor gates."},
                 ],
             },
             ensure_ascii=False,
@@ -236,16 +236,16 @@ async def test_one_to_one_builder_should_fallback_to_outline_structure_when_no_d
         id="chapter-1",
         project_id="project-1",
         chapter_number=1,
-        title="?1?",
+        title="Chapter 1",
         summary=None,
         expansion_plan=None,
     )
     project = SimpleNamespace(
         id="project-1",
-        title="?????",
-        genre="????",
-        theme="????",
-        narrative_perspective="????",
+        title="Project Atlas",
+        genre="fantasy",
+        theme="destiny",
+        narrative_perspective="third_person",
     )
     db = _StubDB([_ScalarListResult([])])
 
@@ -265,5 +265,5 @@ async def test_one_to_one_builder_should_fallback_to_outline_structure_when_no_d
     )
 
     assert "角色/组织参考：" in context.chapter_characters
-    assert "??" in context.chapter_characters
-    assert "????????" in context.chapter_characters
+    assert "Hero Lin" in context.chapter_characters
+    assert "Skywatch Guild" in context.chapter_characters

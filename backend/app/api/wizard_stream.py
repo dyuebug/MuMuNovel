@@ -35,6 +35,7 @@ from app.services.chapter_web_research_service import chapter_web_research_servi
 from app.services.chapter_quality_context_service import (
     StoryGenerationGuidance,
     StoryPacket,
+    StoryBlueprint,
     build_story_generation_packet_with_project_continuity,
 )
 from app.services.outline_requirement_service import build_outline_generation_requirements
@@ -44,6 +45,45 @@ from app.api.settings import get_user_ai_service
 
 router = APIRouter(prefix="/wizard-stream", tags=["项目创建向导(流式)"])
 logger = get_logger(__name__)
+
+
+def _coerce_story_packet_like(
+    value: Any,
+    *,
+    creative_mode: Optional[str] = None,
+    story_focus: Optional[str] = None,
+    plot_stage: Optional[str] = None,
+    story_creation_brief: Optional[str] = None,
+    quality_preset: Optional[str] = None,
+    quality_notes: Optional[str] = None,
+) -> StoryPacket:
+    if isinstance(value, StoryPacket):
+        return value
+
+    guidance = getattr(value, "guidance", None)
+    if not isinstance(guidance, StoryGenerationGuidance):
+        guidance = StoryGenerationGuidance(
+            creative_mode=creative_mode,
+            story_focus=story_focus,
+            plot_stage=plot_stage,
+            story_creation_brief=story_creation_brief,
+            quality_preset=quality_preset,
+            quality_notes=quality_notes,
+        )
+
+    blueprint = getattr(value, "blueprint", None)
+    if not isinstance(blueprint, StoryBlueprint):
+        blueprint = StoryBlueprint()
+
+    request_overrides = getattr(value, "request_overrides", None)
+    normalized_overrides = request_overrides if isinstance(request_overrides, dict) else None
+    source = getattr(value, "source", None)
+    return StoryPacket.from_guidance(
+        guidance,
+        request_overrides=normalized_overrides,
+        source=source,
+        blueprint=blueprint,
+    )
 
 
 def _pick_outline_field(data: Dict[str, Any], keys: list[str]) -> Any:
@@ -289,15 +329,21 @@ async def world_building_generator(
             return
         
         # 获取基础提示词（支持自定义）
-        yield await tracker.preparing("准备AI提示词...")
+        preparing_message = "Preparing AI generation..."
+        if chapter_web_research_service.is_enabled(enable_web_research) and web_research_query:
+            preparing_message = f"Preparing AI generation with web research: {web_research_query}..."
+        yield await tracker.preparing(preparing_message)
+        world_research_seed = web_research_query or _compose_research_seed(title, theme, genre, description)
+        world_research_context = web_research_query or _compose_research_seed(title, theme, genre, description, limit=260)
         world_research_bundle = await chapter_web_research_service.collect_assets(
             user_id=user_id,
             db_session=db,
-            exa_query=_compose_research_seed(title, theme, genre, description),
+            exa_query=world_research_seed,
             grok_query=(
-                f"请为小说世界观搭建做实时网络研究，提炼时代、地点、社会秩序、规则和氛围素材，并给出来源。"
-                f"背景：{_compose_research_seed(title, theme, genre, description, limit=260)}"
-            ) if _compose_research_seed(title, theme, genre, description, limit=260) else "",
+                "Collect world-building references, genre conventions, cultural details, "
+                "historical signals, and setting inspirations relevant to: "
+                f"{world_research_context}"
+            ) if world_research_context else "",
             enable_web_research=enable_web_research,
             archive_scope=f"wizard_{user_id or 'anonymous'}",
             archive_id=f"world_building_{datetime.now().strftime('%Y%m%d%H%M%S')}",
@@ -582,6 +628,7 @@ async def career_system_generator(
         project_id = data.get("project_id")
         provider = data.get("provider")
         model = data.get("model")
+        enable_mcp = data.get("enable_mcp", True)
         enable_web_research = data.get("enable_web_research")
         web_research_query = data.get("web_research_query")
         user_id = data.get("user_id")
@@ -1668,6 +1715,15 @@ async def outline_generator(
             quality_notes=quality_notes,
             source_label="wizard-outline-request",
         )
+        story_packet = _coerce_story_packet_like(
+            story_packet,
+            creative_mode=creative_mode,
+            story_focus=story_focus,
+            plot_stage=plot_stage,
+            story_creation_brief=story_creation_brief,
+            quality_preset=quality_preset,
+            quality_notes=quality_notes,
+        )
         outline_requirements = _merge_wizard_outline_requirements(
             requirements,
             outline_count=outline_count,
@@ -1883,12 +1939,12 @@ async def outline_generator(
                 enable_mcp=enable_mcp,
             )
             postprocess_scheduled = True
-            logger.info("?? ???????????????/???????????")
-            yield await tracker.saving("??????????/??...", 0.92)
+            logger.info("Scheduled outline postprocess tasks")
+            yield await tracker.saving("Scheduling outline postprocess tasks...", 0.92)
         except Exception as e:
-            logger.error(f"?? ????????????????????: {e}", exc_info=True)
+            logger.error(f"Failed to schedule outline postprocess tasks: {e}", exc_info=True)
         
-        logger.info(f"?? ?????????")
+        logger.info("Wizard outline generation finished")
         logger.info(f"📊 向导大纲生成完成：")
         logger.info(f"  - 创建大纲节点：{len(created_outlines)} 个")
         logger.info(f"  - 创建章节：{len(created_chapters)} 个")
@@ -1910,9 +1966,9 @@ async def outline_generator(
             "outline_count": len(created_outlines),
             "chapter_count": len(created_chapters),
             "outline_mode": project.outline_mode,
+            "research_query": str(outline_research_bundle.get("query") or ""),
             "research_assets": outline_research_assets,
             "outline_postprocess_scheduled": postprocess_scheduled,
-            "research_assets": outline_research_assets,
             "outlines": [
                 {
                     "id": outline.id,

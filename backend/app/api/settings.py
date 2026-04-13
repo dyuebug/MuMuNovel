@@ -11,7 +11,9 @@ from datetime import datetime
 import hashlib
 import httpx
 import json
+import os
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 from app.database import get_db
 from app.models.settings import Settings
@@ -21,6 +23,7 @@ from app.schemas.settings import (
     PresetUpdateRequest, PresetResponse, PresetListResponse
 )
 from app.user_manager import User
+from app.api.common import require_request_user
 from app.logger import get_logger
 from app.config import settings as app_settings, PROJECT_ROOT
 from app.services.ai_service import AIService, create_user_ai_service, create_user_ai_service_with_mcp
@@ -216,6 +219,67 @@ def _should_prefer_normalized_v1_probe_candidate(provider: str, api_base_url: st
     )
 
 
+def _is_running_in_docker_environment() -> bool:
+    return os.path.exists("/.dockerenv")
+
+
+def _is_local_gateway_host(hostname: Optional[str]) -> bool:
+    return hostname in {"127.0.0.1", "localhost", "host.docker.internal"}
+
+
+def _replace_base_url_host(base_url: str, hostname: str) -> str:
+    parsed = urlsplit(str(base_url or "").strip())
+
+    auth = ""
+    if parsed.username:
+        auth = parsed.username
+        if parsed.password:
+            auth = f"{auth}:{parsed.password}"
+        auth = f"{auth}@"
+
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    netloc = f"{auth}{hostname}{port}"
+    return urlunsplit(parsed._replace(netloc=netloc))
+
+
+def _maybe_map_loopback_base_url_to_docker_host(base_url: str) -> Optional[str]:
+    if not _is_running_in_docker_environment():
+        return None
+
+    parsed = urlsplit(str(base_url or "").strip())
+    if parsed.hostname not in {"127.0.0.1", "localhost"}:
+        return None
+
+    return _replace_base_url_host(base_url, "host.docker.internal")
+
+
+def _maybe_map_local_https_base_url_to_http(base_url: str) -> Optional[str]:
+    parsed = urlsplit(str(base_url or "").strip())
+    if parsed.scheme != "https" or not _is_local_gateway_host(parsed.hostname):
+        return None
+    return urlunsplit(parsed._replace(scheme="http"))
+
+
+def _expand_openai_probe_base_url_candidates(base_urls: List[str]) -> List[str]:
+    unique_urls: List[str] = []
+    for base_url in base_urls:
+        variants = [base_url]
+        docker_variant = _maybe_map_loopback_base_url_to_docker_host(base_url)
+        if docker_variant:
+            variants.append(docker_variant)
+
+        for variant in list(variants):
+            http_variant = _maybe_map_local_https_base_url_to_http(variant)
+            if http_variant:
+                variants.append(http_variant)
+
+        for candidate in variants:
+            normalized = str(candidate or "").strip().rstrip("/")
+            if normalized and normalized not in unique_urls:
+                unique_urls.append(normalized)
+    return unique_urls
+
+
 def _build_api_connection_probe_request_options(provider: str, api_base_url: str) -> Optional[Dict[str, Any]]:
     request_options: Dict[str, Any] = {
         "transport_max_retries": 1,
@@ -321,6 +385,85 @@ def _build_probe_details(
         details["transport_diagnostics"] = transport_diagnostics
     return details
 
+def _build_api_probe_exception_suggestions(
+    exception: Exception,
+    *,
+    api_base_url: str,
+    backup_urls: Optional[List[str]],
+    fallback_strategy: Optional[str],
+) -> List[str]:
+    error_msg = str(exception)
+    lowered = error_msg.lower()
+    status_code = exception.response.status_code if isinstance(exception, httpx.HTTPStatusError) and exception.response is not None else None
+    normalized_base_url = str(api_base_url or "").strip().rstrip("/")
+    normalized_backups = _normalize_probe_backup_urls(backup_urls)
+    normalized_strategy = str(fallback_strategy or "auto").strip().lower() or "auto"
+    auto_failover_enabled = normalized_strategy == "auto" and bool(normalized_backups)
+    is_local_gateway = (
+        normalized_base_url.startswith("http://127.0.0.1")
+        or normalized_base_url.startswith("http://localhost")
+        or normalized_base_url.startswith("https://127.0.0.1")
+        or normalized_base_url.startswith("https://localhost")
+    )
+
+    if "blocked" in lowered:
+        return [
+            "The upstream API request was blocked or rejected",
+            "Check whether the API key has permission for the target model",
+            "Confirm the API key is bound to the expected proxy or gateway",
+            "Verify the API base URL and gateway policy are consistent",
+        ]
+
+    if "unauthorized" in lowered or "401" in error_msg:
+        return [
+            "API key authentication failed",
+            "Check whether the API key is correct and active",
+            "Confirm the API key has sufficient permission",
+        ]
+
+    if "not found" in lowered or "404" in error_msg:
+        return [
+            "The API endpoint or model could not be found",
+            "Confirm the API base URL is correct",
+            "Verify the target model exists on the current service",
+        ]
+
+    if "rate limit" in lowered or "429" in error_msg:
+        return [
+            "The API request hit a rate limit",
+            "Retry later after the rate limit window resets",
+            "Consider reducing concurrency or switching to a backup endpoint",
+        ]
+
+    if "insufficient" in lowered or "quota" in lowered:
+        return [
+            "The API quota appears to be exhausted",
+            "Check the account balance or quota usage",
+            "Confirm the current key is allowed to use this model",
+        ]
+
+    if status_code in {502, 503, 504} or any(code in error_msg for code in ["502", "503", "504"]):
+        suggestions = []
+        if is_local_gateway:
+            suggestions.append("The local gateway or proxy is reachable, but it failed to forward the model request upstream")
+            suggestions.append("Check the local gateway logs and verify its upstream provider configuration for /chat/completions or /responses")
+        else:
+            suggestions.append("The upstream gateway or proxy returned a server error while processing the request")
+            suggestions.append("Check whether the current API gateway can reach its model provider and whether the target model is healthy")
+
+        if auto_failover_enabled:
+            suggestions.append("Retry the request and inspect transport diagnostics to confirm whether failover was attempted")
+        else:
+            suggestions.append("Configure at least one backup endpoint and keep fallback strategy as auto if you want automatic failover")
+
+        return suggestions
+
+    return [
+        "An unknown error occurred during the request",
+        "Check the network and configuration parameters",
+        "Review the detailed error message for more clues",
+    ]
+
 
 def build_default_web_research_settings() -> Dict[str, Any]:
     return {
@@ -375,11 +518,9 @@ def serialize_settings_response(settings_obj: Settings) -> Dict[str, Any]:
     return base
 
 
-def require_login(request: Request):
+def require_login(request: Request) -> User:
     """依赖：要求用户已登录"""
-    if not hasattr(request.state, "user") or not request.state.user:
-        raise HTTPException(status_code=401, detail="需要登录")
-    return request.state.user
+    return require_request_user(request, "需要登录")
 
 
 async def get_user_ai_service(
@@ -663,20 +804,18 @@ async def get_available_models(
             openai_compatible_providers = {"openai", "openai_responses", "azure", "newapi", "custom", "sub2api"}
             if provider in openai_compatible_providers:
                 base_url = api_base_url.rstrip("/")
-                candidate_urls = [f"{base_url}/models"]
+                candidate_base_urls = [base_url]
                 if base_url.endswith("/v1"):
                     root_base = base_url[:-3].rstrip("/")
                     if root_base:
-                        candidate_urls.append(f"{root_base}/models")
+                        candidate_base_urls.append(root_base)
                 else:
-                    candidate_urls.append(f"{base_url}/v1/models")
+                    candidate_base_urls.append(f"{base_url}/v1")
 
-                # 去重并保持顺序
-                unique_urls: List[str] = []
-                for candidate in candidate_urls:
-                    if candidate not in unique_urls:
-                        unique_urls.append(candidate)
-
+                unique_urls = [
+                    f"{candidate_base_url}/models"
+                    for candidate_base_url in _expand_openai_probe_base_url_candidates(candidate_base_urls)
+                ]
                 # Azure 使用 api-key 头，其他使用 Bearer
                 if provider == "azure":
                     headers = {
@@ -693,6 +832,7 @@ async def get_available_models(
                     f"正在获取模型列表 (provider: {provider}, candidates: {unique_urls})"
                 )
                 last_http_error: Optional[httpx.HTTPStatusError] = None
+                last_network_error: Optional[Exception] = None
 
                 for index, url in enumerate(unique_urls):
                     try:
@@ -714,6 +854,15 @@ async def get_available_models(
                             )
                             continue
                         raise
+                    except (httpx.ConnectError, httpx.TimeoutException) as e:
+                        last_network_error = e
+                        if index < len(unique_urls) - 1:
+                            logger.warning(
+                                f"????????????????????????????????: {url}"
+                            )
+                            continue
+                        raise
+
 
                     data = response.json()
                     models = []
@@ -767,6 +916,8 @@ async def get_available_models(
 
                 if last_http_error:
                     raise last_http_error
+                if last_network_error:
+                    raise last_network_error
 
                 raise HTTPException(
                     status_code=404,
@@ -1350,61 +1501,32 @@ async def test_api_connection(data: ApiTestRequest):
     except Exception as e:
         error_msg = str(e)
         error_type = type(e).__name__
+        transport_diagnostics = _extract_probe_transport_diagnostics(test_service, provider)
+        status_code = e.response.status_code if isinstance(e, httpx.HTTPStatusError) and e.response is not None else None
 
         logger.error(f"API probe failed: {error_msg}")
         logger.error(f"  - Error type: {error_type}")
-
-        if "blocked" in error_msg.lower():
-            suggestions = [
-                "The upstream API request was blocked or rejected",
-                "Check whether the API key has permission for the target model",
-                "Confirm the API key is bound to the expected proxy or gateway",
-                "Verify the API base URL and gateway policy are consistent",
-            ]
-        elif "unauthorized" in error_msg.lower() or "401" in error_msg:
-            suggestions = [
-                "API key authentication failed",
-                "Check whether the API key is correct and active",
-                "Confirm the API key has sufficient permission",
-            ]
-        elif "not found" in error_msg.lower() or "404" in error_msg:
-            suggestions = [
-                "The API endpoint or model could not be found",
-                "Confirm the API base URL is correct",
-                "Verify the target model exists on the current service",
-            ]
-        elif "rate limit" in error_msg.lower() or "429" in error_msg:
-            suggestions = [
-                "The API request hit a rate limit",
-                "Retry later after the rate limit window resets",
-                "Consider reducing concurrency or switching to a backup endpoint",
-            ]
-        elif "insufficient" in error_msg.lower() or "quota" in error_msg.lower():
-            suggestions = [
-                "The API quota appears to be exhausted",
-                "Check the account balance or quota usage",
-                "Confirm the current key is allowed to use this model",
-            ]
-        else:
-            suggestions = [
-                "An unknown error occurred during the request",
-                "Check the network and configuration parameters",
-                "Review the detailed error message for more clues",
-            ]
 
         result = {
             "success": False,
             "message": "API test failed",
             "error": error_msg,
             "error_type": error_type,
-            "suggestions": suggestions,
-            "details": {
-                "endpoint_diagnostics": _build_probe_endpoint_diagnostics(
-                    api_base_url=api_base_url,
-                    backup_urls=api_backup_urls,
-                    fallback_strategy=fallback_strategy,
-                ),
-            },
+            "suggestions": _build_api_probe_exception_suggestions(
+                e,
+                api_base_url=api_base_url,
+                backup_urls=api_backup_urls,
+                fallback_strategy=fallback_strategy,
+            ),
+            "details": _build_probe_details(
+                api_base_url=api_base_url,
+                backup_urls=api_backup_urls,
+                fallback_strategy=fallback_strategy,
+                transport_diagnostics=transport_diagnostics,
+                extra={
+                    "http_status_code": status_code,
+                } if status_code is not None else None,
+            ),
         }
         return _store_probe_result(cache_key, result)
 

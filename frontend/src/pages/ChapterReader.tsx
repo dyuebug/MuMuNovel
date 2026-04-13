@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { MAX_CONSECUTIVE_TASK_POLL_ERRORS } from '../utils/taskPolling';
+import { isAnalysisTaskRetrying } from '../utils/analysisTasks';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, Spin, Alert, Button, Space, Switch, Drawer, message, Progress, theme } from 'antd';
 import {
@@ -77,6 +79,10 @@ const ChapterReader: React.FC = () => {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [navigation, setNavigation] = useState<NavigationData | null>(null);
+  const analysisPollIntervalRef = useRef<number | null>(null);
+  const analysisPollTimeoutRef = useRef<number | null>(null);
+  const analysisPollErrorCountRef = useRef(0);
+  const analyzingRef = useRef(false);
 
   const loadChapterData = useCallback(async () => {
     try {
@@ -136,10 +142,29 @@ const ChapterReader: React.FC = () => {
     }
   }, [chapterId]);
 
+  const stopAnalysisPolling = () => {
+    if (analysisPollIntervalRef.current) {
+      window.clearInterval(analysisPollIntervalRef.current);
+      analysisPollIntervalRef.current = null;
+    }
+    if (analysisPollTimeoutRef.current) {
+      window.clearTimeout(analysisPollTimeoutRef.current);
+      analysisPollTimeoutRef.current = null;
+    }
+    analysisPollErrorCountRef.current = 0;
+  };
+
+  useEffect(() => {
+    analyzingRef.current = analyzing;
+  }, [analyzing]);
+
   useEffect(() => {
     if (chapterId) {
       loadChapterData();
     }
+    return () => {
+      stopAnalysisPolling();
+    };
   }, [chapterId, loadChapterData]);
 
   const handleAnnotationClick = (annotation: MemoryAnnotation) => {
@@ -169,53 +194,91 @@ const ChapterReader: React.FC = () => {
   const handleReanalyze = async () => {
     if (!chapterId) return;
 
+    stopAnalysisPolling();
+
     try {
       setAnalyzing(true);
       setAnalysisProgress(0);
       message.loading({ content: '开始分析章节...', key: 'analyze', duration: 0 });
 
-      // 触发分析
       await chapterApi.triggerChapterAnalysis(chapterId, chapter?.project_id);
 
-      // 轮询分析状态
-      const pollInterval = setInterval(async () => {
+      analysisPollErrorCountRef.current = 0;
+
+      const poll = async () => {
         try {
           const statusRes = await chapterApi.getChapterAnalysisStatus(chapterId, chapter?.project_id);
-          const { status, progress, error_message } = statusRes;
+          analysisPollErrorCountRef.current = 0;
+          const { status, progress, error_message, auto_recovered } = statusRes;
 
           setAnalysisProgress(progress || 0);
 
           if (status === 'completed') {
-            clearInterval(pollInterval);
+            stopAnalysisPolling();
             setAnalyzing(false);
             message.success({ content: '分析完成！', key: 'analyze' });
-            
-            // 重新加载标注数据
+
             const annotationsRes = await api.get<unknown, AnnotationsData>(`/chapters/${chapterId}/annotations`);
             setAnnotationsData(annotationsRes);
-          } else if (status === 'failed') {
-            clearInterval(pollInterval);
+            return;
+          }
+
+          if (status === 'failed') {
+            if (isAnalysisTaskRetrying(statusRes)) {
+              message.loading({
+                content: error_message || '\u7ae0\u8282\u5206\u6790\u6b63\u5728\u81ea\u52a8\u91cd\u8bd5\uff0c\u8bf7\u7a0d\u5019...',
+                key: 'analyze',
+                duration: 0,
+              });
+              return;
+            }
+
+            stopAnalysisPolling();
             setAnalyzing(false);
+
+            if (auto_recovered) {
+              message.warning({
+                content: `\u5206\u6790\u4efb\u52a1\u5df2\u81ea\u52a8\u6062\u590d\uff1a${error_message || '\u8bf7\u7a0d\u540e\u91cd\u8bd5'}`,
+                key: 'analyze'
+              });
+              return;
+            }
+
             message.error({
-              content: `分析失败：${error_message || '未知错误'}`,
+              content: `\u5206\u6790\u5931\u8d25\uff1a${error_message || '\u672a\u77e5\u9519\u8bef'}`,
               key: 'analyze'
             });
           }
         } catch (err) {
+          analysisPollErrorCountRef.current += 1;
           console.error('轮询分析状态失败:', err);
+          if (analysisPollErrorCountRef.current < MAX_CONSECUTIVE_TASK_POLL_ERRORS) {
+            return;
+          }
+          stopAnalysisPolling();
+          setAnalyzing(false);
+          message.error({
+            content: '章节分析状态同步失败，请刷新页面确认最新结果',
+            key: 'analyze'
+          });
         }
-      }, 2000); // 每2秒轮询一次
+      };
 
-      // 30秒超时
-      setTimeout(() => {
-        clearInterval(pollInterval);
-        if (analyzing) {
+      void poll();
+      analysisPollIntervalRef.current = window.setInterval(() => {
+        void poll();
+      }, 2000);
+
+      analysisPollTimeoutRef.current = window.setTimeout(() => {
+        stopAnalysisPolling();
+        if (analyzingRef.current) {
           setAnalyzing(false);
           message.warning({ content: '分析超时，请稍后刷新查看结果', key: 'analyze' });
         }
       }, 30000);
 
     } catch (err: unknown) {
+      stopAnalysisPolling();
       setAnalyzing(false);
       const error = err as { response?: { data?: { detail?: string } } };
       message.error({

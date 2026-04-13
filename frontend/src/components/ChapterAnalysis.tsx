@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { Modal, Spin, Alert, Tabs, Card, Tag, List, Empty, Statistic, Row, Col, Button, message } from 'antd';
 import {
   ThunderboltOutlined,
@@ -16,6 +16,8 @@ import {
 import type { AnalysisTask, ChapterAnalysisResponse } from '../types';
 import { chapterApi } from '../services/api';
 import { getQualityTrendLabel } from '../utils/storyCreationQualitySummary';
+import { MAX_CONSECUTIVE_TASK_POLL_ERRORS } from '../utils/taskPolling';
+import { isAnalysisTaskRetrying } from '../utils/analysisTasks';
 
 // 判断是否为移动设备
 const LazyChapterRegenerationModal = lazy(() => import('./ChapterRegenerationModal'));
@@ -119,23 +121,36 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
   const [draftContent, setDraftContent] = useState('');
   const [newGeneratedContent, setNewGeneratedContent] = useState('');
   const [newContentWordCount, setNewContentWordCount] = useState(0);
+  const pollIntervalRef = useRef<number | null>(null);
+  const pollTimeoutRef = useRef<number | null>(null);
+  const pollErrorCountRef = useRef(0);
+
+  const stopPolling = () => {
+    if (pollIntervalRef.current) {
+      window.clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (pollTimeoutRef.current) {
+      window.clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
+    }
+    pollErrorCountRef.current = 0;
+  };
 
   useEffect(() => {
     if (visible && chapterId) {
-      fetchAnalysisStatus();
+      void fetchAnalysisStatus();
     }
 
-    // 监听窗口大小变化
     const handleResize = () => {
       setIsMobile(isMobileDevice());
     };
 
     window.addEventListener('resize', handleResize);
 
-    // 清理函数：组件卸载或关闭时清除轮询
     return () => {
       window.removeEventListener('resize', handleResize);
-      // 清除可能存在的轮询
+      stopPolling();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, chapterId]);
@@ -179,9 +194,10 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
 
       if (taskData.status === 'completed') {
         await fetchAnalysisResult();
-      } else if (taskData.status === 'running' || taskData.status === 'pending') {
-        // 开始轮询
+      } else if (taskData.status === 'running' || taskData.status === 'pending' || isAnalysisTaskRetrying(taskData)) {
         startPolling();
+      } else if (taskData.status === 'failed' && taskData.auto_recovered) {
+        setError(taskData.error_message || '\u5206\u6790\u4efb\u52a1\u5df2\u81ea\u52a8\u6062\u590d\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5');
       }
     } catch (err) {
       setError((err as Error).message);
@@ -200,31 +216,53 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
   };
 
   const startPolling = () => {
-    const pollInterval = setInterval(async () => {
+    stopPolling();
+    pollErrorCountRef.current = 0;
+
+    const poll = async () => {
       try {
         const taskData: AnalysisTask = await chapterApi.getChapterAnalysisStatus(
           chapterId,
           chapterInfo?.project_id
         );
+        pollErrorCountRef.current = 0;
         if (taskData.status === 'none' || !taskData.has_task) return;
         setTask(taskData);
 
         if (taskData.status === 'completed') {
-          clearInterval(pollInterval);
+          stopPolling();
           await fetchAnalysisResult();
-          // 🔧 分析完成后刷新章节内容，确保显示最新内容
           await loadChapterInfo();
         } else if (taskData.status === 'failed') {
-          clearInterval(pollInterval);
-          setError(taskData.error_message || '分析失败');
+          if (isAnalysisTaskRetrying(taskData)) {
+            return;
+          }
+
+          stopPolling();
+          setError(taskData.auto_recovered
+            ? (taskData.error_message || '\u5206\u6790\u4efb\u52a1\u5df2\u81ea\u52a8\u6062\u590d\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5')
+            : (taskData.error_message || '\u5206\u6790\u5931\u8d25'));
         }
       } catch (err) {
+        pollErrorCountRef.current += 1;
         console.error('轮询错误:', err);
+        if (pollErrorCountRef.current < MAX_CONSECUTIVE_TASK_POLL_ERRORS) {
+          return;
+        }
+        stopPolling();
+        setError('章节分析状态同步失败，请稍后刷新重试');
+        message.error('章节分析状态同步失败，请稍后刷新重试');
       }
+    };
+
+    void poll();
+    pollIntervalRef.current = window.setInterval(() => {
+      void poll();
     }, 2000);
 
-    // 5分钟超时
-    setTimeout(() => clearInterval(pollInterval), 300000);
+    pollTimeoutRef.current = window.setTimeout(() => {
+      stopPolling();
+    }, 300000);
   };
 
   const triggerAnalysis = async () => {

@@ -712,9 +712,17 @@ class ChapterWebResearchService:
         runtime_config = self.build_runtime_config(overrides=overrides)
         provider_name = (provider or "").strip().lower()
         if provider_name == "exa":
-            payload = await self._run_exa_search(query or "historical fiction writing details with reliable sources", runtime_config)
+            exa_query = query or "historical fiction writing details with reliable sources"
+            payload = (
+                await self._run_exa_direct_search(exa_query, runtime_config)
+                if self._can_run_direct_exa_search(runtime_config)
+                else await self._run_exa_search(exa_query, runtime_config)
+            )
             results = payload.get("results") or []
             success = not payload.get("error") and bool(results)
+            error_type = None
+            if payload.get("error"):
+                error_type = "DirectApiError" if payload.get("mode") == "direct_search_api" or self._can_run_direct_exa_search(runtime_config) else "SkillError"
             return {
                 "success": success,
                 "provider": "exa",
@@ -722,7 +730,7 @@ class ChapterWebResearchService:
                 "response_preview": self._clip_text(((results[0] or {}).get("text") if results else "") or ((results[0] or {}).get("title") if results else ""), 180),
                 "result_count": len(results),
                 "error": payload.get("detail") or payload.get("error"),
-                "error_type": "SkillError" if payload.get("error") else None,
+                "error_type": error_type,
                 "suggestions": [] if success else ["检查 Exa API Key 是否正确", "确认 Exa Base URL 可访问；未填写时会使用默认地址"],
             }
         payload = await self._run_grok_search(query or "Summarize current discussion around fiction writing trends with sources", runtime_config)

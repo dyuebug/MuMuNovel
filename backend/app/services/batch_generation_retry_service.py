@@ -1,0 +1,398 @@
+"""?????????????? helper?"""
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Optional
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.logger import get_logger
+from app.models.batch_generation_task import BatchGenerationTask
+from app.models.chapter import Chapter
+from app.models.project import Project
+from app.services.ai_service import AIService
+from app.services.batch_generation_chapter_execution_service import (
+    clear_batch_generation_execution_caches,
+    prepare_batch_generation_chapter_attempt,
+    prepare_batch_generation_chapter_result,
+)
+from app.services.batch_generation_chapter_failure_state_service import (
+    fail_batch_generation_after_analysis,
+    fail_batch_generation_after_max_retries,
+    fail_batch_generation_for_manual_review,
+)
+from app.services.batch_generation_chapter_success_state_service import (
+    apply_successful_batch_generation_chapter,
+    finalize_successful_batch_generation_chapter,
+    handle_batch_generation_quality_gate_retry,
+)
+from app.services.chapter_generation_prerequisite_service import check_chapter_generation_prerequisites
+from app.services.chapter_quality_context_service import StoryPacket, clone_chapter_quality_profile
+from app.services.story_repair_payload_service import (
+    StoryRepairPayload,
+    resolve_generation_story_repair_state_for_batch,
+    resolve_quality_gate_execution_plan,
+)
+from app.services.story_runtime_serialization_service import attach_story_runtime_contract
+from app.services.task_quality_snapshot_service import record_task_quality_metrics
+from app.services.task_workflow_runtime_service import batch_task_exists, sync_task_story_repair_state
+
+
+logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class BatchGenerationExecutionEnvironment:
+    batch_id: str
+    user_id: str
+    ai_service: AIService
+    write_lock: Any
+    emit_event: Callable[..., Any]
+    batch_story_packet: StoryPacket
+    task_base_quality_profile: Dict[str, Any]
+    cached_analysis_quality_profile: Dict[str, Any]
+    custom_model: Optional[str]
+    temp_narrative_perspective: Optional[str]
+    creative_mode: Optional[str]
+    story_focus: Optional[str]
+    plot_stage: Optional[str]
+    story_creation_brief: Optional[str]
+    quality_preset: Optional[str]
+    quality_notes: Optional[str]
+    enable_web_research: Optional[bool]
+    web_research_query: Optional[str]
+    story_repair_summary: Optional[str]
+    story_repair_targets: Optional[list[str]]
+    story_preserve_strengths: Optional[list[str]]
+    stream_chunks: bool
+    run_generation_fn: Callable[..., Any]
+    await_generation_result_fn: Callable[..., Any]
+    run_batch_analysis_fn: Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class BatchGenerationChapterRuntimeState:
+    chapter_id: str
+    chapter_index: int
+    last_generated_summary: Optional[str]
+    active_story_repair_state: Dict[str, Any]
+    active_story_repair_payload: Optional[StoryRepairPayload]
+
+
+@dataclass(frozen=True)
+class BatchGenerationChapterExecutionOutcome:
+    active_story_repair_state: Dict[str, Any]
+    active_story_repair_payload: Optional[StoryRepairPayload]
+    last_generated_summary: Optional[str]
+
+
+async def execute_batch_generation_chapter_with_retries(
+    db_session: AsyncSession,
+    *,
+    task: BatchGenerationTask,
+    project: Project,
+    execution_context: BatchGenerationExecutionEnvironment,
+    runtime_state: BatchGenerationChapterRuntimeState,
+) -> Optional[BatchGenerationChapterExecutionOutcome]:
+    retry_count = 0
+    chapter_success = False
+    chapter = None
+    current_last_generated_summary = runtime_state.last_generated_summary
+    current_active_story_repair_state = runtime_state.active_story_repair_state
+    current_active_story_repair_payload = runtime_state.active_story_repair_payload
+
+    while retry_count <= task.max_retries and not chapter_success:
+        try:
+            attempt_preparation = await prepare_batch_generation_chapter_attempt(
+                db_session,
+                task=task,
+                project=project,
+                chapter_id=runtime_state.chapter_id,
+                retry_count=retry_count,
+                write_lock=execution_context.write_lock,
+                emit_event=execution_context.emit_event,
+                cached_analysis_quality_profile=execution_context.cached_analysis_quality_profile,
+                clone_quality_profile_fn=clone_chapter_quality_profile,
+            )
+            chapter = attempt_preparation.chapter
+            analysis_quality_profile = attempt_preparation.analysis_quality_profile
+
+            if retry_count > 0:
+                logger.info(
+                    f"?? [{runtime_state.chapter_index}/{task.total_chapters}] ?????? (?{retry_count}?): "
+                    f"?{chapter.chapter_number}? ?{chapter.title}?"
+                )
+            else:
+                logger.info(
+                    f"?? [{runtime_state.chapter_index}/{task.total_chapters}] ??????: "
+                    f"?{chapter.chapter_number}? ?{chapter.title}?"
+                )
+
+            can_generate, error_msg, _ = await check_chapter_generation_prerequisites(db_session, chapter)
+            if not can_generate:
+                raise Exception(f"???????: {error_msg}")
+
+            generation_result = await execution_context.await_generation_result_fn(
+                generation_coro=execution_context.run_generation_fn(
+                    db_session=db_session,
+                    chapter=chapter,
+                    user_id=execution_context.user_id,
+                    style_id=task.style_id,
+                    target_word_count=task.target_word_count,
+                    ai_service=execution_context.ai_service,
+                    write_lock=execution_context.write_lock,
+                    story_packet=execution_context.batch_story_packet,
+                    base_quality_profile=execution_context.task_base_quality_profile,
+                    custom_model=execution_context.custom_model,
+                    previous_summary_context=current_last_generated_summary,
+                    temp_narrative_perspective=execution_context.temp_narrative_perspective,
+                    creative_mode=execution_context.creative_mode,
+                    story_focus=execution_context.story_focus,
+                    plot_stage=execution_context.plot_stage,
+                    story_creation_brief=execution_context.story_creation_brief,
+                    quality_preset=execution_context.quality_preset,
+                    quality_notes=execution_context.quality_notes,
+                    enable_web_research=execution_context.enable_web_research,
+                    web_research_query=execution_context.web_research_query,
+                    story_repair_summary=execution_context.story_repair_summary,
+                    story_repair_targets=execution_context.story_repair_targets,
+                    story_preserve_strengths=execution_context.story_preserve_strengths,
+                    story_repair_payload=current_active_story_repair_payload,
+                    active_story_repair_snapshot=current_active_story_repair_state.get("active_story_repair_payload"),
+                    story_repair_state=current_active_story_repair_state,
+                    stream_task_id=execution_context.batch_id,
+                    stream_chunks=execution_context.stream_chunks,
+                    retry_count=retry_count,
+                    max_retries=task.max_retries,
+                ),
+                task=task,
+                db_session=db_session,
+            )
+
+            prepared_result = prepare_batch_generation_chapter_result(
+                generation_result,
+                chapter=chapter,
+                retry_count=retry_count,
+                max_retries=task.max_retries,
+                active_story_repair_payload=current_active_story_repair_payload,
+                enable_analysis=task.enable_analysis,
+                resolve_quality_gate_plan_fn=resolve_quality_gate_execution_plan,
+                attach_story_runtime_contract_fn=attach_story_runtime_contract,
+            )
+            generated_summary = prepared_result.generated_summary
+            generated_content = prepared_result.generated_content
+            generated_word_count = prepared_result.generated_word_count
+            generation_quality_metrics = prepared_result.generation_quality_metrics
+            generation_story_runtime_contract = prepared_result.generation_story_runtime_contract
+            quality_gate_plan = prepared_result.quality_gate_plan
+            quality_gate_snapshot = prepared_result.quality_gate_snapshot
+            quality_gate_action = prepared_result.quality_gate_action
+            should_run_analysis = prepared_result.should_run_analysis
+
+            if prepared_result.metrics_event is not None:
+                await execution_context.emit_event(prepared_result.metrics_event)
+                await record_task_quality_metrics(
+                    execution_context.batch_id,
+                    prepared_result.metrics_event,
+                    db_session=db_session,
+                )
+
+            retry_preparation = None
+            if quality_gate_action == "retry":
+                retry_preparation = await handle_batch_generation_quality_gate_retry(
+                    db_session,
+                    task=task,
+                    chapter=chapter,
+                    project=project,
+                    batch_id=execution_context.batch_id,
+                    chapter_id=runtime_state.chapter_id,
+                    retry_count=retry_count,
+                    write_lock=execution_context.write_lock,
+                    emit_event=execution_context.emit_event,
+                    sync_task_story_repair_state_fn=sync_task_story_repair_state,
+                                        quality_gate_plan=quality_gate_plan,
+                    quality_gate_snapshot=quality_gate_snapshot,
+                    generated_content=generated_content,
+                    generated_summary=generated_summary,
+                    generation_quality_metrics=generation_quality_metrics,
+                    active_story_repair_payload=current_active_story_repair_payload,
+                    active_story_repair_state=current_active_story_repair_state,
+                )
+                current_active_story_repair_state = retry_preparation.active_story_repair_state
+                current_active_story_repair_payload = retry_preparation.active_story_repair_payload
+            elif quality_gate_action == "manual_review":
+                current_active_story_repair_payload = quality_gate_plan.get("repair_payload") or current_active_story_repair_payload
+                current_active_story_repair_state = await sync_task_story_repair_state(
+                    execution_context.batch_id,
+                    payload=current_active_story_repair_payload,
+                    active_story_repair_payload=quality_gate_plan.get("active_story_repair_payload"),
+                    db_session=db_session,
+                )
+                error_message = quality_gate_plan.get("message") or (
+                    f"Chapter {chapter.chapter_number} is blocked by the quality gate and requires manual review."
+                )
+                await execution_context.emit_event(
+                    {
+                        "type": "quality_gate_blocked",
+                        "chapter_id": runtime_state.chapter_id,
+                        "chapter_number": chapter.chapter_number,
+                        "message": error_message,
+                        "progress": 90,
+                        "status": "running",
+                        "phase": "quality_blocked",
+                        "current_retry_count": retry_count,
+                        "max_retries": task.max_retries,
+                        "quality_gate": quality_gate_snapshot,
+                        "active_story_repair_payload": quality_gate_plan.get("active_story_repair_payload"),
+                    }
+                )
+            else:
+                applied_state = await apply_successful_batch_generation_chapter(
+                    db_session,
+                    task=task,
+                    chapter=chapter,
+                    batch_id=execution_context.batch_id,
+                    retry_count=retry_count,
+                    emit_event=execution_context.emit_event,
+                                    project=project,
+                    write_lock=execution_context.write_lock,
+                    resolve_story_repair_state_fn=resolve_generation_story_repair_state_for_batch,
+                    sync_task_story_repair_state_fn=sync_task_story_repair_state,
+                    generated_content=generated_content,
+                    generated_word_count=generated_word_count,
+                    generation_quality_metrics=generation_quality_metrics,
+                    generation_story_runtime_contract=generation_story_runtime_contract,
+                    generated_summary=generated_summary,
+                    should_run_analysis=should_run_analysis,
+                    story_repair_summary=execution_context.story_repair_summary,
+                    story_repair_targets=execution_context.story_repair_targets,
+                    story_preserve_strengths=execution_context.story_preserve_strengths,
+                )
+                current_active_story_repair_state = applied_state.active_story_repair_state
+                current_active_story_repair_payload = applied_state.active_story_repair_payload
+                if applied_state.last_generated_summary:
+                    current_last_generated_summary = applied_state.last_generated_summary
+
+            if not await batch_task_exists(db_session, execution_context.batch_id):
+                await clear_batch_generation_execution_caches(execution_context.batch_id)
+                logger.info(f"Stop batch generation because task no longer exists: {execution_context.batch_id}")
+                return None
+
+            chapter_exists_result = await db_session.execute(
+                select(Chapter.id).where(Chapter.id == runtime_state.chapter_id)
+            )
+            if chapter_exists_result.scalar_one_or_none() is None:
+                await clear_batch_generation_execution_caches(execution_context.batch_id)
+                logger.info(f"Stop batch generation because chapter no longer exists: {runtime_state.chapter_id}")
+                return None
+
+            if should_run_analysis:
+                analysis_success, analysis_error = await execution_context.run_batch_analysis_fn(
+                    db_session=db_session,
+                    write_lock=execution_context.write_lock,
+                    batch_id=execution_context.batch_id,
+                    chapter=chapter,
+                    user_id=execution_context.user_id,
+                    project_id=task.project_id,
+                    retry_count=retry_count,
+                    max_retries=task.max_retries,
+                    ai_service=execution_context.ai_service,
+                    quality_profile=analysis_quality_profile,
+                    story_packet=execution_context.batch_story_packet,
+                    chapter_content_override=generated_content,
+                    chapter_word_count_override=generated_word_count,
+                    story_repair_summary=execution_context.story_repair_summary,
+                    story_repair_targets=execution_context.story_repair_targets,
+                    story_preserve_strengths=execution_context.story_preserve_strengths,
+                    story_repair_payload=current_active_story_repair_payload,
+                )
+                if not analysis_success:
+                    await fail_batch_generation_after_analysis(
+                        db_session,
+                        task=task,
+                        chapter=chapter,
+                        chapter_id=runtime_state.chapter_id,
+                        analysis_error=analysis_error,
+                        write_lock=execution_context.write_lock,
+                        emit_event=execution_context.emit_event,
+                    )
+                    return None
+
+            if quality_gate_action == "retry":
+                next_retry_count = retry_preparation.next_retry_count
+                wait_time = min(2 ** next_retry_count, 10)
+                logger.info(
+                    f"Quality-gate retry for chapter {chapter.chapter_number}; "
+                    f"waiting {wait_time}s before retry #{next_retry_count}"
+                )
+                await asyncio.sleep(wait_time)
+                retry_count = next_retry_count
+                continue
+
+            if quality_gate_action == "manual_review":
+                await fail_batch_generation_for_manual_review(
+                    db_session,
+                    task=task,
+                    chapter=chapter,
+                    project=project,
+                    batch_id=execution_context.batch_id,
+                    chapter_id=runtime_state.chapter_id,
+                    retry_count=retry_count,
+                    write_lock=execution_context.write_lock,
+                    emit_event=execution_context.emit_event,
+                                        quality_gate_plan=quality_gate_plan,
+                    quality_gate_snapshot=quality_gate_snapshot,
+                    generated_content=generated_content,
+                    generated_summary=generated_summary,
+                    generation_quality_metrics=generation_quality_metrics,
+                    active_story_repair_state=current_active_story_repair_state,
+                )
+                return None
+
+            chapter_success = True
+            await finalize_successful_batch_generation_chapter(
+                db_session,
+                task=task,
+                emit_event=execution_context.emit_event,
+                write_lock=execution_context.write_lock,
+            )
+        except Exception as e:
+            last_error = str(e)
+            error_msg = f"?{chapter.chapter_number if chapter else '?'}???: {last_error}"
+            logger.error(f"? {error_msg}")
+
+            retry_count += 1
+
+            if retry_count <= task.max_retries:
+                wait_time = min(2 ** retry_count, 10)
+                logger.info(f"? ?? {wait_time} ????...")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(
+                    f"? ???????????????({task.max_retries}): "
+                    f"?{chapter.chapter_number if chapter else '?'}?"
+                )
+                await fail_batch_generation_after_max_retries(
+                    db_session,
+                    task=task,
+                    chapter=chapter,
+                    chapter_id=runtime_state.chapter_id,
+                    last_error=last_error,
+                    retry_count=retry_count,
+                    write_lock=execution_context.write_lock,
+                    emit_event=execution_context.emit_event,
+                )
+                return None
+
+    if not chapter_success:
+        return None
+
+    return BatchGenerationChapterExecutionOutcome(
+        active_story_repair_state=current_active_story_repair_state,
+        active_story_repair_payload=current_active_story_repair_payload,
+        last_generated_summary=current_last_generated_summary,
+    )
+
+

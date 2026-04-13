@@ -1,6 +1,7 @@
 """Server-Sent Events (SSE) 响应工具类"""
 import json
 import asyncio
+from contextlib import suppress
 from enum import Enum
 from typing import AsyncGenerator, Dict, Any, Optional, Callable
 from dataclasses import dataclass
@@ -8,6 +9,8 @@ from fastapi.responses import StreamingResponse
 from app.logger import get_logger
 
 logger = get_logger(__name__)
+
+SSE_KEEPALIVE_INTERVAL_SECONDS = 10
 
 
 class ProgressStage(Enum):
@@ -390,37 +393,71 @@ async def create_sse_generator(
 
 def create_sse_response(generator: AsyncGenerator[str, None]) -> StreamingResponse:
     """
-    创建SSE StreamingResponse - 兼容HTTP/2协议
+    ??SSE StreamingResponse - ??HTTP/2??
     
     Args:
-        generator: SSE消息生成器
+        generator: SSE?????
         
     Returns:
-        StreamingResponse对象
+        StreamingResponse??
     
-    注意：
-    - HTTP/2不支持Connection头，已移除
-    - 明确指定charset=utf-8以确保编码正确
-    - 添加CORS头以支持跨域请求
+    ???
+    - HTTP/2???Connection?????
+    - ????charset=utf-8???????
+    - ??CORS????????
+    - ??????????????????heartbeat??????
     """
-    async def wrapper():
-        """包装生成器以捕获StreamingResponse初始化时的GeneratorExit"""
+
+    async def _pump_to_queue(queue: asyncio.Queue[tuple[str, Optional[str]]]):
+        """????????????????????"""
         try:
             async for chunk in generator:
-                yield chunk
+                await queue.put(("chunk", chunk))
         except GeneratorExit:
-            # StreamingResponse在初始化时会进行类型检查，导致GeneratorExit
-            # 这是正常行为，不需要记录警告
             pass
+        except Exception as exc:
+            logger.error(f"SSE???????: {type(exc).__name__}: {exc}", exc_info=True)
+            await queue.put(("chunk", await SSEResponse.send_error(str(exc))))
+        finally:
+            await queue.put(("done", None))
+
+    async def wrapper():
+        """?????????????????????????????"""
+        queue: asyncio.Queue[tuple[str, Optional[str]]] = asyncio.Queue()
+        producer = asyncio.create_task(_pump_to_queue(queue))
+
+        try:
+            while True:
+                try:
+                    message_type, payload = await asyncio.wait_for(
+                        queue.get(),
+                        timeout=SSE_KEEPALIVE_INTERVAL_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    yield await SSEResponse.send_heartbeat()
+                    continue
+
+                if message_type == "done":
+                    break
+
+                if payload is not None:
+                    yield payload
+        except GeneratorExit:
+            pass
+        finally:
+            if not producer.done():
+                producer.cancel()
+            with suppress(asyncio.CancelledError):
+                await producer
     
     return StreamingResponse(
         wrapper(),
-        media_type="text/event-stream; charset=utf-8",  # 明确指定charset
+        media_type="text/event-stream; charset=utf-8",  # ????charset
         headers={
-            "Cache-Control": "no-cache, no-transform",  # 禁用缓存和转换
-            # 移除 Connection: keep-alive (HTTP/2不兼容)
-            "X-Accel-Buffering": "no",  # 禁用nginx缓冲
-            "Access-Control-Allow-Origin": "*",  # CORS支持
+            "Cache-Control": "no-cache, no-transform",  # ???????
+            # ?? Connection: keep-alive (HTTP/2???)
+            "X-Accel-Buffering": "no",  # ??nginx??
+            "Access-Control-Allow-Origin": "*",  # CORS??
             "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
         }

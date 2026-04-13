@@ -29,6 +29,7 @@ import type {
   GenerateCharacterRequest
 } from '../types';
 import { formatActiveStoryRepairLabel } from '../utils/activeStoryRepair';
+import { MAX_CONSECUTIVE_TASK_POLL_ERRORS } from '../utils/taskPolling';
 
 type CharacterCreatePayload = Parameters<typeof characterApi.createCharacter>[0];
 
@@ -165,6 +166,21 @@ export async function loadProjectChapters(projectId?: string, options: RefreshCo
 /**
  * 项目数据同步 Hook
  */
+
+export async function syncProjectToStoreById(projectId: string) {
+  const project = await projectApi.getProject(projectId);
+  const store = useStore.getState();
+
+  store.setCurrentProject(project);
+  if (store.projects.some((item) => item.id === projectId)) {
+    store.updateProject(projectId, project);
+  } else {
+    store.addProject(project);
+  }
+
+  return project;
+}
+
 export function useProjectSync() {
   const { setProjects, setLoading, addProject, updateProject, removeProject, setCurrentProject } = useStore();
 
@@ -576,6 +592,7 @@ export function useChapterSync() {
       try {
         const maxPollCount = 900; // 最多轮询约30分钟（2秒一次）
         let pollCount = 0;
+        let consecutivePollErrors = 0;
 
         while (pollCount < maxPollCount) {
           await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -585,7 +602,24 @@ export function useChapterSync() {
             throw new Error(streamFailure);
           }
 
-          const taskStatus = await chapterSingleTaskApi.getSingleGenerateTaskStatus(taskId, currentProject?.id);
+          const trackedTask = useBackgroundTaskStore.getState().tasks[taskId];
+          if (trackedTask?.taskType === 'chapter_single_generate' && trackedTask.status === 'cancelled') {
+            throw new Error(trackedTask.error || trackedTask.message || '后台生成已取消');
+          }
+
+          let taskStatus: Awaited<ReturnType<typeof chapterSingleTaskApi.getSingleGenerateTaskStatus>>;
+          try {
+            taskStatus = await chapterSingleTaskApi.getSingleGenerateTaskStatus(taskId, currentProject?.id);
+            consecutivePollErrors = 0;
+          } catch (pollError) {
+            consecutivePollErrors += 1;
+            if (consecutivePollErrors < MAX_CONSECUTIVE_TASK_POLL_ERRORS) {
+              console.warn('单章后台生成状态轮询失败，准备重试:', pollError);
+              continue;
+            }
+            throw pollError;
+          }
+
           const activeRepairStrategyLabel = formatActiveStoryRepairLabel(taskStatus.active_story_repair_payload);
 
           if (taskStatus.status === 'pending') {

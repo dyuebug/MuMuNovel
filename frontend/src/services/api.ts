@@ -954,6 +954,7 @@ export const getBatchManualReviewInfo = (
   terminalReason?: string | null,
   terminalLabel?: string | null,
   reviewRequired?: boolean | null,
+  mode: 'batch' | 'single' = 'single',
 ): ChapterBatchManualReviewInfo | null => {
   const matched = (failedChapters || []).find((item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
@@ -963,12 +964,16 @@ export const getBatchManualReviewInfo = (
 
   const fallback = String(fallbackErrorMessage || '').trim();
   const isManualReviewTerminal = reviewRequired === true || String(terminalReason || '').trim().toLowerCase() === 'manual_review';
+  const defaultLabel = mode === 'batch' ? '已生成，建议优化' : '需人工复核';
+  const defaultMessage = mode === 'batch'
+    ? '已生成，建议优化：当前内容已生成并保留，可根据质量提示决定是否进一步优化。'
+    : '需人工复核：当前候选稿需要人工复核后再决定是否保存。';
 
   if (!matched && !isManualReviewTerminal) {
     if (!fallback) return null;
     if (!fallback.startsWith('需复核:') && !fallback.toLowerCase().includes('manual review')) return null;
     return {
-      label: '需人工复核',
+      label: defaultLabel,
       message: fallback,
       failedMetrics: [],
     };
@@ -978,10 +983,10 @@ export const getBatchManualReviewInfo = (
     ? terminalLabel.trim()
     : matched && isNonEmptyString(matched.quality_gate_label)
       ? matched.quality_gate_label.trim()
-      : '需人工复核';
+      : defaultLabel;
   const message = matched && isNonEmptyString(matched.error)
     ? matched.error.trim()
-    : fallback || `${label}：当前候选稿需要人工复核后再决定是否保存。`;
+    : fallback || defaultMessage;
   const failedMetrics = matched && Array.isArray(matched.quality_gate_failed_metrics)
     ? matched.quality_gate_failed_metrics.filter((item): item is string => isNonEmptyString(item))
     : [];
@@ -1109,10 +1114,17 @@ const buildChapterGenerateTaskMessage = (
     : '批量生成';
   if (status === 'failed') {
     const manualReviewInfo = (taskType === 'chapters_batch_generate' || taskType === 'chapter_single_generate')
-      ? getBatchManualReviewInfo(failedChapters, errorMessage, terminalReason, terminalLabel, reviewRequired)
+      ? getBatchManualReviewInfo(
+        failedChapters,
+        errorMessage,
+        terminalReason,
+        terminalLabel,
+        reviewRequired,
+        taskType === 'chapters_batch_generate' ? 'batch' : 'single',
+      )
       : null;
-    if (manualReviewInfo) return `${taskName}待人工复核`;
-    return errorMessage || `${taskName}失败`;
+    if (manualReviewInfo) return taskType === 'chapters_batch_generate' ? taskName + '已生成，建议优化' : taskName + '待人工复核';
+    return errorMessage || taskName + '失败';
   }
   if (status === 'cancelled') return `${taskName}已取消`;
   if (status === 'completed') return `${taskName}完成 (${completed}/${total})`;

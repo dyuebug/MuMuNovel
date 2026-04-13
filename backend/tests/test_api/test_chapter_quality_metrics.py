@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from app.api import chapters as chapters_api
 
 
@@ -5,6 +6,28 @@ def test_should_calculate_chapter_generation_max_tokens_with_tighter_budget():
     assert chapters_api._calculate_chapter_generation_max_tokens(500) == 700
     assert chapters_api._calculate_chapter_generation_max_tokens(1600) == 960
     assert chapters_api._calculate_chapter_generation_max_tokens(3000) == 1800
+
+
+def test_should_build_generation_request_options_for_responses_provider():
+    ai_service = SimpleNamespace(
+        api_provider='openai_responses',
+        config=SimpleNamespace(retry=SimpleNamespace(max_retries=5)),
+    )
+
+    options = chapters_api._build_chapter_generation_request_options(ai_service)
+
+    assert options == {
+        'prefer_chat_completions': True,
+        'transport_max_retries': 2,
+        'first_chunk_timeout': 20.0,
+        'allow_non_stream_fallback': False,
+    }
+
+
+def test_should_skip_generation_request_options_for_non_responses_provider():
+    ai_service = SimpleNamespace(api_provider='openai')
+
+    assert chapters_api._build_chapter_generation_request_options(ai_service) is None
 
 
 def test_should_skip_rule_grounding_when_world_rules_missing():

@@ -3,6 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { Card, Button, Space, Typography, message, Progress } from 'antd';
 import { CheckCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import { backgroundTaskApi, wizardStreamApi } from '../services/api';
+import type { BackgroundTaskStatus } from '../services/api';
+import { useBackgroundTaskStore } from '../store/backgroundTasks';
+import { formatBackgroundTaskError, waitForBackgroundTaskCompletion } from '../utils/taskPolling';
+import { isProjectWizardCompleted } from '../utils/projectWizardState';
 import type { SSEClientOptions } from '../utils/sseClient';
 import type { ApiError, CreativeMode, PlotStage, QualityPreset, ResearchAssetSummary, StoryFocus } from '../types';
 
@@ -24,6 +28,9 @@ export interface GenerationConfig {
   default_story_creation_brief?: string;
   default_quality_preset?: QualityPreset;
   default_quality_notes?: string;
+  provider?: string;
+  model?: string;
+  enable_mcp?: boolean;
   enable_web_research?: boolean;
   web_research_query?: string;
   world_building_research_query?: string;
@@ -60,6 +67,22 @@ interface StepResearchSummary {
   assets: ResearchAssetSummary[];
 }
 
+const WIZARD_STREAM_INACTIVITY_TIMEOUT_MS = 90000;
+const WIZARD_HEARTBEAT_SUFFIX = '?????????????';
+
+const appendWizardHeartbeatHint = (message: string) => {
+  const normalized = message.trim();
+  if (!normalized) {
+    return `AI ?????${WIZARD_HEARTBEAT_SUFFIX}`;
+  }
+
+  if (normalized.endsWith(WIZARD_HEARTBEAT_SUFFIX)) {
+    return normalized;
+  }
+
+  return `${normalized}${WIZARD_HEARTBEAT_SUFFIX}`;
+};
+
 interface WorldBuildingResult {
   project_id: string;
   time_period: string;
@@ -69,6 +92,14 @@ interface WorldBuildingResult {
   research_query?: string;
   research_assets?: ResearchAssetSummary[];
 }
+
+type ResumableWizardTaskType = 'wizard_career_system' | 'wizard_characters' | 'wizard_outline';
+
+const RESUMABLE_WIZARD_TASK_TYPES: ResumableWizardTaskType[] = [
+  'wizard_career_system',
+  'wizard_characters',
+  'wizard_outline',
+];
 
 export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   config,
@@ -109,30 +140,45 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   const [isCancelled, setIsCancelled] = useState(false);
   // 【修复】操作锁，防止并发调用
   const operationLockRef = useRef(false);
+  const autoStartSignatureRef = useRef<string | null>(null);
 
   // LocalStorage 键名
   const storageKeys = {
     projectId: `${storagePrefix}_project_id`,
     generationData: `${storagePrefix}_generation_data`,
-    currentStep: `${storagePrefix}_current_step`
+    currentStep: `${storagePrefix}_current_step`,
+    taskId: `${storagePrefix}_task_id`,
   };
 
-  // 保存进度到localStorage
+  const setStoredTaskId = (taskId: string | null) => {
+    try {
+      if (taskId) {
+        localStorage.setItem(storageKeys.taskId, taskId);
+        return;
+      }
+      localStorage.removeItem(storageKeys.taskId);
+    } catch (error) {
+      console.error('Failed to persist resumable task info:', error);
+    }
+  };
+
+  // Persist progress to localStorage
   const saveProgress = (projectId: string, data: GenerationConfig, step: string) => {
     try {
       localStorage.setItem(storageKeys.projectId, projectId);
       localStorage.setItem(storageKeys.generationData, JSON.stringify(data));
       localStorage.setItem(storageKeys.currentStep, step);
     } catch (error) {
-      console.error('保存进度失败:', error);
+      console.error('Failed to persist generation progress:', error);
     }
   };
 
-  // 清理localStorage
+  // Clear localStorage
   const clearStorage = () => {
     localStorage.removeItem(storageKeys.projectId);
     localStorage.removeItem(storageKeys.generationData);
     localStorage.removeItem(storageKeys.currentStep);
+    localStorage.removeItem(storageKeys.taskId);
   };
 
   const buildResearchFields = (data: GenerationConfig, step: ResearchStepKey) => {
@@ -147,6 +193,12 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       web_research_query: (stepQueryMap[step] || data.web_research_query)?.trim() || undefined,
     };
   };
+
+  const buildExecutionFields = (data: GenerationConfig) => ({
+    provider: data.provider,
+    model: data.model,
+    enable_mcp: data.enable_mcp,
+  });
 
   const buildWorldBuildingPayload = (data: GenerationConfig) => {
     const genreString = Array.isArray(data.genre) ? data.genre.join('、') : data.genre;
@@ -166,12 +218,14 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       default_story_creation_brief: data.default_story_creation_brief,
       default_quality_preset: data.default_quality_preset,
       default_quality_notes: data.default_quality_notes,
+      ...buildExecutionFields(data),
       ...buildResearchFields(data, 'worldBuilding'),
     };
   };
 
   const buildCareerPayload = (pid: string, data: GenerationConfig) => ({
     project_id: pid,
+    ...buildExecutionFields(data),
     ...buildResearchFields(data, 'careers'),
   });
 
@@ -188,6 +242,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       },
       theme: data.theme,
       genre: genreString,
+      ...buildExecutionFields(data),
       ...buildResearchFields(data, 'characters'),
     };
   };
@@ -203,6 +258,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     story_creation_brief: data.default_story_creation_brief,
     quality_preset: data.default_quality_preset,
     quality_notes: data.default_quality_notes,
+    ...buildExecutionFields(data),
     ...buildResearchFields(data, 'outline'),
   });
 
@@ -221,6 +277,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     }));
   };
 
+
   const isTaskCancelledError = (error: unknown) => {
     const e = error as { name?: string; code?: string; message?: string };
     return cancelledByUserRef.current || e?.code === 'TASK_CANCELLED' || e?.name === 'TaskCancelledError' || e?.message?.includes('取消');
@@ -232,16 +289,23 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
   const buildTaskOptions = (options: SSEClientOptions): SSEClientOptions => ({
     ...options,
+    inactivityTimeoutMs: options.inactivityTimeoutMs ?? WIZARD_STREAM_INACTIVITY_TIMEOUT_MS,
+    onHeartbeat: () => {
+      setProgressMessage((prev) => appendWizardHeartbeatHint(prev || 'AI ?????'));
+      options.onHeartbeat?.();
+    },
     onTaskCreated: (taskId: string) => {
       cancelledByUserRef.current = false;
       setIsCancelled(false);
       setCurrentTaskId(taskId);
+      setStoredTaskId(taskId);
       options.onTaskCreated?.(taskId);
     },
     onCancelled: (cancelMsg: string) => {
       cancelledByUserRef.current = true;
       setIsCancelled(true);
       setCurrentTaskId(null);
+      setStoredTaskId(null);
       setProgressMessage(cancelMsg || '后台任务已取消');
       setLoading(false);
       setIsCancelling(false);
@@ -251,6 +315,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     },
     onComplete: () => {
       setCurrentTaskId(null);
+      setStoredTaskId(null);
       setIsCancelling(false);
       // 【修复】释放操作锁
       operationLockRef.current = false;
@@ -258,9 +323,178 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     },
   });
 
+  const completeWizardGeneration = (pid: string) => {
+    setProgress(100);
+    setProgressMessage('生成已完成，正在跳转...');
+    message.success('项目创建完成，正在跳转...');
+    clearStorage();
+    setLoading(false);
+
+    onComplete(pid);
+    setTimeout(() => {
+      navigate(`/project/${pid}`);
+    }, 1000);
+  };
+
+  const buildCareerTaskOptions = (): SSEClientOptions => buildTaskOptions({
+    onProgress: (msg, prog) => {
+      setProgress(prog);
+      setProgressMessage(msg);
+    },
+    onResult: (result) => {
+      console.log(`职业体系生成完成：主职业${result.main_careers_count}个，子职业${result.sub_careers_count}个`);
+      updateStepResearch('careers', result);
+      setGenerationSteps((prev) => ({ ...prev, careers: 'completed' }));
+    },
+    onError: (error) => {
+      console.error('职业体系生成失败:', error);
+      setErrorDetails(`职业体系生成失败: ${error}`);
+      setGenerationSteps((prev) => ({ ...prev, careers: 'error' }));
+      setLoading(false);
+      throw new Error(error);
+    },
+    onComplete: () => {
+      console.log('职业体系任务完成');
+    },
+  });
+
+  const buildCharactersTaskOptions = (): SSEClientOptions => buildTaskOptions({
+    onProgress: (msg, prog) => {
+      setProgress(prog);
+      setProgressMessage(msg);
+    },
+    onResult: (result) => {
+      console.log(`角色生成完成，共${result.characters?.length || 0}个角色`);
+      updateStepResearch('characters', result);
+      setGenerationSteps((prev) => ({ ...prev, characters: 'completed' }));
+    },
+    onError: (error) => {
+      console.error('角色生成失败:', error);
+      setErrorDetails(`角色生成失败: ${error}`);
+      setGenerationSteps((prev) => ({ ...prev, characters: 'error' }));
+      setLoading(false);
+      throw new Error(error);
+    },
+    onComplete: () => {
+      console.log('角色任务完成');
+    },
+  });
+
+  const buildOutlineTaskOptions = (): SSEClientOptions => buildTaskOptions({
+    onProgress: (msg, prog) => {
+      setProgress(prog);
+      setProgressMessage(msg);
+    },
+    onResult: (result) => {
+      console.log('大纲任务完成');
+      updateStepResearch('outline', result);
+      setGenerationSteps((prev) => ({ ...prev, outline: 'completed' }));
+    },
+    onError: (error) => {
+      console.error('大纲生成失败:', error);
+      setErrorDetails(`大纲生成失败: ${error}`);
+      setGenerationSteps((prev) => ({ ...prev, outline: 'error' }));
+      setLoading(false);
+      throw new Error(error);
+    },
+    onComplete: () => {
+      console.log('大纲任务完成');
+    },
+  });
+
+  const isActiveWizardTaskStatus = (status?: BackgroundTaskStatus['status']) =>
+    status === 'pending' || status === 'running';
+
+  const getActiveWizardTasks = async (projectIdParam: string) => {
+    const activeTasks: Partial<Record<ResumableWizardTaskType, BackgroundTaskStatus>> = {};
+
+    const upsertTask = (task?: BackgroundTaskStatus | null) => {
+      if (!task?.task_type || !RESUMABLE_WIZARD_TASK_TYPES.includes(task.task_type as ResumableWizardTaskType)) {
+        return;
+      }
+      if (task.project_id !== projectIdParam || !isActiveWizardTaskStatus(task.status)) {
+        return;
+      }
+
+      const taskType = task.task_type as ResumableWizardTaskType;
+      const current = activeTasks[taskType];
+      const currentUpdatedAt = current?.updated_at ? new Date(current.updated_at).getTime() : 0;
+      const nextUpdatedAt = task.updated_at ? new Date(task.updated_at).getTime() : Date.now();
+
+      if (!current || nextUpdatedAt >= currentUpdatedAt) {
+        activeTasks[taskType] = task;
+      }
+    };
+
+    try {
+      const listedTasks = await backgroundTaskApi.listTasks({
+        project_id: projectIdParam,
+        active_only: true,
+        limit: 20,
+      });
+      listedTasks.items.forEach((task) => upsertTask(task));
+    } catch (error) {
+      console.warn('获取活跃向导后台任务失败，继续走本地恢复:', error);
+    }
+
+    const { tasks } = useBackgroundTaskStore.getState();
+    Object.values(tasks).forEach((task) => {
+      const taskType = task.taskType as ResumableWizardTaskType;
+      if (!RESUMABLE_WIZARD_TASK_TYPES.includes(taskType)) {
+        return;
+      }
+      if (!task.projectId) {
+        return;
+      }
+
+      upsertTask({
+        task_id: task.taskId,
+        task_type: taskType,
+        project_id: task.projectId,
+        status: task.status,
+        progress: task.progress,
+        message: task.message,
+        result: task.result ?? null,
+        error: task.error ?? null,
+        stage_code: task.stageCode ?? null,
+        execution_mode: task.executionMode ?? null,
+        workflow_scope: task.workflowScope ?? null,
+        checkpoint: task.checkpoint ?? null,
+        active_story_repair_payload: task.activeStoryRepairPayload ?? null,
+        terminal_reason: task.terminalReason ?? null,
+        terminal_label: task.terminalLabel ?? null,
+        review_required: task.reviewRequired ?? null,
+        can_resume: task.canResume ?? null,
+        created_at: new Date(task.createdAt).toISOString(),
+        updated_at: new Date(task.updatedAt).toISOString(),
+        started_at: null,
+        completed_at: task.completedAt ? new Date(task.completedAt).toISOString() : null,
+      });
+    });
+
+    return activeTasks;
+  };
+
+  const waitForExistingBackgroundTask = async <T,>(
+    task: BackgroundTaskStatus,
+    options?: SSEClientOptions
+  ): Promise<T> => waitForBackgroundTaskCompletion<BackgroundTaskStatus, T>(task, {
+    pollTask: (taskId) => backgroundTaskApi.getTaskStatus(taskId),
+    sseOptions: options,
+    progressMessage: '???????',
+    failureFallbackMessage: '????????',
+    pollErrorFallbackMessage: '????????',
+    createPollError: (error, fallbackMessage) => {
+      const apiError = error as ApiError;
+      const errorMessage = apiError.response?.data?.detail || apiError.message || fallbackMessage;
+      return new Error(errorMessage);
+    },
+    resolveValue: (latestTask) => ((latestTask.result as T) ?? (true as T)),
+  });
+
   const handleCancelCurrentTask = async (): Promise<boolean> => {
     // 【修复】防止并发调用
-    if (!currentTaskId || isCancelling || operationLockRef.current) return false;
+    if (!currentTaskId || isCancelling) return false;
 
     operationLockRef.current = true;
     setIsCancelling(true);
@@ -274,6 +508,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       cancelledByUserRef.current = true;
       setIsCancelled(true);
       setCurrentTaskId(null);
+      setStoredTaskId(null);
       setIsCancelling(false);
       setLoading(false);
       operationLockRef.current = false;
@@ -287,22 +522,155 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       return false;
     }
   };
-
   // 开始自动化生成流程
   useEffect(() => {
-    if (config) {
-      if (resumeProjectId) {
-        // 恢复生成模式
-        handleResumeGenerate(config, resumeProjectId);
-      } else {
-        // 新建项目模式
-        handleAutoGenerate(config);
-      }
+    if (!config) {
+      autoStartSignatureRef.current = null;
+      return;
+    }
+
+    const storedTaskId = localStorage.getItem(storageKeys.taskId)?.trim();
+    const autoStartSignature = JSON.stringify({
+      title: config.title,
+      description: config.description,
+      theme: config.theme,
+      genre: Array.isArray(config.genre) ? config.genre.join('|') : config.genre,
+      target_words: config.target_words,
+      chapter_count: config.chapter_count,
+      character_count: config.character_count,
+      resumeProjectId: resumeProjectId || '',
+      storedTaskId: storedTaskId || '',
+    });
+
+    if (autoStartSignatureRef.current === autoStartSignature) {
+      return;
+    }
+
+    autoStartSignatureRef.current = autoStartSignature;
+
+    if (resumeProjectId) {
+      // Resume existing generation
+      handleResumeGenerate(config, resumeProjectId);
+    } else if (storedTaskId) {
+      // Resume world-building task before projectId is available
+      handleResumeWorldBuildingTask(config, storedTaskId);
+    } else {
+      // Resume existing generation
+      handleAutoGenerate(config);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config, resumeProjectId]);
 
-  // 恢复未完成项目的生成
+  const handleResumeWorldBuildingTask = async (data: GenerationConfig, taskId: string) => {
+    try {
+      cancelledByUserRef.current = false;
+      setIsCancelled(false);
+      setCurrentTaskId(taskId);
+      setStoredTaskId(taskId);
+      setIsCancelling(false);
+      setLoading(true);
+      setProgress(0);
+      setProgressMessage('正在恢复世界观生成任务...');
+      setErrorDetails('');
+      setGenerationData(data);
+      setProjectId('');
+      setGenerationSteps({ worldBuilding: 'processing', careers: 'pending', characters: 'pending', outline: 'pending' });
+
+      const task = await backgroundTaskApi.getTaskStatus(taskId);
+      if (task.task_type !== 'wizard_world_building') {
+        setStoredTaskId(null);
+        await handleAutoGenerate(data);
+        return;
+      }
+
+      if (task.status === 'completed') {
+        const result = task.result as WorldBuildingResult | null;
+        if (!result?.project_id) {
+          throw new Error('恢复世界观任务失败：缺少项目ID');
+        }
+        setProgress(task.progress || 20);
+        setProgressMessage(task.message || '世界观已生成完成，正在继续后续步骤...');
+        setWorldBuildingResult(result);
+        setProjectId(result.project_id);
+        updateStepResearch('worldBuilding', result);
+        setGenerationSteps({ worldBuilding: 'completed', careers: 'pending', characters: 'pending', outline: 'pending' });
+        saveProgress(result.project_id, data, 'generating');
+        await continueFromCareers(result);
+        return;
+      }
+
+      if (task.status === 'failed') {
+        const errorMsg = formatBackgroundTaskError(task.error, task.message, '世界观生成失败');
+        setCurrentTaskId(null);
+        setStoredTaskId(null);
+        setErrorDetails(errorMsg);
+        setGenerationSteps((prev) => ({ ...prev, worldBuilding: 'error' }));
+        setLoading(false);
+        return;
+      }
+
+      if (task.status === 'cancelled') {
+        const cancelMsg = task.message || '后台任务已取消';
+        cancelledByUserRef.current = true;
+        setIsCancelled(true);
+        setCurrentTaskId(null);
+        setStoredTaskId(null);
+        setProgressMessage(cancelMsg);
+        setLoading(false);
+        return;
+      }
+
+      setProgress(task.progress || 0);
+      setProgressMessage(task.message || '正在恢复世界观生成任务...');
+      const worldResult = await waitForExistingBackgroundTask<WorldBuildingResult>(task, buildTaskOptions({
+        onProgress: (msg, prog) => {
+          setProgress(prog);
+          setProgressMessage(msg);
+        },
+        onResult: (result) => {
+          setProjectId(result.project_id);
+          setWorldBuildingResult(result);
+          updateStepResearch('worldBuilding', result);
+          setGenerationSteps((prev) => ({ ...prev, worldBuilding: 'completed' }));
+        },
+        onError: (error) => {
+          console.error('Failed to resume world-building task:', error);
+          setErrorDetails(`世界观生成失败: ${error}`);
+          setGenerationSteps((prev) => ({ ...prev, worldBuilding: 'error' }));
+          setLoading(false);
+          throw new Error(error);
+        },
+        onComplete: () => {
+          console.log('World-building task resumed successfully');
+        },
+      }));
+
+      if (!worldResult?.project_id) {
+        throw new Error('恢复世界观任务失败：缺少项目ID');
+      }
+
+      saveProgress(worldResult.project_id, data, 'generating');
+      await continueFromCareers(worldResult);
+    } catch (error) {
+      if (isTaskCancelledError(error)) {
+        message.info('后台任务已取消');
+        setLoading(false);
+        setIsCancelling(false);
+        setCurrentTaskId(null);
+        setStoredTaskId(null);
+        operationLockRef.current = false;
+        return;
+      }
+      const apiError = error as ApiError;
+      const errorMsg = apiError.response?.data?.detail || apiError.message || '恢复世界观任务失败';
+      console.error('Failed to resume world-building task:', errorMsg);
+      setErrorDetails(errorMsg);
+      message.error('恢复世界观任务失败：' + errorMsg);
+      setLoading(false);
+      operationLockRef.current = false;
+    }
+  };
+
   const handleResumeGenerate = async (data: GenerationConfig, projectIdParam: string) => {
     try {
       cancelledByUserRef.current = false;
@@ -324,7 +692,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         throw new Error('获取项目信息失败');
       }
       const project = await response.json();
-      const wizardStep = project.wizard_step || 0;
+      const wizardStep = Number(project.wizard_step ?? 0);
 
       // 根据wizard_step判断从哪里继续
       // wizard_step: 0=未开始, 1=世界观已完成, 2=职业体系已完成, 3=角色已完成, 4=大纲已完成
@@ -337,35 +705,66 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         rules: project.world_rules || ''
       };
 
-      if (wizardStep === 0) {
-        // 从世界观开始
-        message.info('从世界观步骤开始生成...');
+      const activeWizardTasks = await getActiveWizardTasks(projectIdParam);
+
+      if (activeWizardTasks.wizard_outline) {
+        const outlineTask = activeWizardTasks.wizard_outline;
+        message.info('检测到已存在的角色生成任务，正在接回...');
+        setGenerationSteps({ worldBuilding: 'completed', careers: 'completed', characters: 'completed', outline: 'processing' });
+        setWorldBuildingResult(worldResult);
+        setProgress(outlineTask.progress || 70);
+        setProgressMessage(outlineTask.message || '正在继续生成大纲...');
+        await waitForExistingBackgroundTask(outlineTask, buildOutlineTaskOptions());
+        completeWizardGeneration(projectIdParam);
+      } else if (activeWizardTasks.wizard_characters) {
+        const charactersTask = activeWizardTasks.wizard_characters;
+        message.info('检测到已存在的角色生成任务，正在接回...');
+        setGenerationSteps({ worldBuilding: 'completed', careers: 'completed', characters: 'processing', outline: 'pending' });
+        setWorldBuildingResult(worldResult);
+        setProgress(charactersTask.progress || 40);
+        setProgressMessage(charactersTask.message || '正在继续生成角色...');
+        await waitForExistingBackgroundTask(charactersTask, buildCharactersTaskOptions());
+        await resumeFromOutline(data, projectIdParam);
+      } else if (activeWizardTasks.wizard_career_system) {
+        const careersTask = activeWizardTasks.wizard_career_system;
+        message.info('检测到已存在的职业体系任务，正在接回...');
+        setGenerationSteps({ worldBuilding: 'completed', careers: 'processing', characters: 'pending', outline: 'pending' });
+        setWorldBuildingResult(worldResult);
+        setProgress(careersTask.progress || 20);
+        setProgressMessage(careersTask.message || '正在继续生成职业体系...');
+        await waitForExistingBackgroundTask(careersTask, buildCareerTaskOptions());
+        await resumeFromCharacters(data, worldResult);
+      } else if (wizardStep === 0) {
+        // 从世界观阶段恢复
+        message.info('正在从世界观阶段继续生成...');
         setGenerationSteps({ worldBuilding: 'processing', careers: 'pending', characters: 'pending', outline: 'pending' });
         await resumeFromWorldBuilding(data);
       } else if (wizardStep === 1) {
-        // 世界观已完成，从职业体系开始
-        message.info('世界观已完成，从职业体系步骤继续...');
+        // 从职业体系阶段恢复
+        message.info('正在从职业体系阶段继续生成...');
         setGenerationSteps({ worldBuilding: 'completed', careers: 'processing', characters: 'pending', outline: 'pending' });
         setWorldBuildingResult(worldResult);
         setProgress(20);
         await resumeFromCareers(data, worldResult);
       } else if (wizardStep === 2) {
-        // 职业体系已完成，从角色开始
-        message.info('职业体系已完成，从角色步骤继续...');
+        // 从角色阶段恢复
+        message.info('正在从角色阶段继续生成...');
         setGenerationSteps({ worldBuilding: 'completed', careers: 'completed', characters: 'processing', outline: 'pending' });
         setWorldBuildingResult(worldResult);
         setProgress(40);
         await resumeFromCharacters(data, worldResult);
       } else if (wizardStep === 3) {
-        // 角色已完成，从大纲开始
-        message.info('角色已完成，从大纲步骤继续...');
+        // 从大纲阶段恢复
+        message.info('正在从大纲阶段继续生成...');
         setGenerationSteps({ worldBuilding: 'completed', careers: 'completed', characters: 'completed', outline: 'processing' });
         setProgress(70);
         await resumeFromOutline(data, projectIdParam);
-      } else {
+      } else if (isProjectWizardCompleted(project)) {
         // 已全部完成
         message.success('项目已完成,正在跳转...');
         setProgress(100);
+        clearStorage();
+        setLoading(false);
         onComplete(projectIdParam);
         setTimeout(() => {
           navigate(`/project/${projectIdParam}`);
@@ -432,110 +831,38 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
     await wizardStreamApi.generateCareerSystemStream(
       buildCareerPayload(pid, data),
-      buildTaskOptions({
-        onProgress: (msg, prog) => {
-          setProgress(prog);
-          setProgressMessage(msg);
-        },
-        onResult: (result) => {
-          console.log(`成功生成职业体系：主职业${result.main_careers_count}个，副职业${result.sub_careers_count}个`);
-          setGenerationSteps(prev => ({ ...prev, careers: 'completed' }));
-        },
-        onError: (error) => {
-          console.error('职业体系生成失败:', error);
-          setErrorDetails(`职业体系生成失败: ${error}`);
-          setGenerationSteps(prev => ({ ...prev, careers: 'error' }));
-          setLoading(false);
-          throw new Error(error);
-        },
-        onComplete: () => {
-          console.log('职业体系生成完成');
-        }
-      })
+      buildCareerTaskOptions()
     );
 
     await resumeFromCharacters(data, worldResult);
   };
 
-  // 恢复:从角色步骤继续
   const resumeFromCharacters = async (data: GenerationConfig, worldResult: WorldBuildingResult) => {
     const pid = projectId || worldResult.project_id;
 
     setGenerationSteps(prev => ({ ...prev, characters: 'processing' }));
-    setProgressMessage('正在生成角色...');
+    setProgressMessage('正在生成大纲...');
 
     await wizardStreamApi.generateCharactersStream(
       buildCharactersPayload(pid, data, worldResult),
-      buildTaskOptions({
-        onProgress: (msg, prog) => {
-          // 直接使用后端返回的进度值
-          setProgress(prog);
-          setProgressMessage(msg);
-        },
-        onResult: (result) => {
-          console.log(`成功生成${result.characters?.length || 0}个角色`);
-          setGenerationSteps(prev => ({ ...prev, characters: 'completed' }));
-        },
-        onError: (error) => {
-          console.error('角色生成失败:', error);
-          setErrorDetails(`角色生成失败: ${error}`);
-          setGenerationSteps(prev => ({ ...prev, characters: 'error' }));
-          setLoading(false);
-          throw new Error(error);
-        },
-        onComplete: () => {
-          console.log('角色生成完成');
-        }
-      })
+      buildCharactersTaskOptions()
     );
 
     await resumeFromOutline(data, pid);
   };
 
-  // 恢复:从大纲步骤继续
   const resumeFromOutline = async (data: GenerationConfig, pid: string) => {
     setGenerationSteps(prev => ({ ...prev, outline: 'processing' }));
     setProgressMessage('正在生成大纲...');
 
     await wizardStreamApi.generateCompleteOutlineStream(
       buildOutlinePayload(pid, data),
-      buildTaskOptions({
-        onProgress: (msg, prog) => {
-          // 直接使用后端返回的进度值
-          setProgress(prog);
-          setProgressMessage(msg);
-        },
-        onResult: () => {
-          console.log('大纲生成完成');
-          setGenerationSteps(prev => ({ ...prev, outline: 'completed' }));
-        },
-        onError: (error) => {
-          console.error('大纲生成失败:', error);
-          setErrorDetails(`大纲生成失败: ${error}`);
-          setGenerationSteps(prev => ({ ...prev, outline: 'error' }));
-          setLoading(false);
-          throw new Error(error);
-        },
-        onComplete: () => {
-          console.log('大纲生成完成');
-        }
-      })
+      buildOutlineTaskOptions()
     );
 
-    // 全部完成
-    setProgress(100);
-    setProgressMessage('项目创建完成！正在跳转...');
-    message.success('项目创建成功！正在进入项目...');
-    clearStorage();
-    setLoading(false);
-
-    onComplete(pid);
-    setTimeout(() => {
-      navigate(`/project/${pid}`);
-    }, 1000);
+    completeWizardGeneration(pid);
   };
 
-  // 自动化生成流程
   const handleAutoGenerate = async (data: GenerationConfig) => {
     try {
       cancelledByUserRef.current = false;
@@ -602,7 +929,8 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           },
           onResult: (result) => {
             console.log(`成功生成职业体系：主职业${result.main_careers_count}个，副职业${result.sub_careers_count}个`);
-            setGenerationSteps(prev => ({ ...prev, careers: 'completed' }));
+            updateStepResearch('careers', result);
+          setGenerationSteps(prev => ({ ...prev, careers: 'completed' }));
           },
           onError: (error) => {
             console.error('职业体系生成失败:', error);
@@ -631,7 +959,8 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           },
           onResult: (result) => {
             console.log(`成功生成${result.characters?.length || 0}个角色`);
-            setGenerationSteps(prev => ({ ...prev, characters: 'completed' }));
+            updateStepResearch('characters', result);
+          setGenerationSteps(prev => ({ ...prev, characters: 'completed' }));
           },
           onError: (error) => {
             console.error('角色生成失败:', error);
@@ -658,9 +987,10 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
             setProgress(prog);
             setProgressMessage(msg);
           },
-          onResult: () => {
+          onResult: (result) => {
             console.log('大纲生成完成');
-            setGenerationSteps(prev => ({ ...prev, outline: 'completed' }));
+            updateStepResearch('outline', result);
+          setGenerationSteps(prev => ({ ...prev, outline: 'completed' }));
           },
           onError: (error) => {
             console.error('大纲生成失败:', error);
@@ -853,6 +1183,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         },
         onResult: (result) => {
           console.log(`成功生成职业体系：主职业${result.main_careers_count}个，副职业${result.sub_careers_count}个`);
+          updateStepResearch('careers', result);
           setGenerationSteps(prev => ({ ...prev, careers: 'completed' }));
         },
         onError: (error) => {
@@ -900,6 +1231,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         },
         onResult: (result) => {
           console.log(`成功生成${result.characters?.length || 0}个角色`);
+          updateStepResearch('characters', result);
           setGenerationSteps(prev => ({ ...prev, characters: 'completed' }));
         },
         onError: (error) => {
@@ -945,8 +1277,9 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           setProgress(prog);
           setProgressMessage(msg);
         },
-        onResult: () => {
+        onResult: (result) => {
           console.log('大纲生成完成');
+          updateStepResearch('outline', result);
           setGenerationSteps(prev => ({ ...prev, outline: 'completed' }));
         },
         onError: (error) => {
@@ -962,20 +1295,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       })
     );
 
-    setProgress(100);
-    setProgressMessage('项目创建完成！正在跳转...');
-    message.success('项目创建成功！正在进入项目...');
-    setLoading(false);
-
-    // 调用完成回调
-    if (pid) {
-      onComplete(pid);
-
-      // 延迟1秒后自动跳转到项目详情页
-      setTimeout(() => {
-        navigate(`/project/${pid}`);
-      }, 1000);
-    }
+    completeWizardGeneration(pid);
   };
 
   // 从职业体系步骤开始的完整流程
@@ -996,6 +1316,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         },
         onResult: (result) => {
           console.log(`成功生成职业体系：主职业${result.main_careers_count}个，副职业${result.sub_careers_count}个`);
+          updateStepResearch('careers', result);
           setGenerationSteps(prev => ({ ...prev, careers: 'completed' }));
         },
         onError: (error) => {
@@ -1033,6 +1354,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         },
         onResult: (result) => {
           console.log(`成功生成${result.characters?.length || 0}个角色`);
+          updateStepResearch('characters', result);
           setGenerationSteps(prev => ({ ...prev, characters: 'completed' }));
         },
         onError: (error) => {
@@ -1066,8 +1388,9 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           setProgress(prog);
           setProgressMessage(msg);
         },
-        onResult: () => {
+        onResult: (result) => {
           console.log('大纲生成完成');
+          updateStepResearch('outline', result);
           setGenerationSteps(prev => ({ ...prev, outline: 'completed' }));
         },
         onError: (error) => {
@@ -1086,6 +1409,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     setProgress(100);
     setProgressMessage('项目创建完成！正在跳转...');
     message.success('项目创建成功！正在进入项目...');
+    clearStorage();
     setLoading(false);
 
     // 调用完成回调
@@ -1114,8 +1438,23 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     generationSteps.outline === 'error';
   const showTerminalActions = hasError || isCancelled;
 
-  // 渲染生成进度页面
+  const handleExitGeneration = (target: 'back' | 'home') => {
+    clearStorage();
+    setCurrentTaskId(null);
+    setLoading(false);
+    setIsCancelling(false);
+    onBusyChange?.(false);
+
+    if (target === 'back') {
+      onBack?.();
+      return;
+    }
+
+    navigate('/');
+  };
+
   const renderGenerating = () => (
+
     <div style={{
       textAlign: 'center',
       padding: isMobile ? '32px 16px' : '40px 20px',
@@ -1345,7 +1684,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           {onBack && (
             <Button
               size="large"
-              onClick={onBack}
+              onClick={() => handleExitGeneration('back')}
               disabled={loading || isCancelling}
             >
               {backButtonText}
@@ -1353,7 +1692,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           )}
           <Button
             size="large"
-            onClick={() => navigate('/')}
+            onClick={() => handleExitGeneration('home')}
             disabled={loading || isCancelling}
           >
             {homeButtonText}

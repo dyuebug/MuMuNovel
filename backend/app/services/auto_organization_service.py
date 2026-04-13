@@ -62,7 +62,7 @@ class AutoOrganizationService:
     ) -> Dict[str, Any]:
         """生成组织详细信息"""
         
-        # ?????????
+        # 优先复用调用方已解析的模板，避免重复读取配置
         resolved_template = template or await PromptService.get_template(
             "AUTO_ORGANIZATION_GENERATION",
             user_id,
@@ -369,7 +369,7 @@ class AutoOrganizationService:
             db
         )
 
-        # 6. ?????????????????
+        # 6. 逐个补齐缺失组织，并复用已缓存的上下文信息
         created_organizations = []
         
         for idx, org_name in enumerate(missing_name_list):
@@ -467,7 +467,7 @@ class AutoOrganizationService:
         if created_organizations and not commit_per_item:
             await db.flush()
         
-        logger.info(f"?? ????????: ?? {len(missing_name_list)} ?????????? {len(created_organizations)} ?")
+        logger.info(f"✅ 组织补全完成：检测到 {len(missing_name_list)} 个缺失组织，成功创建 {len(created_organizations)} 个")
         
         return {
             "created_organizations": created_organizations,

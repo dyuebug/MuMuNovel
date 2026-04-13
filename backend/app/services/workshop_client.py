@@ -32,6 +32,8 @@ class WorkshopClient:
             "X-Instance-ID": INSTANCE_ID,
             "Content-Type": "application/json"
         }
+        if settings.WORKSHOP_PROXY_SHARED_SECRET:
+            headers["X-Workshop-Secret"] = settings.WORKSHOP_PROXY_SHARED_SECRET
         if user_identifier:
             headers["X-User-ID"] = user_identifier
         

@@ -594,7 +594,7 @@ async def test_should_prefer_chat_completions_for_sub2api_api_connection_probe(a
 
         async def generate_text(self, **kwargs):
             captured["call_kwargs"] = kwargs
-            return {"content": "????", "tool_calls": None, "finish_reason": "stop"}
+            return {"content": "ok", "tool_calls": None, "finish_reason": "stop"}
 
     monkeypatch.setattr(settings_api, "AIService", FakeAIService)
 
@@ -747,7 +747,7 @@ async def test_should_pass_backup_urls_and_fallback_strategy_to_api_connection_p
             captured["init_kwargs"] = kwargs
 
         async def generate_text(self, **kwargs):
-            return {"content": "????", "tool_calls": None, "finish_reason": "stop"}
+            return {"content": "ok", "tool_calls": None, "finish_reason": "stop"}
 
         def get_transport_diagnostics(self, provider=None):
             return transport_diagnostics
@@ -852,6 +852,50 @@ async def test_should_return_timeout_error_when_api_test_times_out(async_client,
     assert "timeout" in body["error"]
     assert body["details"]["endpoint_diagnostics"]["primary_endpoint"] == "https://api.openai.com/v1"
     assert body["details"]["endpoint_diagnostics"]["backup_endpoints"] == []
+
+async def test_should_return_gateway_error_guidance_for_api_probe(async_client, monkeypatch):
+    transport_diagnostics = {
+        "events": [{"type": "chat_completions_candidate_failed", "api_mode": "chat_completions"}],
+        "attempts": [{"result": "http_error", "api_mode": "chat_completions", "status_code": 502}],
+        "summary": {"total_attempts": 1},
+    }
+    request = httpx.Request("POST", "http://127.0.0.1:8317/v1/chat/completions")
+    response = httpx.Response(502, request=request)
+    gateway_error = httpx.HTTPStatusError(
+        "Server error '502 Bad Gateway' for url 'http://127.0.0.1:8317/v1/chat/completions'",
+        request=request,
+        response=response,
+    )
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            return None
+
+        async def generate_text(self, **kwargs):
+            raise gateway_error
+
+        def get_transport_diagnostics(self, provider=None):
+            return transport_diagnostics
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+
+    response = await async_client.post(
+        "/api/settings/test",
+        json=build_api_test_payload(
+            api_base_url="http://127.0.0.1:8317/v1",
+            provider="openai_responses",
+        ),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["error_type"] == "HTTPStatusError"
+    assert body["details"]["http_status_code"] == 502
+    assert body["details"]["endpoint_diagnostics"]["primary_endpoint"] == "http://127.0.0.1:8317/v1"
+    assert body["details"]["endpoint_diagnostics"]["auto_failover_enabled"] is False
+    assert body["details"]["transport_diagnostics"] == transport_diagnostics
+    assert any("local gateway or proxy" in item.lower() for item in body["suggestions"])
+    assert any("backup endpoint" in item.lower() for item in body["suggestions"])
 
 
 @pytest.mark.parametrize("error_message", ["401 unauthorized", "404 not found", "429 rate limit"])
@@ -1118,7 +1162,7 @@ async def test_should_normalize_api_connection_probe_cache_key_by_probe_max_toke
 
         async def generate_text(self, **kwargs):
             calls["count"] += 1
-            return {"content": "????", "tool_calls": None, "finish_reason": "stop"}
+            return {"content": "ok", "tool_calls": None, "finish_reason": "stop"}
 
     monkeypatch.setattr(settings_api, "AIService", FakeAIService)
 
@@ -1175,7 +1219,7 @@ async def test_should_not_reuse_api_connection_probe_cache_when_backup_urls_chan
 
         async def generate_text(self, **kwargs):
             calls["count"] += 1
-            return {"content": "????", "tool_calls": None, "finish_reason": "stop"}
+            return {"content": "ok", "tool_calls": None, "finish_reason": "stop"}
 
     monkeypatch.setattr(settings_api, "AIService", FakeAIService)
 
@@ -1278,3 +1322,95 @@ async def test_should_not_cache_function_calling_probe_timeout(async_client, mon
     assert first.json()["cached"] is False
     assert second.json()["cached"] is False
     assert calls["count"] == 2
+
+
+
+async def test_should_fallback_to_docker_host_models_when_loopback_is_unreachable(async_client, monkeypatch):
+    captured_urls = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            captured_urls.append(url)
+            if url.startswith("http://127.0.0.1:8317"):
+                raise httpx.ConnectError("connection refused", request=httpx.Request("GET", url))
+            return httpx.Response(
+                status_code=200,
+                json={"data": [{"id": "gpt-5.3-codex"}]},
+                request=httpx.Request("GET", url),
+            )
+
+    monkeypatch.setattr(settings_api, "_is_running_in_docker_environment", lambda: True)
+    monkeypatch.setattr(settings_api.httpx, "AsyncClient", FakeAsyncClient)
+
+    response = await async_client.get(
+        "/api/settings/models",
+        params={
+            "api_key": "sk-test",
+            "api_base_url": "http://127.0.0.1:8317/v1",
+            "provider": "sub2api",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider"] == "sub2api"
+    assert body["count"] == 1
+    assert body["models"][0]["value"] == "gpt-5.3-codex"
+    assert captured_urls[0] == "http://127.0.0.1:8317/v1/models"
+    assert captured_urls[1] == "http://host.docker.internal:8317/v1/models"
+
+
+
+async def test_should_fallback_from_local_https_models_to_http(async_client, monkeypatch):
+    captured_urls = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, headers=None):
+            captured_urls.append(url)
+            if url.startswith("https://"):
+                raise httpx.ConnectError("ssl record layer failure", request=httpx.Request("GET", url))
+            return httpx.Response(
+                status_code=200,
+                json={"data": [{"id": "gpt-5.3-codex"}]},
+                request=httpx.Request("GET", url),
+            )
+
+    monkeypatch.setattr(settings_api, "_is_running_in_docker_environment", lambda: True)
+    monkeypatch.setattr(settings_api.httpx, "AsyncClient", FakeAsyncClient)
+
+    response = await async_client.get(
+        "/api/settings/models",
+        params={
+            "api_key": "sk-test",
+            "api_base_url": "https://127.0.0.1:8317/v1",
+            "provider": "sub2api",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider"] == "sub2api"
+    assert body["count"] == 1
+    assert body["models"][0]["value"] == "gpt-5.3-codex"
+    assert captured_urls[:4] == [
+        "https://127.0.0.1:8317/v1/models",
+        "https://host.docker.internal:8317/v1/models",
+        "http://127.0.0.1:8317/v1/models",
+        "http://host.docker.internal:8317/v1/models",
+    ]

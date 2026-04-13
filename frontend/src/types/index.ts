@@ -815,6 +815,7 @@ export interface ChapterPlanItem {
 export interface OutlineExpansionRequest {
   target_chapter_count: number;
   expansion_strategy?: 'balanced' | 'climax' | 'detail';
+  enable_scene_analysis?: boolean;
   auto_create_chapters?: boolean;
   provider?: string;
   model?: string;
@@ -843,6 +844,7 @@ export interface BatchOutlineExpansionRequest {
   outline_ids?: string[];
   chapters_per_outline: number;
   expansion_strategy?: 'balanced' | 'climax' | 'detail';
+  enable_scene_analysis?: boolean;
   auto_create_chapters?: boolean;
   provider?: string;
   model?: string;
@@ -987,6 +989,8 @@ export interface WizardBasicInfo {
   default_story_creation_brief?: string;
   default_quality_preset?: QualityPreset;
   default_quality_notes?: string;
+  model?: string;
+  enable_mcp?: boolean;
   enable_web_research?: boolean;
   web_research_query?: string;
   world_building_research_query?: string;

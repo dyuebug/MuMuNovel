@@ -8,16 +8,54 @@ import { EditOutlined, DeleteOutlined, ThunderboltOutlined, BranchesOutlined, Ap
 
 
 import { useStore } from '../store';
+import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgroundTasks';
 
 
 import { useCharacterSync, useOutlineSync } from '../store/hooks';
 
 
 import { backgroundTaskApi, outlineApi, chapterApi, projectApi } from '../services/api';
+import { formatBackgroundTaskError } from '../utils/taskPolling';
+import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
 import { hasUsableApiCredentials } from '../utils/apiKey';
 
 
 import type { OutlineExpansionResponse, BatchOutlineExpansionResponse, ChapterPlanItem, ApiError, Character, CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
+
+const OUTLINE_TASK_REPLAY_KEY_PREFIX = 'background-task-replay:outline:';
+const OUTLINE_TASK_OPEN_REQUEST_KEY_PREFIX = 'background-task-open:outline:';
+
+const hasOutlineTaskReplayBeenHandled = (taskId: string): boolean => {
+  try {
+    return sessionStorage.getItem(`${OUTLINE_TASK_REPLAY_KEY_PREFIX}${taskId}`) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const markOutlineTaskReplayHandled = (taskId: string) => {
+  try {
+    sessionStorage.setItem(`${OUTLINE_TASK_REPLAY_KEY_PREFIX}${taskId}`, '1');
+  } catch {
+    // ignore sessionStorage failures
+  }
+};
+
+const getRequestedOutlineTaskId = (projectId: string): string | null => {
+  try {
+    return sessionStorage.getItem(`${OUTLINE_TASK_OPEN_REQUEST_KEY_PREFIX}${projectId}`);
+  } catch {
+    return null;
+  }
+};
+
+const clearRequestedOutlineTaskId = (projectId: string) => {
+  try {
+    sessionStorage.removeItem(`${OUTLINE_TASK_OPEN_REQUEST_KEY_PREFIX}${projectId}`);
+  } catch {
+    // ignore sessionStorage failures
+  }
+};
 
 
 // 大纲生成请求数据类型
@@ -426,6 +464,15 @@ export default function Outline() {
   const [batchPreviewData, setBatchPreviewData] = useState<BatchOutlineExpansionResponse | null>(null);
 
 
+  const [singlePreviewVisible, setSinglePreviewVisible] = useState(false);
+
+
+  const [singlePreviewOutlineId, setSinglePreviewOutlineId] = useState<string | null>(null);
+
+
+  const [singlePreviewData, setSinglePreviewData] = useState<OutlineExpansionResponse | null>(null);
+
+
   const [visibleOutlineCount, setVisibleOutlineCount] = useState(INITIAL_OUTLINE_RENDER_COUNT);
 
 
@@ -439,15 +486,44 @@ export default function Outline() {
 
 
   const [sseModalVisible, setSSEModalVisible] = useState(false);
+  const trackedTasks = useBackgroundTaskStore((state) => state.tasks);
 
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth <= 768);
+    };
 
-  const generateTaskPollTimerRef = useRef<number | null>(null);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
+  const activeTrackedOutlineGenerateTask = useMemo(() => {
+    if (!currentProject?.id) {
+      return null;
+    }
 
-  const expandTaskPollTimerRef = useRef<number | null>(null);
+    return Object.values(trackedTasks)
+      .filter(
+        (task) => task.projectId === currentProject.id
+          && task.taskType === 'outline_generate'
+          && isActiveBackgroundTask(task)
+      )
+      .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+  }, [currentProject?.id, trackedTasks]);
 
+  const activeTrackedOutlineExpandTask = useMemo(() => {
+    if (!currentProject?.id) {
+      return null;
+    }
 
-  const generateTaskIdRef = useRef<string | null>(null);
+    return Object.values(trackedTasks)
+      .filter(
+        (task) => task.projectId === currentProject.id
+          && (task.taskType === 'outline_expand' || task.taskType === 'outline_batch_expand')
+          && isActiveBackgroundTask(task)
+      )
+      .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+  }, [currentProject?.id, trackedTasks]);
 
 
   const expandTaskIdRef = useRef<string | null>(null);
@@ -456,67 +532,7 @@ export default function Outline() {
   useEffect(() => {
 
 
-    const handleResize = () => {
-
-
-      setIsMobile(window.innerWidth <= 768);
-
-
-    };
-
-
-    window.addEventListener('resize', handleResize);
-
-
-    return () => window.removeEventListener('resize', handleResize);
-
-
-  }, []);
-
-
-  const stopGenerateTaskPolling = () => {
-
-
-    if (generateTaskPollTimerRef.current) {
-
-
-      window.clearInterval(generateTaskPollTimerRef.current);
-
-
-      generateTaskPollTimerRef.current = null;
-
-
-    }
-
-
-  };
-
-
-  const stopExpandTaskPolling = () => {
-
-
-    if (expandTaskPollTimerRef.current) {
-
-
-      window.clearInterval(expandTaskPollTimerRef.current);
-
-
-      expandTaskPollTimerRef.current = null;
-
-
-    }
-
-
-  };
-
-
-  useEffect(() => {
-
-
     return () => {
-
-
-      stopGenerateTaskPolling();
 
 
       stopExpandTaskPolling();
@@ -528,256 +544,200 @@ export default function Outline() {
   }, []);
 
 
-  const startGenerateTaskPolling = (taskId: string) => {
-
-
-    stopGenerateTaskPolling();
-
-
-    generateTaskIdRef.current = taskId;
-
-
-    const poll = async () => {
-
-
-      try {
-
-
-        const task = await backgroundTaskApi.getTaskStatus(taskId);
-
-
+  const { currentTaskIdRef: generateTaskIdRef, startTaskPolling: startGenerateTaskPolling, stopTaskPolling: stopGenerateTaskPolling } = useRestorableBackgroundTaskPolling({
+    projectId: currentProject?.id,
+    activeTrackedTask: activeTrackedOutlineGenerateTask,
+    canRestore: !isExpanding && !Boolean(expandTaskIdRef.current),
+    isMatchingTask: (task) => task.task_type === 'outline_generate' && (task.status === 'pending' || task.status === 'running'),
+    onRestoreTask: ({ progress, message: taskMessage }) => {
+      setIsGenerating(true);
+      setSSEProgress(progress || 0);
+      setSSEMessage(taskMessage || '正在恢复大纲任务...');
+      setSSEModalVisible(true);
+    },
+    createPollingOptions: () => ({
+      pollTask: (currentPollingTaskId) => backgroundTaskApi.getTaskStatus(currentPollingTaskId),
+      onTask: (task) => {
         setSSEProgress(task.progress || 0);
-
-
         setSSEMessage(task.message || '');
-
-
-        if (task.status === 'completed') {
-
-
-          stopGenerateTaskPolling();
-
-
-          generateTaskIdRef.current = null;
-
-
-          setSSEModalVisible(false);
-
-
-          setIsGenerating(false);
-
-
-          message.success('大纲生成完成！');
-
-
-          void refreshOutlines();
-
-
-          return;
-
-
-        }
-
-
-        if (task.status === 'failed') {
-
-
-          stopGenerateTaskPolling();
-
-
-          generateTaskIdRef.current = null;
-
-
-          setSSEModalVisible(false);
-
-
-          setIsGenerating(false);
-
-
-          message.error(task.error || task.message || '生成失败');
-
-
-          return;
-
-
-        }
-
-
-        if (task.status === 'cancelled') {
-
-
-          stopGenerateTaskPolling();
-
-
-          generateTaskIdRef.current = null;
-
-
-          setSSEModalVisible(false);
-
-
-          setIsGenerating(false);
-
-
-          message.info(task.message || '任务已取消');
-
-
-        }
-
-
-      } catch (error) {
-
-
+      },
+      onCompleted: () => {
+        stopGenerateTaskPolling();
+        generateTaskIdRef.current = null;
+        setSSEModalVisible(false);
+        setIsGenerating(false);
+        message.success('大纲生成成功');
+        void refreshOutlines();
+      },
+      onFailed: (task) => {
+        stopGenerateTaskPolling();
+        generateTaskIdRef.current = null;
+        setSSEModalVisible(false);
+        setIsGenerating(false);
+        message.error(formatBackgroundTaskError(task.error, task.message, '生成失败'));
+      },
+      onCancelled: (task) => {
+        stopGenerateTaskPolling();
+        generateTaskIdRef.current = null;
+        setSSEModalVisible(false);
+        setIsGenerating(false);
+        message.info(task.message || '任务已取消');
+      },
+      onPollingError: (error) => {
         console.error('轮询大纲生成任务失败:', error);
+        stopGenerateTaskPolling();
+        generateTaskIdRef.current = null;
+        setSSEModalVisible(false);
+        setIsGenerating(false);
+        void refreshOutlines();
+        message.error('大纲生成状态同步失败，请刷新后重试');
+      },
+    }),
+  });
 
 
-      }
+  const openSingleExpansionPreview = useCallback((outlineId: string, response: OutlineExpansionResponse) => {
+    setSinglePreviewOutlineId(outlineId);
+    setSinglePreviewData(response);
+    setSinglePreviewVisible(true);
+  }, []);
 
 
-    };
-
-
-    void poll();
-
-
-    generateTaskPollTimerRef.current = window.setInterval(() => {
-
-
-      void poll();
-
-
-    }, 1500);
-
-
-  };
-
-
-  const startExpandTaskPolling = (
-
-
-    taskId: string,
-
-
-    onCompleted: (result: Record<string, unknown> | null) => void
-
-
+  const handleExpandTaskResult = useCallback((
+    taskType: 'outline_expand' | 'outline_batch_expand',
+    result: Record<string, unknown> | null,
   ) => {
+    if (!result) {
+      message.error(taskType === 'outline_batch_expand' ? '批量展开大纲失败' : '展开大纲失败');
+      return;
+    }
+
+    if (taskType === 'outline_batch_expand') {
+      const data = result as unknown as BatchOutlineExpansionResponse;
+      setCachedBatchExpansionResponse(data);
+      setBatchPreviewData(data);
+      setBatchPreviewVisible(true);
+      return;
+    }
+
+    const response = result as unknown as OutlineExpansionResponse;
+    const outlineId = typeof response.outline_id === 'string' ? response.outline_id : '';
+    if (!outlineId) {
+      message.error('缺少大纲 ID');
+      return;
+    }
+
+    openSingleExpansionPreview(outlineId, response);
+  }, [openSingleExpansionPreview]);
 
 
-    stopExpandTaskPolling();
-
-
-    expandTaskIdRef.current = taskId;
-
-
-    const poll = async () => {
-
-
-      try {
-
-
-        const task = await backgroundTaskApi.getTaskStatus(taskId);
-
-
+  const { currentTaskIdRef: expandPollingTaskIdRef, startTaskPolling: startExpandTaskPolling, stopTaskPolling: stopExpandTaskPolling } = useRestorableBackgroundTaskPolling({
+    projectId: currentProject?.id,
+    activeTrackedTask: activeTrackedOutlineExpandTask,
+    canRestore: !isGenerating && !Boolean(generateTaskIdRef.current),
+    isMatchingTask: (task) => (task.task_type === 'outline_expand' || task.task_type === 'outline_batch_expand') && (task.status === 'pending' || task.status === 'running'),
+    onRestoreTask: ({ progress, message: taskMessage }) => {
+      setIsExpanding(true);
+      setSSEProgress(progress || 0);
+      setSSEMessage(taskMessage || '正在恢复大纲任务...');
+      setSSEModalVisible(true);
+    },
+    createPollingOptions: () => ({
+      pollTask: (currentPollingTaskId) => backgroundTaskApi.getTaskStatus(currentPollingTaskId),
+      onTask: (task) => {
         setSSEProgress(task.progress || 0);
-
-
         setSSEMessage(task.message || '');
+      },
+      onCompleted: (task) => {
+        stopExpandTaskPolling();
+        expandPollingTaskIdRef.current = null;
+        expandTaskIdRef.current = null;
+        setSSEModalVisible(false);
+        setIsExpanding(false);
 
-
-        if (task.status === 'completed') {
-
-
-          stopExpandTaskPolling();
-
-
-          expandTaskIdRef.current = null;
-
-
-          setSSEModalVisible(false);
-
-
-          setIsExpanding(false);
-
-
-          onCompleted((task.result as Record<string, unknown> | null) || null);
-
-
-          return;
-
-
+        if (task.task_type === 'outline_expand' || task.task_type === 'outline_batch_expand') {
+          handleExpandTaskResult(task.task_type, (task.result as Record<string, unknown> | null) || null);
         }
-
-
-        if (task.status === 'failed') {
-
-
-          stopExpandTaskPolling();
-
-
-          expandTaskIdRef.current = null;
-
-
-          setSSEModalVisible(false);
-
-
-          setIsExpanding(false);
-
-
-          message.error(task.error || task.message || '任务执行失败');
-
-
-          return;
-
-
-        }
-
-
-        if (task.status === 'cancelled') {
-
-
-          stopExpandTaskPolling();
-
-
-          expandTaskIdRef.current = null;
-
-
-          setSSEModalVisible(false);
-
-
-          setIsExpanding(false);
-
-
-          message.info(task.message || '任务已取消');
-
-
-        }
-
-
-      } catch (error) {
-
-
+      },
+      onFailed: (task) => {
+        stopExpandTaskPolling();
+        expandPollingTaskIdRef.current = null;
+        expandTaskIdRef.current = null;
+        setSSEModalVisible(false);
+        setIsExpanding(false);
+        message.error(formatBackgroundTaskError(task.error, task.message, '展开失败'));
+      },
+      onCancelled: (task) => {
+        stopExpandTaskPolling();
+        expandPollingTaskIdRef.current = null;
+        expandTaskIdRef.current = null;
+        setSSEModalVisible(false);
+        setIsExpanding(false);
+        message.info(task.message || '任务已取消');
+      },
+      onPollingError: (error) => {
         console.error('轮询大纲展开任务失败:', error);
+        stopExpandTaskPolling();
+        expandPollingTaskIdRef.current = null;
+        expandTaskIdRef.current = null;
+        setSSEModalVisible(false);
+        setIsExpanding(false);
+        void refreshOutlines();
+        message.error('大纲展开状态同步失败，请刷新后重试');
+      },
+    }),
+  });
 
 
-      }
+  useEffect(() => {
+    if (
+      !currentProject?.id
+      || generateTaskIdRef.current
+      || expandTaskIdRef.current
+      || sseModalVisible
+      || batchPreviewVisible
+    ) {
+      return;
+    }
 
+    const requestedTaskId = getRequestedOutlineTaskId(currentProject.id);
+    const completedTasks = Object.values(trackedTasks).filter(
+      (task) => task.projectId === currentProject.id
+        && (task.taskType === 'outline_expand' || task.taskType === 'outline_batch_expand')
+        && task.status === 'completed'
+        && task.result
+    );
+    const completedTask = requestedTaskId
+      ? completedTasks.find((task) => task.taskId === requestedTaskId)
+      : completedTasks
+        .filter((task) => !hasOutlineTaskReplayBeenHandled(task.taskId))
+        .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
 
-    };
+    if (!completedTask || !completedTask.result) {
+      return;
+    }
 
+    if (requestedTaskId) {
+      clearRequestedOutlineTaskId(currentProject.id);
+    }
 
-    void poll();
+    if (completedTask.taskType === 'outline_batch_expand') {
+      const data = completedTask.result as unknown as BatchOutlineExpansionResponse;
+      markOutlineTaskReplayHandled(completedTask.taskId);
+      setCachedBatchExpansionResponse(data);
+      setBatchPreviewData(data);
+      setBatchPreviewVisible(true);
+      return;
+    }
 
+    const response = completedTask.result as unknown as OutlineExpansionResponse;
+    if (!response.outline_id || typeof response.outline_id !== 'string') {
+      return;
+    }
 
-    expandTaskPollTimerRef.current = window.setInterval(() => {
-
-
-      void poll();
-
-
-    }, 1500);
-
-
-  };
+    markOutlineTaskReplayHandled(completedTask.taskId);
+    openSingleExpansionPreview(response.outline_id, response);
+  }, [batchPreviewVisible, currentProject?.id, openSingleExpansionPreview, sseModalVisible, trackedTasks]);
 
 
   const handleCancelGenerateTask = async () => {
@@ -795,21 +755,6 @@ export default function Outline() {
       await backgroundTaskApi.cancelTask(taskId);
 
 
-      message.info('已取消大纲生成任务');
-
-
-    } catch (error) {
-
-
-      console.error('取消大纲生成任务失败:', error);
-
-
-      message.error('取消任务失败');
-
-
-    } finally {
-
-
       stopGenerateTaskPolling();
 
 
@@ -820,6 +765,18 @@ export default function Outline() {
 
 
       setIsGenerating(false);
+
+
+      message.info('已取消大纲生成任务');
+
+
+    } catch (error) {
+
+
+      console.error('取消大纲生成任务失败:', error);
+
+
+      message.error('取消任务失败');
 
 
     }
@@ -843,21 +800,6 @@ export default function Outline() {
       await backgroundTaskApi.cancelTask(taskId);
 
 
-      message.info('已取消大纲展开任务');
-
-
-    } catch (error) {
-
-
-      console.error('取消大纲展开任务失败:', error);
-
-
-      message.error('取消任务失败');
-
-
-    } finally {
-
-
       stopExpandTaskPolling();
 
 
@@ -868,6 +810,18 @@ export default function Outline() {
 
 
       setIsExpanding(false);
+
+
+      message.info('已取消大纲展开任务');
+
+
+    } catch (error) {
+
+
+      console.error('取消大纲展开任务失败:', error);
+
+
+      message.error('取消任务失败');
 
 
     }
@@ -921,10 +875,7 @@ export default function Outline() {
     }
 
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-
-
-  }, [currentProject?.id]);
+  }, [currentProject?.id, refreshOutlines]);
 
 
   const ensureProjectCharactersLoaded = useCallback((projectId = currentProject?.id) => {
@@ -1066,9 +1017,6 @@ export default function Outline() {
 
 
   // 避免首屏对全部大纲并发查询
-
-
-  if (!currentProject) return null;
 
 
   // 确保大纲按 order_index 排序
@@ -2289,6 +2237,21 @@ export default function Outline() {
     try {
 
 
+      const activeProject = currentProject;
+
+
+      if (!activeProject) {
+
+
+        message.error('当前项目不存在');
+
+
+        return;
+
+
+      }
+
+
       setIsGenerating(true);
 
 
@@ -2325,22 +2288,22 @@ export default function Outline() {
       const requestData: OutlineGenerateRequestData = {
 
 
-        project_id: currentProject.id,
+        project_id: activeProject.id,
 
 
-        genre: currentProject.genre || '通用',
+        genre: activeProject.genre || '通用',
 
 
-        theme: values.theme || currentProject.theme || '',
+        theme: values.theme || activeProject.theme || '',
 
 
         chapter_count: values.chapter_count || 5,
 
 
-        narrative_perspective: values.narrative_perspective || currentProject.narrative_perspective || '第三人称',
+        narrative_perspective: values.narrative_perspective || activeProject.narrative_perspective || '第三人称',
 
 
-        target_words: currentProject.target_words || 100000,
+        target_words: activeProject.target_words || 100000,
 
 
         requirements: values.requirements,
@@ -2427,7 +2390,7 @@ export default function Outline() {
         task_type: 'outline_generate',
 
 
-        project_id: currentProject.id,
+        project_id: activeProject.id,
 
 
         payload,
@@ -2470,6 +2433,12 @@ export default function Outline() {
 
 
   const showGenerateModal = async () => {
+
+    if (isGenerating || activeTrackedOutlineGenerateTask) {
+      message.info('当前已有任务执行中，请稍候');
+      return;
+    }
+
 
 
     const hasOutlines = outlines.length > 0;
@@ -2853,10 +2822,25 @@ export default function Outline() {
         try {
 
 
+          const activeProject = currentProject;
+
+
+          if (!activeProject) {
+
+
+            message.error('当前项目不存在');
+
+
+            return;
+
+
+          }
+
+
           await outlineApi.createOutline({
 
 
-            project_id: currentProject.id,
+            project_id: activeProject.id,
 
 
             ...values
@@ -2914,6 +2898,12 @@ export default function Outline() {
 
 
   const handleExpandOutline = async (outlineId: string, outlineTitle: string) => {
+
+    if (isExpanding || activeTrackedOutlineExpandTask) {
+      message.info('当前已有任务执行中，请稍候');
+      return;
+    }
+
 
 
     try {
@@ -3297,10 +3287,25 @@ export default function Outline() {
               auto_create_chapters: false, // 第一步：仅生成规划
 
 
-              enable_scene_analysis: true
+              enable_scene_analysis: values.enable_scene_analysis ?? true
 
 
             };
+
+
+            const activeProject = currentProject;
+
+
+            if (!activeProject) {
+
+
+              message.error('当前项目不存在');
+
+
+              return;
+
+
+            }
 
 
             const task = await backgroundTaskApi.createTask({
@@ -3309,7 +3314,7 @@ export default function Outline() {
               task_type: 'outline_expand',
 
 
-              project_id: currentProject.id,
+              project_id: activeProject.id,
 
 
               payload: {
@@ -3330,25 +3335,8 @@ export default function Outline() {
             message.success('大纲展开任务已转为后台执行，可继续进行其他操作');
 
 
-            startExpandTaskPolling(task.task_id, (result) => {
-
-
-              if (!result) {
-
-
-                message.error('展开任务完成但未返回规划数据');
-
-
-                return;
-
-
-              }
-
-
-              showExpansionPreview(outlineId, result as unknown as OutlineExpansionResponse);
-
-
-            });
+            expandTaskIdRef.current = task.task_id;
+            startExpandTaskPolling(task.task_id);
 
 
           } catch (error) {
@@ -3761,88 +3749,6 @@ export default function Outline() {
   };
 
 
-  // 显示展开规划预览，并提供确认创建章节的选项
-
-
-  const showExpansionPreview = (outlineId: string, response: OutlineExpansionResponse) => {
-
-
-    // 缓存AI生成的规划数据
-
-
-    const cachedPlans = response.chapter_plans;
-
-
-    modalApi.confirm({
-
-
-      title: (
-
-
-        <Space>
-
-
-          <CheckCircleOutlined style={{ color: 'var(--color-success)' }} />
-
-
-          <span>展开规划预览</span>
-
-
-        </Space>
-
-
-      ),
-
-
-      width: 900,
-
-
-      centered: true,
-
-
-      okText: '确认并创建章节',
-
-
-      cancelText: '暂不创建',
-
-
-      content: (
-        <Suspense fallback={outlineLazyFallback}>
-          <LazyOutlineExpansionPreviewContent
-            response={response}
-            isMobile={isMobile}
-          />
-        </Suspense>
-      ),
-
-
-      onOk: async () => {
-
-
-        // 第二步：用户确认后，直接使用缓存的规划创建章节（避免重复调用AI）
-
-
-        await handleConfirmCreateChapters(outlineId, cachedPlans);
-
-
-      },
-
-
-      onCancel: () => {
-
-
-        message.info('已取消创建章节');
-
-
-      }
-
-
-    });
-
-
-  };
-
-
   // 确认创建章节 - 使用缓存的规划数据，避免重复AI调用
 
 
@@ -3916,6 +3822,12 @@ export default function Outline() {
 
 
   const handleBatchExpandOutlines = () => {
+
+    if (isExpanding || activeTrackedOutlineExpandTask) {
+      message.info('当前已有任务执行中，请稍候');
+      return;
+    }
+
 
 
     if (!currentProject?.id || outlines.length === 0) {
@@ -4012,7 +3924,9 @@ export default function Outline() {
             ...values,
 
 
-            auto_create_chapters: false // 第一步：仅生成规划
+            auto_create_chapters: false, // 第一步：仅生成规划
+
+            enable_scene_analysis: values.enable_scene_analysis ?? true
 
 
           };
@@ -4042,37 +3956,8 @@ export default function Outline() {
           message.success('批量展开任务已转为后台执行，可继续进行其他操作');
 
 
-          startExpandTaskPolling(task.task_id, (result) => {
-
-
-            if (!result) {
-
-
-              message.error('批量展开完成但未返回规划数据');
-
-
-              return;
-
-
-            }
-
-
-            const data = result as unknown as BatchOutlineExpansionResponse;
-
-
-            console.log('批量展开完成，结果:', data);
-
-
-            setCachedBatchExpansionResponse(data);
-
-
-            setBatchPreviewData(data);
-
-
-            setBatchPreviewVisible(true);
-
-
-          });
+          expandTaskIdRef.current = task.task_id;
+          startExpandTaskPolling(task.task_id);
 
 
         } catch (error) {
@@ -4105,6 +3990,30 @@ export default function Outline() {
     });
 
 
+  };
+
+
+  const handleSinglePreviewOk = async () => {
+    if (!singlePreviewOutlineId || !singlePreviewData) {
+      message.error('规划数据丢失，请重新展开');
+      setSinglePreviewVisible(false);
+      setSinglePreviewOutlineId(null);
+      setSinglePreviewData(null);
+      return;
+    }
+
+    setSinglePreviewVisible(false);
+    await handleConfirmCreateChapters(singlePreviewOutlineId, singlePreviewData.chapter_plans);
+    setSinglePreviewOutlineId(null);
+    setSinglePreviewData(null);
+  };
+
+
+  const handleSinglePreviewCancel = () => {
+    setSinglePreviewVisible(false);
+    setSinglePreviewOutlineId(null);
+    setSinglePreviewData(null);
+    message.info('已取消创建章节');
   };
 
 
@@ -4306,31 +4215,13 @@ export default function Outline() {
   const handleExpandOutlineRef = useRef(handleExpandOutline);
 
 
-  useEffect(() => {
+  handleOpenEditModalRef.current = handleOpenEditModal;
 
 
-    handleOpenEditModalRef.current = handleOpenEditModal;
+  handleDeleteOutlineRef.current = handleDeleteOutline;
 
 
-  }, [handleOpenEditModal]);
-
-
-  useEffect(() => {
-
-
-    handleDeleteOutlineRef.current = handleDeleteOutline;
-
-
-  }, [handleDeleteOutline]);
-
-
-  useEffect(() => {
-
-
-    handleExpandOutlineRef.current = handleExpandOutline;
-
-
-  }, [handleExpandOutline]);
+  handleExpandOutlineRef.current = handleExpandOutline;
 
 
   const openEditModalFromList = useCallback((id: string) => {
@@ -4355,24 +4246,6 @@ export default function Outline() {
 
 
     return handleExpandOutlineRef.current(outlineId, outlineTitle);
-
-
-  }, []);
-
-
-  const toggleScenesExpand = useCallback((id: string) => {
-
-
-    setScenesExpandStatus((prev) => ({
-
-
-      ...prev,
-
-
-      [id]: !prev[id],
-
-
-    }));
 
 
   }, []);
@@ -6484,7 +6357,7 @@ export default function Outline() {
                   onClick={() => expandOutlineFromList(item.id, item.title)}
 
 
-                  loading={isExpanding}
+                  loading={Boolean(isExpanding || activeTrackedOutlineExpandTask)}
 
 
                   size={isMobile ? 'middle' : 'small'}
@@ -6607,6 +6480,9 @@ export default function Outline() {
     isExpanding,
 
 
+    activeTrackedOutlineExpandTask,
+
+
     openEditModalFromList,
 
 
@@ -6616,16 +6492,44 @@ export default function Outline() {
     expandOutlineFromList,
 
 
-    toggleScenesExpand,
-
-
   ]);
+
+
+  if (!currentProject) return null;
 
 
   return (
 
 
     <>
+
+
+      {singlePreviewVisible && singlePreviewData ? (
+        <Modal
+          title={(
+            <Space>
+              <CheckCircleOutlined style={{ color: 'var(--color-success)' }} />
+              <span>展开规划预览</span>
+            </Space>
+          )}
+          open={singlePreviewVisible}
+          onOk={() => void handleSinglePreviewOk()}
+          onCancel={handleSinglePreviewCancel}
+          width={900}
+          centered
+          okText="确认并创建章节"
+          cancelText="暂不创建"
+          confirmLoading={isExpanding}
+          destroyOnHidden
+        >
+          <Suspense fallback={outlineLazyFallback}>
+            <LazyOutlineExpansionPreviewContent
+              response={singlePreviewData}
+              isMobile={isMobile}
+            />
+          </Suspense>
+        </Modal>
+      ) : null}
 
 
       {/* 批量展开预览 Modal */}
@@ -6850,7 +6754,7 @@ export default function Outline() {
               onClick={showGenerateModal}
 
 
-              loading={isGenerating}
+              loading={Boolean(isGenerating || activeTrackedOutlineGenerateTask)}
 
 
               block={isMobile}
@@ -6877,7 +6781,7 @@ export default function Outline() {
                 onClick={handleBatchExpandOutlines}
 
 
-                loading={isExpanding}
+                loading={Boolean(isExpanding || activeTrackedOutlineExpandTask)}
 
 
                 title="将所有大纲展开为多章，实现从大纲到章节的一对多关系"
@@ -6977,5 +6881,3 @@ export default function Outline() {
 
 
 }
-
-

@@ -72,6 +72,25 @@ def get_user_id(request: Request) -> Optional[str]:
     return getattr(request.state, 'user_id', None)
 
 
+def raise_auth_service_unavailable_if_needed(request: Request) -> None:
+    """在鉴权依赖的数据库不可用时，统一返回 503。"""
+    if getattr(request.state, 'auth_backend_unavailable', False):
+        detail = getattr(
+            request.state,
+            'auth_backend_unavailable_message',
+            '认证服务暂时不可用，请确认 PostgreSQL 已启动后重试',
+        )
+        raise HTTPException(status_code=503, detail=detail)
+
+
+def require_request_user(request: Request, detail: str = '需要登录'):
+    """统一处理登录校验，并在鉴权后端不可用时优先返回 503。"""
+    raise_auth_service_unavailable_if_needed(request)
+    if not hasattr(request.state, 'user') or not request.state.user:
+        raise HTTPException(status_code=401, detail=detail)
+    return request.state.user
+
+
 async def verify_project_access_from_request(
     project_id: str,
     request: Request,

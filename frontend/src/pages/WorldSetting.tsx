@@ -1,9 +1,12 @@
 import { Card, Descriptions, Empty, Typography, Button, Modal, Form, Input, message, Flex, InputNumber, Select } from 'antd';
 import { GlobalOutlined, EditOutlined, SyncOutlined, FormOutlined } from '@ant-design/icons';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../store';
+import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgroundTasks';
 import { cardStyles } from '../components/CardStyles';
 import { backgroundTaskApi, projectApi } from '../services/api';
+import { formatBackgroundTaskError } from '../utils/taskPolling';
+import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
 import { SSELoadingOverlay } from '../components/SSELoadingOverlay';
 import type { QualityPreset } from '../types';
 import {
@@ -17,6 +20,41 @@ import {
 
 const { Title, Paragraph } = Typography;
 const { TextArea } = Input;
+const WORLD_TASK_REPLAY_KEY_PREFIX = 'background-task-replay:world:';
+const WORLD_TASK_OPEN_REQUEST_KEY_PREFIX = 'background-task-open:world:';
+
+const hasWorldTaskReplayBeenHandled = (taskId: string): boolean => {
+  try {
+    return sessionStorage.getItem(`${WORLD_TASK_REPLAY_KEY_PREFIX}${taskId}`) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const markWorldTaskReplayHandled = (taskId: string) => {
+  try {
+    sessionStorage.setItem(`${WORLD_TASK_REPLAY_KEY_PREFIX}${taskId}`, '1');
+  } catch {
+    // ignore sessionStorage failures
+  }
+};
+
+const getRequestedWorldTaskId = (projectId: string): string | null => {
+  try {
+    return sessionStorage.getItem(`${WORLD_TASK_OPEN_REQUEST_KEY_PREFIX}${projectId}`);
+  } catch {
+    return null;
+  }
+};
+
+const clearRequestedWorldTaskId = (projectId: string) => {
+  try {
+    sessionStorage.removeItem(`${WORLD_TASK_OPEN_REQUEST_KEY_PREFIX}${projectId}`);
+  } catch {
+    // ignore sessionStorage failures
+  }
+};
+
 export default function WorldSetting() {
   const { currentProject, setCurrentProject } = useStore();
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
@@ -42,89 +80,129 @@ export default function WorldSetting() {
   } | null>(null);
   const [isSavingPreview, setIsSavingPreview] = useState(false);
   const [modal, contextHolder] = Modal.useModal();
-  const taskPollTimerRef = useRef<number | null>(null);
-  const currentTaskIdRef = useRef<string | null>(null);
-
-  const stopTaskPolling = () => {
-    if (taskPollTimerRef.current) {
-      window.clearInterval(taskPollTimerRef.current);
-      taskPollTimerRef.current = null;
+  const trackedTasks = useBackgroundTaskStore((state) => state.tasks);
+  const activeTrackedWorldTask = useMemo(() => {
+    if (!currentProject?.id) {
+      return null;
     }
-  };
 
-  useEffect(() => {
-    return () => {
-      stopTaskPolling();
-      currentTaskIdRef.current = null;
-    };
-  }, []);
-
-  const startTaskPolling = (taskId: string) => {
-    stopTaskPolling();
-    currentTaskIdRef.current = taskId;
-    setIsCancellingTask(false);
-
-    const poll = async () => {
-      try {
-        const task = await backgroundTaskApi.getTaskStatus(taskId);
+    return Object.values(trackedTasks)
+      .filter(
+        (task) => task.projectId === currentProject.id
+          && task.taskType === 'world_regenerate'
+          && isActiveBackgroundTask(task)
+      )
+      .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+  }, [currentProject?.id, trackedTasks]);
+  const { currentTaskIdRef, startTaskPolling, stopTaskPolling } = useRestorableBackgroundTaskPolling({
+    projectId: currentProject?.id,
+    activeTrackedTask: activeTrackedWorldTask,
+    isMatchingTask: (task) => task.task_type === 'world_regenerate' && (task.status === 'pending' || task.status === 'running'),
+    onRestoreTask: ({ progress, message: taskMessage }) => {
+      setIsRegenerating(true);
+      setIsCancellingTask(false);
+      setRegenerateProgress(progress || 0);
+      setRegenerateMessage(taskMessage || '姝ｅ湪鎭㈠涓栫晫瑙傞噸寤轰换鍔?..');
+    },
+    createPollingOptions: () => ({
+      pollTask: (currentPollingTaskId) => backgroundTaskApi.getTaskStatus(currentPollingTaskId),
+      onTask: (task) => {
         setRegenerateProgress(task.progress || 0);
         setRegenerateMessage(task.message || '');
+      },
+      onCompleted: (task) => {
+        stopTaskPolling();
+        currentTaskIdRef.current = null;
+        setIsCancellingTask(false);
+        setIsRegenerating(false);
+        setRegenerateProgress(0);
+        setRegenerateMessage('');
 
-        if (task.status === 'completed') {
-          stopTaskPolling();
-          currentTaskIdRef.current = null;
-          setIsCancellingTask(false);
-          setIsRegenerating(false);
-          setRegenerateProgress(0);
-          setRegenerateMessage('');
-
-          const result = task.result as Record<string, unknown> | null;
-          if (result) {
-            setNewWorldData({
-              time_period: String(result.time_period || ''),
-              location: String(result.location || ''),
-              atmosphere: String(result.atmosphere || ''),
-              rules: String(result.rules || ''),
-            });
-          }
-          setIsPreviewModalVisible(true);
-          return;
+        const result = task.result as Record<string, unknown> | null;
+        if (result) {
+          setNewWorldData({
+            time_period: String(result.time_period || ''),
+            location: String(result.location || ''),
+            atmosphere: String(result.atmosphere || ''),
+            rules: String(result.rules || ''),
+          });
         }
-
-        if (task.status === 'failed') {
-          stopTaskPolling();
-          currentTaskIdRef.current = null;
-          setIsCancellingTask(false);
-          setIsRegenerating(false);
-          setRegenerateProgress(0);
-          setRegenerateMessage('');
-          message.error(task.error || task.message || '重新生成失败，请重试');
-          return;
+        setIsPreviewModalVisible(true);
+      },
+      onFailed: (task) => {
+        stopTaskPolling();
+        currentTaskIdRef.current = null;
+        setIsCancellingTask(false);
+        setIsRegenerating(false);
+        setRegenerateProgress(0);
+        setRegenerateMessage('');
+        message.error(formatBackgroundTaskError(task.error, task.message, '??????????'));
+      },
+      onCancelled: (task) => {
+        stopTaskPolling();
+        currentTaskIdRef.current = null;
+        setIsCancellingTask(false);
+        setIsRegenerating(false);
+        setRegenerateProgress(0);
+        setRegenerateMessage('');
+        message.info(task.message || '???????');
+      },
+      onPollingError: (error) => {
+        console.error('???????????:', error);
+        stopTaskPolling();
+        currentTaskIdRef.current = null;
+        setIsCancellingTask(false);
+        setIsRegenerating(false);
+        setRegenerateProgress(0);
+        setRegenerateMessage('??????????????????????');
+        if (currentProject?.id) {
+          void projectApi.getProject(currentProject.id).then(setCurrentProject).catch(() => undefined);
         }
+        message.error('??????????????????????');
+      },
+    }),
+  });
 
-        if (task.status === 'cancelled') {
-          stopTaskPolling();
-          currentTaskIdRef.current = null;
-          setIsCancellingTask(false);
-          setIsRegenerating(false);
-          setRegenerateProgress(0);
-          setRegenerateMessage('');
-          message.info(task.message || '后台任务已取消');
-        }
-      } catch (error) {
-        console.error('轮询世界观任务状态失败:', error);
-      }
-    };
 
-    void poll();
-    taskPollTimerRef.current = window.setInterval(() => {
-      void poll();
-    }, 1500);
-  };
+
+  useEffect(() => {
+    if (!currentProject?.id || currentTaskIdRef.current || isPreviewModalVisible || newWorldData) {
+      return;
+    }
+
+    const requestedTaskId = getRequestedWorldTaskId(currentProject.id);
+    const completedTasks = Object.values(trackedTasks).filter(
+      (task) => task.projectId === currentProject.id
+        && task.taskType === 'world_regenerate'
+        && task.status === 'completed'
+        && task.result
+    );
+    const completedTask = requestedTaskId
+      ? completedTasks.find((task) => task.taskId === requestedTaskId)
+      : completedTasks
+        .filter((task) => !hasWorldTaskReplayBeenHandled(task.taskId))
+        .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
+
+    if (!completedTask || !completedTask.result) {
+      return;
+    }
+
+    if (requestedTaskId) {
+      clearRequestedWorldTaskId(currentProject.id);
+    }
+    markWorldTaskReplayHandled(completedTask.taskId);
+    setNewWorldData({
+      time_period: String(completedTask.result.time_period || ''),
+      location: String(completedTask.result.location || ''),
+      atmosphere: String(completedTask.result.atmosphere || ''),
+      rules: String(completedTask.result.rules || ''),
+    });
+    setIsPreviewModalVisible(true);
+  }, [currentProject?.id, isPreviewModalVisible, newWorldData, trackedTasks]);
 
   const handleRegenerateBackground = async () => {
     if (!currentProject) return;
-    if (isRegenerating) {
+    if (isRegenerating || activeTrackedWorldTask) {
       message.info('后台世界观任务正在运行，请稍后查看结果');
       return;
     }
@@ -287,7 +365,7 @@ export default function WorldSetting() {
             <Button
               icon={<SyncOutlined />}
               onClick={handleRegenerateBackground}
-              disabled={isRegenerating}
+              disabled={Boolean(isRegenerating || activeTrackedWorldTask)}
               style={{
                 minWidth: 'fit-content',
                 flex: '1 1 auto'
@@ -914,7 +992,7 @@ export default function WorldSetting() {
 
       {/* AI重新生成加载遮罩 */}
       <SSELoadingOverlay
-        loading={isRegenerating}
+        loading={Boolean(isRegenerating || activeTrackedWorldTask)}
         progress={regenerateProgress}
         message={regenerateMessage}
         blocking={false}

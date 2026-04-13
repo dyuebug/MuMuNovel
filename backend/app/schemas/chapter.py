@@ -286,7 +286,7 @@ class BatchGenerateResponse(BaseModel):
 
 
 class BatchGenerateStatusResponse(BaseModel):
-    """??????????"""
+    """Batch generation status response."""
     batch_id: str
     status: str
     total: int
@@ -305,6 +305,7 @@ class BatchGenerateStatusResponse(BaseModel):
     checkpoint: Optional[Dict[str, Any]] = None
     latest_quality_metrics: Optional[ChapterLatestQualityMetrics] = None
     quality_metrics_summary: Optional[ChapterQualityMetricsSummary] = None
+    quality_profile_summary: Optional[Dict[str, Any]] = None
     active_story_repair_payload: Optional[ActiveStoryRepairPayload] = None
     terminal_reason: Optional[str] = None
     terminal_label: Optional[str] = None

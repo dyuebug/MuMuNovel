@@ -104,7 +104,7 @@ def test_should_build_generation_stream_result_payload_with_candidate_draft():
         "word_count": 2888,
         "can_apply": True,
         "has_full_content": True,
-        "content_preview": "?????",
+        "content_preview": "draft preview",
     }
 
     payload = build_chapter_generation_stream_result_payload(
@@ -112,7 +112,7 @@ def test_should_build_generation_stream_result_payload_with_candidate_draft():
         analysis_task_id="analysis-task-001",
         quality_metrics=SAMPLE_QUALITY_METRICS,
         quality_gate_action="manual_review",
-        quality_gate_message="??????",
+        quality_gate_message="needs manual review",
         content_applied=False,
         chapter_status="draft",
         saved_word_count=0,

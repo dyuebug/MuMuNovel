@@ -1,10 +1,12 @@
 """AI 客户端基类"""
 import asyncio
 import hashlib
+import ipaddress
 import json
 import time
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict, Optional, List
+from urllib.parse import urlparse
 
 import httpx
 
@@ -255,12 +257,25 @@ class BaseAIClient(ABC):
         self._transport_diagnostics: Dict[str, Any] = {}
 
     def _get_client_key(self) -> str:
-        """生成客户端唯一键"""
+        """????????"""
         key_hash = hashlib.md5(self.api_key.encode()).hexdigest()[:8]
         return f"{self.__class__.__name__}_{self.base_url}_{key_hash}"
 
+    @staticmethod
+    def _should_disable_env_proxy_for_base_url(base_url: str) -> bool:
+        parsed = urlparse(base_url)
+        hostname = (parsed.hostname or "").strip().lower()
+        if not hostname:
+            return False
+        if hostname == "localhost":
+            return True
+        try:
+            return ipaddress.ip_address(hostname).is_loopback
+        except ValueError:
+            return False
+
     def _get_or_create_client(self) -> httpx.AsyncClient:
-        """获取或创建 HTTP 客户端"""
+        """????? HTTP ???"""
         client_key = self._get_client_key()
 
         if client_key in _http_client_pool:
@@ -270,7 +285,9 @@ class BaseAIClient(ABC):
             del _http_client_pool[client_key]
 
         http_cfg = self.config.http
+        trust_env = not self._should_disable_env_proxy_for_base_url(self.base_url)
         client = httpx.AsyncClient(
+            trust_env=trust_env,
             timeout=httpx.Timeout(
                 connect=http_cfg.connect_timeout,
                 read=http_cfg.read_timeout,
@@ -284,7 +301,7 @@ class BaseAIClient(ABC):
             ),
         )
         _http_client_pool[client_key] = client
-        logger.info(f"✅ 创建 HTTP 客户端: {client_key}")
+        logger.info(f"? ?? HTTP ???: {client_key} (trust_env={trust_env})")
         return client
 
     @abstractmethod

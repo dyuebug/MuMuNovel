@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Optional
+import re
+
+from typing import Optional, List
 
 from app.services.chapter_quality_context_service import (
     StoryGenerationGuidance,
@@ -38,11 +40,102 @@ from app.services.prompt_service import (
 OUTLINE_SCENE = "outline"
 
 
+def _split_sentences(text: str) -> List[str]:
+    parts = re.split(r"[???!??;\n]+", text)
+    return [part.strip() for part in parts if part.strip()]
+
+
 def _append_if_present(parts: list[str], block: Optional[str]) -> None:
     normalized = str(block or "").strip()
     if normalized:
         parts.append(normalized)
 
+
+def extract_outline_anchor_lines(chapter_outline: Optional[str], max_lines: int = 10) -> List[str]:
+    """Extract outline anchors from both headed and prose summaries."""
+    if not chapter_outline:
+        return []
+
+    section_capture_limits = {
+        "章节概要": 1,
+        "剧情摘要": 1,
+        "场景设定": 2,
+        "关键事件": 4,
+        "情节要点": 5,
+        "叙事目标": 1,
+        "冲突主线": 2,
+        "角色抉择": 2,
+        "代价/风险": 2,
+        "规则影响点": 2,
+        "对话钩子": 2,
+        "人物转折": 2,
+        "角色焦点": 2,
+        "情感基调": 1,
+    }
+    keywords = (
+        "章节概要", "剧情摘要", "关键事件", "情节要点", "叙事目标",
+        "冲突", "规则影响", "角色投择", "角色抉择", "代价", "人物转折",
+        "对话钩子", "角色焦点", "场景设定", "情感基调",
+    )
+    sentence_cues = (
+        "目标", "冲突", "阻力", "规则", "决定", "代价", "反馈", "小爽点", "悬念", "章尾",
+        "反转", "异常", "认主", "借书证", "页印", "回声", "机位", "禁播", "校对", "封门",
+    )
+
+    raw_lines = [line.strip() for line in chapter_outline.splitlines() if line.strip()]
+    section_anchors: List[str] = []
+    capture_bullet_count = 0
+
+    for line in raw_lines:
+        if line.startswith("【") and line.endswith("】"):
+            section_name = line[1:-1].strip()
+            if any(key in section_name for key in keywords):
+                capture_bullet_count = section_capture_limits.get(section_name, 3)
+            else:
+                capture_bullet_count = 0
+            continue
+
+        cleaned = line.lstrip("- ").strip()
+        if not cleaned:
+            continue
+
+        if capture_bullet_count > 0:
+            section_anchors.append(cleaned[:120])
+            capture_bullet_count -= 1
+            continue
+
+        if any(key in cleaned for key in keywords):
+            parts = [part.strip() for part in re.split(r"[:：]", cleaned, maxsplit=1)]
+            if len(parts) == 2 and parts[1] and any(key in parts[0] for key in keywords):
+                section_anchors.append(parts[1][:120])
+                continue
+            if cleaned.endswith((":", "：")):
+                continue
+            section_anchors.append(cleaned[:120])
+
+    sentence_anchors: List[str] = []
+    for sentence in _split_sentences(chapter_outline):
+        normalized = sentence.lstrip("- ").strip()
+        if len(normalized) < 8:
+            continue
+        cue_score = sum(1 for cue in sentence_cues if cue in normalized)
+        if cue_score <= 0 and len(normalized) < 24:
+            continue
+        sentence_anchors.append(normalized[:120])
+
+    source_anchors = section_anchors if section_anchors else sentence_anchors
+
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for item in [*source_anchors, *sentence_anchors]:
+        normalized = item.strip()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            deduped.append(normalized[:120])
+        if len(deduped) >= max_lines:
+            break
+
+    return deduped
 
 def resolve_outline_guidance(
     *,
@@ -55,7 +148,8 @@ def resolve_outline_guidance(
     guidance: Optional[StoryGenerationGuidance] = None,
     story_packet: Optional[StoryPacket] = None,
 ) -> StoryGenerationGuidance:
-    return (story_packet.guidance if story_packet is not None else guidance) or StoryGenerationGuidance(
+    packet_guidance = getattr(story_packet, "guidance", None) if story_packet is not None else None
+    return packet_guidance or guidance or StoryGenerationGuidance(
         creative_mode=creative_mode,
         story_focus=story_focus,
         plot_stage=plot_stage,
