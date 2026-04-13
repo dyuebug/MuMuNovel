@@ -390,7 +390,7 @@ docker run -d --name postgres \
   postgres:18-alpine
 
 # 启动后端
-python -m uvicorn app.main:app --host localhost --port 8000 --reload
+python -m uvicorn app.main:app --host localhost --port ${APP_PORT:-8000} --reload
 ```
 
 #### 前端
@@ -633,3 +633,26 @@ Made with ❤️
 
 ![Alt](https://repobeats.axiom.co/api/embed/ee7141a5f269c64759302e067abe23b46796bafe.svg "Repobeats analytics image")
 
+
+### 开发联调快速回归
+
+本地后端、前端代理和 Docker 应用都启动后，可以运行下面的 PowerShell 脚本做最小 smoke check：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\check-auth-flow.ps1
+```
+
+脚本会默认读取根目录 `.env` 中的 `APP_PORT`、`DOCKER_APP_PORT`、`LOCAL_AUTH_USERNAME` 和 `LOCAL_AUTH_PASSWORD`，依次校验：
+
+- `backend /readyz`
+- `backend /api/auth/config`
+- `backend` 登录 / 鉴权 / 刷新 / 项目列表 / 退出
+- `frontend` 代理登录链路
+- `docker app /readyz`
+
+如果前端 dev server 或 Docker 应用暂时没有启动，可以按需跳过：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\check-auth-flow.ps1 -SkipFrontend
+powershell -ExecutionPolicy Bypass -File .\check-auth-flow.ps1 -SkipDockerReadyz
+```

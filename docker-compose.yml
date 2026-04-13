@@ -61,7 +61,7 @@ services:
     ports:
       # 端口映射格式：宿主机端口:容器内端口
       # 例如 .env 中 APP_PORT=8003 时，实际访问 http://localhost:8003，容器内应用仍监听 8000
-      - "${APP_PORT:-8000}:8000"
+      - "${DOCKER_APP_PORT:-8000}:8000"
     volumes:
       - ./logs:/app/logs
       - ./.env:/app/.env:ro

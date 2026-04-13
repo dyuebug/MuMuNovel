@@ -116,27 +116,67 @@ function Test-AlembicRevisionIds {
     Write-LogLine "Alembic revision health check passed."
 }
 
-function Get-AppPort {
+function Get-EnvFileValue {
+    param([string]$Name)
+
     if (-not (Test-Path -Path ".env")) {
-        return "8000"
+        return $null
     }
 
-    $appPortLine = Get-Content -Path ".env" | Where-Object { $_ -match '^\s*APP_PORT\s*=' } | Select-Object -First 1
-    if (-not $appPortLine) {
-        return "8000"
+    $envLine = Get-Content -Path ".env" | Where-Object { $_ -match ('^\s*' + [regex]::Escape($Name) + '\s*=') } | Select-Object -First 1
+    if (-not $envLine) {
+        return $null
     }
 
-    $value = (($appPortLine -split '=', 2)[1]).Trim()
+    $value = (($envLine -split '=', 2)[1]).Trim()
     if ([string]::IsNullOrWhiteSpace($value)) {
-        return "8000"
+        return $null
     }
 
     return $value
 }
 
+function Get-AppPort {
+    $dockerAppPort = Get-EnvFileValue -Name "DOCKER_APP_PORT"
+    if ($dockerAppPort) {
+        return $dockerAppPort
+    }
+
+    $appPort = Get-EnvFileValue -Name "APP_PORT"
+    if ($appPort) {
+        return $appPort
+    }
+
+    return "8000"
+}
+
 function Get-AppBaseUrl {
     $appPort = Get-AppPort
     return "http://localhost:$appPort"
+}
+
+function Write-AppPortDiagnostics {
+    $appPort = Get-EnvFileValue -Name "APP_PORT"
+    $dockerAppPort = Get-EnvFileValue -Name "DOCKER_APP_PORT"
+    $effectivePort = Get-AppPort
+    $healthBaseUrl = Get-AppBaseUrl
+    $displayAppPort = if ($appPort) { $appPort } else { '<unset>' }
+    $displayDockerAppPort = if ($dockerAppPort) { $dockerAppPort } else { '<unset>' }
+
+    Write-Host "Configured APP_PORT:        $displayAppPort" -ForegroundColor DarkCyan
+    Write-LogLine "Configured APP_PORT: $displayAppPort"
+    Write-Host "Configured DOCKER_APP_PORT: $displayDockerAppPort" -ForegroundColor DarkCyan
+    Write-LogLine "Configured DOCKER_APP_PORT: $displayDockerAppPort"
+    Write-Host "Effective redeploy port:    $effectivePort" -ForegroundColor DarkCyan
+    Write-LogLine "Effective redeploy port: $effectivePort"
+    Write-Host "Effective base URL:         $healthBaseUrl" -ForegroundColor DarkCyan
+    Write-LogLine "Effective base URL: $healthBaseUrl"
+
+    if ($appPort -and $dockerAppPort -and $appPort -ne $dockerAppPort) {
+        $warningMessage = "APP_PORT ($appPort) differs from DOCKER_APP_PORT ($dockerAppPort); redeploy will verify the Docker-exposed port."
+        Write-Host $warningMessage -ForegroundColor Yellow
+        Write-LogLine $warningMessage
+    }
 }
 
 function Get-LiveIndexAssetPath {
@@ -517,10 +557,15 @@ Test-AlembicRevisionIds
 Write-Step "Checking Docker daemon"
 Test-DockerDaemon
 
+Write-Step "Resolving application port"
+Write-AppPortDiagnostics
+
 if ([string]::IsNullOrWhiteSpace($HealthUrl)) {
     $appPort = Get-AppPort
     $HealthUrl = "http://localhost:$appPort/readyz"
 }
+Write-Host "Health check URL:           $HealthUrl" -ForegroundColor DarkCyan
+Write-LogLine "Health check URL: $HealthUrl"
 
 if ($FullRestart) {
     Write-Step "Stopping full stack"

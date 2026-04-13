@@ -1,25 +1,39 @@
 """应用配置管理"""
 from pydantic_settings import BaseSettings
+from dotenv import load_dotenv
 from typing import Optional
 from pathlib import Path
 import logging
 import os
 import uuid
 
-# 获取项目根目录(从backend/app/config.py向上两级)
+# ?? backend ????????
 PROJECT_ROOT = Path(__file__).parent.parent
+REPO_ROOT = PROJECT_ROOT.parent
 DATA_DIR = PROJECT_ROOT / "data"
 DATA_DIR.mkdir(exist_ok=True)
+
+# ????????? backend ??????
+load_dotenv(REPO_ROOT / ".env", override=False)
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 # 配置模块使用标准logging（在logger.py初始化之前）
 config_logger = logging.getLogger(__name__)
 
-# 数据库配置：PostgreSQL
-# 从环境变量获取数据库URL
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://mumuai:password@localhost:5432/mumuai_novel")
+# ??????PostgreSQL
+# ?????? DATABASE_URL?????? POSTGRES_* ???????
+def _build_default_database_url() -> str:
+    postgres_user = os.getenv("POSTGRES_USER", "mumuai")
+    postgres_password = os.getenv("POSTGRES_PASSWORD", "password")
+    postgres_host = os.getenv("POSTGRES_HOST", os.getenv("DB_HOST", "localhost"))
+    postgres_port = os.getenv("POSTGRES_PORT", os.getenv("DB_PORT", "5432"))
+    postgres_db = os.getenv("POSTGRES_DB", "mumuai_novel")
+    return f"postgresql+asyncpg://{postgres_user}:{postgres_password}@{postgres_host}:{postgres_port}/{postgres_db}"
 
-config_logger.debug(f"数据库类型: PostgreSQL")
-config_logger.debug(f"数据库URL: {DATABASE_URL}")
+DATABASE_URL = os.getenv("DATABASE_URL") or _build_default_database_url()
+
+config_logger.debug(f"?????: {'SQLite' if 'sqlite' in DATABASE_URL.lower() else 'PostgreSQL'}")
+config_logger.debug(f"???URL: {DATABASE_URL}")
 
 class Settings(BaseSettings):
     """应用配置"""
@@ -121,6 +135,7 @@ class Settings(BaseSettings):
     WORKSHOP_MODE: str = "client"  # client: 本地部署实例, server: 云端中央服务器
     WORKSHOP_CLOUD_URL: str = "https://mumuverse.space:1566"  # 云端服务地址
     WORKSHOP_API_TIMEOUT: int = 30  # 云端API请求超时时间（秒）
+    WORKSHOP_PROXY_SHARED_SECRET: Optional[str] = None  # 代理请求共享密钥，服务端校验后才信任代理用户身份
     
     class Config:
         env_file = ".env"

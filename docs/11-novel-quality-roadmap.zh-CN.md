@@ -48,11 +48,12 @@
 - 参考：`backend/app/services/prompt_service.py:396`
 - 参考：`backend/app/services/prompt_service.py:6573`
 
-### 4. API 主链路已打通“故事指导 -> Prompt 质量参数 -> 重生成”
-- 章节重生成已经会解析故事指导并构造 prompt 质量参数。
-- 说明“项目默认值 / 临时覆盖值 / 修复建议”已经能在执行链路中汇合。
-- 参考：`backend/app/api/chapters.py:6286`
-- 参考：`backend/app/api/chapters.py:6321`
+### 4. 重生成主链路已打通“故事指导 -> Prompt 质量参数 -> 流式执行”
+- 章节重生成已经迁移到独立 route 模块，并在专门的上下文准备 service 中解析故事指导、修复 payload 与 prompt 质量参数。
+- 说明“项目默认值 / 临时覆盖值 / 修复建议”已经能通过更清晰的 route -> context preparation -> stream pipeline 汇合，而 `chapters.py` 现在主要承担兼容 gateway / seam 职责。
+- 参考：`backend/app/api/chapter_regeneration_routes.py:34`
+- 参考：`backend/app/services/chapter_regeneration_context_service.py:102`
+- 参考：`docs/architecture/chapter-api-gateway-seams.zh-CN.md:1`
 
 ### 5. 前端重生成弹窗已暴露关键质量控制项
 - 现在用户可以显式设置创作模式、结构侧重点、剧情阶段、创作总控摘要、质量预设和额外质量要求。
@@ -243,7 +244,8 @@
 - `backend/app/services/prompt_service.py:396`
 - `backend/app/services/prompt_service.py:6573`
 - `backend/app/api/outlines.py:1824`
-- `backend/app/api/chapters.py:6286`
+- `backend/app/api/chapter_regeneration_routes.py:34`
+- `backend/app/services/chapter_regeneration_context_service.py:102`
 - `backend/app/services/memory_service.py:1080`
 - `frontend/src/components/ChapterRegenerationModal.tsx:212`
 - `frontend/src/components/ChapterRegenerationModal.tsx:513`

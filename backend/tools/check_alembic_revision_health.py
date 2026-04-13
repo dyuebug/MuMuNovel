@@ -10,14 +10,50 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from alembic_versioning import ALEMBIC_VERSION_NUM_LENGTH
-
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+VERSIONING_MODULE = REPO_ROOT / "backend/tools/alembic_versioning.py"
+DEFAULT_MAX_REVISION_LENGTH = 64
+
+
+def _load_alembic_version_num_length() -> int:
+    try:
+        source = VERSIONING_MODULE.read_text(encoding="utf-8")
+        module = ast.parse(source, filename=str(VERSIONING_MODULE))
+    except Exception:
+        return DEFAULT_MAX_REVISION_LENGTH
+
+    for node in module.body:
+        name = None
+        value_node = None
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    name = target.id
+                    break
+            value_node = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            name = node.target.id
+            value_node = node.value
+
+        if name != "ALEMBIC_VERSION_NUM_LENGTH" or value_node is None:
+            continue
+
+        try:
+            value = ast.literal_eval(value_node)
+        except Exception:
+            return DEFAULT_MAX_REVISION_LENGTH
+
+        if isinstance(value, int) and value > 0:
+            return value
+        return DEFAULT_MAX_REVISION_LENGTH
+
+    return DEFAULT_MAX_REVISION_LENGTH
+
 VERSION_ROOTS = {
     "postgres": REPO_ROOT / "backend/alembic/postgres/versions",
     "sqlite": REPO_ROOT / "backend/alembic/sqlite/versions",
 }
-MAX_REVISION_LENGTH = ALEMBIC_VERSION_NUM_LENGTH
+MAX_REVISION_LENGTH = _load_alembic_version_num_length()
 
 
 @dataclass(frozen=True)

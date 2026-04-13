@@ -71,3 +71,18 @@ export default defineConfig([
   },
 ])
 ```
+
+
+## Playwright E2E
+
+Run the minimal auth regression suite against an already running frontend dev server:
+
+```bash
+npm run e2e:auth
+```
+
+You can override the target URL when needed:
+
+```bash
+E2E_BASE_URL=http://127.0.0.1:5175 npm run e2e:auth
+```

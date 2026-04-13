@@ -150,149 +150,33 @@ MuMuNovel 当前已经从“生成完立即保存”升级为“先生成候选�
 
 ---
 
-## 当前实现对“优质小说生成”的直接收益
+## Candidate 链路分层（2026-04）
 
-### 收益 1：减少长篇连载中的质量污染
+本轮重构后，candidate 相关逻辑已经从 `chapters.py` 逐步下沉到多个 service，API 层更多只承担组装与兼容职责。
 
-长篇生成最大的风险不是单章偶发差，而是差章节被当成正式章节写入后，继续污染后续上下文。当前 hard gate 直接切断了这条污染链。
+### 已下沉的阶段职责
 
-### 收益 2：把质量问题前移到保存前
+- `chapter_candidate_generation_service`：candidate 池生成与 rerank retry
+- `chapter_candidate_word_budget_repair_service`：字数 repair candidate
+- `chapter_candidate_targeted_final_repair_service`：定向质量 repair candidate
+- `chapter_candidate_finalize_service`：winner 决策、metadata 附着、最终 runtime state 收口
+- `chapter_candidate_executor_service`：串联整个 candidate workflow
+- `chapter_candidate_runtime_state_service` / `view_service` / `result_service` / `classification_service` / `event_service`：提供运行时状态、只读视图、结果规范化、repair 分类与 event builder
+- `chapter_candidate_record_service`：负责单个 candidate 记录的清洗、quality gate plan 规范化与 selection metadata 二次装配
 
-以前是“生成完 → 保存 → 再分析”；现在是“生成完 → 验收 → 合格才保存”。这会显著提高项目库中正式章节的平均质量底线。
+### `chapters.py` 仍保留的本地 hook
 
-### 收益 3：给修复链路提供更准确的失败样本
+- `_collect_generation_candidate_output(...)`：紧贴 `AIService.generate_text_stream(...)` 的 chunk 循环与流式 runtime state 更新
+- `_resolve_generation_attempt_labels(...)`：保留 generation path / attempt kind 命名语义
+- `_sync_generation_runtime_state(...)`：已退化为 `chapter_candidate_runtime_state_service` 的兼容 wrapper
+- `_build_generation_candidate_record(...)`：已退化为 `chapter_candidate_record_service` 的兼容 wrapper
+- `_get_chapter_candidate_executor_dependencies()`：保留 default wiring 入口
+- `_generate_best_ranked_candidate(...)`：保留旧签名兼容，内部转调 executor workflow
 
-分析器现在能读到被阻断的 candidate，而不是旧正文。这让系统的自动修复与人工修复建议更有针对性。
+### 下一步优化方向
 
-### 收益 4：为后续质量平台建设打基础
-
-一旦 candidate、quality gate、apply、analysis、history 的职责边界清楚，就可以继续做：
-
-- 质量趋势 API
-- 失败样本标签体系
-- quality preset A/B 对比
-- 自动 repair 效果评估
-
----
-
-## 仍然存在的架构缺口
-
-### Gap 1：缺少统一的 `StoryPacket`
-
-现在项目默认值、请求覆盖值、repair payload、质量画像已经在多个入口开始归并，但还没有成为唯一真源。
-
-**建议**：
-- 新增统一 `StoryPacket` / `GenerationIntent`
-- 让大纲生成、章节生成、批量生成、重生成都依赖同一输入对象
-- 把日志与历史里记录的上下文快照也统一到该对象
-
-### Gap 2：candidate 还没有独立存储策略
-
-目前被阻断的 candidate 主要作为运行时输入进入分析链路，但没有独立的候选稿生命周期管理。
-
-**建议**：
-- 新增轻量 `chapter_draft_attempt` 或类似记录
-- 只保存必要字段：摘要、质量快照、失败维度、修复建议 ID
-- 不把正文全文混入正式 `GenerationHistory`
-
-### Gap 3：记忆系统还没有完全升级为一致性系统
-
-当前有记忆、伏笔、角色信息，但对“状态变更”的结构化约束还不够强。
-
-**建议**：
-- 建立人物状态账本
-- 建立关系状态账本
-- 建立伏笔状态机（seeded / pending / paid_off / stale）
-- 在章节保存前做一致性 diff 检查
-
-### Gap 4：缺少卷级 / 连载级节奏控制
-
-当前质量门禁更偏向单章质量，而长篇小说还需要多章协同质量。
-
-**建议**：
-- 引入卷级节奏计划
-- 跟踪近 5~10 章主线推进密度
-- 跟踪近 5~10 章情绪起伏与回报兑现率
-- 在生成前加入近期节奏失衡提示
-
-### Gap 5：缺少实验与反馈闭环
-
-系统还没有把人工修改最多的地方系统化回流到默认值、质量规则和 prompt 结构中。
-
-**建议**：
-- 建立失败样本标签
-- 记录人工修改热点段落类型
-- 给 `quality_preset` 做回归报告
-- 追踪 auto-repair 的二次通过率
+- `_collect_generation_candidate_output(...)` 仍贴近 API：若单章流式和批量流式 contract 完全统一，可考虑继续下沉
+- `chapters.py` 当前主要承担兼容 facade / monkeypatch seam：后续应优先把新增逻辑继续下沉到 service，而不是按“文件内未使用”机械删除现有 wrapper
+- candidate 仍以运行时对象为主：若后续要做失败样本平台与 repair 统计，可考虑 candidate / repair attempt 生命周期记录
 
 ---
-
-## 建议的下一阶段落地顺序
-
-### P0：继续巩固当前质量门禁
-
-- 抽象统一 `StoryPacket`
-- 给质量门禁增加“失败维度 -> repair strategy”映射表
-- 为被阻断 candidate 增加轻量候选记录，而不是继续塞进正式 history
-
-### P1：升级一致性系统
-
-- 建立人物状态快照
-- 建立伏笔账本状态机
-- 在保存前做角色 / 设定 / 伏笔一致性校验
-
-### P1：补长篇节奏控制
-
-- 增加卷级节奏计划
-- 给章节生成增加近期节奏偏差提示
-- 输出多章质量趋势 API
-
-### P2：建立实验平台
-
-- 记录 auto-repair 成功率
-- 记录人工重写类型分布
-- 让 prompt / preset / quality rule 迭代有据可依
-
----
-
-## 推荐监控指标
-
-### 质量通过率
-
-- 单章首轮通过率
-- 自动修复后二次通过率
-- 人工审阅阻断率
-
-### 长篇稳定性
-
-- 近 10 章平均 overall score
-- 大纲偏移次数
-- 未兑现伏笔数量
-- 角色状态冲突次数
-
-### 产能与成本
-
-- 单章平均生成耗时
-- 平均自动重试次数
-- 平均人工修订字数占比
-
----
-
-## 关键代码锚点
-
-- `backend/app/api/chapters.py`
-- `backend/app/services/chapter_quality_context_service.py`
-- `backend/app/services/story_quality_feedback_service.py`
-- `backend/app/services/story_repair_payload_service.py`
-- `backend/app/services/memory_service.py`
-- `backend/tests/test_api/test_chapters.py`
-
----
-
-## 结论
-
-如果目标是“更好地生成优质小说内容”，核心不是继续堆 prompt，而是把运行时链路做成：
-
-统一输入 → 生成 candidate → 质量验收 → 放行才保存 → 失败样本进入修复 / 分析闭环。
-
-MuMuNovel 当前已经完成了这条链路中最关键的一步：把 hard gate 放到了正文保存之前。接下来最值得做的，是统一输入契约、结构化一致性系统，以及卷级节奏控制。

@@ -34,13 +34,16 @@ repeatable story production system with a stable feedback loop:
 - Reference: `backend/app/services/prompt_service.py:396`
 - Reference: `backend/app/services/prompt_service.py:6573`
 
-### 4. The API layer already connects guidance to regeneration
-- Chapter regeneration already resolves story guidance and builds prompt-quality
-  arguments before execution.
+### 4. The regeneration path already connects guidance to prompt-quality assembly
+- Chapter regeneration now enters through a dedicated route module, then resolves
+  story guidance, repair payload, and prompt-quality arguments in a dedicated
+  preparation service before stream execution.
 - This means project defaults, temporary overrides, and repair guidance now meet
-  in one execution path.
-- Reference: `backend/app/api/chapters.py:6286`
-- Reference: `backend/app/api/chapters.py:6321`
+  through a clearer route -> context-preparation -> stream pipeline, while
+  `chapters.py` remains a compatibility gateway instead of the primary route file.
+- Reference: `backend/app/api/chapter_regeneration_routes.py:34`
+- Reference: `backend/app/services/chapter_regeneration_context_service.py:102`
+- Reference: `docs/architecture/chapter-api-gateway-seams.zh-CN.md:1`
 
 ### 5. The frontend now exposes regeneration quality controls
 - Users can explicitly set creative mode, story focus, plot stage,
@@ -271,7 +274,8 @@ Expected impact:
 - `backend/app/services/prompt_service.py:396`
 - `backend/app/services/prompt_service.py:6573`
 - `backend/app/api/outlines.py:1824`
-- `backend/app/api/chapters.py:6286`
+- `backend/app/api/chapter_regeneration_routes.py:34`
+- `backend/app/services/chapter_regeneration_context_service.py:102`
 - `backend/app/services/memory_service.py:1080`
 - `frontend/src/components/ChapterRegenerationModal.tsx:212`
 - `frontend/src/components/ChapterRegenerationModal.tsx:513`
