@@ -12,6 +12,7 @@ from app.user_manager import user_manager
 from app.user_password import password_manager
 from app.logger import get_logger
 from app.config import settings
+from app.api.common import require_request_user
 
 # 中国时区 UTC+8
 CHINA_TZ = timezone(timedelta(hours=8))
@@ -329,10 +330,7 @@ async def callback_alias(
 async def refresh_session(request: Request, response: Response):
     """刷新会话 - 延长登录状态"""
     # 检查是否已登录
-    if not hasattr(request.state, "user") or not request.state.user:
-        raise HTTPException(status_code=401, detail="未登录，无法刷新会话")
-    
-    user = request.state.user
+    user = require_request_user(request, "未登录，无法刷新会话")
     
     # 检查当前会话是否即将过期（剩余时间少于阈值）
     session_expire_at = request.cookies.get("session_expire_at")
@@ -405,19 +403,14 @@ async def logout(request: Request, response: Response):
 @router.get("/user")
 async def get_current_user(request: Request):
     """获取当前登录用户信息"""
-    if not hasattr(request.state, "user") or not request.state.user:
-        raise HTTPException(status_code=401, detail="未登录")
-    
-    return request.state.user.dict()
+    user = require_request_user(request, "未登录")
+    return user.dict()
 
 
 @router.get("/password/status", response_model=PasswordStatusResponse)
 async def get_password_status(request: Request):
     """获取当前用户的密码状态"""
-    if not hasattr(request.state, "user") or not request.state.user:
-        raise HTTPException(status_code=401, detail="未登录")
-    
-    user = request.state.user
+    user = require_request_user(request, "未登录")
     has_password = await password_manager.has_password(user.user_id)
     has_custom = await password_manager.has_custom_password(user.user_id)
     username = await password_manager.get_username(user.user_id)
@@ -438,10 +431,7 @@ async def get_password_status(request: Request):
 @router.post("/password/set", response_model=SetPasswordResponse)
 async def set_user_password(request: Request, password_req: SetPasswordRequest):
     """设置当前用户的密码"""
-    if not hasattr(request.state, "user") or not request.state.user:
-        raise HTTPException(status_code=401, detail="未登录")
-    
-    user = request.state.user
+    user = require_request_user(request, "未登录")
     
     # 验证密码强度（至少6个字符）
     if len(password_req.password) < 6:
@@ -464,10 +454,7 @@ async def initialize_user_password(request: Request, password_req: SetPasswordRe
     
     用于首次通过 Linux DO 授权登录的用户，可以选择设置自定义密码或使用默认密码
     """
-    if not hasattr(request.state, "user") or not request.state.user:
-        raise HTTPException(status_code=401, detail="未登录")
-    
-    user = request.state.user
+    user = require_request_user(request, "未登录")
     
     # 检查是否已经有密码（防止重复初始化）
     if await password_manager.has_password(user.user_id):

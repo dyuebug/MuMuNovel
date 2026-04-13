@@ -8,6 +8,9 @@ const LazyAnnouncementModal = lazy(() => import('../components/AnnouncementModal
 
 import ThemeSwitch from '../components/ThemeSwitch';
 import { VERSION_INFO } from '../config/version';
+import { getHttpStatus } from '../utils/httpError';
+import { clearAuthStatusCache } from '../utils/authStatus';
+import { getRedirectFromSearchParams, saveLoginRedirect } from '../utils/loginRedirect';
 
 const { Title, Paragraph } = Typography;
 
@@ -24,48 +27,72 @@ export default function Login() {
   const primaryButtonShadow = `0 8px 20px ${alphaColor(token.colorPrimary, 0.28)}`;
   const hoverButtonShadow = `0 12px 28px ${alphaColor(token.colorPrimary, 0.36)}`;
   const [showAnnouncement, setShowAnnouncement] = useState(false);
+  const [serviceUnavailableMessage, setServiceUnavailableMessage] = useState('');
+  const [loginErrorMessage, setLoginErrorMessage] = useState('');
 
-  // 检查是否已登录和获取认证配置
+  const resolveServiceUnavailableMessage = (error: unknown): string =>
+    getHttpStatus(error) === 503
+      ? '数据库服务暂时不可用，请先启动 PostgreSQL 或 Docker Desktop 后重试。'
+      : '';
+
+  const resolveLoginErrorMessage = (error: unknown): string => {
+    if (error instanceof Error && error.message.trim()) {
+      return error.message.trim();
+    }
+
+    return '登录失败，请检查账号和密码后重试。';
+  };
+
+  // 检查是否已登录，并获取认证配置
   useEffect(() => {
     const checkAuth = async () => {
       try {
         await authApi.getCurrentUser();
-        // 已登录，重定向到首页
-        const redirect = searchParams.get('redirect') || '/';
+        setServiceUnavailableMessage('');
+        const redirect = getRedirectFromSearchParams(searchParams);
         navigate(redirect);
-      } catch {
-        // 未登录，获取认证配置
+      } catch (error) {
+        const currentUserServiceMessage = resolveServiceUnavailableMessage(error);
+        setServiceUnavailableMessage(currentUserServiceMessage);
+
         try {
           const config = await authApi.getAuthConfig();
           setLocalAuthEnabled(config.local_auth_enabled);
           setLinuxdoEnabled(config.linuxdo_enabled);
-        } catch (error) {
-          console.error('获取认证配置失败:', error);
-          // 默认显示LinuxDO登录
+        } catch (configError) {
+          console.error('获取认证配置失败:', configError);
           setLinuxdoEnabled(true);
+
+          const configServiceMessage = resolveServiceUnavailableMessage(configError);
+          if (configServiceMessage) {
+            setServiceUnavailableMessage(configServiceMessage);
+          }
         }
+
         setChecking(false);
       }
     };
-    checkAuth();
+
+    void checkAuth();
   }, [navigate, searchParams]);
 
   const handleLocalLogin = async (values: { username: string; password: string }) => {
     try {
+      setServiceUnavailableMessage('');
+      setLoginErrorMessage('');
       setLoading(true);
       const response = await authApi.localLogin(values.username, values.password);
 
       if (response.success) {
         message.success('登录成功！');
 
-        // 检查是否永久隐藏公告
         const hideForever = localStorage.getItem('announcement_hide_forever');
         const hideToday = localStorage.getItem('announcement_hide_today');
         const today = new Date().toDateString();
 
-        // 如果永久隐藏或今日已隐藏，则不显示公告
         if (hideForever === 'true' || hideToday === today) {
-          const redirect = searchParams.get('redirect') || '/';
+          const redirect = getRedirectFromSearchParams(searchParams);
+          clearAuthStatusCache();
           navigate(redirect);
         } else {
           setShowAnnouncement(true);
@@ -73,25 +100,27 @@ export default function Login() {
       }
     } catch (error) {
       console.error('本地登录失败:', error);
+      const serviceMessage = resolveServiceUnavailableMessage(error);
+      setServiceUnavailableMessage(serviceMessage);
+      setLoginErrorMessage(serviceMessage ? '' : resolveLoginErrorMessage(error));
       setLoading(false);
     }
   };
 
   const handleLinuxDOLogin = async () => {
     try {
+      setServiceUnavailableMessage('');
+      setLoginErrorMessage('');
       setLoading(true);
       const response = await authApi.getLinuxDOAuthUrl();
 
-      // 保存重定向地址到 sessionStorage
-      const redirect = searchParams.get('redirect');
-      if (redirect) {
-        sessionStorage.setItem('login_redirect', redirect);
-      }
+      const redirect = getRedirectFromSearchParams(searchParams, '');
+      saveLoginRedirect(redirect);
 
-      // 跳转到 LinuxDO 授权页面
       window.location.href = response.auth_url;
     } catch (error) {
       console.error('获取授权地址失败:', error);
+      setServiceUnavailableMessage(resolveServiceUnavailableMessage(error));
       message.error('获取授权地址失败，请稍后重试');
       setLoading(false);
     }
@@ -117,6 +146,7 @@ export default function Login() {
       form={form}
       layout="vertical"
       onFinish={handleLocalLogin}
+      onValuesChange={() => setLoginErrorMessage('')}
       size="large"
       style={{ marginTop: '16px' }}
     >
@@ -213,7 +243,8 @@ export default function Login() {
 
   const handleAnnouncementClose = () => {
     setShowAnnouncement(false);
-    const redirect = searchParams.get('redirect') || '/';
+    const redirect = getRedirectFromSearchParams(searchParams);
+    clearAuthStatusCache();
     navigate(redirect);
   };
 
@@ -461,6 +492,30 @@ export default function Login() {
                 </Space>
 
                 <div style={{ marginTop: 22 }}>
+                  {serviceUnavailableMessage ? (
+                    <div data-testid="login-service-unavailable-alert">
+                      <Alert
+                        type="warning"
+                        showIcon
+                        style={{ marginBottom: 16, borderRadius: 12 }}
+                        message="服务暂时不可用"
+                        description={serviceUnavailableMessage}
+                      />
+                    </div>
+                  ) : null}
+
+                  {loginErrorMessage ? (
+                    <div data-testid="login-error-alert">
+                      <Alert
+                        type="error"
+                        showIcon
+                        style={{ marginBottom: 16, borderRadius: 12 }}
+                        message="登录失败"
+                        description={loginErrorMessage}
+                      />
+                    </div>
+                  ) : null}
+
                   {localAuthEnabled ? renderLocalLogin() : null}
 
                   {linuxdoEnabled && localAuthEnabled ? (

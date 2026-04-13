@@ -1,7 +1,9 @@
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Spin, message, theme } from 'antd';
 import { authApi } from '../services/api';
+import { clearAuthStatusCache } from '../utils/authStatus';
+import { consumeLoginRedirect } from '../utils/loginRedirect';
 const LazyAnnouncementModal = lazy(() => import('../components/AnnouncementModal'));
 const LazyPasswordSetupModal = lazy(() => import('../components/PasswordSetupModal'));
 const LazyAuthCallbackResult = lazy(() => import('../components/AuthCallbackResult'));
@@ -24,6 +26,17 @@ export default function AuthCallback() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [settingPassword, setSettingPassword] = useState(false);
+  const redirectRef = useRef('/');
+  const redirectResolvedRef = useRef(false);
+
+  const resolveRedirect = (): string => {
+    if (!redirectResolvedRef.current) {
+      redirectRef.current = consumeLoginRedirect();
+      redirectResolvedRef.current = true;
+    }
+
+    return redirectRef.current;
+  };
 
   useEffect(() => {
     const handleCallback = async () => {
@@ -32,8 +45,11 @@ export default function AuthCallback() {
         // 这里只需要验证登录状态
         const currentUser = await authApi.getCurrentUser();
 
-        // 检查是否是首次登录（通过 Cookie 标记）
-        const isFirstLogin = document.cookie.includes('first_login=true');
+        // 检查是否是首次登录（优先 Cookie，兼容查询参数兜底）
+        const callbackSearchParams = new URLSearchParams(window.location.search);
+        const isFirstLogin = document.cookie.includes('first_login=true')
+          || callbackSearchParams.get('first_login') === 'true'
+          || callbackSearchParams.get('first_login') === '1';
         
         setStatus('success');
 
@@ -60,8 +76,7 @@ export default function AuthCallback() {
 
         // 非首次登录：正常流程
         // 从 sessionStorage 获取重定向地址
-        const redirect = sessionStorage.getItem('login_redirect') || '/';
-        sessionStorage.removeItem('login_redirect');
+        const redirect = resolveRedirect();
 
         // 检查是否永久隐藏公告或今日已隐藏
         const hideForever = localStorage.getItem('announcement_hide_forever');
@@ -71,6 +86,7 @@ export default function AuthCallback() {
         if (hideForever === 'true' || hideToday === today) {
           // 延迟一下再跳转，让用户看到成功提示
           setTimeout(() => {
+            clearAuthStatusCache();
             navigate(redirect);
           }, 1000);
         } else {
@@ -122,8 +138,8 @@ export default function AuthCallback() {
 
   const handleAnnouncementClose = () => {
     setShowAnnouncement(false);
-    const redirect = sessionStorage.getItem('login_redirect') || '/';
-    sessionStorage.removeItem('login_redirect');
+    const redirect = resolveRedirect();
+    clearAuthStatusCache();
     navigate(redirect);
   };
 
@@ -169,8 +185,7 @@ export default function AuthCallback() {
       setShowPasswordModal(false);
 
       // 继续后续流程
-      const redirect = sessionStorage.getItem('login_redirect') || '/';
-      sessionStorage.removeItem('login_redirect');
+      const redirect = resolveRedirect();
 
       const hideForever = localStorage.getItem('announcement_hide_forever');
       const hideToday = localStorage.getItem('announcement_hide_today');
@@ -178,6 +193,7 @@ export default function AuthCallback() {
 
       if (hideForever === 'true' || hideToday === today) {
         setTimeout(() => {
+          clearAuthStatusCache();
           navigate(redirect);
         }, 500);
       } else {
@@ -206,8 +222,7 @@ export default function AuthCallback() {
     setShowPasswordModal(false);
 
     // 继续后续流程
-    const redirect = sessionStorage.getItem('login_redirect') || '/';
-    sessionStorage.removeItem('login_redirect');
+    const redirect = resolveRedirect();
 
     const hideForever = localStorage.getItem('announcement_hide_forever');
     const hideToday = localStorage.getItem('announcement_hide_today');
@@ -215,6 +230,7 @@ export default function AuthCallback() {
 
     if (hideForever === 'true' || hideToday === today) {
       setTimeout(() => {
+        clearAuthStatusCache();
         navigate(redirect);
       }, 500);
     } else {

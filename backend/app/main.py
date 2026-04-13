@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.exceptions import RequestValidationError
+from sqlalchemy.exc import OperationalError
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -89,6 +90,35 @@ def _set_startup_ready(ready: bool) -> dict:
     return state
 
 
+def _recover_startup_status_if_possible(database_status: dict) -> dict:
+    state = _get_startup_status()
+    if bool(state.get("ready")):
+        return state
+
+    steps = state.get("steps") or {}
+    if not isinstance(steps, dict):
+        return state
+
+    non_database_steps_healthy = all(
+        bool(item.get("healthy"))
+        for step_name, item in steps.items()
+        if step_name != "database_warmup"
+    )
+    database_ready = bool((database_status or {}).get("healthy"))
+    if not (non_database_steps_healthy and database_ready):
+        return state
+
+    _mark_startup_step(
+        "database_warmup",
+        healthy=True,
+        detail="warmup recovered after startup",
+        payload=database_status,
+    )
+    recovered_state = _finalize_startup_status()
+    logger.info("Application startup readiness recovered after database became healthy")
+    return recovered_state
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan management."""
@@ -145,16 +175,25 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "errors": exc.errors()
         }
     )
-
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """处理所有未捕获的异常"""
-    logger.error(f"未处理的异常: {type(exc).__name__}: {str(exc)}", exc_info=True)
+    """??????????"""
+    logger.error(f"??????: {type(exc).__name__}: {str(exc)}", exc_info=True)
+
+    if isinstance(exc, (ConnectionRefusedError, ConnectionError, TimeoutError, OperationalError)):
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "detail": "????????????? PostgreSQL ???",
+                "message": str(exc) if config_settings.debug else "?????"
+            }
+        )
+
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
-            "detail": "服务器内部错误",
-            "message": str(exc) if config_settings.debug else "请稍后重试"
+            "detail": "???????",
+            "message": str(exc) if config_settings.debug else "?????"
         }
     )
 
@@ -194,8 +233,8 @@ async def liveness_check():
 @app.get("/readyz")
 async def readiness_check():
     """Readiness probe with warmup status and database check."""
-    startup_status = _get_startup_status()
     database_status = await check_database_health()
+    startup_status = _recover_startup_status_if_possible(database_status)
     startup_ready = bool(startup_status.get("ready"))
     database_ready = bool(database_status.get("healthy"))
     is_ready = startup_ready and database_ready
@@ -231,7 +270,7 @@ async def db_session_stats():
 
 
 from app.api import (
-    projects, outlines, characters, chapters,
+    projects, outlines, characters, chapters, chapter_crud_routes, chapter_analysis_routes, chapter_analysis_task_routes, chapter_annotation_routes, chapter_batch_generation_routes, chapter_draft_routes, chapter_expansion_plan_routes, chapter_generation_routes, chapter_quality_routes, chapter_partial_regeneration_routes, chapter_regeneration_routes,
     wizard_stream, relationships, organizations,
     auth, users, settings, writing_styles, memories,
     mcp_plugins, admin, inspiration, prompt_templates,
@@ -250,7 +289,17 @@ app.include_router(inspiration.router, prefix="/api")
 app.include_router(outlines.router, prefix="/api")
 app.include_router(characters.router, prefix="/api")
 app.include_router(careers.router, prefix="/api")  # 职业管理API
-app.include_router(chapters.router, prefix="/api")
+app.include_router(chapter_crud_routes.router, prefix="/api")
+app.include_router(chapter_analysis_routes.router, prefix="/api")
+app.include_router(chapter_analysis_task_routes.router, prefix="/api")
+app.include_router(chapter_annotation_routes.router, prefix="/api")
+app.include_router(chapter_batch_generation_routes.router, prefix="/api")
+app.include_router(chapter_draft_routes.router, prefix="/api")
+app.include_router(chapter_expansion_plan_routes.router, prefix="/api")
+app.include_router(chapter_generation_routes.router, prefix="/api")
+app.include_router(chapter_quality_routes.router, prefix="/api")
+app.include_router(chapter_partial_regeneration_routes.router, prefix="/api")
+app.include_router(chapter_regeneration_routes.router, prefix="/api")
 app.include_router(relationships.router, prefix="/api")
 app.include_router(organizations.router, prefix="/api")
 app.include_router(writing_styles.router, prefix="/api")
@@ -264,6 +313,7 @@ app.include_router(background_tasks.router, prefix="/api")  # Background task AP
 app.include_router(book_import.router, prefix="/api")  # 拆书导入API
 
 static_dir = Path(__file__).parent.parent / "static"
+resolved_static_dir = static_dir.resolve() if static_dir.exists() else static_dir
 if static_dir.exists():
     app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
     
@@ -276,11 +326,17 @@ if static_dir.exists():
                 content={"detail": "API路径不存在"}
             )
         
-        file_path = static_dir / full_path
-        if file_path.is_file():
-            return FileResponse(file_path)
-        
-        index_file = static_dir / "index.html"
+        requested_path = (resolved_static_dir / full_path).resolve(strict=False)
+        if not requested_path.is_relative_to(resolved_static_dir):
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "资源不存在"}
+            )
+
+        if requested_path.is_file():
+            return FileResponse(requested_path)
+
+        index_file = resolved_static_dir / "index.html"
         if index_file.exists():
             return FileResponse(index_file)
         

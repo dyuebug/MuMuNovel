@@ -5,16 +5,15 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 from app.user_manager import user_manager, User
+from app.api.common import require_request_user
 from app.user_password import password_manager
 
 router = APIRouter(prefix="/users", tags=["用户管理"])
 
 
-def require_login(request: Request):
+def require_login(request: Request) -> User:
     """依赖：要求用户已登录"""
-    if not hasattr(request.state, "user") or not request.state.user:
-        raise HTTPException(status_code=401, detail="需要登录")
-    return request.state.user
+    return require_request_user(request, "需要登录")
 
 
 def require_admin(request: Request):

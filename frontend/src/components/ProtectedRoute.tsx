@@ -1,62 +1,27 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { Button, Result } from 'antd';
 import { Navigate, useLocation } from 'react-router-dom';
 import LoadingScreen from './LoadingScreen';
-import { authApi } from '../services/api';
-import { sessionManager } from '../utils/sessionManager';
+import { clearAuthStatusCache, resolveAuthStatus } from '../utils/authStatus';
+import type { AuthResolution } from '../utils/authStatus';
+import { buildLoginUrl, getLocationRedirect } from '../utils/loginRedirect';
 
 interface ProtectedRouteProps {
   children: ReactNode;
 }
 
-const AUTH_STATUS_CACHE_MS = 10000;
-
-let cachedAuthStatus: { value: boolean; expiresAt: number } | null = null;
-let authStatusPromise: Promise<boolean> | null = null;
-
-const resolveAuthStatus = async (): Promise<boolean> => {
-  const now = Date.now();
-  if (cachedAuthStatus && cachedAuthStatus.expiresAt > now) {
-    return cachedAuthStatus.value;
-  }
-
-  if (!authStatusPromise) {
-    authStatusPromise = (async () => {
-      try {
-        await authApi.getCurrentUser();
-        sessionManager.start();
-        cachedAuthStatus = {
-          value: true,
-          expiresAt: Date.now() + AUTH_STATUS_CACHE_MS,
-        };
-        return true;
-      } catch {
-        sessionManager.stop();
-        cachedAuthStatus = {
-          value: false,
-          expiresAt: Date.now() + 2000,
-        };
-        return false;
-      } finally {
-        authStatusPromise = null;
-      }
-    })();
-  }
-
-  return authStatusPromise;
-};
-
 export default function ProtectedRoute({ children }: ProtectedRouteProps) {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [authState, setAuthState] = useState<AuthResolution | null>(null);
   const location = useLocation();
 
   useEffect(() => {
     let cancelled = false;
 
     const checkAuth = async () => {
-      const authenticated = await resolveAuthStatus();
+      const resolvedState = await resolveAuthStatus();
       if (!cancelled) {
-        setIsAuthenticated(authenticated);
+        setAuthState(resolvedState);
       }
     };
 
@@ -67,12 +32,43 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
     };
   }, []);
 
-  if (isAuthenticated === null) {
+  if (authState === null) {
     return <LoadingScreen message="加载中..." minHeight="100vh" />;
   }
 
-  if (!isAuthenticated) {
-    return <Navigate to={`/login?redirect=${encodeURIComponent(location.pathname)}`} replace />;
+  if (authState.serviceUnavailable) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '24px',
+        }}
+      >
+        <Result
+          status="warning"
+          title="服务暂时不可用"
+          subTitle="认证服务当前无法访问，请确认 PostgreSQL 或 Docker Desktop 已启动后重试。"
+          extra={(
+            <Button
+              type="primary"
+              onClick={() => {
+                clearAuthStatusCache();
+                window.location.reload();
+              }}
+            >
+              重新检测
+            </Button>
+          )}
+        />
+      </div>
+    );
+  }
+
+  if (!authState.authenticated) {
+    return <Navigate to={buildLoginUrl(getLocationRedirect(location))} replace />;
   }
 
   return <>{children}</>;

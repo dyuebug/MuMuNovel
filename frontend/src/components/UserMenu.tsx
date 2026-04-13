@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Dropdown, Avatar, Space, Typography, message, Modal, Form, Input, Button, theme } from 'antd';
 import { UserOutlined, LogoutOutlined, TeamOutlined, CrownOutlined, LockOutlined } from '@ant-design/icons';
 import { authApi } from '../services/api';
+import { clearAuthStatusCache } from '../utils/authStatus';
 import type { User } from '../types';
 import type { MenuProps } from 'antd';
 import { useNavigate } from 'react-router-dom';
@@ -40,6 +41,7 @@ export default function UserMenu({ showFullInfo = false, compact = false }: User
   const handleLogout = async () => {
     try {
       await authApi.logout();
+      clearAuthStatusCache();
       message.success('已退出登录');
       window.location.href = '/login';
     } catch (error) {
