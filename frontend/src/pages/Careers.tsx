@@ -1,10 +1,13 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Button, Modal, Form, Input, Select, message, Row, Col, Empty, Tabs, Card, Tag, Space, Divider, Typography, InputNumber } from 'antd';
 import { ThunderboltOutlined, PlusOutlined, EditOutlined, DeleteOutlined, TrophyOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import api, { backgroundTaskApi } from '../services/api';
 import { invalidateProjectCareers, loadProjectCareers } from '../services/projectCareers';
 import SSEProgressModal from '../components/SSEProgressModal';
+import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgroundTasks';
+import { formatBackgroundTaskError } from '../utils/taskPolling';
+import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
 
 const { TextArea } = Input;
 const { Title, Text, Paragraph } = Typography;
@@ -46,8 +49,21 @@ export default function Careers() {
     const [aiGenerating, setAiGenerating] = useState(false);
     const [aiProgress, setAiProgress] = useState(0);
     const [aiMessage, setAiMessage] = useState('');
-    const aiTaskPollTimerRef = useRef<number | null>(null);
-    const aiTaskIdRef = useRef<string | null>(null);
+    const trackedTasks = useBackgroundTaskStore((state) => state.tasks);
+
+    const activeTrackedCareerTask = useMemo(() => {
+        if (!projectId) {
+            return null;
+        }
+
+        return Object.values(trackedTasks)
+            .filter(
+                (task) => task.projectId === projectId
+                    && task.taskType === 'careers_generate_system'
+                    && isActiveBackgroundTask(task)
+            )
+            .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+    }, [projectId, trackedTasks]);
 
     const fetchCareers = useCallback(async () => {
         if (!projectId) {
@@ -72,67 +88,57 @@ export default function Careers() {
         }
     }, [projectId, fetchCareers]);
 
-    const stopAiTaskPolling = useCallback(() => {
-        if (aiTaskPollTimerRef.current) {
-            window.clearInterval(aiTaskPollTimerRef.current);
-            aiTaskPollTimerRef.current = null;
-        }
-    }, []);
-
-    useEffect(() => {
-        return () => {
-            stopAiTaskPolling();
-            aiTaskIdRef.current = null;
-        };
-    }, [stopAiTaskPolling]);
-
-    const startAiTaskPolling = useCallback((taskId: string) => {
-        stopAiTaskPolling();
-        aiTaskIdRef.current = taskId;
-
-        const poll = async () => {
-            try {
-                const task = await backgroundTaskApi.getTaskStatus(taskId);
+    const { currentTaskIdRef: aiTaskIdRef, startTaskPolling: startAiTaskPolling, stopTaskPolling: stopAiTaskPolling } = useRestorableBackgroundTaskPolling({
+        projectId,
+        activeTrackedTask: activeTrackedCareerTask,
+        isMatchingTask: (task) => task.task_type === 'careers_generate_system' && (task.status === 'pending' || task.status === 'running'),
+        onRestoreTask: ({ progress, message: taskMessage }) => {
+            setAiGenerating(true);
+            setAiProgress(progress || 0);
+            setAiMessage(taskMessage || '正在恢复职业体系生成任务...');
+        },
+        createPollingOptions: () => ({
+            pollTask: (currentPollingTaskId) => backgroundTaskApi.getTaskStatus(currentPollingTaskId),
+            onTask: (task) => {
                 setAiProgress(task.progress || 0);
                 setAiMessage(task.message || '');
-
-                if (task.status === 'completed') {
-                    stopAiTaskPolling();
-                    aiTaskIdRef.current = null;
-                    setAiGenerating(false);
-                    message.success('智能生成新职业完成！');
+            },
+            onCompleted: () => {
+                stopAiTaskPolling();
+                aiTaskIdRef.current = null;
+                setAiGenerating(false);
+                message.success('职业体系生成完成');
+                if (projectId) {
                     invalidateProjectCareers(projectId);
-                    void fetchCareers();
-                    return;
                 }
-
-                if (task.status === 'failed') {
-                    stopAiTaskPolling();
-                    aiTaskIdRef.current = null;
-                    setAiGenerating(false);
-                    message.error(task.error || task.message || '生成失败');
-                    return;
-                }
-
-                if (task.status === 'cancelled') {
-                    stopAiTaskPolling();
-                    aiTaskIdRef.current = null;
-                    setAiGenerating(false);
-                    message.info(task.message || '后台任务已取消');
-                }
-            } catch (error) {
-                console.error('轮询后台任务状态失败:', error);
-            }
-        };
-
-        void poll();
-        aiTaskPollTimerRef.current = window.setInterval(() => {
-            void poll();
-        }, 1500);
-    }, [fetchCareers, stopAiTaskPolling]);
+                void fetchCareers();
+            },
+            onFailed: (task) => {
+                stopAiTaskPolling();
+                aiTaskIdRef.current = null;
+                setAiGenerating(false);
+                message.error(formatBackgroundTaskError(task.error, task.message, '生成失败'));
+            },
+            onCancelled: (task) => {
+                stopAiTaskPolling();
+                aiTaskIdRef.current = null;
+                setAiGenerating(false);
+                message.info(task.message || '任务已取消');
+            },
+            onPollingError: (error) => {
+                console.error('轮询职业生成任务失败:', error);
+                stopAiTaskPolling();
+                aiTaskIdRef.current = null;
+                setAiGenerating(false);
+                setAiMessage('职业生成状态同步失败，请刷新后重试');
+                void fetchCareers();
+                message.error('职业生成状态同步失败，请刷新后重试');
+            },
+        }),
+    });
 
     const handleAIGenerateBackground = async (values: { main_career_count: number; sub_career_count: number }) => {
-        if (aiGenerating) {
+        if (aiGenerating || activeTrackedCareerTask) {
             message.info('已有后台职业生成任务在运行，请稍后查看结果');
             return;
         }
@@ -153,7 +159,6 @@ export default function Careers() {
                 payload: {
                     main_career_count: values.main_career_count,
                     sub_career_count: values.sub_career_count,
-                    enable_mcp: false
                 }
             });
 
@@ -385,7 +390,7 @@ export default function Careers() {
                                 aiForm.resetFields();
                                 setIsAIModalOpen(true);
                             }}
-                            loading={aiGenerating}
+                            loading={Boolean(aiGenerating || activeTrackedCareerTask)}
                         >
                             智能生成新职业
                         </Button>

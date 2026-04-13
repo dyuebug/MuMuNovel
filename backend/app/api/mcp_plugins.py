@@ -21,6 +21,7 @@ from app.schemas.mcp_plugin import (
 )
 import json
 from app.user_manager import User
+from app.api.common import require_request_user
 from app.mcp import mcp_client, MCPPluginConfig, PluginStatus
 from app.services.mcp_test_service import mcp_test_service
 from app.logger import get_logger
@@ -32,9 +33,7 @@ router = APIRouter(prefix="/mcp/plugins", tags=["MCP插件管理"])
 
 def require_login(request: Request) -> User:
     """依赖：要求用户已登录"""
-    if not hasattr(request.state, "user") or not request.state.user:
-        raise HTTPException(status_code=401, detail="需要登录")
-    return request.state.user
+    return require_request_user(request, "需要登录")
 
 
 async def _register_plugin_background(

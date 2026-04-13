@@ -69,7 +69,7 @@ export default function SettingsPage() {
     error?: string;
     error_type?: string;
     suggestions?: string[];
-    details?: Record<string, any>;
+    details?: Record<string, unknown>;
   } | null>(null);
   const [showTestResult, setShowTestResult] = useState(false);
   const [testingWebResearchProvider, setTestingWebResearchProvider] = useState<'exa' | 'grok' | null>(null);

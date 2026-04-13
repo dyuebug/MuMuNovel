@@ -124,7 +124,7 @@ const EndpointTestResult: React.FC<EndpointTestResultProps> = ({
         <Card title="自动降级演示" size="small">
           <Space direction="vertical" style={{ width: '100%' }} size="middle">
             <Timeline
-              items={fallbackDemonstration.steps.map((step, _index) => ({
+              items={fallbackDemonstration.steps.map((step) => ({
                 color: step.success ? 'green' : 'red',
                 dot: step.success ? (
                   <CheckCircleOutlined style={{ fontSize: 16 }} />

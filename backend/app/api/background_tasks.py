@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Awaitable, Callable, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -18,10 +19,12 @@ from app.api.common import verify_project_access
 from app.api.settings import read_env_defaults
 from app.database import get_db, get_session_factory
 from app.logger import get_logger
+from app.schemas.outline import BatchOutlineExpansionRequest, OutlineExpansionRequest, OutlineGenerateRequest
 from app.models.mcp_plugin import MCPPlugin
 from app.models.settings import Settings
 from app.services.ai_service import AIService, create_user_ai_service_with_mcp
 from app.services.background_task_manager import background_task_manager
+from app.services.background_task_wizard_executor import run_wizard_background_task
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/background-tasks", tags=["后台任务"])
@@ -60,6 +63,33 @@ TASK_STAGE_DEFAULTS: Dict[str, str] = {
     "character_generate": "1.outline",
     "organization_generate": "1.outline",
 }
+DEDUPABLE_TASK_TYPES = {
+    "wizard_world_building",
+    "wizard_career_system",
+    "wizard_characters",
+    "wizard_outline",
+    "world_regenerate",
+    "outline_generate",
+    "outline_expand",
+    "outline_batch_expand",
+}
+
+
+def _build_task_dedupe_fingerprint(
+    task_type: TaskType,
+    project_id: str,
+    payload: Dict[str, Any],
+) -> Optional[str]:
+    if task_type not in DEDUPABLE_TASK_TYPES:
+        return None
+
+    normalized_payload = {
+        "task_type": task_type,
+        "project_id": project_id,
+        "payload": payload,
+    }
+    encoded = json.dumps(normalized_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 class BackgroundTaskCreateRequest(BaseModel):
@@ -100,6 +130,13 @@ def _extract_workflow_payload(
     if checkpoint is not None and not isinstance(checkpoint, dict):
         checkpoint = None
     return clean_payload, stage_code, workflow_scope, checkpoint
+
+
+def _strip_internal_payload_fields(payload: Dict[str, Any], *extra_fields: str) -> Dict[str, Any]:
+    clean_payload = dict(payload or {})
+    for field_name in ("user_id", *extra_fields):
+        clean_payload.pop(field_name, None)
+    return clean_payload
 
 
 async def _build_user_ai_service(user_id: str, db: AsyncSession) -> AIService:
@@ -158,6 +195,203 @@ def _build_fake_request(user_id: str) -> SimpleNamespace:
     return SimpleNamespace(state=state)
 
 
+async def _consume_response_stream(task_id: str, response: Any, error_message: str) -> None:
+    stream = getattr(response, "body_iterator", None)
+    if stream is None:
+        raise RuntimeError(error_message)
+    await background_task_manager.consume_sse_stream(task_id, stream)
+
+
+TaskRunner = Callable[[str, str, str, Dict[str, Any], AsyncSession, AIService, Any], Awaitable[None]]
+
+
+async def _run_careers_generate_system_task(
+    task_id: str,
+    user_id: str,
+    project_id: str,
+    payload: Dict[str, Any],
+    db: AsyncSession,
+    user_ai_service: AIService,
+    fake_request: Any,
+) -> None:
+    from app.api.careers import generate_career_system
+
+    response = await generate_career_system(
+        project_id=project_id,
+        main_career_count=int(payload.get("main_career_count", 3)),
+        sub_career_count=int(payload.get("sub_career_count", 6)),
+        enable_mcp=_as_bool(payload.get("enable_mcp"), True),
+        http_request=fake_request,  # type: ignore[arg-type]
+        db=db,
+        user_ai_service=user_ai_service,
+    )
+    await _consume_response_stream(task_id, response, "careers stream not available")
+
+
+async def _run_character_generate_task(
+    task_id: str,
+    user_id: str,
+    project_id: str,
+    payload: Dict[str, Any],
+    db: AsyncSession,
+    user_ai_service: AIService,
+    fake_request: Any,
+) -> None:
+    from app.api.characters import CharacterGenerateRequest, generate_character_stream
+
+    character_request = CharacterGenerateRequest(
+        project_id=project_id,
+        name=payload.get("name"),
+        role_type=payload.get("role_type", "supporting"),
+        background=payload.get("background"),
+        requirements=payload.get("requirements"),
+        enable_mcp=_as_bool(payload.get("enable_mcp"), True),
+    )
+    response = await generate_character_stream(
+        character_request,
+        fake_request,  # type: ignore[arg-type]
+        db,
+        user_ai_service,
+    )
+    await _consume_response_stream(task_id, response, "character stream not available")
+
+
+async def _run_organization_generate_task(
+    task_id: str,
+    user_id: str,
+    project_id: str,
+    payload: Dict[str, Any],
+    db: AsyncSession,
+    user_ai_service: AIService,
+    fake_request: Any,
+) -> None:
+    from app.api.organizations import OrganizationGenerateRequest, generate_organization_stream
+
+    organization_request = OrganizationGenerateRequest(
+        project_id=project_id,
+        name=payload.get("name"),
+        organization_type=payload.get("organization_type"),
+        background=payload.get("background"),
+        requirements=payload.get("requirements"),
+        enable_mcp=_as_bool(payload.get("enable_mcp"), True),
+    )
+    response = await generate_organization_stream(
+        organization_request,
+        fake_request,  # type: ignore[arg-type]
+        db,
+        user_ai_service,
+    )
+    await _consume_response_stream(task_id, response, "organization stream not available")
+
+
+async def _run_world_regenerate_task(
+    task_id: str,
+    user_id: str,
+    project_id: str,
+    payload: Dict[str, Any],
+    db: AsyncSession,
+    user_ai_service: AIService,
+    fake_request: Any,
+) -> None:
+    from app.api.wizard_stream import world_building_regenerate_generator
+
+    world_payload = dict(payload)
+    world_payload["user_id"] = user_id
+    stream = world_building_regenerate_generator(project_id, world_payload, db, user_ai_service)
+    await background_task_manager.consume_sse_stream(task_id, stream)
+
+
+async def _run_outline_generate_task(
+    task_id: str,
+    user_id: str,
+    project_id: str,
+    payload: Dict[str, Any],
+    db: AsyncSession,
+    user_ai_service: AIService,
+    fake_request: Any,
+) -> None:
+    from app.api.outlines import generate_outline_stream
+
+    outline_payload_raw = _strip_internal_payload_fields(payload)
+    outline_request = OutlineGenerateRequest.model_validate({
+        **outline_payload_raw,
+        "project_id": project_id,
+    })
+    outline_payload = outline_request.model_dump(exclude_none=False)
+    response = await generate_outline_stream(
+        data=outline_payload,
+        request=fake_request,  # type: ignore[arg-type]
+        db=db,
+        user_ai_service=user_ai_service,
+    )
+    await _consume_response_stream(task_id, response, "outline generate stream not available")
+
+
+async def _run_outline_expand_task(
+    task_id: str,
+    user_id: str,
+    project_id: str,
+    payload: Dict[str, Any],
+    db: AsyncSession,
+    user_ai_service: AIService,
+    fake_request: Any,
+) -> None:
+    from app.api.outlines import expand_outline_to_chapters_stream
+
+    outline_id = str(payload.get("outline_id", "")).strip()
+    if not outline_id:
+        raise RuntimeError("outline_id is required for outline_expand")
+
+    expand_payload_raw = _strip_internal_payload_fields(payload, "outline_id")
+    expand_request = OutlineExpansionRequest.model_validate(expand_payload_raw)
+    expand_payload = expand_request.model_dump(exclude_none=False)
+    response = await expand_outline_to_chapters_stream(
+        outline_id=outline_id,
+        data=expand_payload,
+        request=fake_request,  # type: ignore[arg-type]
+        db=db,
+        user_ai_service=user_ai_service,
+    )
+    await _consume_response_stream(task_id, response, "outline expand stream not available")
+
+
+async def _run_outline_batch_expand_task(
+    task_id: str,
+    user_id: str,
+    project_id: str,
+    payload: Dict[str, Any],
+    db: AsyncSession,
+    user_ai_service: AIService,
+    fake_request: Any,
+) -> None:
+    from app.api.outlines import batch_expand_outlines_stream
+
+    batch_payload_raw = _strip_internal_payload_fields(payload)
+    batch_request = BatchOutlineExpansionRequest.model_validate({
+        **batch_payload_raw,
+        "project_id": project_id,
+    })
+    batch_payload = batch_request.model_dump(exclude_none=False)
+    response = await batch_expand_outlines_stream(
+        data=batch_payload,
+        request=fake_request,  # type: ignore[arg-type]
+        db=db,
+        user_ai_service=user_ai_service,
+    )
+    await _consume_response_stream(task_id, response, "outline batch expand stream not available")
+
+
+TASK_RUNNERS: Dict[str, TaskRunner] = {
+    "careers_generate_system": _run_careers_generate_system_task,
+    "character_generate": _run_character_generate_task,
+    "organization_generate": _run_organization_generate_task,
+    "world_regenerate": _run_world_regenerate_task,
+    "outline_generate": _run_outline_generate_task,
+    "outline_expand": _run_outline_expand_task,
+    "outline_batch_expand": _run_outline_batch_expand_task,
+}
+
+
 async def _run_generation_task(
     task_id: str,
     user_id: str,
@@ -171,199 +405,20 @@ async def _run_generation_task(
         user_ai_service = await _build_user_ai_service(user_id, db)
         fake_request = _build_fake_request(user_id)
 
-        if task_type == "careers_generate_system":
-            from app.api.careers import generate_career_system
-
-            response = await generate_career_system(
-                project_id=project_id,
-                main_career_count=int(payload.get("main_career_count", 3)),
-                sub_career_count=int(payload.get("sub_career_count", 6)),
-                enable_mcp=_as_bool(payload.get("enable_mcp"), False),
-                http_request=fake_request,  # type: ignore[arg-type]
-                db=db,
-                user_ai_service=user_ai_service,
-            )
-            stream = getattr(response, "body_iterator", None)
-            if stream is None:
-                raise RuntimeError("careers stream not available")
-            await background_task_manager.consume_sse_stream(task_id, stream)
+        runner = TASK_RUNNERS.get(task_type)
+        if runner is not None:
+            await runner(task_id, user_id, project_id, payload, db, user_ai_service, fake_request)
             return
 
-        if task_type == "character_generate":
-            from app.api.characters import CharacterGenerateRequest, generate_character_stream
-
-            character_request = CharacterGenerateRequest(
-                project_id=project_id,
-                name=payload.get("name"),
-                role_type=payload.get("role_type", "supporting"),
-                background=payload.get("background"),
-                requirements=payload.get("requirements"),
-                enable_mcp=_as_bool(payload.get("enable_mcp"), True),
-            )
-            response = await generate_character_stream(
-                character_request,
-                fake_request,  # type: ignore[arg-type]
-                db,
-                user_ai_service,
-            )
-            stream = getattr(response, "body_iterator", None)
-            if stream is None:
-                raise RuntimeError("character stream not available")
-            await background_task_manager.consume_sse_stream(task_id, stream)
-            return
-
-        if task_type == "organization_generate":
-            from app.api.organizations import OrganizationGenerateRequest, generate_organization_stream
-
-            organization_request = OrganizationGenerateRequest(
-                project_id=project_id,
-                name=payload.get("name"),
-                organization_type=payload.get("organization_type"),
-                background=payload.get("background"),
-                requirements=payload.get("requirements"),
-                enable_mcp=_as_bool(payload.get("enable_mcp"), True),
-            )
-            response = await generate_organization_stream(
-                organization_request,
-                fake_request,  # type: ignore[arg-type]
-                db,
-                user_ai_service,
-            )
-            stream = getattr(response, "body_iterator", None)
-            if stream is None:
-                raise RuntimeError("organization stream not available")
-            await background_task_manager.consume_sse_stream(task_id, stream)
-            return
-
-        if task_type == "world_regenerate":
-            from app.api.wizard_stream import world_building_regenerate_generator
-
-            world_payload = dict(payload)
-            world_payload["user_id"] = user_id
-            stream = world_building_regenerate_generator(project_id, world_payload, db, user_ai_service)
-            await background_task_manager.consume_sse_stream(task_id, stream)
-            return
-
-        if task_type == "outline_generate":
-            from app.api.outlines import generate_outline_stream
-
-            outline_payload = dict(payload)
-            outline_payload["project_id"] = project_id
-            response = await generate_outline_stream(
-                data=outline_payload,
-                request=fake_request,  # type: ignore[arg-type]
-                db=db,
-                user_ai_service=user_ai_service,
-            )
-            stream = getattr(response, "body_iterator", None)
-            if stream is None:
-                raise RuntimeError("outline generate stream not available")
-            await background_task_manager.consume_sse_stream(task_id, stream)
-            return
-
-        if task_type == "outline_expand":
-            from app.api.outlines import expand_outline_to_chapters_stream
-
-            outline_id = str(payload.get("outline_id", "")).strip()
-            if not outline_id:
-                raise RuntimeError("outline_id is required for outline_expand")
-
-            expand_payload = {k: v for k, v in payload.items() if k != "outline_id"}
-            response = await expand_outline_to_chapters_stream(
-                outline_id=outline_id,
-                data=expand_payload,
-                request=fake_request,  # type: ignore[arg-type]
-                db=db,
-                user_ai_service=user_ai_service,
-            )
-            stream = getattr(response, "body_iterator", None)
-            if stream is None:
-                raise RuntimeError("outline expand stream not available")
-            await background_task_manager.consume_sse_stream(task_id, stream)
-            return
-
-        if task_type == "outline_batch_expand":
-            from app.api.outlines import batch_expand_outlines_stream
-
-            batch_payload = dict(payload)
-            batch_payload["project_id"] = project_id
-            response = await batch_expand_outlines_stream(
-                data=batch_payload,
-                request=fake_request,  # type: ignore[arg-type]
-                db=db,
-                user_ai_service=user_ai_service,
-            )
-            stream = getattr(response, "body_iterator", None)
-            if stream is None:
-                raise RuntimeError("outline batch expand stream not available")
-            await background_task_manager.consume_sse_stream(task_id, stream)
-            return
-
-        if task_type == "wizard_world_building":
-            from app.api.wizard_stream import generate_world_building_stream
-
-            world_payload = dict(payload)
-            response = await generate_world_building_stream(
-                request=fake_request,  # type: ignore[arg-type]
-                data=world_payload,
-                db=db,
-                user_ai_service=user_ai_service,
-            )
-            stream = getattr(response, "body_iterator", None)
-            if stream is None:
-                raise RuntimeError("wizard world-building stream not available")
-            await background_task_manager.consume_sse_stream(task_id, stream)
-            return
-
-        if task_type == "wizard_career_system":
-            from app.api.wizard_stream import generate_career_system_stream
-
-            career_payload = dict(payload)
-            career_payload["project_id"] = project_id
-            response = await generate_career_system_stream(
-                request=fake_request,  # type: ignore[arg-type]
-                data=career_payload,
-                db=db,
-                user_ai_service=user_ai_service,
-            )
-            stream = getattr(response, "body_iterator", None)
-            if stream is None:
-                raise RuntimeError("wizard career-system stream not available")
-            await background_task_manager.consume_sse_stream(task_id, stream)
-            return
-
-        if task_type == "wizard_characters":
-            from app.api.wizard_stream import generate_characters_stream
-
-            characters_payload = dict(payload)
-            characters_payload["project_id"] = project_id
-            response = await generate_characters_stream(
-                request=fake_request,  # type: ignore[arg-type]
-                data=characters_payload,
-                db=db,
-                user_ai_service=user_ai_service,
-            )
-            stream = getattr(response, "body_iterator", None)
-            if stream is None:
-                raise RuntimeError("wizard characters stream not available")
-            await background_task_manager.consume_sse_stream(task_id, stream)
-            return
-
-        if task_type == "wizard_outline":
-            from app.api.wizard_stream import generate_outline_stream
-
-            outline_payload = dict(payload)
-            outline_payload["project_id"] = project_id
-            outline_payload["user_id"] = user_id
-            response = await generate_outline_stream(
-                data=outline_payload,
-                db=db,
-                user_ai_service=user_ai_service,
-            )
-            stream = getattr(response, "body_iterator", None)
-            if stream is None:
-                raise RuntimeError("wizard outline stream not available")
-            await background_task_manager.consume_sse_stream(task_id, stream)
+        if await run_wizard_background_task(
+            task_id=task_id,
+            user_id=user_id,
+            task_type=task_type,
+            project_id=project_id,
+            payload=payload,
+            db=db,
+            user_ai_service=user_ai_service,
+        ):
             return
 
         raise RuntimeError(f"unsupported task type: {task_type}")
@@ -392,8 +447,24 @@ async def create_background_task(
     workflow_scope = data.workflow_scope or payload_scope
     checkpoint = data.checkpoint if isinstance(data.checkpoint, dict) else payload_checkpoint
 
-    task_id = str(uuid.uuid4())
     task_project_id = data.project_id or ""
+    dedupe_fingerprint = _build_task_dedupe_fingerprint(data.task_type, task_project_id, clean_payload)
+    existing_task = await background_task_manager.find_active_task(
+        user_id=user_id,
+        task_type=data.task_type,
+        project_id=task_project_id,
+        payload_fingerprint=dedupe_fingerprint,
+    )
+    if existing_task is not None:
+        logger.info(
+            "Reusing existing active background task: user=%s task=%s type=%s",
+            user_id,
+            existing_task.task_id,
+            data.task_type,
+        )
+        return existing_task.to_dict()
+
+    task_id = str(uuid.uuid4())
     record = await background_task_manager.create_task(
         task_id=task_id,
         task_type=data.task_type,
@@ -404,6 +475,7 @@ async def create_background_task(
         execution_mode=execution_mode,
         workflow_scope=workflow_scope,
         checkpoint=checkpoint,
+        payload_fingerprint=dedupe_fingerprint,
     )
 
     job = _run_generation_task(
@@ -470,17 +542,17 @@ async def get_background_task_status(task_id: str, request: Request):
         logger.warning(f"Background task missing: user={user_id}, task={task_id}")
         return {
             "task_id": task_id,
-            "task_type": "unknown",
-            "project_id": "",
+            "task_type": None,
+            "project_id": None,
             "status": "cancelled",
             "progress": 100,
             "message": "任务不存在",
             "error": "task_missing",
             "stage_code": None,
-            "execution_mode": "interactive",
+            "execution_mode": None,
             "workflow_scope": None,
             "checkpoint": None,
-            "created_at": now,
+            "created_at": None,
             "updated_at": now,
             "started_at": None,
             "completed_at": now,

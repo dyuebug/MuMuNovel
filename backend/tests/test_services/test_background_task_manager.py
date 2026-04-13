@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 from pathlib import Path
 from uuid import uuid4
@@ -115,14 +116,17 @@ async def test_should_recover_running_tasks_as_failed_after_restart():
         max_tasks=100,
         persistence_path=str(persistence_file),
     )
+    manager._progress_persist_interval_seconds = 0
 
     await manager.create_task(
         task_id="task-restart-recover",
         task_type="outline_generate",
         user_id="user-1",
         project_id="project-1",
+        stage_code="1.outline.generating",
     )
-    await manager.mark_running("task-restart-recover", "执行中")
+    await manager.mark_running("task-restart-recover", "任务执行中")
+    await manager.update_progress("task-restart-recover", 35, "生成进行中")
 
     restored = BackgroundTaskManager(
         ttl_seconds=3600,
@@ -133,7 +137,11 @@ async def test_should_recover_running_tasks_as_failed_after_restart():
     assert len(tasks) == 1
     assert tasks[0].task_id == "task-restart-recover"
     assert tasks[0].status == "failed"
-    assert tasks[0].error == "服务重启导致任务中断"
+    assert tasks[0].error == "服务重启导致任务上下文丢失"
+    assert isinstance(tasks[0].checkpoint, dict)
+    assert tasks[0].checkpoint.get("event") == "failed"
+    assert tasks[0].checkpoint.get("error") == "服务重启导致任务上下文丢失"
+    assert tasks[0].checkpoint.get("stage_code") == "1.outline.generating"
 
 
 async def test_should_keep_workflow_fields_when_creating_task():
@@ -273,3 +281,262 @@ async def test_should_keep_phase_monotonic_without_retry_hint():
     record = await manager.get_task("task-stage-monotonic", "user-1")
     assert record is not None
     assert record.stage_code == "1.outline.loading"
+
+
+async def test_should_finalize_stage_code_when_run_job_completes():
+    manager = BackgroundTaskManager(
+        ttl_seconds=3600,
+        max_tasks=100,
+        persistence_path=_build_persistence_path(),
+    )
+
+    await manager.create_task(
+        task_id="task-run-job-complete-stage",
+        task_type="outline_generate",
+        user_id="user-1",
+        project_id="project-1",
+        stage_code="1.outline.parsing",
+    )
+
+    async def _job() -> None:
+        return None
+
+    await manager.run_job("task-run-job-complete-stage", _job())
+
+    record = await manager.get_task("task-run-job-complete-stage", "user-1")
+    assert record is not None
+    assert record.status == "completed"
+    assert record.stage_code == "1.outline.complete"
+    assert isinstance(record.checkpoint, dict)
+    assert record.checkpoint.get("event") == "completed"
+    assert record.checkpoint.get("progress_phase") == "complete"
+    assert record.checkpoint.get("stage_code") == "1.outline.complete"
+
+
+async def test_should_not_run_job_when_task_was_cancelled_before_runner_started():
+    manager = BackgroundTaskManager(
+        ttl_seconds=3600,
+        max_tasks=100,
+        persistence_path=_build_persistence_path(),
+    )
+
+    await manager.create_task(
+        task_id="task-cancel-before-runner",
+        task_type="outline_generate",
+        user_id="user-1",
+        project_id="project-1",
+    )
+    await manager.cancel_task("task-cancel-before-runner", "user-1")
+
+    execution_state = {"started": False}
+
+    async def _job() -> None:
+        execution_state["started"] = True
+
+    await manager.run_job("task-cancel-before-runner", _job())
+
+    record = await manager.get_task("task-cancel-before-runner", "user-1")
+    assert record is not None
+    assert record.status == "cancelled"
+    assert execution_state["started"] is False
+
+
+async def test_should_close_stream_when_consume_sse_stream_returns_after_cancel():
+    manager = BackgroundTaskManager(
+        ttl_seconds=3600,
+        max_tasks=100,
+        persistence_path=_build_persistence_path(),
+    )
+
+    await manager.create_task(
+        task_id="task-cancelled-stream-close",
+        task_type="outline_generate",
+        user_id="user-1",
+        project_id="project-1",
+    )
+    await manager.cancel_task("task-cancelled-stream-close", "user-1")
+
+    class _ClosableStream:
+        def __init__(self):
+            self._yielded = False
+            self.closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._yielded:
+                raise StopAsyncIteration
+            self._yielded = True
+            return 'data: {"type":"progress","progress":10,"message":"step"}\n\n'
+
+        async def aclose(self):
+            self.closed = True
+
+    stream = _ClosableStream()
+    await manager.consume_sse_stream("task-cancelled-stream-close", stream)
+
+    assert stream.closed is True
+
+
+async def test_should_mark_task_completed_when_sse_stream_ends_after_result_without_done():
+    manager = BackgroundTaskManager(
+        ttl_seconds=3600,
+        max_tasks=100,
+        persistence_path=_build_persistence_path(),
+    )
+
+    await manager.create_task(
+        task_id="task-result-without-done",
+        task_type="wizard_world_building",
+        user_id="user-1",
+        project_id="",
+    )
+    await manager.mark_running("task-result-without-done", "running")
+
+    class _ResultOnlyStream:
+        def __init__(self):
+            self._yielded = False
+            self.closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._yielded:
+                raise StopAsyncIteration
+            self._yielded = True
+            return 'data: {"type":"result","data":{"project_id":"project-created-1","message":"ok"}}\n\n'
+
+        async def aclose(self):
+            self.closed = True
+
+    stream = _ResultOnlyStream()
+    await manager.consume_sse_stream("task-result-without-done", stream)
+
+    record = await manager.get_task("task-result-without-done", "user-1")
+    assert record is not None
+    assert record.status == "completed"
+    assert record.progress == 100
+    assert record.project_id == "project-created-1"
+    assert record.result == {"project_id": "project-created-1", "message": "ok"}
+    assert stream.closed is True
+
+
+async def test_should_cancel_runner_when_attached_after_task_was_cancelled():
+    manager = BackgroundTaskManager(
+        ttl_seconds=3600,
+        max_tasks=100,
+        persistence_path=_build_persistence_path(),
+    )
+
+    await manager.create_task(
+        task_id="task-attach-after-cancel",
+        task_type="outline_generate",
+        user_id="user-1",
+        project_id="project-1",
+    )
+    await manager.cancel_task("task-attach-after-cancel", "user-1")
+
+    started = asyncio.Event()
+
+    async def _runner() -> None:
+        started.set()
+        await asyncio.sleep(60)
+
+    runner_task = asyncio.create_task(_runner())
+    await started.wait()
+
+    await manager.attach_runner("task-attach-after-cancel", runner_task)
+
+    with pytest.raises(asyncio.CancelledError):
+        await runner_task
+
+
+async def test_should_update_task_project_id_from_result_payload():
+    manager = BackgroundTaskManager(
+        ttl_seconds=3600,
+        max_tasks=100,
+        persistence_path=_build_persistence_path(),
+    )
+
+    await manager.create_task(
+        task_id="task-world-building-project-link",
+        task_type="wizard_world_building",
+        user_id="user-1",
+        project_id="",
+    )
+
+    await manager.set_result(
+        "task-world-building-project-link",
+        {
+            "project_id": "project-created-1",
+            "message": "ok",
+        },
+    )
+
+    record = await manager.get_task("task-world-building-project-link", "user-1")
+    assert record is not None
+    assert record.project_id == "project-created-1"
+
+    project_tasks = await manager.list_tasks(
+        user_id="user-1",
+        project_id="project-created-1",
+        limit=20,
+    )
+    assert [item.task_id for item in project_tasks] == ["task-world-building-project-link"]
+
+
+async def test_should_find_active_task_by_matching_payload_fingerprint():
+    manager = BackgroundTaskManager(
+        ttl_seconds=3600,
+        max_tasks=100,
+        persistence_path=_build_persistence_path(),
+    )
+
+    await manager.create_task(
+        task_id="task-dedupe-match-old",
+        task_type="wizard_world_building",
+        user_id="user-1",
+        project_id="",
+        payload_fingerprint="fp-match",
+    )
+    await manager.mark_running("task-dedupe-match-old", "running")
+
+    await manager.create_task(
+        task_id="task-dedupe-other",
+        task_type="wizard_world_building",
+        user_id="user-1",
+        project_id="",
+        payload_fingerprint="fp-other",
+    )
+    await manager.mark_running("task-dedupe-other", "running")
+
+    await manager.create_task(
+        task_id="task-dedupe-match-new",
+        task_type="wizard_world_building",
+        user_id="user-1",
+        project_id="",
+        payload_fingerprint="fp-match",
+    )
+    await manager.mark_running("task-dedupe-match-new", "running")
+    await manager.update_progress("task-dedupe-match-new", 30, "step-new")
+
+    record = await manager.find_active_task(
+        user_id="user-1",
+        task_type="wizard_world_building",
+        project_id="",
+        payload_fingerprint="fp-match",
+    )
+
+    assert record is not None
+    assert record.task_id in {"task-dedupe-match-old", "task-dedupe-match-new"}
+    assert record.payload_fingerprint == "fp-match"
+
+    missing = await manager.find_active_task(
+        user_id="user-1",
+        task_type="wizard_world_building",
+        project_id="",
+        payload_fingerprint="fp-missing",
+    )
+    assert missing is None

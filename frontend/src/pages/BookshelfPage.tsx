@@ -5,6 +5,7 @@ import type { Project } from '../types';
 import { bookshelfCardStyles, bookshelfCardHoverHandlers } from '../components/CardStyles';
 import { useThemeMode } from '../theme/useThemeMode';
 import { VERSION_INFO } from '../config/version';
+import { isProjectWizardIncomplete } from '../utils/projectWizardState';
 
 const { Paragraph } = Typography;
 
@@ -326,7 +327,7 @@ export default function BookshelfPage({
           {Array.isArray(projects) && projects.map((project, index) => {
             const progress = getProgress(project.current_words || 0, project.target_words || 0);
             const progressColor = getProgressColor(progress);
-            const isWizardIncomplete = project.wizard_status === 'incomplete';
+            const isWizardIncomplete = isProjectWizardIncomplete(project);
             const displayStatus = getDisplayStatus(project.status, progress);
             const isCompleted = progress >= 100 || displayStatus.includes('完结');
             const palette = isCompleted ? completedBookPalette : serialBookPalettes[index % serialBookPalettes.length];

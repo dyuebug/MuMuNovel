@@ -11,6 +11,7 @@ export interface TrackedBackgroundTask {
   status: BackgroundTaskRuntimeStatus;
   progress: number;
   message: string;
+  result?: Record<string, unknown> | null;
   error?: string | null;
   stageCode?: string;
   executionMode?: 'interactive' | 'auto';
@@ -30,11 +31,12 @@ export interface TrackedBackgroundTask {
 
 interface UpsertTaskPayload {
   task_id: string;
-  task_type?: string;
-  project_id?: string;
+  task_type?: string | null;
+  project_id?: string | null;
   status?: BackgroundTaskRuntimeStatus;
   progress?: number;
   message?: string;
+  result?: Record<string, unknown> | null;
   error?: string | null;
   stage_code?: string | null;
   execution_mode?: 'interactive' | 'auto' | null;
@@ -52,13 +54,15 @@ interface UpsertTaskPayload {
 }
 
 
+type ActiveTaskScope = 'background' | 'chapter_batch';
+
 interface BackgroundTaskState {
   tasks: Record<string, TrackedBackgroundTask>;
   upsertTask: (task: UpsertTaskPayload) => void;
   removeTask: (taskId: string) => void;
   removeTasksByProjectId: (projectId: string) => void;
   pruneTasksByProjectIds: (projectIds: string[]) => void;
-  pruneMissingActiveTasks: (activeTaskIds: string[]) => void;
+  pruneMissingActiveTasks: (activeTaskIds: string[], scope?: ActiveTaskScope) => void;
   clearTerminalTasks: () => void;
   pruneExpiredTerminalTasks: () => void;
 }
@@ -68,6 +72,26 @@ const TERMINAL_TASK_RETENTION_MS = 1000 * 60 * 60 * 12;
 const MAX_PERSISTED_TASKS = 30;
 const MAX_TERMINAL_TASKS = 12;
 const ACTIVE_TASK_GRACE_MS = 1000 * 60;
+
+const isChapterManagedTask = (taskType: string) =>
+  taskType === 'chapters_batch_generate' || taskType === 'chapter_single_generate' || taskType === 'chapter_analysis';
+
+const matchesActiveTaskScope = (task: TrackedBackgroundTask, scope?: ActiveTaskScope) => {
+  if (!scope) {
+    return true;
+  }
+
+  if (scope === 'chapter_batch') {
+    return task.taskType === 'chapters_batch_generate' || task.taskType === 'chapter_single_generate';
+  }
+
+  if (scope === 'background') {
+    return !isChapterManagedTask(task.taskType);
+  }
+
+  return true;
+};
+
 
 const toTimestamp = (value?: string | null): number | undefined => {
   if (!value) return undefined;
@@ -128,6 +152,7 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
           ? (toTimestamp(task.completed_at) ?? existing?.completedAt ?? now)
           : undefined;
 
+        const isActiveStatus = incomingStatus === 'pending' || incomingStatus === 'running';
         const terminalReason = task.terminal_reason !== undefined
           ? task.terminal_reason
           : terminal ? (existing?.terminalReason ?? null) : null;
@@ -142,6 +167,15 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
         const canResume = typeof task.can_resume === 'boolean'
           ? task.can_resume
           : incomingStatus === 'failed' || incomingStatus === 'cancelled';
+        const result = task.result !== undefined
+          ? task.result
+          : isActiveStatus ? null : (existing?.result ?? null);
+        const error = task.error !== undefined
+          ? task.error
+          : isActiveStatus ? null : (existing?.error ?? null);
+        const failedChapters = task.failed_chapters !== undefined
+          ? task.failed_chapters
+          : incomingStatus === 'failed' ? (existing?.failedChapters ?? []) : [];
 
         const merged: TrackedBackgroundTask = {
           taskId: task.task_id,
@@ -150,20 +184,21 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
           status: incomingStatus,
           progress: normalizeProgress(task.progress ?? existing?.progress),
           message: task.message ?? existing?.message ?? '',
-          error: task.error ?? existing?.error ?? null,
+          result,
+          error,
           stageCode: task.stage_code ?? existing?.stageCode,
           executionMode: task.execution_mode ?? existing?.executionMode ?? 'interactive',
           workflowScope: task.workflow_scope ?? existing?.workflowScope,
           checkpoint: task.checkpoint ?? existing?.checkpoint ?? null,
-          failedChapters: task.failed_chapters ?? existing?.failedChapters ?? [],
+          failedChapters,
           activeStoryRepairPayload: task.active_story_repair_payload ?? existing?.activeStoryRepairPayload ?? null,
-          terminalReason,
-          terminalLabel,
-          reviewRequired,
-          canResume,
+          terminalReason: isActiveStatus ? null : terminalReason,
+          terminalLabel: isActiveStatus ? null : terminalLabel,
+          reviewRequired: isActiveStatus ? false : reviewRequired,
+          canResume: isActiveStatus ? false : canResume,
           createdAt,
           updatedAt,
-          completedAt,
+          completedAt: isActiveStatus ? undefined : completedAt,
         };
 
         const nextTasks = { ...get().tasks, [task.task_id]: merged };
@@ -190,7 +225,7 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
         );
         set({ tasks: next });
       },
-      pruneMissingActiveTasks: (activeTaskIds) => {
+      pruneMissingActiveTasks: (activeTaskIds, scope) => {
         const now = Date.now();
         const activeSet = new Set(activeTaskIds);
         const next = Object.fromEntries(
@@ -198,10 +233,13 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
             if (TERMINAL_STATUSES.includes(task.status)) {
               return true;
             }
+            if (!matchesActiveTaskScope(task, scope)) {
+              return true;
+            }
             if (activeSet.has(task.taskId)) {
               return true;
             }
-            if (now - task.createdAt <= ACTIVE_TASK_GRACE_MS) {
+            if (now - task.updatedAt <= ACTIVE_TASK_GRACE_MS) {
               return true;
             }
             return false;

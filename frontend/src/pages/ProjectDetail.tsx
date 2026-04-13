@@ -21,6 +21,7 @@ import {
   MoonOutlined,
 } from '@ant-design/icons';
 import { useStore } from '../store';
+import type { Project } from '../types';
 import { useCharacterSync, useOutlineSync, useChapterSync, loadProjectCharacters, loadProjectOutlines, loadProjectChapters, isProjectCollectionFresh } from '../store/hooks';
 import { preloadProjectPage } from '../routes/projectPageLoaders';
 import type { ProjectNavigationPageKey } from '../routes/projectPageLoaders';
@@ -36,7 +37,7 @@ const { Header, Sider, Content } = Layout;
 // 判断是否为移动端
 const isMobile = () => window.innerWidth <= 768;
 
-const projectLoadPromises = new Map<string, Promise<void>>();
+const projectLoadPromises = new Map<string, Promise<Project>>();
 const PROJECT_COLLECTION_HYDRATION_DELAY_MS = 1000;
 
 const shouldHydrateProjectCollectionsForPath = (pathname: string) => {
@@ -266,38 +267,35 @@ export default function ProjectDetail() {
     };
 
     const loadProjectData = async (id: string) => {
-      const existingLoad = projectLoadPromises.get(id);
-      if (existingLoad) {
-        await existingLoad;
-        if (!cancelled && useStore.getState().currentProject?.id === id) {
-          setProjectReady(true);
-        }
-        return;
-      }
-
       cancelScheduledProjectHydration();
       setProjectReady(false);
       setIsProjectDataHydrating(false);
 
-      const loadPromise = (async () => {
-        try {
-          const project = await projectApi.getProject(id);
-          if (cancelled) {
-            return;
+      let loadPromise = projectLoadPromises.get(id);
+      if (!loadPromise) {
+        loadPromise = (async () => {
+          try {
+            return await projectApi.getProject(id);
+          } finally {
+            projectLoadPromises.delete(id);
           }
+        })();
 
-          setCurrentProject(project);
-          setProjectReady(true);
-          scheduleProjectCollectionHydration(id);
-        } catch (error) {
-          console.error('加载项目数据失败:', error);
-        } finally {
-          projectLoadPromises.delete(id);
+        projectLoadPromises.set(id, loadPromise);
+      }
+
+      try {
+        const project = await loadPromise;
+        if (cancelled) {
+          return;
         }
-      })();
 
-      projectLoadPromises.set(id, loadPromise);
-      await loadPromise;
+        setCurrentProject(project);
+        setProjectReady(true);
+        scheduleProjectCollectionHydration(id);
+      } catch (error) {
+        console.error('加载项目数据失败:', error);
+      }
     };
 
     if (projectId) {

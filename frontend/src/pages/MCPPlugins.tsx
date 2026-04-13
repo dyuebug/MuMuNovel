@@ -124,7 +124,7 @@ const buildVerifiedConfig = (settings: {
   fallbackStrategy: settings.fallback_strategy || 'auto',
 });
 
-const renderEndpointDiagnostics = (details: Record<string, any> | undefined, colorBgLayout: string) => {
+const renderEndpointDiagnostics = (details: Record<string, unknown> | undefined, colorBgLayout: string) => {
   const diagnostics = details?.endpoint_diagnostics as EndpointDiagnostics | undefined;
   if (!diagnostics) {
     return null;
@@ -157,7 +157,7 @@ const renderEndpointDiagnostics = (details: Record<string, any> | undefined, col
   );
 };
 
-const renderTransportDiagnostics = (details: Record<string, any> | undefined, colorBgLayout: string) => {
+const renderTransportDiagnostics = (details: Record<string, unknown> | undefined, colorBgLayout: string) => {
   const diagnostics = details?.transport_diagnostics as TransportDiagnostics | undefined;
   if (!diagnostics) {
     return null;
@@ -615,6 +615,13 @@ export default function MCPPluginsPage() {
       if (nextStatus === 'supported') {
         setModelSupportStatus('supported');
 
+        const functionCallingDetails = (result.details ?? {}) as {
+          finish_reason?: string;
+          tool_call_count?: number;
+          test_tool?: string;
+          response_type?: string;
+        };
+
         modal.success({
           title: '✅ Function Calling 支持检测',
           centered: true,
@@ -641,8 +648,8 @@ export default function MCPPluginsPage() {
               <div style={{ marginBottom: 12, padding: 12, background: statusStyles.info.bg, borderRadius: 8, border: `1px solid ${statusStyles.info.border}` }}>
                 <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>🔧 模型信息</Text>
                 <Text code strong>{result.model}</Text>
-                {result.details?.finish_reason && (
-                  <Tag color="green" style={{ marginLeft: 8 }}>finish_reason: {result.details.finish_reason}</Tag>
+                {functionCallingDetails.finish_reason && (
+                  <Tag color="green" style={{ marginLeft: 8 }}>finish_reason: {functionCallingDetails.finish_reason}</Tag>
                 )}
               </div>
 
@@ -650,9 +657,9 @@ export default function MCPPluginsPage() {
                 <div style={{ marginBottom: 12 }}>
                   <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>📊 检测详情</Text>
                   <div style={{ padding: 8, background: token.colorBgLayout, borderRadius: 4, fontSize: 12 }}>
-                    <div>✓ 工具调用数量: {result.details.tool_call_count || 0}</div>
-                    <div>✓ 测试工具: {result.details.test_tool || 'N/A'}</div>
-                    <div>✓ 响应类型: {result.details.response_type || 'N/A'}</div>
+                    <div>✓ 工具调用数量: {functionCallingDetails.tool_call_count || 0}</div>
+                    <div>✓ 测试工具: {functionCallingDetails.test_tool || 'N/A'}</div>
+                    <div>✓ 响应类型: {functionCallingDetails.response_type || 'N/A'}</div>
                   </div>
                 </div>
               )}

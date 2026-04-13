@@ -12,6 +12,7 @@ import UserMenu from '../components/UserMenu';
 import ThemeSwitch from '../components/ThemeSwitch';
 import { useThemeMode } from '../theme/useThemeMode';
 import { getStoredSidebarCollapsed, setStoredSidebarCollapsed } from '../utils/sidebarState';
+import { isProjectWizardIncomplete } from '../utils/projectWizardState';
 import { VERSION_INFO } from '../config/version';
 
 const LazyChangelogFloatingButton = lazy(() => import('../components/ChangelogFloatingButton'));
@@ -58,6 +59,7 @@ export default function ProjectList() {
   const navigate = useNavigate();
   const location = useLocation();
   const { projects, loading } = useStore();
+  const updateProjectInStore = useStore((state) => state.updateProject);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [collapsed, setCollapsed] = useState<boolean>(() => getStoredSidebarCollapsed());
   const [modal, contextHolder] = Modal.useModal();
@@ -168,11 +170,26 @@ export default function ProjectList() {
   };
 
   const handleEnterProject = async (project: Project) => {
-    if (project.wizard_status === 'incomplete') {
-      navigate(`/wizard?project_id=${project.id}`);
-    } else {
+    const localWizardIncomplete = isProjectWizardIncomplete(project);
+    if (!localWizardIncomplete) {
       navigate(`/project/${project.id}`);
+      return;
     }
+
+    try {
+      const latestProject = await projectApi.getProject(project.id);
+      updateProjectInStore(project.id, latestProject);
+
+      const latestWizardIncomplete = isProjectWizardIncomplete(latestProject);
+      if (latestWizardIncomplete) {
+        navigate(`/wizard?project_id=${project.id}`);
+        return;
+      }
+    } catch (error) {
+      console.error('检查项目向导状态失败:', error);
+    }
+
+    navigate(`/project/${project.id}`);
   };
 
   const getStatusTag = (status: string) => {

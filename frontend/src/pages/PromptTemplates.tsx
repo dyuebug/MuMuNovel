@@ -17,6 +17,7 @@ import {
   Spin,
   Empty
 } from 'antd';
+import { useCallback } from 'react';
 import {
   EditOutlined,
   ReloadOutlined,
@@ -88,7 +89,7 @@ export default function PromptTemplates() {
   const isMobile = window.innerWidth <= 768;
 
   // 加载模板数据
-  const loadSyncStatus = async () => {
+  const loadSyncStatus = useCallback(async () => {
     try {
       const response = await axios.get<PromptTemplateSyncStatusResponse>('/api/prompt-templates/sync-status', {
         params: { managed_only: true }
@@ -110,9 +111,9 @@ export default function PromptTemplates() {
         message.warning('同步状态获取失败，已使用基础模式显示');
       }
     }
-  };
+  }, []);
 
-  const loadTemplates = async () => {
+  const loadTemplates = useCallback(async () => {
     try {
       setLoading(true);
       const response = await axios.get<CategoryGroup[]>('/api/prompt-templates/categories');
@@ -124,11 +125,11 @@ export default function PromptTemplates() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [loadSyncStatus]);
 
   useEffect(() => {
     loadTemplates();
-  }, []);
+  }, [loadTemplates]);
 
   // 获取当前分类的模板
   const getCurrentTemplates = (): PromptTemplate[] => {

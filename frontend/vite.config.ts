@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { resolve } from 'path'
 import { gzipSync } from 'zlib'
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import type { PluginOption } from 'vite'
 import type { OutputBundle, OutputChunk } from 'rollup'
 
@@ -170,7 +170,7 @@ const createBundleReportHtml = (report: {
         </td>
         <td>
           <details>
-            <summary>???? (${chunk.modules.length})</summary>
+            <summary>Modules (${chunk.modules.length})</summary>
             <ol>${topModules}</ol>
           </details>
         </td>
@@ -197,8 +197,8 @@ const createBundleReportHtml = (report: {
   </style>
 </head>
 <body>
-  <h1>?? Bundle ????</h1>
-  <div class="meta">?????${escapeHtml(report.generatedAt)} | ???${escapeHtml(report.version)}</div>
+  <h1>Bundle Report</h1>
+  <div class="meta">Generated at: ${escapeHtml(report.generatedAt)} | Version: ${escapeHtml(report.version)}</div>
   <table>
     <thead>
       <tr>
@@ -261,7 +261,14 @@ const bundleReportPlugin = (): PluginOption => ({
   },
 })
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const repoEnv = loadEnv(mode, resolve(__dirname, '..'), '')
+  const apiProxyPort = repoEnv.APP_PORT?.trim() || process.env.APP_PORT?.trim() || '8000'
+  const apiProxyHost = repoEnv.APP_HOST?.trim() || process.env.APP_HOST?.trim() || 'localhost'
+  const apiProxyProtocol = apiProxyHost === '0.0.0.0' ? 'http' : 'http'
+  const apiProxyTarget = `${apiProxyProtocol}://${apiProxyHost === '0.0.0.0' ? '127.0.0.1' : apiProxyHost}:${apiProxyPort}`
+
+  return {
   plugins: [react(), bundleReportPlugin()],
   define: {
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(packageJson.version),
@@ -281,9 +288,10 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: apiProxyTarget,
         changeOrigin: true,
       }
     }
+  }
   }
 })

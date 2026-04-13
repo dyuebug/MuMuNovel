@@ -28,6 +28,7 @@ class BackgroundTaskRecord:
     execution_mode: str = "interactive"
     workflow_scope: Optional[str] = None
     checkpoint: Optional[Dict[str, Any]] = None
+    payload_fingerprint: Optional[str] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
@@ -56,6 +57,7 @@ class BackgroundTaskRecord:
     def to_storage_dict(self) -> Dict[str, Any]:
         data = self.to_dict()
         data["user_id"] = self.user_id
+        data["payload_fingerprint"] = self.payload_fingerprint
         return data
 
     @classmethod
@@ -84,6 +86,7 @@ class BackgroundTaskRecord:
             execution_mode=str(payload.get("execution_mode", "interactive") or "interactive"),
             workflow_scope=payload.get("workflow_scope"),
             checkpoint=payload.get("checkpoint") if isinstance(payload.get("checkpoint"), dict) else None,
+            payload_fingerprint=payload.get("payload_fingerprint"),
             created_at=created_at,
             updated_at=updated_at,
             started_at=parse_dt(payload.get("started_at")),
@@ -304,12 +307,22 @@ class BackgroundTaskManager:
             if record.status not in {"pending", "running"}:
                 continue
             record.status = "failed"
-            record.error = "服务重启导致任务中断"
-            record.message = "任务在服务重启后中断，已标记失败"
+            record.error = "服务重启导致任务上下文丢失"
+            record.message = "服务重启后未恢复执行上下文，请重新发起任务"
             if not record.started_at:
                 record.started_at = record.updated_at or now
             record.completed_at = now
             record.updated_at = now
+            checkpoint_extra = {"error": record.error}
+            if record.stage_code:
+                checkpoint_extra["stage_code"] = record.stage_code
+            self._touch_checkpoint(
+                record,
+                event="failed",
+                progress=record.progress,
+                message=record.message,
+                extra=checkpoint_extra,
+            )
             changed = True
         if changed:
             self._persist_locked(force=True)
@@ -358,6 +371,7 @@ class BackgroundTaskManager:
         execution_mode: str = "interactive",
         workflow_scope: Optional[str] = None,
         checkpoint: Optional[Dict[str, Any]] = None,
+        payload_fingerprint: Optional[str] = None,
     ) -> BackgroundTaskRecord:
         await self.ensure_loaded()
         async with self._lock:
@@ -377,6 +391,7 @@ class BackgroundTaskManager:
                 execution_mode=execution_mode,
                 workflow_scope=workflow_scope,
                 checkpoint=checkpoint,
+                payload_fingerprint=payload_fingerprint,
             )
             self._tasks[task_id] = record
             self._persist_locked(force=True)
@@ -422,6 +437,42 @@ class BackgroundTaskManager:
         )
         return records[:normalized_limit]
 
+    async def find_active_task(
+        self,
+        *,
+        user_id: str,
+        task_type: str,
+        project_id: str,
+        payload_fingerprint: Optional[str] = None,
+    ) -> Optional[BackgroundTaskRecord]:
+        await self.ensure_loaded()
+        async with self._lock:
+            self._cleanup_locked()
+            candidates = [
+                record
+                for record in self._tasks.values()
+                if record.user_id == user_id
+                and record.task_type == task_type
+                and record.project_id == project_id
+                and record.status in {"pending", "running"}
+            ]
+
+            if payload_fingerprint is not None:
+                candidates = [
+                    record
+                    for record in candidates
+                    if record.payload_fingerprint == payload_fingerprint
+                ]
+
+            if not candidates:
+                return None
+
+            candidates.sort(
+                key=lambda item: item.updated_at or item.created_at,
+                reverse=True,
+            )
+            return candidates[0]
+
     async def update_workflow_state(
         self,
         *,
@@ -455,12 +506,18 @@ class BackgroundTaskManager:
                 record.progress = max(0, min(int(progress), 100))
 
             record.updated_at = datetime.now(timezone.utc)
-            self._persist_locked()
+            self._persist_locked(force=True)
             return record
 
     async def attach_runner(self, task_id: str, runner_task: asyncio.Task[None]) -> None:
+        should_cancel = False
         async with self._lock:
             self._runner_tasks[task_id] = runner_task
+            record = self._tasks.get(task_id)
+            should_cancel = bool(record and record.status == "cancelled" and not runner_task.done())
+
+        if should_cancel:
+            runner_task.cancel()
 
     async def cancel_task(self, task_id: str, user_id: str) -> Optional[BackgroundTaskRecord]:
         runner_task: Optional[asyncio.Task[None]] = None
@@ -557,6 +614,9 @@ class BackgroundTaskManager:
             if not record or record.status == "cancelled":
                 return
             record.result = result
+            result_project_id = str(result.get("project_id") or "").strip()
+            if result_project_id:
+                record.project_id = result_project_id
             record.updated_at = datetime.now(timezone.utc)
             self._touch_checkpoint(
                 record,
@@ -616,27 +676,21 @@ class BackgroundTaskManager:
             self._persist_locked(force=True)
 
     async def run_job(self, task_id: str, job: Awaitable[None]) -> None:
-        await self.mark_running(task_id, "后台任务执行中")
+        await self.mark_running(task_id, "任务执行中")
+        if await self.is_cancelled(task_id):
+            close = getattr(job, "close", None)
+            if callable(close):
+                close()
+            return
         try:
             await job
+            should_mark_completed = False
             async with self._lock:
                 record = self._tasks.get(task_id)
                 if record and record.status in {"pending", "running"}:
-                    record.status = "completed"
-                    record.progress = 100
-                    record.message = record.message or "任务已完成"
-                    record.completed_at = datetime.now(timezone.utc)
-                    record.updated_at = datetime.now(timezone.utc)
-                    self._touch_checkpoint(
-                        record,
-                        event="completed",
-                        progress=record.progress,
-                        message=record.message,
-                        extra={"progress_phase": "complete", "stage_code": record.stage_code}
-                        if record.stage_code
-                        else {"progress_phase": "complete"},
-                    )
-                    self._persist_locked(force=True)
+                    should_mark_completed = True
+            if should_mark_completed:
+                await self.mark_completed(task_id)
         except asyncio.CancelledError:
             async with self._lock:
                 record = self._tasks.get(task_id)
@@ -664,38 +718,49 @@ class BackgroundTaskManager:
 
     async def consume_sse_stream(self, task_id: str, stream: AsyncIterable[Any]) -> None:
         for_done = False
-        async for raw_chunk in stream:
-            if await self.is_cancelled(task_id):
-                return
-            chunk = self._normalize_chunk(raw_chunk)
-            if not chunk:
-                continue
-
-            for payload in self._extract_sse_payloads(chunk):
+        saw_result = False
+        try:
+            async for raw_chunk in stream:
                 if await self.is_cancelled(task_id):
                     return
-                event_type = payload.get("type")
-                if event_type == "progress":
-                    await self.update_progress(
-                        task_id=task_id,
-                        progress=payload.get("progress"),
-                        message=payload.get("message"),
-                    )
-                elif event_type == "result":
-                    data = payload.get("data")
-                    if isinstance(data, dict):
-                        await self.set_result(task_id, data)
-                elif event_type == "error":
-                    err = payload.get("error") or payload.get("message") or "任务执行失败"
-                    await self.mark_failed(task_id, str(err))
-                    return
-                elif event_type == "done":
-                    for_done = True
-                    await self.mark_completed(task_id)
-                    return
+                chunk = self._normalize_chunk(raw_chunk)
+                if not chunk:
+                    continue
 
-        if not for_done:
-            await self.mark_completed(task_id)
+                for payload in self._extract_sse_payloads(chunk):
+                    if await self.is_cancelled(task_id):
+                        return
+                    event_type = payload.get("type")
+                    if event_type == "progress":
+                        await self.update_progress(
+                            task_id=task_id,
+                            progress=payload.get("progress"),
+                            message=payload.get("message"),
+                        )
+                    elif event_type == "result":
+                        data = payload.get("data")
+                        if isinstance(data, dict):
+                            await self.set_result(task_id, data)
+                            saw_result = True
+                    elif event_type == "error":
+                        err = payload.get("error") or payload.get("message") or "未知错误"
+                        await self.mark_failed(task_id, str(err))
+                        return
+                    elif event_type == "done":
+                        for_done = True
+                        await self.mark_completed(task_id)
+                        return
+
+            if not for_done and saw_result:
+                logger.warning(
+                    "SSE stream ended without done event; auto-completing task because result payload was already received: task_id=%s",
+                    task_id,
+                )
+                await self.mark_completed(task_id)
+        finally:
+            close = getattr(stream, "aclose", None)
+            if callable(close):
+                await close()
 
     def _cleanup_locked(self, force: bool = False) -> None:
         now = datetime.now(timezone.utc)

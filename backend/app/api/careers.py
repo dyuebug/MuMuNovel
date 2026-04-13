@@ -160,7 +160,7 @@ async def generate_career_system(
     project_id: str,
     main_career_count: int = 3,
     sub_career_count: int = 6,
-    enable_mcp: bool = False,
+    enable_mcp: bool = True,
     http_request: Request = None,
     db: AsyncSession = Depends(get_db),
     user_ai_service: AIService = Depends(get_user_ai_service)
