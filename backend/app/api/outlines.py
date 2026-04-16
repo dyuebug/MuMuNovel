@@ -86,6 +86,7 @@ from app.services.outline_quality_summary_snapshot_store import (
 from app.services.outline_requirement_service import build_outline_generation_requirements
 from app.logger import get_logger
 from app.api.settings import get_user_ai_service
+from app.utils.exception_message import extract_exception_message
 from app.utils.sse_response import SSEResponse, create_sse_response, WizardProgressTracker
 
 router = APIRouter(prefix="/outlines", tags=["大纲管理"])
@@ -2318,11 +2319,12 @@ async def new_outline_generator(
             await db.rollback()
             logger.info("大纲生成事务已回滚（GeneratorExit）")
     except Exception as e:
-        logger.error(f"大纲生成失败: {str(e)}")
+        error_message = extract_exception_message(e)
+        logger.error("大纲生成失败: %s", error_message, exc_info=True)
         if not db_committed and db.in_transaction():
             await db.rollback()
             logger.info("大纲生成事务已回滚（异常）")
-        yield await tracker.error(f"生成失败: {str(e)}")
+        yield await tracker.error(f"生成失败: {error_message}")
 
 
 async def continue_outline_generator(
@@ -2761,11 +2763,12 @@ async def continue_outline_generator(
             await db.rollback()
             logger.info("大纲续写事务已回滚（GeneratorExit）")
     except Exception as e:
-        logger.error(f"大纲续写失败: {str(e)}")
+        error_message = extract_exception_message(e)
+        logger.error("大纲续写失败: %s", error_message, exc_info=True)
         if not db_committed and db.in_transaction():
             await db.rollback()
             logger.info("大纲续写事务已回滚（异常）")
-        yield await tracker.error(f"续写失败: {str(e)}")
+        yield await tracker.error(f"续写失败: {error_message}")
 
 @router.post("/generate-stream", summary="AI生成/续写大纲(SSE流式)")
 async def generate_outline_stream(
@@ -2991,11 +2994,12 @@ async def expand_outline_generator(
             await db.rollback()
             logger.info("大纲展开事务已回滚（GeneratorExit）")
     except Exception as e:
-        logger.error(f"大纲展开失败: {str(e)}")
+        error_message = extract_exception_message(e)
+        logger.error("大纲展开失败: %s", error_message, exc_info=True)
         if not db_committed and db.in_transaction():
             await db.rollback()
             logger.info("大纲展开事务已回滚（异常）")
-        yield await tracker.error(f"展开失败: {str(e)}")
+        yield await tracker.error(f"展开失败: {error_message}")
 
 
 @router.post("/{outline_id}/create-single-chapter", summary="一对一创建章节(传统模式)")

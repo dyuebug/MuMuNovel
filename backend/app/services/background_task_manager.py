@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, AsyncIterable, Awaitable, Dict, Iterable, Optional
 
 from app.logger import get_logger
+from app.utils.exception_message import extract_exception_message
 
 logger = get_logger(__name__)
 
@@ -654,14 +655,15 @@ class BackgroundTaskManager:
             )
             self._persist_locked(force=True)
 
-    async def mark_failed(self, task_id: str, error: str, message: Optional[str] = None) -> None:
+    async def mark_failed(self, task_id: str, error: Any, message: Optional[str] = None) -> None:
         async with self._lock:
             record = self._tasks.get(task_id)
             if not record or record.status == "cancelled":
                 return
+            error_message = extract_exception_message(error)
             record.status = "failed"
-            record.error = error
-            record.message = message or "任务执行失败"
+            record.error = error_message
+            record.message = (message or "任务执行失败").strip() or "任务执行失败"
             if not record.started_at:
                 record.started_at = datetime.now(timezone.utc)
             record.completed_at = datetime.now(timezone.utc)
@@ -671,7 +673,7 @@ class BackgroundTaskManager:
                 event="failed",
                 progress=record.progress,
                 message=record.message,
-                extra={"error": error, "stage_code": record.stage_code},
+                extra={"error": error_message, "stage_code": record.stage_code},
             )
             self._persist_locked(force=True)
 
@@ -705,8 +707,14 @@ class BackgroundTaskManager:
                     self._persist_locked(force=True)
             return
         except Exception as exc:
-            logger.error(f"Background task failed: task_id={task_id}, error={exc}")
-            await self.mark_failed(task_id, str(exc))
+            error_message = extract_exception_message(exc)
+            logger.error(
+                "Background task failed: task_id=%s, error=%s",
+                task_id,
+                error_message,
+                exc_info=True,
+            )
+            await self.mark_failed(task_id, error_message)
         finally:
             async with self._lock:
                 self._runner_tasks.pop(task_id, None)

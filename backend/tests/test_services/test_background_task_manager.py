@@ -2,8 +2,10 @@ import asyncio
 import pytest
 from pathlib import Path
 from uuid import uuid4
+from fastapi import HTTPException
 
 from app.services.background_task_manager import BackgroundTaskManager
+from app.utils.exception_message import extract_exception_message
 
 pytestmark = pytest.mark.asyncio
 
@@ -485,6 +487,41 @@ async def test_should_update_task_project_id_from_result_payload():
         limit=20,
     )
     assert [item.task_id for item in project_tasks] == ["task-world-building-project-link"]
+
+
+def test_should_extract_http_exception_detail_when_string_representation_is_empty():
+    exc = HTTPException(status_code=400, detail="没有可用的现有大纲，无法继续生成")
+
+    assert extract_exception_message(exc) == "没有可用的现有大纲，无法继续生成"
+
+
+async def test_should_use_http_exception_detail_when_background_job_fails():
+    manager = BackgroundTaskManager(
+        ttl_seconds=3600,
+        max_tasks=100,
+        persistence_path=_build_persistence_path(),
+    )
+
+    await manager.create_task(
+        task_id="task-http-exception-detail",
+        task_type="outline_generate",
+        user_id="user-1",
+        project_id="project-1",
+        stage_code="1.outline.generating",
+    )
+
+    async def _job() -> None:
+        raise HTTPException(status_code=400, detail="没有可用的现有大纲，无法继续生成")
+
+    await manager.run_job("task-http-exception-detail", _job())
+
+    record = await manager.get_task("task-http-exception-detail", "user-1")
+    assert record is not None
+    assert record.status == "failed"
+    assert record.error == "没有可用的现有大纲，无法继续生成"
+    assert record.message == "任务执行失败"
+    assert isinstance(record.checkpoint, dict)
+    assert record.checkpoint.get("error") == "没有可用的现有大纲，无法继续生成"
 
 
 async def test_should_find_active_task_by_matching_payload_fingerprint():
