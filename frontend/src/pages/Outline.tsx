@@ -14,10 +14,11 @@ import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgro
 import { useCharacterSync, useOutlineSync } from '../store/hooks';
 
 
-import { backgroundTaskApi, outlineApi, chapterApi, projectApi } from '../services/api';
+import { backgroundTaskApi, outlineApi, chapterApi, projectApi, settingsApi } from '../services/api';
 import { formatBackgroundTaskError } from '../utils/taskPolling';
 import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
 import { hasUsableApiCredentials } from '../utils/apiKey';
+import InlineErrorBoundary from '../components/InlineErrorBoundary';
 
 
 import type { OutlineExpansionResponse, BatchOutlineExpansionResponse, ChapterPlanItem, ApiError, Character, CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
@@ -384,6 +385,19 @@ const outlineLazyFallback = (
   </div>
 );
 
+type ApiLikeError = {
+  response?: {
+    data?: {
+      detail?: string;
+    };
+  };
+  message?: string;
+};
+
+const getApiErrorMessage = (error: unknown, fallbackMessage: string): string => {
+  const apiError = error as ApiLikeError;
+  return apiError.response?.data?.detail || apiError.message || fallbackMessage;
+};
 export default function Outline() {
 
 
@@ -419,6 +433,15 @@ export default function Outline() {
 
   const [manualCreateForm] = Form.useForm();
 
+  const buildOutlineGenerateLogContext = (extra?: Record<string, unknown>) => ({
+    projectId: currentProject?.id ?? null,
+    outlineCount: outlines.length,
+    isGenerating,
+    isExpanding,
+    hasActiveGenerateTask: Boolean(activeTrackedOutlineGenerateTask),
+    hasActiveExpandTask: Boolean(activeTrackedOutlineExpandTask),
+    ...extra,
+  });
   const projectDefaultCreativeMode = currentProject?.default_creative_mode as CreativeMode | undefined;
   const projectDefaultStoryFocus = currentProject?.default_story_focus as StoryFocus | undefined;
   const projectDefaultPlotStage = currentProject?.default_plot_stage as PlotStage | undefined;
@@ -574,6 +597,16 @@ export default function Outline() {
         generateTaskIdRef.current = null;
         setSSEModalVisible(false);
         setIsGenerating(false);
+        console.error('大纲生成任务失败:', {
+          context: buildOutlineGenerateLogContext({
+            stage: 'generate-task-failed',
+            taskId: task.task_id,
+            taskStatus: task.status,
+            taskProgress: task.progress ?? null,
+            taskMessage: task.message || null,
+          }),
+          taskError: task.error,
+        });
         message.error(formatBackgroundTaskError(task.error, task.message, '生成失败'));
       },
       onCancelled: (task) => {
@@ -584,7 +617,13 @@ export default function Outline() {
         message.info(task.message || '任务已取消');
       },
       onPollingError: (error) => {
-        console.error('轮询大纲生成任务失败:', error);
+        console.error('轮询大纲生成任务失败:', {
+          error,
+          context: buildOutlineGenerateLogContext({
+            stage: 'generate-task-polling-error',
+            taskId: generateTaskIdRef.current,
+          }),
+        });
         stopGenerateTaskPolling();
         generateTaskIdRef.current = null;
         setSSEModalVisible(false);
@@ -2408,10 +2447,20 @@ export default function Outline() {
     } catch (error) {
 
 
-      console.error('AI生成失败:', error);
+      const generateErrorMessage = getApiErrorMessage(error, '智能生成失败');
+      console.error('AI生成失败:', {
+        error,
+        context: buildOutlineGenerateLogContext({
+          stage: 'create-generate-task',
+          formMode: values.mode || 'auto',
+          selectedModel: values.model || null,
+          selectedProvider: values.provider || null,
+          projectGenre: currentProject?.genre || null,
+        }),
+      });
 
 
-      message.error('智能生成失败');
+      message.error(generateErrorMessage);
 
 
       stopGenerateTaskPolling();
@@ -2439,150 +2488,103 @@ export default function Outline() {
       return;
     }
 
+    try {
+      const hasOutlines = outlines.length > 0;
 
+      const settings = await settingsApi.getSettings();
 
-    const hasOutlines = outlines.length > 0;
+      const { api_key, api_base_url, api_provider, provider_type } = settings;
 
+      let loadedModels: Array<{ value: string, label: string }> = [];
 
+      let defaultModel: string | undefined = undefined;
 
+      if (hasUsableApiCredentials(api_key, api_base_url)) {
+        try {
+          const modelResponse = await settingsApi.getAvailableModels({
+            api_key,
+            api_base_url,
+            provider: provider_type || api_provider || 'openai',
+          });
 
-    // 直接加载可用模型列表
-
-
-    const settingsResponse = await fetch('/api/settings');
-
-
-    const settings = await settingsResponse.json();
-
-
-    const { api_key, api_base_url, api_provider, provider_type } = settings;
-
-
-    let loadedModels: Array<{ value: string, label: string }> = [];
-
-
-    let defaultModel: string | undefined = undefined;
-
-
-    if (hasUsableApiCredentials(api_key, api_base_url)) {
-
-
-      try {
-
-
-        const modelsResponse = await fetch(
-
-
-          `/api/settings/models?api_key=${encodeURIComponent(api_key)}&api_base_url=${encodeURIComponent(api_base_url)}&provider=${provider_type || api_provider}`
-
-
-        );
-
-
-        if (modelsResponse.ok) {
-
-
-          const data = await modelsResponse.json();
-
-
-          if (data.models && data.models.length > 0) {
-
-
-            loadedModels = data.models;
-
-
+          if (Array.isArray(modelResponse.models) && modelResponse.models.length > 0) {
+            loadedModels = modelResponse.models;
             defaultModel = settings.llm_model;
-
-
           }
-
-
+        } catch (modelError) {
+          const modelErrorMessage = getApiErrorMessage(modelError, '获取模型列表失败，将使用默认模型');
+          console.error('获取模型列表失败，将使用默认模型', {
+            error: modelError,
+            context: buildOutlineGenerateLogContext({
+              stage: 'load-models',
+              apiProvider: provider_type || api_provider || 'openai',
+              hasApiKey: Boolean(api_key),
+              hasApiBaseUrl: Boolean(api_base_url),
+              defaultModel: settings.llm_model || null,
+            }),
+          });
+          message.warning(modelErrorMessage);
         }
-
-
-      } catch {
-
-
-        console.log('获取模型列表失败，将使用默认模型');
-
-
       }
 
+      modalApi.confirm({
+        title: hasOutlines ? (
+          <Space>
+            <span>智能生成/续写大纲</span>
+            <Tag color="blue">当前已有 {outlines.length} 章</Tag>
+          </Space>
+        ) : '智能生成大纲',
 
+        width: 700,
+
+        centered: true,
+
+        content: (
+          <InlineErrorBoundary
+            fallback={(
+              <div style={{ padding: '16px 0', textAlign: 'center' }}>
+                大纲生成面板加载失败，请关闭后重试。
+              </div>
+            )}
+          >
+            <Suspense fallback={outlineLazyFallback}>
+              <LazyOutlineGenerateModalContent
+                generateForm={generateForm}
+                currentProject={currentProject}
+                outlinesCount={outlines.length}
+                loadedModels={loadedModels}
+                defaultModel={defaultModel}
+                projectDefaultCreativeMode={projectDefaultCreativeMode}
+                projectDefaultStoryFocus={projectDefaultStoryFocus}
+                projectDefaultPlotStage={projectDefaultPlotStage}
+                projectDefaultStoryCreationBrief={projectDefaultStoryCreationBrief}
+                projectDefaultQualityPreset={projectDefaultQualityPreset}
+                projectDefaultQualityNotes={projectDefaultQualityNotes}
+              />
+            </Suspense>
+          </InlineErrorBoundary>
+        ),
+
+        okText: hasOutlines ? '开始续写' : '开始生成',
+
+        cancelText: '取消',
+
+        onOk: async () => {
+          const values = await generateForm.validateFields();
+          await handleGenerate(values);
+        },
+      });
+    } catch (error) {
+      const openModalErrorMessage = getApiErrorMessage(error, '打开大纲生成面板失败，请稍后重试');
+      console.error('打开大纲生成弹窗失败', {
+        error,
+        context: buildOutlineGenerateLogContext({
+          stage: 'open-generate-modal',
+        }),
+      });
+      message.error(openModalErrorMessage);
     }
-
-
-    modalApi.confirm({
-
-
-      title: hasOutlines ? (
-
-
-        <Space>
-
-
-          <span>智能生成/续写大纲</span>
-
-
-          <Tag color="blue">当前已有 {outlines.length} 卷</Tag>
-
-
-        </Space>
-
-
-      ) : '智能生成大纲',
-
-
-      width: 700,
-
-
-      centered: true,
-
-
-      content: (
-        <Suspense fallback={outlineLazyFallback}>
-          <LazyOutlineGenerateModalContent
-            generateForm={generateForm}
-            currentProject={currentProject}
-            outlinesCount={outlines.length}
-            loadedModels={loadedModels}
-            defaultModel={defaultModel}
-            projectDefaultCreativeMode={projectDefaultCreativeMode}
-            projectDefaultStoryFocus={projectDefaultStoryFocus}
-            projectDefaultPlotStage={projectDefaultPlotStage}
-            projectDefaultStoryCreationBrief={projectDefaultStoryCreationBrief}
-            projectDefaultQualityPreset={projectDefaultQualityPreset}
-            projectDefaultQualityNotes={projectDefaultQualityNotes}
-          />
-        </Suspense>
-      ),
-
-
-      okText: hasOutlines ? '开始续写' : '开始生成',
-
-
-      cancelText: '取消',
-
-
-      onOk: async () => {
-
-
-        const values = await generateForm.validateFields();
-
-
-        await handleGenerate(values);
-
-
-      },
-
-
-    });
-
-
   };
-
-
-  // 手动创建大纲
 
 
   const showManualCreateOutlineModal = () => {
@@ -3733,13 +3735,21 @@ export default function Outline() {
 
 
       content: (
-        <Suspense fallback={outlineLazyFallback}>
-          <LazyOutlineExistingExpansionContent
-            outlineTitle={outlineTitle}
-            data={data}
-            isMobile={isMobile}
-          />
-        </Suspense>
+        <InlineErrorBoundary
+          fallback={(
+            <div style={{ padding: '16px 0', textAlign: 'center' }}>
+              已有展开规划面板加载失败，请关闭后重试。
+            </div>
+          )}
+        >
+          <Suspense fallback={outlineLazyFallback}>
+            <LazyOutlineExistingExpansionContent
+              outlineTitle={outlineTitle}
+              data={data}
+              isMobile={isMobile}
+            />
+          </Suspense>
+        </InlineErrorBoundary>
       ),
 
 
@@ -3870,12 +3880,20 @@ export default function Outline() {
 
 
       content: (
-        <Suspense fallback={outlineLazyFallback}>
-          <LazyOutlineBatchExpandConfigForm
-            form={batchExpansionForm}
-            outlineCount={outlines.length}
-          />
-        </Suspense>
+        <InlineErrorBoundary
+          fallback={(
+            <div style={{ padding: '16px 0', textAlign: 'center' }}>
+              批量展开配置面板加载失败，请关闭后重试。
+            </div>
+          )}
+        >
+          <Suspense fallback={outlineLazyFallback}>
+            <LazyOutlineBatchExpandConfigForm
+              form={batchExpansionForm}
+              outlineCount={outlines.length}
+            />
+          </Suspense>
+        </InlineErrorBoundary>
       ),
 
 
@@ -6522,12 +6540,20 @@ export default function Outline() {
           confirmLoading={isExpanding}
           destroyOnHidden
         >
-          <Suspense fallback={outlineLazyFallback}>
-            <LazyOutlineExpansionPreviewContent
-              response={singlePreviewData}
-              isMobile={isMobile}
-            />
-          </Suspense>
+          <InlineErrorBoundary
+            fallback={(
+              <div style={{ padding: '16px 0', textAlign: 'center' }}>
+                展开预览面板加载失败，请关闭后重试。
+              </div>
+            )}
+          >
+            <Suspense fallback={outlineLazyFallback}>
+              <LazyOutlineExpansionPreviewContent
+                response={singlePreviewData}
+                isMobile={isMobile}
+              />
+            </Suspense>
+          </InlineErrorBoundary>
         </Modal>
       ) : null}
 
@@ -6536,34 +6562,23 @@ export default function Outline() {
 
 
       {batchPreviewVisible ? (
-
-
-        <Suspense fallback={null}>
-
-
-          <LazyOutlineBatchPreviewModal
-
-
-            visible={batchPreviewVisible}
-
-
-            data={batchPreviewData}
-
-
-            onOk={handleBatchPreviewOk}
-
-
-            onCancel={handleBatchPreviewCancel}
-
-
-          />
-
-
-        </Suspense>
-
-
+        <InlineErrorBoundary
+          fallback={(
+            <div style={{ padding: '16px 0', textAlign: 'center' }}>
+              批量展开预览面板加载失败，请关闭后重试。
+            </div>
+          )}
+        >
+          <Suspense fallback={null}>
+            <LazyOutlineBatchPreviewModal
+              visible={batchPreviewVisible}
+              data={batchPreviewData}
+              onOk={handleBatchPreviewOk}
+              onCancel={handleBatchPreviewCancel}
+            />
+          </Suspense>
+        </InlineErrorBoundary>
       ) : null}
-
 
       {contextHolder}
 
@@ -6572,65 +6587,34 @@ export default function Outline() {
 
 
       {sseModalVisible ? (
+        <InlineErrorBoundary
+          fallback={(
+            <div style={{ padding: '16px 0', textAlign: 'center' }}>
+              任务进度面板加载失败，请刷新页面后重试。
+            </div>
+          )}
+        >
+          <Suspense fallback={null}>
+            <LazySSEProgressModal
+              visible={sseModalVisible}
+              progress={sseProgress}
+              message={sseMessage}
+              title="正在生成中..."
+              blocking={false}
+              onCancel={() => {
+                if (isGenerating) {
+                  void handleCancelGenerateTask();
+                  return;
+                }
 
-
-        <Suspense fallback={null}>
-
-
-          <LazySSEProgressModal
-
-
-            visible={sseModalVisible}
-
-
-            progress={sseProgress}
-
-
-            message={sseMessage}
-
-
-            title="正在生成中..."
-
-
-            blocking={false}
-
-
-            onCancel={() => {
-
-
-              if (isGenerating) {
-
-
-                void handleCancelGenerateTask();
-
-
-                return;
-
-
-              }
-
-
-              if (isExpanding) {
-
-
-                void handleCancelExpandTask();
-
-
-              }
-
-
-            }}
-
-
-            cancelButtonText="取消任务"
-
-
-          />
-
-
-        </Suspense>
-
-
+                if (isExpanding) {
+                  void handleCancelExpandTask();
+                }
+              }}
+              cancelButtonText="取消任务"
+            />
+          </Suspense>
+        </InlineErrorBoundary>
       ) : null}
 
 

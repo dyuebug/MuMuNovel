@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { memo, useEffect, useMemo, useRef } from 'react';
-import { Button, Card, Form, Input, InputNumber, Modal, Radio, Select, Space, Tag } from 'antd';
+import { Button, Card, Collapse, Form, Input, InputNumber, Modal, Radio, Select, Space, Tag } from 'antd';
 import type { FormInstance } from 'antd';
 import { RocketOutlined, StopOutlined } from '@ant-design/icons';
 import CompactPromptPreviewPanel from './CompactPromptPreviewPanel';
@@ -740,6 +740,15 @@ const batchStoryInsightCards = useMemo(
             </Form.Item>
             </Card>
 
+            <Collapse
+              size="small"
+              style={{ marginBottom: 12 }}
+              items={[
+                {
+                  key: 'batch-advanced',
+                  label: '\u521b\u4f5c\u7b56\u7565 / \u8d28\u91cf / \u5fae\u8c03\uff08\u6309\u9700\u5c55\u5f00\uff09',
+                  children: (
+                    <div style={{ maxHeight: 420, overflowY: 'auto', paddingRight: 4 }}>
 
             <Card
               size="small"
@@ -1251,6 +1260,11 @@ const batchStoryInsightCards = useMemo(
                 </Button>
               </Space>
             </Card>
+                    </div>
+                  ),
+                },
+              ]}
+            />
 
 
           </Form>

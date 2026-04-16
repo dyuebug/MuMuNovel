@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react';
-import { Button, Card, Form, Input, Radio, Select, Space } from 'antd';
+import { Button, Card, Collapse, Form, Input, Radio, Select, Space } from 'antd';
 import type { FormInstance } from 'antd';
 
 import type { CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
@@ -503,6 +503,15 @@ export default function OutlineGenerateModalContent({
 
                   </Form.Item>
 
+                  <Collapse
+                    size="small"
+                    style={{ marginBottom: 12 }}
+                    items={[
+                      {
+                        key: 'outline-advanced',
+                        label: '\u521b\u4f5c\u7b56\u7565\u4e0e\u53c2\u8003\u5361\u7247\uff08\u6309\u9700\u5c55\u5f00\uff09',
+                        children: (
+                          <div style={{ maxHeight: 420, overflowY: 'auto', paddingRight: 4 }}>
 
                   <Card size="small" title="创作预设" style={{ marginBottom: 12 }}>
                     <Space wrap>
@@ -874,6 +883,11 @@ export default function OutlineGenerateModalContent({
 
 
                   </Form.Item>
+                          </div>
+                        ),
+                      },
+                    ]}
+                  />
 
 
                 </>
