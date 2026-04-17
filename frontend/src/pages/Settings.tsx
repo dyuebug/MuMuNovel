@@ -119,6 +119,7 @@ export default function SettingsPage() {
   const watchedWebResearchEnabled = Boolean(Form.useWatch('web_research_enabled', form));
   const watchedExaEnabled = Form.useWatch('web_research_exa_enabled', form) !== false;
   const watchedGrokEnabled = Form.useWatch('web_research_grok_enabled', form) !== false;
+  const watchedGrokSearchEnabled = Boolean(Form.useWatch('web_research_grok_search_enabled', form));
 
   const clipDisplayText = (value: string, limit = isMobile ? 20 : 32) => {
     const normalized = value.trim();
@@ -202,7 +203,7 @@ export default function SettingsPage() {
       key: 'research',
       label: '联网检索',
       description: '分别配置 Exa 与 Grok 的检索增强能力。',
-      summary: watchedWebResearchEnabled ? `Exa ${watchedExaEnabled ? '开' : '关'} / Grok ${watchedGrokEnabled ? '开' : '关'}` : '总开关关闭',
+      summary: watchedWebResearchEnabled ? `Exa ${watchedExaEnabled ? '开' : '关'} / Grok ${watchedGrokEnabled ? '开' : '关'} / 深搜 ${watchedGrokSearchEnabled ? '开' : '关'}` : '总开关关闭',
     },
   ];
 
@@ -626,6 +627,7 @@ export default function SettingsPage() {
     const grokApiKey = form.getFieldValue('web_research_grok_api_key');
     const grokBaseUrl = form.getFieldValue('web_research_grok_base_url');
     const grokModel = form.getFieldValue('web_research_grok_model');
+    const grokSearchEnabled = form.getFieldValue('web_research_grok_search_enabled');
 
     if (provider === 'exa' && !exaApiKey) {
       message.warning('请先填写 Exa API Key');
@@ -646,6 +648,7 @@ export default function SettingsPage() {
         grok_api_key: grokApiKey,
         grok_base_url: grokBaseUrl,
         grok_model: grokModel,
+        grok_search_enabled: grokSearchEnabled,
       });
       setWebResearchTestResult(result);
       if (result.success) {
@@ -1227,6 +1230,7 @@ export default function SettingsPage() {
                         watchedBaseUrl={watchedBaseUrl}
                         watchedExaEnabled={watchedExaEnabled}
                         watchedGrokEnabled={watchedGrokEnabled}
+                        watchedGrokSearchEnabled={watchedGrokSearchEnabled}
                         watchedMaxTokens={watchedMaxTokens}
                         watchedModel={watchedModel}
                         watchedProvider={watchedProvider}

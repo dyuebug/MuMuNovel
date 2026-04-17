@@ -78,6 +78,7 @@ def test_should_build_runtime_config_from_saved_web_research_preferences():
                 "web_research_grok_api_key": "grok-test-key",
                 "web_research_grok_base_url": "https://grok.example.com/v1",
                 "web_research_grok_model": "grok-4.1-fast",
+                "web_research_grok_search_enabled": True,
             }
         }
     )
@@ -88,6 +89,7 @@ def test_should_build_runtime_config_from_saved_web_research_preferences():
     assert runtime_config.exa_base_url == "https://exa.chengtx.vip"
     assert runtime_config.grok_api_key == "grok-test-key"
     assert runtime_config.grok_base_url == "https://grok.example.com/v1"
+    assert runtime_config.grok_search_enabled is True
 
 
 @pytest.mark.asyncio
@@ -325,3 +327,34 @@ async def test_should_collect_assets_with_direct_fallback_when_skills_root_missi
     assert payload["archive_path"] == "archive.json"
     assert len(payload["assets"]) == 1
     assert payload["assets"][0]["title"] == "Direct Exa"
+
+
+@pytest.mark.asyncio
+async def test_should_prefer_grok_search_adapter_when_enabled(monkeypatch):
+    service = ChapterWebResearchService()
+
+    async def fake_run_grok_search_via_adapter(query, runtime_config):
+        assert query == "adapter query"
+        assert runtime_config.grok_search_enabled is True
+        return {
+            "content": "adapter result",
+            "sources": [{"title": "Source", "url": "https://example.com", "snippet": "snippet"}],
+            "mode": "grok_search_embedded",
+        }
+
+    monkeypatch.setattr(service, "_run_grok_search_via_adapter", fake_run_grok_search_via_adapter)
+
+    payload = await service._run_grok_search(
+        "adapter query",
+        WebResearchRuntimeConfig(
+            grok_enabled=True,
+            grok_api_key="grok-test-key",
+            grok_base_url="https://relay.example.com/v1",
+            grok_model="grok-4.1-fast",
+            grok_search_enabled=True,
+        ),
+    )
+
+    assert payload["content"] == "adapter result"
+    assert payload["mode"] == "grok_search_embedded"
+    assert payload["sources"][0]["url"] == "https://example.com"

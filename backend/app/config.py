@@ -104,6 +104,7 @@ class Settings(BaseSettings):
     pre_generation_web_research_max_assets: int = 4
     pre_generation_web_research_exa_enabled: bool = True
     pre_generation_web_research_grok_enabled: bool = True
+    pre_generation_web_research_grok_search_enabled: bool = False
     
     # LinuxDO OAuth2 配置
     LINUXDO_CLIENT_ID: Optional[str] = None

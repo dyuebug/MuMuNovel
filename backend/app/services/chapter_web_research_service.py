@@ -24,6 +24,7 @@ from app.models.outline import Outline
 from app.models.project import Project
 from app.models.settings import Settings
 from app.services.ai_clients.openai_client import OpenAIClient
+from app.services.grok_search_adapter import GrokSearchAdapter, GrokSearchAdapterError
 from app.services.memory_service import memory_service
 
 logger = get_logger(__name__)
@@ -43,6 +44,7 @@ class WebResearchRuntimeConfig:
     grok_api_key: str = ""
     grok_base_url: str = ""
     grok_model: str = DEFAULT_GROK_MODEL
+    grok_search_enabled: bool = False
     timeout_seconds: int = 90
     max_assets: int = 4
 
@@ -62,6 +64,7 @@ class ChapterWebResearchService:
             exa_enabled=bool(settings.pre_generation_web_research_exa_enabled),
             grok_enabled=bool(settings.pre_generation_web_research_grok_enabled),
             grok_model=DEFAULT_GROK_MODEL,
+            grok_search_enabled=bool(settings.pre_generation_web_research_grok_search_enabled),
             timeout_seconds=max(15, int(settings.pre_generation_web_research_timeout_seconds)),
             max_assets=max(1, int(settings.pre_generation_web_research_max_assets)),
         )
@@ -87,6 +90,7 @@ class ChapterWebResearchService:
             "grok_api_key": str(pref_payload.get("grok_api_key") or pref_payload.get("web_research_grok_api_key") or "").strip(),
             "grok_base_url": str(pref_payload.get("grok_base_url") or pref_payload.get("web_research_grok_base_url") or "").strip(),
             "grok_model": str(pref_payload.get("grok_model") or pref_payload.get("web_research_grok_model") or DEFAULT_GROK_MODEL).strip() or DEFAULT_GROK_MODEL,
+            "grok_search_enabled": pref_payload.get("grok_search_enabled", pref_payload.get("web_research_grok_search_enabled", default.grok_search_enabled)),
             "timeout_seconds": pref_payload.get("timeout_seconds", default.timeout_seconds),
             "max_assets": pref_payload.get("max_assets", default.max_assets),
         }
@@ -103,6 +107,7 @@ class ChapterWebResearchService:
             grok_api_key=str(payload["grok_api_key"] or "").strip(),
             grok_base_url=str(payload["grok_base_url"] or "").strip(),
             grok_model=str(payload["grok_model"] or DEFAULT_GROK_MODEL).strip() or DEFAULT_GROK_MODEL,
+            grok_search_enabled=bool(payload["grok_search_enabled"]),
             timeout_seconds=max(15, int(float(payload["timeout_seconds"] or default.timeout_seconds))),
             max_assets=max(1, int(payload["max_assets"] or default.max_assets)),
         )
@@ -354,6 +359,28 @@ class ChapterWebResearchService:
             return await self._run_exa_direct_search(query, runtime_config)
         return payload
 
+    async def _run_grok_search_via_adapter(self, query: str, runtime_config: WebResearchRuntimeConfig) -> Dict[str, Any]:
+        if not runtime_config.grok_search_enabled:
+            return {"error": "grok_search_disabled", "detail": "GrokSearch disabled"}
+
+        adapter = GrokSearchAdapter()
+
+        try:
+            result = await adapter.search(
+                query=query,
+                api_key=runtime_config.grok_api_key,
+                api_base_url=runtime_config.grok_base_url,
+                model=runtime_config.grok_model or DEFAULT_GROK_MODEL,
+            )
+        except GrokSearchAdapterError as exc:
+            return {"error": "grok_search_adapter_failed", "detail": self._clip_text(str(exc), 600)}
+
+        return {
+            "content": self._clip_text(result.content, self.MAX_RAW_CHARS),
+            "sources": self._normalize_sources(result.sources),
+            "mode": result.mode,
+        }
+
     async def _run_grok_direct_search(self, query: str, runtime_config: WebResearchRuntimeConfig) -> Dict[str, Any]:
         if not self._can_run_direct_grok_search(runtime_config):
             return {"error": "missing_grok_credentials", "detail": "Grok API Key 或 Base URL 为空"}
@@ -422,6 +449,12 @@ class ChapterWebResearchService:
         }
 
     async def _run_grok_search(self, query: str, runtime_config: WebResearchRuntimeConfig) -> Dict[str, Any]:
+        if runtime_config.grok_search_enabled:
+            adapter_payload = await self._run_grok_search_via_adapter(query, runtime_config)
+            if not adapter_payload.get("error"):
+                return adapter_payload
+            logger.warning("GrokSearch adapter failed, fallback to existing grok path: %s", adapter_payload.get("detail") or adapter_payload.get("error"))
+
         args = ["--mode", "research", "--query", query]
         if runtime_config.grok_api_key:
             args.extend(["--api-key", runtime_config.grok_api_key])

@@ -344,6 +344,7 @@ export const settingsApi = {
     grok_api_key?: string;
     grok_base_url?: string;
     grok_model?: string;
+    grok_search_enabled?: boolean;
     query?: string;
   }) =>
     api.post<unknown, {

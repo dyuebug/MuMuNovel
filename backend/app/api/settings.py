@@ -51,6 +51,7 @@ WEB_RESEARCH_DEFAULTS = {
     "web_research_grok_api_key": "",
     "web_research_grok_base_url": "",
     "web_research_grok_model": "grok-4.1-fast",
+    "web_research_grok_search_enabled": False,
 }
 
 
@@ -471,6 +472,7 @@ def build_default_web_research_settings() -> Dict[str, Any]:
         "web_research_enabled": bool(app_settings.pre_generation_web_research_enabled),
         "web_research_exa_enabled": bool(app_settings.pre_generation_web_research_exa_enabled),
         "web_research_grok_enabled": bool(app_settings.pre_generation_web_research_grok_enabled),
+        "web_research_grok_search_enabled": bool(app_settings.pre_generation_web_research_grok_search_enabled),
     }
 
 
@@ -858,7 +860,7 @@ async def get_available_models(
                         last_network_error = e
                         if index < len(unique_urls) - 1:
                             logger.warning(
-                                f"????????????????????????????????: {url}"
+                                f"模型列表候选地址连接失败，尝试下一个候选地址: {url}"
                             )
                             continue
                         raise
@@ -998,6 +1000,7 @@ class WebResearchTestRequest(BaseModel):
     grok_api_key: Optional[str] = None
     grok_base_url: Optional[str] = None
     grok_model: Optional[str] = None
+    grok_search_enabled: Optional[bool] = None
     query: Optional[str] = None
 
 
@@ -1034,7 +1037,7 @@ async def check_function_calling_support(data: ApiTestRequest):
     )
     cached_result = _get_cached_probe_result(cache_key)
     if cached_result is not None:
-        logger.info("Using cached function-calling probe result")
+        logger.info("使用缓存的 Function Calling 探测结果")
         return cached_result
     
     try:
@@ -1071,10 +1074,10 @@ async def check_function_calling_support(data: ApiTestRequest):
             "and unit=celsius."
         )
         
-        logger.info("Start Function Calling probe")
-        logger.info(f"  - Provider: {provider}")
-        logger.info(f"  - Model: {llm_model}")
-        logger.info("  - Test Tool: get_weather")
+        logger.info("开始 Function Calling 探测")
+        logger.info(f"  - 提供商: {provider}")
+        logger.info(f"  - 模型: {llm_model}")
+        logger.info("  - 测试工具: get_weather")
         
         probe_config = build_probe_ai_config()
         probe_max_tokens = 64
@@ -1375,7 +1378,7 @@ async def test_api_connection(data: ApiTestRequest):
     )
     cached_result = _get_cached_probe_result(cache_key)
     if cached_result is not None:
-        logger.info("Using cached API connection probe result")
+        logger.info("使用缓存的 API 连接探测结果")
         return cached_result
 
     test_service: Optional[AIService] = None
@@ -1399,13 +1402,13 @@ async def test_api_connection(data: ApiTestRequest):
 
         test_prompt = "Reply with exactly: TEST_OK"
 
-        logger.info("Start API connection probe")
-        logger.info(f"  - Provider: {provider}")
-        logger.info(f"  - Model: {llm_model}")
+        logger.info("开始 API 连接探测")
+        logger.info(f"  - 提供商: {provider}")
+        logger.info(f"  - 模型: {llm_model}")
         logger.info(f"  - Base URL: {api_base_url}")
         logger.info(f"  - Temperature: {temperature}")
         logger.info(f"  - Max Tokens: {max_tokens}")
-        logger.info(f"  - Probe Max Tokens: {probe_max_tokens}")
+        logger.info(f"  - 探测 Max Tokens: {probe_max_tokens}")
 
         probe_request_options = _build_api_connection_probe_request_options(provider, api_base_url)
 
@@ -1422,15 +1425,15 @@ async def test_api_connection(data: ApiTestRequest):
         end_time = time.time()
         response_time = round((end_time - start_time) * 1000, 2)
 
-        logger.info(f"API probe succeeded in {response_time}ms")
+        logger.info(f"API 连接探测成功，耗时 {response_time}ms")
 
         response_str = str(response) if response else "N/A"
-        logger.info(f"  - Response preview: {response_str[:100]}")
+        logger.info(f"  - 响应预览: {response_str[:100]}")
 
         transport_diagnostics = _extract_probe_transport_diagnostics(test_service, provider)
         result = {
             "success": True,
-            "message": "API connection test succeeded",
+            "message": "API 连接测试成功",
             "response_time_ms": response_time,
             "provider": provider,
             "model": llm_model,
@@ -1454,17 +1457,17 @@ async def test_api_connection(data: ApiTestRequest):
 
     except ValueError as e:
         error_msg = str(e)
-        logger.error(f"API configuration error: {error_msg}")
+        logger.error(f"API 配置错误: {error_msg}")
         transport_diagnostics = _extract_probe_transport_diagnostics(test_service, provider)
         result = {
             "success": False,
-            "message": "API configuration error",
+            "message": "API 配置错误",
             "error": error_msg,
             "error_type": "ConfigurationError",
             "suggestions": [
-                "Check whether the API key is correct",
-                "Confirm the API base URL format is valid",
-                "Verify the selected provider matches the current configuration",
+                "请检查 API Key 是否正确",
+                "请确认 API Base URL 格式是否有效",
+                "请验证所选提供商与当前配置是否匹配",
             ],
             "details": _build_probe_details(
                 api_base_url=api_base_url,
@@ -1477,17 +1480,17 @@ async def test_api_connection(data: ApiTestRequest):
 
     except TimeoutError as e:
         error_msg = str(e)
-        logger.error(f"API timeout: {error_msg}")
+        logger.error(f"API 请求超时: {error_msg}")
         transport_diagnostics = _extract_probe_transport_diagnostics(test_service, provider)
         result = {
             "success": False,
-            "message": "API request timed out",
+            "message": "API 请求超时",
             "error": error_msg,
             "error_type": "TimeoutError",
             "suggestions": [
-                "Check whether the network connection is stable",
-                "Confirm the API base URL is reachable",
-                "If the proxy is slow, retry later or switch to a backup endpoint",
+                "请检查网络连接是否稳定",
+                "请确认 API Base URL 可以正常访问",
+                "如果代理较慢，请稍后重试或切换备用端点",
             ],
             "details": _build_probe_details(
                 api_base_url=api_base_url,
@@ -1504,12 +1507,12 @@ async def test_api_connection(data: ApiTestRequest):
         transport_diagnostics = _extract_probe_transport_diagnostics(test_service, provider)
         status_code = e.response.status_code if isinstance(e, httpx.HTTPStatusError) and e.response is not None else None
 
-        logger.error(f"API probe failed: {error_msg}")
-        logger.error(f"  - Error type: {error_type}")
+        logger.error(f"API 探测失败: {error_msg}")
+        logger.error(f"  - 错误类型: {error_type}")
 
         result = {
             "success": False,
-            "message": "API test failed",
+            "message": "API 测试失败",
             "error": error_msg,
             "error_type": error_type,
             "suggestions": _build_api_probe_exception_suggestions(
@@ -1556,6 +1559,7 @@ async def test_web_research_connection(data: WebResearchTestRequest):
             "grok_api_key": data.grok_api_key,
             "grok_base_url": data.grok_base_url,
             "grok_model": data.grok_model,
+            "grok_search_enabled": data.grok_search_enabled,
         },
         query=data.query,
     )

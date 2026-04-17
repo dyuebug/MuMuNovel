@@ -57,6 +57,7 @@ export default function SettingsCurrentTab(props: any) {
   watchedBaseUrl,
   watchedExaEnabled,
   watchedGrokEnabled,
+  watchedGrokSearchEnabled,
   watchedMaxTokens,
   watchedModel,
   watchedProvider,
@@ -850,7 +851,7 @@ export default function SettingsCurrentTab(props: any) {
                                   styles={{ body: { padding: isMobile ? 14 : 16 } }}
                                 >
                                   <Text style={{ display: 'block', color: 'var(--color-text-secondary)', marginBottom: 14 }}>
-                                    更适合实时讨论、趋势摘要与表达参考。
+                                    更适合实时讨论、趋势摘要与表达参考；启用 GrokSearch 后会优先走当前项目内置的深度联网搜索逻辑。
                                   </Text>
                                   <Form.Item name="web_research_grok_api_key" label="Grok API Key">
                                     <Input.Password placeholder="填写 Grok API Key" autoComplete="new-password" />
@@ -877,6 +878,14 @@ export default function SettingsCurrentTab(props: any) {
                                   <Form.Item name="web_research_grok_model" label="Grok 模型">
                                     <Input placeholder="grok-4.1-fast" />
                                   </Form.Item>
+                                  <Form.Item name="web_research_grok_search_enabled" label="启用 GrokSearch 深搜" valuePropName="checked">
+                                    <Switch checkedChildren="深搜" unCheckedChildren="普通" />
+                                  </Form.Item>
+                                  <Text style={{ display: 'block', color: 'var(--color-text-tertiary)', marginBottom: 14 }}>
+                                    {watchedGrokSearchEnabled
+                                      ? '当前已启用深搜：会优先使用当前项目内置的 GrokSearch 提示词与来源解析能力。'
+                                      : '启用后会优先使用当前项目内置的 GrokSearch 提示词与来源解析能力。'}
+                                  </Text>
                                   <Button
                                     icon={<ThunderboltOutlined />}
                                     onClick={() => handleTestWebResearch('grok')}

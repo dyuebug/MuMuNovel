@@ -38,6 +38,7 @@ def build_settings_payload(**overrides):
         "web_research_grok_api_key": "grok-test-key",
         "web_research_grok_base_url": "https://grok.example.com/v1",
         "web_research_grok_model": "grok-4.1-fast",
+        "web_research_grok_search_enabled": True,
     }
     payload.update(overrides)
     return payload
@@ -215,6 +216,7 @@ async def test_should_store_web_research_settings_in_preferences(async_client, t
     assert body["web_research_exa_api_key"] == "exa-test-key"
     assert body["web_research_exa_base_url"] == "https://exa.chengtx.vip"
     assert body["web_research_grok_base_url"] == "https://grok.example.com/v1"
+    assert body["web_research_grok_search_enabled"] is True
 
     saved = await fetch_settings(test_db, mock_user.user_id)
     prefs = json.loads(saved.preferences)
@@ -223,6 +225,7 @@ async def test_should_store_web_research_settings_in_preferences(async_client, t
     assert web_research["web_research_exa_api_key"] == "exa-test-key"
     assert web_research["web_research_exa_base_url"] == "https://exa.chengtx.vip"
     assert web_research["web_research_grok_api_key"] == "grok-test-key"
+    assert web_research["web_research_grok_search_enabled"] is True
 
 
 async def test_should_update_settings_via_put(async_client, mock_settings):
@@ -1408,9 +1411,8 @@ async def test_should_fallback_from_local_https_models_to_http(async_client, mon
     assert body["provider"] == "sub2api"
     assert body["count"] == 1
     assert body["models"][0]["value"] == "gpt-5.3-codex"
-    assert captured_urls[:4] == [
+    assert captured_urls == [
         "https://127.0.0.1:8317/v1/models",
         "https://host.docker.internal:8317/v1/models",
         "http://127.0.0.1:8317/v1/models",
-        "http://host.docker.internal:8317/v1/models",
     ]

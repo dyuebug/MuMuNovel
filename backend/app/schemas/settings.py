@@ -28,6 +28,7 @@ class SettingsBase(BaseModel):
     web_research_grok_api_key: Optional[str] = Field(default=None, description="Grok API Key")
     web_research_grok_base_url: Optional[str] = Field(default=None, description="Grok Base URL")
     web_research_grok_model: Optional[str] = Field(default="grok-4.1-fast", description="Grok 模型名称")
+    web_research_grok_search_enabled: Optional[bool] = Field(default=False, description="enable GrokSearch deep web search")
     preferences: Optional[str] = Field(default=None, description="其他偏好设置(JSON)")
 
 
