@@ -1,7 +1,7 @@
 import app.services.story_repair_payload_service as story_repair_payload_service
 
 
-def test_should_continue_batch_when_quality_gate_requests_manual_review(monkeypatch):
+def test_should_keep_manual_review_for_batch_when_quality_gate_requests_manual_review(monkeypatch):
     monkeypatch.setattr(
         story_repair_payload_service,
         "resolve_quality_gate_from_metrics",
@@ -22,7 +22,7 @@ def test_should_continue_batch_when_quality_gate_requests_manual_review(monkeypa
         scope="batch",
     )
 
-    assert plan["action"] == "continue"
+    assert plan["action"] == "manual_review"
     assert plan["quality_gate"]["decision"] == "manual_review"
     assert "补桥关键场景" in plan["message"]
 

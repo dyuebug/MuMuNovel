@@ -16,6 +16,12 @@ def test_should_build_batch_generation_request_payload_with_request_options_and_
     )
     ai_service = SimpleNamespace(api_provider='openai_responses')
 
+    captured_runtime_prompt_kwargs = {}
+
+    def fake_build_runtime_system_prompt(**kwargs):
+        captured_runtime_prompt_kwargs.update(kwargs)
+        return f"sys:{kwargs['style_name']}:{kwargs['target_word_count']}"
+
     payload = batch_execution_service.build_batch_generation_request_payload(
         prompt='?????',
         project=project,
@@ -27,7 +33,15 @@ def test_should_build_batch_generation_request_payload_with_request_options_and_
         ai_service=ai_service,
         custom_model='gpt-custom',
         story_runtime_contract={'contract': True},
-        build_runtime_system_prompt_fn=lambda **kwargs: f"sys:{kwargs['style_name']}:{kwargs['target_word_count']}",
+        research_assets=[
+            {
+                'title': 'night market',
+                'source': 'mock-source',
+                'summary': 'used for scene atmosphere and crowd texture.',
+                'usage_hint': 'improve environment details',
+            }
+        ],
+        build_runtime_system_prompt_fn=fake_build_runtime_system_prompt,
         calculate_max_tokens_fn=lambda target_word_count: 960,
         build_request_options_fn=lambda _ai_service: {'transport_max_retries': 2},
         detect_style_profile_fn=lambda **kwargs: 'profile-a',
@@ -35,6 +49,8 @@ def test_should_build_batch_generation_request_payload_with_request_options_and_
     )
 
     assert payload.system_prompt == 'sys:??:1600'
+    assert captured_runtime_prompt_kwargs['web_research_grounding_block']
+    assert 'night market' in captured_runtime_prompt_kwargs['web_research_grounding_block']
     assert payload.max_tokens == 960
     assert payload.generate_kwargs == {
         'prompt': '?????',
@@ -65,6 +81,7 @@ def test_should_build_batch_generation_request_payload_without_optional_override
         ai_service=SimpleNamespace(api_provider='openai'),
         custom_model=None,
         story_runtime_contract=None,
+        research_assets=None,
         build_runtime_system_prompt_fn=lambda **kwargs: 'system',
         calculate_max_tokens_fn=lambda target_word_count: 800,
         build_request_options_fn=lambda _ai_service: None,
@@ -949,6 +966,7 @@ async def test_should_execute_batch_generation_prompt_stage():
         ai_service=SimpleNamespace(name='ai'),
         custom_model='model-x',
         story_runtime_contract={'contract': True},
+        research_assets=['asset-1'],
         get_template_fn=lambda *args, **kwargs: None,
         format_prompt_fn=lambda *args, **kwargs: 'unused',
         apply_style_to_prompt_fn=lambda prompt, style: prompt,
@@ -965,6 +983,7 @@ async def test_should_execute_batch_generation_prompt_stage():
     assert prompt_calls[0]['style_content'] == '????'
     assert payload_calls[0]['prompt'] == 'styled-prompt'
     assert payload_calls[0]['style_name'] == '??'
+    assert payload_calls[0]['research_assets'] == ['asset-1']
     assert result.batch_prompt.prompt == 'styled-prompt'
     assert result.request_payload.system_prompt == 'system-prompt'
     assert result.prompt == 'styled-prompt'

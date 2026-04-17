@@ -444,6 +444,130 @@ async def test_generate_single_chapter_for_batch_should_build_runtime_context_wi
 
 
 
+async def test_generate_single_chapter_for_batch_should_inject_web_research_grounding_block(
+    chapters_session_factory,
+    fake_ai_service,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="batch-web-research",
+    )
+
+    captured_runtime_prompt_kwargs: dict[str, Any] = {}
+    replace_memory_calls: list[dict[str, Any]] = []
+
+    class FakeContext:
+        chapter_outline = "batch outline"
+        continuation_point = None
+        previous_chapter_summary = ""
+        chapter_characters = "character-a"
+        chapter_careers = "career-a"
+        foreshadow_reminders = "foreshadow-a"
+        relevant_memories = ""
+        recent_chapters_context = ""
+        context_stats = {}
+
+    class FakeOneToManyBuilder:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def build(self, **kwargs):
+            return FakeContext()
+
+    async def fake_resolve_chapter_quality_profile(**kwargs):
+        return {
+            "resolved_style_id": None,
+            "style_content": "",
+            "style_name": "",
+            "style_preset_id": "",
+        }
+
+    async def fake_get_template(*args, **kwargs):
+        return "template"
+
+    def fake_format_prompt(template, **kwargs):
+        return "mock-batch-generate-prompt"
+
+    def fake_build_chapter_runtime_system_prompt(**kwargs):
+        captured_runtime_prompt_kwargs.update(kwargs)
+        return "mock-batch-system-prompt"
+
+    def fake_compute_story_quality_metrics(**kwargs):
+        return {
+            "overall_score": 88.0,
+            "conflict_chain_hit_rate": 82.0,
+            "rule_grounding_hit_rate": 84.0,
+            "outline_alignment_rate": 86.0,
+            "dialogue_naturalness_rate": 80.0,
+            "opening_hook_rate": 87.0,
+            "payoff_chain_rate": 81.0,
+            "cliffhanger_rate": 85.0,
+            "quality_runtime_context": kwargs.get("quality_runtime_context"),
+        }
+
+    async def fake_collect_for_chapter(**kwargs):
+        return {
+            "query": "night market customs",
+            "archive_path": "tmp/research.json",
+            "assets": [
+                {
+                    "title": "night market",
+                    "source": "mock-source",
+                    "summary": "used for scene atmosphere and crowd texture.",
+                    "usage_hint": "improve environment details",
+                }
+            ],
+        }
+
+    async def fake_replace_chapter_memories(**kwargs):
+        replace_memory_calls.append(kwargs)
+        return ["memory-1"]
+
+    monkeypatch.setattr(chapters_api.chapter_web_research_service, "is_enabled", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(chapters_api.chapter_web_research_service, "collect_for_chapter", fake_collect_for_chapter)
+    monkeypatch.setattr(chapters_api.chapter_web_research_service, "replace_chapter_memories", fake_replace_chapter_memories)
+    monkeypatch.setattr(chapters_api, "OneToManyContextBuilder", FakeOneToManyBuilder)
+    monkeypatch.setattr(chapters_api, "resolve_chapter_quality_profile", fake_resolve_chapter_quality_profile)
+    monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
+    monkeypatch.setattr(chapters_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(chapters_api, "_build_chapter_runtime_system_prompt", fake_build_chapter_runtime_system_prompt)
+    monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
+
+    fake_ai_service.calls.clear()
+    fake_ai_service.chunks = ["??", "??"]
+
+    async with chapters_session_factory() as session:
+        db_chapter = await session.get(Chapter, chapter.id)
+        assert db_chapter is not None
+
+        result = await chapters_api.generate_single_chapter_for_batch(
+            db_session=session,
+            chapter=db_chapter,
+            user_id=mock_user.user_id,
+            style_id=None,
+            target_word_count=600,
+            ai_service=fake_ai_service,
+            write_lock=chapters_api.Lock(),
+            enable_web_research=True,
+            web_research_query="night market customs",
+        )
+
+    assert result["full_content"] == "????"
+    assert fake_ai_service.calls
+    assert fake_ai_service.calls[0]["system_prompt"] == "mock-batch-system-prompt"
+    assert captured_runtime_prompt_kwargs["web_research_grounding_block"]
+    assert "night market" in captured_runtime_prompt_kwargs["web_research_grounding_block"]
+    assert "scene atmosphere" in captured_runtime_prompt_kwargs["web_research_grounding_block"]
+    assert replace_memory_calls
+    assert replace_memory_calls[0]["query"] == "night market customs"
+    assert len(replace_memory_calls[0]["assets"]) == 1
+
+
 async def test_should_sync_project_words_when_partial_apply_chapter_word_count_missing(
     chapters_client,
     chapters_session_factory,

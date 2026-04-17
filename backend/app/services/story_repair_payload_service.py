@@ -475,14 +475,6 @@ def resolve_quality_gate_execution_plan(
             message = f"{message} Reason: {reason}"
         if recommended_action_hint:
             message = f"{message} {recommended_action_hint}"
-        if scope == "batch":
-            return {
-                "action": "continue",
-                "message": message,
-                "repair_payload": repair_payload,
-                "active_story_repair_payload": active_story_repair_payload,
-                "quality_gate": quality_gate,
-            }
         return {
             "action": "manual_review",
             "message": message,
@@ -511,14 +503,6 @@ def resolve_quality_gate_execution_plan(
             message = f"{message} {weakest_metric_hint}"
         if recommended_action_hint:
             message = f"{message} {recommended_action_hint}"
-        if scope == "batch":
-            return {
-                "action": "continue",
-                "message": message,
-                "repair_payload": repair_payload,
-                "active_story_repair_payload": active_story_repair_payload,
-                "quality_gate": quality_gate,
-            }
         return {
             "action": "manual_review",
             "message": message,

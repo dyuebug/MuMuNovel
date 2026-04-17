@@ -89,6 +89,7 @@ export default function OutlineGenerateModalContent({
   const selectedOutlineCreativeMode = Form.useWatch('creative_mode', generateForm) as CreativeMode | undefined;
   const selectedOutlineStoryFocus = Form.useWatch('story_focus', generateForm) as StoryFocus | undefined;
   const selectedOutlinePlotStage = Form.useWatch('plot_stage', generateForm) as PlotStage | undefined;
+  const selectedOutlineQualityPreset = Form.useWatch('quality_preset', generateForm) as QualityPreset | undefined;
 
   const activeOutlineCreationPreset = useMemo(
     () => getCreationPresetByModes(selectedOutlineCreativeMode, selectedOutlineStoryFocus),
@@ -157,6 +158,16 @@ export default function OutlineGenerateModalContent({
     }),
     [selectedOutlineChapterCount, selectedOutlinePlotStage],
   );
+
+  const outlineSelectedCreativeModeLabel = selectedOutlineCreativeMode
+    ? (CREATIVE_MODE_OPTIONS.find((item) => item.value === selectedOutlineCreativeMode)?.label || selectedOutlineCreativeMode)
+    : '默认';
+  const outlineSelectedStoryFocusLabel = selectedOutlineStoryFocus
+    ? (STORY_FOCUS_OPTIONS.find((item) => item.value === selectedOutlineStoryFocus)?.label || selectedOutlineStoryFocus)
+    : '默认';
+  const outlineSelectedQualityPresetLabel = selectedOutlineQualityPreset
+    ? (QUALITY_PRESET_OPTIONS.find((item) => item.value === selectedOutlineQualityPreset)?.label || selectedOutlineQualityPreset)
+    : '默认';
 
   const applyOutlineCreationPreset = useCallback((presetId: CreationPresetId) => {
     const preset = getCreationPresetById(presetId);
@@ -503,15 +514,79 @@ export default function OutlineGenerateModalContent({
 
                   </Form.Item>
 
+                  <Card
+                    size="small"
+                    title="常用生成控制"
+                    style={{ marginBottom: 8 }}
+                    styles={{ body: { padding: 12 } }}
+                  >
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                        gap: 12,
+                      }}
+                    >
+                      <Form.Item
+                        label="质量预设"
+                        name="quality_preset"
+                        tooltip="为这轮大纲施加统一的质量偏好，控制更偏推进、氛围、情绪或干净表达"
+                        style={{ marginBottom: 0 }}
+                      >
+                        <Select allowClear placeholder="默认沿用项目偏好" optionLabelProp="label">
+                          {QUALITY_PRESET_OPTIONS.map((option) => (
+                            <Select.Option key={option.value} value={option.value} label={option.label}>
+                              <div>{option.label}</div>
+                              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{option.description}</div>
+                              <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>适合：{option.bestFor}</div>
+                            </Select.Option>
+                          ))}
+                        </Select>
+                      </Form.Item>
+
+                      {loadedModels.length > 0 && (
+                        <Form.Item
+                          label="AI 模型"
+                          name="model"
+                          tooltip="选择用于生成的 AI 模型，不选则使用系统默认模型"
+                          style={{ marginBottom: 0 }}
+                        >
+                          <Select
+                            placeholder={defaultModel ? `默认：${loadedModels.find(m => m.value === defaultModel)?.label || defaultModel}` : '使用系统默认模型'}
+                            allowClear
+                            showSearch
+                            optionFilterProp="label"
+                            options={loadedModels}
+                            onChange={(value) => {
+                              console.log('用户在下拉框中选择了模型:', value);
+                              generateForm.setFieldsValue({ model: value });
+                              console.log('已同步到 Form，当前 Form 值:', generateForm.getFieldsValue());
+                            }}
+                          />
+                          <div style={{ color: 'var(--color-text-tertiary)', fontSize: 12, marginTop: 4 }}>
+                            {defaultModel ? `当前默认模型：${loadedModels.find(m => m.value === defaultModel)?.label || defaultModel}` : '当前未配置默认模型'}
+                          </div>
+                        </Form.Item>
+                      )}
+                    </div>
+                  </Card>
+
                   <Collapse
                     size="small"
                     style={{ marginBottom: 12 }}
                     items={[
                       {
                         key: 'outline-advanced',
-                        label: '\u521b\u4f5c\u7b56\u7565\u4e0e\u53c2\u8003\u5361\u7247\uff08\u6309\u9700\u5c55\u5f00\uff09',
+                        label: (
+                          <div>
+                            <div>{'更多策略与参考卡片（按需展开）'}</div>
+                            <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 4 }}>
+                              {`预设：${activeOutlineCreationPreset?.label || '未选择'} · 模式：${outlineSelectedCreativeModeLabel} · 聚焦：${outlineSelectedStoryFocusLabel} · 质量：${outlineSelectedQualityPresetLabel}`}
+                            </div>
+                          </div>
+                        ),
                         children: (
-                          <div style={{ maxHeight: 420, overflowY: 'auto', paddingRight: 4 }}>
+                          <div style={{ maxHeight: 'min(60vh, 560px)', overflowY: 'auto', paddingRight: 4 }}>
 
                   <Card size="small" title="创作预设" style={{ marginBottom: 12 }}>
                     <Space wrap>
@@ -848,22 +923,6 @@ export default function OutlineGenerateModalContent({
                   </Form.Item>
 
                   <Form.Item
-                    label="质量预设"
-                    name="quality_preset"
-                    tooltip="为这轮大纲施加统一的质量偏好，控制更偏推进、氛围、情绪或干净表达"
-                  >
-                    <Select allowClear placeholder="默认沿用项目偏好" optionLabelProp="label">
-                      {QUALITY_PRESET_OPTIONS.map((option) => (
-                        <Select.Option key={option.value} value={option.value} label={option.label}>
-                          <div>{option.label}</div>
-                          <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{option.description}</div>
-                          <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>适合：{option.bestFor}</div>
-                        </Select.Option>
-                      ))}
-                    </Select>
-                  </Form.Item>
-
-                  <Form.Item
                     label="额外质量要求"
                     name="quality_notes"
                     tooltip="补充这轮大纲要特别强化或压制的表达习惯"
@@ -904,77 +963,6 @@ export default function OutlineGenerateModalContent({
 
           {/* 自定义模型选择 - 移到外层，所有模式都显示 */}
 
-
-          {loadedModels.length > 0 && (
-
-
-            <Form.Item
-
-
-              label="AI模型"
-
-
-              name="model"
-
-
-              tooltip="选择用于生成的AI模型，不选则使用系统默认模型"
-
-
-            >
-
-
-              <Select
-
-
-                placeholder={defaultModel ? `默认: ${loadedModels.find(m => m.value === defaultModel)?.label || defaultModel}` : "使用默认模型"}
-
-
-                allowClear
-
-
-                showSearch
-
-
-                optionFilterProp="label"
-
-
-                options={loadedModels}
-
-
-                onChange={(value) => {
-
-
-                  console.log('用户在下拉框中选择了模型:', value);
-
-
-                  // 手动同步到Form
-
-
-                  generateForm.setFieldsValue({ model: value });
-
-
-                  console.log('已同步到Form，当前Form值:', generateForm.getFieldsValue());
-
-
-                }}
-
-
-              />
-
-
-              <div style={{ color: 'var(--color-text-tertiary)', fontSize: 12, marginTop: 4 }}>
-
-
-                {defaultModel ? `当前默认模型: ${loadedModels.find(m => m.value === defaultModel)?.label || defaultModel}` : '未配置默认模型'}
-
-
-              </div>
-
-
-            </Form.Item>
-
-
-          )}
 
 
         </Form>

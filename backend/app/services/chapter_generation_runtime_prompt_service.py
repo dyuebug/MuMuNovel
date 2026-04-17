@@ -43,6 +43,7 @@ def build_chapter_runtime_system_prompt(
     style_preset_id: Optional[str] = None,
     target_word_count: Optional[int] = None,
     story_runtime_contract: Optional[Dict[str, Any]] = None,
+    web_research_grounding_block: Optional[str] = None,
 ) -> str:
     """构建章节生成运行时系统提示词（风格、世界锚点、剧情锚点与护栏）。"""
     style_profile = detect_style_profile(
@@ -151,12 +152,14 @@ def build_chapter_runtime_system_prompt(
             ]
         )
 
+    web_research_block = web_research_grounding_block or ''
+
     return f"""{style_block}【🌍 世界观锚点】
 - 时间背景：{project.world_time_period or '未设定'}
 - 地理位置：{project.world_location or '未设定'}
 - 氛围基调：{project.world_atmosphere or '未设定'}
 - 世界规则：{project.world_rules or '未设定'}
 
-{outline_anchor_block}{previous_summary_block}{organization_continuity_block}【创作护栏】
+{outline_anchor_block}{previous_summary_block}{organization_continuity_block}{web_research_block}【创作护栏】
 {chr(10).join(guard_lines)}
 """

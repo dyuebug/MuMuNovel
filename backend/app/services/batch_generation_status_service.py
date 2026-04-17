@@ -67,7 +67,7 @@ def build_batch_task_terminal_status(
         'terminal_reason': terminal_reason,
         'terminal_label': terminal_label,
         'review_required': review_required,
-        'can_resume': task.status in {'failed', 'cancelled'},
+        'can_resume': task.status in {'failed', 'cancelled'} and not review_required,
     }
 
 

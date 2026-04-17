@@ -59,6 +59,19 @@ const getTaskStatusMeta = (task: TrackedBackgroundTask): { color: string; label:
 
 const terminalStatuses = new Set<TrackedBackgroundTask['status']>(['completed', 'failed', 'cancelled']);
 
+const isTaskManualReviewTerminal = (task: TrackedBackgroundTask) =>
+  task.reviewRequired || String(task.terminalReason ?? '').trim().toLowerCase() === 'manual_review';
+
+const isTaskResumable = (task: TrackedBackgroundTask) => {
+  if (task.taskType !== 'chapters_batch_generate' && task.taskType !== 'chapter_single_generate') {
+    return false;
+  }
+
+  return typeof task.canResume === 'boolean'
+    ? task.canResume
+    : task.status === 'cancelled' || (task.status === 'failed' && !isTaskManualReviewTerminal(task));
+};
+
 const statusPriority: Record<TrackedBackgroundTask['status'], number> = {
   running: 0,
   pending: 1,
@@ -714,11 +727,7 @@ export default function BackgroundTaskCenter() {
     const terminalTaskCount = tasks.filter((task) => terminalStatuses.has(task.status)).length;
     const otherActiveCount = activeTasks.length - currentProjectActiveCount;
     const failedTaskCount = tasks.filter((task) => task.status === 'failed').length;
-    const recoverableTaskCount = tasks.filter(
-      (task) =>
-        (task.taskType === 'chapters_batch_generate' || task.taskType === 'chapter_single_generate') &&
-        (task.status === 'failed' || task.status === 'cancelled')
-    ).length;
+    const recoverableTaskCount = tasks.filter(isTaskResumable).length;
 
     return {
       currentProjectActiveCount,
@@ -953,9 +962,7 @@ export default function BackgroundTaskCenter() {
     }
   };
 
-  const canResumeTask = (task: TrackedBackgroundTask) =>
-    (task.taskType === 'chapters_batch_generate' || task.taskType === 'chapter_single_generate') &&
-    (typeof task.canResume === 'boolean' ? task.canResume : (task.status === 'failed' || task.status === 'cancelled'));
+  const canResumeTask = (task: TrackedBackgroundTask) => isTaskResumable(task);
 
   const canCancelTask = (task: TrackedBackgroundTask) =>
     task.taskType !== 'chapter_analysis';

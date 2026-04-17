@@ -381,6 +381,7 @@ async def generate_single_chapter_for_batch_workflow(
         ai_service=request.ai_service,
         custom_model=request.custom_model,
         story_runtime_contract=story_runtime_contract,
+        research_assets=research_assets,
         get_template_fn=dependencies.get_template_fn,
         format_prompt_fn=dependencies.format_prompt_fn,
         apply_style_to_prompt_fn=dependencies.apply_style_to_prompt_fn,

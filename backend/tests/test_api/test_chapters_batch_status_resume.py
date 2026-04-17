@@ -147,8 +147,14 @@ async def test_should_expose_manual_review_terminal_status_for_failed_batch_task
     assert status_body["terminal_reason"] == "manual_review"
     assert status_body["terminal_label"] == "manual review"
     assert status_body["review_required"] is True
-    assert status_body["can_resume"] is True
+    assert status_body["can_resume"] is False
     assert status_body["failed_chapters"][0]["quality_gate_decision"] == "manual_review"
+
+    resume_response = await chapters_client.post(
+        f"/api/chapters/batch-generate/{task_id}/resume"
+    )
+    assert resume_response.status_code == 400
+    assert resume_response.json()["detail"] == "Manual review blocked tasks cannot be resumed"
 
 async def test_should_expose_runtime_workflow_phase_in_batch_status(
     chapters_client,
@@ -335,8 +341,8 @@ async def test_should_resume_failed_batch_task_with_persisted_story_repair_paylo
         "summary": "Recover the main conflict payoff",
         "repair_targets": ["restore mainline payoff", "raise climax cost"],
         "preserve_strengths": ["keep character voice"],
-        "quality_gate_decision": "manual_review",
-        "quality_gate_label": "manual review",
+        "quality_gate_decision": "auto_repair",
+        "quality_gate_label": "auto repair",
         "source": "manual_plus_recent_history_summary",
         "scope": "batch",
     }

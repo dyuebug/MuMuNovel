@@ -337,6 +337,115 @@ async def test_execute_batch_generation_should_apply_candidate_only_after_qualit
         assert len(histories) == 1
         assert "batch-candidate-pass" in histories[0].generated_content
 
+async def test_execute_batch_generation_should_forward_web_research_options_to_single_chapter_generation(
+    chapters_session_factory,
+    fake_ai_service,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="batch-web-research-forwarding",
+    )
+
+    async with chapters_session_factory() as session:
+        engine = session.bind
+        task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=1,
+            chapter_count=1,
+            chapter_ids=[chapter.id],
+            status="pending",
+            total_chapters=1,
+            completed_chapters=0,
+            target_word_count=600,
+            enable_analysis=False,
+            max_retries=1,
+        )
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+        batch_id = task.id
+
+    generation_calls: list[dict[str, Any]] = []
+
+    async def fake_get_engine(_user_id):
+        return engine
+
+    async def fake_check_prerequisites(*args, **kwargs):
+        return True, None, None
+
+    async def fake_generate_single_chapter_for_batch(**kwargs):
+        generation_calls.append(kwargs)
+        content = "batch-candidate-pass"
+        return {
+            "full_content": content,
+            "word_count": len(content),
+            "summary_preview": content,
+            "quality_metrics": {
+                "overall_score": 88.0,
+                "conflict_chain_hit_rate": 82.0,
+                "rule_grounding_hit_rate": 84.0,
+                "outline_alignment_rate": 86.0,
+                "dialogue_naturalness_rate": 80.0,
+                "opening_hook_rate": 87.0,
+                "payoff_chain_rate": 81.0,
+                "cliffhanger_rate": 85.0,
+                "pacing_score": 8.0,
+            },
+        }
+
+    async def fake_resolve_generation_story_repair_state_for_batch(*args, **kwargs):
+        return {"payload": None, "active_story_repair_payload": None}
+
+    async def fake_set_task_active_story_repair_payload(*args, **kwargs):
+        return None
+
+    async def fake_publish_task_stream_event(*args, **kwargs):
+        return None
+
+    async def fake_record_task_quality_metrics(*args, **kwargs):
+        return None
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(app_database, "get_engine", fake_get_engine)
+    monkeypatch.setattr(chapters_api, "check_prerequisites", fake_check_prerequisites)
+    monkeypatch.setattr(chapters_api, "generate_single_chapter_for_batch", fake_generate_single_chapter_for_batch)
+    monkeypatch.setattr(
+        chapters_api,
+        "_resolve_generation_story_repair_state_for_batch",
+        fake_resolve_generation_story_repair_state_for_batch,
+    )
+    monkeypatch.setattr(chapters_api, "_set_task_active_story_repair_payload", fake_set_task_active_story_repair_payload)
+    monkeypatch.setattr(chapters_api, "publish_task_stream_event", fake_publish_task_stream_event)
+    monkeypatch.setattr(chapters_api, "_record_task_quality_metrics", fake_record_task_quality_metrics)
+    monkeypatch.setattr(chapters_api.asyncio, "sleep", fake_sleep)
+
+    await REAL_EXECUTE_BATCH_GENERATION_IN_ORDER(
+        batch_id=batch_id,
+        user_id=mock_user.user_id,
+        ai_service=fake_ai_service,
+        enable_web_research=True,
+        web_research_query="night market customs",
+        base_quality_profile={
+            "resolved_style_id": None,
+            "style_content": "",
+            "style_name": "",
+            "style_preset_id": "",
+        },
+    )
+
+    assert generation_calls
+    assert generation_calls[0]["enable_web_research"] is True
+    assert generation_calls[0]["web_research_query"] == "night market customs"
+
+
 async def test_execute_batch_generation_should_stop_promptly_when_task_cancelled_during_chapter_generation(
     chapters_session_factory,
     fake_ai_service,

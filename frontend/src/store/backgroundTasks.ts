@@ -164,9 +164,10 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
           : incomingStatus === 'failed'
             ? (existing?.reviewRequired ?? false)
             : false;
+        const isManualReviewTerminal = reviewRequired || String(terminalReason ?? '').trim().toLowerCase() === 'manual_review';
         const canResume = typeof task.can_resume === 'boolean'
           ? task.can_resume
-          : incomingStatus === 'failed' || incomingStatus === 'cancelled';
+          : incomingStatus === 'cancelled' || (incomingStatus === 'failed' && !isManualReviewTerminal);
         const result = task.result !== undefined
           ? task.result
           : isActiveStatus ? null : (existing?.result ?? null);

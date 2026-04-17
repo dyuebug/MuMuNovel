@@ -740,15 +740,74 @@ const batchStoryInsightCards = useMemo(
             </Form.Item>
             </Card>
 
+            <Card
+              size="small"
+              title="常用生成控制"
+              style={{ marginBottom: 8 }}
+              styles={{ body: { padding: 12 } }}
+            >
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: `repeat(auto-fit, minmax(${isMobile ? 220 : 260}px, 1fr))`,
+                  gap: 12,
+                }}
+              >
+                <Form.Item
+                  label="AI 模型"
+                  tooltip="留空则沿用项目默认模型"
+                  style={{ marginBottom: 0 }}
+                >
+                  <Select
+                    placeholder={batchSelectedModel ? `已选择：${batchSelectedModelLabel}` : '留空 = 项目默认'}
+                    value={batchSelectedModel ?? undefined}
+                    onChange={setBatchSelectedModel}
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                  >
+                    {normalizedAvailableModels.map((model) => (
+                      <Select.Option key={model.value} value={model.value} label={model.label}>
+                        {model.label}
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+                <Form.Item
+                  label="开启质量分析"
+                  name="enableAnalysis"
+                  tooltip="决定批量生成后是否自动附带质量分析建议"
+                  style={{ marginBottom: 0 }}
+                >
+                  <div>
+                    <Radio.Group optionType="button" buttonStyle="solid">
+                      <Radio.Button value={true}>开启分析</Radio.Button>
+                      <Radio.Button value={false}>仅生成</Radio.Button>
+                    </Radio.Group>
+                    <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginTop: 6 }}>
+                      关闭后只生成正文，不自动附带质量分析结果。
+                    </div>
+                  </div>
+                </Form.Item>
+              </div>
+            </Card>
+
             <Collapse
               size="small"
               style={{ marginBottom: 12 }}
               items={[
                 {
                   key: 'batch-advanced',
-                  label: '\u521b\u4f5c\u7b56\u7565 / \u8d28\u91cf / \u5fae\u8c03\uff08\u6309\u9700\u5c55\u5f00\uff09',
+                  label: (
+                    <div>
+                      <div>{'更多策略 / 质量 / 微调（按需展开）'}</div>
+                      <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', marginTop: 4 }}>
+                        {`模式：${batchSelectedCreativeModeLabel} · 聚焦：${batchSelectedStoryFocusLabel} · 阶段：${batchSelectedPlotStageLabel} · 模型：${batchSelectedModelLabel} · 分析：${batchQualityAnalysisLabel}`}
+                      </div>
+                    </div>
+                  ),
                   children: (
-                    <div style={{ maxHeight: 420, overflowY: 'auto', paddingRight: 4 }}>
+                    <div style={{ maxHeight: 'min(60vh, 560px)', overflowY: 'auto', paddingRight: 4 }}>
 
             <Card
               size="small"
@@ -1155,51 +1214,6 @@ const batchStoryInsightCards = useMemo(
                       </Select.Option>
                     ))}
                   </Select>
-                </Form.Item>
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: `repeat(auto-fit, minmax(${isMobile ? 220 : 260}px, 1fr))`,
-                  gap: 12,
-                  marginTop: 12,
-                }}
-              >
-                <Form.Item
-                  label="AI 模型"
-                  tooltip="留空则沿用项目默认模型"
-                  style={{ marginBottom: 0 }}
-                >
-                  <Select
-                    placeholder={batchSelectedModel ? `已选择：${batchSelectedModelLabel}` : "留空=项目默认"}
-                    value={batchSelectedModel ?? undefined}
-                    onChange={setBatchSelectedModel}
-                    allowClear
-                    showSearch
-                    optionFilterProp="label"
-                  >
-                    {normalizedAvailableModels.map((model) => (
-                      <Select.Option key={model.value} value={model.value} label={model.label}>
-                        {model.label}
-                      </Select.Option>
-                    ))}
-                  </Select>
-                </Form.Item>
-                <Form.Item
-                  label="开启质量分析"
-                  name="enableAnalysis"
-                  tooltip="决定批量生成后是否自动附带质量建议"
-                  style={{ marginBottom: 0 }}
-                >
-                  <div>
-                    <Radio.Group optionType="button" buttonStyle="solid">
-                      <Radio.Button value={true}>开启分析</Radio.Button>
-                      <Radio.Button value={false}>仅生成</Radio.Button>
-                    </Radio.Group>
-                    <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginTop: 6 }}>
-                      关闭后只生成正文，不自动附带质量分析。
-                    </div>
-                  </div>
                 </Form.Item>
               </div>
               <div

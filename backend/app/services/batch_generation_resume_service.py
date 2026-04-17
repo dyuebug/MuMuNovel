@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.batch_generation_task import BatchGenerationTask
 from app.models.chapter import Chapter
 from app.services.ai_service import AIService
+from app.services.batch_generation_status_service import build_batch_task_terminal_status
 from app.services.batch_generation_workflow_service import (
     create_batch_generation_task_record,
     enqueue_batch_generation_execution,
@@ -59,6 +60,14 @@ async def prepare_batch_generation_resume(
             detail='Only failed or cancelled tasks can be resumed',
         )
 
+    source_workflow_snapshot = await get_task_workflow_runtime_snapshot(source_task.id, db_session=db_session)
+    terminal_status = build_batch_task_terminal_status(
+        source_task,
+        workflow_snapshot=source_workflow_snapshot if isinstance(source_workflow_snapshot, dict) else None,
+    )
+    if terminal_status.get('review_required'):
+        raise HTTPException(status_code=400, detail='Manual review blocked tasks cannot be resumed')
+
     chapter_ids = list(source_task.chapter_ids or [])
     if not chapter_ids:
         raise HTTPException(status_code=400, detail='No resumable chapters found')
@@ -89,7 +98,6 @@ async def prepare_batch_generation_resume(
     if not can_generate:
         raise HTTPException(status_code=400, detail=f'Resume blocked by prerequisites: {error_msg}')
 
-    source_workflow_snapshot = await get_task_workflow_runtime_snapshot(source_task.id, db_session=db_session)
     source_active_story_repair_payload = (
         source_workflow_snapshot.get('active_story_repair_payload')
         if isinstance(source_workflow_snapshot, dict)

@@ -37,6 +37,72 @@ class BatchGenerationPromptStageResult:
     generate_kwargs: Dict[str, Any]
 
 
+def _clip_research_text(value: Any, limit: int) -> str:
+    if value is None:
+        return ''
+    text = ' '.join(str(value).split())
+    if not text:
+        return ''
+    if len(text) <= limit:
+        return text
+    return f"{text[: max(limit - 1, 1)].rstrip()}…"
+
+
+def _pick_research_asset_text(asset: Dict[str, Any], *keys: str, limit: int) -> str:
+    for key in keys:
+        value = asset.get(key)
+        clipped = _clip_research_text(value, limit)
+        if clipped:
+            return clipped
+    return ''
+
+
+def _build_web_research_grounding_block(research_assets: Optional[list[Any]]) -> str:
+    if not research_assets:
+        return ''
+
+    lines = ['【🌐 联网检索事实锚点】']
+    included_count = 0
+
+    for raw_asset in research_assets:
+        asset = raw_asset if isinstance(raw_asset, dict) else {'summary': raw_asset}
+        title = _pick_research_asset_text(asset, 'title', 'name', 'query', 'topic', limit=40)
+        source = _pick_research_asset_text(asset, 'source', 'provider', 'domain', 'url', limit=60)
+        summary = _pick_research_asset_text(asset, 'summary', 'snippet', 'text', 'content', 'excerpt', limit=150)
+        usage_hint = _pick_research_asset_text(asset, 'usage_hint', 'focus', 'purpose', 'reasoning', limit=80)
+
+        entry_parts = []
+        if title:
+            entry_parts.append(f'主题：{title}')
+        if source:
+            entry_parts.append(f'来源：{source}')
+        if summary:
+            entry_parts.append(f'摘要：{summary}')
+        if usage_hint:
+            entry_parts.append(f'可用点：{usage_hint}')
+
+        if not entry_parts:
+            continue
+
+        included_count += 1
+        lines.append(f"- 条目 {included_count}：{'；'.join(entry_parts)}")
+        if included_count >= 4:
+            break
+
+    if included_count == 0:
+        return ''
+
+    lines.extend(
+        [
+            '- 外部信息仅用于补强职业细节、时代氛围、场景常识、社会情绪与行动逻辑。',
+            '- 若与既有设定、本章大纲、上章回执或角色状态冲突，以项目 canon 为准。',
+            '- 不要照抄来源原文，不要写“根据资料显示 / 据搜索结果 / 某网站指出”等暴露检索过程的话。',
+            '',
+        ]
+    )
+    return '\n'.join(lines) + '\n\n'
+
+
 async def build_batch_generation_prompt(
     *,
     db_session: AsyncSession,
@@ -147,12 +213,14 @@ def build_batch_generation_request_payload(
     ai_service: Any,
     custom_model: Optional[str],
     story_runtime_contract: Optional[Dict[str, Any]],
+    research_assets: Optional[list[Any]] = None,
     build_runtime_system_prompt_fn: Callable[..., str],
     calculate_max_tokens_fn: Callable[[int], int],
     build_request_options_fn: Callable[[Any], Optional[Dict[str, Any]]],
     detect_style_profile_fn: Callable[..., str],
     resolve_generation_temperature_fn: Callable[[str], float],
 ) -> BatchGenerationRequestPayload:
+    web_research_grounding_block = _build_web_research_grounding_block(research_assets)
     system_prompt = build_runtime_system_prompt_fn(
         project=project,
         style_content=style_content,
@@ -162,6 +230,7 @@ def build_batch_generation_request_payload(
         style_preset_id=style_preset_id,
         target_word_count=target_word_count,
         story_runtime_contract=story_runtime_contract,
+        web_research_grounding_block=web_research_grounding_block,
     )
     max_tokens = calculate_max_tokens_fn(target_word_count)
     style_profile = detect_style_profile_fn(
@@ -207,6 +276,7 @@ async def execute_batch_generation_prompt_stage(
     ai_service: Any,
     custom_model: Optional[str],
     story_runtime_contract: Optional[Dict[str, Any]],
+    research_assets: Optional[list[Any]] = None,
     get_template_fn: Callable[[str, str, AsyncSession], Awaitable[str]],
     format_prompt_fn: Callable[..., str],
     apply_style_to_prompt_fn: Callable[[str, str], str],
@@ -246,6 +316,7 @@ async def execute_batch_generation_prompt_stage(
         ai_service=ai_service,
         custom_model=custom_model,
         story_runtime_contract=story_runtime_contract,
+        research_assets=research_assets,
         build_runtime_system_prompt_fn=build_runtime_system_prompt_fn,
         calculate_max_tokens_fn=calculate_max_tokens_fn,
         build_request_options_fn=build_request_options_fn,
