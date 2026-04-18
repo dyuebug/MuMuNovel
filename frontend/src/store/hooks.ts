@@ -547,7 +547,7 @@ export function useChapterSync() {
                     latestAnalysisTaskId = message.task_id.trim();
                   }
                   if (onProgressUpdate) {
-                    onProgressUpdate(message.message || '\u7ae0\u8282\u5206\u6790\u4e2d...', message.progress || 85);
+                    onProgressUpdate(message.message || '章节分析中...', message.progress || 85);
                   }
                 } else if (message.type === 'quality_metrics' && onProgressUpdate) {
                   const qualityMessage = formatQualityMessage(message);
@@ -694,7 +694,7 @@ export function useChapterSync() {
                     contentSource = 'candidate_draft';
                   }
                 } catch (candidateDraftError) {
-                  console.warn('\u83b7\u53d6\u5019\u9009\u7a3f\u5931\u8d25:', candidateDraftError);
+                  console.warn('获取候选稿失败:', candidateDraftError);
                 }
               }
             }
@@ -705,8 +705,8 @@ export function useChapterSync() {
             if (onProgressUpdate) {
               onProgressUpdate(
                 contentSource === 'candidate_draft'
-                  ? '\u5019\u9009\u7a3f\u5df2\u540c\u6b65\u5230\u7f16\u8f91\u5668\u9884\u89c8\uff0c\u7b49\u5f85\u4eba\u5de5\u590d\u6838'
-                  : '\u751f\u6210\u5b8c\u6210',
+                  ? '候选稿已同步到编辑器预览，等待人工复核'
+                  : '生成完成',
                 100,
               );
             }

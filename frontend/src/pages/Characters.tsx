@@ -322,9 +322,9 @@ export default function Characters() {
   const handleDeleteCharacter = useCallback(async (id: string) => {
     try {
       await deleteCharacter(id);
-      message.success('\u5220\u9664\u6210\u529f');
+      message.success('删除成功');
     } catch {
-      message.error('\u5220\u9664\u5931\u8d25');
+      message.error('删除失败');
     }
   }, [deleteCharacter]);
 
@@ -717,9 +717,9 @@ export default function Characters() {
   const handleExportSingle = useCallback(async (characterId: string) => {
     try {
       await characterApi.exportCharacters([characterId]);
-      message.success('\u5bfc\u51fa\u6210\u529f');
+      message.success('导出成功');
     } catch (error) {
-      message.error('\u5bfc\u51fa\u5931\u8d25');
+      message.error('导出失败');
       console.error('export failed:', error);
     }
   }, []);
@@ -1390,7 +1390,7 @@ export default function Characters() {
 
             {isProgressiveRenderPending && (
               <div style={{ textAlign: 'center', padding: '12px 0', color: 'var(--color-text-tertiary)' }}>
-                {'\u6b63\u5728\u52a0\u8f7d\u5176\u4f59\u89d2\u8272\u4e0e\u7ec4\u7ec7...'}
+                {'正在加载其余角色与组织...'}
               </div>
             )}
 

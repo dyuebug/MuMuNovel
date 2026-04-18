@@ -1123,10 +1123,10 @@ const ChapterAnalysis: React.FC = () => {
                   qualityHighlights={candidateComparisonHighlights}
                   onApplyAction={applyCandidateDraft}
                   showDiscardButton={false}
-                  applyButtonText="\u6062\u590d\u5230\u6b63\u6587"
-                  modalTitle={`\u5019\u9009\u7a3f\u5bf9\u6bd4 - ${selectedChapter.title}`}
-                  leftTitle="\u5f53\u524d\u6b63\u6587"
-                  rightTitle="\u5019\u9009\u7a3f"
+                  applyButtonText="恢复到正文"
+                  modalTitle={`候选稿对比 - ${selectedChapter.title}`}
+                  leftTitle="当前正文"
+                  rightTitle="候选稿"
                 />
               </Suspense>
             )}

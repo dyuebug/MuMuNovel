@@ -197,7 +197,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       } else if (taskData.status === 'running' || taskData.status === 'pending' || isAnalysisTaskRetrying(taskData)) {
         startPolling();
       } else if (taskData.status === 'failed' && taskData.auto_recovered) {
-        setError(taskData.error_message || '\u5206\u6790\u4efb\u52a1\u5df2\u81ea\u52a8\u6062\u590d\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5');
+        setError(taskData.error_message || '分析任务已自动恢复，请稍后重试');
       }
     } catch (err) {
       setError((err as Error).message);
@@ -240,8 +240,8 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
 
           stopPolling();
           setError(taskData.auto_recovered
-            ? (taskData.error_message || '\u5206\u6790\u4efb\u52a1\u5df2\u81ea\u52a8\u6062\u590d\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5')
-            : (taskData.error_message || '\u5206\u6790\u5931\u8d25'));
+            ? (taskData.error_message || '分析任务已自动恢复，请稍后重试')
+            : (taskData.error_message || '分析失败'));
         }
       } catch (err) {
         pollErrorCountRef.current += 1;

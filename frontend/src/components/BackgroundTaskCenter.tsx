@@ -427,22 +427,22 @@ const extractFailureReasonTags = (task: TrackedBackgroundTask): FailureReasonTag
   if (manualReviewInfo) {
     pushTag(manualReviewInfo.label, 'gold');
     if (manualReviewInfo.failedMetrics.length > 0) {
-      pushTag('\u8d28\u91cf\u95e8\u7981\u62e6\u622a', 'orange');
+      pushTag('质量门禁拦截', 'orange');
     }
   }
 
   if (!source.trim()) {
-    return tags.length > 0 ? tags.slice(0, 2) : [{ label: '\u672a\u77e5\u539f\u56e0', color: 'default' }];
+    return tags.length > 0 ? tags.slice(0, 2) : [{ label: '未知原因', color: 'default' }];
   }
 
   if (
     source.includes('timeout') ||
     source.includes('time out') ||
     source.includes('timed out') ||
-    source.includes('\u8d85\u65f6') ||
+    source.includes('超时') ||
     source.includes('deadline exceeded')
   ) {
-    pushTag('\u8d85\u65f6', 'gold');
+    pushTag('超时', 'gold');
   }
 
   if (
@@ -451,26 +451,26 @@ const extractFailureReasonTags = (task: TrackedBackgroundTask): FailureReasonTag
     source.includes('unauthorized') ||
     source.includes('forbidden') ||
     source.includes('permission') ||
-    source.includes('\u6743\u9650') ||
-    source.includes('\u8ba4\u8bc1') ||
+    source.includes('权限') ||
+    source.includes('认证') ||
     source.includes('token') ||
     source.includes('apikey') ||
     source.includes('api key')
   ) {
-    pushTag('\u6743\u9650\u9519\u8bef', 'red');
+    pushTag('权限错误', 'red');
   }
 
   if (
     source.includes('429') ||
     source.includes('rate limit') ||
     source.includes('quota') ||
-    source.includes('\u914d\u989d') ||
-    source.includes('\u9650\u6d41') ||
-    source.includes('\u4f59\u989d\u4e0d\u8db3') ||
+    source.includes('配额') ||
+    source.includes('限流') ||
+    source.includes('余额不足') ||
     source.includes('too many requests') ||
     source.includes('insufficient_quota')
   ) {
-    pushTag('\u9650\u6d41/\u914d\u989d', 'volcano');
+    pushTag('限流/配额', 'volcano');
   }
 
   if (
@@ -480,20 +480,20 @@ const extractFailureReasonTags = (task: TrackedBackgroundTask): FailureReasonTag
     source.includes('connect') ||
     source.includes('econn') ||
     source.includes('dns') ||
-    source.includes('\u7f51\u7edc') ||
-    source.includes('\u8fde\u63a5')
+    source.includes('网络') ||
+    source.includes('连接')
   ) {
-    pushTag('\u7f51\u7edc\u5f02\u5e38', 'cyan');
+    pushTag('网络异常', 'cyan');
   }
 
   if (
     source.includes('model') ||
-    source.includes('\u6a21\u578b') ||
+    source.includes('模型') ||
     source.includes('provider') ||
     source.includes('completion') ||
     source.includes('llm')
   ) {
-    pushTag('\u6a21\u578b\u9519\u8bef', 'purple');
+    pushTag('模型错误', 'purple');
   }
 
   if (
@@ -501,11 +501,11 @@ const extractFailureReasonTags = (task: TrackedBackgroundTask): FailureReasonTag
     source.includes('maximum context') ||
     source.includes('too long') ||
     source.includes('length') ||
-    source.includes('\u4e0a\u4e0b\u6587') ||
-    source.includes('\u957f\u5ea6\u8d85\u9650') ||
+    source.includes('上下文') ||
+    source.includes('长度超限') ||
     source.includes('token limit')
   ) {
-    pushTag('\u4e0a\u4e0b\u6587\u8fc7\u957f', 'magenta');
+    pushTag('上下文过长', 'magenta');
   }
 
   if (
@@ -513,15 +513,15 @@ const extractFailureReasonTags = (task: TrackedBackgroundTask): FailureReasonTag
     source.includes('validation') ||
     source.includes('missing') ||
     source.includes('required') ||
-    source.includes('\u53c2\u6570') ||
-    source.includes('\u683c\u5f0f') ||
-    source.includes('\u6821\u9a8c')
+    source.includes('参数') ||
+    source.includes('格式') ||
+    source.includes('校验')
   ) {
-    pushTag('\u53c2\u6570\u95ee\u9898', 'orange');
+    pushTag('参数问题', 'orange');
   }
 
   if (tags.length === 0) {
-    pushTag('\u672a\u77e5\u539f\u56e0', 'default');
+    pushTag('未知原因', 'default');
   }
 
   return tags.slice(0, 2);

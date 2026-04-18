@@ -1,4 +1,4 @@
-﻿import { Card, Space, Tag, Typography, Popconfirm, theme } from 'antd';
+import { Card, Space, Tag, Typography, Popconfirm, theme } from 'antd';
 import { EditOutlined, DeleteOutlined, UserOutlined, BankOutlined, ExportOutlined } from '@ant-design/icons';
 import { characterCardStyles } from './CardStyles';
 import type { Character } from '../types';
@@ -223,7 +223,7 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({ character, onEdit,
                 )}
                 {character.organization_members && (
                   <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
-                    <Text type="secondary" style={{ flexShrink: 0 }}>{'\u6210\u5458\uff1a'}</Text>
+                    <Text type="secondary" style={{ flexShrink: 0 }}>{'成员：'}</Text>
                     <Text
                       style={{ flex: 1, minWidth: 0, fontSize: 12, lineHeight: 1.6, wordBreak: 'break-all' }}
                       title={organizationMembersFullText}

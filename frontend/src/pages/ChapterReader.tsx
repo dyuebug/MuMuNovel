@@ -226,7 +226,7 @@ const ChapterReader: React.FC = () => {
           if (status === 'failed') {
             if (isAnalysisTaskRetrying(statusRes)) {
               message.loading({
-                content: error_message || '\u7ae0\u8282\u5206\u6790\u6b63\u5728\u81ea\u52a8\u91cd\u8bd5\uff0c\u8bf7\u7a0d\u5019...',
+                content: error_message || '章节分析正在自动重试，请稍候...',
                 key: 'analyze',
                 duration: 0,
               });
@@ -238,14 +238,14 @@ const ChapterReader: React.FC = () => {
 
             if (auto_recovered) {
               message.warning({
-                content: `\u5206\u6790\u4efb\u52a1\u5df2\u81ea\u52a8\u6062\u590d\uff1a${error_message || '\u8bf7\u7a0d\u540e\u91cd\u8bd5'}`,
+                content: `分析任务已自动恢复：${error_message || '请稍后重试'}`,
                 key: 'analyze'
               });
               return;
             }
 
             message.error({
-              content: `\u5206\u6790\u5931\u8d25\uff1a${error_message || '\u672a\u77e5\u9519\u8bef'}`,
+              content: `分析失败：${error_message || '未知错误'}`,
               key: 'analyze'
             });
           }
