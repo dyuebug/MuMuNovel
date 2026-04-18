@@ -24,6 +24,50 @@ backend/
 
 ## 🚀 使用方法
 
+### ✅ 推荐：优先使用项目封装命令
+
+为了避免中文 migration message 在某些终端、缓存或脚本环境里出现乱码痕迹，**推荐优先使用项目封装命令**，不要直接手写 `alembic revision -m "中文说明"`。
+
+```bash
+cd backend
+python scripts/migrate.py create "添加system_prompt字段到settings表"
+```
+
+#### 封装命令的行为
+- **文件名**：自动转换为安全的 ASCII slug，例如 `system_prompt_settings`
+- **文件头说明**：migration 顶部 docstring 会自动恢复为原始中文说明
+- **纯中文说明**：如果没有可复用的 ASCII 片段，会自动回退为 `migration_<hash>` 形式的安全文件名
+
+#### 示例
+如果执行：
+
+```bash
+python scripts/migrate.py create "添加system_prompt字段到settings表"
+```
+
+则可能生成类似文件：
+
+```text
+20260418_1030_abcd1234_system_prompt_settings.py
+```
+
+文件开头类似：
+
+```python
+"""添加system_prompt字段到settings表
+
+Revision ID: abcd1234
+Revises: prev1234
+Create Date: 2026-04-18 10:30:00
+
+"""
+```
+
+#### 使用建议
+- **推荐**：日常开发、团队协作、需要保留中文语义时，使用 `python scripts/migrate.py create ...`
+- **可用但不推荐**：直接执行 `alembic revision --autogenerate -m ...`
+- **原因**：项目封装命令会自动处理 slug 安全化与中文说明恢复，能显著降低文件名乱码痕迹
+
 ### 1. PostgreSQL 数据库
 
 #### 配置环境变量
@@ -35,8 +79,12 @@ DATABASE_URL=postgresql+asyncpg://username:password@localhost:5432/database_name
 #### 生成迁移脚本
 ```bash
 cd backend
-alembic -c alembic-postgres.ini revision --autogenerate -m "描述信息"
+python scripts/migrate.py create "添加system_prompt字段到settings表"
 ```
+
+> 高级用法：如果需要直接调试 Alembic 原生命令，仍可使用：
+>
+> `alembic -c alembic-postgres.ini revision --autogenerate -m "描述信息"`
 
 #### 应用迁移
 ```bash
@@ -65,8 +113,12 @@ DATABASE_URL=sqlite+aiosqlite:///./data/mumuai.db
 #### 生成迁移脚本
 ```bash
 cd backend
-alembic -c alembic-sqlite.ini revision --autogenerate -m "描述信息"
+python scripts/migrate.py create "添加system_prompt字段到settings表"
 ```
+
+> 高级用法：如果需要直接调试 Alembic 原生命令，仍可使用：
+>
+> `alembic -c alembic-sqlite.ini revision --autogenerate -m "描述信息"`
 
 #### 应用迁移
 ```bash
@@ -76,6 +128,22 @@ alembic -c alembic-sqlite.ini upgrade head
 #### 回退迁移
 ```bash
 alembic -c alembic-sqlite.ini downgrade -1
+```
+
+#### 查看迁移历史
+```bash
+alembic -c alembic-sqlite.ini history
+alembic -c alembic-sqlite.ini current
+```
+
+```
+
+#### 查看迁移历史
+```bash
+alembic -c alembic-sqlite.ini history
+alembic -c alembic-sqlite.ini current
+```
+
 ```
 
 #### 查看迁移历史

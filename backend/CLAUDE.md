@@ -222,7 +222,10 @@ DATABASE_URL=sqlite+aiosqlite:///./data/mumuai.db
 
 **迁移命令：**
 ```bash
-# 创建新迁移
+# 推荐：使用项目封装命令创建新迁移
+python scripts/migrate.py create "添加system_prompt字段到settings表"
+
+# 高级用法：如果需要直接调试 Alembic 原生命令
 alembic revision --autogenerate -m "描述"
 
 # 应用迁移

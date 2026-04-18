@@ -9,10 +9,12 @@ import contextlib
 import hashlib
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
 from typing import Iterator
+import unicodedata
 
 try:
     import psycopg2
@@ -192,15 +194,104 @@ def _migration_single_flight(description: str) -> Iterator[None]:
         yield
 
 
+DEFAULT_MIGRATION_MESSAGE = "auto_migration"
+MAX_ALEMBIC_MESSAGE_SLUG_LENGTH = 48
+
+VERSION_ROOTS = (
+    project_root / "alembic/postgres/versions",
+    project_root / "alembic/sqlite/versions",
+)
+
+
+def _normalize_original_migration_message(message: str | None) -> str:
+    normalized = " ".join((message or "").strip().splitlines()).strip()
+    return normalized.replace('"""', "'''")
+
+
+def _collect_revision_files() -> set[Path]:
+    revision_files: set[Path] = set()
+    for root in VERSION_ROOTS:
+        if root.exists():
+            revision_files.update(root.glob("*.py"))
+    return revision_files
+
+
+def _rewrite_revision_docstring(path: Path, original_message: str, safe_message: str) -> bool:
+    normalized_message = _normalize_original_migration_message(original_message)
+    if not normalized_message:
+        return False
+
+    content = path.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    if not lines or not lines[0].startswith('"""'):
+        return False
+
+    current_message = lines[0][3:]
+    if current_message != safe_message:
+        return False
+
+    lines[0] = f'"""{normalized_message}'
+    path.write_text("\n".join(lines) + ("\n" if content.endswith("\n") else ""), encoding="utf-8")
+    return True
+
+
+def _restore_original_migration_message(created_files: set[Path], original_message: str, safe_message: str) -> list[Path]:
+    updated_files: list[Path] = []
+    for path in sorted(created_files):
+        if _rewrite_revision_docstring(path, original_message, safe_message):
+            updated_files.append(path)
+    return updated_files
+
+
+def build_safe_migration_message(message: str | None) -> str:
+    raw_message = (message or "").strip()
+    if not raw_message:
+        return DEFAULT_MIGRATION_MESSAGE
+
+    normalized = unicodedata.normalize("NFKD", raw_message)
+    ascii_candidate = "".join(char if ord(char) < 128 else " " for char in normalized)
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", ascii_candidate).strip("_").lower()
+    slug = re.sub(r"_+", "_", slug)
+
+    if not slug:
+        digest = hashlib.sha1(raw_message.encode("utf-8")).hexdigest()[:12]
+        return f"migration_{digest}"
+
+    if not slug[0].isalpha():
+        slug = f"migration_{slug}"
+
+    return slug[:MAX_ALEMBIC_MESSAGE_SLUG_LENGTH].rstrip("_") or DEFAULT_MIGRATION_MESSAGE
+
+
 def create_migration(message: str = None):
     """Create a new Alembic revision."""
     if not message:
         message = input("Enter migration message: ").strip()
-        if not message:
-            message = "auto_migration"
 
-    cmd = ["alembic", "revision", "--autogenerate", "-m", message]
-    return run_command(cmd, f"create migration: {message}")
+    safe_message = build_safe_migration_message(message)
+    normalized_original_message = _normalize_original_migration_message(message)
+    if normalized_original_message and safe_message != normalized_original_message:
+        logger.info("Normalized migration message '%s' to safe Alembic slug '%s'", normalized_original_message, safe_message)
+
+    before_files = _collect_revision_files()
+    cmd = ["alembic", "revision", "--autogenerate", "-m", safe_message]
+    success = run_command(
+        cmd,
+        f"create migration: {normalized_original_message or safe_message} -> {safe_message}",
+    )
+    if not success:
+        return False
+
+    if normalized_original_message and safe_message != normalized_original_message:
+        created_files = _collect_revision_files() - before_files
+        updated_files = _restore_original_migration_message(created_files, normalized_original_message, safe_message)
+        if updated_files:
+            logger.info(
+                "Restored original migration message in revision docstring: %s",
+                ", ".join(path.name for path in updated_files),
+            )
+
+    return True
 
 
 def ensure_alembic_version_table_capacity() -> bool:
