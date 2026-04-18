@@ -357,39 +357,48 @@ class ExpansionPlanResponse(BaseModel):
 
 
 class PartialRegenerateRequest(BaseModel):
-    """局部重写请求参数"""
-    selected_text: str = Field(..., description="选中的原文内容")
-    start_position: int = Field(..., description="在章节内容中的起始位置（字符索引）", ge=0)
-    end_position: int = Field(..., description="在章节内容中的结束位置（字符索引）", ge=0)
-    user_instructions: str = Field(..., description="用户的修改要求", min_length=1, max_length=1000)
-    
-    # 可选参数
+    """????????"""
+
+    selected_text: str = Field(..., description="???????")
+    start_position: int = Field(..., description="?????????????????", ge=0)
+    end_position: int = Field(..., description="?????????????????", ge=0)
+    user_instructions: str = Field(..., description="???????", min_length=1, max_length=1000)
+
     context_chars: int = Field(
         500,
-        description="上下文截取长度（前后各截取多少字符）",
+        description="??????????????????",
         ge=100,
-        le=2000
+        le=2000,
     )
-    style_id: Optional[int] = Field(None, description="写作风格ID，不提供则使用项目默认风格")
+    style_id: Optional[int] = Field(None, description="???? ID?????????????")
     length_mode: Optional[str] = Field(
         "similar",
-        description="字数调整模式：similar(保持相近)/expand(适当扩展)/condense(精简压缩)/custom(自定义)"
+        description="???????similar/expand/condense/custom",
     )
     target_word_count: Optional[int] = Field(
         None,
-        description="指定目标字数（仅当length_mode为custom时有效）",
+        description="????????? length_mode ? custom ????",
         ge=10,
-        le=5000
+        le=5000,
     )
-    
+    enable_web_research: Optional[bool] = Field(None, description="??????????")
+    web_research_query: Optional[str] = Field(None, description="?????????", max_length=500)
+
+    @field_validator("user_instructions", "web_research_query", mode="before")
+    @classmethod
+    def normalize_partial_texts(cls, value):
+        return normalize_optional_text(value)
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
-            "selected_text": "林霄挥剑斩向敌人，剑光凌厉，一招制敌。",
+            "selected_text": "???????????????????",
             "start_position": 1234,
             "end_position": 1260,
-            "user_instructions": "增加更细腻的打斗描写，加入主角的心理活动",
+            "user_instructions": "????????????????????",
             "context_chars": 500,
-            "length_mode": "expand"
+            "length_mode": "expand",
+            "enable_web_research": True,
+            "web_research_query": "late qing harbor guild rules",
         }
     })
 

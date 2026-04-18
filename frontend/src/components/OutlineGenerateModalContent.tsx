@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react';
-import { Button, Card, Collapse, Form, Input, Radio, Select, Space } from 'antd';
+import { Button, Card, Collapse, Form, Input, Radio, Select, Space, Switch } from 'antd';
 import type { FormInstance } from 'antd';
 
 import type { CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
@@ -43,6 +43,8 @@ type OutlineGenerateFormValues = {
   requirements?: string;
   model?: string;
   keep_existing?: boolean;
+  enable_web_research?: boolean;
+  web_research_query?: string;
 };
 
 type OutlineProjectSnapshot = {
@@ -90,6 +92,7 @@ export default function OutlineGenerateModalContent({
   const selectedOutlineStoryFocus = Form.useWatch('story_focus', generateForm) as StoryFocus | undefined;
   const selectedOutlinePlotStage = Form.useWatch('plot_stage', generateForm) as PlotStage | undefined;
   const selectedOutlineQualityPreset = Form.useWatch('quality_preset', generateForm) as QualityPreset | undefined;
+  const outlineEnableWebResearch = Form.useWatch('enable_web_research', generateForm) as boolean | undefined;
 
   const activeOutlineCreationPreset = useMemo(
     () => getCreationPresetByModes(selectedOutlineCreativeMode, selectedOutlineStoryFocus),
@@ -228,6 +231,9 @@ export default function OutlineGenerateModalContent({
 
 
             model: defaultModel,
+
+
+            enable_web_research: false,
 
 
           }}
@@ -586,7 +592,7 @@ export default function OutlineGenerateModalContent({
                           </div>
                         ),
                         children: (
-                          <div style={{ maxHeight: 'min(60vh, 560px)', overflowY: 'auto', paddingRight: 4 }}>
+                          <div style={{ maxHeight: 'min(72vh, 720px)', overflowY: 'auto', paddingRight: 4 }}>
 
                   <Card size="small" title="创作预设" style={{ marginBottom: 12 }}>
                     <Space wrap>
@@ -934,6 +940,36 @@ export default function OutlineGenerateModalContent({
                       maxLength={600}
                     />
                   </Form.Item>
+
+                  <Form.Item
+                    label="联网检索"
+                    name="enable_web_research"
+                    valuePropName="checked"
+                    tooltip="生成前补充实时外部参考，可用于加强设定、职业与时代细节。"
+                    style={{ marginBottom: outlineEnableWebResearch ? 12 : 0 }}
+                  >
+                    <div>
+                      <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                      <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 6 }}>
+                        开启后会先补充外部资料，再注入大纲生成提示词，帮助提升设定可信度与时代细节。
+                      </div>
+                    </div>
+                  </Form.Item>
+
+                  {outlineEnableWebResearch && (
+                    <Form.Item
+                      label="联网检索查询词"
+                      name="web_research_query"
+                      tooltip="可留空，系统会根据题材与要求自动生成查询词。"
+                    >
+                      <TextArea
+                        rows={2}
+                        placeholder="例如：民国巡捕房办案细节、古代夜市风俗、悬疑开篇节奏案例"
+                        showCount
+                        maxLength={300}
+                      />
+                    </Form.Item>
+                  )}
 
                   <Form.Item label="其他要求" name="requirements">
 

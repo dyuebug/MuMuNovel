@@ -624,8 +624,8 @@ export default function Chapters() {
 
   const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [selectedModel, setSelectedModel] = useState<string | undefined>();
-  const [batchSelectedModel, setBatchSelectedModel] = useState<string | undefined>(); // 闂佸綊娼х紞濠囧闯濞差亝鍋ㄩ柣鏃傤焾閻忓洭鏌ｉ妸銉ヮ仾閼垛晠鏌涢妸銉剶闁逞屽墮椤︽壆鈧?
-  const [temporaryNarrativePerspective, setTemporaryNarrativePerspective] = useState<string | undefined>(); // 婵炴垶鎸搁悺銊ヮ渻閸屾稓顩查柧蹇撳ⅲ閻愮儤鐒诲璺侯儏椤?
+  const [batchSelectedModel, setBatchSelectedModel] = useState<string | undefined>(); // 批量生成弹窗的独立模型选择
+  const [temporaryNarrativePerspective, setTemporaryNarrativePerspective] = useState<string | undefined>(); // 编辑器内临时叙事视角
   const [selectedCreativeMode, setSelectedCreativeMode] = useState<CreativeMode | undefined>();
   const [batchSelectedCreativeMode, setBatchSelectedCreativeMode] = useState<CreativeMode | undefined>();
   const [selectedStoryFocus, setSelectedStoryFocus] = useState<StoryFocus | undefined>();
@@ -2627,7 +2627,7 @@ export default function Chapters() {
 
         requireInteraction: false, // allow auto-dismiss
 
-        silent: false, // 闂佸湱铏庨崢浠嬪棘娓氣偓楠炴捇骞囬杞扮驳闂?
+        silent: false, // 允许系统通知发出提示音
 
       });
 
@@ -2938,7 +2938,7 @@ export default function Chapters() {
 
 
 
-      // 闂佺懓鐏氶幐鍝ユ閹寸姷纾介柡宥庡墰鐢棛绱掗幇顓ф當鐟滅増鐩顔炬崉閸濆嫷娼遍柡澶屽仩婵倛鍟梺鎼炲妼椤戝懘宕归鍡樺仒?
+      // 打开编辑器时预加载可用模型
 
       loadAvailableModels();
 
@@ -3111,8 +3111,8 @@ export default function Chapters() {
             type: finalResult?.content_source === 'candidate_draft' ? 'info' : 'success',
 
             content: finalResult?.content_source === 'candidate_draft'
-              ? '\u5019\u9009\u7a3f\u5df2\u8f7d\u5165\u7f16\u8f91\u5668\u9884\u89c8\uff0c\u7b49\u5f85\u4eba\u5de5\u590d\u6838'
-              : '\u751f\u6210\u5b8c\u6210',
+              ? '候选稿已载入编辑器预览，等待人工复核'
+              : '生成完成',
 
             duration: finalResult?.content_source === 'candidate_draft' ? 3 : 2,
 
@@ -3239,6 +3239,8 @@ export default function Chapters() {
     creativeMode?: CreativeMode;
     storyFocus?: StoryFocus;
     plotStage?: PlotStage;
+    enableWebResearch?: boolean;
+    webResearchQuery?: string;
   }) => {
     if (!currentProject?.id) return;
 
@@ -3281,7 +3283,7 @@ export default function Chapters() {
 
       setBatchGenerating(true);
 
-      setBatchGenerateVisible(false); // 闂佺绻戞繛濠偽涢幘顔界厐鐎广儱娲ㄩ弸鍌炴倵閻㈡鏀伴柣锕佹椤╁ジ宕遍鐘殿槷闂備緡鍓欓悘婵嬪储閵堝鐒兼い鏃囨閻繝寮堕埡鍌溾槈閻庣懓鍟块锝夊捶椤撶姴鐐?
+      setBatchGenerateVisible(false); // 关闭配置弹窗，进入后台批量生成状态
 
 
 
@@ -3298,6 +3300,8 @@ export default function Chapters() {
         story_creation_brief?: string;
         quality_preset?: QualityPreset;
         quality_notes?: string;
+        enable_web_research?: boolean;
+        web_research_query?: string;
         story_repair_summary?: string;
         story_repair_targets?: string[];
         story_preserve_strengths?: string[];
@@ -3335,6 +3339,14 @@ export default function Chapters() {
 
       if (batchSelectedQualityNotes.trim()) {
         requestBody.quality_notes = batchSelectedQualityNotes.trim();
+      }
+
+      if (values.enableWebResearch) {
+        requestBody.enable_web_research = true;
+      }
+
+      if (values.webResearchQuery?.trim()) {
+        requestBody.web_research_query = values.webResearchQuery.trim();
       }
 
       const { prompt: resolvedBatchStoryCreationBrief } = resolveStoryCreationPromptState({
@@ -3452,7 +3464,7 @@ export default function Chapters() {
 
 
 
-      // 閻庢鍠掗崑鎾斥攽椤旂⒈鍎撻柣銈呮閹风娀锝為鐔峰簥闂佸憡妫戠槐鏇熸叏閹间礁绠?
+      // 启动批量任务轮询
 
       startBatchPolling(result.batch_id);
 
@@ -3638,15 +3650,15 @@ export default function Chapters() {
             if (manualReviewInfo) {
 
               const manualReviewMessage = manualReviewInfo.failedMetrics.length > 0
-                ? `${manualReviewInfo.message}\uff08\u5173\u6ce8\uff1a${manualReviewInfo.failedMetrics.slice(0, 3).join('\u3001')}\uff09`
+                ? `${manualReviewInfo.message}（关注：${manualReviewInfo.failedMetrics.slice(0, 3).join('、')}）`
                 : manualReviewInfo.message;
 
-              message.warning(`\u6279\u91cf\u751f\u6210\u9700\u4eba\u5de5\u590d\u6838\uff1a${manualReviewMessage}`);
+              message.warning(`批量生成需人工复核：${manualReviewMessage}`);
 
 
               showBrowserNotification(
 
-                '\u6279\u91cf\u751f\u6210\u9700\u4eba\u5de5\u590d\u6838',
+                '批量生成需人工复核',
 
                 manualReviewMessage,
 
@@ -3656,14 +3668,14 @@ export default function Chapters() {
 
             } else {
 
-              message.error(`\u6279\u91cf\u751f\u6210\u5931\u8d25\uff1a${status.error_message || '\u672a\u77e5\u9519\u8bef'}`);
+              message.error(`批量生成失败：${status.error_message || '未知错误'}`);
 
 
               showBrowserNotification(
 
-                '\u6279\u91cf\u751f\u6210\u5931\u8d25',
+                '批量生成失败',
 
-                status.error_message || '\u672a\u77e5\u9519\u8bef',
+                status.error_message || '未知错误',
 
                 'error'
 
@@ -4043,7 +4055,7 @@ export default function Chapters() {
 
 
 
-  // 闂佺懓鐏氶幐鍝ユ閹达附鈷撻柛娑㈠亰閸ゃ垽鏌?
+  // 打开阅读器
 
   const handleOpenReader = useCallback((chapter: Chapter) => {
 
@@ -4078,7 +4090,7 @@ export default function Chapters() {
 
 
 
-  // 闂佺懓鐏氶幐鍝ユ閹寸姳娌柍褜鍓熼弻鍫ュΩ閳轰焦顏熼梺鍛婂姈閻熴儵鎳樻繝鍕幓?
+  // 关闭编辑器
 
 
 

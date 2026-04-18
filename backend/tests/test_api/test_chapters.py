@@ -679,6 +679,61 @@ async def test_should_forward_creative_mode_to_batch_background_generation(
     assert captured["story_packet"].guidance.plot_stage == "ending"
 
 
+async def test_should_forward_web_research_settings_for_batch_background_generation(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_execute_batch_generation(*args, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(
+        chapters_api,
+        "execute_batch_generation_in_order",
+        fake_execute_batch_generation,
+    )
+
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+
+    await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="???",
+        content="???????",
+        status="completed",
+    )
+    await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title="???",
+        content=None,
+    )
+
+    response = await chapters_client.post(
+        f"/api/chapters/project/{project.id}/batch-generate",
+        json={
+            "start_chapter_number": 2,
+            "count": 1,
+            "target_word_count": 600,
+            "enable_analysis": False,
+            "enable_mcp": False,
+            "max_retries": 1,
+            "enable_web_research": True,
+            "web_research_query": "late qing trade customs",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["enable_web_research"] is True
+    assert captured["web_research_query"] == "late qing trade customs"
+
+
 async def test_should_fallback_to_project_generation_defaults_for_batch_background_generation(
     chapters_client,
     chapters_session_factory,
@@ -1146,6 +1201,55 @@ async def test_should_forward_creative_mode_to_single_background_generation(
     assert captured["story_preserve_strengths"] == ["保留对白辨识度"]
 
 
+
+
+async def test_should_forward_web_research_settings_to_single_background_generation(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_execute_batch_generation(*args, **kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(
+        chapters_api,
+        "execute_batch_generation_in_order",
+        fake_execute_batch_generation,
+    )
+
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    outline = await create_outline(
+        chapters_session_factory,
+        project_id=project.id,
+        order_index=1,
+        title="单章后台联网生成大纲",
+    )
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="待联网后台生成章节",
+        content=None,
+        outline_id=outline.id,
+    )
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/generate-background",
+        json={
+            "target_word_count": 1200,
+            "enable_web_research": True,
+            "web_research_query": "late qing harbor guild rules",
+            "enable_analysis": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["enable_web_research"] is True
+    assert captured["web_research_query"] == "late qing harbor guild rules"
 async def test_should_auto_fill_story_repair_payload_from_chapter_quality_history_for_single_background_generation(
     chapters_client,
     chapters_session_factory,
@@ -1577,6 +1681,84 @@ async def test_should_apply_project_story_packet_defaults_in_regeneration_prompt
     assert "【长线目标锚点】" in prompt_kwargs["story_long_term_goal_block"]
     assert "【章节节奏预算】" in prompt_kwargs["story_pacing_budget_block"]
 
+
+
+
+async def test_should_include_web_research_assets_in_regeneration_prompt_context(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+    captured_research: dict[str, Any] = {}
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="chapter-to-regenerate-with-research",
+        content="legacy content",
+        status="completed",
+    )
+
+    fake_assets = [
+        {
+            "title": "Harbor Guild Rules",
+            "url": "https://example.com/harbor-guild-rules",
+            "snippet": "Guild protocol and tariff etiquette.",
+        }
+    ]
+
+    class FakeRegenerator:
+        def __init__(self, ai_service):
+            self.ai_service = ai_service
+
+        async def regenerate_with_feedback(self, **kwargs):
+            captured.update(kwargs)
+            yield {"type": "progress", "progress": 30, "message": "preparing"}
+            yield {"type": "chunk", "content": "new content"}
+
+        def calculate_content_diff(self, original_content, new_content):
+            return {"similarity": 8.0, "difference": 92.0}
+
+    async def fake_collect_for_chapter(**kwargs):
+        captured_research.update(kwargs)
+        return {
+            "query": "late qing harbor guild rules",
+            "archive_path": "tmp/regeneration-research.json",
+            "assets": fake_assets,
+        }
+
+    from app.services import chapter_regeneration_context_service as chapter_regeneration_context_service
+
+    monkeypatch.setattr(chapter_regeneration_routes_api, "REGENERATOR_FACTORY", FakeRegenerator)
+    monkeypatch.setattr(
+        chapter_regeneration_context_service.chapter_web_research_service,
+        "collect_for_chapter",
+        fake_collect_for_chapter,
+    )
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/regenerate-stream",
+        json={
+            "modification_source": "custom",
+            "custom_instructions": "improve grounding and continuity",
+            "target_word_count": 500,
+            "focus_areas": ["rule_grounding"],
+            "auto_apply": False,
+            "enable_web_research": True,
+            "web_research_query": "late qing harbor guild rules",
+        },
+    )
+    assert response.status_code == 200
+
+    events = parse_sse_data(response.text)
+    assert any(event.get("type") == "result" for event in events)
+    assert captured_research["enable_web_research"] is True
+    assert captured_research["web_research_query"] == "late qing harbor guild rules"
+    assert captured["project_context"]["external_assets"] == fake_assets
+    assert captured["project_context"]["reference_assets"] == fake_assets
 
 async def test_should_merge_quality_gate_snapshot_into_regeneration_prompt_context(
     chapters_client,

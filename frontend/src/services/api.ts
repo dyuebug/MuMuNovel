@@ -354,6 +354,9 @@ export const settingsApi = {
       response_preview?: string;
       result_count?: number;
       source_count?: number;
+      search_status?: "success_with_sources" | "success_without_sources" | "failed";
+      status_note?: string;
+      sources_backfilled?: boolean;
       error?: string;
       error_type?: string;
       suggestions?: string[];
@@ -907,6 +910,8 @@ export const chapterApi = {
       style_id?: number;
       length_mode?: 'similar' | 'expand' | 'condense' | 'custom';
       target_word_count?: number;
+      enable_web_research?: boolean;
+      web_research_query?: string;
     },
     options?: SSEClientOptions
   ) => ssePost<{
@@ -1213,6 +1218,8 @@ export const chapterBatchTaskApi = {
       story_creation_brief?: string;
       quality_preset?: QualityPreset;
       quality_notes?: string;
+      enable_web_research?: boolean;
+      web_research_query?: string;
       story_repair_summary?: string;
       story_repair_targets?: string[];
       story_preserve_strengths?: string[];
@@ -1406,6 +1413,8 @@ export const chapterSingleTaskApi = {
       story_creation_brief?: string;
       quality_preset?: QualityPreset;
       quality_notes?: string;
+      enable_web_research?: boolean;
+      web_research_query?: string;
       story_repair_summary?: string;
       story_repair_targets?: string[];
       story_preserve_strengths?: string[];

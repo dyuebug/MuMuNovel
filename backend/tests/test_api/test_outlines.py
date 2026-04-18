@@ -86,6 +86,8 @@ async def test_generate_outline_stream_should_accept_mapping_payload(monkeypatch
             "chapter_count": 8,
             "narrative_perspective": "third_person",
             "mode": "new",
+            "enable_web_research": True,
+            "web_research_query": "late qing trade customs",
         },
         request=SimpleNamespace(state=SimpleNamespace(user_id="user-1")),
         db=_FakeSession(),
@@ -97,6 +99,8 @@ async def test_generate_outline_stream_should_accept_mapping_payload(monkeypatch
     assert captured["payload"]["project_id"] == "project-1"
     assert captured["payload"]["user_id"] == "user-1"
     assert captured["payload"]["mode"] == "new"
+    assert captured["payload"]["enable_web_research"] is True
+    assert captured["payload"]["web_research_query"] == "late qing trade customs"
     assert response.body_iterator is not None
 
 
@@ -139,6 +143,8 @@ async def test_generate_outline_stream_should_strip_internal_user_id_before_vali
             "chapter_count": 8,
             "narrative_perspective": "third_person",
             "mode": "new",
+            "enable_web_research": True,
+            "web_research_query": "late qing trade customs",
             "user_id": "user-1",
         },
         request=SimpleNamespace(state=SimpleNamespace(user_id=None)),
@@ -151,6 +157,8 @@ async def test_generate_outline_stream_should_strip_internal_user_id_before_vali
     assert captured["payload"]["project_id"] == "project-1"
     assert captured["payload"]["user_id"] == "user-1"
     assert captured["payload"]["mode"] == "new"
+    assert captured["payload"]["enable_web_research"] is True
+    assert captured["payload"]["web_research_query"] == "late qing trade customs"
     assert response.body_iterator is not None
 
 
@@ -955,6 +963,181 @@ async def test_should_create_outline_stream_without_duplicate_story_packet_chapt
 
     assert len(outlines) == 1
     assert outlines[0].order_index == 1
+
+
+async def test_should_include_web_research_assets_in_new_outline_prompt(
+    test_engine,
+    mock_user,
+    monkeypatch,
+):
+    from fastapi import FastAPI, Request
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.api import outlines as outlines_api
+    from app.database import Base
+    from app.models.outline import Outline
+    from app.models.project import Project
+    from app.services.chapter_quality_context_service import (
+        StoryBlueprint,
+        StoryGenerationGuidance,
+        StoryPacket,
+    )
+
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_maker = async_sessionmaker(
+        test_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+
+    app = FastAPI()
+    app.include_router(outlines_api.router, prefix="/api")
+
+    async def override_get_db():
+        async with session_maker() as session:
+            yield session
+
+    class FakeAIService:
+        def __init__(self):
+            self.calls = []
+            self.user_id = None
+            self.db_session = None
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            yield json.dumps([
+                {
+                    "title": "Opening Chapter",
+                    "summary": "External research shapes the harbor opening.",
+                    "content": "External research shapes the harbor opening.",
+                }
+            ], ensure_ascii=False)
+
+    fake_ai_service = FakeAIService()
+    captured: dict[str, Any] = {}
+    fake_assets = [
+        {
+            "title": "Late Qing Trade Customs",
+            "url": "https://example.com/late-qing-trade",
+            "snippet": "Harbor guild etiquette and customs summary.",
+        }
+    ]
+
+    def override_get_user_ai_service():
+        return fake_ai_service
+
+    app.dependency_overrides[outlines_api.get_db] = override_get_db
+    app.dependency_overrides[outlines_api.get_user_ai_service] = override_get_user_ai_service
+
+    @app.middleware("http")
+    async def inject_user_id(request: Request, call_next):
+        request.state.user_id = mock_user.user_id
+        return await call_next(request)
+
+    async def fake_get_template(*args, **kwargs):
+        return "template"
+
+    def fake_format_prompt(template, **kwargs):
+        captured["format_prompt_kwargs"] = kwargs
+        return f"formatted::{kwargs['chapter_count']}::{len(kwargs.get('external_assets') or [])}"
+
+    async def fake_build_story_packet(*args, **kwargs):
+        return StoryPacket.from_guidance(
+            StoryGenerationGuidance(
+                creative_mode="hook",
+                story_focus="advance_plot",
+                plot_stage="development",
+                story_creation_brief="keep pressure visible",
+                quality_preset="plot_drive",
+                quality_notes="maintain strong opening momentum",
+            ),
+            blueprint=StoryBlueprint(chapter_count=42),
+        )
+
+    async def fake_collect_assets(**kwargs):
+        captured["collect_assets_kwargs"] = kwargs
+        return {
+            "enabled": True,
+            "assets": fake_assets,
+            "archive_path": "outline_research.json",
+        }
+
+    async def fake_check_characters(**kwargs):
+        return {"created_count": 0, "created_characters": []}
+
+    async def fake_check_organizations(**kwargs):
+        return {"created_count": 0, "created_organizations": []}
+
+    monkeypatch.setattr(outlines_api.PromptService, "get_template", fake_get_template)
+    monkeypatch.setattr(outlines_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(
+        outlines_api,
+        "build_story_generation_packet_with_project_continuity",
+        fake_build_story_packet,
+    )
+    monkeypatch.setattr(
+        outlines_api.chapter_web_research_service,
+        "collect_assets",
+        fake_collect_assets,
+    )
+    monkeypatch.setattr(outlines_api, "_check_and_create_missing_characters_from_outlines", fake_check_characters)
+    monkeypatch.setattr(outlines_api, "_check_and_create_missing_organizations_from_outlines", fake_check_organizations)
+
+    async with session_maker() as seed_session:
+        project = Project(
+            user_id=mock_user.user_id,
+            title="Research Outline Project",
+            description="seed project",
+            theme="Harbor pressure",
+            genre="Urban fantasy",
+            narrative_perspective="third_person",
+            outline_mode="one-to-many",
+        )
+        seed_session.add(project)
+        await seed_session.commit()
+        await seed_session.refresh(project)
+        project_id = project.id
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/outlines/generate-stream",
+            json={
+                "project_id": project_id,
+                "theme": "Harbor pressure",
+                "chapter_count": 1,
+                "narrative_perspective": "third_person",
+                "target_words": 6000,
+                "provider": "sub2api",
+                "model": "gpt-5.4",
+                "enable_mcp": False,
+                "enable_web_research": True,
+                "web_research_query": "late qing trade customs",
+            },
+        )
+
+    assert response.status_code == 200
+    assert len(fake_ai_service.calls) == 1
+    assert captured["collect_assets_kwargs"]["enable_web_research"] is True
+    assert captured["collect_assets_kwargs"]["exa_query"] == "late qing trade customs"
+    assert captured["collect_assets_kwargs"]["grok_query"] == "late qing trade customs"
+    assert captured["format_prompt_kwargs"]["external_assets"] == fake_assets
+    assert captured["format_prompt_kwargs"]["reference_assets"] == fake_assets
+
+    async with session_maker() as verify_session:
+        result = await verify_session.execute(
+            select(Outline)
+            .where(Outline.project_id == project_id)
+            .order_by(Outline.order_index)
+        )
+        outlines = result.scalars().all()
+
+    assert len(outlines) == 1
+    assert outlines[0].order_index == 1
 async def test_should_continue_generate_stream_without_duplicate_chapter_count_and_honor_auto_mcp(
     test_engine,
     mock_user,
@@ -1127,6 +1310,200 @@ async def test_should_continue_generate_stream_without_duplicate_chapter_count_a
     assert outlines[-1].title == "第2章"
 
 
+
+
+async def test_should_include_web_research_assets_in_continue_outline_prompt(
+    test_engine,
+    mock_user,
+    monkeypatch,
+):
+    from fastapi import FastAPI, Request
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.api import outlines as outlines_api
+    from app.database import Base
+    from app.models.outline import Outline
+    from app.models.project import Project
+    from app.services.chapter_quality_context_service import (
+        StoryBlueprint,
+        StoryGenerationGuidance,
+        StoryPacket,
+    )
+
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_maker = async_sessionmaker(
+        test_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+
+    app = FastAPI()
+    app.include_router(outlines_api.router, prefix="/api")
+
+    async def override_get_db():
+        async with session_maker() as session:
+            yield session
+
+    class FakeAIService:
+        def __init__(self):
+            self.calls = []
+            self.user_id = None
+            self.db_session = None
+
+        async def generate_text_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            yield json.dumps([
+                {
+                    "title": "Chapter 2",
+                    "summary": "Research-backed continuation summary.",
+                    "content": "Research-backed continuation summary.",
+                }
+            ], ensure_ascii=False)
+
+    fake_ai_service = FakeAIService()
+    captured: dict[str, Any] = {}
+    fake_assets = [
+        {
+            "title": "Harbor Guild Rules",
+            "url": "https://example.com/harbor-guild-rules",
+            "snippet": "Guild protocol and conflict escalation details.",
+        }
+    ]
+
+    def override_get_user_ai_service():
+        return fake_ai_service
+
+    app.dependency_overrides[outlines_api.get_db] = override_get_db
+    app.dependency_overrides[outlines_api.get_user_ai_service] = override_get_user_ai_service
+
+    @app.middleware("http")
+    async def inject_user_id(request: Request, call_next):
+        request.state.user_id = mock_user.user_id
+        return await call_next(request)
+
+    async def fake_get_template(*args, **kwargs):
+        return "template"
+
+    def fake_format_prompt(template, **kwargs):
+        captured["format_prompt_kwargs"] = kwargs
+        return f"formatted::{template}::{len(kwargs.get('external_assets') or [])}"
+
+    async def fake_build_story_packet(*args, **kwargs):
+        return StoryPacket.from_guidance(
+            StoryGenerationGuidance(
+                creative_mode="balanced",
+                story_focus="advance_plot",
+                plot_stage="development",
+                story_creation_brief=None,
+                quality_preset="plot_drive",
+                quality_notes="keep continuation momentum stable",
+            ),
+            blueprint=StoryBlueprint(chapter_count=99),
+        )
+
+    async def fake_continue_context(*args, **kwargs):
+        return {
+            "recent_outlines": "Chapter 1: Existing setup.",
+            "characters_info": "",
+            "memory_guidance": "",
+            "quality_repair_guidance": "",
+            "quality_trend_guidance": "",
+            "stats": {
+                "total_outlines": 1,
+                "recent_outlines_count": 1,
+                "characters_count": 0,
+                "total_length": 24,
+            },
+        }
+
+    async def fake_collect_assets(**kwargs):
+        captured["collect_assets_kwargs"] = kwargs
+        return {
+            "enabled": True,
+            "assets": fake_assets,
+            "archive_path": "outline_continue_research.json",
+        }
+
+    monkeypatch.setattr(outlines_api.PromptService, "get_template", fake_get_template)
+    monkeypatch.setattr(outlines_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(
+        outlines_api,
+        "build_story_generation_packet_with_project_continuity",
+        fake_build_story_packet,
+    )
+    monkeypatch.setattr(outlines_api, "_build_outline_continue_context", fake_continue_context)
+    monkeypatch.setattr(
+        outlines_api.chapter_web_research_service,
+        "collect_assets",
+        fake_collect_assets,
+    )
+
+    async with session_maker() as seed_session:
+        project = Project(
+            user_id=mock_user.user_id,
+            title="Continuation Research Project",
+            description="seed project",
+            theme="Harbor conflict",
+            genre="Urban fantasy",
+            narrative_perspective="third_person",
+            outline_mode="one-to-many",
+        )
+        seed_session.add(project)
+        await seed_session.flush()
+
+        seed_outline = Outline(
+            project_id=project.id,
+            title="Chapter 1",
+            content="Existing outline content",
+            order_index=1,
+        )
+        seed_session.add(seed_outline)
+        await seed_session.commit()
+        await seed_session.refresh(project)
+        project_id = project.id
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/api/outlines/generate-stream",
+            json={
+                "project_id": project_id,
+                "theme": "Harbor conflict",
+                "chapter_count": 1,
+                "narrative_perspective": "third_person",
+                "target_words": 6000,
+                "mode": "continue",
+                "provider": "sub2api",
+                "model": "gpt-5.4",
+                "enable_mcp": False,
+                "enable_web_research": True,
+                "web_research_query": "late qing harbor guild rules",
+            },
+        )
+
+    assert response.status_code == 200
+    assert len(fake_ai_service.calls) == 1
+    assert captured["collect_assets_kwargs"]["enable_web_research"] is True
+    assert captured["collect_assets_kwargs"]["exa_query"] == "late qing harbor guild rules"
+    assert captured["collect_assets_kwargs"]["grok_query"] == "late qing harbor guild rules"
+    assert captured["format_prompt_kwargs"]["external_assets"] == fake_assets
+    assert captured["format_prompt_kwargs"]["reference_assets"] == fake_assets
+
+    async with session_maker() as verify_session:
+        result = await verify_session.execute(
+            select(Outline)
+            .where(Outline.project_id == project_id)
+            .order_by(Outline.order_index)
+        )
+        outlines = result.scalars().all()
+
+    assert len(outlines) == 2
+    assert outlines[-1].order_index == 2
+    assert outlines[-1].title == "Chapter 2"
 async def test_should_build_story_packet_once_across_multiple_continue_batches(
     test_engine,
     mock_user,

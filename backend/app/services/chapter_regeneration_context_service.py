@@ -14,6 +14,7 @@ from app.models.memory import PlotAnalysis
 from app.models.outline import Outline
 from app.models.project import Project
 from app.schemas.regeneration import ChapterRegenerateRequest
+from app.services.chapter_web_research_service import chapter_web_research_service
 from app.services.chapter_generation_runtime_service import build_chapter_generation_runtime_bundle
 from app.services.chapter_quality_context_service import (
     build_story_generation_packet_with_project_continuity,
@@ -160,6 +161,17 @@ async def prepare_chapter_regeneration_context(
         source=effective_regenerate_request,
         source_label="chapter-regenerate-request",
     )
+    web_research_bundle = await chapter_web_research_service.collect_for_chapter(
+        user_id=user_id,
+        db_session=db_session,
+        project=project,
+        chapter=chapter,
+        outline=outline,
+        story_creation_brief=effective_regenerate_request.story_creation_brief,
+        enable_web_research=effective_regenerate_request.enable_web_research,
+        web_research_query=effective_regenerate_request.web_research_query,
+    )
+    web_research_assets = list(web_research_bundle.get("assets") or [])
 
     outline_runtime_sources = _build_outline_structure_runtime_sources(outline)
     generation_runtime = build_chapter_generation_runtime_bundle(
@@ -201,6 +213,8 @@ async def prepare_chapter_regeneration_context(
         "characters_info": characters_info_with_careers,
         "chapter_outline": outline.content if outline else chapter.summary or "????",
         "previous_context": "",
+        "external_assets": web_research_assets,
+        "reference_assets": web_research_assets,
         "prompt_quality_kwargs": generation_runtime.prompt_quality_kwargs,
     }
 

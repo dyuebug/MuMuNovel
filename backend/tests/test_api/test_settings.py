@@ -939,6 +939,8 @@ async def test_should_test_web_research_connection(async_client, monkeypatch):
             "message": "Exa 连接测试成功",
             "response_preview": "preview",
             "result_count": 1,
+            "search_status": "success_with_sources",
+            "status_note": None,
         }
 
     monkeypatch.setattr(
@@ -960,6 +962,7 @@ async def test_should_test_web_research_connection(async_client, monkeypatch):
     assert body["success"] is True
     assert body["provider"] == "exa"
     assert body["result_count"] == 1
+    assert body["search_status"] == "success_with_sources"
 
 
 async def test_should_detect_function_calling_support_when_tool_calls_present(async_client, monkeypatch):

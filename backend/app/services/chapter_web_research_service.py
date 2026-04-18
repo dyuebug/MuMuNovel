@@ -448,11 +448,57 @@ class ChapterWebResearchService:
             "mode": "direct_chat_search",
         }
 
+
+    def _build_source_backfill_candidates(self, payload: Dict[str, Any]) -> List[Dict[str, str]]:
+        candidates: List[Dict[str, str]] = []
+        for item in (payload.get("results") or [])[:2]:
+            url = self._clip_text(item.get("url") or "", 300)
+            title = self._clip_text(item.get("title") or url or "Exa Source", 120)
+            snippet = self._clip_text(item.get("text") or " ".join(str(text) for text in (item.get("highlights") or [])[:3]) or title, 220)
+            if not url and not snippet:
+                continue
+            candidates.append({
+                "title": title,
+                "url": url,
+                "snippet": snippet,
+            })
+        return self._normalize_sources(candidates)
+
+    async def _maybe_backfill_grok_sources(
+        self,
+        *,
+        query: str,
+        payload: Dict[str, Any],
+        runtime_config: WebResearchRuntimeConfig,
+    ) -> Dict[str, Any]:
+        if payload.get("error") or not str(payload.get("content") or "").strip():
+            return payload
+        if payload.get("sources"):
+            return payload
+        if not runtime_config.exa_enabled:
+            return payload
+
+        exa_payload = await self._run_exa_search(query, runtime_config)
+        backfilled_sources = self._build_source_backfill_candidates(exa_payload)
+        if not backfilled_sources:
+            return payload
+
+        merged_payload = dict(payload)
+        merged_payload["sources"] = backfilled_sources
+        merged_payload["sources_backfilled"] = True
+        merged_payload["sources_backfill_provider"] = "exa"
+        base_mode = str(merged_payload.get("mode") or "grok_search")
+        merged_payload["mode"] = f"{base_mode}+exa_backfill"
+        return merged_payload
     async def _run_grok_search(self, query: str, runtime_config: WebResearchRuntimeConfig) -> Dict[str, Any]:
         if runtime_config.grok_search_enabled:
             adapter_payload = await self._run_grok_search_via_adapter(query, runtime_config)
             if not adapter_payload.get("error"):
-                return adapter_payload
+                return await self._maybe_backfill_grok_sources(
+                    query=query,
+                    payload=adapter_payload,
+                    runtime_config=runtime_config,
+                )
             logger.warning("GrokSearch adapter failed, fallback to existing grok path: %s", adapter_payload.get("detail") or adapter_payload.get("error"))
 
         args = ["--mode", "research", "--query", query]
@@ -469,9 +515,13 @@ class ChapterWebResearchService:
             timeout_seconds=runtime_config.timeout_seconds,
         )
         if payload.get("error") == "script_not_found" and self._can_run_direct_grok_search(runtime_config):
-            logger.warning("⚠️ Grok skill script missing, fallback to OpenAI-compatible direct search: %s", payload.get("detail"))
-            return await self._run_grok_direct_search(query, runtime_config)
-        return payload
+            logger.warning("Grok skill script missing, fallback to OpenAI-compatible direct search: %s", payload.get("detail"))
+            payload = await self._run_grok_direct_search(query, runtime_config)
+        return await self._maybe_backfill_grok_sources(
+            query=query,
+            payload=payload,
+            runtime_config=runtime_config,
+        )
 
     async def _test_grok_direct_connection(self, runtime_config: WebResearchRuntimeConfig) -> Dict[str, Any]:
         if not runtime_config.grok_api_key or not runtime_config.grok_base_url:
@@ -762,27 +812,44 @@ class ChapterWebResearchService:
                 "message": "Exa 连接测试成功" if success else "Exa 连接测试失败",
                 "response_preview": self._clip_text(((results[0] or {}).get("text") if results else "") or ((results[0] or {}).get("title") if results else ""), 180),
                 "result_count": len(results),
+                "search_status": "success_with_sources" if success else "failed",
+                "status_note": None,
                 "error": payload.get("detail") or payload.get("error"),
                 "error_type": error_type,
                 "suggestions": [] if success else ["检查 Exa API Key 是否正确", "确认 Exa Base URL 可访问；未填写时会使用默认地址"],
             }
         payload = await self._run_grok_search(query or "Summarize current discussion around fiction writing trends with sources", runtime_config)
         if payload.get("error") == "script_not_found" and self._can_run_direct_grok_search(runtime_config):
-            logger.warning("⚠️ Grok skill script missing, fallback to OpenAI-compatible direct test: %s", payload.get("detail"))
+            logger.warning("Grok skill script missing, fallback to OpenAI-compatible direct test: %s", payload.get("detail"))
             payload = await self._test_grok_direct_connection(runtime_config)
         sources = payload.get("sources") or []
         content = self._clip_text(payload.get("content"), 180)
         success = not payload.get("error") and bool(content)
+        search_status = "failed"
+        status_note = None
+        message = "Grok 连接测试失败"
+        if success and sources:
+            search_status = "success_with_sources"
+            message = "Grok 连接测试成功"
+            if payload.get("sources_backfilled"):
+                status_note = "已联网检索，来源已由 Exa 自动补全。"
+                message = "Grok 连接测试成功（来源已自动补全）"
+        elif success:
+            search_status = "success_without_sources"
+            status_note = "已联网检索并返回摘要，但本次未返回可展示来源。"
+            message = "Grok 连接测试成功（未返回结构化来源）"
         return {
             "success": success,
             "provider": "grok",
-            "message": "Grok 连接测试成功" if success else "Grok 连接测试失败",
+            "message": message,
             "response_preview": content,
             "source_count": len(sources),
+            "search_status": search_status,
+            "status_note": status_note,
+            "sources_backfilled": bool(payload.get("sources_backfilled")),
             "error": payload.get("detail") or payload.get("error"),
             "error_type": "SkillError" if payload.get("error") else None,
             "suggestions": [] if success else ["检查 Grok API Key 是否正确", "确认 Grok Base URL 可访问且兼容 OpenAI 格式"],
         }
-
 
 chapter_web_research_service = ChapterWebResearchService()

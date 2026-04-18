@@ -1,4 +1,5 @@
 import pytest
+from typing import Any
 from sqlalchemy import select
 
 from app.api import chapters as chapters_api
@@ -186,6 +187,74 @@ async def test_should_stream_partial_regenerate_with_mock_ai_response(
 
     assert fake_ai_service.calls
     assert fake_ai_service.calls[-1]["max_tokens"] == 500
+
+async def test_should_stream_partial_regenerate_with_web_research_grounding(
+    chapters_client,
+    chapters_session_factory,
+    fake_ai_service,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="partial-regenerate-with-research",
+        content="ABCDEFG",
+        status="completed",
+    )
+
+    captured_research: dict[str, Any] = {}
+
+    async def fake_collect_for_chapter(**kwargs):
+        captured_research.update(kwargs)
+        return {
+            "assets": [
+                {
+                    "title": "Harbor Guild Rules",
+                    "snippet": "Guild protocol and tariff etiquette.",
+                    "usage_hint": "Improve rule grounding and action consequences.",
+                }
+            ]
+        }
+
+    from app.services import partial_regeneration_service as partial_regeneration_service_module
+
+    monkeypatch.setattr(
+        partial_regeneration_service_module.chapter_web_research_service,
+        "collect_for_chapter",
+        fake_collect_for_chapter,
+    )
+
+    fake_ai_service.calls.clear()
+    fake_ai_service.chunks = ["Re", "write"]
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/partial-regenerate-stream",
+        json={
+            "selected_text": "BCD",
+            "start_position": 1,
+            "end_position": 4,
+            "user_instructions": "Improve the action texture.",
+            "context_chars": 120,
+            "length_mode": "similar",
+            "enable_web_research": True,
+            "web_research_query": "late qing harbor guild rules",
+        },
+    )
+    assert response.status_code == 200
+
+    events = parse_sse_data(response.text)
+    result_event = next(event for event in events if event.get("type") == "result")
+    assert result_event["data"]["new_text"] == "Rewrite"
+
+    assert captured_research["enable_web_research"] is True
+    assert captured_research["web_research_query"] == "late qing harbor guild rules"
+    assert fake_ai_service.calls
+    assert "[Web Research References]" in fake_ai_service.calls[-1]["prompt"]
+    assert "Harbor Guild Rules" in fake_ai_service.calls[-1]["prompt"]
+
 
 async def test_should_sanitize_partial_regenerate_text_before_apply(
     chapters_client,

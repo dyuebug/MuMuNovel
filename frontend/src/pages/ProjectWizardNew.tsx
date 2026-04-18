@@ -529,11 +529,11 @@ export default function ProjectWizardNew() {
             type="info"
             showIcon
             style={{ marginBottom: 16 }}
-            message="可选。开启后会在世界观、职业体系、角色和大纲生成前先做网络检索，并把资料归档到项目记忆。"
+            message="可选。开启后会在世界观、职业体系、角色和大纲生成前先做联网检索，并把资料归档到项目记忆。"
           />
 
           <Form.Item
-            label="启用网络检索"
+            label="联网检索"
             name="enable_web_research"
             valuePropName="checked"
           >
@@ -541,7 +541,7 @@ export default function ProjectWizardNew() {
           </Form.Item>
 
           <Form.Item
-            label="自定义检索 Query"
+            label="联网检索查询词"
             name="web_research_query"
             tooltip="可选。留空时系统会按书名、简介、主题、类型自动生成检索词。"
           >
@@ -555,12 +555,12 @@ export default function ProjectWizardNew() {
 
           <Row gutter={16}>
             <Col xs={24} md={12}>
-              <Form.Item label="世界观检索 Query" name="world_building_research_query">
+              <Form.Item label="世界观检索查询词" name="world_building_research_query">
                 <TextArea rows={2} placeholder="可选，单独覆盖世界观生成的检索词" maxLength={300} showCount />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item label="职业体系检索 Query" name="careers_research_query">
+              <Form.Item label="职业体系检索查询词" name="careers_research_query">
                 <TextArea rows={2} placeholder="可选，单独覆盖职业体系生成的检索词" maxLength={300} showCount />
               </Form.Item>
             </Col>
@@ -568,12 +568,12 @@ export default function ProjectWizardNew() {
 
           <Row gutter={16}>
             <Col xs={24} md={12}>
-              <Form.Item label="角色检索 Query" name="characters_research_query">
+              <Form.Item label="角色检索查询词" name="characters_research_query">
                 <TextArea rows={2} placeholder="可选，单独覆盖角色生成的检索词" maxLength={300} showCount />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item label="大纲检索 Query" name="outline_research_query">
+              <Form.Item label="大纲检索查询词" name="outline_research_query">
                 <TextArea rows={2} placeholder="可选，单独覆盖大纲生成的检索词" maxLength={300} showCount />
               </Form.Item>
             </Col>

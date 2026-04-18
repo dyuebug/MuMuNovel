@@ -87,6 +87,8 @@ interface OutlineGenerateRequestData {
 
 
   mode: 'auto' | 'new' | 'continue';
+  enable_web_research?: boolean;
+  web_research_query?: string;
 
 
   story_direction?: string;
@@ -2267,6 +2269,12 @@ export default function Outline() {
     keep_existing?: boolean;
 
 
+    enable_web_research?: boolean;
+
+
+    web_research_query?: string;
+
+
   }
 
 
@@ -2364,6 +2372,12 @@ export default function Outline() {
 
 
         mode: values.mode || 'auto',
+
+
+        enable_web_research: values.enable_web_research,
+
+
+        web_research_query: values.web_research_query,
 
 
         story_direction: values.story_direction,
@@ -2535,7 +2549,7 @@ export default function Outline() {
           </Space>
         ) : '智能生成大纲',
 
-        width: 700,
+        width: isMobile ? 'calc(100vw - 32px)' : 860,
 
         centered: true,
 

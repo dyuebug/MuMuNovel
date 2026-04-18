@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { memo, useEffect, useMemo, useRef } from 'react';
-import { Button, Card, Collapse, Form, Input, InputNumber, Modal, Radio, Select, Space, Tag } from 'antd';
+import { Button, Card, Collapse, Form, Input, InputNumber, Modal, Radio, Select, Space, Switch, Tag } from 'antd';
 import type { FormInstance } from 'antd';
 import { RocketOutlined, StopOutlined } from '@ant-design/icons';
 import CompactPromptPreviewPanel from './CompactPromptPreviewPanel';
@@ -236,6 +236,7 @@ function ChapterBatchGenerateModal(props: ChapterBatchGenerateModalProps) {
 
 
 const batchStartChapterNumber = Form.useWatch('startChapterNumber', batchForm) as number | undefined;
+const batchEnableWebResearch = Form.useWatch('enableWebResearch', batchForm) as boolean | undefined;
 useLocalRenderDiagnostics('ChapterBatchGenerateModal', () => ({
   visible: batchGenerateVisible,
   generating: batchGenerating,
@@ -463,7 +464,7 @@ const batchStoryInsightCards = useMemo(
 
         ) : null}
 
-        width={isMobile ? 'calc(100vw - 32px)' : 700}
+        width={isMobile ? 'calc(100vw - 32px)' : 820}
 
         centered
 
@@ -485,7 +486,7 @@ const batchStoryInsightCards = useMemo(
 
           body: {
 
-            maxHeight: isMobile ? 'calc(100vh - 200px)' : 'calc(100vh - 260px)',
+            maxHeight: isMobile ? 'calc(100vh - 200px)' : 'calc(100vh - 220px)',
 
             overflowY: 'auto',
 
@@ -520,6 +521,10 @@ const batchStoryInsightCards = useMemo(
               targetWordCount: getCachedWordCount(),
 
               model: selectedModel,
+
+              enableWebResearch: false,
+
+              webResearchQuery: '',
 
             }}
 
@@ -789,8 +794,45 @@ const batchStoryInsightCards = useMemo(
                     </div>
                   </div>
                 </Form.Item>
+                <Form.Item
+                  label="联网检索"
+                  name="enableWebResearch"
+                  valuePropName="checked"
+                  tooltip="生成前补充实时参考，适合职业、时代、场景等细节型章节。"
+                  style={{ marginBottom: 0 }}
+                >
+                  <div>
+                    <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                    <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginTop: 6 }}>
+                      开启后会在生成前补充外部资料，并注入章节创作提示词。
+                    </div>
+                  </div>
+                </Form.Item>
               </div>
             </Card>
+
+            {batchEnableWebResearch && (
+              <Card
+                size="small"
+                title="联网检索查询"
+                style={{ marginBottom: 8 }}
+                styles={{ body: { padding: 12 } }}
+              >
+                <Form.Item
+                  label="查询词"
+                  name="webResearchQuery"
+                  tooltip="可留空，系统会根据章节上下文自动生成查询词。"
+                  style={{ marginBottom: 0 }}
+                >
+                  <TextArea
+                    rows={2}
+                    placeholder="例如：夜市摊贩叫卖细节、古代驿站制度、现代刑警问询流程"
+                    maxLength={300}
+                    showCount
+                  />
+                </Form.Item>
+              </Card>
+            )}
 
             <Collapse
               size="small"
@@ -807,7 +849,7 @@ const batchStoryInsightCards = useMemo(
                     </div>
                   ),
                   children: (
-                    <div style={{ maxHeight: 'min(60vh, 560px)', overflowY: 'auto', paddingRight: 4 }}>
+            <div style={{ maxHeight: 'min(68vh, 680px)', overflowY: 'auto', paddingRight: 4 }}>
 
             <Card
               size="small"
@@ -1096,7 +1138,7 @@ const batchStoryInsightCards = useMemo(
                       batchStoryRepairTargetCard.applyHint,
                       { tone: 'warning' },
                     )}
-                    {batchRepairWeakestMetricHint && renderCompactFactCard('\u5f53\u524d\u6700\u5f31\u9879', batchRepairWeakestMetricHint)}
+                    {batchRepairWeakestMetricHint && renderCompactFactCard('当前最弱项', batchRepairWeakestMetricHint)}
                     <div
                       style={{
                         display: 'grid',
@@ -1339,7 +1381,7 @@ const batchStoryInsightCards = useMemo(
                   activeBatchRepairGuidance.summary,
                   { style: { marginBottom: 10 } },
                 )}
-                {activeBatchRepairWeakestMetricHint && renderCompactFactCard('\u5f53\u524d\u6700\u5f31\u9879', activeBatchRepairWeakestMetricHint)}
+                {activeBatchRepairWeakestMetricHint && renderCompactFactCard('当前最弱项', activeBatchRepairWeakestMetricHint)}
                 {(activeBatchRepairGuidance?.repairTargets?.length || activeBatchRepairGuidance?.preserveStrengths?.length || activeBatchRepairGuidance?.focusAreas?.length) ? (
                   <div
                     style={{

@@ -9,10 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logger import get_logger
 from app.models.chapter import Chapter
+from app.models.outline import Outline
+from app.models.project import Project
 from app.models.project_default_style import ProjectDefaultStyle
 from app.models.writing_style import WritingStyle
 from app.schemas.chapter import PartialRegenerateRequest
 from app.services.prompt_service import PromptService
+from app.services.chapter_web_research_service import chapter_web_research_service
 from app.services.writing_style_sync_service import sync_low_ai_presets
 
 logger = get_logger(__name__)
@@ -29,6 +32,65 @@ class PartialRegenerationPreparation:
     prompt: str
     target_words: int
     max_tokens: int
+
+
+def _build_partial_web_research_grounding_block(assets: list[dict]) -> str:
+    newline = "\n"
+    lines: list[str] = []
+    for index, asset in enumerate(assets or [], start=1):
+        title = str(asset.get("title") or asset.get("source") or f"Reference {index}").strip()
+        summary = str(
+            asset.get("summary")
+            or asset.get("snippet")
+            or asset.get("text")
+            or asset.get("raw_content")
+            or ""
+        ).strip()
+        usage_hint = str(asset.get("usage_hint") or "").strip()
+        url = str(asset.get("url") or "").strip()
+        item_lines = [f"{index}. {title}"]
+        if summary:
+            item_lines.append(f"   - Summary: {summary}")
+        if usage_hint:
+            item_lines.append(f"   - Usage: {usage_hint}")
+        if url:
+            item_lines.append(f"   - Link: {url}")
+        lines.append(newline.join(item_lines))
+    if not lines:
+        return ""
+    return (
+        f"{newline}{newline}[Web Research References]{newline}"
+        "Use the following references to improve factual texture and scene grounding, but integrate them naturally:\n"
+        + newline.join(lines)
+    )
+
+
+async def _load_partial_regeneration_project_bundle(
+    db_session: AsyncSession,
+    *,
+    chapter: Chapter,
+) -> tuple[Project, Optional[Outline]]:
+    project_result = await db_session.execute(
+        select(Project).where(Project.id == chapter.project_id)
+    )
+    project = project_result.scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status_code=404, detail="?????")
+
+    outline = None
+    if chapter.outline_id:
+        outline_result = await db_session.execute(
+            select(Outline).where(Outline.id == chapter.outline_id)
+        )
+        outline = outline_result.scalar_one_or_none()
+    else:
+        outline_result = await db_session.execute(
+            select(Outline)
+            .where(Outline.project_id == chapter.project_id)
+            .where(Outline.order_index == chapter.chapter_number)
+        )
+        outline = outline_result.scalar_one_or_none()
+    return project, outline
 
 
 def _normalize_partial_selection(
@@ -175,6 +237,23 @@ async def prepare_partial_regeneration(
         requested_style_id=partial_request.style_id,
         user_id=user_id,
     )
+    project, outline = await _load_partial_regeneration_project_bundle(
+        db_session,
+        chapter=chapter,
+    )
+    web_research_bundle = await chapter_web_research_service.collect_for_chapter(
+        user_id=user_id,
+        db_session=db_session,
+        project=project,
+        chapter=chapter,
+        outline=outline,
+        story_creation_brief=None,
+        enable_web_research=partial_request.enable_web_research,
+        web_research_query=partial_request.web_research_query,
+    )
+    web_research_grounding_block = _build_partial_web_research_grounding_block(
+        list(web_research_bundle.get("assets") or [])
+    )
 
     length_requirement = _build_length_requirement(
         length_mode=partial_request.length_mode,
@@ -191,7 +270,7 @@ async def prepare_partial_regeneration(
         original_word_count=original_word_count,
         selected_text=selected_text,
         context_after=context_after if context_after else "????????",
-        user_instructions=partial_request.user_instructions,
+        user_instructions=(partial_request.user_instructions or "") + web_research_grounding_block,
         length_requirement=length_requirement,
         style_content=style_content if style_content else "????????????",
     )

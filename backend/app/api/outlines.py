@@ -66,6 +66,7 @@ from app.services.prompt_service import (
     build_story_character_arc_card_block,
 )
 from app.services.memory_service import memory_service
+from app.services.chapter_web_research_service import chapter_web_research_service
 from app.services.plot_expansion_service import PlotExpansionService
 from app.services.foreshadow_service import foreshadow_service
 from app.services.chapter_quality_context_service import (
@@ -1132,6 +1133,66 @@ async def delete_outline(
 
 
 
+
+def _compose_outline_research_seed(*parts: Any, limit: int = 260) -> str:
+    fragments: list[str] = []
+    for part in parts:
+        text = str(part or "").strip()
+        if not text:
+            continue
+        fragments.append(re.sub(r"\s+", " ", text))
+    if not fragments:
+        return ""
+    return "?".join(fragments)[:limit]
+
+
+async def _collect_outline_research_bundle(
+    *,
+    user_id: Optional[str],
+    db_session: AsyncSession,
+    project: Project,
+    chapter_count: int,
+    characters_info: str,
+    requirements: Optional[str],
+    story_direction: Optional[str],
+    enable_web_research: Optional[bool],
+    web_research_query: Optional[str],
+    archive_id: str,
+    context: str,
+) -> Dict[str, Any]:
+    research_seed = _compose_outline_research_seed(
+        project.title,
+        project.theme,
+        project.genre,
+        project.world_rules,
+        characters_info,
+        requirements,
+        story_direction,
+        limit=260,
+    )
+    custom_query = str(web_research_query or "").strip()
+    grok_query = custom_query
+    if not grok_query and research_seed:
+        grok_query = (
+            "???????????????????????????????????/??????????????????"
+            f"???{research_seed}"
+        )
+
+    return await chapter_web_research_service.collect_assets(
+        user_id=user_id,
+        db_session=db_session,
+        exa_query=custom_query or research_seed,
+        grok_query=grok_query,
+        enable_web_research=enable_web_research,
+        archive_scope=project.id,
+        archive_id=archive_id,
+        metadata={
+            "project_id": project.id,
+            "context": context,
+            "chapter_count": chapter_count,
+        },
+    )
+
 async def _build_outline_continue_static_context(
     user_id: str,
     project: Project,
@@ -2051,6 +2112,22 @@ async def new_outline_generator(
             logger.warning(f"Build outline-create quality guidance failed: {quality_error}")
             quality_guidance_bundle = {}
 
+
+        outline_research_bundle = await _collect_outline_research_bundle(
+            user_id=user_id_for_mcp,
+            db_session=db,
+            project=project,
+            chapter_count=chapter_count,
+            characters_info=characters_info,
+            requirements=data.get("requirements"),
+            story_direction=data.get("story_direction"),
+            enable_web_research=data.get("enable_web_research"),
+            web_research_query=data.get("web_research_query"),
+            archive_id="outline_create",
+            context="outline_create",
+        )
+        outline_research_assets = list(outline_research_bundle.get("assets") or [])
+
         prompt = PromptService.format_prompt(
             template,
             title=project.title,
@@ -2071,6 +2148,8 @@ async def new_outline_generator(
                 story_packet=story_packet,
             ),
             mcp_references="",
+            external_assets=outline_research_assets,
+            reference_assets=outline_research_assets,
             **story_packet.to_prompt_fields(exclude=("chapter_count",)), 
         )
         outline_system_prompt = _build_outline_runtime_system_prompt(
@@ -2415,6 +2494,22 @@ async def continue_outline_generator(
             prebuilt_quality_guidance_bundle = await _build_outline_quality_guidance_bundle(db, project.id)
         except Exception as quality_prefetch_error:
             logger.warning(f"Prefetch outline quality guidance failed; will retry during context build: {quality_prefetch_error}")
+
+
+        outline_research_bundle = await _collect_outline_research_bundle(
+            user_id=user_id,
+            db_session=db,
+            project=project,
+            chapter_count=total_chapters_to_generate,
+            characters_info=_build_characters_info(characters),
+            requirements=data.get("requirements"),
+            story_direction=data.get("story_direction"),
+            enable_web_research=data.get("enable_web_research"),
+            web_research_query=data.get("web_research_query"),
+            archive_id="outline_continue",
+            context="outline_continue",
+        )
+        outline_research_assets = list(outline_research_bundle.get("assets") or [])
         
         # === 批次生成阶段 ===
         prebuilt_continue_static_context: Optional[Dict[str, Any]] = None
@@ -2515,6 +2610,8 @@ async def continue_outline_generator(
                 story_direction=data.get("story_direction", "自然延续"),
                 requirements=merged_requirements,
                 mcp_references="",
+                external_assets=outline_research_assets,
+                reference_assets=outline_research_assets,
                 **story_packet_prompt_fields
             )
             outline_system_prompt = _build_outline_runtime_system_prompt(

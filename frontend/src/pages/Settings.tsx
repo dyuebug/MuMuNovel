@@ -80,6 +80,9 @@ export default function SettingsPage() {
     response_preview?: string;
     result_count?: number;
     source_count?: number;
+    search_status?: 'success_with_sources' | 'success_without_sources' | 'failed';
+    status_note?: string;
+    sources_backfilled?: boolean;
     error?: string;
     error_type?: string;
     suggestions?: string[];

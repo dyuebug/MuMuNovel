@@ -240,6 +240,8 @@ async def test_should_fallback_to_direct_grok_test_when_skill_script_missing(mon
     assert payload["success"] is True
     assert payload["provider"] == "grok"
     assert payload["source_count"] == 0
+    assert payload["search_status"] == "success_without_sources"
+    assert payload["status_note"]
     assert payload["response_preview"] == "relay ok"
 
 
@@ -358,3 +360,49 @@ async def test_should_prefer_grok_search_adapter_when_enabled(monkeypatch):
     assert payload["content"] == "adapter result"
     assert payload["mode"] == "grok_search_embedded"
     assert payload["sources"][0]["url"] == "https://example.com"
+
+
+@pytest.mark.asyncio
+async def test_should_backfill_grok_sources_from_exa_when_content_exists_without_sources(monkeypatch):
+    service = ChapterWebResearchService()
+
+    async def fake_run_grok_search_via_adapter(query, runtime_config):
+        assert query == "adapter query"
+        return {
+            "content": "adapter result",
+            "sources": [],
+            "mode": "grok_search_embedded",
+        }
+
+    async def fake_run_exa_search(query, runtime_config):
+        assert query == "adapter query"
+        return {
+            "results": [
+                {
+                    "title": "Backfilled Source",
+                    "url": "https://example.com/backfill",
+                    "text": "backfilled snippet",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(service, "_run_grok_search_via_adapter", fake_run_grok_search_via_adapter)
+    monkeypatch.setattr(service, "_run_exa_search", fake_run_exa_search)
+
+    payload = await service._run_grok_search(
+        "adapter query",
+        WebResearchRuntimeConfig(
+            exa_enabled=True,
+            grok_enabled=True,
+            grok_api_key="grok-test-key",
+            grok_base_url="https://relay.example.com/v1",
+            grok_model="grok-4.1-fast",
+            grok_search_enabled=True,
+        ),
+    )
+
+    assert payload["content"] == "adapter result"
+    assert payload["sources_backfilled"] is True
+    assert payload["sources_backfill_provider"] == "exa"
+    assert payload["mode"].endswith("+exa_backfill")
+    assert payload["sources"][0]["url"] == "https://example.com/backfill"

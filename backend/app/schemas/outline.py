@@ -73,6 +73,11 @@ class OutlineGenerateRequest(BaseModel):
     plot_stage: PlotStageValue = Field("development", description="剧情阶段：development(发展)、climax(高潮)、ending(结局)")
     keep_existing: bool = Field(False, description="是否保留现有大纲内容（预留字段）")
     enable_mcp: bool = Field(True, description="是否启用MCP工具增强")
+    enable_web_research: Optional[bool] = Field(
+        None,
+        description="????????????? Exa/Grok ?????",
+    )
+    web_research_query: Optional[str] = Field(None, description="??????????????? query")
     creative_mode: Optional[CreativeModeValue] = Field(
         None,
         description="创作模式：balanced/hook/emotion/suspense/relationship/payoff",

@@ -101,6 +101,16 @@ export default function SettingsCurrentTab(props: any) {
   const transportAttempts = Array.isArray(transportDiagnostics?.attempts)
     ? transportDiagnostics.attempts.slice(-3)
     : [];
+  const webResearchSearchStatus = webResearchTestResult?.search_status
+    ?? (webResearchTestResult?.success
+      ? ((webResearchTestResult?.source_count ?? 0) > 0 ? 'success_with_sources' : 'success_without_sources')
+      : 'failed');
+  const webResearchStatusNote = webResearchTestResult?.status_note
+    ?? (webResearchSearchStatus === 'success_without_sources'
+      ? '已联网检索（本次未返回可展示来源）'
+      : webResearchTestResult?.sources_backfilled
+        ? '已联网检索，来源已由 Exa 自动补全。'
+        : undefined);
 
   return (
                     <Space direction="vertical" size={isMobile ? 'middle' : 'large'} style={{ width: '100%' }}>
@@ -916,8 +926,13 @@ export default function SettingsCurrentTab(props: any) {
                                     {typeof webResearchTestResult.result_count === 'number' && (
                                       <div>结果数：{webResearchTestResult.result_count}</div>
                                     )}
-                                    {typeof webResearchTestResult.source_count === 'number' && (
-                                      <div>来源数：{webResearchTestResult.source_count}</div>
+                                    {webResearchStatusNote && (
+                                      <div style={{ marginBottom: 8 }}>
+                                        <strong>{'状态'}</strong> {webResearchStatusNote}
+                                      </div>
+                                    )}
+                                    {typeof webResearchTestResult.source_count === 'number' && webResearchSearchStatus === 'success_with_sources' && (
+                                      <div>????{webResearchTestResult.source_count}</div>
                                     )}
                                     {webResearchTestResult.error && (
                                       <div style={{ color: 'var(--color-error)', marginTop: 8 }}>

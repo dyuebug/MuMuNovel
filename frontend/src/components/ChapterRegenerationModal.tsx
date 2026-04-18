@@ -14,6 +14,7 @@ import {
   Radio,
   Select,
   Space,
+  Switch,
   Tag,
 } from 'antd';
 import {
@@ -49,12 +50,12 @@ const { TextArea } = Input;
 const { Panel } = Collapse;
 
 const REGENERATION_STREAM_INACTIVITY_TIMEOUT_MS = 90000;
-const REGENERATION_HEARTBEAT_SUFFIX = '?????????????';
+const REGENERATION_HEARTBEAT_SUFFIX = '（仍在生成中）';
 
 const appendRegenerationHeartbeatHint = (message: string) => {
   const normalized = message.trim();
   if (!normalized) {
-    return `???????...${REGENERATION_HEARTBEAT_SUFFIX}`;
+    return `正在重新生成...${REGENERATION_HEARTBEAT_SUFFIX}`;
   }
 
   if (normalized.endsWith(REGENERATION_HEARTBEAT_SUFFIX)) {
@@ -127,6 +128,8 @@ interface RegenerationFormValues {
   story_creation_brief?: string;
   quality_preset?: QualityPreset;
   quality_notes?: string;
+  enable_web_research?: boolean;
+  web_research_query?: string;
 }
 
 interface RegenerationRequest {
@@ -151,6 +154,8 @@ interface RegenerationRequest {
   story_repair_summary?: string;
   story_repair_targets?: string[];
   story_preserve_strengths?: string[];
+  enable_web_research?: boolean;
+  web_research_query?: string;
 }
 
 const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
@@ -176,6 +181,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
   const [wordCount, setWordCount] = useState(0);
   const [selectedSuggestions, setSelectedSuggestions] = useState<number[]>([]);
   const [modificationSource, setModificationSource] = useState<ModificationSource>('custom');
+  const regenerationEnableWebResearch = Form.useWatch('enable_web_research', form) as boolean | undefined;
   const requestAbortRef = useRef<AbortController | null>(null);
   const requestCancelledRef = useRef(false);
   const successTimeoutRef = useRef<number | null>(null);
@@ -248,6 +254,8 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
       preserve_structure: false,
       preserve_character_traits: true,
       focus_areas: recommendedFocusAreas,
+      enable_web_research: false,
+      web_research_query: '',
       ...recommendedRepairDefaults,
     });
   }, [
@@ -315,7 +323,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
       setProgress(0);
       setWordCount(0);
       setErrorMessage('');
-      setProgressMessage('???????...');
+      setProgressMessage('正在重新生成...');
 
       const requestData: RegenerationRequest = {
         modification_source: values.modification_source,
@@ -336,6 +344,10 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
         story_creation_brief: values.story_creation_brief,
         quality_preset: values.quality_preset,
         quality_notes: values.quality_notes,
+        enable_web_research: values.enable_web_research,
+        web_research_query: values.enable_web_research && values.web_research_query?.trim()
+          ? values.web_research_query.trim()
+          : undefined,
         story_repair_summary: repairGuidanceDisplay?.summary || undefined,
         story_repair_targets: repairGuidanceDisplay?.repairTargets.length
           ? repairGuidanceDisplay.repairTargets.slice(0, 3)
@@ -356,7 +368,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
             return;
           }
           setProgress(nextProgress);
-          setProgressMessage(msg || '???????...');
+          setProgressMessage(msg || '正在重新生成...');
           if (nextWordCount !== undefined) {
             setWordCount(nextWordCount);
             currentWordCount = nextWordCount;
@@ -366,7 +378,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
           if (requestCancelledRef.current) {
             return;
           }
-          setProgressMessage((prev) => appendRegenerationHeartbeatHint(prev || '???????...'));
+          setProgressMessage((prev) => appendRegenerationHeartbeatHint(prev || '正在重新生成...'));
         },
         onChunk: (content: string) => {
           if (requestCancelledRef.current) {
@@ -381,7 +393,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
           }
           setProgress(100);
           setStatus('success');
-          setProgressMessage('??????');
+          setProgressMessage('生成完成');
           const finalWordCount = data.word_count || currentWordCount;
           setWordCount(finalWordCount);
           message.success('重新生成完成。');
@@ -461,8 +473,15 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
         title={`重新生成章节 - 第${chapterNumber}章：${chapterTitle}`}
         open={visible}
         onCancel={handleCancel}
-        width={800}
+        width={860}
         centered
+        styles={{
+          body: {
+            maxHeight: 'calc(100vh - 220px)',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+          },
+        }}
         footer={
           status === 'success'
             ? null
@@ -606,7 +625,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
                       {recentFailedMetricCounts.map((item) => (
                         <Tag key={`${item.key || item.label}-${item.count || 0}`} color="volcano">
                           {item.label || item.key}
-                          {typeof item.count === 'number' ? ` ?${item.count}` : ''}
+                          {typeof item.count === 'number' ? ` ×${item.count}` : ''}
                         </Tag>
                       ))}
                     </div>
@@ -678,21 +697,64 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
             )
           )}
 
-          {(modificationSource === 'custom' || modificationSource === 'mixed') && (
-            <Form.Item
-              name="custom_instructions"
-              label="自定义修改要求"
-              tooltip="描述你希望如何改进这一章。"
-              extra={repairGuidanceDisplay ? '若留空，系统会结合自动修复建议与重点方向进行重生成。' : undefined}
-            >
-              <TextArea
-                rows={4}
-                placeholder="例如：增强情绪张力，保持主角行为逻辑一致，并在章末留下更强的牵引。"
-                showCount
-                maxLength={1000}
-              />
-            </Form.Item>
-          )}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+              gap: 16,
+              alignItems: 'start',
+            }}
+          >
+            {(modificationSource === 'custom' || modificationSource === 'mixed') && (
+              <Form.Item
+                name="custom_instructions"
+                label="自定义修改要求"
+                tooltip="描述你希望如何改进这一章。"
+                extra={repairGuidanceDisplay ? '若留空，系统会结合自动修复建议与重点方向进行重生成。' : undefined}
+                style={{ marginBottom: 0 }}
+              >
+                <TextArea
+                  rows={6}
+                  placeholder="例如：增强情绪张力，保持主角行为逻辑一致，并在章末留下更强的牵引。"
+                  showCount
+                  maxLength={1000}
+                />
+              </Form.Item>
+            )}
+
+            <div>
+              <Form.Item
+                name="enable_web_research"
+                label="联网检索"
+                valuePropName="checked"
+                tooltip="重生成前补充实时外部参考，适合职业、时代、场景、规则等细节型章节。"
+                style={{ marginBottom: regenerationEnableWebResearch ? 12 : 0 }}
+              >
+                <div>
+                  <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 6 }}>
+                    开启后会先补充外部资料，再注入整章重生成提示词，帮助提升设定落地与细节可信度。
+                  </div>
+                </div>
+              </Form.Item>
+
+              {regenerationEnableWebResearch && (
+                <Form.Item
+                  name="web_research_query"
+                  label="联网检索查询词"
+                  tooltip="可留空，系统会根据当前章节内容与重生成要求自动生成查询词。"
+                  style={{ marginBottom: 0 }}
+                >
+                  <TextArea
+                    rows={3}
+                    placeholder="例如：民国巡捕房办案流程、古代驿站制度、夜市摊贩吆喝细节"
+                    showCount
+                    maxLength={300}
+                  />
+                </Form.Item>
+              )}
+            </div>
+          </div>
 
           <Collapse ghost>
             <Panel header="高级选项" key="advanced">
@@ -832,7 +894,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
         <SSEProgressModal
           visible={status === 'generating'}
           progress={progress}
-          message={`${progressMessage || '???????...'}???? ${wordCount} ??`}
+          message={`${progressMessage || '正在重新生成...'} · 已生成 ${wordCount} 字`}
           title="重新生成章节"
           blocking={false}
         />
