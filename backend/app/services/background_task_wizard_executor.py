@@ -1,4 +1,4 @@
-"""Wizard ????????"""
+"""Wizard 后台任务执行器。"""
 from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, Dict
@@ -87,7 +87,7 @@ async def run_wizard_background_task(
     db: AsyncSession,
     user_ai_service: AIService,
 ) -> bool:
-    """?? wizard ???????????????"""
+    """执行 wizard 后台任务并返回是否成功。"""
     runner = WIZARD_TASK_RUNNERS.get(task_type)
     if runner is None:
         return False

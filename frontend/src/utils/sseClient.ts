@@ -1,20 +1,24 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-export interface SSEMessage {
+export type SSEResolvedValue<TResult = unknown> = TResult | { content: string } | true;
+
+type SSEPromiseResolve<TResult> = (value: SSEResolvedValue<TResult>) => void;
+type SSEPromiseReject = (reason?: unknown) => void;
+
+export interface SSEMessage<TResult = unknown> {
   type: 'progress' | 'chunk' | 'result' | 'error' | 'done';
   message?: string;
   progress?: number;
   word_count?: number;
   status?: 'processing' | 'success' | 'error' | 'warning';
   content?: string;
-  data?: any;
+  data?: TResult;
   error?: string;
   code?: number;
 }
 
-export interface SSEClientOptions {
+export interface SSEClientOptions<TResult = unknown> {
   onProgress?: (message: string, progress: number, status: string, wordCount?: number) => void;
   onChunk?: (content: string) => void;
-  onResult?: (data: any) => void;
+  onResult?: (data: TResult) => void;
   onError?: (error: string, code?: number) => void;
   onCancelled?: (message: string) => void;
   onTaskCreated?: (taskId: string) => void;
@@ -54,25 +58,25 @@ const parseSSEBlock = (block: string): { isHeartbeat: boolean; data: string | nu
   };
 };
 
-export class SSEClient {
+export class SSEClient<TResult = unknown> {
   private eventSource: EventSource | null = null;
   private url: string;
-  private options: SSEClientOptions;
+  private options: SSEClientOptions<TResult>;
   private accumulatedContent: string = '';
 
-  constructor(url: string, options: SSEClientOptions = {}) {
+  constructor(url: string, options: SSEClientOptions<TResult> = {}) {
     this.url = url;
     this.options = options;
   }
 
-  connect(): Promise<any> {
+  connect(): Promise<SSEResolvedValue<TResult>> {
     return new Promise((resolve, reject) => {
       try {
         this.eventSource = new EventSource(this.url);
 
         this.eventSource.onmessage = (event) => {
           try {
-            const message: SSEMessage = JSON.parse(event.data);
+            const message = JSON.parse(event.data) as SSEMessage<TResult>;
             this.handleMessage(message, resolve, reject);
           } catch (error) {
             console.error('解析SSE消息失败:', error);
@@ -94,7 +98,7 @@ export class SSEClient {
     });
   }
 
-  private handleMessage(message: SSEMessage, resolve: (value: any) => void, reject: (reason?: any) => void) {
+  private handleMessage(message: SSEMessage<TResult>, resolve: SSEPromiseResolve<TResult>, reject: SSEPromiseReject) {
     switch (message.type) {
       case 'progress':
         if (this.options.onProgress && message.progress !== undefined) {
@@ -156,30 +160,31 @@ export class SSEClient {
   }
 }
 
-export class SSEPostClient {
+export class SSEPostClient<TResult = unknown, TPayload = unknown> {
   private url: string;
-  private data: any;
-  private options: SSEClientOptions;
+  private data: TPayload;
+  private options: SSEClientOptions<TResult>;
   private abortController: AbortController | null = null;
   private externalAbortCleanup: (() => void) | null = null;
   private accumulatedContent: string = '';
-  private resultData: any = null;
+  private resultData?: TResult;
+  private hasResultData = false;
   private settled = false;
   private inactivityTimer: number | null = null;
 
-  constructor(url: string, data: any, options: SSEClientOptions = {}) {
+  constructor(url: string, data: TPayload, options: SSEClientOptions<TResult> = {}) {
     this.url = url;
     this.data = data;
     this.options = options;
   }
 
-  async connect(): Promise<any> {
+  async connect(): Promise<SSEResolvedValue<TResult>> {
     return new Promise((resolve, reject) => {
       void this.connectInternal(resolve, reject);
     });
   }
 
-  private resolveOnce(resolve: (value: any) => void, value: any) {
+  private resolveOnce(resolve: SSEPromiseResolve<TResult>, value: SSEResolvedValue<TResult>) {
     if (this.settled) {
       return;
     }
@@ -188,7 +193,7 @@ export class SSEPostClient {
     resolve(value);
   }
 
-  private rejectOnce(reject: (reason?: any) => void, reason: any) {
+  private rejectOnce(reject: SSEPromiseReject, reason: unknown) {
     if (this.settled) {
       return;
     }
@@ -208,7 +213,7 @@ export class SSEPostClient {
     }
   }
 
-  private markActivity(reject: (reason?: any) => void) {
+  private markActivity(reject: SSEPromiseReject) {
     this.clearInactivityTimer();
 
     const timeoutMs = this.getInactivityTimeoutMs();
@@ -226,20 +231,20 @@ export class SSEPostClient {
     }, timeoutMs);
   }
 
-  private handleHeartbeat(reject: (reason?: any) => void) {
+  private handleHeartbeat(reject: SSEPromiseReject) {
     this.markActivity(reject);
     if (this.options.onHeartbeat) {
       this.options.onHeartbeat();
     }
   }
 
-  private finalizeStream(resolve: (value: any) => void, reject: (reason?: any) => void) {
+  private finalizeStream(resolve: SSEPromiseResolve<TResult>, reject: SSEPromiseReject) {
     if (this.settled) {
       return;
     }
 
-    if (this.resultData) {
-      this.resolveOnce(resolve, this.resultData);
+    if (this.hasResultData) {
+      this.resolveOnce(resolve, this.resultData as TResult);
       return;
     }
 
@@ -255,7 +260,7 @@ export class SSEPostClient {
     this.rejectOnce(reject, streamClosedError);
   }
 
-  private async connectInternal(resolve: (value: any) => void, reject: (reason?: any) => void) {
+  private async connectInternal(resolve: SSEPromiseResolve<TResult>, reject: SSEPromiseReject) {
     try {
       this.abortController = new AbortController();
 
@@ -325,7 +330,7 @@ export class SSEPostClient {
           }
 
           try {
-            const message: SSEMessage = JSON.parse(parsedBlock.data);
+            const message = JSON.parse(parsedBlock.data) as SSEMessage<TResult>;
             this.markActivity(reject);
             await this.handleMessage(message, resolve, reject);
           } catch (error) {
@@ -347,7 +352,7 @@ export class SSEPostClient {
         }
         if (parsedBlock.data) {
           try {
-            const message: SSEMessage = JSON.parse(parsedBlock.data);
+            const message = JSON.parse(parsedBlock.data) as SSEMessage<TResult>;
             this.markActivity(reject);
             await this.handleMessage(message, resolve, reject);
           } catch (error) {
@@ -357,8 +362,8 @@ export class SSEPostClient {
       }
 
       this.finalizeStream(resolve, reject);
-    } catch (error: any) {
-      if (error?.name === 'AbortError') {
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'AbortError') {
         this.clearInactivityTimer();
         this.rejectOnce(reject, error);
         return;
@@ -366,7 +371,7 @@ export class SSEPostClient {
 
       console.error('SSE POST request failed:', error);
       if (this.options.onError) {
-        this.options.onError(error.message || 'Request failed');
+        this.options.onError(error instanceof Error ? error.message : 'Request failed');
       }
       this.rejectOnce(reject, error);
     } finally {
@@ -376,7 +381,7 @@ export class SSEPostClient {
     }
   }
 
-  private async handleMessage(message: SSEMessage, resolve: (value: any) => void, reject: (reason?: any) => void) {
+  private async handleMessage(message: SSEMessage<TResult>, resolve: SSEPromiseResolve<TResult>, reject: SSEPromiseReject) {
     switch (message.type) {
       case 'progress':
         if (this.options.onProgress && message.progress !== undefined) {
@@ -403,6 +408,7 @@ export class SSEPostClient {
           this.options.onResult(message.data);
         }
         this.resultData = message.data;
+        this.hasResultData = true;
         break;
 
       case 'error':
@@ -441,12 +447,12 @@ export class SSEPostClient {
   }
 }
 
-export async function ssePost<T = any>(
+export async function ssePost<TResult = unknown, TPayload = unknown>(
   url: string,
-  data: any,
-  options: SSEClientOptions = {}
-): Promise<T> {
-  const client = new SSEPostClient(url, data, options);
+  data: TPayload,
+  options: SSEClientOptions<TResult> = {}
+): Promise<SSEResolvedValue<TResult>> {
+  const client = new SSEPostClient<TResult, TPayload>(url, data, options);
   try {
     return await client.connect();
   } finally {

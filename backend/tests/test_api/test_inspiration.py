@@ -96,6 +96,74 @@ async def test_should_generate_options_when_request_is_valid(test_db, mock_user,
     assert "书名专项" in ai_service.calls[0]["system_prompt"]
 
 
+
+
+async def test_should_generate_options_with_web_research_context(test_db, mock_user, mocker):
+    query = "2026 女频悬疑趋势"
+    asset_title = "2026悬疑刉作趋势"
+    ai_payload = {
+        "prompt": "请选择一个你最喜欢的标题",
+        "options": ["风起云涌", "群星回响", "旧城新梦"],
+    }
+    ai_service = FakeAIService([json.dumps(ai_payload, ensure_ascii=False)])
+
+    async def fake_get_template(template_key: str, user_id: str, db: AsyncSession) -> str:
+        templates = {
+            "INSPIRATION_TITLE_SYSTEM": "系统模板：{initial_idea}",
+            "INSPIRATION_TITLE_USER": "用户模板：{initial_idea}",
+        }
+        return templates[template_key]
+
+    mocker.patch.object(
+        inspiration_api.PromptService,
+        "get_template",
+        new=mocker.AsyncMock(side_effect=fake_get_template),
+    )
+    collect_assets_mock = mocker.patch.object(
+        inspiration_api.chapter_web_research_service,
+        "collect_assets",
+        new=mocker.AsyncMock(
+            return_value={
+                "enabled": True,
+                "query": query,
+                "assets": [
+                    {
+                        "title": asset_title,
+                        "source": "https://example.com/trend",
+                        "summary": "女频悬疑更强调强钩子、身份反差与快节奏开场。",
+                        "raw_content": "不应直接返回给前端",
+                    }
+                ],
+            }
+        ),
+    )
+
+    async with _build_client(test_db, ai_service) as client:
+        response = await client.post(
+            "/api/inspiration/generate-options",
+            headers=_auth_headers(mock_user.user_id),
+            json={
+                "step": "title",
+                "context": {"initial_idea": "赛博朋克与成长"},
+                "enable_web_research": True,
+                "web_research_query": query,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["research_query"] == query
+    assert body["research_assets"][0]["title"] == asset_title
+    assert "raw_content" not in body["research_assets"][0]
+
+    kwargs = collect_assets_mock.await_args.kwargs
+    assert kwargs["enable_web_research"] is True
+    assert kwargs["exa_query"] == query
+    assert query in kwargs["grok_query"]
+    assert "联网检索参考" in ai_service.calls[0]["system_prompt"]
+    assert asset_title in ai_service.calls[0]["system_prompt"]
+
+
 async def test_should_return_error_when_generate_options_step_is_unsupported(
     test_db,
     mock_user,
@@ -201,6 +269,80 @@ async def test_should_refine_options_when_feedback_is_provided(test_db, mock_use
     )
     assert "想要更有悲剧张力" in call_kwargs["system_prompt"]
     assert "旧选项A" in call_kwargs["system_prompt"]
+
+
+
+
+async def test_should_refine_options_with_web_research_bundle(test_db, mock_user, mocker):
+    ai_payload = {
+        "options": [
+            "她越想救回家人，命运越逼她亲手选一个人失去，连最珍惜的那段亲情都开始变成交换筹码。",
+            "真相每靠近一步，她都得先割舍一段最舍不得的关系，到最后连活下去都像是在替别人还债。",
+            "这不是谁被拯救的问题，而是谁先承认自己也在伤人，谁又愿意为迟来的清醒付出真正代价。",
+        ],
+        "prompt": "选择更贴合反馈的主题",
+    }
+    ai_service = FakeAIService([json.dumps(ai_payload, ensure_ascii=False)])
+
+    async def fake_get_template(template_key: str, user_id: str, db: AsyncSession) -> str:
+        templates = {
+            "INSPIRATION_THEME_SYSTEM": "系统：{title}-{description}-{theme}",
+            "INSPIRATION_THEME_USER": "用户：{initial_idea}",
+        }
+        return templates[template_key]
+
+    mocker.patch.object(
+        inspiration_api.PromptService,
+        "get_template",
+        new=mocker.AsyncMock(side_effect=fake_get_template),
+    )
+    collect_assets_mock = mocker.patch.object(
+        inspiration_api.chapter_web_research_service,
+        "collect_assets",
+        new=mocker.AsyncMock(
+            return_value={
+                "enabled": True,
+                "query": "主题冲突参考",
+                "assets": [
+                    {
+                        "title": "悲剧张力设计",
+                        "source": "https://example.com/theme",
+                        "summary": "悲剧感往往来自目标与代价同时升高，而不是单纯堆叠痛苦。",
+                    }
+                ],
+            }
+        ),
+    )
+
+    async with _build_client(test_db, ai_service) as client:
+        response = await client.post(
+            "/api/inspiration/refine-options",
+            headers=_auth_headers(mock_user.user_id),
+            json={
+                "step": "theme",
+                "context": {
+                    "initial_idea": "悬疑与家庭矛盾",
+                    "title": "暗夜回廊",
+                    "description": "主角回到旧城调查失踪案",
+                    "theme": "救赎",
+                },
+                "feedback": "想要更有悲剧张力",
+                "previous_options": ["旧选项A", "旧选项B"],
+                "enable_web_research": True,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["research_query"] == "主题冲突参考"
+    assert body["research_assets"][0]["title"] == "悲剧张力设计"
+
+    kwargs = collect_assets_mock.await_args.kwargs
+    assert kwargs["enable_web_research"] is True
+    assert "暗夜回廊" in kwargs["exa_query"]
+    assert "想要更有悲剧张力" in kwargs["exa_query"]
+    assert "联网检索参考" in ai_service.calls[0]["system_prompt"]
+    assert "悲剧张力设计" in ai_service.calls[0]["system_prompt"]
 
 
 async def test_should_quick_generate_and_keep_user_fields_priority(test_db, mock_user, mocker):

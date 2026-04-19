@@ -177,23 +177,23 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """??????????"""
-    logger.error(f"??????: {type(exc).__name__}: {str(exc)}", exc_info=True)
+    """全局异常处理器"""
+    logger.error(f"未处理异常: {type(exc).__name__}: {str(exc)}", exc_info=True)
 
     if isinstance(exc, (ConnectionRefusedError, ConnectionError, TimeoutError, OperationalError)):
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
-                "detail": "????????????? PostgreSQL ???",
-                "message": str(exc) if config_settings.debug else "?????"
+                "detail": "服务暂时不可用，请确认 PostgreSQL 已启动后重试",
+                "message": str(exc) if config_settings.debug else "服务暂不可用"
             }
         )
 
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={
-            "detail": "???????",
-            "message": str(exc) if config_settings.debug else "?????"
+            "detail": "服务内部异常",
+            "message": str(exc) if config_settings.debug else "服务内部异常"
         }
     )
 

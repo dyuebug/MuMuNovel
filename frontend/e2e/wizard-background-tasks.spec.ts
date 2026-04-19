@@ -22,6 +22,12 @@ test.describe('wizard background task smoke', () => {
     await page.goto('/wizard');
     await page.waitForLoadState('networkidle');
 
+    const executionSettingsPanel = page.getByTestId('generation-execution-settings-panel');
+    const executionSettingsInfo = page.getByTestId('generation-execution-settings-info');
+    await expect(executionSettingsPanel).toBeVisible();
+    await expect(executionSettingsInfo).toContainText('联网搜索或研究增强');
+    await expect(executionSettingsInfo).toContainText('页面侧配置');
+
     const uniqueSuffix = Date.now().toString().slice(-6);
     await page.locator('#title').fill(`Smoke Novel ${uniqueSuffix}`);
     await page.locator('#description').fill('Playwright wizard smoke test for background tasks');

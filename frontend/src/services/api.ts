@@ -35,6 +35,7 @@ import type {
   PolishTextResponse,
   GenerateCharactersResponse,
   GenerateOutlineResponse,
+  ResearchAssetSummary,
   Settings,
   SettingsUpdate,
   WritingStyle,
@@ -170,6 +171,14 @@ const api = axios.create({
   },
   withCredentials: true,
 });
+
+const getAxiosErrorStatus = (error: unknown): number | null => {
+  if (!axios.isAxiosError(error)) {
+    return null;
+  }
+
+  return error.response?.status ?? null;
+};
 
 api.interceptors.request.use(
   (config) => {
@@ -331,7 +340,7 @@ export const settingsApi = {
       provider?: string;
       model?: string;
       response_preview?: string;
-      details?: Record<string, any>;
+      details?: Record<string, unknown>;
       error?: string;
       error_type?: string;
       suggestions?: string[];
@@ -371,7 +380,7 @@ export const settingsApi = {
       response_time_ms?: number;
       provider?: string;
       model?: string;
-      details?: Record<string, any>;
+      details?: Record<string, unknown>;
       tool_calls?: Array<{
         id?: string;
         type?: string;
@@ -534,7 +543,7 @@ export const bookImportApi = {
   applyImportStream: (
     taskId: string,
     payload: BookImportApplyPayload,
-    options?: SSEClientOptions,
+    options?: SSEClientOptions<BookImportResult>,
   ) => ssePost<BookImportResult>(
     `/api/book-import/tasks/${taskId}/apply-stream`,
     payload,
@@ -544,7 +553,7 @@ export const bookImportApi = {
   retryFailedStepsStream: (
     taskId: string,
     steps: string[],
-    options?: SSEClientOptions,
+    options?: SSEClientOptions<BookImportRetryResult>,
   ) => ssePost<BookImportRetryResult>(
     `/api/book-import/tasks/${taskId}/retry-stream`,
     { steps },
@@ -912,6 +921,7 @@ export const chapterApi = {
       target_word_count?: number;
       enable_web_research?: boolean;
       web_research_query?: string;
+      reference_research_assets?: ResearchAssetSummary[];
     },
     options?: SSEClientOptions
   ) => ssePost<{
@@ -1325,8 +1335,8 @@ export const chapterBatchTaskApi = {
     >('/chapters/batch-generate/active-tasks', silentRequestConfig({
       params: { limit },
     }));
-    } catch (error: any) {
-      if (error?.response?.status === 404) {
+    } catch (error: unknown) {
+      if (getAxiosErrorStatus(error) === 404) {
         chapterActiveTasksEndpointSupported = false;
         return { total: 0, items: [] };
       }
@@ -1720,8 +1730,8 @@ export const backgroundTaskApi = {
       );
       useBackgroundTaskStore.getState().upsertTask(status);
       return status;
-    } catch (error: any) {
-      if (error?.response?.status === 404) {
+    } catch (error: unknown) {
+      if (getAxiosErrorStatus(error) === 404) {
         useBackgroundTaskStore.getState().removeTask(taskId);
         const now = new Date().toISOString();
         return {
@@ -1758,8 +1768,8 @@ export const backgroundTaskApi = {
         '/background-tasks',
         silentRequestConfig({ params })
       );
-    } catch (error: any) {
-      if (error?.response?.status === 404) {
+    } catch (error: unknown) {
+      if (getAxiosErrorStatus(error) === 404) {
         backgroundTasksEndpointSupported = false;
         return { total: 0, items: [] } as BackgroundTaskListResponse;
       }
@@ -1809,18 +1819,27 @@ export const inspirationApi = {
   generateOptions: (data: {
     step: 'title' | 'description' | 'theme' | 'genre';
     context: {
+      initial_idea?: string;
       title?: string;
       description?: string;
       theme?: string;
     };
+    enable_web_research?: boolean;
+    web_research_query?: string;
   }) =>
     api.post<unknown, {
       prompt?: string;
       options: string[];
       error?: string;
+      research_query?: string;
+      research_assets?: Array<{
+        title: string;
+        source?: string;
+        summary?: string;
+      }>;
     }>('/inspiration/generate-options', data),
 
-  // 基于用户反馈重新生成选项（新增）
+  // 基于用户反馈重新生成选项
   refineOptions: (data: {
     step: 'title' | 'description' | 'theme' | 'genre';
     context: {
@@ -1831,11 +1850,19 @@ export const inspirationApi = {
     };
     feedback: string;
     previous_options?: string[];
+    enable_web_research?: boolean;
+    web_research_query?: string;
   }) =>
     api.post<unknown, {
       prompt?: string;
       options: string[];
       error?: string;
+      research_query?: string;
+      research_assets?: Array<{
+        title: string;
+        source?: string;
+        summary?: string;
+      }>;
     }>('/inspiration/refine-options', data),
 
   // 智能补全缺失信息
@@ -1862,7 +1889,7 @@ const runBackgroundTaskWithPolling = async <T>(
   taskType: BackgroundTaskStatus['task_type'],
   projectId: string | undefined,
   payload: Record<string, unknown>,
-  options?: SSEClientOptions
+  options?: SSEClientOptions<T>
 ): Promise<T> => {
   const createdTask = await backgroundTaskApi.createTask({
     task_type: taskType,
@@ -1891,7 +1918,7 @@ const runBackgroundTaskWithPolling = async <T>(
         if (task.status === 'completed') {
           stopPolling();
           if (task.result !== undefined && task.result !== null) {
-            options?.onResult?.(task.result);
+            options?.onResult?.(task.result as T);
           }
           options?.onComplete?.();
           resolve((task.result as T) ?? (true as T));
@@ -1953,8 +1980,9 @@ export const wizardStreamApi = {
       model?: string;
       enable_web_research?: boolean;
       web_research_query?: string;
+      reference_research_assets?: ResearchAssetSummary[];
     },
-    options?: SSEClientOptions
+    options?: SSEClientOptions<WorldBuildingResponse>
   ) => runBackgroundTaskWithPolling<WorldBuildingResponse>(
     'wizard_world_building',
     undefined,
@@ -1974,8 +2002,9 @@ export const wizardStreamApi = {
       model?: string;
       enable_web_research?: boolean;
       web_research_query?: string;
+      reference_research_assets?: ResearchAssetSummary[];
     },
-    options?: SSEClientOptions
+    options?: SSEClientOptions<GenerateCharactersResponse>
   ) => runBackgroundTaskWithPolling<GenerateCharactersResponse>(
     'wizard_characters',
     data.project_id,
@@ -1990,8 +2019,23 @@ export const wizardStreamApi = {
       model?: string;
       enable_web_research?: boolean;
       web_research_query?: string;
+      reference_research_assets?: ResearchAssetSummary[];
     },
-    options?: SSEClientOptions
+    options?: SSEClientOptions<{
+    project_id: string;
+    main_careers_count: number;
+    sub_careers_count: number;
+    main_careers: string[];
+    sub_careers: string[];
+    research_query?: string;
+    research_assets?: Array<{
+      title: string;
+      source?: string;
+      summary?: string;
+      usage_hint?: string;
+      asset_type?: string;
+    }>;
+  }>
   ) => runBackgroundTaskWithPolling<{
     project_id: string;
     main_careers_count: number;
@@ -2031,7 +2075,7 @@ export const wizardStreamApi = {
       enable_web_research?: boolean;
       web_research_query?: string;
     },
-    options?: SSEClientOptions
+    options?: SSEClientOptions<GenerateOutlineResponse>
   ) => runBackgroundTaskWithPolling<GenerateOutlineResponse>(
     'wizard_outline',
     data.project_id,
@@ -2047,7 +2091,7 @@ export const wizardStreamApi = {
       atmosphere?: string;
       rules?: string;
     },
-    options?: SSEClientOptions
+    options?: SSEClientOptions<WorldBuildingResponse>
   ) => ssePost<WorldBuildingResponse>(
     `/api/wizard-stream/world-building/${projectId}`,
     data,
@@ -2060,7 +2104,7 @@ export const wizardStreamApi = {
       provider?: string;
       model?: string;
     },
-    options?: SSEClientOptions
+    options?: SSEClientOptions<WorldBuildingResponse>
   ) => ssePost<WorldBuildingResponse>(
     `/api/wizard-stream/world-building/${projectId}/regenerate`,
     data || {},

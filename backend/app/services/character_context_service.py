@@ -19,18 +19,18 @@ async def build_characters_info_with_careers(
     characters: list[Character],
     filter_character_names: Optional[list[str]] = None,
 ) -> str:
-    """???????????????"""
+    """构建角色上下文与关联信息。"""
     if not characters:
-        return '??????'
+        return '暂无相关角色'
 
     if filter_character_names:
         filtered_characters = [character for character in characters if character.name in filter_character_names]
         if not filtered_characters:
-            logger.warning(f"????????????????????: {filter_character_names}")
+            logger.warning(f"角色过滤后未命中，回退到全部角色: {filter_character_names}")
             filtered_characters = characters
         else:
             logger.info(
-                f"???????? {len(filtered_characters)}/{len(characters)} ???: "
+                f"角色过滤命中 {len(filtered_characters)}/{len(characters)} 个角色: "
                 f"{[character.name for character in filtered_characters]}"
             )
         characters = filtered_characters
@@ -42,7 +42,7 @@ async def build_characters_info_with_careers(
 
     character_ids = [character.id for character in characters]
     if not character_ids:
-        return '??????'
+        return '暂无相关角色'
 
     all_chars_result = await db.execute(
         select(Character.id, Character.name).where(Character.project_id == project_id)
@@ -80,7 +80,7 @@ async def build_characters_info_with_careers(
     org_name_map: dict[str, str] = {}
     char_id_to_org: dict[str, Organization] = {}
     for organization in all_orgs:
-        org_name_map[organization.id] = all_char_name_map.get(organization.character_id, '????')
+        org_name_map[organization.id] = all_char_name_map.get(organization.character_id, '未知角色')
         char_id_to_org[organization.character_id] = organization
 
     org_ids = [organization.id for organization in all_orgs]
@@ -127,15 +127,15 @@ async def build_characters_info_with_careers(
 
     characters_info_parts: list[str] = []
     for character in characters:
-        entity_type = '??' if character.is_organization else '??'
+        entity_type = '组织' if character.is_organization else '角色'
         status_marker = ""
         char_status = getattr(character, 'status', None) or 'active'
         if char_status != 'active':
             status_markers = {
-                'deceased': '?????',
-                'missing': '????',
-                'retired': '?????',
-                'destroyed': '?????',
+                'deceased': '已死亡',
+                'missing': '失踪',
+                'retired': '已退场',
+                'destroyed': '已毁灭',
             }
             status_marker = f" [{status_markers.get(char_status, char_status)}]"
         base_info = f"- {character.name}({entity_type}, {character.role_type}){status_marker}"
@@ -145,72 +145,72 @@ async def build_characters_info_with_careers(
             organization = char_id_to_org[character.id]
             org_detail_parts: list[str] = []
             if character.organization_type:
-                org_detail_parts.append(f"??:{character.organization_type}")
+                org_detail_parts.append(f"类型:{character.organization_type}")
             if character.organization_purpose:
                 purpose_preview = (
                     character.organization_purpose[:60]
                     if len(character.organization_purpose) > 60
                     else character.organization_purpose
                 )
-                org_detail_parts.append(f"??:{purpose_preview}")
+                org_detail_parts.append(f"目的:{purpose_preview}")
             if organization.power_level is not None:
-                org_detail_parts.append(f"????:{organization.power_level}")
+                org_detail_parts.append(f"势力:{organization.power_level}")
             if organization.location:
-                org_detail_parts.append(f"??:{organization.location}")
+                org_detail_parts.append(f"地点:{organization.location}")
             if organization.motto:
-                org_detail_parts.append(f"??:{organization.motto}")
+                org_detail_parts.append(f"格言:{organization.motto}")
             if organization.member_count:
-                org_detail_parts.append(f"???:{organization.member_count}")
+                org_detail_parts.append(f"成员:{organization.member_count}")
             if org_detail_parts:
                 org_detail_str = f" | {', '.join(org_detail_parts)}"
 
             if organization.id in org_members_map and org_members_map[organization.id]:
                 member_parts: list[str] = []
                 for member in sorted(org_members_map[organization.id], key=lambda item: -(item.rank or 0))[:5]:
-                    member_name = all_char_name_map.get(member.character_id, '??')
+                    member_name = all_char_name_map.get(member.character_id, '未知角色')
                     member_desc = f"{member_name}({member.position})"
                     if member.status and member.status != 'active':
                         member_desc += f"[{member.status}]"
                     member_parts.append(member_desc)
                 if member_parts:
-                    org_detail_str += f" | ??: {', '.join(member_parts)}"
+                    org_detail_str += f" | 成员: {', '.join(member_parts)}"
 
         career_info_str = ""
         if character.id in char_career_map:
             career_data = char_career_map[character.id]
             main_career = career_data['main']
             if main_career:
-                stage_desc = f"{main_career['stage']}/{main_career['max_stage']}?"
-                career_info_str += f" | ???: {main_career['name']}({stage_desc})"
+                stage_desc = f"{main_career['stage']}/{main_career['max_stage']}阶"
+                career_info_str += f" | 主职业: {main_career['name']}({stage_desc})"
 
             sub_careers = career_data['sub']
             if sub_careers:
                 sub_list: list[str] = []
                 for sub_career in sub_careers:
-                    stage_desc = f"{sub_career['stage']}/{sub_career['max_stage']}?"
+                    stage_desc = f"{sub_career['stage']}/{sub_career['max_stage']}阶"
                     sub_list.append(f"{sub_career['name']}({stage_desc})")
-                career_info_str += f" | ???: {', '.join(sub_list)}"
+                career_info_str += f" | 副职业: {', '.join(sub_list)}"
 
         state_str = ""
         if character.current_state:
             state_preview = character.current_state[:50] if len(character.current_state) > 50 else character.current_state
-            state_str = f" | ????: {state_preview}"
+            state_str = f" | 当前状态: {state_preview}"
             if character.state_updated_chapter:
-                state_str += f"(?{character.state_updated_chapter}?)"
+                state_str += f"(第{character.state_updated_chapter}章)"
 
         org_str = ""
         if not character.is_organization and character.id in char_org_map and char_org_map[character.id]:
             org_parts: list[str] = []
             for member in char_org_map[character.id][:3]:
-                organization_name = org_name_map.get(member.organization_id, '????')
+                organization_name = org_name_map.get(member.organization_id, '未知组织')
                 org_desc = f"{organization_name}({member.position})"
                 if member.loyalty is not None and member.loyalty != 50:
-                    org_desc += f"[???:{member.loyalty}]"
+                    org_desc += f"[忠诚:{member.loyalty}]"
                 if member.status and member.status != 'active':
                     org_desc += f"[{member.status}]"
                 org_parts.append(org_desc)
             if org_parts:
-                org_str = f" | ????: {', '.join(org_parts)}"
+                org_str = f" | 组织归属: {', '.join(org_parts)}"
 
         rel_str = ""
         if character.id in char_rels_map and char_rels_map[character.id]:
@@ -218,10 +218,10 @@ async def build_characters_info_with_careers(
             seen_pairs: set[tuple[str, str]] = set()
             for relationship in char_rels_map[character.id][:5]:
                 if relationship.character_from_id == character.id:
-                    other_name = all_char_name_map.get(relationship.character_to_id, '??')
+                    other_name = all_char_name_map.get(relationship.character_to_id, '未知角色')
                     other_id = relationship.character_to_id
                 else:
-                    other_name = all_char_name_map.get(relationship.character_from_id, '??')
+                    other_name = all_char_name_map.get(relationship.character_from_id, '未知角色')
                     other_id = relationship.character_from_id
 
                 pair_key = tuple(sorted([character.id, other_id]))
@@ -229,14 +229,14 @@ async def build_characters_info_with_careers(
                     continue
                 seen_pairs.add(pair_key)
 
-                rel_name = relationship.relationship_name or '??'
+                rel_name = relationship.relationship_name or '未知关系'
                 rel_desc = f"{other_name}({rel_name})"
                 if relationship.intimacy_level is not None and relationship.intimacy_level != 50:
-                    rel_desc += f"[???:{relationship.intimacy_level}]"
+                    rel_desc += f"[亲密:{relationship.intimacy_level}]"
                 rel_parts.append(rel_desc)
 
             if rel_parts:
-                rel_str = f" | ??: {', '.join(rel_parts)}"
+                rel_str = f" | 关系: {', '.join(rel_parts)}"
 
         personality_str = ""
         if character.personality:

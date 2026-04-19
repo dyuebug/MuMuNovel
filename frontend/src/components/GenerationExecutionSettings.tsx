@@ -60,13 +60,14 @@ export const useGenerationExecutionSettings = () => {
       const settings = await settingsApi.getSettings();
       const provider = (settings.provider_type || settings.api_provider || '').trim() || undefined;
       const model = settings.llm_model?.trim() || undefined;
+      const webResearchEnabled = Boolean(settings.web_research_enabled);
 
       setRuntimeProvider(provider);
       setCurrentSettingsModel(model);
 
       if (!provider || !settings.api_key || !settings.api_base_url) {
         setAvailableModels([]);
-        return { provider, model };
+        return { provider, model, webResearchEnabled };
       }
 
       const modelsResponse = await settingsApi.getAvailableModels({
@@ -76,7 +77,7 @@ export const useGenerationExecutionSettings = () => {
       });
 
       setAvailableModels(normalizeModelOptions(modelsResponse.models));
-      return { provider, model };
+      return { provider, model, webResearchEnabled };
     } catch (error) {
       setAvailableModels([]);
       throw error;
@@ -117,11 +118,11 @@ const ExecutionFields = ({
   runtimeProvider,
   currentSettingsModel,
 }: Omit<GenerationExecutionSettingsPanelProps, 'title' | 'card'>) => (
-  <Space direction="vertical" style={{ width: '100%' }} size="middle">
-    <Alert
+  <Space data-testid="generation-execution-settings-panel" direction="vertical" style={{ width: '100%' }} size="middle">
+    <Alert data-testid="generation-execution-settings-info"
       type="info"
       showIcon
-      message="默认沿用当前用户设置的提供商与模型。这里只暴露最常用的执行开关；留空时继续使用系统默认模型。"
+      message="默认沿用当前用户设置的提供商与模型。这里仅保留常用执行开关；如果当前页面已开启联网搜索或研究增强，也会继续沿用页面侧配置；留空时继续使用系统默认模型。"
     />
 
     <div>

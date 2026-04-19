@@ -400,8 +400,8 @@ async def test_should_inject_user_id_into_world_regenerate_background_task(monke
             "",
             {
                 "title": "Smoke Novel",
-                "description": "???????",
-                "theme": "??",
+                "description": "test setup",
+                "theme": "urban",
             },
             "task-existing-wizard-world",
         ),
@@ -416,7 +416,7 @@ async def test_should_inject_user_id_into_world_regenerate_background_task(monke
             "project-1",
             {
                 "title": "Smoke Outline",
-                "theme": "??",
+                "theme": "urban",
                 "target_chapters": 12,
             },
             "task-existing-outline-generate",
@@ -457,7 +457,7 @@ async def test_should_reuse_existing_active_background_task_on_duplicate_create(
         project_id=project_id,
         status="running",
         progress=20,
-        message="?????...",
+        message="Generating...",
     )
 
     async def fake_find_active_task(**kwargs):

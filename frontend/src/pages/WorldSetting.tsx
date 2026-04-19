@@ -136,7 +136,7 @@ export default function WorldSetting() {
         setIsRegenerating(false);
         setRegenerateProgress(0);
         setRegenerateMessage('');
-        message.error(formatBackgroundTaskError(task.error, task.message, '??????????'));
+        message.error(formatBackgroundTaskError(task.error, task.message, '世界设定重生失败'));
       },
       onCancelled: (task) => {
         stopTaskPolling();
@@ -145,20 +145,20 @@ export default function WorldSetting() {
         setIsRegenerating(false);
         setRegenerateProgress(0);
         setRegenerateMessage('');
-        message.info(task.message || '???????');
+        message.info(task.message || '已取消重生');
       },
       onPollingError: (error) => {
-        console.error('???????????:', error);
+        console.error('世界设定轮询失败:', error);
         stopTaskPolling();
         currentTaskIdRef.current = null;
         setIsCancellingTask(false);
         setIsRegenerating(false);
         setRegenerateProgress(0);
-        setRegenerateMessage('??????????????????????');
+        setRegenerateMessage('世界设定重生状态轮询失败，请稍后刷新重试');
         if (currentProject?.id) {
           void projectApi.getProject(currentProject.id).then(setCurrentProject).catch(() => undefined);
         }
-        message.error('??????????????????????');
+        message.error('世界设定重生状态轮询失败，请稍后重试');
       },
     }),
   });
@@ -198,7 +198,7 @@ export default function WorldSetting() {
       rules: String(completedTask.result.rules || ''),
     });
     setIsPreviewModalVisible(true);
-  }, [currentProject?.id, isPreviewModalVisible, newWorldData, trackedTasks]);
+  }, [currentProject?.id, currentTaskIdRef, isPreviewModalVisible, newWorldData, trackedTasks]);
 
   const handleRegenerateBackground = async () => {
     if (!currentProject) return;

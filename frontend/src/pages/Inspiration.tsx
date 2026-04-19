@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { useBusyNavigationGuard } from '../hooks/useBusyNavigationGuard';
 import { useNavigate } from 'react-router-dom';
-import { Card, Input, Button, Space, Typography, message, Spin, Modal, theme } from 'antd';
+import { Card, Input, Button, Space, Typography, message, Spin, Modal, Switch, theme } from 'antd';
 import { SendOutlined, ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons';
 import { inspirationApi } from '../services/api';
 import { AIProjectGenerator, type GenerationConfig } from '../components/AIProjectGenerator';
@@ -15,6 +15,36 @@ const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
 
 type Step = 'idea' | 'title' | 'description' | 'theme' | 'genre' | 'perspective' | 'outline_mode' | 'confirm' | 'generating' | 'complete';
+type InspirationOptionStep = 'title' | 'description' | 'theme' | 'genre';
+
+type InspirationResearchAsset = {
+  title: string;
+  source?: string;
+  summary?: string;
+};
+
+type InspirationOptionRequest = {
+  step: InspirationOptionStep;
+  context: Partial<WizardData> & {
+    initial_idea?: string;
+  };
+  enable_web_research?: boolean;
+  web_research_query?: string;
+};
+
+type InspirationOptionResponse = {
+  prompt?: string;
+  options: string[];
+  error?: string;
+  research_query?: string;
+  research_assets?: InspirationResearchAsset[];
+};
+
+type InspirationResearchBundle = {
+  query: string;
+  assets: InspirationResearchAsset[];
+};
+
 
 interface Message {
   type: 'ai' | 'user';
@@ -42,10 +72,10 @@ interface CacheData {
   wizardData: Partial<WizardData>;
   initialIdea: string;
   selectedOptions: string[];
-  lastFailedRequest: {
-    step: 'title' | 'description' | 'theme' | 'genre';
-    context: Partial<WizardData>;
-  } | null;
+  executionEnableWebResearch: boolean;
+  executionWebResearchQuery: string;
+  inspirationResearch: InspirationResearchBundle;
+  lastFailedRequest: InspirationOptionRequest | null;
   timestamp: number;
 }
 
@@ -82,6 +112,10 @@ const Inspiration: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
+  const [inspirationResearch, setInspirationResearch] = useState<InspirationResearchBundle>({
+    query: '',
+    assets: [],
+  });
 
   // 收集的数据
   const [wizardData, setWizardData] = useState<Partial<WizardData>>({});
@@ -99,6 +133,8 @@ const Inspiration: React.FC = () => {
   const [executionModalOpen, setExecutionModalOpen] = useState(false);
   const [executionModel, setExecutionModel] = useState<string | undefined>();
   const [executionEnableMcp, setExecutionEnableMcp] = useState(true);
+  const [executionEnableWebResearch, setExecutionEnableWebResearch] = useState(false);
+  const [executionWebResearchQuery, setExecutionWebResearchQuery] = useState('');
   const {
     availableModels,
     fetchingModels,
@@ -111,18 +147,63 @@ const Inspiration: React.FC = () => {
   // Modal hook
   const [modal, contextHolder] = Modal.useModal();
 
-  const loadExecutionDefaults = useCallback(async () => {
+  const loadExecutionDefaults = useCallback(async (options?: { syncWebResearch?: boolean }) => {
     try {
-      const { model } = await loadDefaults();
+      const { model, webResearchEnabled } = await loadDefaults();
       setExecutionEnableMcp(true);
       setExecutionModel(model);
+      if (options?.syncWebResearch) {
+        setExecutionEnableWebResearch(webResearchEnabled);
+      }
     } catch (error) {
-      console.warn('加载灵感模式执行设置失败:', error);
+      console.warn('Failed to load inspiration execution settings:', error);
     }
   }, [loadDefaults]);
 
+  const mergeInspirationResearch = useCallback((response?: InspirationOptionResponse) => {
+    const query = response?.research_query?.trim() || '';
+    const responseAssets = Array.isArray(response?.research_assets) ? response.research_assets : [];
+    if (!query && responseAssets.length === 0) {
+      return;
+    }
+
+    setInspirationResearch((prev) => {
+      const mergedAssets = [...prev.assets];
+      const seenKeys = new Set(
+        prev.assets.map((asset) => `${asset.title?.trim() || ''}::${asset.source?.trim() || ''}`.toLowerCase())
+      );
+
+      for (const asset of responseAssets) {
+        const title = asset.title?.trim() || asset.source?.trim() || '';
+        const source = asset.source?.trim() || '';
+        const summary = asset.summary?.trim() || '';
+        if (!title && !source && !summary) {
+          continue;
+        }
+        const dedupeKey = `${title}::${source}`.toLowerCase();
+        if (seenKeys.has(dedupeKey)) {
+          continue;
+        }
+        seenKeys.add(dedupeKey);
+        mergedAssets.push({
+          title: title || source || '参考资料',
+          source: source || undefined,
+          summary: summary || undefined,
+        });
+      }
+
+      return {
+        query: query || prev.query,
+        assets: mergedAssets.slice(0, 6),
+      };
+    });
+  }, []);
+
   const beginProjectGeneration = useCallback(() => {
     const data = wizardData as WizardData;
+    const fallbackResearchQuery = executionEnableWebResearch
+      ? executionWebResearchQuery.trim() || inspirationResearch.query.trim() || undefined
+      : undefined;
     const config: GenerationConfig = {
       title: data.title,
       description: data.description,
@@ -136,6 +217,11 @@ const Inspiration: React.FC = () => {
       provider: runtimeProvider,
       model: executionModel,
       enable_mcp: executionEnableMcp,
+      enable_web_research: executionEnableWebResearch,
+      web_research_query: fallbackResearchQuery,
+      reference_research_assets: executionEnableWebResearch
+        ? inspirationResearch.assets.slice(0, 6)
+        : undefined,
     };
     try {
       localStorage.removeItem(CACHE_KEY);
@@ -146,17 +232,23 @@ const Inspiration: React.FC = () => {
     setGenerationConfig(config);
     setExecutionModalOpen(false);
     setCurrentStep('generating');
-  }, [executionEnableMcp, executionModel, runtimeProvider, wizardData]);
+  }, [
+    executionEnableMcp,
+    executionEnableWebResearch,
+    executionModel,
+    executionWebResearchQuery,
+    inspirationResearch.assets,
+    inspirationResearch.query,
+    runtimeProvider,
+    wizardData,
+  ]);
 
   // 滚动容器引用
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
   // 记录上次失败的请求参数，用于重试
-  const [lastFailedRequest, setLastFailedRequest] = useState<{
-    step: 'title' | 'description' | 'theme' | 'genre';
-    context: Partial<WizardData>;
-  } | null>(null);
+  const [lastFailedRequest, setLastFailedRequest] = useState<InspirationOptionRequest | null>(null);
 
   // 标记是否已经加载缓存
   const [cacheLoaded, setCacheLoaded] = useState(false);
@@ -179,6 +271,7 @@ const Inspiration: React.FC = () => {
       localStorage.removeItem('inspiration_project_id');
       localStorage.removeItem('inspiration_generation_data');
       localStorage.removeItem('inspiration_current_step');
+      localStorage.removeItem('inspiration_task_id');
     } catch (error) {
       console.error('清除灵感模式生成恢复缓存失败:', error);
     }
@@ -204,6 +297,9 @@ const Inspiration: React.FC = () => {
         wizardData,
         initialIdea,
         selectedOptions,
+        executionEnableWebResearch,
+        executionWebResearchQuery,
+        inspirationResearch,
         lastFailedRequest,
         timestamp: Date.now()
       };
@@ -213,7 +309,17 @@ const Inspiration: React.FC = () => {
     } catch (error) {
       console.error('保存缓存失败:', error);
     }
-  }, [currentStep, messages, wizardData, initialIdea, selectedOptions, lastFailedRequest]);
+  }, [
+    currentStep,
+    executionEnableWebResearch,
+    executionWebResearchQuery,
+    initialIdea,
+    inspirationResearch,
+    lastFailedRequest,
+    messages,
+    selectedOptions,
+    wizardData,
+  ]);
 
 
   // Restore generation state from storage
@@ -221,7 +327,11 @@ const Inspiration: React.FC = () => {
     try {
       const storedStep = localStorage.getItem('inspiration_current_step');
       const rawConfig = localStorage.getItem('inspiration_generation_data');
+      const storedTaskId = localStorage.getItem('inspiration_task_id');
       if (storedStep !== 'generating' || !rawConfig) {
+        if (storedStep || rawConfig || storedTaskId) {
+          clearGenerationResumeStorage();
+        }
         return false;
       }
 
@@ -272,6 +382,9 @@ const Inspiration: React.FC = () => {
       setWizardData(cacheData.wizardData);
       setInitialIdea(cacheData.initialIdea);
       setSelectedOptions(cacheData.selectedOptions);
+      setExecutionEnableWebResearch(Boolean(cacheData.executionEnableWebResearch));
+      setExecutionWebResearchQuery(cacheData.executionWebResearchQuery || '');
+      setInspirationResearch(cacheData.inspirationResearch || { query: '', assets: [] });
       if (cacheData.lastFailedRequest) {
         setLastFailedRequest(cacheData.lastFailedRequest);
       }
@@ -291,25 +404,32 @@ const Inspiration: React.FC = () => {
   useEffect(() => {
     if (!cacheLoaded) {
       const restoredGenerating = restoreGenerationFromStorage();
-      if (!restoredGenerating) {
-        restoreFromCache();
+      const restoredConversation = !restoredGenerating && restoreFromCache();
+      if (!restoredGenerating && !restoredConversation) {
+        void loadExecutionDefaults({ syncWebResearch: true });
       }
       setCacheLoaded(true);
     }
-  }, [cacheLoaded, restoreFromCache, restoreGenerationFromStorage]);
+  }, [cacheLoaded, loadExecutionDefaults, restoreFromCache, restoreGenerationFromStorage]);
 
   // ==================== 自动保存：状态变化时保存 ====================
 
-  useEffect(() => {
-    // 防抖保存
-    const timer = setTimeout(() => {
-      if (cacheLoaded) {
-        saveToCache();
-      }
-    }, 500);
-
-    return () => clearTimeout(timer);
-  }, [messages, currentStep, wizardData, initialIdea, selectedOptions, lastFailedRequest, cacheLoaded, saveToCache]);
+  useLayoutEffect(() => {
+    if (cacheLoaded) {
+      saveToCache();
+    }
+  }, [
+    cacheLoaded,
+    currentStep,
+    executionEnableWebResearch,
+    executionWebResearchQuery,
+    initialIdea,
+    lastFailedRequest,
+    messages,
+    saveToCache,
+    selectedOptions,
+    wizardData,
+  ]);
 
   // 自动滚动到底部
   const scrollToBottom = () => {
@@ -328,21 +448,65 @@ const Inspiration: React.FC = () => {
     scrollToBottom();
   }, [messages]);
 
+  const buildChatResearchFields = useCallback(() => {
+    const trimmedQuery = executionWebResearchQuery.trim();
+    return {
+      enable_web_research: executionEnableWebResearch,
+      web_research_query: executionEnableWebResearch && trimmedQuery ? trimmedQuery : undefined,
+    };
+  }, [executionEnableWebResearch, executionWebResearchQuery]);
+
+  const previewResearchQuery = executionWebResearchQuery.trim() || inspirationResearch.query.trim();
+  const previewResearchAssets = inspirationResearch.assets.slice(0, 3);
+  const previewResearchOverflowCount = Math.max(0, inspirationResearch.assets.length - previewResearchAssets.length);
+  const showEnabledResearchPreview = executionEnableWebResearch && (previewResearchQuery || previewResearchAssets.length > 0);
+  const showDisabledResearchHint = !executionEnableWebResearch && inspirationResearch.assets.length > 0;
+
+  const buildInspirationRequest = useCallback(
+    (step: InspirationOptionStep, context: InspirationOptionRequest['context']): InspirationOptionRequest => ({
+      step,
+      context,
+      ...buildChatResearchFields(),
+    }),
+    [buildChatResearchFields]
+  );
+
+  const buildInspirationPrompt = useCallback(
+    (fallbackPrompt: string, response?: InspirationOptionResponse) => {
+      const prompt = response?.prompt?.trim() || fallbackPrompt;
+      const query = response?.research_query?.trim();
+      const assets = Array.isArray(response?.research_assets) ? response.research_assets : [];
+      if (!query && assets.length === 0) {
+        return prompt;
+      }
+
+      const assetTitles = assets
+        .map((asset) => asset.title?.trim() || asset.source?.trim() || '')
+        .filter(Boolean)
+        .slice(0, 2);
+      const notes = [`已结合联网检索${query ? `：${query}` : ''}`];
+      if (assetTitles.length > 0) {
+        notes.push(`参考资料：${assetTitles.join(' / ')}`);
+      }
+      return `${prompt}\n\n${notes.join('\n')}`;
+    },
+    []
+  );
+
   // 重试生成
   const handleRetry = async () => {
     if (!lastFailedRequest) return;
 
     setLoading(true);
     try {
-      const response = await inspirationApi.generateOptions({
-        step: lastFailedRequest.step,
-        context: lastFailedRequest.context
-      });
+      const response = await inspirationApi.generateOptions(lastFailedRequest);
 
       if (response.error) {
         message.error(response.error);
         return;
       }
+
+      mergeInspirationResearch(response);
 
       setMessages(prev => {
         const newMessages = [...prev];
@@ -356,7 +520,7 @@ const Inspiration: React.FC = () => {
 
       const aiMessage: Message = {
         type: 'ai',
-        content: response.prompt || '请选择一个选项，或者输入你自己的：',
+        content: buildInspirationPrompt('请选择一个选项，或者输入你自己的：', response),
         options: response.options || [],
         isMultiSelect: lastFailedRequest.step === 'genre'
       };
@@ -407,7 +571,7 @@ const Inspiration: React.FC = () => {
       };
       setMessages(prev => [...prev, feedbackMessage]);
 
-      const step = targetMessage.step as 'title' | 'description' | 'theme' | 'genre';
+      const step = targetMessage.step as InspirationOptionStep;
       
       // 构建上下文
       const context: Partial<WizardData> & { initial_idea?: string } = {
@@ -423,6 +587,7 @@ const Inspiration: React.FC = () => {
         context,
         feedback,
         previous_options: targetMessage.options,
+        ...buildChatResearchFields(),
       });
 
       if (response.error) {
@@ -431,9 +596,11 @@ const Inspiration: React.FC = () => {
       }
 
       // 添加新的AI消息
+      mergeInspirationResearch(response);
+
       const aiMessage: Message = {
         type: 'ai',
-        content: response.prompt || `根据你的反馈，我重做了这批${step === 'title' ? '书名' : step === 'description' ? '简介' : step === 'theme' ? '主题' : '类型'}选项，冲突和句式会更拉开：`,
+        content: buildInspirationPrompt(`根据你的反馈，我重做了这批${step === 'title' ? '书名' : step === 'description' ? '简介' : step === 'theme' ? '主题' : '类型'}选项，冲突和句式会更拉开：`, response),
         options: response.options || [],
         isMultiSelect: step === 'genre',
         canRefine: true,
@@ -475,13 +642,10 @@ const Inspiration: React.FC = () => {
       if (currentStep === 'idea') {
         setInitialIdea(userInput);
 
-        const requestData = {
-          step: 'title' as const,
-          context: {
-            initial_idea: userInput,
-            description: userInput
-          }
-        };
+        const requestData = buildInspirationRequest('title', {
+          initial_idea: userInput,
+          description: userInput,
+        });
 
         const response = await inspirationApi.generateOptions(requestData);
 
@@ -498,9 +662,11 @@ const Inspiration: React.FC = () => {
           return;
         }
 
+        mergeInspirationResearch(response);
+
         const aiMessage: Message = {
           type: 'ai',
-          content: response.prompt || '请选择一个更有记忆点的书名，或者输入你自己的：',
+          content: buildInspirationPrompt('请选择一个更有记忆点的书名，或者输入你自己的：', response),
           options: response.options,
           canRefine: true,
           step: 'title'
@@ -801,13 +967,10 @@ const Inspiration: React.FC = () => {
       setMessages(prev => [...prev, aiMessage]);
       setCurrentStep('perspective');
     } else if (nextStep === 'description') {
-      const requestData = {
-        step: 'description' as const,
-        context: {
-          initial_idea: initialIdea,
-          title: data.title
-        }
-      };
+      const requestData = buildInspirationRequest('description', {
+        initial_idea: initialIdea,
+        title: data.title,
+      });
       const response = await inspirationApi.generateOptions(requestData);
 
       if (response.error || !response.options || response.options.length < 3) {
@@ -823,9 +986,11 @@ const Inspiration: React.FC = () => {
         return;
       }
 
+      mergeInspirationResearch(response);
+
       const aiMessage: Message = {
         type: 'ai',
-        content: response.prompt || '请选择一个冲突更强、开场更快的简介，或者输入你自己的：',
+        content: buildInspirationPrompt('请选择一个冲突更强、开场更快的简介，或者输入你自己的：', response),
         options: response.options,
         canRefine: true,
         step: 'description'
@@ -835,14 +1000,11 @@ const Inspiration: React.FC = () => {
       setLastFailedRequest(null);
 
     } else if (nextStep === 'theme') {
-      const requestData = {
-        step: 'theme' as const,
-        context: {
-          initial_idea: initialIdea,
-          title: data.title,
-          description: data.description
-        }
-      };
+      const requestData = buildInspirationRequest('theme', {
+        initial_idea: initialIdea,
+        title: data.title,
+        description: data.description,
+      });
       const response = await inspirationApi.generateOptions(requestData);
 
       if (response.error || !response.options || response.options.length < 3) {
@@ -858,9 +1020,11 @@ const Inspiration: React.FC = () => {
         return;
       }
 
+      mergeInspirationResearch(response);
+
       const aiMessage: Message = {
         type: 'ai',
-        content: response.prompt || '请选择一个价值冲突最清晰的主题，或者输入你自己的：',
+        content: buildInspirationPrompt('请选择一个价值冲突最清晰的主题，或者输入你自己的：', response),
         options: response.options,
         canRefine: true,
         step: 'theme'
@@ -870,15 +1034,12 @@ const Inspiration: React.FC = () => {
       setLastFailedRequest(null);
 
     } else if (nextStep === 'genre') {
-      const requestData = {
-        step: 'genre' as const,
-        context: {
-          initial_idea: initialIdea,
-          title: data.title,
-          description: data.description,
-          theme: data.theme
-        }
-      };
+      const requestData = buildInspirationRequest('genre', {
+        initial_idea: initialIdea,
+        title: data.title,
+        description: data.description,
+        theme: data.theme,
+      });
       const response = await inspirationApi.generateOptions(requestData);
 
       if (response.error || !response.options || response.options.length < 3) {
@@ -895,9 +1056,11 @@ const Inspiration: React.FC = () => {
         return;
       }
 
+      mergeInspirationResearch(response);
+
       const aiMessage: Message = {
         type: 'ai',
-        content: response.prompt || '请选择类型标签（可多选）：',
+        content: buildInspirationPrompt('请选择类型标签（可多选）：', response),
         options: response.options,
         isMultiSelect: true,
         canRefine: true,
@@ -926,6 +1089,7 @@ const Inspiration: React.FC = () => {
     setWizardData({});
     setInitialIdea('');
     setSelectedOptions([]);
+    setInspirationResearch({ query: '', assets: [] });
     setLoading(false);
   };
 
@@ -1141,6 +1305,77 @@ const Inspiration: React.FC = () => {
         style={{ boxShadow: `0 4px 12px color-mix(in srgb, ${token.colorTextBase} 14%, transparent)` }}
         styles={{ body: { padding: 12 } }}
       >
+        <Space direction="vertical" size={12} style={{ width: '100%', marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              <Text strong>联网搜索增强</Text>
+              <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 4 }}>
+                为灵感生成补充实时趋势、题材资料与风格参考；留空时会自动按当前创意生成检索词。
+              </Text>
+            </div>
+            <Switch
+              checked={executionEnableWebResearch}
+              onChange={setExecutionEnableWebResearch}
+              checkedChildren="开启"
+              unCheckedChildren="关闭"
+            />
+          </div>
+          {executionEnableWebResearch && (
+            <>
+              <TextArea
+                value={executionWebResearchQuery}
+                onChange={(e) => setExecutionWebResearchQuery(e.target.value)}
+                placeholder="例如：2026 女频悬疑爆款趋势、法医职业细节、时间循环题材读者偏好"
+                autoSize={{ minRows: 2, maxRows: 3 }}
+                maxLength={400}
+                showCount
+              />
+              {showEnabledResearchPreview && (
+                <div
+                  data-testid="inspiration-research-preview"
+                  style={{
+                    borderRadius: 10,
+                    padding: '10px 12px',
+                    background: `color-mix(in srgb, ${token.colorInfoBg} 75%, ${token.colorBgContainer} 25%)`,
+                    border: `1px solid color-mix(in srgb, ${token.colorInfoBorder} 72%, transparent)`,
+                  }}
+                >
+                  <Text strong style={{ display: 'block', marginBottom: 6 }}>
+                    将带入生成链路的研究上下文
+                  </Text>
+                  {previewResearchQuery && (
+                    <Text type="secondary" style={{ display: 'block', marginBottom: previewResearchAssets.length > 0 ? 8 : 0 }}>
+                      检索词：{previewResearchQuery}
+                    </Text>
+                  )}
+                  {previewResearchAssets.length > 0 && (
+                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      {previewResearchAssets.map((asset, index) => (
+                        <Text key={`${asset.title}-${asset.source || index}`} style={{ display: 'block', fontSize: 12 }}>
+                          - {asset.title}{asset.source ? ` · ${asset.source}` : ''}
+                        </Text>
+                      ))}
+                      {previewResearchOverflowCount > 0 && (
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          还有 {previewResearchOverflowCount} 条已缓存资料会一并带入。
+                        </Text>
+                      )}
+                    </Space>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+          {showDisabledResearchHint && (
+            <Text
+              data-testid="inspiration-research-preview-disabled"
+              type="secondary"
+              style={{ fontSize: 12 }}
+            >
+              当前已缓存 {inspirationResearch.assets.length} 条灵感资料；重新开启后会自动带入创建流程。
+            </Text>
+          )}
+        </Space>
         <Space.Compact style={{ width: '100%' }}>
           <TextArea
             value={inputValue}

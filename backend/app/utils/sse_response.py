@@ -393,36 +393,36 @@ async def create_sse_generator(
 
 def create_sse_response(generator: AsyncGenerator[str, None]) -> StreamingResponse:
     """
-    ??SSE StreamingResponse - ??HTTP/2??
+    创建SSE StreamingResponse，兼容 HTTP/2 代理场景
     
     Args:
-        generator: SSE?????
+        generator: SSE 事件生成器
         
     Returns:
-        StreamingResponse??
+        StreamingResponse 对象
     
-    ???
-    - HTTP/2???Connection?????
-    - ????charset=utf-8???????
-    - ??CORS????????
-    - ??????????????????heartbeat??????
+    说明：
+    - HTTP/2 下无需设置 Connection 响应头
+    - 显式声明 charset=utf-8 以避免编码歧义
+    - 预置 CORS 响应头，便于前端消费
+    - 通过队列包装生成器，空闲时按心跳间隔保活
     """
 
     async def _pump_to_queue(queue: asyncio.Queue[tuple[str, Optional[str]]]):
-        """????????????????????"""
+        """将上游生成器内容持续写入队列"""
         try:
             async for chunk in generator:
                 await queue.put(("chunk", chunk))
         except GeneratorExit:
             pass
         except Exception as exc:
-            logger.error(f"SSE???????: {type(exc).__name__}: {exc}", exc_info=True)
+            logger.error(f"SSE 生成器执行失败: {type(exc).__name__}: {exc}", exc_info=True)
             await queue.put(("chunk", await SSEResponse.send_error(str(exc))))
         finally:
             await queue.put(("done", None))
 
     async def wrapper():
-        """?????????????????????????????"""
+        """包装生成器，按心跳间隔稳定输出 SSE 事件"""
         queue: asyncio.Queue[tuple[str, Optional[str]]] = asyncio.Queue()
         producer = asyncio.create_task(_pump_to_queue(queue))
 
@@ -452,12 +452,12 @@ def create_sse_response(generator: AsyncGenerator[str, None]) -> StreamingRespon
     
     return StreamingResponse(
         wrapper(),
-        media_type="text/event-stream; charset=utf-8",  # ????charset
+        media_type="text/event-stream; charset=utf-8",  # 显式声明 charset
         headers={
-            "Cache-Control": "no-cache, no-transform",  # ???????
-            # ?? Connection: keep-alive (HTTP/2???)
-            "X-Accel-Buffering": "no",  # ??nginx??
-            "Access-Control-Allow-Origin": "*",  # CORS??
+            "Cache-Control": "no-cache, no-transform",  # 禁止缓存与代理改写
+            # 不设置 Connection: keep-alive（HTTP/2 不需要）
+            "X-Accel-Buffering": "no",  # 禁用 nginx 缓冲
+            "Access-Control-Allow-Origin": "*",  # CORS 支持
             "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
         }

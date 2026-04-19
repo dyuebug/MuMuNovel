@@ -36,7 +36,7 @@ async def prepare_manual_chapter_analysis(
         style_id=None,
         enable_mcp=True,
         prefer_project_default_style=True,
-        log_prefix="????",
+        log_prefix="章节分析",
     )
     analysis_story_packet = await build_story_generation_packet_with_project_continuity(
         db_session,

@@ -7,21 +7,21 @@ import logging
 import os
 import uuid
 
-# ?? backend ????????
+# 基于 backend 目录解析路径
 PROJECT_ROOT = Path(__file__).parent.parent
 REPO_ROOT = PROJECT_ROOT.parent
 DATA_DIR = PROJECT_ROOT / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-# ????????? backend ??????
+# 优先加载仓库根目录与 backend 目录的 .env
 load_dotenv(REPO_ROOT / ".env", override=False)
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 # 配置模块使用标准logging（在logger.py初始化之前）
 config_logger = logging.getLogger(__name__)
 
-# ??????PostgreSQL
-# ?????? DATABASE_URL?????? POSTGRES_* ???????
+# 默认使用 PostgreSQL
+# 若未显式配置 DATABASE_URL，则回退为 POSTGRES_* 环境变量组装
 def _build_default_database_url() -> str:
     postgres_user = os.getenv("POSTGRES_USER", "mumuai")
     postgres_password = os.getenv("POSTGRES_PASSWORD", "password")
@@ -32,8 +32,8 @@ def _build_default_database_url() -> str:
 
 DATABASE_URL = os.getenv("DATABASE_URL") or _build_default_database_url()
 
-config_logger.debug(f"?????: {'SQLite' if 'sqlite' in DATABASE_URL.lower() else 'PostgreSQL'}")
-config_logger.debug(f"???URL: {DATABASE_URL}")
+config_logger.debug(f"数据库类型: {'SQLite' if 'sqlite' in DATABASE_URL.lower() else 'PostgreSQL'}")
+config_logger.debug(f"数据库 URL: {DATABASE_URL}")
 
 class Settings(BaseSettings):
     """应用配置"""

@@ -33,6 +33,7 @@ export interface GenerationConfig {
   enable_mcp?: boolean;
   enable_web_research?: boolean;
   web_research_query?: string;
+  reference_research_assets?: ResearchAssetSummary[];
   world_building_research_query?: string;
   careers_research_query?: string;
   characters_research_query?: string;
@@ -68,12 +69,12 @@ interface StepResearchSummary {
 }
 
 const WIZARD_STREAM_INACTIVITY_TIMEOUT_MS = 90000;
-const WIZARD_HEARTBEAT_SUFFIX = '?????????????';
+const WIZARD_HEARTBEAT_SUFFIX = '（连接保持中）';
 
 const appendWizardHeartbeatHint = (message: string) => {
   const normalized = message.trim();
   if (!normalized) {
-    return `AI ?????${WIZARD_HEARTBEAT_SUFFIX}`;
+    return `AI 正在处理中${WIZARD_HEARTBEAT_SUFFIX}`;
   }
 
   if (normalized.endsWith(WIZARD_HEARTBEAT_SUFFIX)) {
@@ -92,6 +93,23 @@ interface WorldBuildingResult {
   research_query?: string;
   research_assets?: ResearchAssetSummary[];
 }
+
+interface WizardResearchPayload {
+  research_query?: string;
+  research_assets?: ResearchAssetSummary[];
+}
+
+interface CareerSystemResult extends WizardResearchPayload {
+  project_id?: string;
+  main_careers_count?: number;
+  sub_careers_count?: number;
+}
+
+interface CharactersGenerationResult extends WizardResearchPayload {
+  characters?: unknown[];
+}
+
+type OutlineGenerationResult = WizardResearchPayload
 
 type ResumableWizardTaskType = 'wizard_career_system' | 'wizard_characters' | 'wizard_outline';
 
@@ -191,6 +209,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     return {
       enable_web_research: data.enable_web_research,
       web_research_query: (stepQueryMap[step] || data.web_research_query)?.trim() || undefined,
+      reference_research_assets: data.reference_research_assets,
     };
   };
 
@@ -287,11 +306,11 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     onBusyChange?.(loading || isCancelling);
   }, [isCancelling, loading, onBusyChange]);
 
-  const buildTaskOptions = (options: SSEClientOptions): SSEClientOptions => ({
+  const buildTaskOptions = <TResult extends WizardResearchPayload | WorldBuildingResult>(options: SSEClientOptions<TResult>): SSEClientOptions<TResult> => ({
     ...options,
     inactivityTimeoutMs: options.inactivityTimeoutMs ?? WIZARD_STREAM_INACTIVITY_TIMEOUT_MS,
     onHeartbeat: () => {
-      setProgressMessage((prev) => appendWizardHeartbeatHint(prev || 'AI ?????'));
+      setProgressMessage((prev) => appendWizardHeartbeatHint(prev || 'AI 正在处理中'));
       options.onHeartbeat?.();
     },
     onTaskCreated: (taskId: string) => {
@@ -336,7 +355,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     }, 1000);
   };
 
-  const buildCareerTaskOptions = (): SSEClientOptions => buildTaskOptions({
+  const buildCareerTaskOptions = (): SSEClientOptions<CareerSystemResult> => buildTaskOptions<CareerSystemResult>({
     onProgress: (msg, prog) => {
       setProgress(prog);
       setProgressMessage(msg);
@@ -358,7 +377,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     },
   });
 
-  const buildCharactersTaskOptions = (): SSEClientOptions => buildTaskOptions({
+  const buildCharactersTaskOptions = (): SSEClientOptions<CharactersGenerationResult> => buildTaskOptions<CharactersGenerationResult>({
     onProgress: (msg, prog) => {
       setProgress(prog);
       setProgressMessage(msg);
@@ -380,7 +399,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     },
   });
 
-  const buildOutlineTaskOptions = (): SSEClientOptions => buildTaskOptions({
+  const buildOutlineTaskOptions = (): SSEClientOptions<OutlineGenerationResult> => buildTaskOptions<OutlineGenerationResult>({
     onProgress: (msg, prog) => {
       setProgress(prog);
       setProgressMessage(msg);
@@ -477,13 +496,13 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
   const waitForExistingBackgroundTask = async <T,>(
     task: BackgroundTaskStatus,
-    options?: SSEClientOptions
+    options?: SSEClientOptions<T>
   ): Promise<T> => waitForBackgroundTaskCompletion<BackgroundTaskStatus, T>(task, {
     pollTask: (taskId) => backgroundTaskApi.getTaskStatus(taskId),
     sseOptions: options,
-    progressMessage: '???????',
-    failureFallbackMessage: '????????',
-    pollErrorFallbackMessage: '????????',
+    progressMessage: '正在恢复任务...',
+    failureFallbackMessage: '后台任务执行失败',
+    pollErrorFallbackMessage: '轮询后台任务失败',
     createPollError: (error, fallbackMessage) => {
       const apiError = error as ApiError;
       const errorMessage = apiError.response?.data?.detail || apiError.message || fallbackMessage;
@@ -622,7 +641,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
       setProgress(task.progress || 0);
       setProgressMessage(task.message || '正在恢复世界观生成任务...');
-      const worldResult = await waitForExistingBackgroundTask<WorldBuildingResult>(task, buildTaskOptions({
+      const worldResult = await waitForExistingBackgroundTask<WorldBuildingResult>(task, buildTaskOptions<WorldBuildingResult>({
         onProgress: (msg, prog) => {
           setProgress(prog);
           setProgressMessage(msg);
@@ -882,7 +901,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
       const worldResult = await wizardStreamApi.generateWorldBuildingStream(
         buildWorldBuildingPayload(data),
-        buildTaskOptions({
+        buildTaskOptions<WorldBuildingResult>({
           onProgress: (msg, prog) => {
             // 直接使用后端返回的进度值
             setProgress(prog);
@@ -1530,7 +1549,8 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         {Object.values(researchSummaries).some((item) => item && (item.query || item.assets.length > 0)) && (
           <Card
             size="small"
-            title="本次检索资料摘要"
+            title="本次联网研究摘要"
+            data-testid="project-generator-research-summary"
             style={{
               marginBottom: 24,
               textAlign: 'left',
@@ -1540,9 +1560,9 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           >
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
               {([
-                ['worldBuilding', '世界观'],
+                ['worldBuilding', '世界观设定'],
                 ['careers', '职业体系'],
-                ['characters', '角色'],
+                ['characters', '角色设定'],
                 ['outline', '大纲'],
               ] as Array<[ResearchStepKey, string]>).map(([stepKey, label]) => {
                 const item = researchSummaries[stepKey];
@@ -1554,7 +1574,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
                     <Text strong>{label}</Text>
                     {item.query && (
                       <div style={{ marginTop: 6, color: 'var(--color-text-secondary)', fontSize: 13 }}>
-                        <strong>Query：</strong>{item.query}
+                        <strong>检索词：</strong>{item.query}
                       </div>
                     )}
                     {item.assets.length > 0 && (
@@ -1564,7 +1584,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
                             <div style={{ fontWeight: 500 }}>{asset.title}</div>
                             {asset.summary && <div style={{ fontSize: 13 }}>{asset.summary}</div>}
                             {asset.source && (
-                              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{asset.source}</div>
+                              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>来源：{asset.source}</div>
                             )}
                           </li>
                         ))}

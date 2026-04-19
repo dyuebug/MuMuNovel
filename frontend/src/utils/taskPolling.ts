@@ -16,7 +16,7 @@ interface WaitForBackgroundTaskCompletionOptions<
   TResult,
 > {
   pollTask: (taskId: string) => Promise<TTask>;
-  sseOptions?: SSEClientOptions;
+  sseOptions?: SSEClientOptions<TResult>;
   pollIntervalMs?: number;
   progressMessage?: string;
   initialStatus?: string;
@@ -45,11 +45,11 @@ const hasTerminalResult = (task: Pick<PollableBackgroundTask, 'result'>) => (
 export const formatBackgroundTaskError = (
   error?: string | null,
   message?: string | null,
-  fallback = '??????'
+  fallback = '任务执行失败'
 ): string => {
   const normalizedError = typeof error === 'string' ? error.trim() : '';
   if (normalizedError === 'task_missing') {
-    return '??????????????????';
+    return '后台任务不存在或已被清理';
   }
 
   const normalizedMessage = typeof message === 'string' ? message.trim() : '';
@@ -65,11 +65,11 @@ export const waitForBackgroundTaskCompletion = <
     pollTask,
     sseOptions,
     pollIntervalMs = 1500,
-    progressMessage = '???????',
+    progressMessage = '正在同步状态',
     initialStatus = task.status,
-    failureFallbackMessage = '????????',
-    cancelledFallbackMessage = '???????',
-    pollErrorFallbackMessage = '????????',
+    failureFallbackMessage = '任务执行失败',
+    cancelledFallbackMessage = '任务已取消',
+    pollErrorFallbackMessage = '任务状态轮询失败',
     createPollError = (error, fallbackMessage) => (
       error instanceof Error ? error : new Error(fallbackMessage)
     ),
@@ -96,7 +96,7 @@ export const waitForBackgroundTaskCompletion = <
       stopPolling();
       settled = true;
       if (hasTerminalResult(latestTask)) {
-        sseOptions?.onResult?.(latestTask.result);
+        sseOptions?.onResult?.(latestTask.result as TResult);
       }
       sseOptions?.onComplete?.();
       resolve(resolveValue(latestTask));

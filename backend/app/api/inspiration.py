@@ -1,7 +1,8 @@
-"""灵感模式API - 通过对话引导创建项目"""
+"""灵感模式 API - 通过对话式引导创建项目。"""
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any
+from datetime import datetime
 import json
 import re
 
@@ -9,6 +10,7 @@ from app.database import get_db
 from app.services.ai_service import AIService
 from app.api.settings import get_user_ai_service
 from app.services.prompt_service import PromptService
+from app.services.chapter_web_research_service import chapter_web_research_service
 from app.logger import get_logger
 
 router = APIRouter(prefix="/inspiration", tags=["灵感模式"])
@@ -17,57 +19,57 @@ logger = get_logger(__name__)
 
 # 不同阶段的temperature设置（递减以保持一致性）
 TEMPERATURE_SETTINGS = {
-    "title": 0.9,        # 书名阶段鼓励更强创意跳跃
-    "description": 0.78, # 简介阶段兼顾画面感与一致性
-    "theme": 0.72,       # 主题阶段保持角度分化
-    "genre": 0.62        # 类型标签仍需清晰，但不做过度收窄
+    "title": 0.9,
+    "description": 0.78,
+    "theme": 0.72,
+    "genre": 0.62,
 }
 
 COMMON_INSPIRATION_STYLE_GUARD = """
 【风格与可读性要求（必须遵守）】
-1. 用中国读者习惯的自然表达，避免公文腔、论文腔、模板腔
-2. 句子长短要有变化，不要全是同长度短句或流水账长句
-3. 可在合适位置少量使用网络语感，但必须克制，不能硬塞梗
-4. 优先写人物目标、阻碍、代价和情绪，不要只堆设定术语
-5. 如出现术语或设定名词，需补一句白话解释（例如“也就是……”）
-6. 避免高频模板开头：这是一个关于、讲述了、故事围绕、在这个世界里
-7. 只输出当前任务结果，不输出流程说明、调度术语或自我评注
-8. 信息不足时优先保住“目标→阻力→选择→后果”最小冲突链
-9. 六个选项必须有明显区分，至少覆盖不同切入角，不得只换同义词
-10. 叙述要带具体场景感或动作感，避免只给抽象大词
-11. 避免“鸡汤式收尾”和“下章预告式空话”，优先保留具体冲突钩子
-12. 优先给可传播记忆点：反常识信息、极端选择、倒计时压力三者至少命中其一
+1. 使用中文网文读者习惯的自然表达，避免公文腔、论文腔和模板腔。
+2. 句子长短要有变化，避免整段都是同长度短句或流水账长句。
+3. 可以少量借用网络语感，但必须克制，不能堆砌流行词。
+4. 优先写人物目标、阻碍、代价和情绪，不要只堆设定名词。
+5. 如果出现术语或特殊设定，要顺手补一句白话解释。
+6. 避免高频模板开头，例如“这是一个关于……”或“故事围绕……”这类空泛引入。
+7. 只输出当前任务结果，不输出流程说明、调度术语或自我评价。
+8. 信息不足时，优先保住“目标 → 阻力 → 选择 → 后果”的最小冲突链。
+9. 六个选项必须有明显区分，至少覆盖不同切入角度，不能只换同义词。
+10. 描述要带具体场景感或动作感，避免只给抽象大词。
+11. 避免“鸡汤式收尾”和“下章预告式空话”，优先保留具体冲突钩子。
+12. 优先给可传播的记忆点：反常识信息、极端选择、倒计时压力，至少命中其一。
 """
 
 STEP_EXTRA_STYLE_GUARD = {
     "title": """
-【书名专项】
-- 风格要拉开差异，避免同构词组批量改写
-- 名称要好记、上口，避免生造复杂词
-- 至少覆盖六种命名策略中的四种：身份反差、强事件、关系张力、情绪钩子、世界异化、命运抉择
-""",
+    【书名专项】
+    - 风格要拉开差异，避免同构词组批量改写。
+    - 名称要顺口、好记，避免生造拗口长词。
+    - 至少覆盖以下命名策略中的四种：身份反差、强事件、关系张力、情绪钩子、世界观异化、命运投择。
+    """,
     "description": """
-【简介专项】
-- 每个选项都要体现：主角当下目标 + 关键阻碍/代价（至少命中其一）
-- 冲突要能被读者感知，不要只写抽象观点
-- 6个选项开场方式要有明显变化（动作切入/对白切入/结果倒叙/困境切入等）
-- 开头前30字尽量出现冲突触发、异常变化或高压任务，不要慢热
-- 至少2个选项使用“短句爆点开场”，至少2个选项出现“却/偏偏/结果/直到”等反转连接
-""",
+    【简介专项】
+    - 每个选项都要体现：主角当前目标 + 关键阻碍或代价。
+    - 冲突必须让读者感知得到，不能只写抽象观点。
+    - 六个选项的开场方式要明显变化，比如动作切入、对话切入、结果倒叙、困境切入等。
+    - 开头尽量尽快出现冲突触发、异常变化或高压任务，不要慢热铺垫。
+    - 至少两个选项使用短句爆点开场，至少两个选项带明确转折连接词。
+    """,
     "theme": """
-【主题专项】
-- 主题要先给人话结论，再落回冲突现场，避免“高概念空转”
-- 保持情绪温度，别写成教科书总结
-- 每个主题都要包含一个“价值冲突对撞点”，避免全是正确废话
-- 每个主题尽量采用“命题句→冲突现场→情绪余震”三拍结构
-- 至少1个主题包含“反常识但合理”的价值碰撞点
-""",
+    【主题专项】
+    - 主题要先给人话结论，再落回角色冲突现场，避免高概念空转。
+    - 保持情绪温度，不要写成教科书总结。
+    - 每个主题都要包含一个价值冲突对撞点，避免全是正确废话。
+    - 优先采用“命题句 → 冲突现场 → 情绪余震”的三拍结构。
+    - 至少一个主题要体现“反常识但合理”的价值碰撞。
+    """,
     "genre": """
-【类型专项】
-- 标签以读者常见认知为主，可组合但不要互相冲突
-- 禁止生造难懂标签
-- 至少体现“主赛道 + 冲突气质”两个维度
-""",
+    【类型专项】
+    - 标签以读者常见认知为主，可以组合，但不要互相冲突。
+    - 禁止生造难懂标签。
+    - 至少体现“主赛道 + 冲突气质”两个维度。
+    """,
 }
 
 INSPIRATION_ALLOWED_PERSPECTIVES = ("第一人称", "第三人称", "全知视角")
@@ -92,7 +94,6 @@ _TEMPLATEY_PREFIXES = (
 _SETTING_JARGON_WORDS = (
     "门影",
     "回灌",
-    "熵值",
     "锚点",
     "协议体",
     "模因",
@@ -120,7 +121,7 @@ _TEMPLATEY_ENDING_HINTS = (
 _WORKFLOW_META_PATTERNS = (
     r"执行\s*\d+(?:\.\d+)*",
     r"调用\s*agent",
-    r"方案\s*[ab](?:\s*[/、-]\s*[ab])?",
+    r"方案\s*[ab](?:\s*[/、]\s*[ab])?",
     r"流程(?:说明|总结|复盘)",
     r"步骤\s*\d+",
     r"(?:作为|身为)\s*(?:ai|助手|模型)",
@@ -128,24 +129,23 @@ _WORKFLOW_META_PATTERNS = (
 _CONFLICT_CONNECTOR_WORDS = (
     "却",
     "偏偏",
-    "但",
+    "但是",
     "结果",
     "直到",
     "否则",
     "代价",
 )
 _ACTION_HINT_WORDS = (
-    "冲",
-    "闯",
+    "追",
+    "问",
     "推开",
     "拦住",
-    "追",
     "逃",
-    "砸",
+    "退",
+    "破",
     "开口",
-    "签",
+    "撞",
     "掏出",
-    "扣下",
     "按下",
     "谈判",
     "对峙",
@@ -254,6 +254,117 @@ def _build_quick_generate_existing_text(data: Dict[str, Any]) -> str:
 def _normalize_text(value: str) -> str:
     lowered = (value or "").strip().lower()
     return re.sub(r"[^\w\u4e00-\u9fff]+", "", lowered)
+
+
+def _normalize_research_text(value: Any, limit: int = 180) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _serialize_inspiration_research_assets(value: Any) -> list[Dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+
+    assets: list[Dict[str, str]] = []
+    for item in value[:4]:
+        if not isinstance(item, dict):
+            continue
+        title = _normalize_research_text(item.get("title") or item.get("source") or "参考资料", 120)
+        source = _normalize_research_text(item.get("source"), 300)
+        summary = _normalize_research_text(item.get("summary") or item.get("raw_content") or item.get("title"), 220)
+        if not title and not source and not summary:
+            continue
+        assets.append({
+            "title": title or source or "参考资料",
+            "source": source,
+            "summary": summary,
+        })
+    return assets
+
+
+def _compose_inspiration_research_seed(step: str, context: Dict[str, Any], feedback: str = "") -> str:
+    step_label_map = {
+        "title": "小说书名创意",
+        "description": "小说简介与冲突设计",
+        "theme": "小说主题与价值冲突",
+        "genre": "小说类型定位与读者偏好",
+    }
+    parts = [
+        step_label_map.get(step, step),
+        _normalize_research_text(context.get("initial_idea"), 120),
+        _normalize_research_text(context.get("title"), 80),
+        _normalize_research_text(context.get("description"), 140),
+        _normalize_research_text(context.get("theme"), 100),
+        _normalize_research_text(feedback, 100),
+    ]
+    parts = [part for part in parts if part]
+    return _normalize_research_text(" | ".join(parts), 320)
+
+
+def _build_inspiration_research_note(bundle: Dict[str, Any]) -> str:
+    query = _normalize_research_text(bundle.get("query"), 320)
+    assets = _serialize_inspiration_research_assets(bundle.get("assets"))
+    if not query and not assets:
+        return ""
+
+    lines = ["【联网检索参考（仅作灵感增强）】"]
+    if query:
+        lines.append(f"- 检索主题：{query}")
+    for index, asset in enumerate(assets, start=1):
+        title = asset.get("title") or "参考资料"
+        source = asset.get("source") or ""
+        summary = asset.get("summary") or ""
+        title_line = f"- 资料{index}：{title}"
+        if source:
+            title_line += f" | {source}"
+        lines.append(title_line)
+        if summary:
+            lines.append(f"  摘要：{summary}")
+    lines.append("请只吸收可验证的趋势、职业细节、场景信息与语感方向，不要直接照抄外部文本。")
+    return "\n".join(lines)
+
+
+async def _build_inspiration_research_bundle(
+    *,
+    step: str,
+    context: Dict[str, Any],
+    user_id: str | None,
+    db_session: AsyncSession,
+    enable_web_research: Any,
+    web_research_query: Any,
+    feedback: str = "",
+) -> Dict[str, Any]:
+    custom_query = _normalize_research_text(web_research_query, 320)
+    seed = custom_query or _compose_inspiration_research_seed(step, context, feedback)
+    grok_context = _normalize_research_text(custom_query or seed, 260)
+    if not seed and not grok_context:
+        return {"enabled": False, "query": "", "assets": []}
+
+    try:
+        return await chapter_web_research_service.collect_assets(
+            user_id=user_id,
+            db_session=db_session,
+            exa_query=seed,
+            grok_query=(
+                f"请围绕以下中文小说创作需求进行实时联网研究，重点整理题材趋势、读者关注点、职业与场景细节、可借鉴的语感方向，并尽量附带来源：{grok_context}"
+            ) if grok_context else "",
+            enable_web_research=enable_web_research,
+            archive_scope=f"inspiration_{user_id or 'anonymous'}",
+            archive_id=f"{step}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
+            metadata={"step": step},
+        )
+    except Exception as exc:
+        logger.warning("灵感阶段联网检索失败: %s", exc, exc_info=True)
+        return {"enabled": True, "query": custom_query or seed, "assets": [], "error": str(exc)}
+
+
+def _attach_inspiration_research_payload(result: Dict[str, Any], bundle: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(result or {})
+    payload["research_query"] = _normalize_research_text(bundle.get("query"), 320)
+    payload["research_assets"] = _serialize_inspiration_research_assets(bundle.get("assets"))
+    return payload
 
 
 def _contains_unexplained_jargon(text: str) -> bool:
@@ -480,14 +591,24 @@ async def generate_options(
                 "description": context.get("description", ""),
                 "theme": context.get("theme", "")
             }
+            research_bundle = await _build_inspiration_research_bundle(
+                step=step,
+                context=context,
+                user_id=user_id,
+                db_session=db,
+                enable_web_research=data.get("enable_web_research"),
+                web_research_query=data.get("web_research_query"),
+            )
             
-            # 格式化提示词
+            # Build prompts
             system_prompt = system_template.format(**format_params)
             user_prompt = user_template.format(**format_params)
             style_guard = _build_style_guard(step)
             system_prompt = f"{system_prompt}\n\n{style_guard}"
+            research_note = _build_inspiration_research_note(research_bundle)
+            if research_note:
+                system_prompt = f"{system_prompt}\n\n{research_note}"
             
-            # 如果是重试，在提示词中强调格式要求
             if attempt > 0:
                 system_prompt += f"\n\n这是第{attempt + 1}次生成，请只返回合法JSON，并确保options里有6个有效选项。"
             
@@ -533,7 +654,7 @@ async def generate_options(
                         }
                 
                 logger.info(f"✅ 第{attempt + 1}次成功生成{len(result.get('options', []))}个有效选项")
-                return result
+                return _attach_inspiration_research_payload(result, research_bundle)
                 
             except json.JSONDecodeError as e:
                 logger.error(f"第{attempt + 1}次JSON解析失败: {e}")
@@ -642,31 +763,39 @@ async def refine_options(
                 "description": context.get("description", ""),
                 "theme": context.get("theme", "")
             }
+            research_bundle = await _build_inspiration_research_bundle(
+                step=step,
+                context=context,
+                user_id=user_id,
+                db_session=db,
+                enable_web_research=data.get("enable_web_research"),
+                web_research_query=data.get("web_research_query"),
+                feedback=feedback,
+            )
             
-            # 格式化提示词
+            # Build prompts
             system_prompt = system_template.format(**format_params)
             user_prompt = user_template.format(**format_params)
             style_guard = _build_style_guard(step)
             system_prompt = f"{system_prompt}\n\n{style_guard}"
+            research_note = _build_inspiration_research_note(research_bundle)
+            if research_note:
+                system_prompt = f"{system_prompt}\n\n{research_note}"
             
-            # 添加反馈信息到提示词
             feedback_instruction = f"""
 
 用户对上一轮选项不满意，反馈如下：
-「{feedback}」
-
+【{feedback}】
 上一轮选项：
 {chr(10).join([f"- {opt}" for opt in previous_options]) if previous_options else "（无）"}
 
-请根据反馈调整方向，给出更贴近用户预期的新选项。
-要求：
-1. 先理解反馈意图，再改写方向
-2. 新选项要体现用户提出的偏好变化
-3. 与已有上下文保持一致，不跑题
-4. 返回6个有效选项
-5. 至少2个选项必须明显跳出上一轮表达结构，不能只做同义改写
+请根据反馈调整方向，给出更贴近用户预期的新选项。要求：
+1. 先理解反馈意图，再改写方向。
+2. 新选项要体现用户提出的偏好变化。
+3. 与现有上下文保持一致，不跑题。
+4. 返回 6 个有效选项。
+5. 至少 2 个选项必须明显跳出上一轮表达结构，不能只做同义改写。
 """
-            
             system_prompt += feedback_instruction
             
             # 如果是重试，强调格式要求
@@ -712,7 +841,7 @@ async def refine_options(
                         }
                 
                 logger.info(f"✅ 第{attempt + 1}次根据反馈成功生成{len(result.get('options', []))}个有效选项")
-                return result
+                return _attach_inspiration_research_payload(result, research_bundle)
                 
             except json.JSONDecodeError as e:
                 logger.error(f"第{attempt + 1}次JSON解析失败: {e}")

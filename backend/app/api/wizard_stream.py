@@ -256,6 +256,52 @@ def _compose_research_seed(*values: Any, limit: int = 320) -> str:
     return seed[:limit]
 
 
+
+def _normalize_reference_research_assets(value: Any, limit: int = 6) -> list[Dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[Dict[str, str]] = []
+    for item in value[:limit]:
+        if not isinstance(item, dict):
+            continue
+        title = _normalize_research_text(item.get("title") or item.get("source") or "参考资料", 120)
+        source = _normalize_research_text(item.get("source"), 300)
+        summary = _normalize_research_text(item.get("summary") or item.get("raw_content") or item.get("title"), 220)
+        if not title and not source and not summary:
+            continue
+        normalized.append({
+            "title": title or source or "参考资料",
+            "source": source,
+            "summary": summary,
+        })
+    return normalized
+
+
+def _merge_reference_research_assets(*asset_groups: list[Dict[str, str]], limit: int = 8) -> list[Dict[str, str]]:
+    merged: list[Dict[str, str]] = []
+    seen: set[str] = set()
+    for group in asset_groups:
+        for asset in group or []:
+            title = _normalize_research_text(asset.get("title"), 120)
+            source = _normalize_research_text(asset.get("source"), 300)
+            summary = _normalize_research_text(asset.get("summary"), 220)
+            if not title and not source and not summary:
+                continue
+            key = f"{title}|{source}|{summary}".lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append({
+                "title": title or source or "参考资料",
+                "source": source,
+                "summary": summary,
+            })
+            if len(merged) >= limit:
+                return merged
+    return merged
+
+
 async def _save_project_research_assets(
     *,
     db: AsyncSession,
@@ -323,6 +369,7 @@ async def world_building_generator(
         enable_web_research = data.get("enable_web_research")
         web_research_query = data.get("web_research_query")
         user_id = data.get("user_id")  # 从中间件注入
+        reference_research_assets = _normalize_reference_research_assets(data.get("reference_research_assets"))
         
         if not title or not description or not theme or not genre:
             yield await tracker.error("title、description、theme 和 genre 是必需的参数", 400)
@@ -349,7 +396,10 @@ async def world_building_generator(
             archive_id=f"world_building_{datetime.now().strftime('%Y%m%d%H%M%S')}",
             metadata={"title": title, "theme": theme, "genre": genre},
         )
-        world_research_assets = list(world_research_bundle.get("assets") or [])
+        world_research_assets = _merge_reference_research_assets(
+            reference_research_assets,
+            list(world_research_bundle.get("assets") or []),
+        )
         template = await PromptService.get_template("WORLD_BUILDING", user_id, db)
         base_prompt = PromptService.format_prompt(
             template,
@@ -632,6 +682,7 @@ async def career_system_generator(
         enable_web_research = data.get("enable_web_research")
         web_research_query = data.get("web_research_query")
         user_id = data.get("user_id")
+        reference_research_assets = _normalize_reference_research_assets(data.get("reference_research_assets"))
         
         if not project_id:
             yield await tracker.error("project_id 是必需的参数", 400)
@@ -683,7 +734,10 @@ async def career_system_generator(
             archive_id="wizard_careers",
             metadata={"project_id": project.id, "context": "careers"},
         )
-        careers_research_assets = list(careers_research_bundle.get("assets") or [])
+        careers_research_assets = _merge_reference_research_assets(
+            reference_research_assets,
+            list(careers_research_bundle.get("assets") or []),
+        )
         template = await PromptService.get_template("CAREER_SYSTEM_GENERATION", user_id, db)
         career_prompt = PromptService.format_prompt(
             template,
@@ -955,6 +1009,7 @@ async def characters_generator(
         enable_web_research = data.get("enable_web_research")
         web_research_query = data.get("web_research_query")
         user_id = data.get("user_id")  # 从中间件注入
+        reference_research_assets = _normalize_reference_research_assets(data.get("reference_research_assets"))
         
         # 验证项目
         yield await tracker.loading("验证项目...", 0.3)
@@ -1000,7 +1055,10 @@ async def characters_generator(
             archive_id="wizard_characters",
             metadata={"project_id": project.id, "context": "characters"},
         )
-        characters_research_assets = list(characters_research_bundle.get("assets") or [])
+        characters_research_assets = _merge_reference_research_assets(
+            reference_research_assets,
+            list(characters_research_bundle.get("assets") or []),
+        )
         
         # 获取项目的职业列表，用于角色职业分配
         yield await tracker.loading("加载职业体系...", 0.8)
@@ -1678,6 +1736,7 @@ async def outline_generator(
         enable_web_research = data.get("enable_web_research")
         web_research_query = data.get("web_research_query")
         user_id = data.get("user_id")  # 从中间件注入
+        reference_research_assets = _normalize_reference_research_assets(data.get("reference_research_assets"))
         
         # 获取项目信息
         yield await tracker.loading("加载项目信息...", 0.3)
@@ -1758,7 +1817,10 @@ async def outline_generator(
             archive_id="wizard_outline",
             metadata={"project_id": project.id, "context": "outline", "outline_count": outline_count},
         )
-        outline_research_assets = list(outline_research_bundle.get("assets") or [])
+        outline_research_assets = _merge_reference_research_assets(
+            reference_research_assets,
+            list(outline_research_bundle.get("assets") or []),
+        )
         template = await PromptService.get_template("OUTLINE_CREATE", user_id, db)
         outline_prompt = PromptService.format_prompt(
             template,

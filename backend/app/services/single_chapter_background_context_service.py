@@ -1,4 +1,4 @@
-"""??????????? helper?"""
+"""单章后台上下文 helper。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -57,7 +57,7 @@ async def build_single_chapter_background_execution_context(
         style_id=style_id,
         enable_mcp=True,
         prefer_project_default_style=not bool(style_id),
-        log_prefix="??????",
+        log_prefix="单章生成",
     )
     return SingleChapterBackgroundExecutionContext(
         target_word_count=target_word_count,

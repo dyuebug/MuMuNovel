@@ -204,21 +204,21 @@ def _infer_batch_progress_phase(
     if normalized_event == 'analysis_started':
         return 'parsing'
 
-    if '??' in text or 'cancel' in text:
+    if '取消' in text or 'cancel' in text:
         return 'cancelled'
-    if '??' in text or 'complete' in text or 'done' in text:
+    if '完成' in text or 'complete' in text or 'done' in text:
         return 'complete'
-    if '??' in text or 'save' in text:
+    if '保存' in text or 'save' in text:
         return 'saving'
-    if '??' in text or 'analysis' in text or '??' in text or 'parse' in text:
+    if '分析' in text or 'analysis' in text or '解析' in text or 'parse' in text:
         return 'parsing'
-    if '??' in text or 'retry' in text:
+    if '重试' in text or 'retry' in text:
         return 'generating'
-    if '??' in text or '??' in text or 'generate' in text:
+    if '生成' in text or '写作' in text or 'generate' in text:
         return 'generating'
-    if '??' in text or 'prepare' in text:
+    if '准备' in text or 'prepare' in text:
         return 'preparing'
-    if '??' in text or 'load' in text:
+    if '加载' in text or 'load' in text:
         return 'loading'
 
     if progress is None:
