@@ -80,6 +80,20 @@ const statusPriority: Record<TrackedBackgroundTask['status'], number> = {
   completed: 4,
 };
 
+const getErrorResponseStatus = (error: unknown): number | null => {
+  if (typeof error !== 'object' || error === null || !('response' in error)) {
+    return null;
+  }
+
+  const response = (error as { response?: unknown }).response;
+  if (typeof response !== 'object' || response === null || !('status' in response)) {
+    return null;
+  }
+
+  const status = (response as { status?: unknown }).status;
+  return typeof status === 'number' ? status : null;
+};
+
 type TaskSection = {
   key: string;
   title: string;
@@ -766,8 +780,8 @@ export default function BackgroundTaskCenter() {
       const backgroundRequest = backgroundTasksApiSupported
         ? backgroundTaskApi.listTasks({ active_only: true, limit: 100 })
           .then((response) => ({ ok: true, items: response.items || [] }))
-          .catch((error: any) => {
-            if (error?.response?.status === 404) {
+          .catch((error: unknown) => {
+            if (getErrorResponseStatus(error) === 404) {
               backgroundTasksApiSupported = false;
             }
             return { ok: false, items: [] as Array<{ task_id: string }> };
@@ -777,8 +791,8 @@ export default function BackgroundTaskCenter() {
       const chapterRequest = chapterActiveTasksApiSupported
         ? chapterBatchTaskApi.listActiveTasks(100)
           .then((response) => ({ ok: true, items: response.items || [] }))
-          .catch((error: any) => {
-            if (error?.response?.status === 404) {
+          .catch((error: unknown) => {
+            if (getErrorResponseStatus(error) === 404) {
               chapterActiveTasksApiSupported = false;
             }
             return { ok: false, items: [] as Array<{ batch_id: string }> };
@@ -845,8 +859,8 @@ export default function BackgroundTaskCenter() {
     if (activeTasks.length === 0) return;
 
     let stopped = false;
-    const handleMissingTask = (taskId: string, error: any) => {
-      if (error?.response?.status !== 404) return;
+    const handleMissingTask = (taskId: string, error: unknown) => {
+      if (getErrorResponseStatus(error) !== 404) return;
       removeTask(taskId);
     };
     const poll = async () => {
@@ -856,12 +870,12 @@ export default function BackgroundTaskCenter() {
           if (task.taskType === 'chapters_batch_generate') {
             return chapterBatchTaskApi
               .getBatchGenerateStatus(task.taskId, task.projectId)
-              .catch((error: any) => handleMissingTask(task.taskId, error));
+              .catch((error: unknown) => handleMissingTask(task.taskId, error));
           }
           if (task.taskType === 'chapter_single_generate') {
             return chapterSingleTaskApi
               .getSingleGenerateTaskStatus(task.taskId, task.projectId)
-              .catch((error: any) => handleMissingTask(task.taskId, error));
+              .catch((error: unknown) => handleMissingTask(task.taskId, error));
           }
           if (task.taskType === 'chapter_analysis') {
             const chapterId = typeof task.checkpoint?.chapter_id === 'string'
@@ -870,11 +884,11 @@ export default function BackgroundTaskCenter() {
             if (!chapterId) return Promise.resolve(null);
             return chapterApi
               .getChapterAnalysisStatus(chapterId, task.projectId)
-              .catch((error: any) => handleMissingTask(task.taskId, error));
+              .catch((error: unknown) => handleMissingTask(task.taskId, error));
           }
           return backgroundTaskApi
             .getTaskStatus(task.taskId)
-            .catch((error: any) => handleMissingTask(task.taskId, error));
+            .catch((error: unknown) => handleMissingTask(task.taskId, error));
         })
       );
     };

@@ -310,15 +310,6 @@ export default function Characters() {
 
 
 
-  useEffect(() => {
-    return () => {
-      currentTaskIdRef.current = null;
-      taskCreationInFlightRef.current = false;
-    };
-  }, []);
-
-
-
   const handleDeleteCharacter = useCallback(async (id: string) => {
     try {
       await deleteCharacter(id);
@@ -387,6 +378,13 @@ export default function Characters() {
     }),
   });
 
+  useEffect(() => {
+    return () => {
+      currentTaskIdRef.current = null;
+      taskCreationInFlightRef.current = false;
+    };
+  }, [currentTaskIdRef]);
+
 
 
   useEffect(() => {
@@ -409,7 +407,7 @@ export default function Characters() {
 
     markCharacterTaskRefreshHandled(completedTask.taskId);
     void refreshCharacters(currentProject.id);
-  }, [currentProject?.id, isGenerating, refreshCharacters, trackedTasks]);
+  }, [currentProject?.id, currentTaskIdRef, isGenerating, refreshCharacters, trackedTasks]);
 
 
 

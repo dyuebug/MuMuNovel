@@ -86,3 +86,19 @@ You can override the target URL when needed:
 ```bash
 E2E_BASE_URL=http://127.0.0.1:5175 npm run e2e:auth
 ```
+
+The background-task and inspiration smoke suites use a real backend and are intentionally skipped unless `E2E_REAL_BACKEND=1` is set.
+
+```bash
+E2E_REAL_BACKEND=1 npx playwright test \
+  e2e/wizard-background-tasks.spec.ts \
+  e2e/inspiration-resume.spec.ts \
+  e2e/inspiration-web-research-payload.spec.ts \
+  --reporter=line
+```
+
+These suites currently cover:
+
+- shared execution settings hints on background-task pages
+- stale inspiration resume state cleanup
+- web research payload pass-through and research summary rendering

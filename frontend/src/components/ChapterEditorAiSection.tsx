@@ -1,8 +1,7 @@
 import { memo, useEffect, useMemo, useState } from 'react';
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Button, Card, Form, Input, InputNumber, Select, Space, Tag } from 'antd';
 import { chapterApi } from '../services/api';
-import type { ChapterQualityMetrics, ChapterQualityProfileSummary } from '../types';
+import type { ChapterQualityMetrics, ChapterQualityProfileSummary, CreativeMode, PlotStage, StoryFocus } from '../types';
 import CompactPromptPreviewPanel from './CompactPromptPreviewPanel';
 import StoryCreationSnapshotPanel from './StoryCreationSnapshotPanel';
 import { renderCompactPresetRecommendationBlock } from './storyCreationPresetUi';
@@ -28,6 +27,7 @@ import {
   getQualityProfileDisplayItems,
   getRepairGuidanceDisplay,
   getWeakestQualityMetric,
+  type QualityProfileDisplayItem,
 } from '../utils/storyCreationQualitySummary';
 import { DEFAULT_WORD_COUNT, setCachedWordCount } from '../utils/storyCreationWordCount';
 import {
@@ -37,19 +37,37 @@ import {
   isStorySceneOutlineDraftEmpty,
   STORY_BEAT_PLANNER_FIELDS,
   STORY_SCENE_OUTLINE_FIELDS,
+  type StoryBeatPlannerDraft,
+  type StorySceneOutlineDraft,
 } from '../utils/storyCreationDraft';
 import {
   buildCreationPresetRecommendation,
   buildScoreDrivenRecommendationCard,
   buildStoryAfterScorecard,
 } from '../utils/creationPresetsQuality';
-import { CREATION_PLOT_STAGE_OPTIONS, CREATION_PRESETS, getCreationPresetByModes } from '../utils/creationPresetsCore';
+import {
+  CREATION_PLOT_STAGE_OPTIONS,
+  CREATION_PRESETS,
+  getCreationPresetByModes,
+  type StoryAcceptanceCard,
+  type StoryCharacterArcCard,
+  type StoryCreationControlCard,
+  type StoryExecutionChecklist,
+  type StoryObjectiveCard,
+  type StoryRepairTargetCard,
+  type StoryRepetitionRiskCard,
+  type StoryResultCard,
+} from '../utils/creationPresetsCore';
+import type { PreferenceOption } from '../utils/generationPreferenceOptions';
 
 const { TextArea } = Input;
 
-const normalizeAvailableModelOptions = (models: any[]): Array<{ value: string; label: string }> => {
+type ModelOption = { value?: unknown; label?: unknown };
+type NormalizedModelOption = { value: string; label: string };
+
+const normalizeAvailableModelOptions = (models: ModelOption[]): NormalizedModelOption[] => {
   const seenValues = new Set<string>();
-  return models.reduce((options: Array<{ value: string; label: string }>, model: any) => {
+  return models.reduce((options: NormalizedModelOption[], model) => {
     const value = typeof model?.value === 'string' ? model.value.trim() : '';
     if (!value || seenValues.has(value)) {
       return options;
@@ -64,8 +82,66 @@ const normalizeAvailableModelOptions = (models: any[]): Array<{ value: string; l
   }, []);
 };
 
+type ChapterEditorAiSectionSectionProps = {
+  currentEditingChapterId: string | null;
+  currentEditingChapterNumber: number | null;
+  applySingleCreationPreset: (presetId: string) => void;
+  projectDefaultCreativeMode?: CreativeMode;
+  setSelectedCreativeMode: (value?: CreativeMode) => void;
+  projectDefaultStoryFocus?: StoryFocus;
+  setSelectedStoryFocus: (value?: StoryFocus) => void;
+  selectedPlotStage?: PlotStage;
+  setSelectedPlotStage: (value?: PlotStage) => void;
+  singleStoryCreationControlCard: StoryCreationControlCard | null;
+  isSingleStoryCreationControlCustomized: boolean;
+  setSingleStoryCreationBriefDraft: (value: string) => void;
+  singleSystemStoryCreationBrief: string;
+  singleStoryCreationBriefDraft: string;
+  isSingleStoryCreationBriefCustomized: boolean;
+  singleStoryBeatPlannerDraft: StoryBeatPlannerDraft;
+  setSingleStoryBeatPlannerDraft: (value: StoryBeatPlannerDraft | ((prev: StoryBeatPlannerDraft) => StoryBeatPlannerDraft)) => void;
+  singleSystemStoryBeatPlanner: StoryBeatPlannerDraft;
+  isSingleStoryBeatPlannerCustomized: boolean;
+  isSingleStorySceneOutlineCustomized: boolean;
+  setSingleStorySceneOutlineDraft: (value: StorySceneOutlineDraft | ((prev: StorySceneOutlineDraft) => StorySceneOutlineDraft)) => void;
+  singleSuggestedStorySceneOutline: StorySceneOutlineDraft;
+  singleStorySceneOutlineDraft: StorySceneOutlineDraft;
+  resolvedSingleStoryCreationBrief: string;
+  singleStoryCreationPromptLayerLabels: string[];
+  singleStoryCreationPromptCharCount: number;
+  isSingleStoryCreationPromptVerbose: boolean;
+  STORY_CREATION_PROMPT_WARN_THRESHOLD: number;
+  copyStoryCreationPrompt: (content: string | undefined, scopeLabel: 'single' | 'batch') => Promise<void>;
+  singleStoryCreationSnapshots: unknown[];
+  singleStoryCreationCurrentDraft: unknown;
+  canSaveSingleStoryCreationSnapshot: boolean;
+  saveSingleStoryCreationSnapshot: (reason: 'manual' | 'generate') => Promise<void>;
+  applySingleStoryCreationSnapshot: (snapshot: unknown) => void;
+  deleteSingleStoryCreationSnapshot: (snapshotId: string) => void;
+  singleStoryAcceptanceCard: StoryAcceptanceCard | null;
+  singleStoryCharacterArcCard: StoryCharacterArcCard | null;
+  singleStoryExecutionChecklist: StoryExecutionChecklist | null;
+  singleStoryObjectiveCard: StoryObjectiveCard | null;
+  singleStoryRepairTargetCard: StoryRepairTargetCard | null;
+  singleStoryRepetitionRiskCard: StoryRepetitionRiskCard | null;
+  singleStoryResultCard: StoryResultCard | null;
+  isMobile: boolean;
+  targetWordCount: number;
+  CREATIVE_MODE_OPTIONS: PreferenceOption<CreativeMode>[];
+  selectedCreativeMode?: CreativeMode;
+  STORY_FOCUS_OPTIONS: PreferenceOption<StoryFocus>[];
+  selectedStoryFocus?: StoryFocus;
+  availableModels: ModelOption[];
+  selectedModel?: string;
+  setSelectedModel: (value?: string) => void;
+  setTargetWordCount: (value: number) => void;
+  chapterQualityRefreshToken: number;
+  onChapterQualityMetricsChange: (metrics: ChapterQualityMetrics | null) => void;
+  knownStructureChapterCount: number;
+};
+
 type ChapterEditorAiSectionProps = {
-  sectionProps: any;
+  sectionProps: ChapterEditorAiSectionSectionProps;
 };
 
 function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
@@ -347,13 +423,13 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
     );
 
     const selectedCreativeModeLabel = selectedCreativeMode
-      ? (CREATIVE_MODE_OPTIONS.find((item: any) => item.value === selectedCreativeMode)?.label || selectedCreativeMode)
+      ? (CREATIVE_MODE_OPTIONS.find((item) => item.value === selectedCreativeMode)?.label || selectedCreativeMode)
       : '默认推荐';
     const selectedStoryFocusLabel = selectedStoryFocus
-      ? (STORY_FOCUS_OPTIONS.find((item: any) => item.value === selectedStoryFocus)?.label || selectedStoryFocus)
+      ? (STORY_FOCUS_OPTIONS.find((item) => item.value === selectedStoryFocus)?.label || selectedStoryFocus)
       : '默认推荐';
     const selectedPlotStageLabel = selectedPlotStage
-      ? (CREATION_PLOT_STAGE_OPTIONS.find((item: any) => item.value === selectedPlotStage)?.label || selectedPlotStage)
+      ? (CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === selectedPlotStage)?.label || selectedPlotStage)
       : '自动推断';
     const selectedModelLabel = selectedModel
       ? (normalizedAvailableModels.find((item) => item.value === selectedModel)?.label || selectedModel)
@@ -374,7 +450,7 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
           style={{ marginBottom: 12 }}
         >
           <Space wrap>
-            {CREATION_PRESETS.map((preset: any) => (
+            {CREATION_PRESETS.map((preset) => (
               <Button
                 key={preset.id}
                 type={activeSingleCreationPreset?.id === preset.id ? 'primary' : 'default'}
@@ -433,7 +509,7 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                 {singleScoreDrivenRecommendationCard.alternatives.length > 0 && (
                   renderCompactListCard(
                     '备选方案',
-                    singleScoreDrivenRecommendationCard.alternatives.map((item: any) => (
+                    singleScoreDrivenRecommendationCard.alternatives.map((item) => (
                       item.reason ? `${item.label}：${item.reason}` : item.label
                     )),
                     { tagText: `${singleScoreDrivenRecommendationCard.alternatives.length}项` },
@@ -541,12 +617,12 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                     },
                   )}
                   <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                    {STORY_BEAT_PLANNER_FIELDS.map((field: any) => (
+                    {STORY_BEAT_PLANNER_FIELDS.map((field) => (
                       <div key={field.key}>
                         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{field.label}</div>
                         <Input
                           value={singleStoryBeatPlannerDraft[field.key]}
-                          onChange={(event) => setSingleStoryBeatPlannerDraft((prev: any) => ({
+                          onChange={(event) => setSingleStoryBeatPlannerDraft((prev: StoryBeatPlannerDraft) => ({
                             ...prev,
                             [field.key]: event.target.value,
                           }))}
@@ -580,12 +656,12 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                     },
                   )}
                   <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                    {STORY_SCENE_OUTLINE_FIELDS.map((field: any) => (
+                    {STORY_SCENE_OUTLINE_FIELDS.map((field) => (
                       <div key={field.key}>
                         <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{field.label}</div>
                         <TextArea
                           value={singleStorySceneOutlineDraft[field.key]}
-                          onChange={(event) => setSingleStorySceneOutlineDraft((prev: any) => ({
+                          onChange={(event) => setSingleStorySceneOutlineDraft((prev: StorySceneOutlineDraft) => ({
                             ...prev,
                             [field.key]: event.target.value,
                           }))}
@@ -708,7 +784,7 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
             {renderCompactListCard(
               "章节分段",
               singleVolumePacingPlan.segments.map(
-                (segment: any) => `第${segment.startChapter}-${segment.endChapter}章 · ${segment.label}：${segment.mission}`,
+                (segment) => `第${segment.startChapter}-${segment.endChapter}章 · ${segment.label}：${segment.mission}`,
               ),
               { tagText: `${singleVolumePacingPlan.segments.length}段` },
             )}
@@ -748,7 +824,7 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                 allowClear
                 optionLabelProp="label"
               >
-                {CREATIVE_MODE_OPTIONS.map((option: any) => (
+                {CREATIVE_MODE_OPTIONS.map((option) => (
                   <Select.Option key={option.value} value={option.value} label={option.label}>
                     <div>{option.label}</div>
                     <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{option.description}</div>
@@ -768,7 +844,7 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                 allowClear
                 optionLabelProp="label"
               >
-                {STORY_FOCUS_OPTIONS.map((option: any) => (
+                {STORY_FOCUS_OPTIONS.map((option) => (
                   <Select.Option key={option.value} value={option.value} label={option.label}>
                     <div>{option.label}</div>
                     <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{option.description}</div>
@@ -844,7 +920,7 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                 { tone: "success", style: { marginBottom: 10 } },
               )}
               {renderCompactFactGrid(
-                chapterQualityProfileItems.map((item: any) => [item.label, item.description] as [string, string]),
+                chapterQualityProfileItems.map((item: QualityProfileDisplayItem) => [item.label, item.description] as [string, string]),
               )}
             </>
           ) : (

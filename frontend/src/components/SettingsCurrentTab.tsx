@@ -932,7 +932,7 @@ export default function SettingsCurrentTab(props: any) {
                                       </div>
                                     )}
                                     {typeof webResearchTestResult.source_count === 'number' && webResearchSearchStatus === 'success_with_sources' && (
-                                      <div>????{webResearchTestResult.source_count}</div>
+                                      <div>来源数：{webResearchTestResult.source_count}</div>
                                     )}
                                     {webResearchTestResult.error && (
                                       <div style={{ color: 'var(--color-error)', marginTop: 8 }}>

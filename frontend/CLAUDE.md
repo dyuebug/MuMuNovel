@@ -410,10 +410,10 @@ export const eventBus = new EventBus();
 
 ### 当前状态
 
-- **单元测试**: 暂无
+- **单元测试**: 后端 `pytest` 已覆盖主要 API / service 回归，前端单元测试暂无
 - **组件测试**: 暂无
-- **E2E 测试**: 暂无
-- **代码检查**: ESLint 配置
+- **E2E 测试**: 已有 Playwright 用例，覆盖认证、后台任务页面、灵感恢复与联网研究透传链路
+- **代码检查**: ESLint + Vite build
 
 ### 建议补充
 
@@ -423,9 +423,9 @@ export const eventBus = new EventBus();
    - 测试状态变化
 
 2. **E2E 测试（Playwright）**
-   - 测试完整用户流程
-   - 测试跨页面交互
-   - 测试 SSE 流式响应
+   - 已有 `auth.spec.ts`、`wizard-background-tasks.spec.ts` 等回归用例
+   - 灵感模式补充了 stale resume 与联网研究透传 smoke coverage
+   - 真实后端链路需使用 `E2E_REAL_BACKEND=1` 运行
 
 3. **视觉回归测试**
    - 使用 Storybook 管理组件

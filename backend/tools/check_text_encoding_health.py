@@ -30,13 +30,42 @@ QMARK_PATTERN = re.compile(r"\?{3,}")
 MOJIBAKE_CHARS = {chr(code) for code in (0x00C3, 0x00C2, 0x00E6, 0x00E5, 0x00E4, 0x00E7, 0x00E9, 0x00E8, 0x00EA, 0x00EF, 0x00F0, 0x00F8, 0x00E3, 0x00E2)} | {chr(0xFFFD)}
 
 
+URL_PATTERN = re.compile(r"https?://\S+")
+REGEX_CALL_MARKERS = (
+    "re.compile(",
+    "re.search(",
+    "re.findall(",
+    "re.finditer(",
+    "re.fullmatch(",
+    "re.match(",
+    "re.split(",
+    "re.sub(",
+    "re.subn(",
+)
+REGEX_ASSIGNMENT_PATTERN = re.compile(r"\b(?:[A-Za-z_][A-Za-z0-9_]*pattern|pattern[A-Za-z0-9_]*)\b\s*=\s*r?[\"']")
+RAW_STRING_PATTERN = re.compile(r"r([\"']{1,3}).*?\1")
+
+
+NULLISH_COALESCE_PATTERN = re.compile(r"\?\?(?=\s*[A-Za-z_(\[])")
+OPTIONAL_CHAIN_PATTERN = re.compile(r"\?\.(?=[A-Za-z_(\[])")
+
+
+def strip_safe_qmark_contexts(line: str) -> str:
+    sanitized = URL_PATTERN.sub("", line)
+    sanitized = NULLISH_COALESCE_PATTERN.sub("", sanitized)
+    sanitized = OPTIONAL_CHAIN_PATTERN.sub("", sanitized)
+    if any(marker in sanitized for marker in REGEX_CALL_MARKERS) or REGEX_ASSIGNMENT_PATTERN.search(sanitized):
+        sanitized = RAW_STRING_PATTERN.sub('""', sanitized)
+    return sanitized
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Scan source files for encoding corruption")
     parser.add_argument(
         "--root",
         action="append",
         default=[],
-        help="Additional root to scan (relative to repo root, repeatable)",
+        help="Root to scan (relative to repo root, repeatable). When provided, only these roots are scanned",
     )
     parser.add_argument(
         "--strict-qmark",
@@ -47,12 +76,15 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_roots(extra_roots: Sequence[str]) -> List[Path]:
-    roots = [REPO_ROOT / item for item in DEFAULT_ROOTS]
-    for raw in extra_roots:
-        path = (REPO_ROOT / raw).resolve()
-        if path not in roots:
-            roots.append(path)
-    return roots
+    if extra_roots:
+        roots: List[Path] = []
+        for raw in extra_roots:
+            path = (REPO_ROOT / raw).resolve()
+            if path not in roots:
+                roots.append(path)
+        return roots
+
+    return [REPO_ROOT / item for item in DEFAULT_ROOTS]
 
 
 def is_text_file(path: Path) -> bool:
@@ -73,7 +105,7 @@ def has_cjk(text: str) -> bool:
 def detect_reasons(line: str, *, strict_qmark: bool) -> List[str]:
     reasons: List[str] = []
     qmark_pattern = re.compile(r"\?{2,}") if strict_qmark else QMARK_PATTERN
-    sanitized_line = re.sub(r"\?\?|\?\.(?=[A-Za-z_(\[])", "", line)
+    sanitized_line = strip_safe_qmark_contexts(line)
     if qmark_pattern.search(sanitized_line):
         reasons.append("qmark")
     if any(0x80 <= ord(ch) <= 0x9F for ch in line):
