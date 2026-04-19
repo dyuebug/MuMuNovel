@@ -9,10 +9,10 @@ from app.services import batch_generation_execution_service as batch_execution_s
 
 
 def test_should_build_batch_generation_request_payload_with_request_options_and_custom_model():
-    project = Project(id='project-1', title='??', user_id='user-1')
+    project = Project(id='project-1', title='Test Project', user_id='user-1')
     chapter_context = SimpleNamespace(
-        chapter_outline='????',
-        previous_chapter_summary='?????',
+        chapter_outline='outline',
+        previous_chapter_summary='summary',
     )
     ai_service = SimpleNamespace(api_provider='openai_responses')
 
@@ -23,11 +23,11 @@ def test_should_build_batch_generation_request_payload_with_request_options_and_
         return f"sys:{kwargs['style_name']}:{kwargs['target_word_count']}"
 
     payload = batch_execution_service.build_batch_generation_request_payload(
-        prompt='?????',
+        prompt='draft prompt',
         project=project,
         chapter_context=chapter_context,
-        style_content='??',
-        style_name='??',
+        style_content='style guide',
+        style_name='noir',
         style_preset_id='preset-1',
         target_word_count=1600,
         ai_service=ai_service,
@@ -48,13 +48,13 @@ def test_should_build_batch_generation_request_payload_with_request_options_and_
         resolve_generation_temperature_fn=lambda style_profile: 0.75,
     )
 
-    assert payload.system_prompt == 'sys:??:1600'
+    assert payload.system_prompt == 'sys:noir:1600'
     assert captured_runtime_prompt_kwargs['web_research_grounding_block']
     assert 'night market' in captured_runtime_prompt_kwargs['web_research_grounding_block']
     assert payload.max_tokens == 960
     assert payload.generate_kwargs == {
-        'prompt': '?????',
-        'system_prompt': 'sys:??:1600',
+        'prompt': 'draft prompt',
+        'system_prompt': 'sys:noir:1600',
         'tool_choice': 'auto',
         'max_tokens': 960,
         'temperature': 0.75,
@@ -64,14 +64,14 @@ def test_should_build_batch_generation_request_payload_with_request_options_and_
 
 
 def test_should_build_batch_generation_request_payload_without_optional_overrides():
-    project = Project(id='project-1', title='??', user_id='user-1')
+    project = Project(id='project-1', title='Test Project', user_id='user-1')
     chapter_context = SimpleNamespace(
-        chapter_outline='????',
-        previous_chapter_summary='?????',
+        chapter_outline='outline',
+        previous_chapter_summary='summary',
     )
 
     payload = batch_execution_service.build_batch_generation_request_payload(
-        prompt='?????',
+        prompt='draft prompt',
         project=project,
         chapter_context=chapter_context,
         style_content='',
@@ -90,7 +90,7 @@ def test_should_build_batch_generation_request_payload_without_optional_override
     )
 
     assert payload.generate_kwargs == {
-        'prompt': '?????',
+        'prompt': 'draft prompt',
         'system_prompt': 'system',
         'tool_choice': 'auto',
         'max_tokens': 800,
@@ -129,7 +129,7 @@ def test_should_enqueue_batch_generation_execution():
         user_id='user-1',
         ai_service=SimpleNamespace(name='ai'),
         custom_model='gpt-x',
-        temp_narrative_perspective='????',
+        temp_narrative_perspective='first-person',
         story_packet=SimpleNamespace(source='packet'),
         base_quality_profile={'style': 'x'},
         enable_web_research=True,
@@ -144,9 +144,9 @@ def test_should_enqueue_batch_generation_execution():
 
 
 def test_should_build_batch_generation_candidate_quality_hooks():
-    project = Project(id='project-1', title='??', user_id='user-1', world_rules='??')
-    chapter = Chapter(id='chapter-1', project_id='project-1', chapter_number=2, title='???')
-    chapter_context = SimpleNamespace(chapter_outline='????')
+    project = Project(id='project-1', title='Test Project', user_id='user-1', world_rules='rules')
+    chapter = Chapter(id='chapter-1', project_id='project-1', chapter_number=2, title='Test Chapter')
+    chapter_context = SimpleNamespace(chapter_outline='outline')
 
     hooks = batch_execution_service.build_batch_generation_candidate_quality_hooks(
         story_packet=SimpleNamespace(packet='story'),
@@ -154,7 +154,7 @@ def test_should_build_batch_generation_candidate_quality_hooks():
         chapter=chapter,
         chapter_context=chapter_context,
         target_word_count=1800,
-        generation_intent={'intent': '??'},
+        generation_intent={'intent': 'batch'},
         retry_count=1,
         max_retries=3,
         current_story_repair_payload={'repair': True},
@@ -178,12 +178,12 @@ def test_should_build_batch_generation_candidate_quality_hooks():
         },
     )
 
-    metrics = hooks.quality_evaluator('????')
+    metrics = hooks.quality_evaluator('draft')
     plan = hooks.quality_gate_plan_builder({'overall_score': 60}, 0)
 
     assert metrics['runtime_context'] == {
         'target_word_count': 1800,
-        'generation_intent': {'intent': '??'},
+        'generation_intent': {'intent': 'batch'},
     }
     assert plan == {
         'action': 'retry',
@@ -218,11 +218,11 @@ def test_should_build_batch_generation_candidate_runtime_state():
 async def test_should_create_batch_generation_candidate_execution():
     async def fake_candidate_generator(**kwargs):
         kwargs['runtime_state']['current_chars'] = 1280
-        return {'full_content': '??', 'candidate_count': kwargs['max_candidates']}
+        return {'full_content': 'draft', 'candidate_count': kwargs['max_candidates']}
 
     execution = batch_execution_service.create_batch_generation_candidate_execution(
         ai_service=SimpleNamespace(api_provider='openai'),
-        generate_kwargs={'prompt': '?????'},
+        generate_kwargs={'prompt': 'draft prompt'},
         target_word_count=1500,
         chapter_number=6,
         quality_evaluator=lambda content: {'ok': True},
@@ -246,7 +246,7 @@ async def test_should_wait_for_batch_generation_candidate_and_emit_progress(monk
 
     async def delayed_result():
         await asyncio.sleep(0.02)
-        return {'full_content': '??', 'candidate_count': 2}
+        return {'full_content': 'draft', 'candidate_count': 2}
 
     monkeypatch.setattr(batch_execution_service, 'publish_task_stream_event', fake_publish)
     runtime_state = {
@@ -267,13 +267,13 @@ async def test_should_wait_for_batch_generation_candidate_and_emit_progress(monk
         selected_candidate_task=asyncio.create_task(delayed_result()),
         runtime_state=runtime_state,
         stream_task_id='task-1',
-        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=3, title='???'),
+        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=3, title='Test Chapter'),
         target_word_count=1800,
         heartbeat_interval_seconds=0.01,
         db_session=None,
     )
 
-    assert selected_candidate['full_content'] == '??'
+    assert selected_candidate['full_content'] == 'draft'
     assert events
     assert events[0][0] == 'task-1'
     assert events[0][1]['type'] == 'progress'
@@ -293,7 +293,7 @@ async def test_should_emit_batch_generation_selected_candidate_events(monkeypatc
     await batch_execution_service.emit_batch_generation_selected_candidate_events(
         stream_task_id='task-1',
         stream_chunks=True,
-        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=4, title='???'),
+        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=4, title='Test Chapter'),
         selected_candidate={
             'candidate_index': 2,
             'candidate_count': 3,
@@ -302,7 +302,7 @@ async def test_should_emit_batch_generation_selected_candidate_events(monkeypatc
             'rerank_used': True,
             'word_budget_repair_used': False,
             'winner_candidate_index': 2,
-            'candidate_chunks': ['??1', '??2'],
+            'candidate_chunks': ['chunk-1', 'chunk-2'],
         },
         candidate_word_count=1450,
         quality_gate_plan={'action': 'continue'},
@@ -322,19 +322,19 @@ async def test_should_emit_batch_generation_selected_candidate_events(monkeypatc
         'type': 'chunk',
         'chapter_id': 'chapter-1',
         'chapter_number': 4,
-        'content': '??1',
+        'content': 'chunk-1',
     }
-    assert events[2][1]['content'] == '??2'
+    assert events[2][1]['content'] == 'chunk-2'
 
 
 
 def test_should_build_batch_generation_selected_candidate_result():
-    chapter = Chapter(id='chapter-1', project_id='project-1', chapter_number=5, title='???')
+    chapter = Chapter(id='chapter-1', project_id='project-1', chapter_number=5, title='Test Chapter')
 
     result = batch_execution_service.build_batch_generation_selected_candidate_result(
         chapter=chapter,
         selected_candidate={
-            'full_content': '???\n???',
+            'full_content': 'part-1\npart-2',
             'word_count': 1234,
             'quality_metrics': {'overall_score': 91},
             'quality_gate_plan': {'action': 'continue'},
@@ -349,9 +349,9 @@ def test_should_build_batch_generation_selected_candidate_result():
     )
 
     assert result == {
-        'full_content': '???\n???',
+        'full_content': 'part-1\npart-2',
         'word_count': 1234,
-        'summary_preview': '??? ???',
+        'summary_preview': 'part-1 part-2',
         'quality_metrics': {
             'overall_score': 91,
             'story_runtime_contract': {'contract': True},
@@ -378,37 +378,37 @@ async def test_should_build_batch_generation_prompt_for_one_to_one_next_with_sty
 
     result = await batch_execution_service.build_batch_generation_prompt(
         db_session=None,
-        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=3, title='???'),
-        project=Project(id='project-1', title='??', user_id='user-1', outline_mode='one-to-one'),
+        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=3, title='Test Chapter'),
+        project=Project(id='project-1', title='Test Project', user_id='user-1', outline_mode='one-to-one'),
         chapter_context=SimpleNamespace(
-            chapter_outline='??',
-            continuation_point='?????',
-            previous_chapter_summary='?????',
-            chapter_characters='??A',
-            chapter_careers='??A',
-            foreshadow_reminders='??A',
-            relevant_memories='??A',
+            chapter_outline='outline',
+            continuation_point='cliffhanger',
+            previous_chapter_summary='summary',
+            chapter_characters='roleA',
+            chapter_careers='jobA',
+            foreshadow_reminders='noteA',
+            relevant_memories='memoryA',
             recent_chapters_context='',
         ),
         outline_mode='one-to-one',
         current_user_id='user-1',
         target_word_count=1800,
-        temp_narrative_perspective='????',
+        temp_narrative_perspective='first-person',
         previous_summary_context=None,
         prompt_quality_kwargs={'quality_preset': 'plot_drive'},
-        style_content='????',
+        style_content='style guide',
         get_template_fn=fake_get_template,
         format_prompt_fn=fake_format_prompt,
         apply_style_to_prompt_fn=lambda prompt, style: f'styled::{style}::{prompt}',
     )
 
     assert template_calls == ['CHAPTER_GENERATION_ONE_TO_ONE_NEXT']
-    assert result.chapter_perspective == '????'
+    assert result.chapter_perspective == 'first-person'
     assert result.base_prompt == 'formatted:template:CHAPTER_GENERATION_ONE_TO_ONE_NEXT'
-    assert result.prompt == 'styled::????::formatted:template:CHAPTER_GENERATION_ONE_TO_ONE_NEXT'
-    assert format_calls[0]['previous_chapter_content'] == '?????'
-    assert format_calls[0]['previous_chapter_summary'] == '?????'
-    assert format_calls[0]['narrative_perspective'] == '????'
+    assert result.prompt == 'styled::style guide::formatted:template:CHAPTER_GENERATION_ONE_TO_ONE_NEXT'
+    assert format_calls[0]['previous_chapter_content'] == 'cliffhanger'
+    assert format_calls[0]['previous_chapter_summary'] == 'summary'
+    assert format_calls[0]['narrative_perspective'] == 'first-person'
 
 
 @pytest.mark.asyncio
@@ -426,24 +426,24 @@ async def test_should_build_batch_generation_prompt_for_one_to_many_next_with_pr
 
     result = await batch_execution_service.build_batch_generation_prompt(
         db_session=None,
-        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=6, title='???'),
-        project=Project(id='project-1', title='??', user_id='user-1', outline_mode='one-to-many'),
+        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=6, title='Test Chapter'),
+        project=Project(id='project-1', title='Test Project', user_id='user-1', outline_mode='one-to-many'),
         chapter_context=SimpleNamespace(
-            chapter_outline='??',
-            continuation_point='????',
+            chapter_outline='outline',
+            continuation_point='turn',
             previous_chapter_summary='',
-            chapter_characters='??A',
-            chapter_careers='??A',
-            foreshadow_reminders='??A',
-            relevant_memories='??A',
-            recent_chapters_context='??????',
+            chapter_characters='roleA',
+            chapter_careers='jobA',
+            foreshadow_reminders='noteA',
+            relevant_memories='memoryA',
+            recent_chapters_context='recent recap',
         ),
         outline_mode='one-to-many',
         current_user_id='user-1',
         target_word_count=2000,
         temp_narrative_perspective=None,
-        previous_summary_context='??????',
-        prompt_quality_kwargs={'quality_notes': '????'},
+        previous_summary_context='recent recap',
+        prompt_quality_kwargs={'quality_notes': 'tight prose'},
         style_content='',
         get_template_fn=fake_get_template,
         format_prompt_fn=fake_format_prompt,
@@ -453,8 +453,8 @@ async def test_should_build_batch_generation_prompt_for_one_to_many_next_with_pr
     assert template_calls == ['CHAPTER_GENERATION_ONE_TO_MANY_NEXT']
     assert result.base_prompt == 'formatted:template:CHAPTER_GENERATION_ONE_TO_MANY_NEXT'
     assert result.prompt == result.base_prompt
-    assert format_calls[0]['previous_chapter_summary'] == '??????'
-    assert format_calls[0]['recent_chapters_context'] == '??????'
+    assert format_calls[0]['previous_chapter_summary'] == 'recent recap'
+    assert format_calls[0]['recent_chapters_context'] == 'recent recap'
 
 
 
@@ -469,19 +469,19 @@ async def test_should_build_batch_generation_context_for_one_to_many_with_stats_
         async def build(self, **kwargs):
             build_calls.append(kwargs)
             return SimpleNamespace(
-                continuation_point='????',
+                continuation_point='turn',
                 context_stats={'memory_count': 3, 'total_length': 2048},
             )
 
     result = await batch_execution_service.build_batch_generation_context(
         db_session=None,
-        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=4, title='???'),
-        project=Project(id='project-1', title='??', user_id='user-1', outline_mode='one-to-many'),
+        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=4, title='Test Chapter'),
+        project=Project(id='project-1', title='Test Project', user_id='user-1', outline_mode='one-to-many'),
         outline=SimpleNamespace(id='outline-1'),
         outline_mode='one-to-many',
         user_id='user-1',
         target_word_count=1800,
-        style_content='????',
+        style_content='style guide',
         memory_service=object(),
         foreshadow_service=object(),
         one_to_one_builder_cls=lambda **kwargs: None,
@@ -489,9 +489,9 @@ async def test_should_build_batch_generation_context_for_one_to_many_with_stats_
         build_outline_structure_runtime_sources_fn=lambda outline: {'outline_id': outline.id},
     )
 
-    assert build_calls[0]['style_content'] == '????'
+    assert build_calls[0]['style_content'] == 'style guide'
     assert build_calls[0]['target_word_count'] == 1800
-    assert result.chapter_context.continuation_point == '????'
+    assert result.chapter_context.continuation_point == 'turn'
     assert result.outline_runtime_sources == {'outline_id': 'outline-1'}
 
 
@@ -512,13 +512,13 @@ async def test_should_build_batch_generation_context_for_one_to_one_without_styl
 
     result = await batch_execution_service.build_batch_generation_context(
         db_session=None,
-        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=1, title='???'),
-        project=Project(id='project-1', title='??', user_id='user-1', outline_mode='one-to-one'),
+        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=1, title='Test Chapter'),
+        project=Project(id='project-1', title='Test Project', user_id='user-1', outline_mode='one-to-one'),
         outline=SimpleNamespace(id='outline-1'),
         outline_mode='one-to-one',
         user_id='user-1',
         target_word_count=1200,
-        style_content='????',
+        style_content='style guide',
         memory_service=object(),
         foreshadow_service=object(),
         one_to_one_builder_cls=FakeOneToOneBuilder,
@@ -557,21 +557,21 @@ async def test_should_prepare_batch_generation_runtime_with_base_quality_profile
     result = await batch_execution_service.prepare_batch_generation_runtime(
         db_session=None,
         user_id='user-1',
-        project=Project(id='project-1', title='??', user_id='user-1'),
-        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=3, title='???'),
+        project=Project(id='project-1', title='Test Project', user_id='user-1'),
+        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=3, title='Test Chapter'),
         target_word_count=1800,
         style_id=5,
         story_packet=SimpleNamespace(guidance={'mode': 'hook'}, source='prebuilt'),
         base_quality_profile={
             'resolved_style_id': 7,
-            'style_content': '????',
-            'style_name': '??',
+            'style_content': 'style guide',
+            'style_name': 'noir',
             'style_preset_id': 'preset-7',
         },
         research_assets=['asset-1'],
         creative_mode='fast',
-        story_focus='??',
-        plot_stage='??',
+        story_focus='growth',
+        plot_stage='opening',
         story_creation_brief='brief',
         quality_preset='balanced',
         quality_notes='notes',
@@ -590,7 +590,7 @@ async def test_should_prepare_batch_generation_runtime_with_base_quality_profile
     assert result.generation_guidance == {'mode': 'hook'}
     assert result.quality_profile['cloned'] == ['asset-1']
     assert result.style_id == 7
-    assert result.style_content == '????'
+    assert result.style_content == 'style guide'
     assert clone_calls == [{'external_assets': ['asset-1'], 'reference_assets': ['asset-1']}]
     assert bundle_calls[0]['quality_profile']['cloned'] == ['asset-1']
     assert bundle_calls[0]['character_focus_source'] == {'outline_id': 'outline-1'}
@@ -614,8 +614,8 @@ async def test_should_prepare_batch_generation_runtime_by_building_story_packet_
         resolve_calls.append(kwargs)
         return {
             'resolved_style_id': 11,
-            'style_content': '????',
-            'style_name': '??',
+            'style_content': 'style guide',
+            'style_name': 'noir',
             'style_preset_id': 'preset-11',
         }
 
@@ -630,16 +630,16 @@ async def test_should_prepare_batch_generation_runtime_by_building_story_packet_
     result = await batch_execution_service.prepare_batch_generation_runtime(
         db_session=None,
         user_id='user-1',
-        project=Project(id='project-1', title='??', user_id='user-1'),
-        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=5, title='???'),
+        project=Project(id='project-1', title='Test Project', user_id='user-1'),
+        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=5, title='Test Chapter'),
         target_word_count=2200,
         style_id=None,
         story_packet=None,
         base_quality_profile=None,
         research_assets=['asset-x'],
         creative_mode='steady',
-        story_focus='??',
-        plot_stage='???',
+        story_focus='growth',
+        plot_stage='mid',
         story_creation_brief='summary',
         quality_preset='cinematic',
         quality_notes='keep pace',
@@ -662,7 +662,7 @@ async def test_should_prepare_batch_generation_runtime_by_building_story_packet_
     assert resolve_calls[0]['prefer_project_default_style'] is True
     assert result.effective_story_packet.source == 'built'
     assert result.generation_guidance == {'mode': 'resolved'}
-    assert result.style_name == '??'
+    assert result.style_name == 'noir'
     assert result.style_id == 11
     assert bundle_calls[0]['story_packet'].source == 'built'
     assert result.generation_runtime.prompt_quality_kwargs == {'quality': 'balanced'}
@@ -678,10 +678,10 @@ async def test_should_resolve_batch_generation_chapter_runtime():
     runtime_preparation = batch_execution_service.BatchGenerationRuntimePreparation(
         effective_story_packet=SimpleNamespace(source='prepared'),
         generation_guidance={'mode': 'prepared'},
-        quality_profile={'style_name': '??'},
+        quality_profile={'style_name': 'noir'},
         style_id=9,
         style_content='style-content',
-        style_name='??',
+        style_name='noir',
         style_preset_id='preset-9',
         generation_runtime=None,
     )
@@ -711,8 +711,8 @@ async def test_should_resolve_batch_generation_chapter_runtime():
     result = await batch_execution_service.resolve_batch_generation_chapter_runtime(
         db_session=None,
         user_id='user-1',
-        project=Project(id='project-1', title='??', user_id='user-1'),
-        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=2, title='???'),
+        project=Project(id='project-1', title='Test Project', user_id='user-1'),
+        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=2, title='Test Chapter'),
         outline=SimpleNamespace(id='outline-1'),
         outline_mode='one-to-many',
         target_word_count=2000,
@@ -757,10 +757,10 @@ def test_should_finalize_batch_generation_runtime():
     runtime_preparation = batch_execution_service.BatchGenerationRuntimePreparation(
         effective_story_packet=SimpleNamespace(source='prepared'),
         generation_guidance={'mode': 'prepared'},
-        quality_profile={'resolved_style_id': 3, 'style_name': '??'},
+        quality_profile={'resolved_style_id': 3, 'style_name': 'noir'},
         style_id=3,
-        style_content='????',
-        style_name='??',
+        style_content='style guide',
+        style_name='noir',
         style_preset_id='preset-3',
         generation_runtime=None,
     )
@@ -775,8 +775,8 @@ def test_should_finalize_batch_generation_runtime():
 
     result = batch_execution_service.finalize_batch_generation_runtime(
         runtime_preparation=runtime_preparation,
-        project=Project(id='project-1', title='??', user_id='user-1'),
-        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=8, title='???'),
+        project=Project(id='project-1', title='Test Project', user_id='user-1'),
+        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=8, title='Test Chapter'),
         chapter_context=SimpleNamespace(chapter_outline='outline'),
         target_word_count=2600,
         outline_runtime_sources={'outline_id': 'outline-8'},
@@ -787,7 +787,7 @@ def test_should_finalize_batch_generation_runtime():
     )
 
     assert bundle_calls[0]['story_packet'].source == 'prepared'
-    assert bundle_calls[0]['quality_profile']['style_name'] == '??'
+    assert bundle_calls[0]['quality_profile']['style_name'] == 'noir'
     assert bundle_calls[0]['character_focus_source'] == {'outline_id': 'outline-8'}
     assert result.generation_runtime.story_runtime_contract == {'contract': 'story'}
     assert result.generation_intent == {'intent': 'batch-runtime'}
@@ -812,10 +812,10 @@ async def test_should_execute_batch_generation_candidate_flow_without_stream():
 
     async def fake_candidate_generator(**kwargs):
         generator_calls.append(kwargs)
-        metrics = kwargs['quality_evaluator']('????')
+        metrics = kwargs['quality_evaluator']('draft')
         gate_plan = kwargs['quality_gate_plan_builder'](metrics, 0)
         return {
-            'full_content': '????',
+            'full_content': 'draft',
             'word_count': 4,
             'quality_metrics': metrics,
             'quality_gate_plan': gate_plan,
@@ -837,9 +837,9 @@ async def test_should_execute_batch_generation_candidate_flow_without_stream():
     flow_result = await batch_execution_service.execute_batch_generation_candidate_flow(
         stream_task_id=None,
         stream_chunks=False,
-        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=2, title='???'),
+        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=2, title='Test Chapter'),
         effective_story_packet=SimpleNamespace(source='prepared'),
-        project=Project(id='project-1', title='??', user_id='user-1', world_rules='??'),
+        project=Project(id='project-1', title='Test Project', user_id='user-1', world_rules='rules'),
         chapter_context=SimpleNamespace(chapter_outline='outline', context_stats={'memory_count': 2}),
         target_word_count=1800,
         generation_intent={'intent': 'batch'},
@@ -868,7 +868,7 @@ async def test_should_execute_batch_generation_candidate_flow_without_stream():
     assert generator_calls[0]['max_candidates'] == 2
     assert result_calls[0]['story_runtime_contract'] == {'contract': True}
     assert emit_calls[0]['candidate_word_count'] == 4
-    assert flow_result.selected_candidate['full_content'] == '????'
+    assert flow_result.selected_candidate['full_content'] == 'draft'
     assert flow_result.selected_candidate_result['story_runtime_contract'] == {'contract': True}
 
 
@@ -888,16 +888,16 @@ async def test_should_execute_batch_generation_generation_stage_with_stream_prog
     async def fake_execute_candidate_flow(**kwargs):
         execute_calls.append(kwargs)
         return batch_execution_service.BatchGenerationCandidateFlowResult(
-            selected_candidate={'full_content': '??'},
+            selected_candidate={'full_content': 'draft'},
             selected_candidate_result={'word_count': 12},
         )
 
     result = await batch_execution_service.execute_batch_generation_generation_stage(
         stream_task_id='task-1',
         stream_chunks=True,
-        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=4, title='???'),
+        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=4, title='Test Chapter'),
         effective_story_packet=SimpleNamespace(source='prepared'),
-        project=Project(id='project-1', title='??', user_id='user-1'),
+        project=Project(id='project-1', title='Test Project', user_id='user-1'),
         chapter_context=SimpleNamespace(chapter_outline='outline'),
         target_word_count=2000,
         generation_intent={'intent': 'batch'},
@@ -936,7 +936,7 @@ async def test_should_execute_batch_generation_prompt_stage():
     async def fake_build_prompt(**kwargs):
         prompt_calls.append(kwargs)
         return batch_execution_service.BatchGenerationPrompt(
-            chapter_perspective='????',
+            chapter_perspective='first-person',
             base_prompt='base',
             prompt='styled-prompt',
         )
@@ -951,17 +951,17 @@ async def test_should_execute_batch_generation_prompt_stage():
 
     result = await batch_execution_service.execute_batch_generation_prompt_stage(
         db_session=None,
-        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=6, title='???'),
-        project=Project(id='project-1', title='??', user_id='user-1'),
+        chapter=Chapter(id='chapter-1', project_id='project-1', chapter_number=6, title='Test Chapter'),
+        project=Project(id='project-1', title='Test Project', user_id='user-1'),
         chapter_context=SimpleNamespace(chapter_outline='outline'),
         outline_mode='one-to-many',
         current_user_id='user-1',
         target_word_count=2400,
-        temp_narrative_perspective='????',
+        temp_narrative_perspective='first-person',
         previous_summary_context='summary',
         prompt_quality_kwargs={'quality_notes': 'tight'},
-        style_content='????',
-        style_name='??',
+        style_content='style guide',
+        style_name='noir',
         style_preset_id='preset-9',
         ai_service=SimpleNamespace(name='ai'),
         custom_model='model-x',
@@ -980,9 +980,9 @@ async def test_should_execute_batch_generation_prompt_stage():
     )
 
     assert prompt_calls[0]['outline_mode'] == 'one-to-many'
-    assert prompt_calls[0]['style_content'] == '????'
+    assert prompt_calls[0]['style_content'] == 'style guide'
     assert payload_calls[0]['prompt'] == 'styled-prompt'
-    assert payload_calls[0]['style_name'] == '??'
+    assert payload_calls[0]['style_name'] == 'noir'
     assert payload_calls[0]['research_assets'] == ['asset-1']
     assert result.batch_prompt.prompt == 'styled-prompt'
     assert result.request_payload.system_prompt == 'system-prompt'

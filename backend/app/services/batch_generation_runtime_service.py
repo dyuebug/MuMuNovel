@@ -1,4 +1,4 @@
-"""?????? runtime ?? helper?"""
+"""批量生成 runtime 解析 helper。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -125,7 +125,7 @@ async def prepare_batch_generation_runtime(
             external_assets=research_assets,
             reference_assets=research_assets,
             prefer_project_default_style=not bool(style_id),
-            log_prefix='??????',
+            log_prefix='批量生成',
         )
 
     resolved_style_id = quality_profile.get('resolved_style_id')
@@ -213,7 +213,7 @@ async def build_batch_generation_context(
     build_outline_structure_runtime_sources_fn: Callable[[Any], Any],
 ) -> BatchGenerationBuiltContext:
     if outline_mode == 'one-to-one':
-        logger.info(f'?? ???? - [1-1??] ?? {one_to_one_builder_cls.__name__}')
+        logger.info(f'构建上下文 - [1-1模式] 使用 {one_to_one_builder_cls.__name__}')
         context_builder = one_to_one_builder_cls(
             memory_service=memory_service,
             foreshadow_service=foreshadow_service,
@@ -227,7 +227,7 @@ async def build_batch_generation_context(
             target_word_count=target_word_count,
         )
     else:
-        logger.info(f'?? ???? - [1-N??] ?? {one_to_many_builder_cls.__name__}')
+        logger.info(f'构建上下文 - [1-N模式] 使用 {one_to_many_builder_cls.__name__}')
         context_builder = one_to_many_builder_cls(
             memory_service=memory_service,
             foreshadow_service=foreshadow_service,
@@ -247,11 +247,11 @@ async def build_batch_generation_context(
         if isinstance(getattr(chapter_context, 'context_stats', None), dict)
         else {}
     )
-    logger.info('?? ???? - ???????')
-    logger.info(f'  - ????: {chapter.chapter_number}')
-    logger.info(f"  - ??????: {len(getattr(chapter_context, 'continuation_point', '') or '')} ??")
-    logger.info(f"  - ????: {context_stats.get('memory_count', 0)} ?")
-    logger.info(f"  - ??????: {context_stats.get('total_length', 0)} ??")
+    logger.info('批量生成 - 上下文摘要')
+    logger.info(f'  - 章节号: {chapter.chapter_number}')
+    logger.info(f"  - 续写点长度: {len(getattr(chapter_context, 'continuation_point', '') or '')} 字")
+    logger.info(f"  - 记忆数: {context_stats.get('memory_count', 0)} 条")
+    logger.info(f"  - 上下文总长: {context_stats.get('total_length', 0)} 字")
 
     outline_runtime_sources = build_outline_structure_runtime_sources_fn(outline)
     return BatchGenerationBuiltContext(

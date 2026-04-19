@@ -44,7 +44,7 @@ async def prepare_batch_generation_create(
     )
     all_chapters = result.scalars().all()
     if not all_chapters:
-        raise HTTPException(status_code=404, detail='??????')
+        raise HTTPException(status_code=404, detail='项目下暂无章节')
 
     start_number = batch_request.start_chapter_number
     end_number = start_number + batch_request.count - 1
@@ -53,12 +53,12 @@ async def prepare_batch_generation_create(
         if start_number <= chapter.chapter_number <= end_number
     ]
     if not chapters_to_generate:
-        raise HTTPException(status_code=404, detail='?????????')
+        raise HTTPException(status_code=404, detail='未找到指定范围内的章节')
 
     first_chapter = chapters_to_generate[0]
     can_generate, error_msg, _ = await check_prerequisites_fn(db_session, first_chapter)
     if not can_generate:
-        raise HTTPException(status_code=400, detail=f'?????????{error_msg}')
+        raise HTTPException(status_code=400, detail=f'批量生成前置检查未通过：{error_msg}')
 
     batch_quality_profile = await resolve_quality_profile_fn(
         db_session=db_session,
@@ -67,7 +67,7 @@ async def prepare_batch_generation_create(
         style_id=batch_request.style_id,
         enable_mcp=True,
         prefer_project_default_style=not bool(batch_request.style_id),
-        log_prefix='????',
+        log_prefix='批量生成',
     )
     batch_story_repair_state = await resolve_story_repair_state_fn(
         db_session,
@@ -141,7 +141,7 @@ async def create_batch_generation_and_enqueue(
     )
     return {
         'batch_id': batch_id,
-        'message': f'????????????? {len(preparation.chapters_to_generate)} ???',
+        'message': f'已创建批量生成任务，共 {len(preparation.chapters_to_generate)} 章',
         'chapters_to_generate': [
             {
                 'id': chapter.id,

@@ -73,13 +73,13 @@ def _resolve_regeneration_filter_character_names(
         try:
             structure = json.loads(structure_text)
         except json.JSONDecodeError:
-            logger.warning("???? - outline.structure ???????????")
+            logger.warning("章节重写 - outline.structure 不是合法 JSON")
             return None
         if not isinstance(structure, dict):
             return None
         filter_character_names = structure.get("characters", [])
         if filter_character_names:
-            logger.info(f"???? - 1-1 ??????: {filter_character_names}")
+            logger.info(f"章节重写 - 1-1 角色聚焦: {filter_character_names}")
             return filter_character_names
         return None
 
@@ -89,13 +89,13 @@ def _resolve_regeneration_filter_character_names(
     try:
         plan = json.loads(chapter.expansion_plan)
     except json.JSONDecodeError:
-        logger.warning("???? - expansion_plan ???????????")
+        logger.warning("章节重写 - expansion_plan 不是合法 JSON")
         return None
     if not isinstance(plan, dict):
         return None
     filter_character_names = plan.get("character_focus", [])
     if filter_character_names:
-        logger.info(f"???? - 1-N ??????: {filter_character_names}")
+        logger.info(f"章节重写 - 1-N 角色聚焦: {filter_character_names}")
         return filter_character_names
     return None
 
@@ -141,7 +141,7 @@ async def prepare_chapter_regeneration_context(
         style_id=regenerate_request.style_id,
         enable_mcp=True,
         prefer_project_default_style=not bool(regenerate_request.style_id),
-        log_prefix="?????",
+        log_prefix="章节重写",
     )
     story_repair_state = await resolve_generation_story_repair_state_for_chapter(
         db_session,
@@ -198,20 +198,20 @@ async def prepare_chapter_regeneration_context(
     style_content = quality_profile.get("style_content") or ""
     style_id = quality_profile.get("resolved_style_id")
     if style_id:
-        logger.info(f"??????ID: {style_id}")
+        logger.info(f"章节重写风格 ID: {style_id}")
     else:
-        logger.info("???????????????")
+        logger.info("章节重写未命中明确风格 ID")
 
     project_context = {
-        "project_title": project.title if project else "??",
-        "genre": project.genre if project else "???",
-        "theme": project.theme if project else "???",
-        "narrative_perspective": project.narrative_perspective if project else "????",
-        "time_period": project.world_time_period if project else "???",
-        "location": project.world_location if project else "???",
-        "atmosphere": project.world_atmosphere if project else "???",
+        "project_title": project.title if project else "未命名项目",
+        "genre": project.genre if project else "未提供",
+        "theme": project.theme if project else "未提供",
+        "narrative_perspective": project.narrative_perspective if project else "第三人称",
+        "time_period": project.world_time_period if project else "未提供",
+        "location": project.world_location if project else "未提供",
+        "atmosphere": project.world_atmosphere if project else "未提供",
         "characters_info": characters_info_with_careers,
-        "chapter_outline": outline.content if outline else chapter.summary or "????",
+        "chapter_outline": outline.content if outline else chapter.summary or "暂无大纲",
         "previous_context": "",
         "external_assets": web_research_assets,
         "reference_assets": web_research_assets,
@@ -235,7 +235,7 @@ async def prepare_chapter_regeneration_stream_context(
     user_id: str,
 ) -> ChapterRegenerationStreamContext:
     if not chapter.content or not chapter.content.strip():
-        raise ValueError("?????????????")
+        raise ValueError("当前章节缺少可重写的原始内容")
 
     analysis = None
     if regenerate_request.modification_source in {"analysis_suggestions", "mixed"}:
@@ -247,7 +247,7 @@ async def prepare_chapter_regeneration_stream_context(
         )
         analysis = analysis_result.scalar_one_or_none()
         if analysis is None:
-            raise LookupError("?????????")
+            raise LookupError("未找到对应的章节分析")
 
     preparation = await prepare_chapter_regeneration_context(
         db_session,

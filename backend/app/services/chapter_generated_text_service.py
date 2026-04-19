@@ -53,10 +53,10 @@ def lightly_polish_template_phrases(text: str) -> str:
     """\u8f7b\u5ea6\u6253\u78e8\u9ad8\u9891\u6a21\u677f\u53e5\u5f0f\uff0c\u51cf\u5c11\u660e\u663e AI \u8154\u8c03\u3002"""
     cleaned = text
 
-    sentence_boundary_pattern = r"""(^|[\u3002\uff01\uff1f!?\uff1b;\n])([?"'????(]*)"""
+    sentence_boundary_pattern = r"""(^|[\u3002\uff01\uff1f!?\uff1b;\n])([?"'\u201c\u201d\u2018\u2019(]*)"""
     sentence_lead_suffix_pattern = r"""(?:[\uff0c\u3001,]\s*)?"""
     leading_punctuation_pattern = re.compile(
-        r"""(^|[\u3002\uff01\uff1f!?\uff1b;\n])([?"'????(]*)[\uff0c\u3001,]\s*""",
+        r"""(^|[\u3002\uff01\uff1f!?\uff1b;\n])([?"'\u201c\u201d\u2018\u2019(]*)[\uff0c\u3001,]\s*""",
         flags=re.MULTILINE,
     )
 

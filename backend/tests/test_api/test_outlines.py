@@ -1755,8 +1755,8 @@ async def test_should_defer_final_continue_outline_postprocess_to_background(tes
             yield json.dumps([
                 {
                     "title": "Chapter 2",
-                    "summary": "Summary placeholder",
-                    "content": "Outline content placeholder",
+                    "summary": "沈知微在雨夜重返旧案现场，发现新的目击线索。",
+                    "content": "第二章围绕雨夜现场勘查展开，主角从监控漏洞中锁定新嫌疑人。",
                 }
             ], ensure_ascii=False)
 

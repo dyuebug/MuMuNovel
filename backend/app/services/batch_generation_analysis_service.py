@@ -1,4 +1,4 @@
-"""?????????? helper?"""
+"""批量生成章节分析 helper。"""
 from __future__ import annotations
 
 import asyncio
@@ -42,14 +42,14 @@ async def run_batch_chapter_analysis(
     create_analysis_task_fn: Optional[Callable[..., Any]] = None,
     analyze_chapter_background_fn: Optional[Callable[..., Any]] = None,
 ) -> tuple[bool, Optional[str]]:
-    logger.info(f"????????: ?{chapter.chapter_number}?")
+    logger.info(f"开始章节分析: 第{chapter.chapter_number}章")
     await publish_task_stream_event(
         batch_id,
         {
             "type": "analysis_started",
             "chapter_id": chapter.id,
             "chapter_number": chapter.chapter_number,
-            "message": "??????",
+            "message": "正在分析章节",
             "progress": 85,
             "phase": "parsing",
             "current_retry_count": retry_count,
@@ -68,7 +68,7 @@ async def run_batch_chapter_analysis(
     while analysis_retry_count < 3:
         try:
             if analysis_retry_count > 0:
-                logger.info(f"??????(?{analysis_retry_count}?): ?{chapter.chapter_number}?")
+                logger.info(f"章节分析重试(第{analysis_retry_count}次): 第{chapter.chapter_number}章")
 
             async with write_lock:
                 analysis_task = await resolved_create_analysis_task_fn(
@@ -98,9 +98,9 @@ async def run_batch_chapter_analysis(
                 story_repair_payload=story_repair_payload,
             )
             if not analysis_result:
-                raise Exception("????????")
+                raise Exception("章节分析结果为空")
 
-            logger.info(f"??????: ?{chapter.chapter_number}?")
+            logger.info(f"开始章节分析: 第{chapter.chapter_number}章")
             return True, None
         except Exception as analysis_error:
             last_analysis_error = str(analysis_error)
@@ -108,7 +108,7 @@ async def run_batch_chapter_analysis(
 
             if analysis_retry_count < 3:
                 wait_time = min(2 ** analysis_retry_count, 10)
-                logger.warning(f"???????{wait_time} ????...")
+                logger.warning(f"章节分析将在 {wait_time} 秒后重试...")
                 await asyncio.sleep(wait_time)
 
-    return False, last_analysis_error or "??????"
+    return False, last_analysis_error or "章节分析失败"

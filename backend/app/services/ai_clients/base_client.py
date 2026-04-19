@@ -257,7 +257,7 @@ class BaseAIClient(ABC):
         self._transport_diagnostics: Dict[str, Any] = {}
 
     def _get_client_key(self) -> str:
-        """????????"""
+        """生成客户端池键"""
         key_hash = hashlib.md5(self.api_key.encode()).hexdigest()[:8]
         return f"{self.__class__.__name__}_{self.base_url}_{key_hash}"
 
@@ -275,7 +275,7 @@ class BaseAIClient(ABC):
             return False
 
     def _get_or_create_client(self) -> httpx.AsyncClient:
-        """????? HTTP ???"""
+        """获取或创建 HTTP 客户端"""
         client_key = self._get_client_key()
 
         if client_key in _http_client_pool:
@@ -301,7 +301,7 @@ class BaseAIClient(ABC):
             ),
         )
         _http_client_pool[client_key] = client
-        logger.info(f"? ?? HTTP ???: {client_key} (trust_env={trust_env})")
+        logger.info(f"✅ 创建 HTTP 客户端: {client_key} (trust_env={trust_env})")
         return client
 
     @abstractmethod

@@ -554,25 +554,10 @@ export default function Outline() {
   const expandTaskIdRef = useRef<string | null>(null);
 
 
-  useEffect(() => {
-
-
-    return () => {
-
-
-      stopExpandTaskPolling();
-
-
-    };
-
-
-  }, []);
-
-
   const { currentTaskIdRef: generateTaskIdRef, startTaskPolling: startGenerateTaskPolling, stopTaskPolling: stopGenerateTaskPolling } = useRestorableBackgroundTaskPolling({
     projectId: currentProject?.id,
     activeTrackedTask: activeTrackedOutlineGenerateTask,
-    canRestore: !isExpanding && !Boolean(expandTaskIdRef.current),
+    canRestore: !isExpanding && !expandTaskIdRef.current,
     isMatchingTask: (task) => task.task_type === 'outline_generate' && (task.status === 'pending' || task.status === 'running'),
     onRestoreTask: ({ progress, message: taskMessage }) => {
       setIsGenerating(true);
@@ -675,7 +660,7 @@ export default function Outline() {
   const { currentTaskIdRef: expandPollingTaskIdRef, startTaskPolling: startExpandTaskPolling, stopTaskPolling: stopExpandTaskPolling } = useRestorableBackgroundTaskPolling({
     projectId: currentProject?.id,
     activeTrackedTask: activeTrackedOutlineExpandTask,
-    canRestore: !isGenerating && !Boolean(generateTaskIdRef.current),
+    canRestore: !isGenerating && !generateTaskIdRef.current,
     isMatchingTask: (task) => (task.task_type === 'outline_expand' || task.task_type === 'outline_batch_expand') && (task.status === 'pending' || task.status === 'running'),
     onRestoreTask: ({ progress, message: taskMessage }) => {
       setIsExpanding(true);
@@ -729,6 +714,12 @@ export default function Outline() {
     }),
   });
 
+  useEffect(() => {
+    return () => {
+      stopExpandTaskPolling();
+    };
+  }, [stopExpandTaskPolling]);
+
 
   useEffect(() => {
     if (
@@ -778,7 +769,7 @@ export default function Outline() {
 
     markOutlineTaskReplayHandled(completedTask.taskId);
     openSingleExpansionPreview(response.outline_id, response);
-  }, [batchPreviewVisible, currentProject?.id, openSingleExpansionPreview, sseModalVisible, trackedTasks]);
+  }, [batchPreviewVisible, currentProject?.id, generateTaskIdRef, openSingleExpansionPreview, sseModalVisible, trackedTasks]);
 
 
   const handleCancelGenerateTask = async () => {

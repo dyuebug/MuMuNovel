@@ -26,16 +26,16 @@ from app.services.foreshadow_service import foreshadow_service
 from app.services.memory_service import memory_service
 
 
-router = APIRouter(prefix="/chapters", tags=["????"])
+router = APIRouter(prefix="/chapters", tags=["章节管理"])
 
 
-@router.post("", response_model=ChapterResponse, summary="????")
+@router.post("", response_model=ChapterResponse, summary="创建章节")
 async def create_chapter(
     chapter: ChapterCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """?????????????"""
+    """创建新章节并更新项目字数。"""
     user_id = require_authenticated_user_id(request)
     project = await verify_project_access(chapter.project_id, user_id, db)
 
@@ -52,13 +52,13 @@ async def create_chapter(
     return db_chapter
 
 
-@router.get("/project/{project_id}", response_model=ChapterListResponse, summary="?????????")
+@router.get("/project/{project_id}", response_model=ChapterListResponse, summary="获取项目章节列表")
 async def get_project_chapters(
     project_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """????????????????????"""
+    """获取项目下的全部章节及其关联大纲信息。"""
     user_id = require_authenticated_user_id(request)
     await verify_project_access(project_id, user_id, db)
 
@@ -109,13 +109,13 @@ async def get_project_chapters(
     }
 
 
-@router.get("/{chapter_id}", response_model=ChapterResponse, summary="??????")
+@router.get("/{chapter_id}", response_model=ChapterResponse, summary="获取章节详情")
 async def get_chapter(
     chapter_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """?? ID ???????"""
+    """根据 ID 获取单个章节详情。"""
     user_id = require_authenticated_user_id(request)
     return await load_accessible_chapter_or_404(
         db=db,
@@ -124,14 +124,14 @@ async def get_chapter(
     )
 
 
-@router.put("/{chapter_id}", response_model=ChapterResponse, summary="????")
+@router.put("/{chapter_id}", response_model=ChapterResponse, summary="更新章节")
 async def update_chapter(
     chapter_id: str,
     chapter_update: ChapterUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """?????????????????"""
+    """更新章节内容并同步项目字数变化。"""
     user_id = require_authenticated_user_id(request)
     chapter = await load_accessible_chapter_or_404(
         db=db,
@@ -161,13 +161,13 @@ async def update_chapter(
     return chapter
 
 
-@router.delete("/{chapter_id}", summary="????")
+@router.delete("/{chapter_id}", summary="删除章节")
 async def delete_chapter(
     chapter_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """?????????????"""
+    """删除章节并回收对应项目字数。"""
     user_id = require_authenticated_user_id(request)
     chapter = await load_accessible_chapter_or_404(
         db=db,
@@ -201,13 +201,13 @@ async def delete_chapter(
     return {"success": True}
 
 
-@router.get("/{chapter_id}/navigation", summary="????????")
+@router.get("/{chapter_id}/navigation", summary="获取章节导航")
 async def get_chapter_navigation(
     chapter_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """?????????????????"""
+    """获取章节的上一章、下一章与目录导航信息。"""
     user_id = require_authenticated_user_id(request)
     current_chapter = await load_accessible_chapter_or_404(
         db=db,

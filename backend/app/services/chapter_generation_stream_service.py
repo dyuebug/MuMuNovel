@@ -144,7 +144,7 @@ async def build_chapter_generation_event_stream(
 ) -> AsyncIterator[Any]:
     db_session = None
     db_committed = False
-    tracker = WizardProgressTracker("??")
+    tracker = WizardProgressTracker("章节生成")
 
     try:
         yield await tracker.start()
@@ -167,7 +167,7 @@ async def build_chapter_generation_event_stream(
                 )
             except ValueError as exc:
                 detail = str(exc)
-                error_code = 404 if "???" in detail else 400
+                error_code = 404 if ("未找到" in detail or "不存在" in detail) else 400
                 yield await tracker.error(detail, error_code)
                 return
 

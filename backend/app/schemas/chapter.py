@@ -357,32 +357,32 @@ class ExpansionPlanResponse(BaseModel):
 
 
 class PartialRegenerateRequest(BaseModel):
-    """????????"""
+    """局部重写请求"""
 
-    selected_text: str = Field(..., description="???????")
-    start_position: int = Field(..., description="?????????????????", ge=0)
-    end_position: int = Field(..., description="?????????????????", ge=0)
-    user_instructions: str = Field(..., description="???????", min_length=1, max_length=1000)
+    selected_text: str = Field(..., description="用户选中的原文片段")
+    start_position: int = Field(..., description="选中片段在章节全文中的起始位置", ge=0)
+    end_position: int = Field(..., description="选中片段在章节全文中的结束位置", ge=0)
+    user_instructions: str = Field(..., description="用户的补充指令", min_length=1, max_length=1000)
 
     context_chars: int = Field(
         500,
-        description="??????????????????",
+        description="用于重写时拼接的前后文字符数",
         ge=100,
         le=2000,
     )
-    style_id: Optional[int] = Field(None, description="???? ID?????????????")
+    style_id: Optional[int] = Field(None, description="风格模板 ID，不传时使用当前默认风格")
     length_mode: Optional[str] = Field(
         "similar",
-        description="???????similar/expand/condense/custom",
+        description="重写长度模式：similar/expand/condense/custom",
     )
     target_word_count: Optional[int] = Field(
         None,
-        description="????????? length_mode ? custom ????",
+        description="目标字数，仅在 length_mode 为 custom 时生效",
         ge=10,
         le=5000,
     )
-    enable_web_research: Optional[bool] = Field(None, description="??????????")
-    web_research_query: Optional[str] = Field(None, description="?????????", max_length=500)
+    enable_web_research: Optional[bool] = Field(None, description="是否启用联网搜索")
+    web_research_query: Optional[str] = Field(None, description="联网搜索查询词", max_length=500)
 
     @field_validator("user_instructions", "web_research_query", mode="before")
     @classmethod
@@ -391,10 +391,10 @@ class PartialRegenerateRequest(BaseModel):
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
-            "selected_text": "???????????????????",
+            "selected_text": "这一段冲突张力不够，需要重写",
             "start_position": 1234,
             "end_position": 1260,
-            "user_instructions": "????????????????????",
+            "user_instructions": "请强化冲突压迫感，补足人物心理",
             "context_chars": 500,
             "length_mode": "expand",
             "enable_web_research": True,

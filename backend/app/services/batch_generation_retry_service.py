@@ -1,4 +1,4 @@
-"""?????????????? helper?"""
+"""批量生成重试调度 helper。"""
 from __future__ import annotations
 
 import asyncio
@@ -121,18 +121,18 @@ async def execute_batch_generation_chapter_with_retries(
 
             if retry_count > 0:
                 logger.info(
-                    f"?? [{runtime_state.chapter_index}/{task.total_chapters}] ?????? (?{retry_count}?): "
-                    f"?{chapter.chapter_number}? ?{chapter.title}?"
+                    f"重试 [{runtime_state.chapter_index}/{task.total_chapters}] 继续生成 (第{retry_count}次): "
+                    f"第{chapter.chapter_number}章《{chapter.title}》"
                 )
             else:
                 logger.info(
-                    f"?? [{runtime_state.chapter_index}/{task.total_chapters}] ??????: "
-                    f"?{chapter.chapter_number}? ?{chapter.title}?"
+                    f"开始 [{runtime_state.chapter_index}/{task.total_chapters}] 生成章节: "
+                    f"第{chapter.chapter_number}章《{chapter.title}》"
                 )
 
             can_generate, error_msg, _ = await check_chapter_generation_prerequisites(db_session, chapter)
             if not can_generate:
-                raise Exception(f"???????: {error_msg}")
+                raise Exception(f"章节生成失败: {error_msg}")
 
             generation_result = await execution_context.await_generation_result_fn(
                 generation_coro=execution_context.run_generation_fn(
@@ -360,19 +360,19 @@ async def execute_batch_generation_chapter_with_retries(
             )
         except Exception as e:
             last_error = str(e)
-            error_msg = f"?{chapter.chapter_number if chapter else '?'}???: {last_error}"
-            logger.error(f"? {error_msg}")
+            error_msg = f"第{chapter.chapter_number if chapter else "?"}章生成失败: {last_error}"
+            logger.error(f"批量生成错误: {error_msg}")
 
             retry_count += 1
 
             if retry_count <= task.max_retries:
                 wait_time = min(2 ** retry_count, 10)
-                logger.info(f"? ?? {wait_time} ????...")
+                logger.info(f"将在 {wait_time} 秒后重试...")
                 await asyncio.sleep(wait_time)
             else:
                 logger.error(
-                    f"? ???????????????({task.max_retries}): "
-                    f"?{chapter.chapter_number if chapter else '?'}?"
+                    f"❌ 已超过最大重试次数({task.max_retries}): "
+                    f"第{chapter.chapter_number if chapter else '?'}章"
                 )
                 await fail_batch_generation_after_max_retries(
                     db_session,

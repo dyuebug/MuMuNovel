@@ -123,7 +123,7 @@ async def build_batch_generation_prompt(
     chapter_perspective = (
         temp_narrative_perspective
         or project.narrative_perspective
-        or '????'
+        or '第三人称'
     )
     logger.info(f'Batch prompt stage perspective: {chapter_perspective}')
 
@@ -134,13 +134,13 @@ async def build_batch_generation_prompt(
         'chapter_outline': chapter_context.chapter_outline,
         'target_word_count': target_word_count,
         'narrative_perspective': chapter_perspective,
-        'world_time_period': project.world_time_period or '???',
-        'world_location': project.world_location or '???',
-        'world_atmosphere': project.world_atmosphere or '???',
-        'world_rules': project.world_rules or '???',
-        'characters_info': chapter_context.chapter_characters or '??????',
-        'chapter_careers': chapter_context.chapter_careers or '??????',
-        'foreshadow_reminders': chapter_context.foreshadow_reminders or '?????????',
+        'world_time_period': project.world_time_period or '未提供',
+        'world_location': project.world_location or '未提供',
+        'world_atmosphere': project.world_atmosphere or '未提供',
+        'world_rules': project.world_rules or '未提供',
+        'characters_info': chapter_context.chapter_characters or '暂无角色信息',
+        'chapter_careers': chapter_context.chapter_careers or '暂无职业信息',
+        'foreshadow_reminders': chapter_context.foreshadow_reminders or '暂无伏笔提醒',
         **prompt_quality_kwargs,
     }
 
@@ -152,7 +152,7 @@ async def build_batch_generation_prompt(
                 template,
                 previous_chapter_content=chapter_context.continuation_point,
                 previous_chapter_summary=chapter_context.previous_chapter_summary or '',
-                relevant_memories=chapter_context.relevant_memories or '??????',
+                relevant_memories=chapter_context.relevant_memories or '暂无相关记忆',
                 **common_kwargs,
             )
         else:
@@ -160,12 +160,12 @@ async def build_batch_generation_prompt(
             template = await get_template_fn(template_key, current_user_id, db_session)
             base_prompt = format_prompt_fn(
                 template,
-                relevant_memories=chapter_context.relevant_memories or '??????',
+                relevant_memories=chapter_context.relevant_memories or '暂无相关记忆',
                 **common_kwargs,
             )
     else:
         if chapter_context.continuation_point:
-            final_prev_summary = '??????????????????'
+            final_prev_summary = '承接上一章剧情继续推进。'
             if chapter_context.previous_chapter_summary:
                 final_prev_summary = chapter_context.previous_chapter_summary
             elif previous_summary_context:
@@ -185,7 +185,7 @@ async def build_batch_generation_prompt(
             template = await get_template_fn(template_key, current_user_id, db_session)
             base_prompt = format_prompt_fn(
                 template,
-                relevant_memories=chapter_context.relevant_memories or '??????',
+                relevant_memories=chapter_context.relevant_memories or '暂无相关记忆',
                 **common_kwargs,
             )
 

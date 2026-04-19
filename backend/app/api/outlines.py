@@ -1143,7 +1143,7 @@ def _compose_outline_research_seed(*parts: Any, limit: int = 260) -> str:
         fragments.append(re.sub(r"\s+", " ", text))
     if not fragments:
         return ""
-    return "?".join(fragments)[:limit]
+    return " | ".join(fragments)[:limit]
 
 
 async def _collect_outline_research_bundle(
@@ -1174,8 +1174,8 @@ async def _collect_outline_research_bundle(
     grok_query = custom_query
     if not grok_query and research_seed:
         grok_query = (
-            "???????????????????????????????????/??????????????????"
-            f"???{research_seed}"
+            "请围绕以下小说大纲设定进行实时联网研究，重点整理题材趋势、世界规则、人物关系与剧情推进参考，并尽量附带来源："
+            f"背景：{research_seed}"
         )
 
     return await chapter_web_research_service.collect_assets(

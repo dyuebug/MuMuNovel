@@ -26,6 +26,7 @@ import {
   getBatchSummaryMetricItems,
   getQualityProfileDisplayItems,
   getRepairGuidanceDisplay,
+  type QualityProfileDisplayItem,
 } from '../utils/storyCreationQualitySummary';
 import { getCachedWordCount, setCachedWordCount } from '../utils/storyCreationWordCount';
 import {
@@ -35,6 +36,8 @@ import {
   isStorySceneOutlineDraftEmpty,
   STORY_BEAT_PLANNER_FIELDS,
   STORY_SCENE_OUTLINE_FIELDS,
+  type StoryBeatPlannerDraft,
+  type StorySceneOutlineDraft,
 } from '../utils/storyCreationDraft';
 import {
   buildBatchCreationPresetRecommendation,
@@ -45,8 +48,9 @@ import {
   buildBatchStoryRepairTargetCardFromSummary,
 } from '../utils/creationPresetsBatch';
 import { buildCreationBlueprint, buildVolumePacingPlan } from '../utils/creationPresetsStory';
+import type { Chapter, WritingStyle } from '../types';
 import { CREATION_PLOT_STAGE_OPTIONS, CREATION_PRESETS, getCreationPresetByModes } from '../utils/creationPresetsCore';
-import { QUALITY_PRESET_OPTIONS } from '../utils/generationPreferenceOptions';
+import { QUALITY_PRESET_OPTIONS, type PreferenceOption } from '../utils/generationPreferenceOptions';
 import {
   formatActiveStoryRepairUpdatedAt,
   getActiveStoryRepairScopeLabel,
@@ -59,6 +63,11 @@ type ChapterBatchGenerateModalProps = {
   batchForm: FormInstance;
   [key: string]: any;
 };
+
+type ModelOption = { value?: unknown; label?: unknown };
+type NormalizedModelOption = { value: string; label: string };
+type BatchWritingStyleOption = Pick<WritingStyle, 'id' | 'name' | 'description'> & { is_default?: boolean };
+type BatchChapterOption = Pick<Chapter, 'id' | 'chapter_number' | 'title' | 'content'>;
 
 type RenderDebugGlobal = typeof globalThis & {
   __NOVEL_RENDER_DEBUG__?: boolean;
@@ -104,9 +113,9 @@ function useActiveRenderDiagnostics(componentName: string, getSnapshot: () => Re
 
 const useLocalRenderDiagnostics = import.meta.env.DEV ? useActiveRenderDiagnostics : noopRenderDiagnostics;
 
-const normalizeAvailableModelOptions = (models: any[]): Array<{ value: string; label: string }> => {
+const normalizeAvailableModelOptions = (models: ModelOption[]): NormalizedModelOption[] => {
   const seenValues = new Set<string>();
-  return models.reduce((options: Array<{ value: string; label: string }>, model: any) => {
+  return models.reduce((options: NormalizedModelOption[], model) => {
     const value = typeof model?.value === 'string' ? model.value.trim() : '';
     if (!value || seenValues.has(value)) {
       return options;
@@ -121,7 +130,7 @@ const normalizeAvailableModelOptions = (models: any[]): Array<{ value: string; l
   }, []);
 };
 
-const normalizeWritingStyleOptions = (styles: any[]): any[] => {
+const normalizeWritingStyleOptions = (styles: BatchWritingStyleOption[]): BatchWritingStyleOption[] => {
   const seenStyleIds = new Set<number>();
   return styles.filter((style) => {
     if (typeof style?.id !== 'number' || seenStyleIds.has(style.id)) {
@@ -133,7 +142,7 @@ const normalizeWritingStyleOptions = (styles: any[]): any[] => {
   });
 };
 
-const normalizeBatchStartChapterOptions = (chapters: any[]): any[] => {
+const normalizeBatchStartChapterOptions = (chapters: BatchChapterOption[]): BatchChapterOption[] => {
   const seenChapterNumbers = new Set<number>();
   return chapters.filter((chapter) => {
     if (typeof chapter?.chapter_number !== 'number' || seenChapterNumbers.has(chapter.chapter_number)) {
@@ -347,13 +356,13 @@ const batchCreationBlueprint = useMemo(
 );
 
 const batchSelectedCreativeModeLabel = batchSelectedCreativeMode
-  ? (CREATIVE_MODE_OPTIONS.find((item: any) => item.value === batchSelectedCreativeMode)?.label || batchSelectedCreativeMode)
+  ? (CREATIVE_MODE_OPTIONS.find((item: PreferenceOption<'balanced' | 'hook' | 'emotion' | 'suspense' | 'relationship' | 'payoff'>) => item.value === batchSelectedCreativeMode)?.label || batchSelectedCreativeMode)
   : "批量保留优势";
 const batchSelectedStoryFocusLabel = batchSelectedStoryFocus
-  ? (STORY_FOCUS_OPTIONS.find((item: any) => item.value === batchSelectedStoryFocus)?.label || batchSelectedStoryFocus)
+  ? (STORY_FOCUS_OPTIONS.find((item: PreferenceOption<'advance_plot' | 'deepen_character' | 'escalate_conflict' | 'reveal_mystery' | 'relationship_shift' | 'foreshadow_payoff'>) => item.value === batchSelectedStoryFocus)?.label || batchSelectedStoryFocus)
   : '保持结构均衡';
 const batchSelectedPlotStageLabel = batchSelectedPlotStage
-  ? (CREATION_PLOT_STAGE_OPTIONS.find((item: any) => item.value === batchSelectedPlotStage)?.label || batchSelectedPlotStage)
+  ? (CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === batchSelectedPlotStage)?.label || batchSelectedPlotStage)
   : '按具体场景判断';
 const batchSelectedModelLabel = batchSelectedModel
   ? (normalizedAvailableModels.find((item) => item.value === batchSelectedModel)?.label || batchSelectedModel)
@@ -510,7 +519,7 @@ const batchStoryInsightCards = useMemo(
 
             initialValues={{
 
-              startChapterNumber: sortedChapters.find((ch: any) => !ch.content || ch.content.trim() === '')?.chapter_number || 1,
+              startChapterNumber: sortedChapters.find((ch: BatchChapterOption) => !ch.content || ch.content.trim() === '')?.chapter_number || 1,
 
               count: 5,
 
@@ -556,7 +565,7 @@ const batchStoryInsightCards = useMemo(
 
                 <Select placeholder="请选择章节">
 
-                  {normalizedBatchStartChapterOptions.map((ch: any) => (
+                  {normalizedBatchStartChapterOptions.map((ch) => (
 
                     <Select.Option key={ch.id ?? `chapter-${ch.chapter_number}`} value={ch.chapter_number}>
 
@@ -647,7 +656,7 @@ const batchStoryInsightCards = useMemo(
 
                 >
 
-                  {normalizedWritingStyles.map((style: any) => (
+                  {normalizedWritingStyles.map((style) => (
 
                     <Select.Option key={style.id} value={style.id}>
 
@@ -727,7 +736,7 @@ const batchStoryInsightCards = useMemo(
                 allowClear
                 optionLabelProp="label"
               >
-                {CREATION_PLOT_STAGE_OPTIONS.map((option: any) => (
+                {CREATION_PLOT_STAGE_OPTIONS.map((option) => (
                   <Select.Option key={option.value} value={option.value} label={option.label}>
                     <div>{option.label}</div>
                     <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)' }}>{option.description}</div>
@@ -738,7 +747,7 @@ const batchStoryInsightCards = useMemo(
                 <Button size="small" onClick={applyInferredBatchPlotStage}>应用推断阶段</Button>
                 {batchSelectedPlotStage && (
                   <span style={{ color: 'var(--color-success)', fontSize: 12 }}>
-                    已选择： {CREATION_PLOT_STAGE_OPTIONS.find((item: any) => item.value === batchSelectedPlotStage)?.label || batchSelectedPlotStage}
+                    已选择： {CREATION_PLOT_STAGE_OPTIONS.find((item) => item.value === batchSelectedPlotStage)?.label || batchSelectedPlotStage}
                   </span>
                 )}
               </Space>
@@ -857,7 +866,7 @@ const batchStoryInsightCards = useMemo(
               style={{ marginBottom: 12 }}
             >
               <Space wrap>
-                {CREATION_PRESETS.map((preset: any) => (
+                {CREATION_PRESETS.map((preset) => (
                   <Button
                     key={preset.id}
                     type={activeBatchCreationPreset?.id === preset.id ? 'primary' : 'default'}
@@ -916,7 +925,7 @@ const batchStoryInsightCards = useMemo(
                     {batchScoreDrivenRecommendationCard.alternatives.length > 0 && (
                       renderCompactListCard(
                         '备选方案',
-                        batchScoreDrivenRecommendationCard.alternatives.map((item: any) => (
+                        batchScoreDrivenRecommendationCard.alternatives.map((item) => (
                           item.reason ? `${item.label}：${item.reason}` : item.label
                         )),
                         { tagText: `${batchScoreDrivenRecommendationCard.alternatives.length}项` },
@@ -1024,12 +1033,12 @@ const batchStoryInsightCards = useMemo(
                         },
                       )}
                       <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                        {STORY_BEAT_PLANNER_FIELDS.map((field: any) => (
+                        {STORY_BEAT_PLANNER_FIELDS.map((field) => (
                           <div key={field.key}>
                             <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{field.label}</div>
                             <Input
                               value={batchStoryBeatPlannerDraft[field.key]}
-                              onChange={(event) => setBatchStoryBeatPlannerDraft((prev: any) => ({
+                              onChange={(event) => setBatchStoryBeatPlannerDraft((prev: StoryBeatPlannerDraft) => ({
                                 ...prev,
                                 [field.key]: event.target.value,
                               }))}
@@ -1063,12 +1072,12 @@ const batchStoryInsightCards = useMemo(
                         },
                       )}
                       <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                        {STORY_SCENE_OUTLINE_FIELDS.map((field: any) => (
+                        {STORY_SCENE_OUTLINE_FIELDS.map((field) => (
                           <div key={field.key}>
                             <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{field.label}</div>
                             <TextArea
                               value={batchStorySceneOutlineDraft[field.key]}
-                              onChange={(event) => setBatchStorySceneOutlineDraft((prev: any) => ({
+                              onChange={(event) => setBatchStorySceneOutlineDraft((prev: StorySceneOutlineDraft) => ({
                                 ...prev,
                                 [field.key]: event.target.value,
                               }))}
@@ -1229,7 +1238,7 @@ const batchStoryInsightCards = useMemo(
                     allowClear
                     optionLabelProp="label"
                   >
-                    {CREATIVE_MODE_OPTIONS.map((option: any) => (
+                    {CREATIVE_MODE_OPTIONS.map((option: PreferenceOption<'balanced' | 'hook' | 'emotion' | 'suspense' | 'relationship' | 'payoff'>) => (
                       <Select.Option key={option.value} value={option.value} label={option.label}>
                         <div>{option.label}</div>
                         <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{option.description}</div>
@@ -1249,7 +1258,7 @@ const batchStoryInsightCards = useMemo(
                     allowClear
                     optionLabelProp="label"
                   >
-                    {STORY_FOCUS_OPTIONS.map((option: any) => (
+                    {STORY_FOCUS_OPTIONS.map((option: PreferenceOption<'advance_plot' | 'deepen_character' | 'escalate_conflict' | 'reveal_mystery' | 'relationship_shift' | 'foreshadow_payoff'>) => (
                       <Select.Option key={option.value} value={option.value} label={option.label}>
                         <div>{option.label}</div>
                         <div style={{ fontSize: 12, color: "var(--color-text-tertiary)" }}>{option.description}</div>
@@ -1365,7 +1374,7 @@ const batchStoryInsightCards = useMemo(
                   { tone: "success", style: { marginBottom: 10 } },
                 )}
                 {renderCompactFactGrid(
-                  batchQualityProfileItems.map((item: any) => [item.label, item.description] as [string, string]),
+                  batchQualityProfileItems.map((item: QualityProfileDisplayItem) => [item.label, item.description] as [string, string]),
                 )}
               </Card>
 

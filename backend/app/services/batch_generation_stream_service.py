@@ -22,16 +22,16 @@ async def validate_batch_generation_stream_access(
     user_id: Optional[str],
 ) -> BatchGenerationTask:
     if not user_id:
-        raise HTTPException(status_code=401, detail='???')
+        raise HTTPException(status_code=401, detail='未登录')
 
     result = await db_session.execute(
         select(BatchGenerationTask).where(BatchGenerationTask.id == batch_id)
     )
     task = result.scalar_one_or_none()
     if not task:
-        raise HTTPException(status_code=404, detail='?????????')
+        raise HTTPException(status_code=404, detail='未找到批量生成任务')
     if task.user_id != user_id:
-        raise HTTPException(status_code=403, detail='???????')
+        raise HTTPException(status_code=403, detail='无权访问该任务')
     return task
 
 
@@ -43,7 +43,7 @@ async def build_batch_generation_event_stream(
 ) -> AsyncGenerator[str, None]:
     queue = await subscribe_task_stream(batch_id)
     try:
-        yield await SSEResponse.send_progress('????????', 0, 'processing')
+        yield await SSEResponse.send_progress('正在连接批量生成任务流', 0, 'processing')
 
         while True:
             try:
@@ -61,7 +61,7 @@ async def build_batch_generation_event_stream(
                 )
                 row = status_result.first()
                 if not row:
-                    yield await SSEResponse.send_error('?????', 404)
+                    yield await SSEResponse.send_error('批量生成任务不存在', 404)
                     break
 
                 status = row[0]
@@ -70,7 +70,7 @@ async def build_batch_generation_event_stream(
                     yield await SSEResponse.send_done()
                     break
                 if status == 'failed':
-                    yield await SSEResponse.send_error(error_message or '????', 500)
+                    yield await SSEResponse.send_error(error_message or '批量生成任务执行失败', 500)
                     break
     finally:
         await unsubscribe_task_stream(batch_id, queue)

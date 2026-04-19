@@ -1,4 +1,4 @@
-"""?????????? service?"""
+"""批量生成运行 service。"""
 from __future__ import annotations
 
 import asyncio
@@ -69,7 +69,7 @@ async def execute_batch_generation_in_order_workflow(
     story_preserve_strengths = resolved_story_repair_kwargs.get("story_preserve_strengths")
 
     try:
-        logger.info(f"??????????: {batch_id}")
+        logger.info(f"开始执行批量生成任务: {batch_id}")
 
         from app.database import get_engine
         from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -205,10 +205,10 @@ async def execute_batch_generation_in_order_workflow(
                     refresh_before_commit=True,
                 )
             except Exception as cancel_error:
-                logger.error(f"??????????: {str(cancel_error)}")
+                logger.error(f"处理中断取消逻辑失败: {str(cancel_error)}")
         return
     except Exception as error:
-        logger.error(f"????????: {str(error)}", exc_info=True)
+        logger.error(f"批量生成执行异常: {str(error)}", exc_info=True)
         if db_session and task:
             try:
                 await fail_batch_generation_on_unhandled_exception(
@@ -219,7 +219,7 @@ async def execute_batch_generation_in_order_workflow(
                     emit_event=emit_batch_event,
                 )
             except Exception as commit_error:
-                logger.error(f"?????????????: {str(commit_error)}")
+                logger.error(f"更新批量生成失败状态时提交失败: {str(commit_error)}")
     finally:
         if db_session:
             await db_session.close()

@@ -1,4 +1,4 @@
-"""???????????????"""
+"""批量生成章节状态门面。"""
 from __future__ import annotations
 
 from app.services.batch_generation_chapter_failure_state_service import (

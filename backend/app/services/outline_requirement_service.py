@@ -41,7 +41,8 @@ OUTLINE_SCENE = "outline"
 
 
 def _split_sentences(text: str) -> List[str]:
-    parts = re.split(r"[???!??;\n]+", text)
+    parts = re.split(r"[。！？!?；;\n]+", text)
+    return [part.strip() for part in parts if part.strip()]
     return [part.strip() for part in parts if part.strip()]
 
 

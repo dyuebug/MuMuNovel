@@ -30,7 +30,7 @@ def test_should_sanitize_regeneration_content_and_raise_on_empty():
             sanitize_generated_text=lambda text: ("   ", 2),
             contains_workflow_meta_text=lambda text: False,
         )
-    assert "?????" in str(exc_info.value)
+    assert "重写结果为空或仅包含流程化元文本" in str(exc_info.value)
 
 
 def test_should_sanitize_regeneration_content_and_raise_on_meta_text():
@@ -41,7 +41,7 @@ def test_should_sanitize_regeneration_content_and_raise_on_meta_text():
             sanitize_generated_text=lambda text: ("valid content", 0),
             contains_workflow_meta_text=lambda text: True,
         )
-    assert "??????" in str(exc_info.value)
+    assert "重写结果包含流程化元文本" in str(exc_info.value)
 
 
 def test_should_finalize_regeneration_completion_and_build_result_payload():

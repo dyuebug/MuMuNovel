@@ -57,7 +57,7 @@ async def get_auto_revision_draft(
     history_id: Optional[str] = Query(None, description="指定修订草稿历史ID"),
     db: AsyncSession = Depends(get_db),
 ):
-    """???????????"""
+    """获取自动修订草稿详情。"""
     user_id = require_authenticated_user_id(request)
     chapter = await load_accessible_chapter_or_404(
         db=db,
@@ -95,7 +95,7 @@ async def apply_auto_revision_draft(
     apply_request: Optional[Dict[str, Any]] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """??????????????"""
+    """应用自动修订草稿到章节正文。"""
     user_id = require_authenticated_user_id(request)
     chapter = await load_accessible_chapter_or_404(
         db=db,
@@ -152,7 +152,7 @@ async def apply_auto_revision_draft(
         ),
     )
     logger.info(
-        "? ?????????: chapter_id=%s, old=%s, new=%s, stale=%s",
+        "已应用自动修订草稿: chapter_id=%s, old=%s, new=%s, stale=%s",
         chapter_id,
         apply_result.old_word_count,
         apply_result.new_word_count,
@@ -177,7 +177,7 @@ async def get_candidate_draft(
     attempt_id: Optional[str] = Query(None, description="指定候选草稿ID"),
     db: AsyncSession = Depends(get_db),
 ):
-    """?????????"""
+    """获取候选草稿详情。"""
     user_id = require_authenticated_user_id(request)
     chapter = await load_accessible_chapter_or_404(
         db=db,
@@ -213,7 +213,7 @@ async def apply_candidate_draft(
     apply_request: Optional[Dict[str, Any]] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """????????????"""
+    """应用候选草稿到章节正文。"""
     user_id = require_authenticated_user_id(request)
     chapter = await load_accessible_chapter_or_404(
         db=db,

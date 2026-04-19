@@ -1,4 +1,4 @@
-"""??? rerank / repair ?? service?"""
+"""章节候选 rerank / repair 执行 service。"""
 from __future__ import annotations
 
 from dataclasses import dataclass

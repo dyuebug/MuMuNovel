@@ -37,7 +37,7 @@ def parse_reviser_result_from_history(generated_content: Optional[str]) -> Optio
 def require_candidate_draft_full_content(draft_attempt: ChapterDraftAttempt) -> str:
     candidate_content_raw, has_full_content = _extract_candidate_draft_full_content(draft_attempt)
     if not has_full_content or not candidate_content_raw.strip():
-        raise HTTPException(status_code=409, detail="????????????????????")
+        raise HTTPException(status_code=409, detail="当前候选草稿缺少可回放的完整内容")
     return candidate_content_raw
 
 def is_reviser_draft_stale(

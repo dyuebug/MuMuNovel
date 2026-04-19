@@ -1,4 +1,4 @@
-"""???????? service?"""
+"""批量生成单章 service。"""
 from __future__ import annotations
 
 from asyncio import Lock
@@ -226,10 +226,10 @@ async def _load_batch_generation_project_and_outline(
     )
     project = project_result.scalar_one_or_none()
     if not project:
-        raise Exception("?????")
+        raise Exception("项目不存在")
 
     outline_mode = project.outline_mode if project else "one-to-many"
-    logger.info(f"???????? - ????: {outline_mode}")
+    logger.info(f"批量生成单章 - 大纲模式: {outline_mode}")
 
     if request.chapter.outline_id:
         outline_result = await request.db_session.execute(
@@ -260,7 +260,7 @@ async def _collect_batch_generation_research_assets(
             request.stream_task_id,
             {
                 "type": "progress",
-                "message": f"?{request.chapter.chapter_number}???????",
+                "message": f"第{request.chapter.chapter_number}章正在联网检索",
                 "progress": 18,
                 "status": "running",
                 "phase": "researching",
@@ -293,7 +293,7 @@ async def _collect_batch_generation_research_assets(
         )
 
     logger.info(
-        "???????? - ?%s??? %s ???????? %s ???",
+        "联网检索 - 第%s章获得 %s 条资料，归档 %s 条记忆",
         request.chapter.chapter_number,
         len(research_assets),
         len(saved_memory_ids),
@@ -303,7 +303,7 @@ async def _collect_batch_generation_research_assets(
             request.stream_task_id,
             {
                 "type": "progress",
-                "message": f"?{request.chapter.chapter_number}???? {len(research_assets)} ?????",
+                "message": f"第{request.chapter.chapter_number}章已检索到 {len(research_assets)} 条资料",
                 "progress": 22,
                 "status": "running",
                 "phase": "researching",

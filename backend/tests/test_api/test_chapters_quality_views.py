@@ -453,12 +453,12 @@ async def test_should_return_chapter_annotations_with_analysis_metadata(
     mock_user,
 ):
     project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
-    chapter_content = "???????????????????????"
+    chapter_content = "At dusk, the hook clue appears near the harbor and a plot spark follows."
     chapter = await create_chapter(
         chapters_session_factory,
         project_id=project.id,
         chapter_number=1,
-        title="????",
+        title="Harbor Night",
         content=chapter_content,
         status="completed",
     )
@@ -466,12 +466,12 @@ async def test_should_return_chapter_annotations_with_analysis_metadata(
     analysis = PlotAnalysis(
         project_id=project.id,
         chapter_id=chapter.id,
-        plot_stage="??",
-        hooks=[{"type": "??", "content": "????", "keyword": "??", "strength": 8, "position": "??"}],
+        plot_stage="opening",
+        hooks=[{"type": "hook", "content": "hook clue", "keyword": "hook", "strength": 8, "position": "opening"}],
         hooks_count=1,
-        foreshadows=[{"content": "????", "type": "planted", "keyword": "????", "strength": 7}],
+        foreshadows=[{"content": "future omen", "type": "planted", "keyword": "harbor", "strength": 7}],
         foreshadows_planted=1,
-        plot_points=[{"content": "????????", "keyword": "??", "importance": 0.9, "type": "conflict"}],
+        plot_points=[{"content": "plot spark", "keyword": "plot", "importance": 0.9, "type": "conflict"}],
         plot_points_count=1,
         overall_quality_score=8.2,
         pacing_score=8.0,
@@ -489,36 +489,36 @@ async def test_should_return_chapter_annotations_with_analysis_metadata(
                     project_id=project.id,
                     chapter_id=chapter.id,
                     memory_type="hook",
-                    title="????",
-                    content="????",
+                    title="hook memory",
+                    content="hook clue",
                     story_timeline=1,
-                    chapter_position=-1,
-                    text_length=0,
+                    chapter_position=chapter_content.find("hook"),
+                    text_length=len("hook"),
                     importance_score=0.9,
-                    tags=["??"],
+                    tags=["hook"],
                 ),
                 StoryMemory(
                     project_id=project.id,
                     chapter_id=chapter.id,
                     memory_type="foreshadow",
-                    title="????",
-                    content="????",
+                    title="Foreshadow Memory",
+                    content="future omen",
                     story_timeline=1,
                     chapter_position=7,
                     text_length=4,
                     importance_score=0.8,
                     is_foreshadow=1,
-                    related_locations=["??"],
+                    related_locations=["harbor"],
                 ),
                 StoryMemory(
                     project_id=project.id,
                     chapter_id=chapter.id,
                     memory_type="plot_point",
-                    title="????",
-                    content="????????",
+                    title="Plot Memory",
+                    content="plot spark",
                     story_timeline=1,
-                    chapter_position=-1,
-                    text_length=0,
+                    chapter_position=chapter_content.find("plot"),
+                    text_length=len("plot"),
                     importance_score=0.7,
                 ),
             ]
@@ -539,19 +539,19 @@ async def test_should_return_chapter_annotations_with_analysis_metadata(
     foreshadow_annotation = next(item for item in body["annotations"] if item["type"] == "foreshadow")
     plot_annotation = next(item for item in body["annotations"] if item["type"] == "plot_point")
 
-    assert hook_annotation["position"] == chapter_content.find("??")
-    assert hook_annotation["length"] == len("??")
+    assert hook_annotation["position"] == chapter_content.find("hook")
+    assert hook_annotation["length"] == len("hook")
     assert hook_annotation["metadata"]["strength"] == 8
-    assert hook_annotation["metadata"]["position_desc"] == "??"
+    assert hook_annotation["metadata"]["position_desc"] == "opening"
 
     assert foreshadow_annotation["position"] == 7
     assert foreshadow_annotation["length"] == 4
     assert foreshadow_annotation["metadata"]["foreshadow_type"] == "planted"
     assert foreshadow_annotation["metadata"]["strength"] == 7
-    assert foreshadow_annotation["metadata"]["related_locations"] == ["??"]
+    assert foreshadow_annotation["metadata"]["related_locations"] == ["harbor"]
 
-    assert plot_annotation["position"] == chapter_content.find("??")
-    assert plot_annotation["length"] == len("??")
+    assert plot_annotation["position"] == chapter_content.find("plot")
+    assert plot_annotation["length"] == len("plot")
 
 async def test_should_restore_project_quality_trend_from_persisted_snapshot_after_cache_clear(
     chapters_client,

@@ -155,14 +155,14 @@ async def partial_regenerate_stream(
 
     return create_sse_response(event_generator())
 
-@router.post("/{chapter_id}/apply-partial-regenerate", summary="????????")
+@router.post("/{chapter_id}/apply-partial-regenerate", summary="应用局部重写结果")
 async def apply_partial_regenerate(
     chapter_id: str,
     request: Request,
     apply_request: dict,
     db: AsyncSession = Depends(get_db),
 ):
-    """??????????????"""
+    """将局部重写结果写回章节内容。"""
     user_id = require_authenticated_user_id(request)
     chapter = await load_accessible_chapter_or_404(
         db=db,
@@ -177,18 +177,18 @@ async def apply_partial_regenerate(
     new_text, removed_meta_lines = sanitize_generated_narrative_text(new_text_raw)
     if removed_meta_lines > 0:
         logger.warning(
-            "?? ?????????? %s ???????: chapter_id=%s",
+            "局部重写应用前检测到 %s 行流程化元文本: chapter_id=%s",
             removed_meta_lines,
             chapter_id,
         )
     if not new_text:
-        raise HTTPException(status_code=400, detail="????????")
+        raise HTTPException(status_code=400, detail="重写结果为空")
     if contains_chapter_workflow_meta_text(new_text):
-        raise HTTPException(status_code=400, detail="????????????")
+        raise HTTPException(status_code=400, detail="重写结果包含流程化元文本")
 
     content_length = len(chapter.content or "")
     if start_position < 0 or end_position > content_length or start_position >= end_position:
-        raise HTTPException(status_code=400, detail="??????")
+        raise HTTPException(status_code=400, detail="选区范围无效")
 
     new_content = (chapter.content or "")[:start_position] + new_text + (chapter.content or "")[end_position:]
     apply_result = await apply_chapter_content_update(
@@ -198,7 +198,7 @@ async def apply_partial_regenerate(
     )
 
     logger.info(
-        "? ???????: chapter_id=%s, %s? -> %s?",
+        "已应用局部重写: chapter_id=%s, %s字 -> %s字",
         chapter_id,
         apply_result.old_word_count,
         apply_result.new_word_count,
@@ -209,6 +209,5 @@ async def apply_partial_regenerate(
         "chapter_id": chapter_id,
         "word_count": apply_result.new_word_count,
         "old_word_count": apply_result.old_word_count,
-        "message": "???????",
+        "message": "局部重写结果已应用",
     }
-

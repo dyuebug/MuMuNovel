@@ -1,4 +1,4 @@
-"""??????? API?"""
+"""章节重写 API。"""
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import select
@@ -27,11 +27,11 @@ from app.services.chapter_generated_text_service import (
 from app.services.chapter_regenerator import ChapterRegenerator
 from app.utils.sse_response import create_sse_response
 
-router = APIRouter(prefix="/chapters", tags=["????"])
+router = APIRouter(prefix="/chapters", tags=["章节管理"])
 REGENERATOR_FACTORY = ChapterRegenerator
 
 
-@router.post("/{chapter_id}/regenerate-stream", summary="???????")
+@router.post("/{chapter_id}/regenerate-stream", summary="流式重写章节")
 async def regenerate_chapter_stream(
     chapter_id: str,
     request: Request,
@@ -40,7 +40,7 @@ async def regenerate_chapter_stream(
     db: AsyncSession = Depends(get_db),
     user_ai_service: AIService = Depends(get_user_ai_service),
 ):
-    """? SSE ?????????????????????"""
+    """通过 SSE 流式返回章节重写进度与结果。"""
     _ = background_tasks
     user_id = require_authenticated_user_id(request)
     chapter = await load_accessible_chapter_or_404(
@@ -72,14 +72,14 @@ async def regenerate_chapter_stream(
     )
 
 
-@router.get("/{chapter_id}/regeneration/tasks", summary="???????????")
+@router.get("/{chapter_id}/regeneration/tasks", summary="获取章节重写任务列表")
 async def get_regeneration_tasks(
     chapter_id: str,
     request: Request,
     limit: int = Query(10, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
 ):
-    """???????????????"""
+    """获取章节历史重写任务列表。"""
     user_id = require_authenticated_user_id(request)
     chapter = await load_accessible_chapter_or_404(
         db=db,

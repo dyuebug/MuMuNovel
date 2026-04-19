@@ -539,7 +539,7 @@ async def test_generate_single_chapter_for_batch_should_inject_web_research_grou
     monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
 
     fake_ai_service.calls.clear()
-    fake_ai_service.chunks = ["??", "??"]
+    fake_ai_service.chunks = ["draft ", "text"]
 
     async with chapters_session_factory() as session:
         db_chapter = await session.get(Chapter, chapter.id)
@@ -557,7 +557,7 @@ async def test_generate_single_chapter_for_batch_should_inject_web_research_grou
             web_research_query="night market customs",
         )
 
-    assert result["full_content"] == "????"
+    assert result["full_content"] == "draft text"
     assert fake_ai_service.calls
     assert fake_ai_service.calls[0]["system_prompt"] == "mock-batch-system-prompt"
     assert captured_runtime_prompt_kwargs["web_research_grounding_block"]
@@ -578,7 +578,7 @@ async def test_should_sync_project_words_when_partial_apply_chapter_word_count_m
         chapters_session_factory,
         project_id=project.id,
         chapter_number=1,
-        title="??????????",
+        title="Word Count Sync",
         content="ABCDEFG",
         status="completed",
     )
@@ -703,15 +703,15 @@ async def test_should_forward_web_research_settings_for_batch_background_generat
         chapters_session_factory,
         project_id=project.id,
         chapter_number=1,
-        title="???",
-        content="???????",
+        title="Chapter One",
+        content="opening paragraph",
         status="completed",
     )
     await create_chapter(
         chapters_session_factory,
         project_id=project.id,
         chapter_number=2,
-        title="???",
+        title="Chapter Two",
         content=None,
     )
 

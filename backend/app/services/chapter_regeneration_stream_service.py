@@ -71,13 +71,13 @@ async def build_chapter_regeneration_event_stream(
     sanitize_generated_text: Callable[[str], tuple[str, int]],
     contains_workflow_meta_text: Callable[[str], bool],
 ) -> AsyncGenerator[str, None]:
-    tracker = WizardProgressTracker("??????")
+    tracker = WizardProgressTracker("章节重写")
     yield await tracker.start()
 
     async for db_session in db_session_source():
         db_committed = False
         try:
-            yield await tracker.loading("??????...", 0.5)
+            yield await tracker.loading("正在准备重写上下文...", 0.5)
 
             regeneration_task = await create_regeneration_task(
                 db_session,
@@ -88,9 +88,9 @@ async def build_chapter_regeneration_event_stream(
                 style_id=context.style_id,
             )
             task_id = regeneration_task.id
-            logger.info(f"?? ????????: {task_id}")
+            logger.info(f"已创建章节重写任务: {task_id}")
 
-            yield await tracker.preparing("??????...")
+            yield await tracker.preparing("正在生成重写提示词...")
             yield await SSEResponse.send_event(
                 event="task_created",
                 data={"task_id": task_id},
@@ -118,7 +118,7 @@ async def build_chapter_regeneration_event_stream(
             ):
                 yield streamed_payload
 
-            yield await tracker.saving("?????????...", 0.5)
+            yield await tracker.saving("正在保存重写结果...", 0.5)
 
             full_content = streaming_state.full_content
             sanitized_content = sanitize_chapter_regeneration_content(
@@ -153,9 +153,9 @@ async def build_chapter_regeneration_event_stream(
             ):
                 yield emitted_payload
 
-            logger.info(f"? ????????: {context.chapter.id}, ??: {task_id}")
+            logger.info(f"章节重写完成: {context.chapter.id}, 任务: {task_id}")
         except Exception as exc:
-            logger.error(f"? ??????: {str(exc)}", exc_info=True)
+            logger.error(f"章节重写失败: {str(exc)}", exc_info=True)
 
             if not db_committed:
                 try:
@@ -165,7 +165,7 @@ async def build_chapter_regeneration_event_stream(
                         error_message=str(exc),
                     )
                 except Exception as update_error:
-                    logger.error(f"??????????: {str(update_error)}")
+                    logger.error(f"更新章节重写任务状态失败: {str(update_error)}")
 
             yield await tracker.error(str(exc))
         break
@@ -191,12 +191,12 @@ def sanitize_chapter_regeneration_content(
     sanitized_content, removed_meta_lines = sanitize_generated_text(full_content)
     if removed_meta_lines > 0:
         logger.warning(
-            f"??????? {removed_meta_lines} ????????chapter_id={chapter_id}"
+            f"章节重写检测到流程化元文本，已清理 {removed_meta_lines} 行: chapter_id={chapter_id}"
         )
     if not sanitized_content.strip():
-        raise ValueError("????????????????")
+        raise ValueError("重写结果为空或仅包含流程化元文本")
     if contains_workflow_meta_text(sanitized_content):
-        raise ValueError("???????????????")
+        raise ValueError("重写结果包含流程化元文本")
     return ChapterRegenerationSanitizedContent(
         full_content=sanitized_content,
         removed_meta_lines=removed_meta_lines,
@@ -242,8 +242,8 @@ def build_chapter_regeneration_emission_plan(
     result_payload: Dict[str, Any],
 ) -> List[ChapterRegenerationEmissionStep]:
     return [
-        ChapterRegenerationEmissionStep(kind="tracker_saving", message="????", progress=0.9),
-        ChapterRegenerationEmissionStep(kind="tracker_complete", message="???????"),
+        ChapterRegenerationEmissionStep(kind="tracker_saving", message="正在保存", progress=0.9),
+        ChapterRegenerationEmissionStep(kind="tracker_complete", message="章节重写完成"),
         ChapterRegenerationEmissionStep(kind="tracker_result", payload=result_payload),
         ChapterRegenerationEmissionStep(kind="tracker_done"),
     ]
@@ -312,7 +312,7 @@ async def stream_chapter_regeneration_feedback(
                 yield await tracker_generating_fn(
                     current_chars=len(streaming_state.full_content),
                     estimated_total=estimated_total,
-                    message=f"?????... ??? {len(streaming_state.full_content)} ?",
+                    message=f"正在重写中... 已生成 {len(streaming_state.full_content)} 字",
                 )
         elif event["type"] == "progress":
             progress = float(event.get("progress") or 0)

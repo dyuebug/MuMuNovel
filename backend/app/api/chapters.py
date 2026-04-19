@@ -323,12 +323,12 @@ from app.api.settings import get_user_ai_service
 
 logger = get_logger(__name__)
 
-# ?????????? gateway / seam facade??????? FastAPI route?
+# 兼容层：通过 gateway / seam facade 复用批量生成 FastAPI 路由能力
 
 # 全局数据库写入锁（每个用户一个锁，用于保护SQLite写入操作）
 
 
-# ==================== Batch / Runtime ?? seam ====================
+# ==================== Batch / Runtime seam ====================
 
 async def get_db_write_lock(user_id: str) -> Lock:
     return await _get_db_write_lock_compat_service(user_id)
@@ -705,7 +705,7 @@ async def execute_batch_generation_in_order(
     story_repair_payload: Optional[StoryRepairPayload] = None,
     base_quality_profile: Optional[Dict[str, Any]] = None,
 ):
-    """????????????"""
+    """执行兼容层批量生成流程。"""
     return await _execute_batch_generation_in_order_compat_service(
         batch_id=batch_id,
         user_id=user_id,
@@ -817,4 +817,3 @@ async def generate_single_chapter_for_batch(
 
 
 # ==================== 局部重写相关API ====================
-

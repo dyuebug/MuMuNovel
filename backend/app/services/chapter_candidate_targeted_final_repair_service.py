@@ -1,4 +1,4 @@
-"""?????????????"""
+"""章节候选定向最终修复服务。"""
 from __future__ import annotations
 
 from dataclasses import dataclass

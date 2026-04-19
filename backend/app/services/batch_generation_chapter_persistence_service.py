@@ -1,4 +1,4 @@
-"""??????????? helper?"""
+"""批量生成章节落库 helper。"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -117,7 +117,7 @@ async def apply_generated_batch_chapter_candidate(
         history = GenerationHistory(
             project_id=chapter.project_id,
             chapter_id=chapter.id,
-            prompt=f"????: ?{chapter.chapter_number}??{chapter.title}?",
+            prompt=f"批量生成: 第{chapter.chapter_number}章《{chapter.title}》",
             generated_content=_build_generation_history_payload(
                 full_content,
                 quality_metrics if isinstance(quality_metrics, dict) else None,
@@ -130,7 +130,7 @@ async def apply_generated_batch_chapter_candidate(
         await db_session.commit()
         await db_session.refresh(chapter)
 
-    logger.info(f"???????: ?{chapter.chapter_number}??? {word_count} ?")
+    logger.info(f"章节已持久化: 第{chapter.chapter_number}章，共 {word_count} 字")
 
     try:
         async with write_lock:
@@ -143,7 +143,7 @@ async def apply_generated_batch_chapter_candidate(
             )
         if plant_result.get('planted_count', 0) > 0:
             logger.info(
-                f"???? - ????????? {plant_result['planted_count']} ?"
+                f"伏笔埋入 - 已记录 {plant_result['planted_count']} 条"
             )
     except Exception as plant_error:
-        logger.warning(f"???? - ??????????: {str(plant_error)}")
+        logger.warning(f"伏笔回收 - 自动埋入失败: {str(plant_error)}")

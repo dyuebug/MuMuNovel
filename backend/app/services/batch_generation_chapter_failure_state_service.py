@@ -1,4 +1,4 @@
-"""???????????? helper?"""
+"""批量生成章节失败状态 helper。"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -110,7 +110,7 @@ async def fail_batch_generation_after_analysis(
         'chapter_id': chapter_id,
         'chapter_number': chapter.chapter_number,
         'title': chapter.title,
-        'error': f"??????3?: {analysis_error}",
+        'error': f"章节分析失败，已重试3次: {analysis_error}",
         'retry_count': 3,
     }
 
@@ -120,16 +120,16 @@ async def fail_batch_generation_after_analysis(
             failed_info,
         ]
         task.status = 'failed'
-        task.error_message = f"?{chapter.chapter_number}?????3?: {analysis_error}"[:500]
+        task.error_message = f"第{chapter.chapter_number}章分析失败，已重试3次: {analysis_error}"[:500]
         task.completed_at = datetime.now()
         task.current_retry_count = 0
         await db_session.commit()
 
-    logger.error(f"??????: ?{chapter.chapter_number}????")
+    logger.error(f"章节分析失败: 第{chapter.chapter_number}章已终止")
     await emit_event(
         {
             "type": "error",
-            "error": task.error_message or "??????",
+            "error": task.error_message or "章节分析失败",
             "code": 500,
             "phase": "failed",
         }
@@ -149,7 +149,7 @@ async def fail_batch_generation_after_max_retries(
     emit_event,
 ) -> None:
     chapter_number = chapter.chapter_number if chapter else -1
-    chapter_title = chapter.title if chapter else "??"
+    chapter_title = chapter.title if chapter else "未命名章节"
     failed_info = {
         'chapter_id': chapter_id,
         'chapter_number': chapter_number,
@@ -164,15 +164,15 @@ async def fail_batch_generation_after_max_retries(
             failed_info,
         ]
         task.status = 'failed'
-        task.error_message = f"?{chapter_number}?????(??{retry_count-1}?): {last_error}"[:500]
+        task.error_message = f"第{chapter_number}章生成失败(重试{retry_count-1}次): {last_error}"[:500]
         task.completed_at = datetime.now()
         task.current_retry_count = 0
         await db_session.commit()
 
     if task.enable_analysis:
-        logger.error("??????: ???????/???????????????")
+        logger.error("章节生成失败: 已达到最大重试次数/分析未通过")
     else:
-        logger.error(f"??????: ?{chapter_number}???")
+        logger.error(f"章节生成失败: 第{chapter_number}章已终止")
     await emit_event(
         {
             "type": "error",

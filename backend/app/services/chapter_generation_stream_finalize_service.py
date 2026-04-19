@@ -39,19 +39,19 @@ def build_chapter_generation_analysis_followup_plan(
         elif resolved_action == "manual_review":
             analysis_reason = "quality_gate_manual_review"
 
-    completion_message = "??????"
+    completion_message = "章节生成完成"
     if resolved_action == "retry":
-        completion_message = "????????????????"
+        completion_message = "章节生成完成，已转入质量修复"
     elif resolved_action == "manual_review":
-        completion_message = "???????????????"
+        completion_message = "章节生成完成，已转入人工复核"
 
     analysis_started_message: Optional[str] = None
     if should_schedule_analysis:
-        analysis_started_message = "?????????"
+        analysis_started_message = "章节分析任务已启动"
         if resolved_action == "retry":
-            analysis_started_message = "????????????????????"
+            analysis_started_message = "质量修复分析任务已启动"
         elif resolved_action == "manual_review":
-            analysis_started_message = "????????????????????"
+            analysis_started_message = "人工复核分析任务已启动"
 
     return ChapterGenerationAnalysisFollowupPlan(
         should_schedule_analysis=should_schedule_analysis,
@@ -193,12 +193,12 @@ async def run_chapter_generation_post_persist_effects(
     auto_plant_pending_foreshadows_fn: Callable[..., Awaitable[Dict[str, Any]]],
 ) -> ChapterGenerationPostPersistEffects:
     if content_applied:
-        logger.info(f"? ?? {chapter_id} ????? {candidate_word_count} ?")
+        logger.info(f"✅ 章节 {chapter_id} 已保存，共 {candidate_word_count} 字")
     elif provisional_draft_saved:
-        logger.info(f"?? ?? {chapter_id} ?????????? {candidate_word_count} ?")
+        logger.info(f"⚠️ 章节 {chapter_id} 已保存候选草稿，共 {candidate_word_count} 字")
     else:
         logger.info(
-            f"?? ?? {chapter_id} ??? {candidate_word_count} ?????????? previous_status={previous_status}"
+            f"⚠️ 章节 {chapter_id} 未落库，保留候选草稿，共 {candidate_word_count} 字，previous_status={previous_status}"
         )
 
     planted_count = 0
@@ -214,10 +214,10 @@ async def run_chapter_generation_post_persist_effects(
             )
             planted_count = int((plant_result or {}).get("planted_count") or 0)
             if planted_count > 0:
-                logger.info(f"?? ??????: {planted_count}")
+                logger.info(f"✅ 已成功埋入伏笔: {planted_count}")
         except Exception as exc:
             plant_error = str(exc)
-            logger.warning(f"?? ????????: {plant_error}")
+            logger.warning(f"⚠️ 自动埋入伏笔失败: {plant_error}")
 
     return ChapterGenerationPostPersistEffects(
         planted_count=planted_count,

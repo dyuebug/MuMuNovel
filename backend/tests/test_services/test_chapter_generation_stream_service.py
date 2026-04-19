@@ -72,12 +72,12 @@ async def test_should_load_generation_stream_runtime_context(monkeypatch):
         id="chapter-1",
         project_id="project-1",
         chapter_number=3,
-        title="???",
+        title="Test Chapter",
         outline_id="outline-1",
     )
     project = Project(
         id="project-1",
-        title="????",
+        title="Test Project",
         user_id="user-1",
         outline_mode="one-to-one",
     )
@@ -85,7 +85,7 @@ async def test_should_load_generation_stream_runtime_context(monkeypatch):
         id="outline-1",
         project_id="project-1",
         order_index=3,
-        content="????",
+        content="outline notes",
     )
     db_session = AsyncMock()
     db_session.execute = AsyncMock(
@@ -97,17 +97,17 @@ async def test_should_load_generation_stream_runtime_context(monkeypatch):
     )
     quality_profile = {
         "resolved_style_id": 7,
-        "style_content": "????",
-        "style_name": "????",
+        "style_content": "style guide",
+        "style_name": "noir",
         "style_preset_id": "preset-7",
     }
     story_packet = SimpleNamespace(guidance={"creative_mode": "hook"})
     resolve_quality_profile = AsyncMock(return_value=quality_profile)
     build_story_packet = AsyncMock(return_value=story_packet)
     repair_payload = normalize_story_repair_payload(
-        summary="????",
-        targets=["?????"],
-        strengths=["??????"],
+        summary="repair brief",
+        targets=["tighten pace"],
+        strengths=["keep tension"],
     )
     resolve_story_repair_state = AsyncMock(return_value={"payload": repair_payload})
     cancelled_projects: list[str] = []
@@ -129,9 +129,9 @@ async def test_should_load_generation_stream_runtime_context(monkeypatch):
 
     request = SimpleNamespace(
         enable_mcp=False,
-        story_repair_summary="????",
-        story_repair_targets=["?????"],
-        story_preserve_strengths=["??????"],
+        story_repair_summary="repair brief",
+        story_repair_targets=["tighten pace"],
+        story_preserve_strengths=["keep tension"],
     )
 
     context = await generation_stream_service.load_chapter_generation_stream_runtime_context(
@@ -153,8 +153,8 @@ async def test_should_load_generation_stream_runtime_context(monkeypatch):
     assert context.generation_guidance == {"creative_mode": "hook"}
     assert context.story_repair_payload == repair_payload
     assert context.resolved_style_id == 7
-    assert context.style_content == "????"
-    assert context.style_name == "????"
+    assert context.style_content == "style guide"
+    assert context.style_name == "noir"
     assert context.style_preset_id == "preset-7"
     assert cancelled_projects == ["project-1"]
     resolve_quality_profile.assert_awaited_once()
@@ -168,7 +168,7 @@ async def test_should_raise_when_project_missing_while_loading_generation_stream
         id="chapter-1",
         project_id="project-1",
         chapter_number=2,
-        title="???",
+        title="Test Chapter",
     )
     db_session = AsyncMock()
     db_session.execute = AsyncMock(
@@ -189,7 +189,7 @@ async def test_should_raise_when_project_missing_while_loading_generation_stream
             cancel_outline_postprocess_tasks_fn=lambda _project_id: 0,
         )
 
-    assert str(exc_info.value) == "?????"
+    assert str(exc_info.value) == "项目不存在"
 
 
 @pytest.mark.asyncio
@@ -205,9 +205,9 @@ async def test_should_build_generation_stream_context_with_expected_builder(
     expected_builder: str,
 ):
     runtime_context = generation_stream_service.ChapterGenerationStreamRuntimeContext(
-        chapter=Chapter(id="chapter-1", project_id="project-1", chapter_number=3, title="???"),
-        project=Project(id="project-1", title="????", user_id="user-1", outline_mode=outline_mode),
-        outline=Outline(id="outline-1", project_id="project-1", order_index=3, content="????"),
+        chapter=Chapter(id="chapter-1", project_id="project-1", chapter_number=3, title="Test Chapter"),
+        project=Project(id="project-1", title="Test Project", user_id="user-1", outline_mode=outline_mode),
+        outline=Outline(id="outline-1", project_id="project-1", order_index=3, content="outline notes"),
         outline_mode=outline_mode,
         quality_profile={"resolved_style_id": 7},
         story_packet=SimpleNamespace(guidance={"creative_mode": "hook"}),
@@ -215,8 +215,8 @@ async def test_should_build_generation_stream_context_with_expected_builder(
         story_repair_state={"payload": None},
         story_repair_payload=None,
         resolved_style_id=7,
-        style_content="????",
-        style_name="????",
+        style_content="style guide",
+        style_name="noir",
         style_preset_id="preset-7",
     )
     calls = {"one": 0, "many": 0}
@@ -249,8 +249,8 @@ async def test_should_build_generation_stream_context_with_expected_builder(
         async def build(self, **kwargs):
             calls["many"] += 1
             assert kwargs["target_word_count"] == 1800
-            assert kwargs["style_content"] == "????"
-            assert kwargs["temp_narrative_perspective"] == "????"
+            assert kwargs["style_content"] == "style guide"
+            assert kwargs["temp_narrative_perspective"] == "第三人称"
             return FakeContext()
 
     generation_runtime = SimpleNamespace(
@@ -264,7 +264,7 @@ async def test_should_build_generation_stream_context_with_expected_builder(
         runtime_context=runtime_context,
         user_id="user-1",
         target_word_count=1800,
-        temp_narrative_perspective="????",
+        temp_narrative_perspective="第三人称",
         memory_service=object(),
         foreshadow_service=object(),
         one_to_one_builder_cls=FakeOneToOneBuilder,
@@ -285,9 +285,9 @@ async def test_should_build_generation_stream_context_with_expected_builder(
 @pytest.mark.asyncio
 async def test_should_build_one_to_one_next_prompt_with_style():
     runtime_context = generation_stream_service.ChapterGenerationStreamRuntimeContext(
-        chapter=Chapter(id="chapter-1", project_id="project-1", chapter_number=2, title="???"),
-        project=Project(id="project-1", title="????", user_id="user-1", outline_mode="one-to-one"),
-        outline=Outline(id="outline-1", project_id="project-1", order_index=2, content="????"),
+        chapter=Chapter(id="chapter-1", project_id="project-1", chapter_number=2, title="Test Chapter"),
+        project=Project(id="project-1", title="Test Project", user_id="user-1", outline_mode="one-to-one"),
+        outline=Outline(id="outline-1", project_id="project-1", order_index=2, content="outline notes"),
         outline_mode="one-to-one",
         quality_profile={"resolved_style_id": 7},
         story_packet=SimpleNamespace(guidance={"creative_mode": "hook"}),
@@ -295,18 +295,18 @@ async def test_should_build_one_to_one_next_prompt_with_style():
         story_repair_state={"payload": None},
         story_repair_payload=None,
         resolved_style_id=7,
-        style_content="????",
-        style_name="????",
+        style_content="style guide",
+        style_name="noir",
         style_preset_id="preset-7",
     )
     chapter_context = SimpleNamespace(
-        chapter_outline="????",
-        continuation_point="?????",
-        previous_chapter_summary="?????",
-        chapter_characters="??A",
-        chapter_careers="??A",
-        foreshadow_reminders="??A",
-        relevant_memories="??A",
+        chapter_outline="outline",
+        continuation_point="cliffhanger",
+        previous_chapter_summary="summary",
+        chapter_characters="角色A",
+        chapter_careers="职业A",
+        foreshadow_reminders="伏笔A",
+        relevant_memories="记忆A",
         recent_chapters_context="",
     )
     built_context = generation_stream_service.ChapterGenerationStreamBuiltContext(
@@ -335,27 +335,27 @@ async def test_should_build_one_to_one_next_prompt_with_style():
         built_context=built_context,
         current_user_id="user-1",
         target_word_count=1800,
-        temp_narrative_perspective="????",
+        temp_narrative_perspective="第三人称",
         get_template_fn=fake_get_template,
         format_prompt_fn=fake_format_prompt,
         apply_style_to_prompt_fn=fake_apply_style,
     )
 
     assert template_calls == ["CHAPTER_GENERATION_ONE_TO_ONE_NEXT"]
-    assert result.chapter_perspective == "????"
+    assert result.chapter_perspective == "第三人称"
     assert result.base_prompt == "formatted:template:CHAPTER_GENERATION_ONE_TO_ONE_NEXT"
-    assert result.prompt == "styled::????::formatted:template:CHAPTER_GENERATION_ONE_TO_ONE_NEXT"
-    assert format_calls[0]["previous_chapter_content"] == "?????"
-    assert format_calls[0]["previous_chapter_summary"] == "?????"
-    assert format_calls[0]["narrative_perspective"] == "????"
+    assert result.prompt == "styled::style guide::formatted:template:CHAPTER_GENERATION_ONE_TO_ONE_NEXT"
+    assert format_calls[0]["previous_chapter_content"] == "cliffhanger"
+    assert format_calls[0]["previous_chapter_summary"] == "summary"
+    assert format_calls[0]["narrative_perspective"] == "第三人称"
 
 
 @pytest.mark.asyncio
 async def test_should_build_one_to_many_first_chapter_prompt_without_style():
     runtime_context = generation_stream_service.ChapterGenerationStreamRuntimeContext(
-        chapter=Chapter(id="chapter-1", project_id="project-1", chapter_number=1, title="???"),
-        project=Project(id="project-1", title="????", user_id="user-1", outline_mode="one-to-many"),
-        outline=Outline(id="outline-1", project_id="project-1", order_index=1, content="????"),
+        chapter=Chapter(id="chapter-1", project_id="project-1", chapter_number=1, title="Test Chapter"),
+        project=Project(id="project-1", title="Test Project", user_id="user-1", outline_mode="one-to-many"),
+        outline=Outline(id="outline-1", project_id="project-1", order_index=1, content="outline notes"),
         outline_mode="one-to-many",
         quality_profile={"resolved_style_id": None},
         story_packet=SimpleNamespace(guidance={"creative_mode": "hook"}),
@@ -368,19 +368,19 @@ async def test_should_build_one_to_many_first_chapter_prompt_without_style():
         style_preset_id="",
     )
     chapter_context = SimpleNamespace(
-        chapter_outline="????",
+        chapter_outline="outline",
         continuation_point=None,
         previous_chapter_summary="",
-        chapter_characters="??A",
-        chapter_careers="??A",
-        foreshadow_reminders="??A",
-        relevant_memories="??A",
-        recent_chapters_context="????",
+        chapter_characters="角色A",
+        chapter_careers="职业A",
+        foreshadow_reminders="伏笔A",
+        relevant_memories="记忆A",
+        recent_chapters_context="recent recap",
     )
     built_context = generation_stream_service.ChapterGenerationStreamBuiltContext(
         chapter_context=chapter_context,
         generation_intent={"intent": "ok"},
-        prompt_quality_kwargs={"quality_notes": "?????"},
+        prompt_quality_kwargs={"quality_notes": "tight prose"},
         story_runtime_contract={"contract": True},
     )
     template_calls: list[str] = []
@@ -405,7 +405,7 @@ async def test_should_build_one_to_many_first_chapter_prompt_without_style():
     )
 
     assert template_calls == ["CHAPTER_GENERATION_ONE_TO_MANY"]
-    assert result.chapter_perspective == "????"
+    assert result.chapter_perspective == "第三人称"
     assert result.base_prompt == "formatted:template:CHAPTER_GENERATION_ONE_TO_MANY:1"
     assert result.prompt == result.base_prompt
 
@@ -413,9 +413,9 @@ async def test_should_build_one_to_many_first_chapter_prompt_without_style():
 
 def test_should_build_generation_stream_request_payload_with_request_options_and_custom_model():
     runtime_context = generation_stream_service.ChapterGenerationStreamRuntimeContext(
-        chapter=Chapter(id="chapter-1", project_id="project-1", chapter_number=2, title="???"),
-        project=Project(id="project-1", title="????", user_id="user-1", outline_mode="one-to-one"),
-        outline=Outline(id="outline-1", project_id="project-1", order_index=2, content="????"),
+        chapter=Chapter(id="chapter-1", project_id="project-1", chapter_number=2, title="Test Chapter"),
+        project=Project(id="project-1", title="Test Project", user_id="user-1", outline_mode="one-to-one"),
+        outline=Outline(id="outline-1", project_id="project-1", order_index=2, content="outline notes"),
         outline_mode="one-to-one",
         quality_profile={"resolved_style_id": 7},
         story_packet=SimpleNamespace(guidance={"creative_mode": "hook"}),
@@ -423,21 +423,21 @@ def test_should_build_generation_stream_request_payload_with_request_options_and
         story_repair_state={"payload": None},
         story_repair_payload=None,
         resolved_style_id=7,
-        style_content="????",
-        style_name="????",
+        style_content="style guide",
+        style_name="noir",
         style_preset_id="preset-7",
     )
     built_context = generation_stream_service.ChapterGenerationStreamBuiltContext(
         chapter_context=SimpleNamespace(
-            chapter_outline="????",
-            previous_chapter_summary="?????",
+            chapter_outline="outline",
+            previous_chapter_summary="summary",
         ),
         generation_intent={"intent": "ok"},
         prompt_quality_kwargs={"quality_preset": "plot_drive"},
         story_runtime_contract={"contract": True},
     )
     stream_prompt = generation_stream_service.ChapterGenerationStreamPrompt(
-        chapter_perspective="????",
+        chapter_perspective="first-person",
         base_prompt="base prompt",
         prompt="final prompt",
     )
@@ -470,8 +470,8 @@ def test_should_build_generation_stream_request_payload_with_request_options_and
 
 def test_should_build_generation_stream_request_payload_without_optional_fields():
     runtime_context = generation_stream_service.ChapterGenerationStreamRuntimeContext(
-        chapter=Chapter(id="chapter-1", project_id="project-1", chapter_number=1, title="???"),
-        project=Project(id="project-1", title="????", user_id="user-1", outline_mode="one-to-many"),
+        chapter=Chapter(id="chapter-1", project_id="project-1", chapter_number=1, title="Test Chapter"),
+        project=Project(id="project-1", title="Test Project", user_id="user-1", outline_mode="one-to-many"),
         outline=None,
         outline_mode="one-to-many",
         quality_profile={"resolved_style_id": None},
@@ -486,7 +486,7 @@ def test_should_build_generation_stream_request_payload_without_optional_fields(
     )
     built_context = generation_stream_service.ChapterGenerationStreamBuiltContext(
         chapter_context=SimpleNamespace(
-            chapter_outline="????",
+            chapter_outline="outline",
             previous_chapter_summary="",
         ),
         generation_intent={"intent": "ok"},
@@ -494,7 +494,7 @@ def test_should_build_generation_stream_request_payload_without_optional_fields(
         story_runtime_contract=None,
     )
     stream_prompt = generation_stream_service.ChapterGenerationStreamPrompt(
-        chapter_perspective="????",
+        chapter_perspective="first-person",
         base_prompt="base prompt",
         prompt="final prompt",
     )
@@ -532,7 +532,7 @@ async def test_should_create_chapter_generation_candidate_execution():
 
     async def fake_candidate_generator(**kwargs: Any) -> dict[str, Any]:
         recorded_kwargs.update(kwargs)
-        return {"full_content": "???", "candidate_index": 1}
+        return {"full_content": "draft", "candidate_index": 1}
 
     execution = generation_stream_service.create_chapter_generation_candidate_execution(
         ai_service=object(),
@@ -548,7 +548,7 @@ async def test_should_create_chapter_generation_candidate_execution():
     assert execution.runtime_state["candidate_total"] == 2
     assert execution.runtime_state["candidate_index"] == 1
     result = await execution.selected_candidate_task
-    assert result["full_content"] == "???"
+    assert result["full_content"] == "draft"
     assert recorded_kwargs["generation_label"] == "chapter_id=chapter-1"
     assert recorded_kwargs["runtime_state"] is execution.runtime_state
 
@@ -564,7 +564,7 @@ async def test_should_wait_for_candidate_and_emit_heartbeat_progress():
 
     async def fake_selected_candidate() -> dict[str, Any]:
         await asyncio.sleep(0.03)
-        return {"full_content": "???", "candidate_index": 2}
+        return {"full_content": "draft", "candidate_index": 2}
 
     async def emit_generating(**kwargs: Any) -> None:
         events.append(("generating", kwargs))
@@ -583,7 +583,7 @@ async def test_should_wait_for_candidate_and_emit_heartbeat_progress():
         emit_heartbeat_fn=emit_heartbeat,
     )
 
-    assert result["full_content"] == "???"
+    assert result["full_content"] == "draft"
     assert events[0][0] == "generating"
     assert events[0][1]["current_chars"] == 321
     assert events[0][1]["retry_count"] == 1
@@ -593,22 +593,22 @@ async def test_should_wait_for_candidate_and_emit_heartbeat_progress():
 
 def test_should_build_candidate_quality_hooks_and_evaluate_metrics():
     runtime_context = generation_stream_service.ChapterGenerationStreamRuntimeContext(
-        chapter=Chapter(id="chapter-1", project_id="project-1", chapter_number=2, title="???"),
-        project=Project(id="project-1", title="????", user_id="user-1", outline_mode="one-to-one", world_rules="??A"),
+        chapter=Chapter(id="chapter-1", project_id="project-1", chapter_number=2, title="Test Chapter"),
+        project=Project(id="project-1", title="Test Project", user_id="user-1", outline_mode="one-to-one", world_rules="ruleA"),
         outline=None,
         outline_mode="one-to-one",
         quality_profile={"resolved_style_id": 7},
         story_packet=SimpleNamespace(guidance={"creative_mode": "hook"}),
         generation_guidance={"creative_mode": "hook"},
-        story_repair_state={"payload": {"summary": "????"}},
-        story_repair_payload={"summary": "????"},
+        story_repair_state={"payload": {"summary": "repair brief"}},
+        story_repair_payload={"summary": "repair brief"},
         resolved_style_id=7,
-        style_content="????",
-        style_name="????",
+        style_content="style guide",
+        style_name="noir",
         style_preset_id="preset-7",
     )
     built_context = generation_stream_service.ChapterGenerationStreamBuiltContext(
-        chapter_context=SimpleNamespace(chapter_outline="????"),
+        chapter_context=SimpleNamespace(chapter_outline="outline"),
         generation_intent={"intent": "ok"},
         prompt_quality_kwargs={},
         story_runtime_contract=None,
@@ -637,35 +637,35 @@ def test_should_build_candidate_quality_hooks_and_evaluate_metrics():
         resolve_quality_gate_execution_plan_fn=lambda *args, **kwargs: {"action": "continue"},
     )
 
-    metrics = hooks.quality_evaluator("?????")
+    metrics = hooks.quality_evaluator("draft text")
 
     assert metrics["overall_score"] == 91.0
     assert captured_runtime_kwargs["target_word_count"] == 1800
     assert captured_runtime_kwargs["generation_intent"] == {"intent": "ok"}
-    assert captured_metric_kwargs["content"] == "?????"
-    assert captured_metric_kwargs["chapter_outline"] == "????"
-    assert captured_metric_kwargs["world_rules"] == "??A"
+    assert captured_metric_kwargs["content"] == "draft text"
+    assert captured_metric_kwargs["chapter_outline"] == "outline"
+    assert captured_metric_kwargs["world_rules"] == "ruleA"
     assert captured_metric_kwargs["quality_runtime_context"] == {"runtime": True}
 
 
 def test_should_build_candidate_quality_gate_plan_from_hooks():
     runtime_context = generation_stream_service.ChapterGenerationStreamRuntimeContext(
-        chapter=Chapter(id="chapter-1", project_id="project-1", chapter_number=2, title="???"),
-        project=Project(id="project-1", title="????", user_id="user-1", outline_mode="one-to-one"),
+        chapter=Chapter(id="chapter-1", project_id="project-1", chapter_number=2, title="Test Chapter"),
+        project=Project(id="project-1", title="Test Project", user_id="user-1", outline_mode="one-to-one"),
         outline=None,
         outline_mode="one-to-one",
         quality_profile={"resolved_style_id": 7},
         story_packet=SimpleNamespace(guidance={"creative_mode": "hook"}),
         generation_guidance={"creative_mode": "hook"},
-        story_repair_state={"payload": {"summary": "????"}},
-        story_repair_payload={"summary": "????"},
+        story_repair_state={"payload": {"summary": "repair brief"}},
+        story_repair_payload={"summary": "repair brief"},
         resolved_style_id=7,
-        style_content="????",
-        style_name="????",
+        style_content="style guide",
+        style_name="noir",
         style_preset_id="preset-7",
     )
     built_context = generation_stream_service.ChapterGenerationStreamBuiltContext(
-        chapter_context=SimpleNamespace(chapter_outline="????"),
+        chapter_context=SimpleNamespace(chapter_outline="outline"),
         generation_intent={"intent": "ok"},
         prompt_quality_kwargs={},
         story_runtime_contract=None,
@@ -695,7 +695,7 @@ def test_should_build_candidate_quality_gate_plan_from_hooks():
     assert captured_gate_kwargs["candidate_metrics"] == {"overall_score": 81.0}
     assert captured_gate_kwargs["retry_count"] == 0
     assert captured_gate_kwargs["max_retries"] == 1
-    assert captured_gate_kwargs["current_story_repair_payload"] == {"summary": "????"}
+    assert captured_gate_kwargs["current_story_repair_payload"] == {"summary": "repair brief"}
     assert captured_gate_kwargs["scope"] == "chapter"
 
 
@@ -709,15 +709,15 @@ def test_should_build_selected_candidate_outcome_for_followup_retry():
 
     outcome = generation_stream_service.build_chapter_generation_selected_candidate_outcome(
         selected_candidate={
-            "full_content": "????",
+            "full_content": "draft",
             "word_count": 1234,
-            "candidate_chunks": ["??A", "??B"],
+            "candidate_chunks": ["片段A", "片段B"],
             "quality_metrics": {"overall_score": 76.0},
             "quality_gate_plan": {
                 "action": "retry",
-                "message": "??????",
+                "message": "needs review",
                 "quality_gate": {"decision": "auto_repair", "status": "repairable"},
-                "active_story_repair_payload": {"summary": "????"},
+                "active_story_repair_payload": {"summary": "repair brief"},
             },
         },
         story_runtime_contract={"contract": True},
@@ -729,9 +729,9 @@ def test_should_build_selected_candidate_outcome_for_followup_retry():
         attach_story_runtime_contract_fn=lambda metrics, contract: {**(metrics or {}), "story_runtime_contract": contract},
     )
 
-    assert outcome.full_content == "????"
+    assert outcome.full_content == "draft"
     assert outcome.candidate_word_count == 1234
-    assert outcome.candidate_chunks == ["??A", "??B"]
+    assert outcome.candidate_chunks == ["片段A", "片段B"]
     assert outcome.quality_gate_action == "retry"
     assert outcome.quality_gate_requires_followup is True
     assert outcome.content_applied is False
@@ -739,14 +739,14 @@ def test_should_build_selected_candidate_outcome_for_followup_retry():
     assert outcome.quality_metrics["quality_gate"]["decision"] == "auto_repair"
     assert outcome.quality_metrics["story_runtime_contract"] == {"contract": True}
     assert outcome.draft_attempt["draft"] is True
-    assert draft_calls["repair_payload"] == {"summary": "????"}
+    assert draft_calls["repair_payload"] == {"summary": "repair brief"}
 
 
 def test_should_build_selected_candidate_outcome_for_applied_content():
     outcome = generation_stream_service.build_chapter_generation_selected_candidate_outcome(
         selected_candidate={
-            "full_content": "????",
-            "candidate_chunks": ["??A"],
+            "full_content": "draft",
+            "candidate_chunks": ["片段A"],
             "quality_metrics": {"overall_score": 92.0},
             "quality_gate_plan": {
                 "action": "continue",
@@ -755,7 +755,7 @@ def test_should_build_selected_candidate_outcome_for_applied_content():
             },
         },
         story_runtime_contract=None,
-        previous_content="????",
+        previous_content="draft",
         previous_word_count=800,
         project_id="project-1",
         chapter_id="chapter-1",
@@ -763,7 +763,7 @@ def test_should_build_selected_candidate_outcome_for_applied_content():
         attach_story_runtime_contract_fn=lambda metrics, contract: metrics,
     )
 
-    assert outcome.candidate_word_count == len("????")
+    assert outcome.candidate_word_count == len("draft")
     assert outcome.quality_gate_action == "continue"
     assert outcome.quality_gate_requires_followup is False
     assert outcome.content_applied is True
@@ -777,17 +777,17 @@ def test_should_apply_generation_outcome_and_build_history_for_completed_content
         id="chapter-1",
         project_id="project-1",
         chapter_number=3,
-        title="????",
-        content="???",
+        title="Applied Chapter",
+        content="old",
         word_count=3,
         status="draft",
     )
-    project = Project(id="project-1", title="??", user_id="user-1", current_words=3)
+    project = Project(id="project-1", title="测试项目", user_id="user-1", current_words=3)
     payload_calls: dict[str, Any] = {}
     outcome = generation_stream_service.ChapterGenerationSelectedCandidateOutcome(
-        full_content="?????",
+        full_content="final text",
         candidate_word_count=5,
-        candidate_chunks=["?"],
+        candidate_chunks=["片段A"],
         quality_metrics={"overall_score": 95.0},
         quality_gate_plan={"action": "continue"},
         quality_gate_action="continue",
@@ -817,11 +817,11 @@ def test_should_apply_generation_outcome_and_build_history_for_completed_content
         history_model="test-model",
     )
 
-    assert chapter.content == "?????"
+    assert chapter.content == "final text"
     assert chapter.word_count == 5
     assert chapter.status == "completed"
     assert project.current_words == 5
-    assert preparation.previous_content == "???"
+    assert preparation.previous_content == "old"
     assert preparation.previous_word_count == 3
     assert preparation.previous_status == "draft"
     assert preparation.saved_word_count == 5
@@ -830,7 +830,7 @@ def test_should_apply_generation_outcome_and_build_history_for_completed_content
     assert preparation.history.chapter_id == "chapter-1"
     assert preparation.history.generated_content == "history-payload"
     assert preparation.history.model == "test-model"
-    assert payload_calls["full_content"] == "?????"
+    assert payload_calls["full_content"] == "final text"
     assert payload_calls["content_applied"] is True
     assert payload_calls["attempt_state"] == "applied"
     assert payload_calls["story_runtime_contract"] == {"contract": True}
@@ -841,22 +841,22 @@ def test_should_apply_generation_outcome_as_provisional_draft_when_retry_allows_
         id="chapter-1",
         project_id="project-1",
         chapter_number=1,
-        title="????",
+        title="Retry Chapter",
         content=None,
         word_count=0,
         status=None,
     )
-    project = Project(id="project-1", title="??", user_id="user-1", current_words=0)
+    project = Project(id="project-1", title="测试项目", user_id="user-1", current_words=0)
     payload_calls: dict[str, Any] = {}
     outcome = generation_stream_service.ChapterGenerationSelectedCandidateOutcome(
-        full_content="?????",
+        full_content="draft fix",
         candidate_word_count=5,
-        candidate_chunks=["??"],
+        candidate_chunks=["片段A"],
         quality_metrics={"overall_score": 78.0},
         quality_gate_plan={"action": "retry"},
         quality_gate_action="retry",
         quality_gate_requires_followup=True,
-        quality_gate_message="??????",
+        quality_gate_message="needs review",
         quality_gate_snapshot={"decision": "auto_repair"},
         content_applied=False,
         attempt_state="retry",
@@ -880,7 +880,7 @@ def test_should_apply_generation_outcome_as_provisional_draft_when_retry_allows_
         build_generation_history_payload_fn=fake_build_generation_history_payload,
     )
 
-    assert chapter.content == "?????"
+    assert chapter.content == "draft fix"
     assert chapter.word_count == 5
     assert chapter.status == "draft"
     assert project.current_words == 5
@@ -898,16 +898,16 @@ def test_should_build_analysis_followup_plan_for_quality_gate_retry():
         enable_analysis=False,
         quality_gate_action="retry",
         quality_gate_requires_followup=True,
-        full_content="????",
+        full_content="draft",
         candidate_word_count=456,
     )
 
     assert plan.should_schedule_analysis is True
     assert plan.analysis_reason == "quality_gate_auto_repair"
-    assert plan.chapter_content_override == "????"
+    assert plan.chapter_content_override == "draft"
     assert plan.chapter_word_count_override == 456
-    assert plan.completion_message == "????????????????"
-    assert plan.analysis_started_message == "????????????????????"
+    assert plan.completion_message == "章节生成完成，已转入质量修复"
+    assert plan.analysis_started_message == "质量修复分析任务已启动"
 
 
 def test_should_build_stream_response_artifacts_with_candidate_draft_and_analysis_event():
@@ -915,7 +915,7 @@ def test_should_build_stream_response_artifacts_with_candidate_draft_and_analysi
         id="chapter-1",
         project_id="project-1",
         chapter_number=2,
-        title="????",
+        title="Blocked Chapter",
         status="draft",
     )
     chapter.updated_at = None
@@ -935,14 +935,14 @@ def test_should_build_stream_response_artifacts_with_candidate_draft_and_analysi
         draft_attempt={"draft": True},
         quality_metrics={"overall_score": 80.0},
         quality_gate_action="manual_review",
-        quality_gate_message="??????",
+        quality_gate_message="needs review",
         quality_gate_snapshot={"decision": "manual_review", "status": "blocked"},
         quality_gate_requires_followup=True,
         content_applied=False,
         saved_word_count=321,
         task_id="task-1",
         story_runtime_contract={"contract": True},
-        analysis_started_message="????????????????????",
+        analysis_started_message="人工复核分析任务已启动",
         build_candidate_draft_payload_fn=fake_build_candidate_draft_payload,
         build_stream_result_payload_fn=fake_build_stream_result_payload,
     )
@@ -955,7 +955,7 @@ def test_should_build_stream_response_artifacts_with_candidate_draft_and_analysi
     assert artifacts.result_payload["candidate_draft"]["attempt_id"] == "draft-1"
     assert artifacts.analysis_started_event_data == {
         "task_id": "task-1",
-        "message": "????????????????????",
+        "message": "人工复核分析任务已启动",
     }
     assert draft_calls["draft_attempt"] == {"draft": True}
     assert result_calls["saved_word_count"] == 321
@@ -970,10 +970,10 @@ async def test_should_prepare_analysis_scheduling_with_background_kwargs():
     followup_plan = generation_stream_service.ChapterGenerationAnalysisFollowupPlan(
         should_schedule_analysis=True,
         analysis_reason="quality_gate_auto_repair",
-        chapter_content_override="????",
+        chapter_content_override="draft",
         chapter_word_count_override=456,
-        completion_message="????????????????",
-        analysis_started_message="????????????????????",
+        completion_message="章节生成完成，已转入质量修复",
+        analysis_started_message="质量修复分析任务已启动",
     )
 
     async def fake_create_analysis_task(*args: Any, **kwargs: Any) -> Any:
@@ -996,7 +996,7 @@ async def test_should_prepare_analysis_scheduling_with_background_kwargs():
     assert created_calls["log_context"] == "stream:quality_gate_auto_repair"
     assert scheduling.background_task_kwargs["chapter_id"] == "chapter-1"
     assert scheduling.background_task_kwargs["task_id"] == "task-1"
-    assert scheduling.background_task_kwargs["chapter_content_override"] == "????"
+    assert scheduling.background_task_kwargs["chapter_content_override"] == "draft"
     assert scheduling.background_task_kwargs["chapter_word_count_override"] == 456
 
 
@@ -1012,7 +1012,7 @@ async def test_should_skip_analysis_scheduling_when_followup_not_needed():
             analysis_reason=None,
             chapter_content_override=None,
             chapter_word_count_override=None,
-            completion_message="??????",
+            completion_message="章节生成完成",
             analysis_started_message=None,
         ),
         ai_service="ai-service",
@@ -1031,10 +1031,10 @@ async def test_should_run_post_persist_effects_and_plant_foreshadows_when_conten
         id="chapter-1",
         project_id="project-1",
         chapter_number=2,
-        title="????",
+        title="Persisted Chapter",
         status="completed",
     )
-    project = Project(id="project-1", title="??", user_id="user-1")
+    project = Project(id="project-1", title="测试项目", user_id="user-1")
     db_session = AsyncMock()
     calls: dict[str, Any] = {}
 
@@ -1047,7 +1047,7 @@ async def test_should_run_post_persist_effects_and_plant_foreshadows_when_conten
         chapter_id="chapter-1",
         chapter=chapter,
         project=project,
-        full_content="????",
+        full_content="draft",
         candidate_word_count=321,
         content_applied=True,
         provisional_draft_saved=False,
@@ -1061,7 +1061,7 @@ async def test_should_run_post_persist_effects_and_plant_foreshadows_when_conten
     assert calls["project_id"] == "project-1"
     assert calls["chapter_id"] == "chapter-1"
     assert calls["chapter_number"] == 2
-    assert calls["chapter_content"] == "????"
+    assert calls["chapter_content"] == "draft"
 
 
 @pytest.mark.asyncio
@@ -1070,10 +1070,10 @@ async def test_should_swallow_post_persist_foreshadow_errors():
         id="chapter-1",
         project_id="project-1",
         chapter_number=2,
-        title="????",
+        title="Persisted Chapter",
         status="completed",
     )
-    project = Project(id="project-1", title="??", user_id="user-1")
+    project = Project(id="project-1", title="测试项目", user_id="user-1")
 
     async def fake_auto_plant_pending_foreshadows(**kwargs: Any) -> dict[str, Any]:
         raise RuntimeError("plant failed")
@@ -1083,7 +1083,7 @@ async def test_should_swallow_post_persist_foreshadow_errors():
         chapter_id="chapter-1",
         chapter=chapter,
         project=project,
-        full_content="????",
+        full_content="draft",
         candidate_word_count=321,
         content_applied=True,
         provisional_draft_saved=False,
@@ -1104,7 +1104,7 @@ def test_should_build_stream_emission_plan_in_expected_order():
     )
 
     plan = generation_stream_service.build_chapter_generation_stream_emission_plan(
-        completion_message="????????????????",
+        completion_message="章节生成完成，已转入质量修复",
         response_artifacts=response_artifacts,
     )
 
@@ -1116,7 +1116,7 @@ def test_should_build_stream_emission_plan_in_expected_order():
         "sse_event",
         "tracker_done",
     ]
-    assert plan[0].message == "????????????????"
+    assert plan[0].message == "章节生成完成，已转入质量修复"
     assert plan[1].payload["type"] == "quality_metrics"
     assert plan[2].payload["type"] == "quality_gate_retry"
     assert plan[3].payload["word_count"] == 500

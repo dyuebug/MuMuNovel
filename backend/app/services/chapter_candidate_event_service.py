@@ -104,8 +104,8 @@ def build_chapter_generation_progress_kwargs(
         "current_chars": runtime_snapshot.current_chars,
         "estimated_total": target_word_count,
         "message": (
-            f"??????? {runtime_snapshot.candidate_index}/{runtime_snapshot.candidate_total} ... "
-            f"({runtime_snapshot.current_chars}?)"
+            f"候选草稿生成 {runtime_snapshot.candidate_index}/{runtime_snapshot.candidate_total} ... "
+            f"({runtime_snapshot.current_chars}字)"
         ),
         "retry_count": max(runtime_snapshot.candidate_index - 1, 0),
         "max_retries": max(runtime_snapshot.candidate_total - 1, 1),

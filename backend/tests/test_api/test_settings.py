@@ -631,7 +631,7 @@ async def test_should_prefer_chat_completions_for_sub2api_function_calling_probe
                     {
                         "id": "call_001",
                         "type": "function",
-                        "function": {"name": "get_weather", "arguments": '{"city":"??"}'},
+                        "function": {"name": "get_weather", "arguments": '{"city":"北京"}'},
                     }
                 ],
                 "content": "",
@@ -796,7 +796,7 @@ async def test_should_pass_backup_urls_and_fallback_strategy_to_function_calling
                     {
                         "id": "call_001",
                         "type": "function",
-                        "function": {"name": "get_weather", "arguments": '{"city":"??"}'},
+                        "function": {"name": "get_weather", "arguments": '{"city":"北京"}'},
                     }
                 ],
                 "content": "",
@@ -1256,7 +1256,7 @@ async def test_should_not_reuse_function_calling_probe_cache_when_fallback_strat
             calls["count"] += 1
             return {
                 "finish_reason": "tool_calls",
-                "tool_calls": [{"id": "call_001", "type": "function", "function": {"name": "get_weather", "arguments": '{\"city\":\"??\"}'}}],
+                "tool_calls": [{"id": "call_001", "type": "function", "function": {"name": "get_weather", "arguments": '{\\"city\\":\\"北京\\"}'}}],
                 "content": "",
             }
 

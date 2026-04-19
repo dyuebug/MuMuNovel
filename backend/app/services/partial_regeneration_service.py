@@ -75,7 +75,7 @@ async def _load_partial_regeneration_project_bundle(
     )
     project = project_result.scalar_one_or_none()
     if project is None:
-        raise HTTPException(status_code=404, detail="?????")
+        raise HTTPException(status_code=404, detail="章节不存在")
 
     outline = None
     if chapter.outline_id:
@@ -103,11 +103,11 @@ def _normalize_partial_selection(
     end_position = partial_request.end_position
 
     if start_position >= content_length:
-        raise HTTPException(status_code=400, detail="??????????")
+        raise HTTPException(status_code=400, detail="请先选中需要重写的内容")
     if end_position > content_length:
-        raise HTTPException(status_code=400, detail="??????????")
+        raise HTTPException(status_code=400, detail="请提供有效的选中文本")
     if start_position >= end_position:
-        raise HTTPException(status_code=400, detail="????????????")
+        raise HTTPException(status_code=400, detail="选中文本与原文不匹配，请重试")
 
     actual_selected = chapter_content[start_position:end_position]
     selected_text = partial_request.selected_text
@@ -120,13 +120,13 @@ def _normalize_partial_selection(
     if selected_text not in search_area:
         raise HTTPException(
             status_code=400,
-            detail="??????????????????????",
+            detail="未找到对应章节的大纲上下文，无法执行局部重写",
         )
 
     offset = search_area.find(selected_text)
     corrected_start = search_start + offset
     corrected_end = corrected_start + len(selected_text)
-    logger.info(f"????????: {corrected_start}-{corrected_end}")
+    logger.info(f"局部重写选区已校正: {corrected_start}-{corrected_end}")
     return corrected_start, corrected_end, selected_text
 
 
@@ -148,7 +148,7 @@ async def _resolve_style_content(
         default_style_id = default_style_result.scalar_one_or_none()
         if default_style_id:
             style_id = default_style_id
-            logger.info(f"???? - ??????????: {style_id}")
+            logger.info(f"局部重写 - 使用项目默认风格ID: {style_id}")
 
     if not style_id:
         return None, ""
@@ -160,12 +160,12 @@ async def _resolve_style_content(
     if style is None:
         return style_id, ""
     if style.user_id is not None and style.user_id != user_id:
-        logger.warning(f"?? {style_id} ??????????")
+        logger.warning(f"风格 {style_id} 不属于当前用户，已忽略")
         return style_id, ""
 
     style_content = style.prompt_content or ""
-    style_type = "????" if style.user_id is None else "?????"
-    logger.info(f"???? - ??????: {style.name} ({style_type})")
+    style_type = "系统风格" if style.user_id is None else "用户风格"
+    logger.info(f"局部重写 - 使用风格: {style.name} ({style_type})")
     return style_id, style_content
 
 
@@ -178,18 +178,18 @@ def _build_length_requirement(
     if length_mode == "similar":
         min_words = int(original_word_count * 0.8)
         max_words = int(original_word_count * 1.2)
-        return f"????????????{original_word_count}????{min_words}-{max_words}????"
+        return f"尽量保持与原文接近，原文约 {original_word_count} 字，目标 {min_words}-{max_words} 字"
     if length_mode == "expand":
         min_words = int(original_word_count * 1.2)
         max_words = int(original_word_count * 2.0)
-        return f"?????????{min_words}-{max_words}??"
+        return f"建议扩写至 {min_words}-{max_words} 字"
     if length_mode == "condense":
         min_words = int(original_word_count * 0.5)
         max_words = int(original_word_count * 0.8)
-        return f"?????????{min_words}-{max_words}??"
+        return f"建议压缩至 {min_words}-{max_words} 字"
     if length_mode == "custom" and target_word_count:
-        return f"??????{target_word_count}?????20%???"
-    return f"????????????{original_word_count}??"
+        return f"目标长度约 {target_word_count} 字，允许上下浮动 20%"
+        return f"默认按接近原文长度处理，原文约 {original_word_count} 字"
 
 
 def _calculate_target_words(
@@ -214,7 +214,7 @@ async def prepare_partial_regeneration(
 ) -> PartialRegenerationPreparation:
     chapter_content = chapter.content or ""
     if not chapter_content.strip():
-        raise HTTPException(status_code=400, detail="??????")
+        raise HTTPException(status_code=400, detail="章节内容为空")
 
     start_position, end_position, selected_text = _normalize_partial_selection(
         chapter_content=chapter_content,
@@ -228,7 +228,7 @@ async def prepare_partial_regeneration(
     context_after_end = min(len(chapter_content), end_position + context_chars)
     context_after = chapter_content[end_position:context_after_end]
     logger.info(
-        f"???? - ??: {original_word_count}?, ??: {len(context_before)}?, ??: {len(context_after)}?"
+        f"局部重写上下文 - 原文: {original_word_count}字, 前文: {len(context_before)}字, 后文: {len(context_after)}字"
     )
 
     style_id, style_content = await _resolve_style_content(
@@ -266,13 +266,13 @@ async def prepare_partial_regeneration(
 
     prompt = PromptService.format_prompt(
         template,
-        context_before=context_before if context_before else "????????",
+        context_before=context_before if context_before else "（无前文上下文）",
         original_word_count=original_word_count,
         selected_text=selected_text,
-        context_after=context_after if context_after else "????????",
+        context_after=context_after if context_after else "（无后文上下文）",
         user_instructions=(partial_request.user_instructions or "") + web_research_grounding_block,
         length_requirement=length_requirement,
-        style_content=style_content if style_content else "????????????",
+        style_content=style_content if style_content else "（未提供风格约束）",
     )
 
     target_words = _calculate_target_words(

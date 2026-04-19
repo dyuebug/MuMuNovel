@@ -886,6 +886,8 @@ export default function Chapters() {
   }, [
     projectDefaultCreativeMode,
     projectDefaultPlotStage,
+    projectDefaultQualityNotes,
+    projectDefaultQualityPreset,
     projectDefaultStoryCreationBrief,
     projectDefaultStoryFocus,
   ]);

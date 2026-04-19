@@ -1,4 +1,4 @@
-"""???????????"""
+"""章节候选最终定稿服务。"""
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -16,13 +16,13 @@ from app.services.project_quality_trend_service import (
 )
 
 
-router = APIRouter(prefix="/chapters", tags=["????"])
+router = APIRouter(prefix="/chapters", tags=["章节管理"])
 
 
 @router.get(
     "/project/{project_id}/quality-trend",
     response_model=ProjectChapterQualityTrendResponse,
-    summary="??????????",
+    summary="获取项目章节质量趋势",
 )
 async def get_project_chapter_quality_trend(
     project_id: str,
@@ -30,7 +30,7 @@ async def get_project_chapter_quality_trend(
     limit: int = Query(12, ge=1, le=50, description="Number of recent chapters to return"),
     db: AsyncSession = Depends(get_db),
 ):
-    """?????????????????"""
+    """获取项目最近章节的质量趋势数据。"""
     user_id = require_authenticated_user_id(request)
     await verify_project_access(project_id, user_id, db)
 

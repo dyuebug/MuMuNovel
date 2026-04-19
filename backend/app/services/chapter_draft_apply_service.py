@@ -155,7 +155,7 @@ def create_reviser_apply_history_entry_factory(
         return GenerationHistory(
             project_id=chapter.project_id,
             chapter_id=chapter_id,
-            prompt=f"????????: ?{chapter_number}? {title}",
+            prompt=f"自动修订应用: 第{chapter_number}章 {title}",
             generated_content=build_reviser_apply_history_payload(
                 source_history_id=source_history_id,
                 source_created_at=source_created_at,

@@ -75,9 +75,9 @@ class OutlineGenerateRequest(BaseModel):
     enable_mcp: bool = Field(True, description="是否启用MCP工具增强")
     enable_web_research: Optional[bool] = Field(
         None,
-        description="????????????? Exa/Grok ?????",
+        description="是否启用联网搜索增强，优先调用 Exa/Grok 研究链路",
     )
-    web_research_query: Optional[str] = Field(None, description="??????????????? query")
+    web_research_query: Optional[str] = Field(None, description="自定义联网搜索查询词，会覆盖默认 query")
     creative_mode: Optional[CreativeModeValue] = Field(
         None,
         description="创作模式：balanced/hook/emotion/suspense/relationship/payoff",

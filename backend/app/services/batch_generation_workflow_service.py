@@ -1,4 +1,4 @@
-"""?????? workflow / persistence ?? helper?"""
+"""批量生成 workflow / persistence 协调 helper。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -150,7 +150,7 @@ async def handle_cancelled_batch_generation_execution(
     await emit_event(
         {
             "type": "error",
-            "error": "?????",
+            "error": "项目不存在",
             "code": 400,
             "phase": "cancelled",
         }
@@ -173,11 +173,11 @@ async def complete_batch_generation_execution(
         task.current_chapter_number = None
         await db_session.commit()
 
-    logger.info(f"??????????: {batch_id}, ???? {task.completed_chapters} ?")
+    logger.info(f"批量生成任务已完成: {batch_id}, 共完成 {task.completed_chapters} 章")
     await emit_event(
         {
             "type": "progress",
-            "message": "?????",
+            "message": "批量生成完成",
             "progress": 100,
             "status": "success",
             "phase": "complete",
@@ -259,13 +259,13 @@ async def initialize_batch_generation_execution(
     if project is None:
         async with write_lock:
             task.status = 'failed'
-            task.error_message = '?????'
+            task.error_message = '项目不存在'
             task.completed_at = datetime.now()
             await db_session.commit()
         await emit_event(
             {
                 'type': 'error',
-                'error': '?????',
+                'error': '项目不存在',
                 'code': 404,
                 'phase': 'loading',
             }
@@ -299,7 +299,7 @@ async def initialize_batch_generation_execution(
             style_id=task.style_id,
             enable_mcp=True,
             prefer_project_default_style=not bool(task.style_id),
-            log_prefix='???????',
+            log_prefix='批量生成',
         )
     )
     cached_analysis_quality_profile = clone_quality_profile_fn(task_base_quality_profile)
@@ -311,7 +311,7 @@ async def initialize_batch_generation_execution(
     await emit_event(
         {
             'type': 'progress',
-            'message': '??????',
+            'message': '正在准备批量生成',
             'progress': 5,
             'status': 'running',
             'phase': 'loading',

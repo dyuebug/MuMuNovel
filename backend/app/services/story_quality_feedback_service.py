@@ -428,7 +428,7 @@ def build_story_continuity_preflight(
 
 
 def _split_sentences(text: str) -> List[str]:
-    parts = re.split(r"[???!??;\n]+", text)
+    parts = re.split(r"[。！？!?；;\n]+", text)
     return [part.strip() for part in parts if part.strip()]
 
 
@@ -454,7 +454,7 @@ def _extract_rule_keywords(world_rules: Optional[str], limit: int = 10) -> List[
 
     segments = [
         segment.strip()
-        for segment in re.split(r"[???!??;?,??:/??()??\[\]\n]+", world_rules)
+        for segment in re.split(r"[，。！？!?；;,：:/（）()\[\]\n]+", world_rules)
         if segment and segment.strip()
     ]
     priority_segments = [
@@ -521,10 +521,9 @@ def _extract_rule_keywords(world_rules: Optional[str], limit: int = 10) -> List[
 
 
 def _calc_rule_grounding_rate(text: str, world_rules: Optional[str]) -> Dict[str, Any]:
-    """????????????????? + ??????"""
+    """评估世界规则落地率与命中关键词。"""
     keywords = _extract_rule_keywords(world_rules)
     if not keywords:
-        "- ?????? 1 ?????????????????????????????????",
         return {
             "hit_rate": 0.0,
             "hit_count": 0,
@@ -611,7 +610,7 @@ def _extract_outline_anchor_tokens(anchor: str, limit: int = 12) -> List[str]:
     split_chars = "的了着过把将让给在向对跟与和并而或但却被因于从到往里上下前后再还又先就都也仍会要想"
     candidates: List[str] = []
 
-    for chunk in re.split(r'[??????()??"????\s]+', anchor or ""):
+    for chunk in re.split(r'[，。！？!?（）()“”"‘’、\s]+', anchor or ""):
         for token in re.findall(r"[一-鿿]{2,16}", chunk):
             if token in stop_tokens:
                 continue
@@ -754,7 +753,7 @@ def _extract_dialogue_segments(text: str) -> List[str]:
 
 
 def _calc_dialogue_naturalness_rate(text: str) -> Dict[str, Any]:
-    """???????????? + ??/???? + ??/??????"""
+    """评估对话自然度，包含对话/描写比例与句式节奏。"""
     quotes = _extract_dialogue_segments(text)
     if not quotes:
         return {
@@ -1097,11 +1096,11 @@ _WORLD_RULE_PLACEHOLDER_VALUES = {
     "暂无设定",
     "未设置世界规则",
     "未设定世界规则",
-    "???",
-    "???????",
-    "?????",
-    "???????",
-    "??????",
+    "未提供",
+    "暂无设定",
+    "无世界规则",
+    "暂无世界规则",
+    "待补充",
 }
 
 

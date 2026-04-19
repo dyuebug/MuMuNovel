@@ -1,4 +1,4 @@
-"""?????? API?"""
+"""章节标注 API。"""
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
@@ -12,16 +12,16 @@ from app.database import get_db
 from app.models.memory import PlotAnalysis, StoryMemory
 from app.services.chapter_annotation_service import build_chapter_annotations_payload
 
-router = APIRouter(prefix="/chapters", tags=["????"])
+router = APIRouter(prefix="/chapters", tags=["章节管理"])
 
 
-@router.get("/{chapter_id}/annotations", summary="????????")
+@router.get("/{chapter_id}/annotations", summary="获取章节标注")
 async def get_chapter_annotations(
     chapter_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """???????????????????"""
+    """获取章节的分析标注与记忆映射结果。"""
     user_id = require_authenticated_user_id(request)
     chapter = await load_accessible_chapter_or_404(
         db=db,

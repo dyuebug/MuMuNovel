@@ -1,4 +1,4 @@
-"""???????????? helper?"""
+"""批量生成章节成功状态 helper。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -168,7 +168,7 @@ async def apply_successful_batch_generation_chapter(
     await emit_event(
         {
             "type": "progress",
-            "message": f"???? {chapter.chapter_number} ?",
+            "message": f"第 {chapter.chapter_number} 章已生成",
             "progress": 80 if not should_run_analysis else 70,
             "status": "running",
             "phase": "saving" if not should_run_analysis else "generating",
@@ -198,12 +198,12 @@ async def finalize_successful_batch_generation_chapter(
         task.current_retry_count = 0
         await db_session.commit()
 
-    logger.info(f"??: {task.completed_chapters}/{task.total_chapters}")
+    logger.info(f"批量进度: {task.completed_chapters}/{task.total_chapters}")
     completed_ratio = task.completed_chapters / max(task.total_chapters, 1)
     await emit_event(
         {
             "type": "progress",
-            "message": f"??? {task.completed_chapters}/{task.total_chapters}",
+            "message": f"已完成 {task.completed_chapters}/{task.total_chapters}",
             "progress": 15 + int(completed_ratio * 80),
             "status": "running",
             "phase": "loading" if task.completed_chapters < task.total_chapters else "saving",

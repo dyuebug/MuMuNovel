@@ -1,4 +1,4 @@
-"""???????????"""
+"""章节候选生成服务。"""
 from __future__ import annotations
 
 from dataclasses import dataclass

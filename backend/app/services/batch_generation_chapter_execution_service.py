@@ -1,4 +1,4 @@
-"""?????????? helper?"""
+"""批量生成章节执行 helper。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -41,7 +41,7 @@ async def prepare_batch_generation_chapter_attempt(
     )
     chapter = chapter_result.scalar_one_or_none()
     if chapter is None:
-        raise Exception(f"?? {chapter_id} ???")
+        raise Exception(f"章节 {chapter_id} 不存在")
     if chapter.project_id != project.id:
         raise Exception(f"Chapter {chapter_id} project mismatch")
 

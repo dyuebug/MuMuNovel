@@ -101,7 +101,7 @@ def _resolve_chapter_perspective(
     project: Project,
     temp_narrative_perspective: Optional[str],
 ) -> str:
-    return temp_narrative_perspective or project.narrative_perspective or "????"
+    return temp_narrative_perspective or project.narrative_perspective or "第三人称"
 
 
 async def prepare_chapter_generation_stream_request(
@@ -115,7 +115,7 @@ async def prepare_chapter_generation_stream_request(
     )
     chapter = result.scalar_one_or_none()
     if chapter is None:
-        raise ValueError("?????")
+        raise ValueError("章节不存在")
 
     can_generate, error_msg, previous_chapters = await check_prerequisites_fn(db_session, chapter)
     if not can_generate:
@@ -144,14 +144,14 @@ async def load_chapter_generation_stream_runtime_context(
     )
     chapter = chapter_result.scalar_one_or_none()
     if chapter is None:
-        raise ValueError("?????")
+        raise ValueError("章节不存在")
 
     project_result = await db_session.execute(
         select(Project).where(Project.id == chapter.project_id)
     )
     project = project_result.scalar_one_or_none()
     if project is None:
-        raise ValueError("?????")
+        raise ValueError("项目不存在")
 
     outline_mode = project.outline_mode or "one-to-many"
     cancelled_postprocess_tasks = cancel_outline_postprocess_tasks_fn(chapter.project_id)

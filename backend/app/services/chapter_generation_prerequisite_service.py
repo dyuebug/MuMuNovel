@@ -31,7 +31,7 @@ async def check_chapter_generation_prerequisites(
     ]
     if incomplete_chapters:
         missing_numbers = [str(previous_chapter.chapter_number) for previous_chapter in incomplete_chapters]
-        error_message = f"??????????? {', '.join(missing_numbers)} ?"
+        error_message = f"前置章节尚未完成: {', '.join(missing_numbers)} 章"
         return False, error_message, previous_chapters
 
     return True, "", previous_chapters

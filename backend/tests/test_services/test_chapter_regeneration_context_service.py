@@ -32,7 +32,7 @@ async def test_should_raise_when_regeneration_source_chapter_content_is_empty():
             regenerate_request=SimpleNamespace(modification_source="custom"),
             user_id="user-1",
         )
-    assert "??????" in str(exc_info.value)
+    assert "当前章节缺少可重写的原始内容" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -54,7 +54,7 @@ async def test_should_raise_when_analysis_required_but_missing_for_regeneration(
             regenerate_request=SimpleNamespace(modification_source="analysis_suggestions"),
             user_id="user-1",
         )
-    assert "??????" in str(exc_info.value)
+    assert "未找到对应的章节分析" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
