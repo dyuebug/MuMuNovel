@@ -102,11 +102,15 @@ async def test_should_pass_mapping_payload_to_outline_generate_background_task(m
             "chapter_count": 6,
             "narrative_perspective": "third_person",
             "mode": "new",
+            "enable_web_research": True,
+            "web_research_query": "late qing trade customs",
         },
     )
 
     assert isinstance(captured["data"], dict)
     assert captured["data"]["project_id"] == "project-1"
+    assert captured["data"]["enable_web_research"] is True
+    assert captured["data"]["web_research_query"] == "late qing trade customs"
     assert "user_id" not in captured["data"]
 
 
@@ -318,10 +322,24 @@ async def test_should_inject_user_id_into_wizard_background_task_payload(
         user_id="user-1",
         task_type=task_type,
         project_id="project-1",
-        payload={"topic": "seed"},
+        payload={
+            "topic": "seed",
+            "enable_web_research": True,
+            "web_research_query": "harbor guild rumors",
+            "reference_research_assets": [
+                {
+                    "title": "carried note",
+                    "source": "https://example.com/note",
+                    "summary": "Keep the hook visible in the opening scene.",
+                }
+            ],
+        },
     )
 
     assert captured["data"]["user_id"] == "user-1"
+    assert captured["data"]["enable_web_research"] is True
+    assert captured["data"]["web_research_query"] == "harbor guild rumors"
+    assert captured["data"]["reference_research_assets"][0]["title"] == "carried note"
     if expect_project_id:
         assert captured["data"]["project_id"] == "project-1"
 

@@ -626,6 +626,7 @@ def _build_chapter_runtime_system_prompt(
     style_preset_id: Optional[str] = None,
     target_word_count: Optional[int] = None,
     story_runtime_contract: Optional[Dict[str, Any]] = None,
+    web_research_grounding_block: Optional[str] = None,
 ) -> str:
     return _build_chapter_runtime_system_prompt_compat_service(
         project=project,
@@ -636,6 +637,7 @@ def _build_chapter_runtime_system_prompt(
         style_preset_id=style_preset_id,
         target_word_count=target_word_count,
         story_runtime_contract=story_runtime_contract,
+        web_research_grounding_block=web_research_grounding_block,
     )
 
 # ==================== Batch Entry seam ====================

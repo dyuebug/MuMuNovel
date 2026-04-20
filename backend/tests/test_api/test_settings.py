@@ -901,6 +901,36 @@ async def test_should_return_gateway_error_guidance_for_api_probe(async_client, 
     assert any("backup endpoint" in item.lower() for item in body["suggestions"])
 
 
+async def test_should_return_specific_suggestions_for_host_docker_timeout(async_client, monkeypatch):
+    timeout_request = httpx.Request("POST", "http://host.docker.internal:8317/v1/chat/completions")
+
+    class FakeAIService:
+        def __init__(self, **kwargs):
+            return None
+
+        async def generate_text(self, **kwargs):
+            raise httpx.ReadTimeout("upstream timeout", request=timeout_request)
+
+    monkeypatch.setattr(settings_api, "AIService", FakeAIService)
+    monkeypatch.setattr(settings_api, "_is_running_in_docker_environment", lambda: False)
+
+    response = await async_client.post(
+        "/api/settings/test",
+        json=build_api_test_payload(
+            api_base_url="http://host.docker.internal:8317/v1",
+            provider="openai_responses",
+        ),
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["error_type"] == "ReadTimeout"
+    assert body["details"]["endpoint_diagnostics"]["primary_endpoint"] == "http://host.docker.internal:8317/v1"
+    assert any("host.docker.internal" in item for item in body["suggestions"])
+    assert any("127.0.0.1" in item for item in body["suggestions"])
+    assert any("backup endpoint" in item.lower() for item in body["suggestions"])
+
+
 @pytest.mark.parametrize("error_message", ["401 unauthorized", "404 not found", "429 rate limit"])
 async def test_should_return_failure_for_common_api_errors(
     async_client,

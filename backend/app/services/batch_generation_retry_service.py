@@ -21,7 +21,6 @@ from app.services.batch_generation_chapter_execution_service import (
 from app.services.batch_generation_chapter_failure_state_service import (
     fail_batch_generation_after_analysis,
     fail_batch_generation_after_max_retries,
-    fail_batch_generation_for_manual_review,
 )
 from app.services.batch_generation_chapter_success_state_service import (
     apply_successful_batch_generation_chapter,
@@ -222,33 +221,35 @@ async def execute_batch_generation_chapter_with_retries(
                 )
                 current_active_story_repair_state = retry_preparation.active_story_repair_state
                 current_active_story_repair_payload = retry_preparation.active_story_repair_payload
-            elif quality_gate_action == "manual_review":
-                current_active_story_repair_payload = quality_gate_plan.get("repair_payload") or current_active_story_repair_payload
-                current_active_story_repair_state = await sync_task_story_repair_state(
-                    execution_context.batch_id,
-                    payload=current_active_story_repair_payload,
-                    active_story_repair_payload=quality_gate_plan.get("active_story_repair_payload"),
-                    db_session=db_session,
-                )
-                error_message = quality_gate_plan.get("message") or (
-                    f"Chapter {chapter.chapter_number} is blocked by the quality gate and requires manual review."
-                )
-                await execution_context.emit_event(
-                    {
-                        "type": "quality_gate_blocked",
-                        "chapter_id": runtime_state.chapter_id,
-                        "chapter_number": chapter.chapter_number,
-                        "message": error_message,
-                        "progress": 90,
-                        "status": "running",
-                        "phase": "quality_blocked",
-                        "current_retry_count": retry_count,
-                        "max_retries": task.max_retries,
-                        "quality_gate": quality_gate_snapshot,
-                        "active_story_repair_payload": quality_gate_plan.get("active_story_repair_payload"),
-                    }
-                )
             else:
+                if quality_gate_action == "manual_review":
+                    current_active_story_repair_payload = (
+                        quality_gate_plan.get("repair_payload") or current_active_story_repair_payload
+                    )
+                    current_active_story_repair_state = await sync_task_story_repair_state(
+                        execution_context.batch_id,
+                        payload=current_active_story_repair_payload,
+                        active_story_repair_payload=quality_gate_plan.get("active_story_repair_payload"),
+                        db_session=db_session,
+                    )
+                    notice_message = quality_gate_plan.get("message") or (
+                        f"Chapter {chapter.chapter_number} hit the quality gate; content is kept and optimization is recommended."
+                    )
+                    await execution_context.emit_event(
+                        {
+                            "type": "progress",
+                            "chapter_id": runtime_state.chapter_id,
+                            "chapter_number": chapter.chapter_number,
+                            "message": notice_message,
+                            "progress": 76,
+                            "status": "running",
+                            "phase": "saving",
+                            "current_retry_count": retry_count,
+                            "max_retries": task.max_retries,
+                            "quality_gate": quality_gate_snapshot,
+                            "active_story_repair_payload": quality_gate_plan.get("active_story_repair_payload"),
+                        }
+                    )
                 applied_state = await apply_successful_batch_generation_chapter(
                     db_session,
                     task=task,
@@ -331,26 +332,6 @@ async def execute_batch_generation_chapter_with_retries(
                 retry_count = next_retry_count
                 continue
 
-            if quality_gate_action == "manual_review":
-                await fail_batch_generation_for_manual_review(
-                    db_session,
-                    task=task,
-                    chapter=chapter,
-                    project=project,
-                    batch_id=execution_context.batch_id,
-                    chapter_id=runtime_state.chapter_id,
-                    retry_count=retry_count,
-                    write_lock=execution_context.write_lock,
-                    emit_event=execution_context.emit_event,
-                                        quality_gate_plan=quality_gate_plan,
-                    quality_gate_snapshot=quality_gate_snapshot,
-                    generated_content=generated_content,
-                    generated_summary=generated_summary,
-                    generation_quality_metrics=generation_quality_metrics,
-                    active_story_repair_state=current_active_story_repair_state,
-                )
-                return None
-
             chapter_success = True
             await finalize_successful_batch_generation_chapter(
                 db_session,
@@ -360,7 +341,7 @@ async def execute_batch_generation_chapter_with_retries(
             )
         except Exception as e:
             last_error = str(e)
-            error_msg = f"第{chapter.chapter_number if chapter else "?"}章生成失败: {last_error}"
+            error_msg = f"Chapter {chapter.chapter_number if chapter else '?'} generation failed: {last_error}"
             logger.error(f"批量生成错误: {error_msg}")
 
             retry_count += 1
@@ -394,5 +375,4 @@ async def execute_batch_generation_chapter_with_retries(
         active_story_repair_payload=current_active_story_repair_payload,
         last_generated_summary=current_last_generated_summary,
     )
-
 

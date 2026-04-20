@@ -50,6 +50,7 @@ def test_should_delegate_prompt_runtime_helpers(monkeypatch):
         style_preset_id='preset',
         target_word_count=1200,
         story_runtime_contract={'guardrails': True},
+        web_research_grounding_block='grounding block',
     )
 
     assert profile == 'low_ai_serial'
@@ -58,6 +59,7 @@ def test_should_delegate_prompt_runtime_helpers(monkeypatch):
     assert captured['build']['style_content'] == 'style'
     assert captured['build']['chapter_outline'] == 'outline'
     assert captured['build']['target_word_count'] == 1200
+    assert captured['build']['web_research_grounding_block'] == 'grounding block'
 
 
 def test_should_delegate_resolve_generation_temperature(monkeypatch):

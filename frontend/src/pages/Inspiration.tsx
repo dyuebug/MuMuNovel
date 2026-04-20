@@ -135,6 +135,7 @@ const Inspiration: React.FC = () => {
   const [executionEnableMcp, setExecutionEnableMcp] = useState(true);
   const [executionEnableWebResearch, setExecutionEnableWebResearch] = useState(false);
   const [executionWebResearchQuery, setExecutionWebResearchQuery] = useState('');
+  const [showResearchQueryEditor, setShowResearchQueryEditor] = useState(false);
   const {
     availableModels,
     fetchingModels,
@@ -456,11 +457,23 @@ const Inspiration: React.FC = () => {
     };
   }, [executionEnableWebResearch, executionWebResearchQuery]);
 
-  const previewResearchQuery = executionWebResearchQuery.trim() || inspirationResearch.query.trim();
+  const trimmedExecutionResearchQuery = executionWebResearchQuery.trim();
+  const previewResearchQuery = trimmedExecutionResearchQuery || inspirationResearch.query.trim();
   const previewResearchAssets = inspirationResearch.assets.slice(0, 3);
   const previewResearchOverflowCount = Math.max(0, inspirationResearch.assets.length - previewResearchAssets.length);
   const showEnabledResearchPreview = executionEnableWebResearch && (previewResearchQuery || previewResearchAssets.length > 0);
   const showDisabledResearchHint = !executionEnableWebResearch && inspirationResearch.assets.length > 0;
+
+  useEffect(() => {
+    if (!executionEnableWebResearch) {
+      setShowResearchQueryEditor(false);
+      return;
+    }
+
+    if (trimmedExecutionResearchQuery) {
+      setShowResearchQueryEditor(true);
+    }
+  }, [executionEnableWebResearch, trimmedExecutionResearchQuery]);
 
   const buildInspirationRequest = useCallback(
     (step: InspirationOptionStep, context: InspirationOptionRequest['context']): InspirationOptionRequest => ({
@@ -1322,14 +1335,44 @@ const Inspiration: React.FC = () => {
           </div>
           {executionEnableWebResearch && (
             <>
-              <TextArea
-                value={executionWebResearchQuery}
-                onChange={(e) => setExecutionWebResearchQuery(e.target.value)}
-                placeholder="例如：2026 女频悬疑爆款趋势、法医职业细节、时间循环题材读者偏好"
-                autoSize={{ minRows: 2, maxRows: 3 }}
-                maxLength={400}
-                showCount
-              />
+              {showResearchQueryEditor ? (
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <Text strong style={{ fontSize: 12 }}>自定义检索词（可选）</Text>
+                    <Button
+                      type="link"
+                      size="small"
+                      style={{ paddingInline: 0, height: 'auto' }}
+                      onClick={() => {
+                        if (!trimmedExecutionResearchQuery) {
+                          setShowResearchQueryEditor(false);
+                        }
+                      }}
+                      disabled={Boolean(trimmedExecutionResearchQuery)}
+                    >
+                      收起
+                    </Button>
+                  </div>
+                  <Input
+                    data-testid="inspiration-research-query-input"
+                    value={executionWebResearchQuery}
+                    onChange={(e) => setExecutionWebResearchQuery(e.target.value)}
+                    placeholder="例如：2026 女频悬疑爆款趋势、法医职业细节、时间循环题材读者偏好"
+                    maxLength={400}
+                    showCount
+                    allowClear
+                  />
+                </Space>
+              ) : (
+                <Button
+                  data-testid="inspiration-research-query-toggle"
+                  type="dashed"
+                  block
+                  onClick={() => setShowResearchQueryEditor(true)}
+                >
+                  补充自定义检索词（可选）
+                </Button>
+              )}
               {showEnabledResearchPreview && (
                 <div
                   data-testid="inspiration-research-preview"

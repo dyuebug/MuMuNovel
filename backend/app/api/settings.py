@@ -395,6 +395,7 @@ def _build_api_probe_exception_suggestions(
 ) -> List[str]:
     error_msg = str(exception)
     lowered = error_msg.lower()
+    error_type = type(exception).__name__
     status_code = exception.response.status_code if isinstance(exception, httpx.HTTPStatusError) and exception.response is not None else None
     normalized_base_url = str(api_base_url or "").strip().rstrip("/")
     normalized_backups = _normalize_probe_backup_urls(backup_urls)
@@ -454,6 +455,29 @@ def _build_api_probe_exception_suggestions(
 
         if auto_failover_enabled:
             suggestions.append("Retry the request and inspect transport diagnostics to confirm whether failover was attempted")
+        else:
+            suggestions.append("Configure at least one backup endpoint and keep fallback strategy as auto if you want automatic failover")
+
+        return suggestions
+
+    parsed_base_url = urlsplit(normalized_base_url) if normalized_base_url else None
+    base_url_hostname = parsed_base_url.hostname if parsed_base_url else None
+    if error_type in {"TimeoutError", "ReadTimeout", "ConnectTimeout", "PoolTimeout", "ConnectError"}:
+        suggestions = [
+            "The API endpoint did not respond in time or could not be reached",
+            "Check the network path, API base URL, and gateway process status",
+        ]
+
+        if base_url_hostname == "host.docker.internal":
+            if _is_running_in_docker_environment():
+                suggestions.append("The current backend appears to run inside Docker; confirm the host machine is exposing the gateway on the configured port")
+            else:
+                suggestions.append("`host.docker.internal` usually only works from inside Docker Desktop containers; if this backend runs on the host OS, switch the API base URL to `http://127.0.0.1:<port>` or `http://localhost:<port>`")
+        elif is_local_gateway:
+            suggestions.append("If this is a local gateway, verify the gateway process is listening and can answer /chat/completions on the configured port")
+
+        if auto_failover_enabled:
+            suggestions.append("Retry after checking transport diagnostics to confirm whether backup endpoint failover was attempted")
         else:
             suggestions.append("Configure at least one backup endpoint and keep fallback strategy as auto if you want automatic failover")
 

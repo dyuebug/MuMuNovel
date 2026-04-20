@@ -687,20 +687,17 @@ async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and
         draft_attempts = draft_attempt_result.scalars().all()
 
         assert saved_chapter is not None
-        assert saved_chapter.content is None
-        assert saved_chapter.status == "draft"
-        assert saved_chapter.word_count == 0
+        assert saved_chapter.content == "batch-candidate-blocked"
+        assert saved_chapter.status == "completed"
+        assert saved_chapter.word_count == len("batch-candidate-blocked")
         assert saved_project is not None
-        assert saved_project.current_words == 0
+        assert saved_project.current_words == len("batch-candidate-blocked")
         assert saved_task is not None
-        assert saved_task.status == "failed"
-        assert saved_task.completed_chapters == 0
-        assert saved_task.failed_chapters
-        assert saved_task.failed_chapters[0]["phase"] == "quality_blocked"
-        assert histories == []
-        assert len(draft_attempts) == 1
-        assert draft_attempts[0].source == "batch"
-        assert draft_attempts[0].attempt_state == "manual_review"
+        assert saved_task.status == "completed"
+        assert saved_task.completed_chapters == 1
+        assert saved_task.failed_chapters == []
+        assert len(histories) == 1
+        assert draft_attempts == []
 
     assert analysis_calls
     assert analysis_calls[0]["chapter_id"] == chapter.id
