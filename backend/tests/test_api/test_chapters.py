@@ -16,10 +16,12 @@ from app.api import chapters as chapters_api
 from app.api import chapter_analysis_routes as chapter_analysis_routes_api
 from app.api import chapter_analysis_task_routes as chapter_analysis_task_routes_api
 from app.api import chapter_annotation_routes as chapter_annotation_routes_api
+from app.api import chapter_crud_routes as chapter_crud_routes_api
 from app.api import chapter_draft_routes as chapter_draft_routes_api
 from app.api import chapter_expansion_plan_routes as chapter_expansion_plan_routes_api
 from app.api import chapter_partial_regeneration_routes as chapter_partial_regeneration_routes_api
 from app.api import chapter_regeneration_routes as chapter_regeneration_routes_api
+from app.services import chapter_regeneration_route_compat_service
 import app.database as app_database
 from app.database import Base, get_db as app_get_db
 from app.models.analysis_task import AnalysisTask
@@ -122,6 +124,241 @@ async def test_should_handle_chapter_crud_and_project_word_count(
         assert words_result.scalar_one() == 0
 
 
+
+
+async def test_should_delegate_project_chapter_list_query(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    captured = {}
+    now = datetime.utcnow()
+
+    async def fake_load_project_chapter_list_payload(**kwargs):
+        captured.update(kwargs)
+        return {
+            'total': 1,
+            'items': [{
+                'id': 'crud-list-route',
+                'project_id': kwargs['project_id'],
+                'title': 'delegated list item',
+                'chapter_number': 1,
+                'content': 'abc',
+                'summary': None,
+                'word_count': 3,
+                'status': 'draft',
+                'outline_id': None,
+                'sub_index': 1,
+                'expansion_plan': None,
+                'outline_title': None,
+                'outline_order': None,
+                'created_at': now,
+                'updated_at': now,
+            }],
+        }
+
+    monkeypatch.setattr(
+        chapter_crud_routes_api,
+        'load_project_chapter_list_payload',
+        fake_load_project_chapter_list_payload,
+    )
+
+    response = await chapters_client.get(f'/api/chapters/project/{project.id}')
+
+    assert response.status_code == 200
+    assert response.json()['items'][0]['id'] == 'crud-list-route'
+    assert captured['project_id'] == project.id
+    assert captured['db_session'] is not None
+
+
+async def test_should_delegate_create_chapter_workflow(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    captured = {}
+    now = datetime.utcnow()
+
+    async def fake_create_chapter_record(**kwargs):
+        captured.update(kwargs)
+        payload = kwargs['chapter_create']
+        return {
+            'id': 'crud-create-route',
+            'project_id': kwargs['project'].id,
+            'title': payload.title,
+            'chapter_number': payload.chapter_number,
+            'content': payload.content,
+            'summary': payload.summary,
+            'word_count': len(payload.content or ''),
+            'status': payload.status,
+            'outline_id': payload.outline_id,
+            'sub_index': payload.sub_index,
+            'expansion_plan': payload.expansion_plan,
+            'outline_title': None,
+            'outline_order': None,
+            'created_at': now,
+            'updated_at': now,
+        }
+
+    monkeypatch.setattr(
+        chapter_crud_routes_api,
+        'create_chapter_record',
+        fake_create_chapter_record,
+    )
+
+    response = await chapters_client.post(
+        '/api/chapters',
+        json={
+            'project_id': project.id,
+            'chapter_number': 1,
+            'title': 'delegated create',
+            'content': 'abc',
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()['id'] == 'crud-create-route'
+    assert captured['project'].id == project.id
+    assert captured['db_session'] is not None
+    assert captured['chapter_create'].title == 'delegated create'
+
+
+async def test_should_delegate_update_chapter_workflow(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title='before update',
+        content='abc',
+        status='draft',
+    )
+    captured = {}
+    now = datetime.utcnow()
+
+    async def fake_update_chapter_record(**kwargs):
+        captured.update(kwargs)
+        return {
+            'id': kwargs['chapter'].id,
+            'project_id': kwargs['chapter'].project_id,
+            'title': 'delegated update',
+            'chapter_number': kwargs['chapter'].chapter_number,
+            'content': 'abcdef',
+            'summary': kwargs['chapter'].summary,
+            'word_count': 6,
+            'status': kwargs['chapter'].status,
+            'outline_id': kwargs['chapter'].outline_id,
+            'sub_index': kwargs['chapter'].sub_index,
+            'expansion_plan': kwargs['chapter'].expansion_plan,
+            'outline_title': None,
+            'outline_order': None,
+            'created_at': now,
+            'updated_at': now,
+        }
+
+    monkeypatch.setattr(
+        chapter_crud_routes_api,
+        'update_chapter_record',
+        fake_update_chapter_record,
+    )
+
+    response = await chapters_client.put(
+        f'/api/chapters/{chapter.id}',
+        json={'title': 'delegated update', 'content': 'abcdef'},
+    )
+
+    assert response.status_code == 200
+    assert response.json()['title'] == 'delegated update'
+    assert captured['chapter'].id == chapter.id
+    assert captured['db_session'] is not None
+    assert captured['chapter_update'].title == 'delegated update'
+
+
+async def test_should_delegate_delete_chapter_workflow(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title='before delete',
+        content='abc',
+        status='draft',
+    )
+    captured = {}
+
+    async def fake_delete_chapter_record(**kwargs):
+        captured.update(kwargs)
+        return {'success': True}
+
+    monkeypatch.setattr(
+        chapter_crud_routes_api,
+        'delete_chapter_record',
+        fake_delete_chapter_record,
+    )
+
+    response = await chapters_client.delete(f'/api/chapters/{chapter.id}')
+
+    assert response.status_code == 200
+    assert response.json()['success'] is True
+    assert captured['chapter'].id == chapter.id
+    assert captured['user_id'] == mock_user.user_id
+    assert captured['db_session'] is not None
+
+
+
+async def test_should_delegate_chapter_navigation_query(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=2,
+        title='delegated nav current',
+        content='B',
+        status='completed',
+    )
+    captured = {}
+
+    async def fake_load_chapter_navigation_payload(**kwargs):
+        captured.update(kwargs)
+        return {
+            'current': {'id': chapter.id, 'chapter_number': 2, 'title': 'delegated nav current'},
+            'previous': None,
+            'next': None,
+        }
+
+    monkeypatch.setattr(
+        chapter_crud_routes_api,
+        'load_chapter_navigation_payload',
+        fake_load_chapter_navigation_payload,
+    )
+
+    response = await chapters_client.get(f'/api/chapters/{chapter.id}/navigation')
+
+    assert response.status_code == 200
+    assert response.json()['current']['id'] == chapter.id
+    assert captured['current_chapter'].id == chapter.id
+    assert captured['db_session'] is not None
+
+
 async def test_should_return_chapter_navigation(
     chapters_client,
     chapters_session_factory,
@@ -205,6 +442,94 @@ async def test_should_update_chapter_expansion_plan(
     assert body["expansion_plan"]["key_events"] == ["主角与守门人冲突", "钥匙暴露"]
     assert body["expansion_plan"]["emotional_tone"] == "紧张"
     assert body["message"] == "规划信息更新成功"
+
+
+async def test_should_delegate_expansion_plan_route_to_compat_service(
+    chapters_client,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_update_chapter_expansion_plan_with_default_route_wiring(**kwargs):
+        captured.update(kwargs)
+        return {
+            "id": kwargs["chapter_id"],
+            "summary": "delegated summary",
+            "expansion_plan": {"key_events": ["delegated"]},
+            "message": "ok",
+        }
+
+    monkeypatch.setattr(
+        chapter_expansion_plan_routes_api,
+        "update_chapter_expansion_plan_with_default_route_wiring",
+        fake_update_chapter_expansion_plan_with_default_route_wiring,
+    )
+
+    response = await chapters_client.put(
+        '/api/chapters/expansion-route/expansion-plan',
+        json={"summary": "delegated summary", "key_events": ["delegated"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "expansion-route"
+    assert captured["chapter_id"] == "expansion-route"
+    assert captured["request"] is not None
+    assert captured["db_session"] is not None
+    assert captured["expansion_plan"].summary == "delegated summary"
+    assert captured["expansion_plan"].key_events == ["delegated"]
+
+
+
+async def test_should_delegate_regeneration_tasks_query(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+    monkeypatch,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title='delegated regeneration route',
+        content='abc',
+        status='completed',
+    )
+    captured: dict[str, Any] = {}
+
+    async def fake_load_regeneration_tasks_payload(**kwargs):
+        captured.update(kwargs)
+        return {
+            'chapter_id': kwargs['chapter_id'],
+            'total': 1,
+            'tasks': [{
+                'task_id': 'regen-task-delegated',
+                'status': 'completed',
+                'version_number': 2,
+                'version_note': 'delegated',
+                'original_word_count': 3,
+                'regenerated_word_count': 5,
+                'created_at': None,
+                'completed_at': None,
+            }],
+        }
+
+    monkeypatch.setattr(
+        chapter_regeneration_routes_api,
+        'load_regeneration_tasks_payload',
+        fake_load_regeneration_tasks_payload,
+    )
+
+    response = await chapters_client.get(
+        f'/api/chapters/{chapter.id}/regeneration/tasks',
+        params={'limit': 7},
+    )
+
+    assert response.status_code == 200
+    assert response.json()['tasks'][0]['task_id'] == 'regen-task-delegated'
+    assert captured['chapter_id'] == chapter.id
+    assert captured['limit'] == 7
+    assert captured['db_session'] is not None
 
 
 async def test_should_return_regeneration_tasks_history(
@@ -1654,7 +1979,7 @@ async def test_should_apply_project_story_packet_defaults_in_regeneration_prompt
         def calculate_content_diff(self, original_content, new_content):
             return {"similarity": 8.0, "difference": 92.0}
 
-    monkeypatch.setattr(chapter_regeneration_routes_api, "REGENERATOR_FACTORY", FakeRegenerator)
+    monkeypatch.setattr(chapter_regeneration_route_compat_service, "REGENERATOR_FACTORY", FakeRegenerator)
 
     response = await chapters_client.post(
         f"/api/chapters/{chapter.id}/regenerate-stream",
@@ -1732,7 +2057,7 @@ async def test_should_include_web_research_assets_in_regeneration_prompt_context
 
     from app.services import chapter_regeneration_context_service as chapter_regeneration_context_service
 
-    monkeypatch.setattr(chapter_regeneration_routes_api, "REGENERATOR_FACTORY", FakeRegenerator)
+    monkeypatch.setattr(chapter_regeneration_route_compat_service, "REGENERATOR_FACTORY", FakeRegenerator)
     monkeypatch.setattr(
         chapter_regeneration_context_service.chapter_web_research_service,
         "collect_for_chapter",
@@ -1813,7 +2138,7 @@ async def test_should_merge_quality_gate_snapshot_into_regeneration_prompt_conte
         def calculate_content_diff(self, original_content, new_content):
             return {"similarity": 8.0, "difference": 92.0}
 
-    monkeypatch.setattr(chapter_regeneration_routes_api, "REGENERATOR_FACTORY", FakeRegenerator)
+    monkeypatch.setattr(chapter_regeneration_route_compat_service, "REGENERATOR_FACTORY", FakeRegenerator)
 
     response = await chapters_client.post(
         f"/api/chapters/{chapter.id}/regenerate-stream",
@@ -1906,7 +2231,7 @@ async def test_should_reuse_quality_history_context_in_regeneration_prompt(
         def calculate_content_diff(self, original_content, new_content):
             return {"similarity": 8.0, "difference": 92.0}
 
-    monkeypatch.setattr(chapter_regeneration_routes_api, "REGENERATOR_FACTORY", FakeRegenerator)
+    monkeypatch.setattr(chapter_regeneration_route_compat_service, "REGENERATOR_FACTORY", FakeRegenerator)
 
     response = await chapters_client.post(
         f"/api/chapters/{chapter.id}/regenerate-stream",
@@ -1969,7 +2294,7 @@ async def test_should_sanitize_regenerated_content_before_persisting_task(
         def calculate_content_diff(self, original_content, new_content):
             return {"similarity": 10.0, "difference": 90.0}
 
-    monkeypatch.setattr(chapter_regeneration_routes_api, "REGENERATOR_FACTORY", FakeRegenerator)
+    monkeypatch.setattr(chapter_regeneration_route_compat_service, "REGENERATOR_FACTORY", FakeRegenerator)
 
     response = await chapters_client.post(
         f"/api/chapters/{chapter.id}/regenerate-stream",
@@ -2292,6 +2617,79 @@ async def test_should_return_analysis_checker_and_auto_revision_payloads(
     assert full_response.json()["candidate_draft"]["quality_highlights"]["foreshadow"]["summary"] == "Key payoff still needs to land on the page."
 
 
+
+
+async def test_should_delegate_analysis_route_to_compat_service(
+    chapters_client,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_get_chapter_analysis_with_default_route_wiring(**kwargs):
+        captured.update(kwargs)
+        return {
+            "chapter_id": kwargs["chapter_id"],
+            "analysis": {"plot_stage": "development"},
+            "memories": [],
+            "checker_result": None,
+            "checker_created_at": None,
+            "auto_revision_draft": None,
+            "candidate_draft": None,
+            "quality_metrics": None,
+            "quality_metrics_summary": {"chapter_count": 0},
+            "created_at": None,
+        }
+
+    monkeypatch.setattr(
+        chapter_analysis_routes_api,
+        "get_chapter_analysis_with_default_route_wiring",
+        fake_get_chapter_analysis_with_default_route_wiring,
+    )
+
+    response = await chapters_client.get(
+        "/api/chapters/route-delegate/analysis",
+        params={"include_full_draft": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["chapter_id"] == "route-delegate"
+    assert captured["chapter_id"] == "route-delegate"
+    assert captured["include_full_draft"] is True
+    assert captured["request"] is not None
+    assert captured["db_session"] is not None
+
+
+async def test_should_delegate_annotation_route_to_compat_service(
+    chapters_client,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_get_chapter_annotations_with_default_route_wiring(**kwargs):
+        captured.update(kwargs)
+        return {
+            "chapter_id": kwargs["chapter_id"],
+            "chapter_number": 1,
+            "title": "route-delegate",
+            "word_count": 0,
+            "annotations": [],
+            "has_analysis": False,
+            "summary": {"total_annotations": 0, "hooks": 0, "foreshadows": 0, "plot_points": 0, "character_events": 0},
+        }
+
+    monkeypatch.setattr(
+        chapter_annotation_routes_api,
+        "get_chapter_annotations_with_default_route_wiring",
+        fake_get_chapter_annotations_with_default_route_wiring,
+    )
+
+    response = await chapters_client.get('/api/chapters/annotation-route/annotations')
+
+    assert response.status_code == 200
+    assert response.json()["chapter_id"] == "annotation-route"
+    assert captured["chapter_id"] == "annotation-route"
+    assert captured["request"] is not None
+    assert captured["db_session"] is not None
 
 
 async def test_should_generate_second_candidate_with_retry_prompt_and_strategy(monkeypatch):

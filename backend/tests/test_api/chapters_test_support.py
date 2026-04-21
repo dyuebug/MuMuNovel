@@ -10,6 +10,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.api import chapters as chapters_api
+from app.services import batch_generation_entry_compat_service
+from app.services import chapter_generation_route_compat_service
+from app.services import chapter_analysis_task_route_compat_service
 from app.api import chapter_analysis_routes as chapter_analysis_routes_api
 from app.api import chapter_analysis_task_routes as chapter_analysis_task_routes_api
 from app.api import chapter_annotation_routes as chapter_annotation_routes_api
@@ -21,16 +24,18 @@ from app.api import chapter_quality_routes as chapter_quality_routes_api
 from app.api import chapter_expansion_plan_routes as chapter_expansion_plan_routes_api
 from app.api import chapter_partial_regeneration_routes as chapter_partial_regeneration_routes_api
 from app.api import chapter_regeneration_routes as chapter_regeneration_routes_api
+from app.services import chapter_regeneration_route_compat_service
 from app.database import Base, get_db as app_get_db
 from app.models.chapter import Chapter
 from app.models.outline import Outline
 from app.models.project import Project
+from app.services import manual_chapter_analysis_execution_service
 
 REAL_EXECUTE_BATCH_GENERATION_IN_ORDER = chapters_api.execute_batch_generation_in_order
 
 class FakeAIService:
     def __init__(self):
-        self.chunks = ["流式片段A", "流式片段B"]
+        self.chunks = ["濞翠礁绱￠悧鍥唽A", "濞翠礁绱￠悧鍥唽B"]
         self.calls: list[dict[str, Any]] = []
 
     async def generate_text_stream(self, **kwargs):
@@ -90,7 +95,27 @@ def mock_side_effect_services(monkeypatch):
         fake_analyze_chapter_background,
     )
     monkeypatch.setattr(
+        manual_chapter_analysis_execution_service,
+        "execute_chapter_analysis_background",
+        fake_analyze_chapter_background,
+    )
+    monkeypatch.setattr(
+        chapter_generation_route_compat_service,
+        "execute_chapter_analysis_background",
+        fake_analyze_chapter_background,
+    )
+    monkeypatch.setattr(
+        chapter_analysis_task_route_compat_service,
+        "execute_chapter_analysis_background",
+        fake_analyze_chapter_background,
+    )
+    monkeypatch.setattr(
         chapters_api,
+        "execute_batch_generation_in_order",
+        fake_execute_batch_generation,
+    )
+    monkeypatch.setattr(
+        batch_generation_entry_compat_service,
         "execute_batch_generation_in_order",
         fake_execute_batch_generation,
     )
@@ -174,6 +199,8 @@ async def chapters_client(chapters_session_factory, fake_ai_service, mock_user, 
 
     monkeypatch.setattr(chapters_api, "get_db", override_get_db)
     monkeypatch.setattr(chapter_regeneration_routes_api, "get_db", override_get_db)
+    monkeypatch.setattr(chapter_regeneration_route_compat_service, "get_db", override_get_db)
+    monkeypatch.setattr(chapter_generation_route_compat_service, "get_db", override_get_db)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -190,9 +217,9 @@ async def create_project(chapters_session_factory, user_id: str, **overrides) ->
     async with chapters_session_factory() as session:
         project = Project(
             user_id=user_id,
-            title=overrides.get("title", "测试项目"),
-            genre=overrides.get("genre", "奇幻"),
-            theme=overrides.get("theme", "成长"),
+            title=overrides.get("title", "test-project"),
+            genre=overrides.get("genre", "fantasy"),
+            theme=overrides.get("theme", "adventure"),
             outline_mode=overrides.get("outline_mode", "one-to-many"),
             current_words=overrides.get("current_words", 0),
             narrative_perspective=overrides.get("narrative_perspective", "third_person"),
@@ -212,8 +239,8 @@ async def create_outline(
     chapters_session_factory,
     project_id: str,
     order_index: int = 1,
-    title: str = "大纲",
-    content: str = "章节大纲",
+    title: str = "outline-1",
+    content: str = "outline content",
 ) -> Outline:
     async with chapters_session_factory() as session:
         outline = Outline(

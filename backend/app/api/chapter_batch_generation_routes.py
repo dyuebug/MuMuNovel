@@ -1,4 +1,4 @@
-"""章节批量生成 API。"""
+"""Batch generation chapter routes."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api import chapters as chapters_api
 from app.api.common import verify_project_access
 from app.api.settings import get_user_ai_service
 from app.database import get_db
@@ -20,9 +19,10 @@ from app.schemas.chapter import (
     BatchGenerateStatusResponse,
 )
 from app.services.ai_service import AIService
-from app.services.batch_generation_orchestration_service import (
-    orchestrate_batch_generation_create,
-    orchestrate_batch_generation_resume,
+from app.services.batch_generation_route_compat_service import (
+    orchestrate_batch_generation_create_with_default_wiring,
+    orchestrate_batch_generation_resume_with_default_wiring,
+    stream_batch_generation_events_with_default_route_wiring,
 )
 from app.services.batch_generation_query_service import (
     load_active_project_batch_generation_task_view_context,
@@ -34,17 +34,16 @@ from app.services.batch_generation_status_service import (
     build_batch_generation_status_response,
     build_batch_generation_task_list_item,
 )
-from app.services.batch_generation_stream_service import (
-    build_batch_generation_event_stream,
-    validate_batch_generation_stream_access,
-)
-from app.utils.sse_response import create_sse_response
 
-router = APIRouter(prefix="/chapters", tags=["章节管理"])
+router = APIRouter(prefix="/chapters", tags=["chapter-batch-generation"])
 logger = get_logger(__name__)
 
 
-@router.post("/project/{project_id}/batch-generate", response_model=BatchGenerateResponse, summary="按顺序批量生成章节")
+@router.post(
+    "/project/{project_id}/batch-generate",
+    response_model=BatchGenerateResponse,
+    summary="Create batch generation task",
+)
 async def batch_generate_chapters_in_order(
     project_id: str,
     batch_request: BatchGenerateRequest,
@@ -55,10 +54,10 @@ async def batch_generate_chapters_in_order(
 ):
     user_id = getattr(request.state, "user_id", None)
     if not user_id:
-        raise HTTPException(status_code=401, detail="未登录")
+        raise HTTPException(status_code=401, detail="Not logged in")
 
     project = await verify_project_access(project_id, user_id, db)
-    response_payload = await orchestrate_batch_generation_create(
+    response_payload = await orchestrate_batch_generation_create_with_default_wiring(
         db,
         project_id=project_id,
         project=project,
@@ -66,17 +65,15 @@ async def batch_generate_chapters_in_order(
         batch_request=batch_request,
         background_tasks=background_tasks,
         ai_service=user_ai_service,
-        check_prerequisites_fn=chapters_api.check_prerequisites,
-        resolve_quality_profile_fn=chapters_api.resolve_chapter_quality_profile,
-        build_story_packet_fn=chapters_api.build_story_generation_packet_with_project_continuity,
-        resolve_story_repair_state_fn=chapters_api._resolve_generation_story_repair_state_for_batch,
-        sync_task_story_repair_state_fn=chapters_api._sync_task_story_repair_state,
-        execution_callable=chapters_api.execute_batch_generation_in_order,
     )
     return BatchGenerateResponse(**response_payload)
 
 
-@router.get("/batch-generate/{batch_id}/status", response_model=BatchGenerateStatusResponse, summary="获取批量生成任务状态")
+@router.get(
+    "/batch-generate/{batch_id}/status",
+    response_model=BatchGenerateStatusResponse,
+    summary="Get batch generation status",
+)
 async def get_batch_generation_status(
     batch_id: str,
     db: AsyncSession = Depends(get_db),
@@ -86,7 +83,7 @@ async def get_batch_generation_status(
         batch_id=batch_id,
     )
     if task_view is None:
-        raise HTTPException(status_code=404, detail="未找到批量生成任务")
+        raise HTTPException(status_code=404, detail="Batch generation task not found")
 
     return build_batch_generation_status_response(
         task_view.task,
@@ -95,33 +92,32 @@ async def get_batch_generation_status(
     )
 
 
-@router.get("/batch-generate/{batch_id}/stream", summary="批量生成任务事件流")
+@router.get(
+    "/batch-generate/{batch_id}/stream",
+    summary="Stream batch generation events",
+)
 async def stream_batch_generation_events(
     batch_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    user_id = getattr(request.state, 'user_id', None)
-    await validate_batch_generation_stream_access(
+    return await stream_batch_generation_events_with_default_route_wiring(
         db,
         batch_id=batch_id,
-        user_id=user_id,
-    )
-    return create_sse_response(
-        build_batch_generation_event_stream(
-            db,
-            batch_id=batch_id,
-        )
+        request=request,
     )
 
 
-@router.get("/project/{project_id}/batch-generate/active", summary="获取项目当前激活的批量生成任务")
+@router.get(
+    "/project/{project_id}/batch-generate/active",
+    summary="Get active project batch generation",
+)
 async def get_active_batch_generation(
     project_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    user_id = getattr(request.state, 'user_id', None)
+    user_id = getattr(request.state, "user_id", None)
     await verify_project_access(project_id, user_id, db)
 
     task_view = await load_active_project_batch_generation_task_view_context(
@@ -141,7 +137,10 @@ async def get_active_batch_generation(
     )
 
 
-@router.get("/batch-generate/active-tasks", summary="获取当前用户的激活批量生成任务列表")
+@router.get(
+    "/batch-generate/active-tasks",
+    summary="List active batch generation tasks",
+)
 async def list_active_batch_generation_tasks(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -149,7 +148,7 @@ async def list_active_batch_generation_tasks(
 ):
     user_id = getattr(request.state, "user_id", None)
     if not user_id:
-        raise HTTPException(status_code=401, detail="未登录")
+        raise HTTPException(status_code=401, detail="Not logged in")
 
     task_views = await load_active_user_batch_generation_task_view_contexts(
         db,
@@ -170,7 +169,10 @@ async def list_active_batch_generation_tasks(
     }
 
 
-@router.post("/batch-generate/{batch_id}/cancel", summary="取消批量生成任务")
+@router.post(
+    "/batch-generate/{batch_id}/cancel",
+    summary="Cancel batch generation",
+)
 async def cancel_batch_generation(
     batch_id: str,
     db: AsyncSession = Depends(get_db),
@@ -181,25 +183,31 @@ async def cancel_batch_generation(
     task = result.scalar_one_or_none()
 
     if not task:
-        raise HTTPException(status_code=404, detail="未找到批量生成任务")
+        raise HTTPException(status_code=404, detail="Batch generation task not found")
 
-    if task.status in ['completed', 'failed', 'cancelled']:
-        raise HTTPException(status_code=400, detail=f"任务状态为 {task.status}，无法取消")
+    if task.status in ["completed", "failed", "cancelled"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel task in status {task.status}",
+        )
 
-    task.status = 'cancelled'
+    task.status = "cancelled"
     task.completed_at = datetime.now()
     await db.commit()
 
-    logger.info(f"已取消批量生成任务: {batch_id}")
+    logger.info(f"Cancelled batch generation task {batch_id}")
     return {
-        "message": "批量生成任务已取消",
+        "message": "Batch generation cancelled",
         "batch_id": batch_id,
         "completed_chapters": task.completed_chapters,
         "total_chapters": task.total_chapters,
     }
 
 
-@router.post("/batch-generate/{batch_id}/resume", summary="恢复批量生成任务")
+@router.post(
+    "/batch-generate/{batch_id}/resume",
+    summary="Resume batch generation",
+)
 async def resume_batch_generation(
     batch_id: str,
     request: Request,
@@ -211,13 +219,10 @@ async def resume_batch_generation(
     if not user_id:
         raise HTTPException(status_code=401, detail="Not logged in")
 
-    return await orchestrate_batch_generation_resume(
+    return await orchestrate_batch_generation_resume_with_default_wiring(
         db,
         batch_id=batch_id,
         user_id=user_id,
         background_tasks=background_tasks,
         ai_service=user_ai_service,
-        resolve_story_repair_state_for_batch=chapters_api._resolve_generation_story_repair_state_for_batch,
-        check_prerequisites_fn=chapters_api.check_prerequisites,
-        execution_callable=chapters_api.execute_batch_generation_in_order,
     )

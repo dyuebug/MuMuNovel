@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 import app.database as app_database
 from app.api import chapters as chapters_api
+from app.services import chapter_generation_route_compat_service
 from app.models.batch_generation_task import BatchGenerationTask
 from app.models.chapter import Chapter
 from app.models.chapter_draft_attempt import ChapterDraftAttempt
@@ -19,6 +20,7 @@ from tests.test_api.chapters_test_support import (
     chapters_client,
     chapters_session_factory,
     create_chapter,
+    create_outline,
     create_project,
     fake_ai_service,
     mock_side_effect_services,
@@ -27,6 +29,47 @@ from tests.test_api.chapters_test_support import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+async def test_should_create_single_chapter_background_generation_task_via_generation_route_compat(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+    outline = await create_outline(
+        chapters_session_factory,
+        project_id=project.id,
+        order_index=1,
+        title="single-background-outline",
+    )
+    chapter = await create_chapter(
+        chapters_session_factory,
+        project_id=project.id,
+        chapter_number=1,
+        title="single-background-chapter",
+        content=None,
+        outline_id=outline.id,
+    )
+
+    response = await chapters_client.post(
+        f"/api/chapters/{chapter.id}/generate-background",
+        json={"target_word_count": 1200},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["chapter_id"] == chapter.id
+    assert body["status"] == "pending"
+    assert body["task_id"]
+
+    async with chapters_session_factory() as session:
+        task = await session.get(BatchGenerationTask, body["task_id"])
+        assert task is not None
+        assert task.chapter_count == 1
+        assert task.chapter_ids == [chapter.id]
+        assert task.target_word_count == 1200
+        assert task.enable_analysis is True
+
 
 @pytest.mark.parametrize(
     ("quality_metrics", "expected_action", "expected_decision", "expect_provisional_save"),
@@ -119,6 +162,9 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
     def fake_format_prompt(template, **kwargs):
         return "mock-generate-prompt"
 
+    def fake_build_runtime_system_prompt(*args, **kwargs):
+        return "mock-runtime-system-prompt"
+
     def fake_compute_story_quality_metrics(**kwargs):
         quality_metric_calls.append(kwargs)
         return dict(quality_metrics)
@@ -130,13 +176,13 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
     async def fake_sleep(_seconds):
         return None
 
-    monkeypatch.setattr(chapters_api, "OneToManyContextBuilder", FakeOneToManyBuilder)
-    monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(chapters_api.PromptService, "format_prompt", fake_format_prompt)
-    monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
-    monkeypatch.setattr(chapters_api, "analyze_chapter_background", fake_analyze_chapter_background)
-    monkeypatch.setattr(chapters_api.asyncio, "sleep", fake_sleep)
-
+    monkeypatch.setattr(chapter_generation_route_compat_service, "get_template", fake_get_template)
+    monkeypatch.setattr(chapter_generation_route_compat_service, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(chapter_generation_route_compat_service, "OneToManyContextBuilder", FakeOneToManyBuilder)
+    monkeypatch.setattr(chapter_generation_route_compat_service, "build_chapter_runtime_system_prompt", fake_build_runtime_system_prompt)
+    monkeypatch.setattr(chapter_generation_route_compat_service, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
+    monkeypatch.setattr(chapter_generation_route_compat_service, "execute_chapter_analysis_background", fake_analyze_chapter_background)
+    
     fake_ai_service.calls.clear()
     fake_ai_service.chunks = ["继续", "创作"]
     expected_generated_content = "".join(fake_ai_service.chunks)
@@ -302,8 +348,7 @@ async def test_execute_batch_generation_should_apply_candidate_only_after_qualit
     monkeypatch.setattr(chapters_api, "_set_task_active_story_repair_payload", fake_set_task_active_story_repair_payload)
     monkeypatch.setattr(chapters_api, "publish_task_stream_event", fake_publish_task_stream_event)
     monkeypatch.setattr(chapters_api, "_record_task_quality_metrics", fake_record_task_quality_metrics)
-    monkeypatch.setattr(chapters_api.asyncio, "sleep", fake_sleep)
-
+    
     await REAL_EXECUTE_BATCH_GENERATION_IN_ORDER(
         batch_id=batch_id,
         user_id=mock_user.user_id,
@@ -425,8 +470,7 @@ async def test_execute_batch_generation_should_forward_web_research_options_to_s
     monkeypatch.setattr(chapters_api, "_set_task_active_story_repair_payload", fake_set_task_active_story_repair_payload)
     monkeypatch.setattr(chapters_api, "publish_task_stream_event", fake_publish_task_stream_event)
     monkeypatch.setattr(chapters_api, "_record_task_quality_metrics", fake_record_task_quality_metrics)
-    monkeypatch.setattr(chapters_api.asyncio, "sleep", fake_sleep)
-
+    
     await REAL_EXECUTE_BATCH_GENERATION_IN_ORDER(
         batch_id=batch_id,
         user_id=mock_user.user_id,
@@ -658,9 +702,8 @@ async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and
     monkeypatch.setattr(chapters_api, "_set_task_active_story_repair_payload", fake_set_task_active_story_repair_payload)
     monkeypatch.setattr(chapters_api, "publish_task_stream_event", fake_publish_task_stream_event)
     monkeypatch.setattr(chapters_api, "_record_task_quality_metrics", fake_record_task_quality_metrics)
-    monkeypatch.setattr(chapters_api, "analyze_chapter_background", fake_analyze_chapter_background)
-    monkeypatch.setattr(chapters_api.asyncio, "sleep", fake_sleep)
-
+    monkeypatch.setattr(chapter_generation_route_compat_service, "execute_chapter_analysis_background", fake_analyze_chapter_background)
+    
     await REAL_EXECUTE_BATCH_GENERATION_IN_ORDER(
         batch_id=batch_id,
         user_id=mock_user.user_id,

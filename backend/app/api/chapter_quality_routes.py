@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api import chapters as chapters_api
 from app.api.chapter_route_helpers import require_authenticated_user_id
 from app.api.common import verify_project_access
 from app.database import get_db
@@ -11,6 +10,7 @@ from app.schemas.chapter import ProjectChapterQualityTrendResponse
 from app.services.project_quality_trend_query_service import (
     load_project_quality_trend_query_context,
 )
+from app.services import project_quality_trend_compat_service
 from app.services.project_quality_trend_service import (
     build_project_quality_trend_response_payload,
 )
@@ -37,12 +37,11 @@ async def get_project_chapter_quality_trend(
     query_context = await load_project_quality_trend_query_context(
         db,
         project_id=project_id,
-        load_records_fn=chapters_api._load_latest_quality_metric_records_for_chapter_ids,
     )
     return await build_project_quality_trend_response_payload(
         project_id=project_id,
         chapters=list(query_context.chapters),
         records_by_chapter=dict(query_context.records_by_chapter),
         limit=limit,
-        resolve_snapshot_fn=chapters_api._get_project_quality_trend_snapshot,
+        resolve_snapshot_fn=project_quality_trend_compat_service.get_project_quality_trend_snapshot_with_default_wiring,
     )

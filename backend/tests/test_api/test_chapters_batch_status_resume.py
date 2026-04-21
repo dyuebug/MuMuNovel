@@ -3,6 +3,7 @@ from typing import Any
 import pytest
 
 from app.api import chapters as chapters_api
+from app.services import batch_generation_entry_compat_service
 from app.models.batch_generation_snapshot import BatchGenerationSnapshot
 from app.models.batch_generation_task import BatchGenerationTask
 from tests.test_api.chapters_test_support import (
@@ -28,22 +29,22 @@ async def test_should_create_batch_generation_task_and_query_status(
         chapters_session_factory,
         project_id=project.id,
         chapter_number=1,
-        title="第一章",
-        content="前置章节已完成",
+        title="chapter-1",
+        content="ready",
         status="completed",
     )
     await create_chapter(
         chapters_session_factory,
         project_id=project.id,
         chapter_number=2,
-        title="第二章",
+        title="chapter-2",
         content=None,
     )
     await create_chapter(
         chapters_session_factory,
         project_id=project.id,
         chapter_number=3,
-        title="第三章",
+        title="chapter-3",
         content=None,
     )
 
@@ -312,6 +313,7 @@ async def test_should_resume_failed_batch_task_with_persisted_story_repair_paylo
         return None
 
     monkeypatch.setattr(chapters_api, "execute_batch_generation_in_order", fake_execute_batch_generation)
+    monkeypatch.setattr(batch_generation_entry_compat_service, "execute_batch_generation_in_order", fake_execute_batch_generation)
 
     project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
     await create_chapter(
@@ -519,7 +521,7 @@ async def test_should_list_active_batch_generation_tasks_for_current_user(
     mock_user,
 ):
     project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
-    other_project = await create_project(chapters_session_factory, user_id="other-user", title="其他项目")
+    other_project = await create_project(chapters_session_factory, user_id="other-user", title="鍏朵粬椤圭洰")
 
     async with chapters_session_factory() as session:
         user_single_task = BatchGenerationTask(

@@ -2,13 +2,16 @@ import pytest
 from typing import Any
 from sqlalchemy import select
 
-from app.api import chapters as chapters_api
-from app.api import chapter_regeneration_routes as chapter_regeneration_routes_api
+from app.services import batch_generation_route_compat_service
+from app.services import chapter_generation_route_compat_service
+from app.services import chapter_regeneration_route_compat_service
+from app.services import chapter_partial_regeneration_route_compat_service
 from app.models.batch_generation_task import BatchGenerationTask
 from app.models.chapter import Chapter
 from app.models.chapter_draft_attempt import ChapterDraftAttempt
 from app.models.generation_history import GenerationHistory
 from app.models.regeneration_task import RegenerationTask
+from app.api import chapter_partial_regeneration_routes as chapter_partial_regeneration_routes_api
 from tests.test_api.chapters_test_support import (
     chapters_client,
     chapters_session_factory,
@@ -89,6 +92,9 @@ async def test_should_build_context_with_expected_builder_during_generate_stream
     def fake_format_prompt(template, **kwargs):
         return "mock-generate-prompt"
 
+    def fake_build_runtime_system_prompt(*args, **kwargs):
+        return "mock-runtime-system-prompt"
+
     def fake_compute_story_quality_metrics(**kwargs):
         return {
             "overall_score": 92.0,
@@ -113,12 +119,13 @@ async def test_should_build_context_with_expected_builder_during_generate_stream
             },
         }
 
-    monkeypatch.setattr(chapters_api, "OneToManyContextBuilder", FakeOneToManyBuilder)
-    monkeypatch.setattr(chapters_api, "OneToOneContextBuilder", FakeOneToOneBuilder)
-    monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(chapters_api.PromptService, "format_prompt", fake_format_prompt)
-    monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
-    monkeypatch.setattr(chapters_api, "_resolve_quality_gate_execution_plan", fake_resolve_quality_gate_execution_plan)
+    monkeypatch.setattr(chapter_generation_route_compat_service, "get_template", fake_get_template)
+    monkeypatch.setattr(chapter_generation_route_compat_service, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(chapter_generation_route_compat_service, "OneToManyContextBuilder", FakeOneToManyBuilder)
+    monkeypatch.setattr(chapter_generation_route_compat_service, "OneToOneContextBuilder", FakeOneToOneBuilder)
+    monkeypatch.setattr(chapter_generation_route_compat_service, "build_chapter_runtime_system_prompt", fake_build_runtime_system_prompt)
+    monkeypatch.setattr(chapter_generation_route_compat_service, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
+    monkeypatch.setattr(chapter_generation_route_compat_service, "resolve_quality_gate_execution_plan", fake_resolve_quality_gate_execution_plan)
 
     fake_ai_service.calls.clear()
     fake_ai_service.chunks = ["段落甲", "段落乙"]
@@ -296,6 +303,41 @@ async def test_should_sanitize_partial_regenerate_text_before_apply(
             "EFG"
         )
 
+async def test_should_delegate_apply_partial_regenerate_route_to_compat_service(
+    chapters_client,
+    monkeypatch,
+):
+    captured: dict[str, Any] = {}
+
+    async def fake_apply_partial_regenerate_with_default_route_wiring(**kwargs):
+        captured.update(kwargs)
+        return {
+            "success": True,
+            "chapter_id": kwargs["chapter_id"],
+            "word_count": 11,
+            "old_word_count": 7,
+            "message": "ok",
+        }
+
+    monkeypatch.setattr(
+        chapter_partial_regeneration_routes_api,
+        "apply_partial_regenerate_with_default_route_wiring",
+        fake_apply_partial_regenerate_with_default_route_wiring,
+    )
+
+    response = await chapters_client.post(
+        '/api/chapters/delegated-partial/apply-partial-regenerate',
+        json={"new_text": "XYZ", "start_position": 1, "end_position": 4},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["chapter_id"] == "delegated-partial"
+    assert captured["chapter_id"] == "delegated-partial"
+    assert captured["request"] is not None
+    assert captured["db_session"] is not None
+    assert captured["apply_request"]["new_text"] == "XYZ"
+
+
 async def test_should_return_400_when_partial_regenerate_position_invalid(
     chapters_client,
     chapters_session_factory,
@@ -323,6 +365,38 @@ async def test_should_return_400_when_partial_regenerate_position_invalid(
         },
     )
     assert response.status_code == 400
+
+async def test_should_stream_batch_generation_events_via_route_compat(
+    chapters_client,
+    monkeypatch,
+):
+    async def fake_validate_access(db_session, *, batch_id, user_id):
+        assert batch_id == "batch-1"
+        assert user_id is not None
+        return object()
+
+    async def fake_build_stream(db_session, *, batch_id):
+        from app.utils.sse_response import SSEResponse
+        yield await SSEResponse.send_progress("connected", 0, "processing")
+        yield await SSEResponse.send_done()
+
+    monkeypatch.setattr(
+        batch_generation_route_compat_service,
+        "validate_batch_generation_stream_access",
+        fake_validate_access,
+    )
+    monkeypatch.setattr(
+        batch_generation_route_compat_service,
+        "build_batch_generation_event_stream",
+        fake_build_stream,
+    )
+
+    response = await chapters_client.get("/api/chapters/batch-generate/batch-1/stream")
+    assert response.status_code == 200
+    events = parse_sse_data(response.text)
+    assert any(event.get("type") == "progress" for event in events)
+    assert any(event.get("type") == "done" for event in events)
+
 
 async def test_should_reject_stream_subscription_from_other_user(
     chapters_client,
@@ -388,7 +462,7 @@ async def test_should_regenerate_chapter_stream_and_persist_regeneration_task(
         def calculate_content_diff(self, original_content, new_content):
             return {"similarity": 12.5, "difference": 87.5}
 
-    monkeypatch.setattr(chapter_regeneration_routes_api, "REGENERATOR_FACTORY", FakeRegenerator)
+    monkeypatch.setattr(chapter_regeneration_route_compat_service, "REGENERATOR_FACTORY", FakeRegenerator)
 
     response = await chapters_client.post(
         f"/api/chapters/{chapter.id}/regenerate-stream",
