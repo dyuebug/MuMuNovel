@@ -20,4 +20,34 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/services/api.ts'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [
+          {
+            name: '../services/api',
+            message: '请改为从 ../services/modularApi 或对应 modules/* 导入；services/api.ts 仅保留兼容用途。',
+          },
+          {
+            name: '../../services/api',
+            message: '请改为从 ../../services/modularApi 或对应 modules/* 导入；services/api.ts 仅保留兼容用途。',
+          },
+          {
+            name: './services/api',
+            message: '请改为从 ./services/modularApi 或对应 modules/* 导入；services/api.ts 仅保留兼容用途。',
+          },
+          {
+            name: '@/services/api',
+            message: '请改为从 @/services/modularApi 或对应 modules/* 导入；services/api.ts 仅保留兼容用途。',
+          },
+          {
+            name: 'src/services/api',
+            message: '请改为从 src/services/modularApi 或对应 modules/* 导入；services/api.ts 仅保留兼容用途。',
+          },
+        ],
+      }],
+    },
+  },
 ])

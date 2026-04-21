@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
-    "build:analyze": "tsc -b && node ./scripts/build-analyze.mjs",
-    "lint": "eslint .",
+    "validate:services": "node ./scripts/check-service-facade.mjs",
+    "build": "npm run validate:services && tsc -b && vite build",
+    "build:analyze": "npm run validate:services && tsc -b && node ./scripts/build-analyze.mjs",
+    "lint": "npm run validate:services && eslint .",
     "preview": "vite preview",
     "e2e": "playwright test",
     "e2e:auth": "playwright test e2e/auth.spec.ts"
