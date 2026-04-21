@@ -950,3 +950,12 @@ Frontend staging update:
 - Verified the staged file scope stays inside the intended batch boundary and does not accidentally mix `Chapters.tsx`, floating-index refactors, or background-task-center changes into the service batch.
 - `git diff --cached --check` passed for the staged batch, so the current index is ready for a focused frontend service-layer commit when desired.
 - Recommended next action: either commit batch A now, or keep the current staged index intact and prepare the batch B staging pass only after batch A is submitted.
+
+
+## Progress Refresh / 2026-04-21 / Iteration 165
+
+Final delivery update:
+- Added a final delivery summary document that consolidates backend milestones, frontend milestones, validation status, commit history, remaining risks, and recommended handoff materials into a single closing reference.
+- Confirmed the working tree is clean after the refactor and documentation submission chain.
+- Confirmed the superseded legacy roadmap artifact remains excluded only through local `.git/info/exclude`, so repository history stays focused on the clean-plan baseline.
+- The refactor track should now be considered closed unless a new follow-up task is opened for performance, package-size, or residual transition-debt cleanup.
