@@ -109,6 +109,15 @@
 **阅读时间**：15 分钟
 **前置要求**：理解代码结构
 
+
+#### [前端服务层约定](./architecture/frontend-service-layer-conventions.zh-CN.md)
+- `core/httpClient.ts`、`modules/*`、`modularApi.ts`、`api.ts` 的职责边界
+- 新运行时代码的推荐导入方式
+- 服务层变更时的维护与验证清单
+
+**适合人群**：前端开发者、全栈开发者
+**阅读时间**：10 分钟
+**前置要求**：理解代码结构
 ---
 
 

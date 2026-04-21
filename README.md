@@ -162,6 +162,22 @@
 > - **Docker 部署**：建议预留额外 1-2 GB 内存给容器运行时
 > - 本项目主要依赖外部 AI API（OpenAI/Claude/Gemini），不需要本地 GPU
 
+## 🧩 前端服务层约定
+
+前端服务层当前采用模块化结构：
+
+- `frontend/src/services/core/httpClient.ts`：唯一真实 HTTP 客户端实现
+- `frontend/src/services/modules/*.ts`：按业务域拆分的 API 实现
+- `frontend/src/services/modularApi.ts`：推荐的前端服务聚合入口
+- `frontend/src/services/api.ts`：仅保留历史导入路径与默认 `api` 转发的兼容门面
+
+开发时默认约定：
+
+- 新运行时代码优先从 `frontend/src/services/modularApi.ts` 导入
+- 只有在需要强聚焦、按域直取时，才直接从 `frontend/src/services/modules/*` 导入
+- 不再为新代码增加对 `frontend/src/services/api.ts` 的依赖
+- `frontend/eslint.config.js` 已限制新增运行时代码继续导入 `services/api.ts`
+- 详细约定见 `docs/architecture/frontend-service-layer-conventions.zh-CN.md`
 ## 🚀 快速开始
 
 ### 前置要求

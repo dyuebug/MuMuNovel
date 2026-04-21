@@ -117,7 +117,7 @@
 - 新端点优先追加到语义最接近的现有文件，除非已形成独立子域
 - 共享校验逻辑优先抽到 `common.py` 或 `chapter_route_helpers.py`
 - 不要在路由层复制服务逻辑；发现重复应回收进 `services/`
-- 变更路由前缀、请求模型或返回字段时，必须追踪前端 `src/services/api.ts` 与相关 E2E
+- 变更路由前缀、请求模型或返回字段时，必须追踪前端 `src/services/modularApi.ts`、必要时兼顾 `src/services/api.ts` 兼容层与相关 E2E
 - SSE / 后台任务接口改动时，必须同步检查任务恢复与进度消费链路
 
 ---
