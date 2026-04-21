@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 
-import { backgroundTaskApi, type BackgroundTaskStatus } from '../services/api';
+import { backgroundTaskApi, type BackgroundTaskStatus } from '../services/modularApi';
 import type { TrackedBackgroundTask } from '../store/backgroundTasks';
 import {
   startBackgroundTaskPolling,

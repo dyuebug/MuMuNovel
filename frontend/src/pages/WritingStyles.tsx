@@ -23,7 +23,7 @@ import {
   StarFilled,
 } from '@ant-design/icons';
 import { useStore } from '../store';
-import { writingStyleApi } from '../services/api';
+import { writingStyleApi } from '../services/modularApi';
 import type { WritingStyle, WritingStyleCreate, WritingStyleUpdate } from '../types';
 
 const { TextArea } = Input;

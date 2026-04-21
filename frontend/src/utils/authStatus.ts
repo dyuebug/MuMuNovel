@@ -1,4 +1,4 @@
-import { authApi } from '../services/api';
+import { authApi } from '../services/modularApi';
 import { sessionManager } from './sessionManager';
 import { isServiceUnavailableError } from './httpError';
 

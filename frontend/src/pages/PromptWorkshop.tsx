@@ -40,7 +40,8 @@ import {
   SettingOutlined,
   PlusOutlined,
 } from '@ant-design/icons';
-import { promptWorkshopApi, authApi } from '../services/api';
+import { promptWorkshopApi } from '../services/modularApi';
+import { authApi } from '../services/modularApi';
 import type {
   PromptWorkshopItem,
   PromptSubmission,

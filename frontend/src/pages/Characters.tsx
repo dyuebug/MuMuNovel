@@ -8,7 +8,7 @@ import { charactersPageGridConfig } from '../components/CardStyles';
 import { CharacterCard } from '../components/CharacterCard';
 import type { CSSProperties } from 'react';
 import type { Character, ApiError } from '../types';
-import { backgroundTaskApi, characterApi } from '../services/api';
+import { backgroundTaskApi, characterApi } from '../services/modularApi';
 import { getCachedProjectCareers, loadProjectCareers } from '../services/projectCareers';
 import { formatBackgroundTaskError } from '../utils/taskPolling';
 import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';

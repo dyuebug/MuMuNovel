@@ -1,93 +1,92 @@
-# React + TypeScript + Vite
+# MuMuNovel Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+MuMuNovel 的前端基于 React、TypeScript 与 Vite，负责项目管理、章节创作、大纲生成、后台任务中心、提示词工坊与设置管理等页面能力。
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-
-## Playwright E2E
-
-Run the minimal auth regression suite against an already running frontend dev server:
+## 快速开始
 
 ```bash
+cd frontend
+npm install
+npm run dev
+```
+
+默认开发命令会启动 Vite，本地页面通常通过后端代理后的 `/api` 路径访问业务接口。
+
+## 常用命令
+
+```bash
+cd frontend
+npm run dev
+npm run build
+npm run build:analyze
+npm run lint
+npm run e2e
 npm run e2e:auth
 ```
 
-You can override the target URL when needed:
+## 目录概览
 
-```bash
-E2E_BASE_URL=http://127.0.0.1:5175 npm run e2e:auth
+```text
+frontend/
+├── src/
+│   ├── pages/                # 页面
+│   ├── components/           # 组件与业务面板
+│   ├── services/             # HTTP 客户端、模块化 API、兼容门面
+│   ├── store/                # Zustand 状态与事件协作
+│   ├── utils/                # SSE、session、通用工具
+│   ├── routes/               # 懒加载与路由辅助
+│   └── theme/                # 主题系统
+├── e2e/                      # Playwright 用例
+├── scripts/                  # 构建与分析脚本
+└── package.json
 ```
 
-The background-task and inspiration smoke suites use a real backend and are intentionally skipped unless `E2E_REAL_BACKEND=1` is set.
+## 服务层导入规范
+
+当前前端服务层已经收口为三层结构：
+
+- `src/services/core/httpClient.ts`：唯一真实 HTTP 客户端实现
+- `src/services/modules/*.ts`：按业务域拆分的 API 实现
+- `src/services/modularApi.ts`：推荐的聚合导入入口
+
+兼容说明：
+
+- `src/services/api.ts` 只保留历史导入路径与默认 `api` 转发
+- 新运行时代码默认从 `src/services/modularApi.ts` 或对应 `src/services/modules/*` 导入
+- ESLint 已限制新增代码继续从 `src/services/api.ts` 导入
+- 详细约定见 `../docs/architecture/frontend-service-layer-conventions.zh-CN.md`
+
+推荐写法：
+
+```ts
+import { projectApi, outlineApi } from '../services/modularApi'
+```
+
+按域直引也可以：
+
+```ts
+import { chapterApi } from '../services/modules/chapters'
+```
+
+不推荐新增：
+
+```ts
+import { projectApi } from '../services/api'
+```
+
+## 构建与产物
+
+- `npm run build` 会执行 TypeScript 构建并产出前端静态文件
+- Vite 产物输出到 `../backend/static`
+- 修改构建配置时，需要同时考虑后端静态托管行为
+
+## Lint 与测试
+
+- `npm run lint`：执行 ESLint 检查，包括服务层导入约束
+- `npm run e2e`：运行 Playwright E2E
+- `npm run e2e:auth`：运行最小登录回归集
+
+以下真实后端相关 E2E 仅在设置 `E2E_REAL_BACKEND=1` 时运行更有意义：
 
 ```bash
 E2E_REAL_BACKEND=1 npx playwright test \
@@ -97,8 +96,9 @@ E2E_REAL_BACKEND=1 npx playwright test \
   --reporter=line
 ```
 
-These suites currently cover:
+## 开发建议
 
-- shared execution settings hints on background-task pages
-- stale inspiration resume state cleanup
-- web research payload pass-through and research summary rendering
+- 页面尽量复用 `services`、`store`、`utils` 中已有能力，不要在页面里散落裸 `fetch`
+- 长任务相关改动要同时检查进度展示、恢复链路、取消逻辑与错误提示
+- 新增 API 时优先放入语义最接近的 `src/services/modules/*.ts`
+- 修改响应结构时，要同时回看消费页面、组件、store hook 与 E2E

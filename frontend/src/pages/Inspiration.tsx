@@ -3,7 +3,7 @@ import { useBusyNavigationGuard } from '../hooks/useBusyNavigationGuard';
 import { useNavigate } from 'react-router-dom';
 import { Card, Input, Button, Space, Typography, message, Spin, Modal, Switch, theme } from 'antd';
 import { SendOutlined, ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons';
-import { inspirationApi } from '../services/api';
+import { inspirationApi } from '../services/modularApi';
 import { AIProjectGenerator, type GenerationConfig } from '../components/AIProjectGenerator';
 import {
   GenerationExecutionSettingsPanel,

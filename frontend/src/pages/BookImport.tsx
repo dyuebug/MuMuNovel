@@ -15,7 +15,7 @@ import {
   theme,
 } from 'antd';
 import { InboxOutlined, ReloadOutlined } from '@ant-design/icons';
-import { bookImportApi } from '../services/api';
+import { bookImportApi } from '../services/modularApi';
 import { MAX_CONSECUTIVE_TASK_POLL_ERRORS } from '../utils/taskPolling';
 import { syncProjectToStoreById } from '../store/hooks';
 import type {

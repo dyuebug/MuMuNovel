@@ -125,16 +125,16 @@
 
 ## 与 services 的耦合关系
 
-- `store/hooks.ts` 直接依赖 `services/api.ts` 中多个 `*Api`
-- `services/api.ts` 反向依赖：
-  - `useStore`
-  - `useBackgroundTaskStore`
-- 这意味着当前状态层和服务层并非完全解耦，而是双向协作：
+- `store/hooks.ts` 当前直接依赖 `services/modularApi.ts` 中多个 `*Api`
+- `services/api.ts` 现已退化为兼容门面；真实业务实现位于 `services/modules/*`，HTTP 客户端位于 `services/core/httpClient.ts`
+  - `store/hooks.ts` 通过 `modularApi.ts` 读取项目、章节与任务相关 API
+  - 后台任务相关变更仍需联动检查 `store/backgroundTasks.ts` 与消费组件
+- 这意味着当前状态层和服务层仍有协作，但主要通过模块化服务入口完成，而不是回堆到 `services/api.ts`：
   - hooks 负责“请求后写 store”
   - api 负责“任务类接口直接同步 store”
 
 关键点：
-- 改动 `backgroundTasks.ts` 的字段定义时，要同时检查 `services/api.ts` 与 `BackgroundTaskCenter.tsx`
+- 改动 `backgroundTasks.ts` 的字段定义时，要同时检查 `services/modularApi.ts`、`BackgroundTaskCenter.tsx` 与相关任务消费链路
 - 改动 `useStore` 的实体字段时，要同时检查 `store/hooks.ts` 与主要页面消费点
 
 ---

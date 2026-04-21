@@ -33,7 +33,7 @@ import {
   SearchOutlined,
   MoreOutlined,
 } from '@ant-design/icons';
-import { adminApi } from '../services/api';
+import { adminApi } from '../services/modularApi';
 import type { User } from '../types';
 import UserMenu from '../components/UserMenu';
 import { useDeferredMount } from '../hooks/useDeferredMount';

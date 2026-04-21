@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { Alert, Button, Card, Col, Divider, Form, Input, Layout, Row, Space, Spin, Tag, Typography, message, theme } from 'antd';
 import { BookOutlined, LockOutlined, RobotOutlined, SafetyCertificateOutlined, TeamOutlined, ThunderboltOutlined, UserOutlined } from '@ant-design/icons';
-import { authApi } from '../services/api';
+import { authApi } from '../services/modularApi';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 const LazyAnnouncementModal = lazy(() => import('../components/AnnouncementModal'));
 

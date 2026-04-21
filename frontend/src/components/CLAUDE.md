@@ -78,7 +78,7 @@
 - `ChapterBatchGenerateModal.tsx` 是高复杂度批量生成面板，内部整合创作预设、质量提示、快照、模型与风格选项，不是“薄 Modal”
 - `ChapterRegenerationModal.tsx` 直接处理 SSE 重写流、修复指导、质量门禁推荐项与联网检索开关
 - `PartialRegenerateModal.tsx` 与 `PartialRegenerateToolbar.tsx` 支撑局部重写工作流，和章节编辑器强耦合
-- 这组组件往往同时依赖 `types`、`utils`、`services/api`、`sseClient` 和多个 story-quality 工具函数
+- 这组组件往往同时依赖 `types`、`utils`、`services/modularApi`、`sseClient` 和多个 story-quality 工具函数
 
 ### 3. 生成执行设置与创作配置复用
 - `GenerationExecutionSettings.tsx`
@@ -93,7 +93,7 @@
 关键点：
 - `GenerationExecutionSettings.tsx` 同时导出 hook 与 panel，被 `ProjectWizardNew.tsx`、`Inspiration.tsx` 复用，用于统一生成参数配置
 - 设置相关组件承担 provider/model/endpoint/preset 细粒度拆分，属于设置页的子模块，而不是纯原子控件
-- 这组组件和 `src/pages/Settings.tsx`、`src/services/api.ts` 耦合明显
+- 这组组件和 `src/pages/Settings.tsx`、`src/services/modularApi.ts` 耦合明显
 
 ### 4. 大纲、分析与质量展示
 - `OutlineGenerateModalContent.tsx`
@@ -205,7 +205,7 @@
 ## 风险与注意事项
 
 - 组件目录中存在大量“看起来像组件、实际是工作流子页面”的文件，不能按原子组件思路随意改造
-- 章节生成/重写类组件与 `services/api.ts`、SSE、质量规则和页面状态强耦合，局部改动容易回归
+- 章节生成/重写类组件与 `services/modularApi.ts`、SSE、质量规则和页面状态强耦合，局部改动容易回归
 - `BackgroundTaskCenter.tsx` 是全局挂载组件，性能与副作用问题会影响全站体验
 - `storyCreation*` 与 `Compact*` 文件存在较多组合调用，重复造轮子会快速放大维护成本
 

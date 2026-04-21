@@ -31,7 +31,7 @@ import {
   QuestionCircleOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { mcpPluginApi, settingsApi } from '../services/api';
+import { mcpPluginApi, settingsApi } from '../services/modularApi';
 import type { MCPPlugin, MCPTool } from '../types';
 
 const { Paragraph, Text, Title } = Typography;

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../store';
 import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgroundTasks';
 import { cardStyles } from '../components/CardStyles';
-import { backgroundTaskApi, projectApi } from '../services/api';
+import { backgroundTaskApi, projectApi } from '../services/modularApi';
 import { formatBackgroundTaskError } from '../utils/taskPolling';
 import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
 import { SSELoadingOverlay } from '../components/SSELoadingOverlay';

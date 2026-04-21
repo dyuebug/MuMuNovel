@@ -10,7 +10,7 @@ import {
   FundOutlined,
 } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
-import api, { chapterApi } from '../services/api';
+import { api, chapterApi } from '../services/modularApi';
 import type { MemoryAnnotation } from '../components/AnnotatedText';
 import type { ChapterAnalysisResponse, ChapterCandidateDraftQualityHighlights, ChapterQualityMetrics, ProjectChapterQualityTrendResponse } from '../types';
 import {

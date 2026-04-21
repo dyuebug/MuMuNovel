@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Dropdown, Avatar, Space, Typography, message, Modal, Form, Input, Button, theme } from 'antd';
 import { UserOutlined, LogoutOutlined, TeamOutlined, CrownOutlined, LockOutlined } from '@ant-design/icons';
-import { authApi } from '../services/api';
+import { authApi } from '../services/modularApi';
 import { clearAuthStatusCache } from '../utils/authStatus';
 import type { User } from '../types';
 import type { MenuProps } from 'antd';

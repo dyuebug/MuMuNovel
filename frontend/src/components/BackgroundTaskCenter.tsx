@@ -25,7 +25,7 @@ import {
   UnorderedListOutlined,
 } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { backgroundTaskApi, chapterApi, chapterBatchTaskApi, chapterSingleTaskApi, getBatchManualReviewInfo } from '../services/api';
+import { backgroundTaskApi, chapterApi, chapterBatchTaskApi, chapterSingleTaskApi, getBatchManualReviewInfo } from '../services/modularApi';
 import { useStore } from '../store';
 import { OPEN_BACKGROUND_TASK_CENTER_EVENT } from '../constants/backgroundTaskEvents';
 import {
@@ -34,43 +34,32 @@ import {
   useBackgroundTaskStore,
   type TrackedBackgroundTask,
 } from '../store/backgroundTasks';
+import {
+  groupBackgroundTasksByCategory,
+  selectActiveBackgroundTasks,
+  selectBackgroundTaskSections,
+  selectCurrentProjectActiveTaskCount,
+  selectFailedBackgroundTaskCount,
+  selectRecoverableBackgroundTaskCount,
+  selectTerminalBackgroundTaskCount,
+  selectVisibleBackgroundTasks,
+} from '../store/backgroundTaskSelectors';
+import {
+  extractFailureReasonTags,
+  formatRelativeTime,
+  getCompletionNotice,
+  getTaskCheckpointSummary,
+  getTaskCheckpointTags,
+  getTaskDestination,
+  getTaskDisplayMessage,
+  getTaskStatusMeta,
+  isTaskResumable,
+  terminalStatuses,
+} from './backgroundTaskPresentation';
 import { formatActiveStoryRepairLabel } from '../utils/activeStoryRepair';
 
 const { Text } = Typography;
 const { useBreakpoint } = Grid;
-
-const statusMeta: Record<TrackedBackgroundTask['status'], { color: string; label: string }> = {
-  pending: { color: 'default', label: '排队中' },
-  running: { color: 'processing', label: '执行中' },
-  completed: { color: 'success', label: '已完成' },
-  failed: { color: 'error', label: '失败' },
-  cancelled: { color: 'warning', label: '已取消' },
-};
-
-const getTaskStatusMeta = (task: TrackedBackgroundTask): { color: string; label: string } => {
-  if (task.status === 'failed' && task.reviewRequired) {
-    return {
-      color: 'warning',
-      label: task.terminalLabel || '需人工复核',
-    };
-  }
-  return statusMeta[task.status];
-};
-
-const terminalStatuses = new Set<TrackedBackgroundTask['status']>(['completed', 'failed', 'cancelled']);
-
-const isTaskManualReviewTerminal = (task: TrackedBackgroundTask) =>
-  task.reviewRequired || String(task.terminalReason ?? '').trim().toLowerCase() === 'manual_review';
-
-const isTaskResumable = (task: TrackedBackgroundTask) => {
-  if (task.taskType !== 'chapters_batch_generate' && task.taskType !== 'chapter_single_generate') {
-    return false;
-  }
-
-  return typeof task.canResume === 'boolean'
-    ? task.canResume
-    : task.status === 'cancelled' || (task.status === 'failed' && !isTaskManualReviewTerminal(task));
-};
 
 const statusPriority: Record<TrackedBackgroundTask['status'], number> = {
   running: 0,
@@ -104,451 +93,9 @@ type TaskSection = {
 
 type TaskFilter = 'overview' | 'active' | 'current' | 'failed';
 
-type TaskGroup = {
-  key: string;
-  title: string;
-  tasks: TrackedBackgroundTask[];
-};
-
-type FailureReasonTag = {
-  label: string;
-  color: string;
-};
-
-type TaskCheckpointCompactionDetail = {
-  before?: number | null;
-  after?: number | null;
-};
-
-type TaskCheckpoint = {
-  current_chapter_number?: number | null;
-  candidate_index?: number | null;
-  candidate_count?: number | null;
-  word_count?: number | null;
-  generation_path?: string | null;
-  attempt_kind?: string | null;
-  rerank_used?: boolean | null;
-  word_budget_repair_used?: boolean | null;
-  winner_candidate_index?: number | null;
-  pre_compaction_total_length?: number | null;
-  context_budget_limit?: number | null;
-  compaction_applied?: boolean | null;
-  compaction_details?: Record<string, TaskCheckpointCompactionDetail> | null;
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> => (
-  Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-);
-
-const toFiniteNumber = (value: unknown): number | null => {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-};
-
-const toNullableBoolean = (value: unknown): boolean | null => (
-  typeof value === 'boolean' ? value : null
-);
-
-const normalizeCompactionDetails = (
-  value: unknown,
-): Record<string, TaskCheckpointCompactionDetail> | null => {
-  if (!isRecord(value)) return null;
-
-  const entries = Object.entries(value).reduce<Record<string, TaskCheckpointCompactionDetail>>((acc, [key, detail]) => {
-    if (!isRecord(detail)) return acc;
-    acc[key] = {
-      before: toFiniteNumber(detail.before),
-      after: toFiniteNumber(detail.after),
-    };
-    return acc;
-  }, {});
-
-  return entries;
-};
-
-const contextCompactionFieldLabels: Record<string, string> = {
-  recent_chapters_context: '最近章节规划',
-  chapter_careers: '职业体系',
-  foreshadow_reminders: '伏笔提醒',
-  relevant_memories: '相关记忆',
-  chapter_characters: '角色信息',
-  character_arc_snapshot: '角色弧光',
-  continuation_point: '衔接锚点',
-  previous_chapter_summary: '上章摘要',
-};
-
-const getCompactionFieldNames = (checkpoint?: TaskCheckpoint | null): string[] => {
-  if (!checkpoint?.compaction_details) return [];
-  return Object.keys(checkpoint.compaction_details)
-    .map((fieldName) => contextCompactionFieldLabels[fieldName] ?? fieldName)
-    .filter(Boolean);
-};
-
-const getCompactionAfterLength = (checkpoint?: TaskCheckpoint | null): number | null => {
-  const before = checkpoint?.pre_compaction_total_length;
-  if (typeof before !== 'number') return null;
-  if (!checkpoint?.compaction_applied) return before;
-  if (!checkpoint.compaction_details) return null;
-
-  let saved = 0;
-  Object.values(checkpoint.compaction_details).forEach((detail) => {
-    if (typeof detail.before === 'number' && typeof detail.after === 'number') {
-      saved += Math.max(detail.before - detail.after, 0);
-    }
-  });
-  return Math.max(before - saved, 0);
-};
-
-const getCompactionSummary = (checkpoint?: TaskCheckpoint | null): string | null => {
-  if (!checkpoint?.compaction_applied) return null;
-
-  const before = checkpoint.pre_compaction_total_length;
-  const after = getCompactionAfterLength(checkpoint);
-  const limit = checkpoint.context_budget_limit;
-  const fieldNames = getCompactionFieldNames(checkpoint).slice(0, 3);
-  const fieldLabel = fieldNames.length > 0 ? `?${fieldNames.join('?')}?` : '';
-
-  if (typeof before === 'number' && typeof after === 'number' && typeof limit === 'number') {
-    return `上下文压缩 ${before}→${after} / ${limit}${fieldLabel}`;
-  }
-  if (typeof before === 'number' && typeof after === 'number') {
-    return `上下文压缩 ${before}→${after}${fieldLabel}`;
-  }
-  return fieldLabel ? `已压缩${fieldLabel}` : '已压缩';
-};
-
-const getGenerationPathLabel = (value?: string | null): string => {
-  switch (value) {
-    case 'single_pass':
-      return '单轮直出';
-    case 'rerank_retry':
-      return '重排复选';
-    case 'word_budget_repair':
-      return '字数修复';
-    default:
-      return value ? value : '';
-  }
-};
-
-const getAttemptKindLabel = (value?: string | null): string => {
-  switch (value) {
-    case 'initial_candidate':
-      return '初始候选';
-    case 'rerank_candidate':
-      return '重排候选';
-    case 'word_budget_repair':
-      return '字数修复';
-    default:
-      return value ? value : '';
-  }
-};
-
-const getTaskCheckpoint = (task: TrackedBackgroundTask): TaskCheckpoint | null => {
-  if (!isRecord(task.checkpoint)) return null;
-  return {
-    current_chapter_number: toFiniteNumber(task.checkpoint.current_chapter_number),
-    candidate_index: toFiniteNumber(task.checkpoint.candidate_index),
-    candidate_count: toFiniteNumber(task.checkpoint.candidate_count),
-    word_count: toFiniteNumber(task.checkpoint.word_count),
-    generation_path: typeof task.checkpoint.generation_path === 'string' ? task.checkpoint.generation_path : null,
-    attempt_kind: typeof task.checkpoint.attempt_kind === 'string' ? task.checkpoint.attempt_kind : null,
-    rerank_used: toNullableBoolean(task.checkpoint.rerank_used),
-    word_budget_repair_used: toNullableBoolean(task.checkpoint.word_budget_repair_used),
-    winner_candidate_index: toFiniteNumber(task.checkpoint.winner_candidate_index),
-    pre_compaction_total_length: toFiniteNumber(task.checkpoint.pre_compaction_total_length),
-    context_budget_limit: toFiniteNumber(task.checkpoint.context_budget_limit),
-    compaction_applied: toNullableBoolean(task.checkpoint.compaction_applied),
-    compaction_details: normalizeCompactionDetails(task.checkpoint.compaction_details),
-  };
-};
-
-const getTaskCheckpointSummary = (task: TrackedBackgroundTask): string | null => {
-  const checkpoint = getTaskCheckpoint(task);
-  if (!checkpoint) return null;
-
-  const parts: string[] = [];
-  if (typeof checkpoint.current_chapter_number === 'number') {
-    parts.push(`第 ${checkpoint.current_chapter_number} 章`);
-  }
-  if (typeof checkpoint.candidate_index === 'number' && typeof checkpoint.candidate_count === 'number') {
-    parts.push(`候选 ${checkpoint.candidate_index}/${checkpoint.candidate_count}`);
-  }
-  if (typeof checkpoint.word_count === 'number' && checkpoint.word_count > 0) {
-    parts.push(`${checkpoint.word_count} 字`);
-  }
-  const compactionSummary = getCompactionSummary(checkpoint);
-  if (compactionSummary) {
-    parts.push(compactionSummary);
-  }
-  return parts.length > 0 ? `检查点：${parts.join(' · ')}` : null;
-};
-
-const getTaskCheckpointTags = (task: TrackedBackgroundTask): FailureReasonTag[] => {
-  const checkpoint = getTaskCheckpoint(task);
-  if (!checkpoint) return [];
-
-  const tags: FailureReasonTag[] = [];
-  const pushTag = (label: string, color: string) => {
-    if (!label || tags.some((tag) => tag.label === label)) return;
-    tags.push({ label, color });
-  };
-
-  const generationPathLabel = getGenerationPathLabel(checkpoint.generation_path);
-  if (generationPathLabel) pushTag(generationPathLabel, 'blue');
-  const attemptKindLabel = getAttemptKindLabel(checkpoint.attempt_kind);
-  if (attemptKindLabel && attemptKindLabel !== generationPathLabel) pushTag(attemptKindLabel, 'purple');
-  if (checkpoint.rerank_used) pushTag('启用重排', 'geekblue');
-  if (checkpoint.word_budget_repair_used) pushTag('字数修复', 'orange');
-  if (checkpoint.compaction_applied) pushTag('上下文压缩', 'gold');
-  if (typeof checkpoint.winner_candidate_index === 'number') {
-    pushTag(`胜出候选 ${checkpoint.winner_candidate_index}`, 'green');
-  }
-  return tags;
-};
-
 let backgroundTasksApiSupported = true;
 let chapterActiveTasksApiSupported = true;
 let recoverableTasksSyncPromise: Promise<void> | null = null;
-
-const getTaskDestination = (task: TrackedBackgroundTask): string | null => {
-  if (!task.projectId) {
-    if (task.taskType.startsWith('wizard_')) return '/wizard';
-    return null;
-  }
-
-  switch (task.taskType) {
-    case 'careers_generate_system':
-    case 'wizard_career_system':
-      return `/project/${task.projectId}/careers`;
-    case 'character_generate':
-    case 'wizard_characters':
-      return `/project/${task.projectId}/characters`;
-    case 'organization_generate':
-      return `/project/${task.projectId}/organizations`;
-    case 'world_regenerate':
-    case 'wizard_world_building':
-      return `/project/${task.projectId}/world-setting`;
-    case 'outline_generate':
-    case 'outline_expand':
-    case 'outline_batch_expand':
-    case 'wizard_outline':
-      return `/project/${task.projectId}/outline`;
-    case 'chapters_batch_generate':
-    case 'chapter_single_generate':
-    case 'chapter_analysis':
-      return `/project/${task.projectId}/chapters`;
-    default:
-      return `/project/${task.projectId}`;
-  }
-};
-
-const getCompletionNotice = (task: TrackedBackgroundTask): { title: string; description: string } => {
-  const taskLabel = getTaskTypeLabel(task.taskType);
-  if (task.status === 'completed') {
-    return {
-      title: `${taskLabel}已完成`,
-      description: task.message || '后台任务执行完成',
-    };
-  }
-  if (task.status === 'failed') {
-    return {
-      title: `${taskLabel}执行失败`,
-      description: task.error || task.message || '后台任务执行失败',
-    };
-  }
-  return {
-    title: `${taskLabel}已取消`,
-    description: task.message || '后台任务已取消',
-  };
-};
-
-const getTaskDisplayMessage = (task: TrackedBackgroundTask): string => {
-  if (task.taskType !== 'chapter_analysis') {
-    return task.message || '任务执行中...';
-  }
-
-  if (task.status === 'completed') return '章节分析已完成';
-  if (task.status === 'failed') return task.error || '章节分析失败';
-  if (task.status === 'cancelled') return '章节分析已取消';
-  return `章节分析进行中 (${task.progress}%)`;
-};
-
-const getTaskCategory = (taskType: string): TaskGroup['key'] => {
-  if (taskType.startsWith('chapter_') || taskType === 'chapters_batch_generate') return 'chapter';
-  if (taskType.startsWith('outline_')) return 'outline';
-  if (taskType === 'world_regenerate' || taskType === 'wizard_world_building') return 'world';
-  if (taskType === 'character_generate' || taskType === 'wizard_characters') return 'character';
-  if (taskType === 'careers_generate_system' || taskType === 'wizard_career_system') return 'career';
-  if (taskType === 'organization_generate') return 'organization';
-  if (taskType.startsWith('wizard_')) return 'wizard';
-  return 'other';
-};
-
-const getTaskCategoryLabel = (category: TaskGroup['key']): string => {
-  const labels: Record<TaskGroup['key'], string> = {
-    chapter: '章节相关',
-    outline: '大纲相关',
-    world: '世界观相关',
-    character: '角色相关',
-    career: '职业体系',
-    organization: '组织势力',
-    wizard: '向导流程',
-    other: '其他任务',
-  };
-  return labels[category] ?? '其他任务';
-};
-
-const groupTasksByCategory = (tasks: TrackedBackgroundTask[]): TaskGroup[] => {
-  const grouped = new Map<TaskGroup['key'], TrackedBackgroundTask[]>();
-
-  tasks.forEach((task) => {
-    const category = getTaskCategory(task.taskType);
-    const existing = grouped.get(category) ?? [];
-    existing.push(task);
-    grouped.set(category, existing);
-  });
-
-  const order: TaskGroup['key'][] = ['chapter', 'outline', 'world', 'character', 'career', 'organization', 'wizard', 'other'];
-
-  return order
-    .map((key) => ({ key, title: getTaskCategoryLabel(key), tasks: grouped.get(key) ?? [] }))
-    .filter((group) => group.tasks.length > 0);
-};
-
-const extractFailureReasonTags = (task: TrackedBackgroundTask): FailureReasonTag[] => {
-  const source = `${task.error ?? ''} ${task.message ?? ''}`.toLowerCase();
-  const tags: FailureReasonTag[] = [];
-  const manualReviewInfo = (task.taskType === 'chapters_batch_generate' || task.taskType === 'chapter_single_generate')
-    ? getBatchManualReviewInfo(
-      task.failedChapters,
-      task.error,
-      task.terminalReason,
-      task.terminalLabel,
-      task.reviewRequired,
-    )
-    : null;
-
-  const pushTag = (label: string, color: string) => {
-    if (!tags.some((tag) => tag.label === label)) {
-      tags.push({ label, color });
-    }
-  };
-
-  if (manualReviewInfo) {
-    pushTag(manualReviewInfo.label, 'gold');
-    if (manualReviewInfo.failedMetrics.length > 0) {
-      pushTag('质量门禁拦截', 'orange');
-    }
-  }
-
-  if (!source.trim()) {
-    return tags.length > 0 ? tags.slice(0, 2) : [{ label: '未知原因', color: 'default' }];
-  }
-
-  if (
-    source.includes('timeout') ||
-    source.includes('time out') ||
-    source.includes('timed out') ||
-    source.includes('超时') ||
-    source.includes('deadline exceeded')
-  ) {
-    pushTag('超时', 'gold');
-  }
-
-  if (
-    source.includes('401') ||
-    source.includes('403') ||
-    source.includes('unauthorized') ||
-    source.includes('forbidden') ||
-    source.includes('permission') ||
-    source.includes('权限') ||
-    source.includes('认证') ||
-    source.includes('token') ||
-    source.includes('apikey') ||
-    source.includes('api key')
-  ) {
-    pushTag('权限错误', 'red');
-  }
-
-  if (
-    source.includes('429') ||
-    source.includes('rate limit') ||
-    source.includes('quota') ||
-    source.includes('配额') ||
-    source.includes('限流') ||
-    source.includes('余额不足') ||
-    source.includes('too many requests') ||
-    source.includes('insufficient_quota')
-  ) {
-    pushTag('限流/配额', 'volcano');
-  }
-
-  if (
-    source.includes('network') ||
-    source.includes('socket') ||
-    source.includes('connection') ||
-    source.includes('connect') ||
-    source.includes('econn') ||
-    source.includes('dns') ||
-    source.includes('网络') ||
-    source.includes('连接')
-  ) {
-    pushTag('网络异常', 'cyan');
-  }
-
-  if (
-    source.includes('model') ||
-    source.includes('模型') ||
-    source.includes('provider') ||
-    source.includes('completion') ||
-    source.includes('llm')
-  ) {
-    pushTag('模型错误', 'purple');
-  }
-
-  if (
-    source.includes('context length') ||
-    source.includes('maximum context') ||
-    source.includes('too long') ||
-    source.includes('length') ||
-    source.includes('上下文') ||
-    source.includes('长度超限') ||
-    source.includes('token limit')
-  ) {
-    pushTag('上下文过长', 'magenta');
-  }
-
-  if (
-    source.includes('invalid') ||
-    source.includes('validation') ||
-    source.includes('missing') ||
-    source.includes('required') ||
-    source.includes('参数') ||
-    source.includes('格式') ||
-    source.includes('校验')
-  ) {
-    pushTag('参数问题', 'orange');
-  }
-
-  if (tags.length === 0) {
-    pushTag('未知原因', 'default');
-  }
-
-  return tags.slice(0, 2);
-};
-
-
-const formatRelativeTime = (timestamp: number): string => {
-  const diff = Date.now() - timestamp;
-  if (diff < 60_000) return '刚刚更新';
-  if (diff < 3_600_000) return `${Math.max(1, Math.floor(diff / 60_000))} 分钟前更新`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前更新`;
-  return `${Math.floor(diff / 86_400_000)} 天前更新`;
-};
 
 export default function BackgroundTaskCenter() {
   const location = useLocation();
@@ -579,22 +126,11 @@ export default function BackgroundTaskCenter() {
   const clearTerminalTasks = useBackgroundTaskStore((state) => state.clearTerminalTasks);
 
   const tasks = useMemo(
-    () => {
-      const allTasks = Object.values(tasksMap);
-      const filtered = knownProjectIds.size > 0
-        ? allTasks.filter((task) => !task.projectId || knownProjectIds.has(task.projectId))
-        : allTasks;
-
-      return filtered.sort((a, b) => {
-        const statusDelta = statusPriority[a.status] - statusPriority[b.status];
-        if (statusDelta !== 0) return statusDelta;
-        return b.updatedAt - a.updatedAt;
-      });
-    },
+    () => selectVisibleBackgroundTasks(tasksMap, knownProjectIds, statusPriority),
     [tasksMap, knownProjectIds]
   );
 
-  const activeTasks = useMemo(() => tasks.filter(isActiveBackgroundTask), [tasks]);
+  const activeTasks = useMemo(() => selectActiveBackgroundTasks(tasks), [tasks]);
   const activeTaskPollKey = useMemo(
     () => activeTasks.map((task) => `${task.taskType}:${task.taskId}`).join('|'),
     [activeTasks]
@@ -616,132 +152,17 @@ export default function BackgroundTaskCenter() {
     }
   }, [focusProjectId, taskFilter]);
 
-  const taskSections = useMemo<TaskSection[]>(() => {
-    const currentActive: TrackedBackgroundTask[] = [];
-    const currentRecent: TrackedBackgroundTask[] = [];
-    const globalTasks: TrackedBackgroundTask[] = [];
-    const otherActive: TrackedBackgroundTask[] = [];
-    const otherRecent: TrackedBackgroundTask[] = [];
-
-    tasks.forEach((task) => {
-      const active = isActiveBackgroundTask(task);
-
-      if (focusProjectId && task.projectId === focusProjectId) {
-        if (active) {
-          currentActive.push(task);
-        } else {
-          currentRecent.push(task);
-        }
-        return;
-      }
-
-      if (!task.projectId) {
-        globalTasks.push(task);
-        return;
-      }
-
-      if (active) {
-        otherActive.push(task);
-      } else {
-        otherRecent.push(task);
-      }
-    });
-
-    const sections: TaskSection[] = [];
-
-    if (focusProjectId) {
-      sections.push({
-        key: 'current-active',
-        title: '当前项目进行中',
-        description: currentActive.length > 0 ? '优先展示与你当前页面相关的任务' : '当前项目暂无进行中的后台任务',
-        tasks: currentActive,
-        accent: 'current',
-      });
-      sections.push({
-        key: 'current-recent',
-        title: '当前项目近期任务',
-        description: currentRecent.length > 0 ? '方便直接回看刚完成或失败的任务' : '当前项目暂无近期任务',
-        tasks: currentRecent,
-        accent: 'current',
-      });
-    } else {
-      sections.push({
-        key: 'active',
-        title: '进行中的任务',
-        description: activeTasks.length > 0 ? '所有仍在排队或执行中的任务' : '暂无进行中的后台任务',
-        tasks: activeTasks,
-      });
-      sections.push({
-        key: 'recent',
-        title: '近期任务',
-        description: tasks.filter((task) => !isActiveBackgroundTask(task)).length > 0 ? '最近结束的后台任务记录' : '暂无近期任务',
-        tasks: tasks.filter((task) => !isActiveBackgroundTask(task)),
-      });
-    }
-
-    if (globalTasks.length > 0) {
-      sections.push({
-        key: 'global',
-        title: '全局任务',
-        description: '未绑定到具体项目的向导或系统任务',
-        tasks: globalTasks,
-        accent: 'global',
-      });
-    }
-
-    if (otherActive.length > 0) {
-      sections.push({
-        key: 'other-active',
-        title: '其他项目进行中',
-        description: '这些任务不属于当前项目，但仍在运行',
-        tasks: otherActive,
-      });
-    }
-
-    if (otherRecent.length > 0) {
-      sections.push({
-        key: 'other-recent',
-        title: '其他项目近期任务',
-        description: '保留最近结束的其他项目任务，便于追踪',
-        tasks: otherRecent,
-      });
-    }
-
-    let filteredSections = sections;
-
-    if (taskFilter === 'active') {
-      filteredSections = sections
-        .map((section) => ({
-          ...section,
-          tasks: section.tasks.filter(isActiveBackgroundTask),
-        }))
-        .filter((section) => section.tasks.length > 0);
-    } else if (taskFilter === 'failed') {
-      filteredSections = sections
-        .map((section) => ({
-          ...section,
-          tasks: section.tasks.filter((task) => task.status === 'failed'),
-        }))
-        .filter((section) => section.tasks.length > 0);
-    } else if (taskFilter === 'current' && focusProjectId) {
-      filteredSections = sections.filter((section) => section.key.startsWith('current-'));
-    }
-
-    return filteredSections.filter(
-      (section) =>
-        section.tasks.length > 0 ||
-        (taskFilter !== 'active' && taskFilter !== 'failed' && (section.key === 'current-active' || section.key === 'current-recent' || section.key === 'active' || section.key === 'recent'))
-    );
-  }, [tasks, focusProjectId, activeTasks, taskFilter]);
+  const taskSections = useMemo<TaskSection[]>(
+    () => selectBackgroundTaskSections(tasks, focusProjectId, taskFilter),
+    [tasks, focusProjectId, taskFilter]
+  );
 
   const summary = useMemo(() => {
-    const currentProjectActiveCount = focusProjectId
-      ? tasks.filter((task) => task.projectId === focusProjectId && isActiveBackgroundTask(task)).length
-      : activeTasks.length;
-    const terminalTaskCount = tasks.filter((task) => terminalStatuses.has(task.status)).length;
+    const currentProjectActiveCount = selectCurrentProjectActiveTaskCount(tasks, focusProjectId);
+    const terminalTaskCount = selectTerminalBackgroundTaskCount(tasks);
     const otherActiveCount = activeTasks.length - currentProjectActiveCount;
-    const failedTaskCount = tasks.filter((task) => task.status === 'failed').length;
-    const recoverableTaskCount = tasks.filter(isTaskResumable).length;
+    const failedTaskCount = selectFailedBackgroundTaskCount(tasks);
+    const recoverableTaskCount = selectRecoverableBackgroundTaskCount(tasks, isTaskResumable);
 
     return {
       currentProjectActiveCount,
@@ -1317,7 +738,7 @@ export default function BackgroundTaskCenter() {
                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无任务" />
               ) : (
                 (() => {
-                  const groups = groupTasksByCategory(section.tasks);
+                  const groups = groupBackgroundTasksByCategory(section.tasks);
                   return groups.map((group) => (
                     <div key={`${section.key}-${group.key}`} style={{ marginBottom: 12 }}>
                       {groups.length > 1 ? (

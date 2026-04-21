@@ -25,7 +25,7 @@ import type { Project } from '../types';
 import { useCharacterSync, useOutlineSync, useChapterSync, loadProjectCharacters, loadProjectOutlines, loadProjectChapters, isProjectCollectionFresh } from '../store/hooks';
 import { preloadProjectPage } from '../routes/projectPageLoaders';
 import type { ProjectNavigationPageKey } from '../routes/projectPageLoaders';
-import { projectApi } from '../services/api';
+import { projectApi } from '../services/modularApi';
 import { preloadProjectCareers } from '../services/projectCareers';
 import ThemeSwitch from '../components/ThemeSwitch';
 import { useThemeMode } from '../theme/useThemeMode';

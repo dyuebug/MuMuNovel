@@ -172,6 +172,7 @@ frontend/
 - 新路由必须同步修改 `src/App.tsx`
 - 与项目页强相关的大型页面优先走懒加载，保持首屏体积可控
 - API 调用优先复用已有 `services` 封装，不要在页面中散落裸 `fetch`
+- 新运行时代码默认从 `src/services/modularApi.ts` 或对应 `src/services/modules/*` 导入；`src/services/api.ts` 仅用于兼容历史路径
 - 涉及长任务体验的改动要同时检查进度展示、恢复入口与错误态
 - 构建输出目录指向后端静态目录，修改 Vite 配置时要考虑后端托管行为
 
@@ -191,7 +192,7 @@ frontend/
 1. `src/main.tsx`
 2. `src/App.tsx`
 3. `src/routes/projectPageLoaders.ts`
-4. `src/services/api.ts`
+4. `src/services/modularApi.ts`（`src/services/api.ts` 为兼容门面）
 5. 当前任务相关页面与对应组件
 6. `playwright.config.ts` 与目标 E2E 用例
 

@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect, useState, useRef, useCallback, useMemo } fro
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Button, Drawer, Menu, Modal, message, Space, Spin, Tag, theme } from 'antd';
 import { EditOutlined, BookOutlined, CalendarOutlined, FileTextOutlined, TrophyOutlined, SettingOutlined, UploadOutlined, ApiOutlined, FileSearchOutlined, MenuUnfoldOutlined, MenuFoldOutlined, BulbOutlined, MoonOutlined, DesktopOutlined } from '@ant-design/icons';
-import { projectApi } from '../services/api';
+import { projectApi } from '../services/modularApi';
 import { useStore } from '../store';
 import { useProjectSync } from '../store/hooks';
 import { eventBus, EventNames } from '../store/eventBus';

@@ -1,4 +1,4 @@
-import { authApi } from '../services/api';
+import { authApi } from '../services/modularApi';
 import { clearAuthStatusCache } from './authStatus';
 import { buildLoginUrlFromLocation } from './loginRedirect';
 import { message } from 'antd';

@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { Card, Form, message, Space, Typography, Spin, Modal, Alert, Grid, Tabs, Tag, Row, Col } from 'antd';
 import { WarningOutlined } from '@ant-design/icons';
-import { settingsApi, mcpPluginApi } from '../services/api';
+import { mcpPluginApi, settingsApi } from '../services/modularApi';
 import type { SettingsUpdate, APIKeyPreset, PresetCreateRequest, APIKeyPresetConfig } from '../types';
 import { eventBus, EventNames } from '../store/eventBus';
 import { hasUsableApiCredentials, isPlaceholderApiKey } from '../utils/apiKey';

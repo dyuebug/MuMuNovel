@@ -1,9 +1,10 @@
-﻿import React from 'react';
+import React from 'react';
 import { Modal, Spin, Button } from 'antd';
 import { DownOutlined, LoadingOutlined, StopOutlined, UnorderedListOutlined, UpOutlined } from '@ant-design/icons';
 import { useFloatingTaskCard } from './useFloatingTaskCard';
 import { OPEN_BACKGROUND_TASK_CENTER_EVENT } from '../constants/backgroundTaskEvents';
-import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgroundTasks';
+import { useBackgroundTaskStore } from '../store/backgroundTasks';
+import { selectActiveBackgroundTaskCount } from '../store/backgroundTaskSelectors';
 
 interface SSEProgressModalProps {
   visible: boolean;
@@ -32,9 +33,7 @@ export const SSEProgressModal: React.FC<SSEProgressModalProps> = ({
     active: visible,
     blocking,
   });
-  const activeTaskCount = useBackgroundTaskStore((state) =>
-    Object.values(state.tasks).filter(isActiveBackgroundTask).length
-  );
+  const activeTaskCount = useBackgroundTaskStore((state) => selectActiveBackgroundTaskCount(state.tasks));
   const queueSummary = !blocking && activeTaskCount > 1
     ? `当前共 ${activeTaskCount} 个后台任务正在运行`
     : null;

@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Spin, message, theme } from 'antd';
-import { authApi } from '../services/api';
+import { authApi } from '../services/modularApi';
 import { clearAuthStatusCache } from '../utils/authStatus';
 import { consumeLoginRedirect } from '../utils/loginRedirect';
 const LazyAnnouncementModal = lazy(() => import('../components/AnnouncementModal'));

@@ -14,7 +14,8 @@ import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgro
 import { useCharacterSync, useOutlineSync } from '../store/hooks';
 
 
-import { backgroundTaskApi, outlineApi, chapterApi, projectApi, settingsApi } from '../services/api';
+import { outlineApi, chapterApi } from '../services/modularApi';
+import { backgroundTaskApi, projectApi, settingsApi } from '../services/modularApi';
 import { formatBackgroundTaskError } from '../utils/taskPolling';
 import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
 import { hasUsableApiCredentials } from '../utils/apiKey';

@@ -12,7 +12,8 @@ import {
   BulbOutlined, EyeOutlined, FlagOutlined, WarningOutlined,
   ClockCircleOutlined, MoreOutlined, ReloadOutlined, InfoCircleOutlined
 } from '@ant-design/icons';
-import { foreshadowApi, chapterApi, characterApi } from '../services/api';
+import { foreshadowApi, chapterApi } from '../services/modularApi';
+import { characterApi } from '../services/modularApi';
 import type {
   Foreshadow, ForeshadowCreate, ForeshadowUpdate, ForeshadowStats,
   ForeshadowStatus, ForeshadowCategory, Chapter, Character

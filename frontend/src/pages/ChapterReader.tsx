@@ -12,7 +12,7 @@ import {
   LeftOutlined,
   RightOutlined,
 } from '@ant-design/icons';
-import api, { chapterApi } from '../services/api';
+import { api, chapterApi } from '../services/modularApi';
 import AnnotatedText, { type MemoryAnnotation } from '../components/AnnotatedText';
 import MemorySidebar from '../components/MemorySidebar';
 
