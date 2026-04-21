@@ -14,7 +14,7 @@ import {
   EditOutlined
 } from '@ant-design/icons';
 import type { AnalysisTask, ChapterAnalysisResponse } from '../types';
-import { chapterApi } from '../services/api';
+import { chapterApi } from '../services/modularApi';
 import { getQualityTrendLabel } from '../utils/storyCreationQualitySummary';
 import { MAX_CONSECUTIVE_TASK_POLL_ERRORS } from '../utils/taskPolling';
 import { isAnalysisTaskRetrying } from '../utils/analysisTasks';

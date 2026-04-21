@@ -22,7 +22,7 @@ import {
   ReloadOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import { chapterApi } from '../services/api';
+import { chapterApi } from '../services/modularApi';
 
 const { TextArea } = Input;
 const { Paragraph, Text } = Typography;

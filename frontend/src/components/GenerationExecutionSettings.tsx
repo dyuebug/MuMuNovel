@@ -2,7 +2,7 @@
 import { useCallback, useState } from 'react';
 import { Alert, Card, Col, Row, Select, Space, Switch } from 'antd';
 
-import { settingsApi } from '../services/api';
+import { settingsApi } from '../services/modularApi';
 
 export type ModelOption = {
   value: string;

@@ -1,15 +1,22 @@
 import { Suspense, lazy, useState, useEffect, useRef, useMemo, useCallback } from 'react';
 
-import { List, Button, Modal, Form, message, Empty, Space, Badge, Tag, Collapse, FloatButton } from 'antd';
+import { Button, Modal, Form, message, Space, Tag } from 'antd';
 
-import { DownloadOutlined, RocketOutlined, CaretRightOutlined, BookOutlined, PlusOutlined } from '@ant-design/icons';
+import { DownloadOutlined, RocketOutlined, BookOutlined, PlusOutlined } from '@ant-design/icons';
 
 import { useStore } from '../store';
 import { useChapterSync } from '../store/hooks';
-import { projectApi, writingStyleApi, chapterApi, chapterBatchTaskApi, getBatchManualReviewInfo } from '../services/api';
-import type { Chapter, ChapterUpdate, ApiError, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterLatestQualityMetrics, ChapterQualityMetrics, ChapterQualityMetricsSummary, ChapterQualityProfileSummary, ActiveStoryRepairPayload, CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
-import { hasUsableApiCredentials } from '../utils/apiKey';
-import ChapterListItem from '../components/ChapterListItem';
+import type { Chapter, ChapterUpdate, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterLatestQualityMetrics, ChapterQualityMetrics, ChapterQualityMetricsSummary, ChapterQualityProfileSummary, ActiveStoryRepairPayload, CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
+import type { ChapterBatchGenerateModalProps } from '../components/ChapterBatchGenerateModal';
+import ChapterAnalysisEntry from '../components/ChapterAnalysisEntry';
+import ChapterBasicModalEntry from '../components/ChapterBasicModalEntry';
+import ChapterBatchGenerateModalEntry from '../components/ChapterBatchGenerateModalEntry';
+import ChapterBatchProgressEntry from '../components/ChapterBatchProgressEntry';
+import ChapterListSection from '../components/ChapterListSection';
+import ChapterPlanEditorEntry from '../components/ChapterPlanEditorEntry';
+import ChapterReaderEntry from '../components/ChapterReaderEntry';
+import FloatingIndexPanelEntry from '../components/FloatingIndexPanelEntry';
+import SingleChapterGenerationOverlayEntry from '../components/SingleChapterGenerationOverlayEntry';
 
 import {
   type CreationPresetId,
@@ -27,11 +34,7 @@ import {
   getCachedWordCount,
 } from '../utils/storyCreationWordCount';
 import {
-  buildStoryBeatPlannerPrompt,
-  buildStoryCreationPromptLayerLabels,
-  buildStorySceneOutlinePrompt,
   buildStorySceneOutlineSuggestion,
-  mergeStoryCreationInstructions,
   STORY_CREATION_PROMPT_WARN_THRESHOLD,
 } from '../utils/storyCreationPrompt';
 import {
@@ -42,21 +45,108 @@ import {
   EMPTY_STORY_BEAT_PLANNER_DRAFT,
   EMPTY_STORY_SCENE_OUTLINE_DRAFT,
   areStoryBeatPlannerDraftsEqual,
-  areStoryCreationDraftContentsEqual,
   areStorySceneOutlineDraftsEqual,
-  hasMeaningfulStoryCreationDraft,
-  isStoryBeatPlannerDraftEmpty,
-  isStorySceneOutlineDraftEmpty,
-  normalizeOptionalText,
-  normalizeStoryBeatPlannerDraft,
-  normalizeStorySceneOutlineDraft,
-  type PersistedStoryCreationDraft,
   type StoryBeatPlannerDraft,
   type StoryCreationSnapshot,
   type StoryCreationSnapshotReason,
   type StorySceneOutlineDraft,
 } from '../utils/storyCreationDraft';
 import { formatActiveStoryRepairLabel } from '../utils/activeStoryRepair';
+import {
+  startSingleChapterGenerationWorkflow,
+} from './chapterSingleGenerationHelpers';
+import type { BatchGenerateFormValues } from './chapterBatchGenerationRequestHelpers';
+import {
+  cancelBatchGenerationWorkflow,
+  openBatchGenerationWorkflow,
+  startBatchGenerationWorkflow,
+} from './chapterBatchGenerationWorkflowHelpers';
+import type { BatchTaskMeta } from './chapterBatchGenerationPollingHelpers';
+import {
+  restoreBatchGenerationWorkflow,
+  startBatchPollingWorkflow,
+} from './chapterBatchGenerationCoordinationHelpers';
+import {
+  getPersistedChapterBatchTaskMeta,
+  persistChapterBatchTaskMeta,
+  removePersistedChapterBatchTaskMeta,
+} from './chapterBatchTaskMetaStorageHelpers';
+import {
+  closeAnalysisWorkflow,
+  loadAnalysisTasksWorkflow,
+  refreshAnalysisTaskWorkflow,
+  startAnalysisPollingTaskWorkflow,
+} from './chapterAnalysisTaskCoordinationHelpers';
+import {
+  applyChapterAnalysisPollingState,
+  ensureChapterAnalysisPolling,
+  pollChapterAnalysisTasksBatch,
+  stopChapterAnalysisPolling,
+  syncChapterAnalysisTasksFromBatch,
+} from './chapterAnalysisTaskPollingHelpers';
+import {
+  deleteChapterWithRefreshWorkflow,
+  initializeChapterProjectWorkflow,
+  reloadChapterProjectWorkflow,
+} from './chapterProjectCoordinationHelpers';
+import { queueDeferredBatchAnalysis } from './chapterDeferredBatchAnalysisHelpers';
+import {
+  confirmChapterExportWorkflow,
+  openExpansionPlanPreviewWorkflow,
+  openManualCreateChapterWorkflow,
+  openSingleChapterGenerateWorkflow,
+} from './chapterActionDialogCoordinationHelpers';
+import {
+  loadChapterWritingStyles,
+  type ChapterWritingStylesCacheEntry,
+} from './chapterWritingStyleLoadHelpers';
+import {
+  loadChapterAvailableModels,
+  type ModelOption,
+} from './chapterModelLoadHelpers';
+import { syncStoryCreationAutoDrafts } from './chapterStoryCreationAutoSyncHelpers';
+import {
+  persistBatchStoryCreationDraftWorkflow,
+  persistSingleStoryCreationDraftWorkflow,
+  restoreBatchStoryCreationPersistenceWorkflow,
+  restoreSingleStoryCreationPersistenceWorkflow,
+} from './chapterStoryCreationPersistenceCoordinationHelpers';
+import {
+  copyStoryCreationPrompt,
+  resolveStoryCreationPromptState,
+} from './chapterStoryCreationPromptHelpers';
+import { buildStoryCreationDerivedState } from './chapterStoryCreationDerivedStateHelpers';
+import {
+  applyBatchStoryCreationSnapshotWorkflow,
+  applySingleStoryCreationSnapshotWorkflow,
+  deleteBatchStoryCreationSnapshotWorkflow,
+  deleteSingleStoryCreationSnapshotWorkflow,
+  saveBatchStoryCreationSnapshotWorkflow,
+  saveSingleStoryCreationSnapshotWorkflow,
+} from './chapterStoryCreationSnapshotWorkflowHelpers';
+import { openChapterEditorWorkflow } from './chapterEditorOpenHelpers';
+import { openChapterModalWorkflow } from './chapterModalOpenHelpers';
+import { submitChapterModalWorkflow } from './chapterModalSubmitHelpers';
+import {
+  closeChapterEditor,
+  submitChapterEditorWorkflow,
+} from './chapterEditorLifecycleHelpers';
+import {
+  closeChapterReader,
+  loadReaderChapter,
+  openChapterReader,
+} from './chapterReaderLifecycleHelpers';
+import { buildChapterReaderModalState } from './chapterReaderModalHelpers';
+import {
+  closeChapterPlanEditor,
+  openChapterPlanEditor,
+  saveChapterPlan,
+} from './chapterPlanEditorLifecycleHelpers';
+import { buildChapterPlanEditorData } from './chapterPlanEditorDataHelpers';
+import { useFloatingIndexPanelBindings } from '../hooks/useFloatingIndexPanelBindings';
+import { selectChapterListItem } from './chapterSelectionHelpers';
+import { buildChapterPlanEditorModalState } from './chapterPlanEditorModalHelpers';
+
 
 
 type SingleStoryPresetState = {
@@ -82,23 +172,7 @@ type GroupedChapterViewModel = {
   totalWordCount: number;
 };
 
-const LazyChapterBasicModal = lazy(() => import('../components/ChapterBasicModal'));
-const LazyChapterAnalysis = lazy(() => import('../components/ChapterAnalysis'));
 const LazyChapterEditorModalContent = lazy(() => import('../components/ChapterEditorModalContent'));
-const LazyChapterBatchGenerateModal = lazy(() => import('../components/ChapterBatchGenerateModal'));
-const LazyChapterReader = lazy(() => import('../components/ChapterReader'));
-
-const LazyExpansionPlanEditor = lazy(() => import('../components/ExpansionPlanEditor'));
-const LazyFloatingIndexPanel = lazy(() => import('../components/FloatingIndexPanel'));
-const LazySSELoadingOverlay = lazy(async () => {
-  const module = await import('../components/SSELoadingOverlay');
-  return { default: module.SSELoadingOverlay };
-});
-
-const LazySSEProgressModal = lazy(async () => {
-  const module = await import('../components/SSEProgressModal');
-  return { default: module.SSEProgressModal };
-});
 
 const loadStoryCreationPersistence = () => import('../utils/storyCreationPersistence');
 const isAnalysisTaskInProgress = (task?: AnalysisTask | null): boolean => (
@@ -161,14 +235,14 @@ const normalizeBatchGenerationCompactionDetails = (
 };
 
 const batchContextCompactionFieldLabels: Record<string, string> = {
-  recent_chapters_context: '最近章节规划',
-  chapter_careers: '职业体系',
-  foreshadow_reminders: '伏笔提醒',
-  relevant_memories: '相关记忆',
-  chapter_characters: '角色信息',
-  character_arc_snapshot: '角色弧光',
-  continuation_point: '衔接锚点',
-  previous_chapter_summary: '上章摘要',
+  recent_chapters_context: 'Recent chapters context',
+  chapter_careers: 'Chapter careers',
+  foreshadow_reminders: 'Foreshadow reminders',
+  relevant_memories: 'Relevant memories',
+  chapter_characters: 'Chapter characters',
+  character_arc_snapshot: 'Character arc snapshot',
+  continuation_point: 'Continuation point',
+  previous_chapter_summary: 'Previous chapter summary',
 };
 
 const getBatchCompactionFieldNames = (checkpoint?: BatchGenerationCheckpoint | null): string[] => {
@@ -200,15 +274,15 @@ const buildBatchCompactionHint = (checkpoint?: BatchGenerationCheckpoint | null)
   const after = getBatchCompactionAfterLength(checkpoint);
   const limit = checkpoint.context_budget_limit;
   const fieldNames = getBatchCompactionFieldNames(checkpoint).slice(0, 3);
-  const fieldLabel = fieldNames.length > 0 ? `?${fieldNames.join('?')}?` : '';
+  const fieldLabel = fieldNames.length > 0 ? `[${fieldNames.join(' ')}]` : '';
 
   if (typeof before === 'number' && typeof after === 'number' && typeof limit === 'number') {
-    return `上下文压缩 ${before}→${after}/${limit}${fieldLabel}`;
+    return `Context compacted: ${before} -> ${after}/${limit}${fieldLabel}`;
   }
   if (typeof before === 'number' && typeof after === 'number') {
-    return `上下文压缩 ${before}→${after}${fieldLabel}`;
+    return `Context compacted: ${before} -> ${after}${fieldLabel}`;
   }
-  return fieldLabel ? `已压缩${fieldLabel}` : '已压缩';
+  return fieldLabel ? `Context compacted fields ${fieldLabel}` : 'Context compacted fields';
 };
 
 const normalizeBatchGenerationCheckpoint = (value: unknown): BatchGenerationCheckpoint | null => {
@@ -233,11 +307,11 @@ const normalizeBatchGenerationCheckpoint = (value: unknown): BatchGenerationChec
 const getBatchGenerationPathLabel = (value?: string | null): string => {
   switch (value) {
     case 'single_pass':
-      return '单轮直出';
+      return 'Single pass';
     case 'rerank_retry':
-      return '重排复选';
+      return 'Rerank retry';
     case 'word_budget_repair':
-      return '字数修复';
+      return 'Word budget repair';
     default:
       return value ? value : '';
   }
@@ -247,23 +321,23 @@ const buildBatchGenerationCheckpointHint = (checkpoint?: BatchGenerationCheckpoi
   if (!checkpoint) return '';
   const parts: string[] = [];
   if (typeof checkpoint.candidate_index === 'number' && typeof checkpoint.candidate_count === 'number') {
-    parts.push(`候选 ${checkpoint.candidate_index}/${checkpoint.candidate_count}`);
+    parts.push(`Candidate ${checkpoint.candidate_index}/${checkpoint.candidate_count}`);
   }
   if (typeof checkpoint.word_count === 'number' && checkpoint.word_count > 0) {
-    parts.push(`${checkpoint.word_count} 字`);
+    parts.push(`${checkpoint.word_count} words`);
   }
   const generationPathLabel = getBatchGenerationPathLabel(checkpoint.generation_path);
   if (generationPathLabel) {
-    parts.push(`路径：${generationPathLabel}`);
+    parts.push(`Path: ${generationPathLabel}`);
   }
   if (typeof checkpoint.winner_candidate_index === 'number') {
-    parts.push(`胜出候选 ${checkpoint.winner_candidate_index}`);
+    parts.push(`Winner: ${checkpoint.winner_candidate_index}`);
   }
   const compactionHint = buildBatchCompactionHint(checkpoint);
   if (compactionHint) {
     parts.push(compactionHint);
   }
-  return parts.join(' · ');
+  return parts.join(' | ');
 };
 
 const collectActiveAnalysisChapterIds = (tasksMap: Record<string, AnalysisTask>): string[] => (
@@ -292,26 +366,9 @@ const areAnalysisTaskSnapshotsEqual = (leftTask?: AnalysisTask, rightTask?: Anal
   );
 };
 
-const BATCH_TASK_META_STORAGE_KEY = 'chapter_batch_task_meta_map_v1';
-
 const writingStylesLoadPromises = new Map<string, Promise<void>>();
-const batchTaskRestorePromises = new Map<string, Promise<void>>();
-const writingStylesCache = new Map<string, { styles: WritingStyle[]; defaultStyleId?: number }>();
+const writingStylesCache = new Map<string, ChapterWritingStylesCacheEntry>();
 const chapterAnalysisTasksCache = new Map<string, Record<string, AnalysisTask>>();
-
-type ModelOption = {
-  value: string;
-  label: string;
-};
-
-const normalizeOptionalSelectValue = (value: unknown): string | undefined => {
-  if (typeof value !== 'string') {
-    return undefined;
-  }
-
-  const normalizedValue = value.trim();
-  return normalizedValue ? normalizedValue : undefined;
-};
 
 const normalizeWritingStyleOptions = (styles: WritingStyle[]): WritingStyle[] => {
   const seenStyleIds = new Set<number>();
@@ -341,63 +398,7 @@ const areWritingStylesEqual = (leftStyles: WritingStyle[], rightStyles: WritingS
   })
 );
 
-const normalizeModelOptions = (rawModels: unknown): ModelOption[] => {
-  if (!Array.isArray(rawModels)) {
-    return [];
-  }
-
-  const seenModelValues = new Set<string>();
-  const normalizedModels: ModelOption[] = [];
-
-  rawModels.forEach((rawModel) => {
-    let nextValue: string | undefined;
-    let nextLabel: string | undefined;
-
-    if (typeof rawModel === 'string') {
-      nextValue = normalizeOptionalSelectValue(rawModel);
-      nextLabel = nextValue;
-    } else if (rawModel && typeof rawModel === 'object') {
-      const modelRecord = rawModel as Record<string, unknown>;
-      nextValue = normalizeOptionalSelectValue(
-        modelRecord.value ?? modelRecord.id ?? modelRecord.name ?? modelRecord.label,
-      );
-      nextLabel = normalizeOptionalSelectValue(
-        modelRecord.label ?? modelRecord.name ?? modelRecord.value ?? modelRecord.id,
-      );
-    }
-
-    if (!nextValue || seenModelValues.has(nextValue)) {
-      return;
-    }
-
-    seenModelValues.add(nextValue);
-    normalizedModels.push({
-      value: nextValue,
-      label: nextLabel ?? nextValue,
-    });
-  });
-
-  return normalizedModels;
-};
-
-const areModelOptionsEqual = (leftOptions: ModelOption[], rightOptions: ModelOption[]): boolean => (
-  leftOptions.length === rightOptions.length
-  && leftOptions.every((option, index) => {
-    const rightOption = rightOptions[index];
-    return Boolean(rightOption)
-      && option.value === rightOption.value
-      && option.label === rightOption.label;
-  })
-);
-
-
-
-
-
 const MANUAL_STORY_CREATION_BRIEF_SENTINEL = '__manual_story_creation_brief__';
-
-
-
 
 const buildSingleStoryCreationDraftStorageKey = (projectId: string, chapterId: string): string => (
   `${projectId}::single::${chapterId}`
@@ -406,173 +407,6 @@ const buildSingleStoryCreationDraftStorageKey = (projectId: string, chapterId: s
 const buildBatchStoryCreationDraftStorageKey = (projectId: string): string => (
   `${projectId}::batch`
 );
-
-
-type BatchTaskMeta = {
-
-  startChapterNumber: number;
-
-  count: number;
-
-  autoAnalyze: boolean;
-
-  projectId?: string;
-
-};
-
-
-
-const isValidBatchTaskMeta = (value: unknown): value is BatchTaskMeta => {
-
-  if (!value || typeof value !== 'object') {
-
-    return false;
-
-  }
-
-
-
-  const meta = value as Record<string, unknown>;
-
-  return (
-
-    typeof meta.startChapterNumber === 'number' &&
-
-    typeof meta.count === 'number' &&
-
-    typeof meta.autoAnalyze === 'boolean'
-
-  );
-
-};
-
-
-
-const readPersistedBatchTaskMetaMap = (): Record<string, BatchTaskMeta> => {
-
-  try {
-
-    const raw = localStorage.getItem(BATCH_TASK_META_STORAGE_KEY);
-
-    if (!raw) {
-
-      return {};
-
-    }
-
-
-
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-
-    if (!parsed || typeof parsed !== 'object') {
-
-      return {};
-
-    }
-
-
-
-    const normalized: Record<string, BatchTaskMeta> = {};
-
-    Object.entries(parsed).forEach(([taskId, value]) => {
-
-      if (isValidBatchTaskMeta(value)) {
-
-        normalized[taskId] = value;
-
-      }
-
-    });
-
-    return normalized;
-
-  } catch (error) {
-
-    console.warn('Failed to read persisted batch task metadata.', error);
-
-    return {};
-
-  }
-
-};
-
-
-
-const writePersistedBatchTaskMetaMap = (map: Record<string, BatchTaskMeta>): void => {
-
-  try {
-
-    localStorage.setItem(BATCH_TASK_META_STORAGE_KEY, JSON.stringify(map));
-
-  } catch (error) {
-
-    console.warn('Failed to persist batch task metadata.', error);
-
-  }
-
-};
-
-
-
-const persistBatchTaskMeta = (taskId: string, meta: BatchTaskMeta): void => {
-
-  const map = readPersistedBatchTaskMetaMap();
-
-  map[taskId] = meta;
-
-  writePersistedBatchTaskMetaMap(map);
-
-};
-
-
-
-const getPersistedBatchTaskMeta = (taskId: string, projectId?: string): BatchTaskMeta | undefined => {
-
-  const map = readPersistedBatchTaskMetaMap();
-
-  const meta = map[taskId];
-
-  if (!meta) {
-
-    return undefined;
-
-  }
-
-
-
-  if (projectId && meta.projectId && meta.projectId !== projectId) {
-
-    return undefined;
-
-  }
-
-
-
-  return meta;
-
-};
-
-
-
-const removePersistedBatchTaskMeta = (taskId: string): void => {
-
-  const map = readPersistedBatchTaskMetaMap();
-
-  if (!(taskId in map)) {
-
-    return;
-
-  }
-
-
-
-  delete map[taskId];
-
-  writePersistedBatchTaskMetaMap(map);
-
-};
-
-
 
 export default function Chapters() {
 
@@ -624,8 +458,8 @@ export default function Chapters() {
 
   const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [selectedModel, setSelectedModel] = useState<string | undefined>();
-  const [batchSelectedModel, setBatchSelectedModel] = useState<string | undefined>(); // 批量生成弹窗的独立模型选择
-  const [temporaryNarrativePerspective, setTemporaryNarrativePerspective] = useState<string | undefined>(); // 编辑器内临时叙事视角
+  const [batchSelectedModel, setBatchSelectedModel] = useState<string | undefined>(); // batch generation model
+  const [temporaryNarrativePerspective, setTemporaryNarrativePerspective] = useState<string | undefined>(); // temporary narrative perspective
   const [selectedCreativeMode, setSelectedCreativeMode] = useState<CreativeMode | undefined>();
   const [batchSelectedCreativeMode, setBatchSelectedCreativeMode] = useState<CreativeMode | undefined>();
   const [selectedStoryFocus, setSelectedStoryFocus] = useState<StoryFocus | undefined>();
@@ -749,8 +583,6 @@ export default function Chapters() {
       return next;
     });
   }, []);
-
-  const [isIndexPanelVisible, setIsIndexPanelVisible] = useState(false);
 
 
 
@@ -943,391 +775,244 @@ export default function Chapters() {
   ]);
 
   useEffect(() => {
-    let cancelled = false;
+  let cancelled = false;
 
-    if (!isEditorOpen) {
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    void loadSingleStoryPresetState()
-      .then((nextState) => {
-        if (cancelled) {
-          return;
-        }
-
-        setSingleStoryPresetState(nextState);
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          console.error('Failed to load single-story preset state.', error);
-        }
-      });
-
+  if (!isEditorOpen) {
     return () => {
       cancelled = true;
     };
-  }, [isEditorOpen, loadSingleStoryPresetState]);
+  }
 
-  useEffect(() => {
-    let cancelled = false;
-
-    void Promise.all([
-      import('../utils/creationPresetsBatch'),
-      resolveCreationPresetByModes(batchSelectedCreativeMode, batchSelectedStoryFocus),
-    ]).then(([{
-      buildBatchSuggestedStorySceneOutline,
-      buildBatchSystemStoryBeatPlanner,
-      buildBatchSystemStoryCreationBriefFromSummary,
-    }, activeBatchCreationPreset]) => {
+  void loadSingleStoryPresetState()
+    .then((nextState) => {
       if (cancelled) {
         return;
       }
 
-      const nextBatchSystemStoryCreationBrief = buildBatchSystemStoryCreationBriefFromSummary(
-        batchProgress?.quality_metrics_summary ?? null,
-        batchSelectedCreativeMode,
-        batchSelectedStoryFocus,
-        {
-          plotStage: batchSelectedPlotStage,
-          chapterNumber: batchStartChapterNumber,
-          totalChapters: knownStructureChapterCount,
-          activePresetId: activeBatchCreationPreset?.id,
-        },
-      );
-      const nextBatchSystemStoryBeatPlanner = buildBatchSystemStoryBeatPlanner(
-        batchSelectedCreativeMode,
-        batchSelectedStoryFocus,
-        { plotStage: batchSelectedPlotStage },
-      );
-      const nextBatchSuggestedStorySceneOutline = buildBatchSuggestedStorySceneOutline(
-        batchStoryBeatPlannerDraft,
-        batchSelectedCreativeMode,
-        batchSelectedStoryFocus,
-        { plotStage: batchSelectedPlotStage },
-      );
-
-      setBatchSystemStoryCreationBrief((previousBrief) => (
-        previousBrief === nextBatchSystemStoryCreationBrief ? previousBrief : nextBatchSystemStoryCreationBrief
-      ));
-      setBatchSystemStoryBeatPlanner((previousPlanner) => (
-        areStoryBeatPlannerDraftsEqual(previousPlanner, nextBatchSystemStoryBeatPlanner)
-          ? previousPlanner
-          : nextBatchSystemStoryBeatPlanner
-      ));
-      setBatchSuggestedStorySceneOutline((previousOutline) => (
-        areStorySceneOutlineDraftsEqual(previousOutline, nextBatchSuggestedStorySceneOutline)
-          ? previousOutline
-          : nextBatchSuggestedStorySceneOutline
-      ));
+      setSingleStoryPresetState(nextState);
+    })
+    .catch((error) => {
+      if (!cancelled) {
+        console.error('Failed to load single-story preset state.', error);
+      }
     });
 
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    batchProgress?.quality_metrics_summary,
-    batchSelectedCreativeMode,
-    batchSelectedPlotStage,
-    batchSelectedStoryFocus,
-    batchStartChapterNumber,
-    batchStoryBeatPlannerDraft,
-    knownStructureChapterCount,
-    resolveCreationPresetByModes,
-  ]);
-  const singleSystemStoryBeatPlanner = useMemo<StoryBeatPlannerDraft>(() => ({
-    openingHook: singleStoryObjectiveCard?.hook || singleStoryExecutionChecklist?.opening || '',
-    chapterGoal: singleStoryObjectiveCard?.objective || singleStoryResultCard?.progress || '',
-    conflictPressure: singleStoryObjectiveCard?.obstacle || singleStoryExecutionChecklist?.pressure || '',
-    turningPoint: singleStoryObjectiveCard?.turn || singleStoryExecutionChecklist?.pivot || '',
-    endingHook: singleStoryExecutionChecklist?.closing || singleStoryResultCard?.fallout || '',
-  }), [singleStoryExecutionChecklist, singleStoryObjectiveCard, singleStoryResultCard]);
+  return () => {
+    cancelled = true;
+  };
+}, [isEditorOpen, loadSingleStoryPresetState]);
 
+useEffect(() => {
+  let cancelled = false;
 
-  const singleSuggestedStorySceneOutline = useMemo<StorySceneOutlineDraft>(() => buildStorySceneOutlineSuggestion({
-    beatPlanner: singleStoryBeatPlannerDraft,
-    objective: singleStoryObjectiveCard,
-    result: singleStoryResultCard,
-    acceptance: singleStoryAcceptanceCard,
-  }), [singleStoryAcceptanceCard, singleStoryBeatPlannerDraft, singleStoryObjectiveCard, singleStoryResultCard]);
+  void Promise.all([
+    import('../utils/creationPresetsBatch'),
+    resolveCreationPresetByModes(batchSelectedCreativeMode, batchSelectedStoryFocus),
+  ]).then(([{
+    buildBatchSuggestedStorySceneOutline,
+    buildBatchSystemStoryBeatPlanner,
+    buildBatchSystemStoryCreationBriefFromSummary,
+  }, activeBatchCreationPreset]) => {
+    if (cancelled) {
+      return;
+    }
 
+    const nextBatchSystemStoryCreationBrief = buildBatchSystemStoryCreationBriefFromSummary(
+      batchProgress?.quality_metrics_summary ?? null,
+      batchSelectedCreativeMode,
+      batchSelectedStoryFocus,
+      {
+        plotStage: batchSelectedPlotStage,
+        chapterNumber: batchStartChapterNumber,
+        totalChapters: knownStructureChapterCount,
+        activePresetId: activeBatchCreationPreset?.id,
+      },
+    );
+    const nextBatchSystemStoryBeatPlanner = buildBatchSystemStoryBeatPlanner(
+      batchSelectedCreativeMode,
+      batchSelectedStoryFocus,
+      { plotStage: batchSelectedPlotStage },
+    );
+    const nextBatchSuggestedStorySceneOutline = buildBatchSuggestedStorySceneOutline(
+      batchStoryBeatPlannerDraft,
+      batchSelectedCreativeMode,
+      batchSelectedStoryFocus,
+      { plotStage: batchSelectedPlotStage },
+    );
 
-  const singleSystemStoryCreationBrief = singleStoryCreationControlCard?.promptBrief ?? '';
+    setBatchSystemStoryCreationBrief((previousBrief) => (
+      previousBrief === nextBatchSystemStoryCreationBrief ? previousBrief : nextBatchSystemStoryCreationBrief
+    ));
+    setBatchSystemStoryBeatPlanner((previousPlanner) => (
+      areStoryBeatPlannerDraftsEqual(previousPlanner, nextBatchSystemStoryBeatPlanner)
+        ? previousPlanner
+        : nextBatchSystemStoryBeatPlanner
+    ));
+    setBatchSuggestedStorySceneOutline((previousOutline) => (
+      areStorySceneOutlineDraftsEqual(previousOutline, nextBatchSuggestedStorySceneOutline)
+        ? previousOutline
+        : nextBatchSuggestedStorySceneOutline
+    ));
+  });
 
-  const singleDefaultStoryCreationBrief = singleSystemStoryCreationBrief || projectDefaultStoryCreationBrief || '';
+  return () => {
+    cancelled = true;
+  };
+}, [
+  batchProgress?.quality_metrics_summary,
+  batchSelectedCreativeMode,
+  batchSelectedPlotStage,
+  batchSelectedStoryFocus,
+  batchStartChapterNumber,
+  batchStoryBeatPlannerDraft,
+  knownStructureChapterCount,
+  resolveCreationPresetByModes,
+]);
 
-  const batchDefaultStoryCreationBrief = batchSystemStoryCreationBrief || projectDefaultStoryCreationBrief || '';
+const singleSystemStoryBeatPlanner = useMemo<StoryBeatPlannerDraft>(() => ({
+  openingHook: singleStoryObjectiveCard?.hook || singleStoryExecutionChecklist?.opening || '',
+  chapterGoal: singleStoryObjectiveCard?.objective || singleStoryResultCard?.progress || '',
+  conflictPressure: singleStoryObjectiveCard?.obstacle || singleStoryExecutionChecklist?.pressure || '',
+  turningPoint: singleStoryObjectiveCard?.turn || singleStoryExecutionChecklist?.pivot || '',
+  endingHook: singleStoryExecutionChecklist?.closing || singleStoryResultCard?.fallout || '',
+}), [singleStoryExecutionChecklist, singleStoryObjectiveCard, singleStoryResultCard]);
 
-  const normalizedSingleStoryCreationBriefDraft = singleStoryCreationBriefDraft.trim();
+const singleSuggestedStorySceneOutline = useMemo<StorySceneOutlineDraft>(() => buildStorySceneOutlineSuggestion({
+  beatPlanner: singleStoryBeatPlannerDraft,
+  objective: singleStoryObjectiveCard,
+  result: singleStoryResultCard,
+  acceptance: singleStoryAcceptanceCard,
+}), [singleStoryAcceptanceCard, singleStoryBeatPlannerDraft, singleStoryObjectiveCard, singleStoryResultCard]);
 
-  const normalizedBatchStoryCreationBriefDraft = batchStoryCreationBriefDraft.trim();
+const singleSystemStoryCreationBrief = singleStoryCreationControlCard?.promptBrief ?? '';
 
-  const singleStoryBeatPlannerBrief = useMemo(
-    () => buildStoryBeatPlannerPrompt(singleStoryBeatPlannerDraft, 'single'),
-    [singleStoryBeatPlannerDraft],
-  );
-
-  const singleStorySceneOutlineBrief = useMemo(
-    () => buildStorySceneOutlinePrompt(singleStorySceneOutlineDraft, 'single'),
-    [singleStorySceneOutlineDraft],
-  );
-
-  const resolvedSingleStoryCreationBrief = useMemo(
-    () => mergeStoryCreationInstructions(
-      normalizedSingleStoryCreationBriefDraft || singleDefaultStoryCreationBrief || undefined,
-      singleStoryBeatPlannerBrief,
-      singleStorySceneOutlineBrief,
-    ),
-    [
-      normalizedSingleStoryCreationBriefDraft,
-      singleDefaultStoryCreationBrief,
-      singleStoryBeatPlannerBrief,
-      singleStorySceneOutlineBrief,
-    ],
-  );
-
-  const singleStoryCreationPromptLayerLabels = useMemo(
-    () => buildStoryCreationPromptLayerLabels({
-      summary: normalizedSingleStoryCreationBriefDraft || singleDefaultStoryCreationBrief || undefined,
-      beat: singleStoryBeatPlannerBrief,
-      scene: singleStorySceneOutlineBrief,
-    }),
-    [
-      normalizedSingleStoryCreationBriefDraft,
-      singleDefaultStoryCreationBrief,
-      singleStoryBeatPlannerBrief,
-      singleStorySceneOutlineBrief,
-    ],
-  );
-
-  const singleStoryCreationPromptCharCount = resolvedSingleStoryCreationBrief?.length ?? 0;
-
-  const isSingleStoryCreationPromptVerbose = singleStoryCreationPromptCharCount >= STORY_CREATION_PROMPT_WARN_THRESHOLD;
-
-  const batchStoryBeatPlannerBrief = useMemo(
-    () => buildStoryBeatPlannerPrompt(batchStoryBeatPlannerDraft, 'batch'),
-    [batchStoryBeatPlannerDraft],
-  );
-
-  const batchStorySceneOutlineBrief = useMemo(
-    () => buildStorySceneOutlinePrompt(batchStorySceneOutlineDraft, 'batch'),
-    [batchStorySceneOutlineDraft],
-  );
-
-  const resolvedBatchStoryCreationBrief = useMemo(
-    () => mergeStoryCreationInstructions(
-      normalizedBatchStoryCreationBriefDraft || batchDefaultStoryCreationBrief || undefined,
-      batchStoryBeatPlannerBrief,
-      batchStorySceneOutlineBrief,
-    ),
-    [
-      normalizedBatchStoryCreationBriefDraft,
-      batchDefaultStoryCreationBrief,
-      batchStoryBeatPlannerBrief,
-      batchStorySceneOutlineBrief,
-    ],
-  );
-
-  const batchStoryCreationPromptLayerLabels = useMemo(
-    () => buildStoryCreationPromptLayerLabels({
-      summary: normalizedBatchStoryCreationBriefDraft || batchDefaultStoryCreationBrief || undefined,
-      beat: batchStoryBeatPlannerBrief,
-      scene: batchStorySceneOutlineBrief,
-    }),
-    [
-      normalizedBatchStoryCreationBriefDraft,
-      batchDefaultStoryCreationBrief,
-      batchStoryBeatPlannerBrief,
-      batchStorySceneOutlineBrief,
-    ],
-  );
-
-  const batchStoryCreationPromptCharCount = resolvedBatchStoryCreationBrief?.length ?? 0;
-
-  const isBatchStoryCreationPromptVerbose = batchStoryCreationPromptCharCount >= STORY_CREATION_PROMPT_WARN_THRESHOLD;
-
-  const resolveStoryCreationPromptState = useCallback((options: {
-    scope: 'single' | 'batch';
-    briefDraft?: string | null;
-    defaultBrief?: string | null;
-    beatPlannerDraft?: Partial<StoryBeatPlannerDraft> | null;
-    sceneOutlineDraft?: Partial<StorySceneOutlineDraft> | null;
-  }) => {
-    const baseBrief = options.briefDraft?.trim() || options.defaultBrief?.trim() || undefined;
-    const beatBrief = buildStoryBeatPlannerPrompt(options.beatPlannerDraft, options.scope);
-    const sceneBrief = buildStorySceneOutlinePrompt(options.sceneOutlineDraft, options.scope);
-    const prompt = mergeStoryCreationInstructions(baseBrief, beatBrief, sceneBrief);
-    const promptLayerLabels = buildStoryCreationPromptLayerLabels({
-      summary: baseBrief,
-      beat: beatBrief,
-      scene: sceneBrief,
-    });
-    const promptCharCount = prompt?.length ?? 0;
-
-    return {
-      prompt,
-      promptLayerLabels,
-      promptCharCount,
-      isVerbose: promptCharCount >= STORY_CREATION_PROMPT_WARN_THRESHOLD,
-    };
-  }, []);
-
-  const isSingleStoryCreationBriefCustomized = Boolean(
-    normalizedSingleStoryCreationBriefDraft
-    && normalizedSingleStoryCreationBriefDraft !== singleDefaultStoryCreationBrief.trim(),
-  );
-
-  const isBatchStoryCreationBriefCustomized = Boolean(
-    normalizedBatchStoryCreationBriefDraft
-    && normalizedBatchStoryCreationBriefDraft !== batchDefaultStoryCreationBrief.trim(),
-  );
-
-  const isSingleStoryBeatPlannerCustomized = Boolean(
-    !isStoryBeatPlannerDraftEmpty(singleStoryBeatPlannerDraft)
-    && !areStoryBeatPlannerDraftsEqual(singleStoryBeatPlannerDraft, singleSystemStoryBeatPlanner),
-  );
-
-  const isBatchStoryBeatPlannerCustomized = Boolean(
-    !isStoryBeatPlannerDraftEmpty(batchStoryBeatPlannerDraft)
-    && !areStoryBeatPlannerDraftsEqual(batchStoryBeatPlannerDraft, batchSystemStoryBeatPlanner),
-  );
-
-  const isSingleStorySceneOutlineCustomized = Boolean(
-    !isStorySceneOutlineDraftEmpty(singleStorySceneOutlineDraft)
-    && !areStorySceneOutlineDraftsEqual(singleStorySceneOutlineDraft, singleSuggestedStorySceneOutline),
-  );
-
-  const isBatchStorySceneOutlineCustomized = Boolean(
-    !isStorySceneOutlineDraftEmpty(batchStorySceneOutlineDraft)
-    && !areStorySceneOutlineDraftsEqual(batchStorySceneOutlineDraft, batchSuggestedStorySceneOutline),
-  );
-
-  const isSingleStoryCreationControlCustomized = isSingleStoryCreationBriefCustomized
-    || isSingleStoryBeatPlannerCustomized
-    || isSingleStorySceneOutlineCustomized;
-
-  const isBatchStoryCreationControlCustomized = isBatchStoryCreationBriefCustomized
-    || isBatchStoryBeatPlannerCustomized
-    || isBatchStorySceneOutlineCustomized;
-
-
-  const singleStoryCreationCurrentDraft = useMemo<PersistedStoryCreationDraft>(() => ({
+const singleStoryCreationDerivedState = useMemo(
+  () => buildStoryCreationDerivedState({
+    scope: 'single',
     creativeMode: selectedCreativeMode,
     storyFocus: selectedStoryFocus,
     plotStage: selectedPlotStage,
     narrativePerspective: temporaryNarrativePerspective,
     storyCreationBriefDraft: singleStoryCreationBriefDraft,
+    systemStoryCreationBrief: singleSystemStoryCreationBrief,
+    projectDefaultStoryCreationBrief,
     beatPlannerDraft: singleStoryBeatPlannerDraft,
+    systemBeatPlannerDraft: singleSystemStoryBeatPlanner,
     sceneOutlineDraft: singleStorySceneOutlineDraft,
-    isBriefCustomized: isSingleStoryCreationBriefCustomized,
-    isBeatPlannerCustomized: isSingleStoryBeatPlannerCustomized,
-    isSceneOutlineCustomized: isSingleStorySceneOutlineCustomized,
-  }), [
-    isSingleStoryBeatPlannerCustomized,
-    isSingleStoryCreationBriefCustomized,
-    isSingleStorySceneOutlineCustomized,
+    suggestedSceneOutlineDraft: singleSuggestedStorySceneOutline,
+    storageKey: singleStoryCreationDraftStorageKey,
+    hasChapterContext: Boolean(currentEditingChapter),
+    resolveStoryCreationPromptState,
+  }),
+  [
+    currentEditingChapter,
+    projectDefaultStoryCreationBrief,
     selectedCreativeMode,
     selectedPlotStage,
     selectedStoryFocus,
     singleStoryBeatPlannerDraft,
     singleStoryCreationBriefDraft,
+    singleStoryCreationDraftStorageKey,
     singleStorySceneOutlineDraft,
+    singleSuggestedStorySceneOutline,
+    singleSystemStoryBeatPlanner,
+    singleSystemStoryCreationBrief,
     temporaryNarrativePerspective,
-  ]);
+  ],
+);
 
-  const batchStoryCreationCurrentDraft = useMemo<PersistedStoryCreationDraft>(() => ({
+const {
+  defaultBrief: singleDefaultStoryCreationBrief,
+  resolvedBrief: resolvedSingleStoryCreationBrief,
+  promptLayerLabels: singleStoryCreationPromptLayerLabels,
+  promptCharCount: singleStoryCreationPromptCharCount,
+  isPromptVerbose: isSingleStoryCreationPromptVerbose,
+  isBriefCustomized: isSingleStoryCreationBriefCustomized,
+  isBeatPlannerCustomized: isSingleStoryBeatPlannerCustomized,
+  isSceneOutlineCustomized: isSingleStorySceneOutlineCustomized,
+  isControlCustomized: isSingleStoryCreationControlCustomized,
+  currentDraft: singleStoryCreationCurrentDraft,
+  canSaveSnapshot: canSaveSingleStoryCreationSnapshot,
+} = singleStoryCreationDerivedState;
+
+const batchStoryCreationDerivedState = useMemo(
+  () => buildStoryCreationDerivedState({
+    scope: 'batch',
     creativeMode: batchSelectedCreativeMode,
     storyFocus: batchSelectedStoryFocus,
     plotStage: batchSelectedPlotStage,
     storyCreationBriefDraft: batchStoryCreationBriefDraft,
+    systemStoryCreationBrief: batchSystemStoryCreationBrief,
+    projectDefaultStoryCreationBrief,
     beatPlannerDraft: batchStoryBeatPlannerDraft,
+    systemBeatPlannerDraft: batchSystemStoryBeatPlanner,
     sceneOutlineDraft: batchStorySceneOutlineDraft,
-    isBriefCustomized: isBatchStoryCreationBriefCustomized,
-    isBeatPlannerCustomized: isBatchStoryBeatPlannerCustomized,
-    isSceneOutlineCustomized: isBatchStorySceneOutlineCustomized,
-  }), [
+    suggestedSceneOutlineDraft: batchSuggestedStorySceneOutline,
+    storageKey: batchStoryCreationDraftStorageKey,
+    resolveStoryCreationPromptState,
+  }),
+  [
     batchSelectedCreativeMode,
     batchSelectedPlotStage,
     batchSelectedStoryFocus,
     batchStoryBeatPlannerDraft,
     batchStoryCreationBriefDraft,
+    batchStoryCreationDraftStorageKey,
     batchStorySceneOutlineDraft,
-    isBatchStoryBeatPlannerCustomized,
-    isBatchStoryCreationBriefCustomized,
-    isBatchStorySceneOutlineCustomized,
-  ]);
+    batchSuggestedStorySceneOutline,
+    batchSystemStoryBeatPlanner,
+    batchSystemStoryCreationBrief,
+    projectDefaultStoryCreationBrief,
+  ],
+);
 
-  const canSaveSingleStoryCreationSnapshot = Boolean(
-    singleStoryCreationDraftStorageKey
-    && currentEditingChapter
-    && hasMeaningfulStoryCreationDraft(singleStoryCreationCurrentDraft)
-  );
+const {
+  defaultBrief: batchDefaultStoryCreationBrief,
+  resolvedBrief: resolvedBatchStoryCreationBrief,
+  promptLayerLabels: batchStoryCreationPromptLayerLabels,
+  promptCharCount: batchStoryCreationPromptCharCount,
+  isPromptVerbose: isBatchStoryCreationPromptVerbose,
+  isBriefCustomized: isBatchStoryCreationBriefCustomized,
+  isBeatPlannerCustomized: isBatchStoryBeatPlannerCustomized,
+  isSceneOutlineCustomized: isBatchStorySceneOutlineCustomized,
+  isControlCustomized: isBatchStoryCreationControlCustomized,
+  currentDraft: batchStoryCreationCurrentDraft,
+  canSaveSnapshot: canSaveBatchStoryCreationSnapshot,
+} = batchStoryCreationDerivedState;
 
-  const canSaveBatchStoryCreationSnapshot = Boolean(
-    batchStoryCreationDraftStorageKey
-    && hasMeaningfulStoryCreationDraft(batchStoryCreationCurrentDraft)
-  );
-
-
-  useEffect(() => {
-    const currentChapterId = currentEditingChapter?.id;
-    const currentChapterNumber = currentEditingChapter?.chapter_number;
-
-    if (!currentChapterId || currentChapterNumber == null) {
-      return;
-    }
-
-    if (!singleStoryCreationDraftStorageKey) {
-      resetSingleStoryCreationCockpit(currentChapterNumber);
-      return;
-    }
-
+useEffect(() => {
     let cancelled = false;
 
-    void loadStoryCreationPersistence().then(({ getPersistedStoryCreationDraft }) => {
-      const persistedDraft = getPersistedStoryCreationDraft(singleStoryCreationDraftStorageKey);
-
-      if (cancelled) {
-        return;
-      }
-
-      if (!persistedDraft) {
-        resetSingleStoryCreationCockpit(currentChapterNumber);
-        return;
-      }
-
-      singleStoryCreationAutoBriefRef.current = persistedDraft.isBriefCustomized
-        ? MANUAL_STORY_CREATION_BRIEF_SENTINEL
-        : persistedDraft.storyCreationBriefDraft ?? singleDefaultStoryCreationBrief;
-      singleStoryBeatPlannerAutoRef.current = persistedDraft.isBeatPlannerCustomized
-        ? { ...EMPTY_STORY_BEAT_PLANNER_DRAFT }
-        : normalizeStoryBeatPlannerDraft(persistedDraft.beatPlannerDraft);
-      singleStorySceneOutlineAutoRef.current = persistedDraft.isSceneOutlineCustomized
-        ? { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT }
-        : normalizeStorySceneOutlineDraft(persistedDraft.sceneOutlineDraft);
-
-      setTemporaryNarrativePerspective(persistedDraft.narrativePerspective);
-      setSelectedCreativeMode(persistedDraft.creativeMode ?? projectDefaultCreativeMode);
-      setSelectedStoryFocus(persistedDraft.storyFocus ?? projectDefaultStoryFocus);
-      setSelectedPlotStage(persistedDraft.plotStage ?? projectDefaultPlotStage);
-      setSelectedQualityPreset(projectDefaultQualityPreset);
-      setSelectedQualityNotes(projectDefaultQualityNotes);
-
-      if (!persistedDraft.plotStage && !projectDefaultPlotStage) {
-        void inferPlotStage({
-          chapterNumber: currentChapterNumber,
-          totalChapters: knownStructureChapterCount,
-        }).then((stage) => {
-          if (!cancelled) {
-            setSelectedPlotStage(stage);
-          }
-        });
-      }
-
-      setSingleStoryCreationBriefDraft(persistedDraft.storyCreationBriefDraft ?? projectDefaultStoryCreationBrief);
-      setSingleStoryBeatPlannerDraft(normalizeStoryBeatPlannerDraft(persistedDraft.beatPlannerDraft));
-      setSingleStorySceneOutlineDraft(normalizeStorySceneOutlineDraft(persistedDraft.sceneOutlineDraft));
+    void restoreSingleStoryCreationPersistenceWorkflow({
+      currentChapterId: currentEditingChapter?.id,
+      currentChapterNumber: currentEditingChapter?.chapter_number,
+      storageKey: singleStoryCreationDraftStorageKey,
+      loadStoryCreationPersistence,
+      resetCockpit: resetSingleStoryCreationCockpit,
+      manualBriefSentinel: MANUAL_STORY_CREATION_BRIEF_SENTINEL,
+      singleDefaultBrief: singleDefaultStoryCreationBrief,
+      projectDefaultBrief: projectDefaultStoryCreationBrief,
+      projectDefaultCreativeMode,
+      projectDefaultStoryFocus,
+      projectDefaultPlotStage,
+      projectDefaultQualityPreset,
+      projectDefaultQualityNotes,
+      totalChapters: knownStructureChapterCount,
+      inferPlotStage,
+      isCancelled: () => cancelled,
+      setAutoBriefRef: (value) => { singleStoryCreationAutoBriefRef.current = value; },
+      setBeatPlannerAutoRef: (value) => { singleStoryBeatPlannerAutoRef.current = value; },
+      setSceneOutlineAutoRef: (value) => { singleStorySceneOutlineAutoRef.current = value; },
+      setTemporaryNarrativePerspective,
+      setSelectedCreativeMode,
+      setSelectedStoryFocus,
+      setSelectedPlotStage,
+      setSelectedQualityPreset,
+      setSelectedQualityNotes,
+      setStoryCreationBriefDraft: setSingleStoryCreationBriefDraft,
+      setBeatPlannerDraft: setSingleStoryBeatPlannerDraft,
+      setSceneOutlineDraft: setSingleStorySceneOutlineDraft,
+      setSnapshots: setSingleStoryCreationSnapshots,
     });
 
     return () => {
@@ -1350,43 +1035,33 @@ export default function Chapters() {
   ]);
 
   useEffect(() => {
-    if (!batchStoryCreationDraftStorageKey) {
-      resetBatchStoryCreationCockpit();
-      return;
-    }
-
     let cancelled = false;
 
-    void loadStoryCreationPersistence().then(({ getPersistedStoryCreationDraft }) => {
-      const persistedDraft = getPersistedStoryCreationDraft(batchStoryCreationDraftStorageKey);
-
-      if (cancelled) {
-        return;
-      }
-
-      if (!persistedDraft) {
-        resetBatchStoryCreationCockpit();
-        return;
-      }
-
-      batchStoryCreationAutoBriefRef.current = persistedDraft.isBriefCustomized
-        ? MANUAL_STORY_CREATION_BRIEF_SENTINEL
-        : persistedDraft.storyCreationBriefDraft ?? batchDefaultStoryCreationBrief;
-      batchStoryBeatPlannerAutoRef.current = persistedDraft.isBeatPlannerCustomized
-        ? { ...EMPTY_STORY_BEAT_PLANNER_DRAFT }
-        : normalizeStoryBeatPlannerDraft(persistedDraft.beatPlannerDraft);
-      batchStorySceneOutlineAutoRef.current = persistedDraft.isSceneOutlineCustomized
-        ? { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT }
-        : normalizeStorySceneOutlineDraft(persistedDraft.sceneOutlineDraft);
-
-      setBatchSelectedCreativeMode(persistedDraft.creativeMode ?? projectDefaultCreativeMode);
-      setBatchSelectedStoryFocus(persistedDraft.storyFocus ?? projectDefaultStoryFocus);
-      setBatchSelectedPlotStage(persistedDraft.plotStage ?? projectDefaultPlotStage);
-      setBatchSelectedQualityPreset(projectDefaultQualityPreset);
-      setBatchSelectedQualityNotes(projectDefaultQualityNotes);
-      setBatchStoryCreationBriefDraft(persistedDraft.storyCreationBriefDraft ?? projectDefaultStoryCreationBrief);
-      setBatchStoryBeatPlannerDraft(normalizeStoryBeatPlannerDraft(persistedDraft.beatPlannerDraft));
-      setBatchStorySceneOutlineDraft(normalizeStorySceneOutlineDraft(persistedDraft.sceneOutlineDraft));
+    void restoreBatchStoryCreationPersistenceWorkflow({
+      storageKey: batchStoryCreationDraftStorageKey,
+      loadStoryCreationPersistence,
+      resetCockpit: resetBatchStoryCreationCockpit,
+      manualBriefSentinel: MANUAL_STORY_CREATION_BRIEF_SENTINEL,
+      batchDefaultBrief: batchDefaultStoryCreationBrief,
+      projectDefaultBrief: projectDefaultStoryCreationBrief,
+      projectDefaultCreativeMode,
+      projectDefaultStoryFocus,
+      projectDefaultPlotStage,
+      projectDefaultQualityPreset,
+      projectDefaultQualityNotes,
+      isCancelled: () => cancelled,
+      setAutoBriefRef: (value) => { batchStoryCreationAutoBriefRef.current = value; },
+      setBeatPlannerAutoRef: (value) => { batchStoryBeatPlannerAutoRef.current = value; },
+      setSceneOutlineAutoRef: (value) => { batchStorySceneOutlineAutoRef.current = value; },
+      setSelectedCreativeMode: setBatchSelectedCreativeMode,
+      setSelectedStoryFocus: setBatchSelectedStoryFocus,
+      setSelectedPlotStage: setBatchSelectedPlotStage,
+      setSelectedQualityPreset: setBatchSelectedQualityPreset,
+      setSelectedQualityNotes: setBatchSelectedQualityNotes,
+      setStoryCreationBriefDraft: setBatchStoryCreationBriefDraft,
+      setBeatPlannerDraft: setBatchStoryBeatPlannerDraft,
+      setSceneOutlineDraft: setBatchStorySceneOutlineDraft,
+      setSnapshots: setBatchStoryCreationSnapshots,
     });
 
     return () => {
@@ -1405,68 +1080,20 @@ export default function Chapters() {
   ]);
 
   useEffect(() => {
-    if (!singleStoryCreationDraftStorageKey) {
-      setSingleStoryCreationSnapshots([]);
-      return;
-    }
-
-    let cancelled = false;
-
-    void loadStoryCreationPersistence().then(({ getPersistedStoryCreationSnapshots }) => {
-      const snapshots = getPersistedStoryCreationSnapshots(singleStoryCreationDraftStorageKey);
-
-      if (!cancelled) {
-        setSingleStoryCreationSnapshots(snapshots);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [singleStoryCreationDraftStorageKey]);
-
-  useEffect(() => {
-    if (!batchStoryCreationDraftStorageKey) {
-      setBatchStoryCreationSnapshots([]);
-      return;
-    }
-
-    let cancelled = false;
-
-    void loadStoryCreationPersistence().then(({ getPersistedStoryCreationSnapshots }) => {
-      const snapshots = getPersistedStoryCreationSnapshots(batchStoryCreationDraftStorageKey);
-
-      if (!cancelled) {
-        setBatchStoryCreationSnapshots(snapshots);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [batchStoryCreationDraftStorageKey]);
-
-  useEffect(() => {
-    const currentChapterId = currentEditingChapter?.id;
-
-    if (!singleStoryCreationDraftStorageKey || !currentChapterId) {
-      return;
-    }
-
-    void loadStoryCreationPersistence().then(({ persistStoryCreationDraft }) => {
-      persistStoryCreationDraft(singleStoryCreationDraftStorageKey, {
-        creativeMode: selectedCreativeMode,
-        storyFocus: selectedStoryFocus,
-        plotStage: selectedPlotStage,
-        narrativePerspective: temporaryNarrativePerspective,
-        storyCreationBriefDraft: singleStoryCreationBriefDraft,
-        beatPlannerDraft: singleStoryBeatPlannerDraft,
-        sceneOutlineDraft: singleStorySceneOutlineDraft,
-        isBriefCustomized: isSingleStoryCreationBriefCustomized,
-        isBeatPlannerCustomized: isSingleStoryBeatPlannerCustomized,
-        isSceneOutlineCustomized: isSingleStorySceneOutlineCustomized,
-        updatedAt: new Date().toISOString(),
-      });
+    persistSingleStoryCreationDraftWorkflow({
+      currentChapterId: currentEditingChapter?.id,
+      storageKey: singleStoryCreationDraftStorageKey,
+      loadStoryCreationPersistence,
+      creativeMode: selectedCreativeMode,
+      storyFocus: selectedStoryFocus,
+      plotStage: selectedPlotStage,
+      narrativePerspective: temporaryNarrativePerspective,
+      storyCreationBriefDraft: singleStoryCreationBriefDraft,
+      beatPlannerDraft: singleStoryBeatPlannerDraft,
+      sceneOutlineDraft: singleStorySceneOutlineDraft,
+      isBriefCustomized: isSingleStoryCreationBriefCustomized,
+      isBeatPlannerCustomized: isSingleStoryBeatPlannerCustomized,
+      isSceneOutlineCustomized: isSingleStorySceneOutlineCustomized,
     });
   }, [
     currentEditingChapter?.id,
@@ -1484,23 +1111,18 @@ export default function Chapters() {
   ]);
 
   useEffect(() => {
-    if (!batchStoryCreationDraftStorageKey) {
-      return;
-    }
-
-    void loadStoryCreationPersistence().then(({ persistStoryCreationDraft }) => {
-      persistStoryCreationDraft(batchStoryCreationDraftStorageKey, {
-        creativeMode: batchSelectedCreativeMode,
-        storyFocus: batchSelectedStoryFocus,
-        plotStage: batchSelectedPlotStage,
-        storyCreationBriefDraft: batchStoryCreationBriefDraft,
-        beatPlannerDraft: batchStoryBeatPlannerDraft,
-        sceneOutlineDraft: batchStorySceneOutlineDraft,
-        isBriefCustomized: isBatchStoryCreationBriefCustomized,
-        isBeatPlannerCustomized: isBatchStoryBeatPlannerCustomized,
-        isSceneOutlineCustomized: isBatchStorySceneOutlineCustomized,
-        updatedAt: new Date().toISOString(),
-      });
+    persistBatchStoryCreationDraftWorkflow({
+      storageKey: batchStoryCreationDraftStorageKey,
+      loadStoryCreationPersistence,
+      creativeMode: batchSelectedCreativeMode,
+      storyFocus: batchSelectedStoryFocus,
+      plotStage: batchSelectedPlotStage,
+      storyCreationBriefDraft: batchStoryCreationBriefDraft,
+      beatPlannerDraft: batchStoryBeatPlannerDraft,
+      sceneOutlineDraft: batchStorySceneOutlineDraft,
+      isBriefCustomized: isBatchStoryCreationBriefCustomized,
+      isBeatPlannerCustomized: isBatchStoryBeatPlannerCustomized,
+      isSceneOutlineCustomized: isBatchStorySceneOutlineCustomized,
     });
   }, [
     batchSelectedCreativeMode,
@@ -1516,372 +1138,145 @@ export default function Chapters() {
   ]);
 
   const saveSingleStoryCreationSnapshot = useCallback(async (
-    reason: StoryCreationSnapshotReason = 'manual',
-    options?: { silent?: boolean; label?: string },
-  ): Promise<StoryCreationSnapshot | null> => {
-    if (!singleStoryCreationDraftStorageKey || !currentEditingChapter) {
-      return null;
-    }
+  reason: StoryCreationSnapshotReason = 'manual',
+  options?: { silent?: boolean; label?: string },
+): Promise<StoryCreationSnapshot | null> => saveSingleStoryCreationSnapshotWorkflow({
+  reason,
+  options,
+  storageKey: singleStoryCreationDraftStorageKey,
+  currentDraft: singleStoryCreationCurrentDraft,
+  currentSnapshots: singleStoryCreationSnapshots,
+  briefDraft: singleStoryCreationBriefDraft,
+  defaultBrief: singleDefaultStoryCreationBrief,
+  beatPlannerDraft: singleStoryBeatPlannerDraft,
+  sceneOutlineDraft: singleStorySceneOutlineDraft,
+  resolveStoryCreationPromptState,
+  loadStoryCreationPersistence,
+  setSnapshots: setSingleStoryCreationSnapshots,
+  chapterNumber: currentEditingChapter?.chapter_number,
+}), [
+  currentEditingChapter?.chapter_number,
+  singleStoryCreationBriefDraft,
+  singleStoryCreationCurrentDraft,
+  singleDefaultStoryCreationBrief,
+  singleStoryBeatPlannerDraft,
+  singleStoryCreationDraftStorageKey,
+  singleStoryCreationSnapshots,
+  singleStorySceneOutlineDraft,
+]);
 
-    if (!hasMeaningfulStoryCreationDraft(singleStoryCreationCurrentDraft)) {
-      if (!options?.silent) {
-        message.warning("当前没有可保存的创作草稿");
-      }
-      return null;
-    }
+const saveBatchStoryCreationSnapshot = useCallback(async (
+  reason: StoryCreationSnapshotReason = 'manual',
+  options?: { silent?: boolean; label?: string },
+): Promise<StoryCreationSnapshot | null> => saveBatchStoryCreationSnapshotWorkflow({
+  reason,
+  options,
+  storageKey: batchStoryCreationDraftStorageKey,
+  currentDraft: batchStoryCreationCurrentDraft,
+  currentSnapshots: batchStoryCreationSnapshots,
+  briefDraft: batchStoryCreationBriefDraft,
+  defaultBrief: batchDefaultStoryCreationBrief,
+  beatPlannerDraft: batchStoryBeatPlannerDraft,
+  sceneOutlineDraft: batchStorySceneOutlineDraft,
+  resolveStoryCreationPromptState,
+  loadStoryCreationPersistence,
+  setSnapshots: setBatchStoryCreationSnapshots,
+}), [
+  batchDefaultStoryCreationBrief,
+  batchStoryBeatPlannerDraft,
+  batchStoryCreationBriefDraft,
+  batchStoryCreationCurrentDraft,
+  batchStoryCreationDraftStorageKey,
+  batchStoryCreationSnapshots,
+  batchStorySceneOutlineDraft,
+]);
 
-    const { prompt, promptLayerLabels } = resolveStoryCreationPromptState({
-      scope: 'single',
-      briefDraft: singleStoryCreationBriefDraft,
+const applySingleStoryCreationSnapshot = useCallback((snapshot: StoryCreationSnapshot) => {
+  applySingleStoryCreationSnapshotWorkflow({
+    snapshot,
+    manualBriefSentinel: MANUAL_STORY_CREATION_BRIEF_SENTINEL,
+    setAutoBriefRef: (value) => { singleStoryCreationAutoBriefRef.current = value; },
+    setBeatPlannerAutoRef: (value) => { singleStoryBeatPlannerAutoRef.current = value; },
+    setSceneOutlineAutoRef: (value) => { singleStorySceneOutlineAutoRef.current = value; },
+    setTemporaryNarrativePerspective,
+    setSelectedCreativeMode,
+    setSelectedStoryFocus,
+    setSelectedPlotStage,
+    setStoryCreationBriefDraft: setSingleStoryCreationBriefDraft,
+    setBeatPlannerDraft: setSingleStoryBeatPlannerDraft,
+    setSceneOutlineDraft: setSingleStorySceneOutlineDraft,
+    inferPlotStage,
+    chapterNumber: currentEditingChapter?.chapter_number,
+    totalChapters: knownStructureChapterCount,
+  });
+}, [currentEditingChapter?.chapter_number, inferPlotStage, knownStructureChapterCount]);
+
+const applyBatchStoryCreationSnapshot = useCallback((snapshot: StoryCreationSnapshot) => {
+  applyBatchStoryCreationSnapshotWorkflow({
+    snapshot,
+    manualBriefSentinel: MANUAL_STORY_CREATION_BRIEF_SENTINEL,
+    setAutoBriefRef: (value) => { batchStoryCreationAutoBriefRef.current = value; },
+    setBeatPlannerAutoRef: (value) => { batchStoryBeatPlannerAutoRef.current = value; },
+    setSceneOutlineAutoRef: (value) => { batchStorySceneOutlineAutoRef.current = value; },
+    setSelectedCreativeMode: setBatchSelectedCreativeMode,
+    setSelectedStoryFocus: setBatchSelectedStoryFocus,
+    setSelectedPlotStage: setBatchSelectedPlotStage,
+    setStoryCreationBriefDraft: setBatchStoryCreationBriefDraft,
+    setBeatPlannerDraft: setBatchStoryBeatPlannerDraft,
+    setSceneOutlineDraft: setBatchStorySceneOutlineDraft,
+  });
+}, []);
+
+const deleteSingleStoryCreationSnapshot = useCallback(async (snapshotId: string) => (
+  deleteSingleStoryCreationSnapshotWorkflow({
+    storageKey: singleStoryCreationDraftStorageKey,
+    snapshotId,
+    loadStoryCreationPersistence,
+    setSnapshots: setSingleStoryCreationSnapshots,
+  })
+), [singleStoryCreationDraftStorageKey]);
+
+const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) => (
+  deleteBatchStoryCreationSnapshotWorkflow({
+    storageKey: batchStoryCreationDraftStorageKey,
+    snapshotId,
+    loadStoryCreationPersistence,
+    setSnapshots: setBatchStoryCreationSnapshots,
+  })
+), [batchStoryCreationDraftStorageKey]);
+  useEffect(() => {
+    syncStoryCreationAutoDrafts({
       defaultBrief: singleDefaultStoryCreationBrief,
-      beatPlannerDraft: singleStoryBeatPlannerDraft,
-      sceneOutlineDraft: singleStorySceneOutlineDraft,
+      previousAutoBrief: singleStoryCreationAutoBriefRef.current,
+      setAutoBriefRef: (value) => { singleStoryCreationAutoBriefRef.current = value; },
+      systemPlanner: singleSystemStoryBeatPlanner,
+      previousAutoPlanner: singleStoryBeatPlannerAutoRef.current,
+      setAutoPlannerRef: (value) => { singleStoryBeatPlannerAutoRef.current = value; },
+      suggestedOutline: singleSuggestedStorySceneOutline,
+      previousSuggestedOutline: singleStorySceneOutlineAutoRef.current,
+      setAutoSceneOutlineRef: (value) => { singleStorySceneOutlineAutoRef.current = value; },
+      setBriefDraft: setSingleStoryCreationBriefDraft,
+      setPlannerDraft: setSingleStoryBeatPlannerDraft,
+      setSceneOutlineDraft: setSingleStorySceneOutlineDraft,
     });
-    const normalizedPrompt = prompt?.trim();
-    const latestSnapshot = singleStoryCreationSnapshots[0];
+  }, [singleDefaultStoryCreationBrief, singleSuggestedStorySceneOutline, singleSystemStoryBeatPlanner]);
 
-    if (
-      latestSnapshot
-      && latestSnapshot.reason === reason
-      && areStoryCreationDraftContentsEqual(latestSnapshot, singleStoryCreationCurrentDraft, { includeNarrativePerspective: true })
-      && normalizeOptionalText(latestSnapshot.prompt) === normalizeOptionalText(normalizedPrompt)
-    ) {
-      if (!options?.silent && reason === 'manual') {
-        message.info("当前草稿与最近一次快照一致");
-      }
-      return latestSnapshot;
-    }
-
-    const createdAt = new Date().toISOString();
-    const chapterLabel = currentEditingChapter.chapter_number ? `第${currentEditingChapter.chapter_number}章` : "未命名章节";
-    const { buildStoryCreationSnapshotId, persistStoryCreationSnapshot } = await loadStoryCreationPersistence();
-    const snapshot: StoryCreationSnapshot = {
-      ...singleStoryCreationCurrentDraft,
-      id: buildStoryCreationSnapshotId(),
-      scope: 'single',
-      createdAt,
-      updatedAt: createdAt,
-      reason,
-      label: options?.label?.trim() || `${chapterLabel} / ${reason === "generate" ? "生成前快照" : "手动保存"}`,
-      prompt: normalizedPrompt || undefined,
-      promptLayerLabels: [...promptLayerLabels],
-      promptCharCount: normalizedPrompt?.length ?? 0,
-    };
-
-    const nextSnapshots = persistStoryCreationSnapshot(singleStoryCreationDraftStorageKey, snapshot);
-    setSingleStoryCreationSnapshots(nextSnapshots);
-
-    if (!options?.silent) {
-      message.success(reason === "generate" ? "已保存生成前快照" : "已保存创作快照");
-    }
-
-    return nextSnapshots[0] ?? snapshot;
-  }, [
-    currentEditingChapter,
-    resolveStoryCreationPromptState,
-    singleStoryCreationBriefDraft,
-    singleStoryCreationCurrentDraft,
-    singleDefaultStoryCreationBrief,
-    singleStoryBeatPlannerDraft,
-    singleStoryCreationDraftStorageKey,
-    singleStoryCreationSnapshots,
-    singleStorySceneOutlineDraft,
-  ]);
-
-  const saveBatchStoryCreationSnapshot = useCallback(async (
-    reason: StoryCreationSnapshotReason = 'manual',
-    options?: { silent?: boolean; label?: string },
-  ): Promise<StoryCreationSnapshot | null> => {
-    if (!batchStoryCreationDraftStorageKey) {
-      return null;
-    }
-
-    if (!hasMeaningfulStoryCreationDraft(batchStoryCreationCurrentDraft)) {
-      if (!options?.silent) {
-        message.warning("当前没有可保存的批量创作草稿");
-      }
-      return null;
-    }
-
-    const { prompt, promptLayerLabels } = resolveStoryCreationPromptState({
-      scope: 'batch',
-      briefDraft: batchStoryCreationBriefDraft,
+  useEffect(() => {
+    syncStoryCreationAutoDrafts({
       defaultBrief: batchDefaultStoryCreationBrief,
-      beatPlannerDraft: batchStoryBeatPlannerDraft,
-      sceneOutlineDraft: batchStorySceneOutlineDraft,
+      previousAutoBrief: batchStoryCreationAutoBriefRef.current,
+      setAutoBriefRef: (value) => { batchStoryCreationAutoBriefRef.current = value; },
+      systemPlanner: batchSystemStoryBeatPlanner,
+      previousAutoPlanner: batchStoryBeatPlannerAutoRef.current,
+      setAutoPlannerRef: (value) => { batchStoryBeatPlannerAutoRef.current = value; },
+      suggestedOutline: batchSuggestedStorySceneOutline,
+      previousSuggestedOutline: batchStorySceneOutlineAutoRef.current,
+      setAutoSceneOutlineRef: (value) => { batchStorySceneOutlineAutoRef.current = value; },
+      setBriefDraft: setBatchStoryCreationBriefDraft,
+      setPlannerDraft: setBatchStoryBeatPlannerDraft,
+      setSceneOutlineDraft: setBatchStorySceneOutlineDraft,
     });
-    const normalizedPrompt = prompt?.trim();
-    const latestSnapshot = batchStoryCreationSnapshots[0];
-
-    if (
-      latestSnapshot
-      && latestSnapshot.reason === reason
-      && areStoryCreationDraftContentsEqual(latestSnapshot, batchStoryCreationCurrentDraft)
-      && normalizeOptionalText(latestSnapshot.prompt) === normalizeOptionalText(normalizedPrompt)
-    ) {
-      if (!options?.silent && reason === 'manual') {
-        message.info("当前批量草稿与最近一次快照一致");
-      }
-      return latestSnapshot;
-    }
-
-    const createdAt = new Date().toISOString();
-    const { buildStoryCreationSnapshotId, persistStoryCreationSnapshot } = await loadStoryCreationPersistence();
-    const snapshot: StoryCreationSnapshot = {
-      ...batchStoryCreationCurrentDraft,
-      id: buildStoryCreationSnapshotId(),
-      scope: 'batch',
-      createdAt,
-      updatedAt: createdAt,
-      reason,
-      label: options?.label?.trim() || `批量章节 / ${reason === "generate" ? "生成前快照" : "手动保存"}`,
-      prompt: normalizedPrompt || undefined,
-      promptLayerLabels: [...promptLayerLabels],
-      promptCharCount: normalizedPrompt?.length ?? 0,
-    };
-
-    const nextSnapshots = persistStoryCreationSnapshot(batchStoryCreationDraftStorageKey, snapshot);
-    setBatchStoryCreationSnapshots(nextSnapshots);
-
-    if (!options?.silent) {
-      message.success(reason === "generate" ? "已保存批量生成前快照" : "已保存批量创作快照");
-    }
-
-    return nextSnapshots[0] ?? snapshot;
-  }, [
-    batchDefaultStoryCreationBrief,
-    batchStoryBeatPlannerDraft,
-    batchStoryCreationBriefDraft,
-    batchStoryCreationCurrentDraft,
-    batchStoryCreationDraftStorageKey,
-    batchStoryCreationSnapshots,
-    batchStorySceneOutlineDraft,
-    resolveStoryCreationPromptState,
-  ]);
-
-  const applySingleStoryCreationSnapshot = useCallback((snapshot: StoryCreationSnapshot) => {
-    singleStoryCreationAutoBriefRef.current = snapshot.isBriefCustomized
-      ? MANUAL_STORY_CREATION_BRIEF_SENTINEL
-      : snapshot.storyCreationBriefDraft ?? '';
-    singleStoryBeatPlannerAutoRef.current = snapshot.isBeatPlannerCustomized
-      ? { ...EMPTY_STORY_BEAT_PLANNER_DRAFT }
-      : normalizeStoryBeatPlannerDraft(snapshot.beatPlannerDraft);
-    singleStorySceneOutlineAutoRef.current = snapshot.isSceneOutlineCustomized
-      ? { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT }
-      : normalizeStorySceneOutlineDraft(snapshot.sceneOutlineDraft);
-
-    setTemporaryNarrativePerspective(snapshot.narrativePerspective);
-    setSelectedCreativeMode(snapshot.creativeMode);
-    setSelectedStoryFocus(snapshot.storyFocus);
-    setSelectedPlotStage(snapshot.plotStage);
-
-    if (!snapshot.plotStage) {
-      void inferPlotStage({
-        chapterNumber: currentEditingChapter?.chapter_number,
-        totalChapters: knownStructureChapterCount,
-      }).then((stage) => {
-        setSelectedPlotStage(stage);
-      });
-    }
-    setSingleStoryCreationBriefDraft(snapshot.storyCreationBriefDraft ?? '');
-    setSingleStoryBeatPlannerDraft(normalizeStoryBeatPlannerDraft(snapshot.beatPlannerDraft));
-    setSingleStorySceneOutlineDraft(normalizeStorySceneOutlineDraft(snapshot.sceneOutlineDraft));
-    message.success(`已应用快照：${snapshot.label}`);
-  }, [currentEditingChapter?.chapter_number, inferPlotStage, knownStructureChapterCount]);
-
-  const applyBatchStoryCreationSnapshot = useCallback((snapshot: StoryCreationSnapshot) => {
-    batchStoryCreationAutoBriefRef.current = snapshot.isBriefCustomized
-      ? MANUAL_STORY_CREATION_BRIEF_SENTINEL
-      : snapshot.storyCreationBriefDraft ?? '';
-    batchStoryBeatPlannerAutoRef.current = snapshot.isBeatPlannerCustomized
-      ? { ...EMPTY_STORY_BEAT_PLANNER_DRAFT }
-      : normalizeStoryBeatPlannerDraft(snapshot.beatPlannerDraft);
-    batchStorySceneOutlineAutoRef.current = snapshot.isSceneOutlineCustomized
-      ? { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT }
-      : normalizeStorySceneOutlineDraft(snapshot.sceneOutlineDraft);
-
-    setBatchSelectedCreativeMode(snapshot.creativeMode);
-    setBatchSelectedStoryFocus(snapshot.storyFocus);
-    setBatchSelectedPlotStage(snapshot.plotStage);
-    setBatchStoryCreationBriefDraft(snapshot.storyCreationBriefDraft ?? '');
-    setBatchStoryBeatPlannerDraft(normalizeStoryBeatPlannerDraft(snapshot.beatPlannerDraft));
-    setBatchStorySceneOutlineDraft(normalizeStorySceneOutlineDraft(snapshot.sceneOutlineDraft));
-    message.success(`已加载快照：${snapshot.label}`);
-  }, []);
-
-  const deleteSingleStoryCreationSnapshot = useCallback(async (snapshotId: string) => {
-    if (!singleStoryCreationDraftStorageKey) {
-      return;
-    }
-
-    const { removePersistedStoryCreationSnapshot } = await loadStoryCreationPersistence();
-    const nextSnapshots = removePersistedStoryCreationSnapshot(singleStoryCreationDraftStorageKey, snapshotId);
-    setSingleStoryCreationSnapshots(nextSnapshots);
-    message.success("已删除创作快照");
-  }, [singleStoryCreationDraftStorageKey]);
-
-  const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) => {
-    if (!batchStoryCreationDraftStorageKey) {
-      return;
-    }
-
-    const { removePersistedStoryCreationSnapshot } = await loadStoryCreationPersistence();
-    const nextSnapshots = removePersistedStoryCreationSnapshot(batchStoryCreationDraftStorageKey, snapshotId);
-    setBatchStoryCreationSnapshots(nextSnapshots);
-    message.success("已删除批量快照");
-  }, [batchStoryCreationDraftStorageKey]);
-
-  const copyStoryCreationPrompt = useCallback(async (
-    content: string | undefined,
-    scopeLabel: 'single' | 'batch',
-  ) => {
-    const normalizedContent = content?.trim();
-    if (!normalizedContent) {
-      message.warning(`${scopeLabel === 'single' ? '单章' : '批量'}提示词暂无可复制内容。`);
-
-      return;
-    }
-
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(normalizedContent);
-      } else {
-        const tempTextArea = document.createElement('textarea');
-        tempTextArea.value = normalizedContent;
-        tempTextArea.setAttribute('readonly', 'true');
-        tempTextArea.style.position = 'fixed';
-        tempTextArea.style.opacity = '0';
-        document.body.appendChild(tempTextArea);
-        tempTextArea.select();
-        document.execCommand('copy');
-        document.body.removeChild(tempTextArea);
-      }
-
-    message.success(`已将${scopeLabel === 'single' ? '单章' : '批量'}提示词复制到剪贴板。`);
-    } catch (error) {
-      console.error('Failed to copy prompt.', error);
-      message.error('复制失败，请重试。');
-    }
-  }, []);
-  useEffect(() => {
-    const previousAutoBrief = singleStoryCreationAutoBriefRef.current;
-
-    if (!singleDefaultStoryCreationBrief) {
-      singleStoryCreationAutoBriefRef.current = '';
-      setSingleStoryCreationBriefDraft(prev => (prev ? '' : prev));
-      return;
-    }
-
-    setSingleStoryCreationBriefDraft(prev => {
-      if (!prev.trim() || prev === previousAutoBrief) {
-        return singleDefaultStoryCreationBrief;
-      }
-
-      return prev;
-    });
-
-    singleStoryCreationAutoBriefRef.current = singleDefaultStoryCreationBrief;
-  }, [singleDefaultStoryCreationBrief]);
-
-  useEffect(() => {
-    const previousAutoBrief = batchStoryCreationAutoBriefRef.current;
-
-    if (!batchDefaultStoryCreationBrief) {
-      batchStoryCreationAutoBriefRef.current = '';
-      setBatchStoryCreationBriefDraft(prev => (prev ? '' : prev));
-      return;
-    }
-
-    setBatchStoryCreationBriefDraft(prev => {
-      if (!prev.trim() || prev === previousAutoBrief) {
-        return batchDefaultStoryCreationBrief;
-      }
-
-      return prev;
-    });
-
-    batchStoryCreationAutoBriefRef.current = batchDefaultStoryCreationBrief;
-  }, [batchDefaultStoryCreationBrief]);
-
-  useEffect(() => {
-    const previousAutoPlanner = singleStoryBeatPlannerAutoRef.current;
-
-    if (isStoryBeatPlannerDraftEmpty(singleSystemStoryBeatPlanner)) {
-      singleStoryBeatPlannerAutoRef.current = EMPTY_STORY_BEAT_PLANNER_DRAFT;
-      setSingleStoryBeatPlannerDraft((prev) => (isStoryBeatPlannerDraftEmpty(prev) ? prev : { ...EMPTY_STORY_BEAT_PLANNER_DRAFT }));
-      return;
-    }
-
-    setSingleStoryBeatPlannerDraft((prev) => {
-      if (isStoryBeatPlannerDraftEmpty(prev) || areStoryBeatPlannerDraftsEqual(prev, previousAutoPlanner)) {
-        return singleSystemStoryBeatPlanner;
-      }
-
-      return prev;
-    });
-
-    singleStoryBeatPlannerAutoRef.current = singleSystemStoryBeatPlanner;
-  }, [singleSystemStoryBeatPlanner]);
-
-  useEffect(() => {
-    const previousAutoPlanner = batchStoryBeatPlannerAutoRef.current;
-
-    if (isStoryBeatPlannerDraftEmpty(batchSystemStoryBeatPlanner)) {
-      batchStoryBeatPlannerAutoRef.current = EMPTY_STORY_BEAT_PLANNER_DRAFT;
-      setBatchStoryBeatPlannerDraft((prev) => (isStoryBeatPlannerDraftEmpty(prev) ? prev : { ...EMPTY_STORY_BEAT_PLANNER_DRAFT }));
-      return;
-    }
-
-    setBatchStoryBeatPlannerDraft((prev) => {
-      if (isStoryBeatPlannerDraftEmpty(prev) || areStoryBeatPlannerDraftsEqual(prev, previousAutoPlanner)) {
-        return batchSystemStoryBeatPlanner;
-      }
-
-      return prev;
-    });
-
-    batchStoryBeatPlannerAutoRef.current = batchSystemStoryBeatPlanner;
-  }, [batchSystemStoryBeatPlanner]);
-
-  useEffect(() => {
-    const previousSuggestedOutline = singleStorySceneOutlineAutoRef.current;
-
-    if (isStorySceneOutlineDraftEmpty(singleSuggestedStorySceneOutline)) {
-      singleStorySceneOutlineAutoRef.current = EMPTY_STORY_SCENE_OUTLINE_DRAFT;
-      setSingleStorySceneOutlineDraft((prev) => (isStorySceneOutlineDraftEmpty(prev) ? prev : { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT }));
-      return;
-    }
-
-    setSingleStorySceneOutlineDraft((prev) => {
-      if (isStorySceneOutlineDraftEmpty(prev) || areStorySceneOutlineDraftsEqual(prev, previousSuggestedOutline)) {
-        return singleSuggestedStorySceneOutline;
-      }
-
-      return prev;
-    });
-
-    singleStorySceneOutlineAutoRef.current = singleSuggestedStorySceneOutline;
-  }, [singleSuggestedStorySceneOutline]);
-
-  useEffect(() => {
-    const previousSuggestedOutline = batchStorySceneOutlineAutoRef.current;
-
-    if (isStorySceneOutlineDraftEmpty(batchSuggestedStorySceneOutline)) {
-      batchStorySceneOutlineAutoRef.current = EMPTY_STORY_SCENE_OUTLINE_DRAFT;
-      setBatchStorySceneOutlineDraft((prev) => (isStorySceneOutlineDraftEmpty(prev) ? prev : { ...EMPTY_STORY_SCENE_OUTLINE_DRAFT }));
-      return;
-    }
-
-    setBatchStorySceneOutlineDraft((prev) => {
-      if (isStorySceneOutlineDraftEmpty(prev) || areStorySceneOutlineDraftsEqual(prev, previousSuggestedOutline)) {
-        return batchSuggestedStorySceneOutline;
-      }
-
-      return prev;
-    });
-
-    batchStorySceneOutlineAutoRef.current = batchSuggestedStorySceneOutline;
-  }, [batchSuggestedStorySceneOutline]);
+  }, [batchDefaultStoryCreationBrief, batchSuggestedStorySceneOutline, batchSystemStoryBeatPlanner]);
 
   const batchPollingIntervalRef = useRef<number | null>(null);
 
@@ -1938,16 +1333,12 @@ export default function Chapters() {
 
 
   const stopAnalysisPolling = useCallback((clearTrackedChapterIds = true) => {
-    if (analysisPollingIntervalRef.current) {
-      clearInterval(analysisPollingIntervalRef.current);
-      analysisPollingIntervalRef.current = null;
-    }
-
-    if (clearTrackedChapterIds) {
-      pollingIntervalsRef.current.clear();
-    }
+    stopChapterAnalysisPolling({
+      analysisPollingIntervalRef,
+      pollingIntervalsRef,
+      clearTrackedChapterIds,
+    });
   }, []);
-
   const syncAnalysisTasksFromBatch = useCallback((
     items: Record<string, AnalysisTask>,
     options?: {
@@ -1955,208 +1346,137 @@ export default function Chapters() {
       notifyOnTerminalTransitions?: boolean;
     }
   ) => {
-    const previousTasks = analysisTasksMapRef.current;
-    const nextTasks = options?.reset ? {} : { ...previousTasks };
-
-    Object.entries(items).forEach(([chapterId, task]) => {
-      nextTasks[chapterId] = task;
-
-      if (options?.notifyOnTerminalTransitions && previousTasks[chapterId]?.status !== task.status) {
-        if (task.status === 'completed') {
-          message.success("后台任务已完成");
-        } else if (task.status === 'failed') {
-          message.error(`后台任务失败：${task.error_message || "未知错误"}`);
-        }
-      }
+    return syncChapterAnalysisTasksFromBatch({
+      items,
+      analysisTasksMapRef,
+      updateAnalysisTasksMap,
+      notifyOnTerminalTransitions: options?.notifyOnTerminalTransitions,
+      reset: options?.reset,
     });
-
-    updateAnalysisTasksMap(nextTasks);
-    return nextTasks;
   }, [updateAnalysisTasksMap]);
-
   const pollAnalysisTasksBatch = useCallback(async (projectId: string) => {
-    const chapterIds = Array.from(pollingIntervalsRef.current);
-    if (!projectId || chapterIds.length === 0) {
-      stopAnalysisPolling(false);
-      return;
-    }
-
-    try {
-      const response = await chapterApi.getBatchChapterAnalysisStatus(chapterIds, projectId);
-      if (currentProjectIdRef.current !== projectId) {
-        return;
-      }
-
-      syncAnalysisTasksFromBatch(response.items, { notifyOnTerminalTransitions: true });
-
-      pollingIntervalsRef.current = new Set(
-        chapterIds.filter((chapterId) => isAnalysisTaskInProgress(response.items[chapterId]))
-      );
-
-      if (pollingIntervalsRef.current.size === 0) {
-        stopAnalysisPolling(false);
-      }
-    } catch (error) {
-      console.error('Failed to poll analysis tasks.', error);
-    }
-  }, [stopAnalysisPolling, syncAnalysisTasksFromBatch]);
-
+    await pollChapterAnalysisTasksBatch({
+      projectId,
+      currentProjectIdRef,
+      pollingIntervalsRef,
+      analysisTasksMapRef,
+      stopAnalysisPolling,
+      updateAnalysisTasksMap,
+      isAnalysisTaskInProgress,
+    });
+  }, [stopAnalysisPolling, updateAnalysisTasksMap]);
   const ensureAnalysisPolling = useCallback((projectId: string) => {
-    if (!projectId || pollingIntervalsRef.current.size === 0) {
-      stopAnalysisPolling(false);
-      return;
-    }
-
-    if (analysisPollingIntervalRef.current) {
-      return;
-    }
-
-    const poll = () => {
-      void pollAnalysisTasksBatch(projectId);
-    };
-
-    poll();
-    analysisPollingIntervalRef.current = window.setInterval(poll, 2000);
+    ensureChapterAnalysisPolling({
+      projectId,
+      analysisPollingIntervalRef,
+      pollingIntervalsRef,
+      stopAnalysisPolling,
+      pollAnalysisTasksBatch,
+    });
   }, [pollAnalysisTasksBatch, stopAnalysisPolling]);
-
   const applyAnalysisPollingState = useCallback((projectId: string, tasksMap: Record<string, AnalysisTask>) => {
-    pollingIntervalsRef.current = new Set(collectActiveAnalysisChapterIds(tasksMap));
-
-    if (pollingIntervalsRef.current.size > 0) {
-      ensureAnalysisPolling(projectId);
-    } else {
-      stopAnalysisPolling(false);
-    }
+    applyChapterAnalysisPollingState({
+      projectId,
+      tasksMap,
+      pollingIntervalsRef,
+      ensureAnalysisPolling,
+      stopAnalysisPolling,
+      collectActiveAnalysisChapterIds,
+    });
   }, [ensureAnalysisPolling, stopAnalysisPolling]);
-
   useEffect(() => {
-    const projectId = currentProject?.id ?? null;
-    currentProjectIdRef.current = projectId;
-    stopAnalysisPolling();
-    updateAnalysisTasksMap(projectId ? (chapterAnalysisTasksCache.get(projectId) ?? {}) : {});
-
-    if (projectId) {
-      if (chapters.length === 0) {
-        refreshChapters();
-      }
-
-      loadWritingStyles();
-      loadAnalysisTasks();
-      checkAndRestoreBatchTask();
-    }
+    initializeChapterProjectWorkflow({
+      projectId: currentProject?.id ?? null,
+      currentProjectIdRef,
+      stopAnalysisPolling,
+      updateAnalysisTasksMap,
+      chapterAnalysisTasksCache,
+      chapterCount: chapters.length,
+      refreshChapters,
+      loadWritingStyles,
+      loadAnalysisTasks,
+      checkAndRestoreBatchTask,
+    });
 
     return () => {
       stopAnalysisPolling();
     };
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProject?.id]);
+  }, [currentProject?.id, setCurrentProject]);
 
   useEffect(() => {
+    const currentBatchPollingIntervalId = batchPollingIntervalRef.current;
+
     return () => {
       stopAnalysisPolling();
 
-      if (batchPollingIntervalRef.current) {
-        clearInterval(batchPollingIntervalRef.current);
+      if (currentBatchPollingIntervalId) {
+        clearInterval(currentBatchPollingIntervalId);
       }
     };
   }, [stopAnalysisPolling]);
 
   const loadAnalysisTasks = async (chaptersToLoad?: typeof chapters) => {
-    const projectId = currentProject?.id;
-    const targetChapters = chaptersToLoad || chapters;
-
-    if (!projectId) {
-      stopAnalysisPolling();
-      return;
-    }
-
-    currentProjectIdRef.current = projectId;
-
-    if (!targetChapters || targetChapters.length === 0) {
-      if (!chaptersToLoad) {
-        updateAnalysisTasksMap({});
-      }
-      stopAnalysisPolling();
-      return;
-    }
-
-    if (!chaptersToLoad) {
-      const cachedTasks = chapterAnalysisTasksCache.get(projectId);
-      if (cachedTasks) {
-        updateAnalysisTasksMap(cachedTasks);
-        applyAnalysisPollingState(projectId, cachedTasks);
-        return;
-      }
-    }
-
-    const targetChapterIds = targetChapters
-      .filter((chapter) => chapter.content && chapter.content.trim() !== '')
-      .map((chapter) => chapter.id);
-
-    if (targetChapterIds.length === 0) {
-      updateAnalysisTasksMap(chaptersToLoad ? { ...analysisTasksMapRef.current } : {});
-      stopAnalysisPolling();
-      return;
-    }
-
-    try {
-      const response = await chapterApi.getBatchChapterAnalysisStatus(targetChapterIds, projectId);
-      if (currentProjectIdRef.current !== projectId) {
-        return;
-      }
-
-      const tasksMap = chaptersToLoad ? { ...analysisTasksMapRef.current } : {};
-      targetChapterIds.forEach((chapterId) => {
-        const task = response.items[chapterId];
-        if (task) {
-          const previousTask = analysisTasksMapRef.current[chapterId];
-          tasksMap[chapterId] = areAnalysisTaskSnapshotsEqual(previousTask, task) ? previousTask : task;
-        }
-      });
-
-      applyAnalysisPollingState(projectId, tasksMap);
-
-      syncAnalysisTasksFromBatch(tasksMap, { reset: !chaptersToLoad });
-    } catch (error) {
-      console.error('Failed to load chapter analysis tasks.', error);
-    }
+    await loadAnalysisTasksWorkflow({
+      projectId: currentProject?.id,
+      chapters,
+      chaptersToLoad,
+      currentProjectIdRef,
+      analysisTasksMapRef,
+      chapterAnalysisTasksCache,
+      updateAnalysisTasksMap,
+      applyAnalysisPollingState,
+      stopAnalysisPolling,
+      areAnalysisTaskSnapshotsEqual: (leftTask, rightTask) => areAnalysisTaskSnapshotsEqual(leftTask ?? undefined, rightTask ?? undefined),
+    });
   };
 
-  const startPollingTask = (chapterId: string) => {
-    pollingIntervalsRef.current.add(chapterId);
+  const startPollingTask = useCallback((chapterId: string) => {
+    startAnalysisPollingTaskWorkflow({
+      chapterId,
+      pollingIntervalsRef,
+      currentProjectIdRef,
+      currentProjectId: currentProject?.id,
+      ensureAnalysisPolling,
+    });
+  }, [currentProject?.id, ensureAnalysisPolling]);
 
-    const projectId = currentProjectIdRef.current ?? currentProject?.id;
-    if (!projectId) {
-      return;
-    }
-
-    ensureAnalysisPolling(projectId);
-  };
-  const refreshChapterAnalysisTask = async (chapterId: string) => {
-    const projectId = currentProjectIdRef.current ?? currentProject?.id;
-    if (!projectId) {
-      return;
-    }
-
-    const task = await chapterApi.getChapterAnalysisStatus(chapterId, projectId);
-    if (currentProjectIdRef.current !== projectId) {
-      return;
-    }
-
-    syncAnalysisTasksFromBatch({ [chapterId]: task }, { notifyOnTerminalTransitions: true });
-
-    if (isAnalysisTaskInProgress(task)) {
-      startPollingTask(chapterId);
-      return;
-    }
-
-    pollingIntervalsRef.current.delete(chapterId);
-    if (pollingIntervalsRef.current.size === 0) {
-      stopAnalysisPolling(false);
-    }
-  };
-
+  const refreshChapterAnalysisTask = useCallback(async (chapterId: string) => {
+    await refreshAnalysisTaskWorkflow({
+      chapterId,
+      currentProjectIdRef,
+      currentProjectId: currentProject?.id,
+      syncAnalysisTasksFromBatch,
+      startPollingTask,
+      pollingIntervalsRef,
+      stopAnalysisPolling,
+      isAnalysisTaskInProgress,
+    });
+  }, [currentProject?.id, startPollingTask, stopAnalysisPolling, syncAnalysisTasksFromBatch]);
+  const reloadCurrentProject = useCallback(async () => {
+    await reloadChapterProjectWorkflow({
+      projectId: currentProject?.id,
+      setCurrentProject,
+    });
+  }, [currentProject?.id, setCurrentProject]);
+  const handleCloseAnalysis = useCallback(() => {
+    closeAnalysisWorkflow({
+      analysisChapterId,
+      projectId: currentProject?.id,
+      setAnalysisVisible,
+      refreshChapters,
+      reloadCurrentProject,
+      refreshChapterAnalysisTask,
+      setAnalysisChapterId,
+    });
+  }, [
+    analysisChapterId,
+    currentProject?.id,
+    refreshChapterAnalysisTask,
+    refreshChapters,
+    reloadCurrentProject,
+  ]);
   const triggerDeferredBatchAnalysis = async (
 
     startChapterNumber: number,
@@ -2169,141 +1489,17 @@ export default function Chapters() {
 
     if (!currentProject?.id || count <= 0) return;
 
-
-
-    const targetChapterNumbers = new Set(
-
-      Array.from({ length: count }, (_, index) => startChapterNumber + index)
-
-    );
-
-
-
-    const candidateChapters = latestChapters.filter(ch =>
-
-      targetChapterNumbers.has(ch.chapter_number) &&
-
-      Boolean(ch.content && ch.content.trim() !== '')
-
-    );
-
-
-
-    if (candidateChapters.length === 0) return;
-
-
-
-    let queuedCount = 0;
-
-    let skippedCount = 0;
-
-    let failedCount = 0;
-
-
-
-    const ensureAnalysisTask = async (chapter: Chapter) => {
-
-      const localTask = analysisTasksMap[chapter.id];
-
-      if (localTask?.has_task && ['pending', 'running', 'completed'].includes(localTask.status)) {
-
-        skippedCount += 1;
-
-        if (localTask.status === 'pending' || localTask.status === 'running') {
-
-          startPollingTask(chapter.id);
-
-        }
-
-        return;
-
-      }
-
-
-
-      try {
-
-        const remoteTask = await chapterApi.getChapterAnalysisStatus(chapter.id, currentProject.id);
-
-        if (remoteTask.has_task && ['pending', 'running', 'completed'].includes(remoteTask.status)) {
-
-          skippedCount += 1;
-
-          if (remoteTask.status === 'pending' || remoteTask.status === 'running') {
-
-            startPollingTask(chapter.id);
-
-          }
-
-          return;
-
-        }
-
-      } catch (error) {
-
-        console.error('Failed to query existing analysis task.', error);
-
-      }
-
-
-
-      try {
-
-        await chapterApi.triggerChapterAnalysis(chapter.id, currentProject.id);
-
-        queuedCount += 1;
-
-        startPollingTask(chapter.id);
-
-      } catch (error) {
-
-        failedCount += 1;
-
-        console.error(`Failed to queue analysis for chapter ${chapter.chapter_number}.`, error);
-
-      }
-
-    };
-
-
-
-    const chunkSize = 3;
-
-    for (let index = 0; index < candidateChapters.length; index += chunkSize) {
-
-      const chunk = candidateChapters.slice(index, index + chunkSize);
-
-      await Promise.all(chunk.map(ensureAnalysisTask));
-
-    }
-
-
-
-    if (queuedCount > 0) {
-
-      message.info(`已将 ${queuedCount} 章加入分析队列。`);
-
-    } else if (skippedCount > 0 && failedCount === 0) {
-
-      message.info('已跳过完成分析的章节。');
-
-    }
-
-
-
-    if (failedCount > 0) {
-
-      message.warning(`有 ${failedCount} 个章节分析失败。`);
-
-    }
-
-
-
-    await loadAnalysisTasks(latestChapters);
+    await queueDeferredBatchAnalysis({
+      projectId: currentProject.id,
+      startChapterNumber,
+      count,
+      latestChapters,
+      analysisTasksMap,
+      startPollingTask,
+      loadAnalysisTasks,
+    });
 
   };
-
-
 
 
 
@@ -2311,151 +1507,26 @@ export default function Chapters() {
 
     if (!currentProject?.id) return;
 
-
-
-    const projectId = currentProject.id;
-
-    const cachedStyles = writingStylesCache.get(projectId);
-
-    if (cachedStyles) {
-
-      setWritingStyles(cachedStyles.styles);
-
-      setSelectedStyleId(cachedStyles.defaultStyleId);
-
-      return;
-
-    }
-
-
-
-    const existingPromise = writingStylesLoadPromises.get(projectId);
-
-    if (existingPromise) {
-
-      await existingPromise;
-
-      return;
-
-    }
-
-
-
-    const loadPromise = (async () => {
-
-      try {
-
-        const response = await writingStyleApi.getProjectStyles(projectId);
-        const normalizedStyles = normalizeWritingStyleOptions(response.styles);
-
-        setWritingStyles((previousStyles) => (
-          areWritingStylesEqual(previousStyles, normalizedStyles) ? previousStyles : normalizedStyles
-        ));
-
-        const defaultStyle = normalizedStyles.find((style) => style.is_default);
-
-        setSelectedStyleId((previousStyleId) => (
-          previousStyleId === defaultStyle?.id ? previousStyleId : defaultStyle?.id
-        ));
-
-        writingStylesCache.set(projectId, {
-
-          styles: normalizedStyles,
-
-          defaultStyleId: defaultStyle?.id,
-
-        });
-
-      } catch (error) {
-
-        console.error('Failed to load writing styles.', error);
-
-        message.error('加载写作风格失败。');
-
-      }
-
-    })();
-
-
-
-    writingStylesLoadPromises.set(projectId, loadPromise);
-
-    try {
-
-      await loadPromise;
-
-    } finally {
-
-      writingStylesLoadPromises.delete(projectId);
-
-    }
+    await loadChapterWritingStyles({
+      projectId: currentProject.id,
+      writingStylesLoadPromises,
+      writingStylesCache,
+      setWritingStyles,
+      setSelectedStyleId,
+      normalizeWritingStyleOptions,
+      areWritingStylesEqual,
+    });
 
   };
 
 
 
-  const loadAvailableModels = useCallback(async () => {
-
-    try {
-
-
-      const settingsResponse = await fetch('/api/settings');
-
-      if (settingsResponse.ok) {
-
-        const settings = await settingsResponse.json();
-
-        const { api_key, api_base_url, api_provider, provider_type } = settings;
-        const preferredModel = normalizeOptionalSelectValue(settings.llm_model);
-
-
-
-        if (hasUsableApiCredentials(api_key, api_base_url)) {
-
-          try {
-
-            const modelsResponse = await fetch(
-
-              `/api/settings/models?api_key=${encodeURIComponent(api_key)}&api_base_url=${encodeURIComponent(api_base_url)}&provider=${provider_type || api_provider}`
-
-            );
-
-            if (modelsResponse.ok) {
-
-              const data = await modelsResponse.json();
-              const normalizedModels = normalizeModelOptions(data.models);
-
-              setAvailableModels((previousModels) => (
-                areModelOptionsEqual(previousModels, normalizedModels) ? previousModels : normalizedModels
-              ));
-
-              setSelectedModel((previousModel) => (
-                previousModel === preferredModel ? previousModel : preferredModel
-              ));
-
-              return preferredModel ?? null;
-
-            }
-
-          } catch (error) {
-
-            console.error('Failed to load models list.', error);
-
-          }
-
-        }
-
-      }
-
-    } catch (error) {
-
-      console.error('Failed to load model settings.', error);
-
-    }
-
-    return null;
-
-  }, []);
+  const loadAvailableModels = useCallback(async () => (
+    loadChapterAvailableModels({
+      setAvailableModels,
+      setSelectedModel,
+    })
+  ), []);
 
 
 
@@ -2464,133 +1535,17 @@ export default function Chapters() {
 
 
   const checkAndRestoreBatchTask = async () => {
-
-    if (!currentProject?.id) return;
-
-
-
-    const projectId = currentProject.id;
-
-    const existingPromise = batchTaskRestorePromises.get(projectId);
-
-    if (existingPromise) {
-
-      await existingPromise;
-
-      return;
-
-    }
-
-
-
-    const restorePromise = (async () => {
-
-      try {
-
-        const data = await chapterBatchTaskApi.getActiveBatchGenerateTask(projectId);
-
-
-
-        if (data.has_active_task && data.task) {
-
-          const task = data.task;
-
-          const persistedTaskMeta = getPersistedBatchTaskMeta(task.batch_id, projectId);
-
-          if (persistedTaskMeta) {
-
-            batchTaskMetaRef.current[task.batch_id] = persistedTaskMeta;
-
-          }
-
-
-
-          setBatchTaskId(task.batch_id);
-
-          setBatchProgress({
-
-            status: task.status,
-
-            total: task.total,
-
-            completed: task.completed,
-
-            current_chapter_number: task.current_chapter_number ?? null,
-
-            checkpoint: normalizeBatchGenerationCheckpoint(task.checkpoint),
-
-            latest_quality_metrics: (task.latest_quality_metrics as {
-
-              overall_score?: number;
-
-              conflict_chain_hit_rate?: number;
-
-              rule_grounding_hit_rate?: number;
-
-              opening_hook_rate?: number;
-
-              payoff_chain_rate?: number;
-
-              cliffhanger_rate?: number;
-
-            } | null | undefined) ?? undefined,
-
-            quality_metrics_summary: (task.quality_metrics_summary as {
-
-              avg_overall_score?: number;
-
-              avg_conflict_chain_hit_rate?: number;
-
-              avg_rule_grounding_hit_rate?: number;
-
-              avg_opening_hook_rate?: number;
-
-              avg_payoff_chain_rate?: number;
-
-              avg_cliffhanger_rate?: number;
-
-              chapter_count?: number;
-
-            } | null | undefined) ?? undefined,
-
-            quality_profile_summary: task.quality_profile_summary ?? null,
-
-            active_story_repair_payload: task.active_story_repair_payload ?? null,
-
-          });
-
-          setBatchGenerating(true);
-
-          setBatchGenerateVisible(false);
-
-          startBatchPolling(task.batch_id);
-
-          message.info('已恢复批量生成任务并继续运行。');
-
-        }
-
-      } catch (error) {
-
-        console.error('Failed to restore batch task.', error);
-
-      }
-
-    })();
-
-
-
-    batchTaskRestorePromises.set(projectId, restorePromise);
-
-    try {
-
-      await restorePromise;
-
-    } finally {
-
-      batchTaskRestorePromises.delete(projectId);
-
-    }
-
+    await restoreBatchGenerationWorkflow({
+      projectId: currentProject?.id,
+      batchTaskMetaRef,
+      getPersistedTaskMeta: getPersistedChapterBatchTaskMeta,
+      setBatchTaskId,
+      setBatchProgress,
+      setBatchGenerating,
+      setBatchGenerateVisible,
+      startBatchPolling,
+      normalizeBatchGenerationCheckpoint,
+    });
   };
 
 
@@ -2615,7 +1570,7 @@ export default function Chapters() {
 
       const icon = type === 'success' ? '/logo.svg' : type === 'error' ? '/favicon.ico' : '/logo.svg';
 
-      
+
 
       const notification = new Notification(title, {
 
@@ -2629,8 +1584,7 @@ export default function Chapters() {
 
         requireInteraction: false, // allow auto-dismiss
 
-        silent: false, // 允许系统通知发出提示音
-
+        silent: false, // keep notification sound enabled
       });
 
 
@@ -2758,7 +1712,7 @@ export default function Chapters() {
 
           outlineId: chapter.outline_id || null,
 
-          outlineTitle: chapter.outline_title || "未分组",
+          outlineTitle: chapter.outline_title || "Untitled outline",
 
           outlineOrder: chapter.outline_order ?? 999,
 
@@ -2854,32 +1808,40 @@ export default function Chapters() {
   const currentEditingGenerateDisabledReason = currentEditingChapter ? getGenerateDisabledReason(currentEditingChapter) : "";
   const canAnalyzeCurrentChapter = Boolean(currentEditingChapter?.id && currentEditingChapter.content?.trim());
 
-  const parsedEditingPlanData = useMemo(() => {
-    if (!editingPlanChapter?.expansion_plan) {
-      return null;
-    }
+  const editingPlanEditorData = useMemo(
+    () => buildChapterPlanEditorData(editingPlanChapter),
+    [editingPlanChapter],
+  );
 
-    try {
-      return JSON.parse(editingPlanChapter.expansion_plan);
-    } catch (error) {
-      console.error('Failed to parse expansion plan JSON.', error);
-      return null;
-    }
-  }, [editingPlanChapter?.expansion_plan]);
+  const chapterReaderModalState = useMemo(
+    () => buildChapterReaderModalState({
+      readerVisible,
+      readingChapter,
+    }),
+    [readerVisible, readingChapter],
+  );
+
+
+  const planEditorModalState = useMemo(
+    () => buildChapterPlanEditorModalState({
+      planEditorVisible,
+      editingPlanChapter,
+      editingPlanEditorData,
+      currentProjectId: currentProject?.id,
+    }),
+    [currentProject?.id, editingPlanChapter, editingPlanEditorData, planEditorVisible],
+  );
+
 
   const handleOpenModal = useCallback((id: string) => {
 
-    const chapter = chapters.find(c => c.id === id);
-
-    if (chapter) {
-
-      form.setFieldsValue(chapter);
-
-      setEditingId(id);
-
-      setIsModalOpen(true);
-
-    }
+    openChapterModalWorkflow({
+      chapterId: id,
+      chapters,
+      form,
+      setEditingId,
+      setIsModalOpen,
+    });
 
   }, [chapters, form]);
 
@@ -2887,32 +1849,14 @@ export default function Chapters() {
 
   const handleSubmit = async (values: ChapterUpdate) => {
 
-    if (!editingId) return;
-
-
-
-    try {
-
-      await updateChapter(editingId, values);
-
-
-
-
-      await refreshChapters();
-
-
-
-      message.success('章节已更新。');
-
-      setIsModalOpen(false);
-
-      form.resetFields();
-
-    } catch {
-
-      message.error('更新章节失败。');
-
-    }
+    await submitChapterModalWorkflow({
+      editingId,
+      values,
+      updateChapter,
+      refreshChapters,
+      setIsModalOpen,
+      form,
+    });
 
   };
 
@@ -2920,33 +1864,17 @@ export default function Chapters() {
 
   const handleOpenEditor = useCallback((id: string) => {
 
-    const chapter = chapters.find(c => c.id === id);
-
-    if (chapter) {
-
-      setCurrentChapter(chapter);
-
-      editorForm.setFieldsValue({
-
-        title: chapter.title,
-
-        content: chapter.content,
-
-      });
-      resetSingleStoryCreationCockpit(chapter.chapter_number);
-      setEditingId(id);
-      setIsEditorOpen(true);
-      setChapterQualityMetrics(null);
-
-
-
-      // 打开编辑器时预加载可用模型
-
-      loadAvailableModels();
-
-
-
-    }
+    openChapterEditorWorkflow({
+      chapterId: id,
+      chapters,
+      editorForm,
+      setCurrentChapter,
+      resetSingleStoryCreationCockpit,
+      setEditingId,
+      setIsEditorOpen,
+      setChapterQualityMetrics,
+      loadAvailableModels,
+    });
 
   }, [chapters, editorForm, loadAvailableModels, resetSingleStoryCreationCockpit, setCurrentChapter]);
 
@@ -2954,270 +1882,57 @@ export default function Chapters() {
 
   const handleEditorSubmit = async (values: ChapterUpdate) => {
 
-    if (!editingId || !currentProject) return;
-
-
-
-    try {
-
-      await updateChapter(editingId, values);
-
-
-
-
-      const updatedProject = await projectApi.getProject(currentProject.id);
-
-      setCurrentProject(updatedProject);
-
-
-
-      message.success("章节更新成功");
-
-      setIsEditorOpen(false);
-
-    } catch {
-
-      message.error("章节更新失败");
-
-    }
+    await submitChapterEditorWorkflow({
+      editingId,
+      currentProjectId: currentProject?.id,
+      values,
+      updateChapter,
+      setCurrentProject,
+      setChapterQualityMetrics,
+      setIsEditorOpen,
+    });
 
   };
 
 
 
   const handleGenerate = async () => {
-
-    if (!editingId) return;
-
-    const chapterId = editingId;
-
-    if (runningSingleChapterTasks[chapterId]) {
-
-      message.info('该章节正在生成中。');
-
-      return;
-
-    }
-
-    const progressMessageKey = `chapter-generate-progress-${chapterId}`;
-
-
-
-    try {
-
-      void saveSingleStoryCreationSnapshot('generate', { silent: true });
-
-      setIsContinuing(true);
-
-      setIsGenerating(true);
-
-      setSingleChapterProgress(0);
-
-      setSingleChapterProgressMessage('正在生成章节...');
-
-
-
-      const latestSingleStoryPresetState = await loadSingleStoryPresetState();
-      const latestSingleSystemStoryCreationBrief = latestSingleStoryPresetState.singleStoryCreationControlCard?.promptBrief ?? '';
-      const { prompt: latestResolvedSingleStoryCreationBrief } = resolveStoryCreationPromptState({
-        scope: 'single',
-        briefDraft: singleStoryCreationBriefDraft,
-        defaultBrief: latestSingleSystemStoryCreationBrief || projectDefaultStoryCreationBrief,
-        beatPlannerDraft: singleStoryBeatPlannerDraft,
-        sceneOutlineDraft: singleStorySceneOutlineDraft,
-      });
-
-      const result = await generateChapterContentStream(
-        chapterId,
-        undefined,
-        selectedStyleId,
-        targetWordCount,
-
-        (progressMsg, progressValue) => {
-
-
-          setSingleChapterProgress(progressValue);
-
-          setSingleChapterProgressMessage(progressMsg);
-
-        },
-        selectedModel,
-        temporaryNarrativePerspective,
-        selectedCreativeMode,
-        selectedStoryFocus,
-        selectedPlotStage,
-        latestResolvedSingleStoryCreationBrief,
-        selectedQualityPreset,
-        selectedQualityNotes.trim() || undefined,
-        latestSingleStoryPresetState.singleStoryRepairPayload?.storyRepairSummary,
-        latestSingleStoryPresetState.singleStoryRepairPayload?.storyRepairTargets,
-        latestSingleStoryPresetState.singleStoryRepairPayload?.storyPreserveStrengths,
-      );
-
-
-      if (result.generation_task_id) {
-
-        setRunningSingleChapterTasks(prev => ({
-
-          ...prev,
-
-          [chapterId]: result.generation_task_id
-
-        }));
-
-      }
-
-
-
-      message.open({
-
-        key: progressMessageKey,
-
-        type: 'loading',
-
-        content: '正在继续生成章节内容，请稍候...',
-
-        duration: 0,
-
-      });
-
-
-
-
-      result.completion
-
-        .then(async (finalResult) => {
-
-          if (isEditorOpenRef.current && editingChapterIdRef.current === chapterId) {
-
-            const hasContentTouched = editorForm.isFieldsTouched(['content']);
-
-            if (!hasContentTouched && finalResult?.content) {
-
-              editorForm.setFieldsValue({ content: finalResult.content });
-
-            } else if (hasContentTouched) {
-
-              message.info('内容已被编辑，已保留你的修改。');
-
-            }
-
-          }
-
-
-
-          message.open({
-
-            key: progressMessageKey,
-
-            type: finalResult?.content_source === 'candidate_draft' ? 'info' : 'success',
-
-            content: finalResult?.content_source === 'candidate_draft'
-              ? '候选稿已载入编辑器预览，等待人工复核'
-              : '生成完成',
-
-            duration: finalResult?.content_source === 'candidate_draft' ? 3 : 2,
-
-          });
-
-
-
-          if (finalResult?.analysis_task_id) {
-
-            const taskId = finalResult.analysis_task_id;
-
-            const pendingTask: AnalysisTask = {
-
-              has_task: true,
-
-              task_id: taskId,
-
-              chapter_id: chapterId,
-
-              status: 'pending',
-
-              progress: 0
-
-            };
-
-            updateAnalysisTasksMap(prev => ({
-
-              ...prev,
-
-              [chapterId]: pendingTask
-
-            }));
-
-            chapterApi.upsertChapterAnalysisTaskToStore(pendingTask, currentProject?.id, 'chapter-analysis-task');
-
-            startPollingTask(chapterId);
-
-          }
-
-          if (isEditorOpenRef.current && editingChapterIdRef.current === chapterId) {
-            setChapterQualityRefreshToken((prev) => prev + 1);
-          }
-
-        })
-
-        .catch((error) => {
-
-          const completionError = error as ApiError;
-
-          message.open({
-
-            key: progressMessageKey,
-
-            type: 'error',
-
-            content: '章节分析失败：' + (completionError.response?.data?.detail || completionError.message || '未知错误'),
-
-            duration: 4,
-
-          });
-
-        })
-
-        .finally(() => {
-
-          setRunningSingleChapterTasks(prev => {
-
-            if (!(chapterId in prev)) return prev;
-
-            const next = { ...prev };
-
-            delete next[chapterId];
-
-            return next;
-
-          });
-
-        });
-
-
-
-      message.success('已创建章节分析任务。');
-
-    } catch (error) {
-
-      const apiError = error as ApiError;
-
-      message.error('续写失败：' + (apiError.response?.data?.detail || apiError.message || '未知错误'));
-
-    } finally {
-
-      setIsContinuing(false);
-
-      setIsGenerating(false);
-
-    }
-
+    await startSingleChapterGenerationWorkflow({
+      editingId,
+      runningSingleChapterTasks,
+      saveSingleStoryCreationSnapshot,
+      setIsContinuing,
+      setIsGenerating,
+      setSingleChapterProgress,
+      setSingleChapterProgressMessage,
+      loadSingleStoryPresetState,
+      resolveStoryCreationPromptState,
+      singleStoryCreationBriefDraft,
+      projectDefaultStoryCreationBrief,
+      singleStoryBeatPlannerDraft,
+      singleStorySceneOutlineDraft,
+      selectedStyleId,
+      targetWordCount,
+      selectedModel,
+      temporaryNarrativePerspective,
+      selectedCreativeMode,
+      selectedStoryFocus,
+      selectedPlotStage,
+      selectedQualityPreset,
+      selectedQualityNotes,
+      generateChapterContentStream,
+      currentProjectId: currentProject?.id,
+      editorForm,
+      isEditorOpenRef,
+      editingChapterIdRef,
+      updateAnalysisTasksMap,
+      startPollingTask,
+      setRunningSingleChapterTasks,
+      setChapterQualityRefreshToken,
+    });
   };
-
   const showGenerateModal = async (chapter: Chapter) => {
-    const { openContinueGenerateDialog } = await import('../utils/chapterActionDialogs');
-
-    openContinueGenerateDialog({
+    await openSingleChapterGenerateWorkflow({
       modal,
       chapter,
       sortedChapters,
@@ -3231,638 +1946,102 @@ export default function Chapters() {
       message,
     });
   };
-  const handleBatchGenerate = async (values: {
-    startChapterNumber: number;
-    count: number;
-    enableAnalysis: boolean;
-    styleId?: number;
-    targetWordCount?: number;
-    model?: string;
-    creativeMode?: CreativeMode;
-    storyFocus?: StoryFocus;
-    plotStage?: PlotStage;
-    enableWebResearch?: boolean;
-    webResearchQuery?: string;
-  }) => {
+  const handleBatchGenerate = async (values: BatchGenerateFormValues) => {
     if (!currentProject?.id) return;
 
-
-
-
-
-
-
-
-
-    const styleId = values.styleId || selectedStyleId;
-
-    const wordCount = values.targetWordCount || targetWordCount;
-
-
-
-    const model = batchSelectedModel;
-    const creativeMode = batchSelectedCreativeMode;
-    const storyFocus = batchSelectedStoryFocus;
-    const plotStage = batchSelectedPlotStage;
-
-
-
-
-
-    if (!styleId) {
-
-      message.error('请先选择写作风格。');
-
-      return;
-
-    }
-
-
-
-    try {
-
-      void saveBatchStoryCreationSnapshot('generate', { silent: true });
-
-      setBatchGenerating(true);
-
-      setBatchGenerateVisible(false); // 关闭配置弹窗，进入后台批量生成状态
-
-
-
-      const requestBody: {
-        start_chapter_number: number;
-        count: number;
-        enable_analysis: boolean;
-        style_id: number;
-        target_word_count: number;
-        model?: string;
-        creative_mode?: CreativeMode;
-        story_focus?: StoryFocus;
-        plot_stage?: PlotStage;
-        story_creation_brief?: string;
-        quality_preset?: QualityPreset;
-        quality_notes?: string;
-        enable_web_research?: boolean;
-        web_research_query?: string;
-        story_repair_summary?: string;
-        story_repair_targets?: string[];
-        story_preserve_strengths?: string[];
-      } = {
-        start_chapter_number: values.startChapterNumber,
-        count: values.count,
-        enable_analysis: false,
-        style_id: styleId,
-        target_word_count: wordCount,
-      };
-
-
-
-      if (model) {
-
-        requestBody.model = model;
-
-      }
-
-      if (creativeMode) {
-        requestBody.creative_mode = creativeMode;
-      }
-
-      if (storyFocus) {
-        requestBody.story_focus = storyFocus;
-      }
-
-      if (plotStage) {
-        requestBody.plot_stage = plotStage;
-      }
-
-      if (batchSelectedQualityPreset) {
-        requestBody.quality_preset = batchSelectedQualityPreset;
-      }
-
-      if (batchSelectedQualityNotes.trim()) {
-        requestBody.quality_notes = batchSelectedQualityNotes.trim();
-      }
-
-      if (values.enableWebResearch) {
-        requestBody.enable_web_research = true;
-      }
-
-      if (values.webResearchQuery?.trim()) {
-        requestBody.web_research_query = values.webResearchQuery.trim();
-      }
-
-      const { prompt: resolvedBatchStoryCreationBrief } = resolveStoryCreationPromptState({
-        scope: 'batch',
-        briefDraft: batchStoryCreationBriefDraft,
-        defaultBrief: batchDefaultStoryCreationBrief,
-        beatPlannerDraft: batchStoryBeatPlannerDraft,
-        sceneOutlineDraft: batchStorySceneOutlineDraft,
-      });
-
-      if (resolvedBatchStoryCreationBrief) {
-        requestBody.story_creation_brief = resolvedBatchStoryCreationBrief;
-      }
-
-      const [{ buildBatchStoryRepairPromptPayloadFromSummary }, activeBatchCreationPreset] = await Promise.all([
-        import('../utils/creationPresetsBatch'),
-        resolveCreationPresetByModes(creativeMode, storyFocus),
-      ]);
-      const batchStoryRepairPayload = buildBatchStoryRepairPromptPayloadFromSummary(
-        batchProgress?.quality_metrics_summary ?? null,
-        creativeMode,
-        storyFocus,
-        {
-          plotStage,
-          chapterNumber: values.startChapterNumber,
-          totalChapters: knownStructureChapterCount,
-          activePresetId: activeBatchCreationPreset?.id,
-        },
-      );
-
-      if (batchStoryRepairPayload?.storyRepairSummary) {
-        requestBody.story_repair_summary = batchStoryRepairPayload.storyRepairSummary;
-      }
-
-      if (batchStoryRepairPayload?.storyRepairTargets?.length) {
-        requestBody.story_repair_targets = batchStoryRepairPayload.storyRepairTargets;
-      }
-
-      if (batchStoryRepairPayload?.storyPreserveStrengths?.length) {
-        requestBody.story_preserve_strengths = batchStoryRepairPayload.storyPreserveStrengths;
-      }
-
-
-
-
-
-      const result = await chapterBatchTaskApi.createBatchGenerateTask(currentProject.id, requestBody);
-
-      setBatchTaskId(result.batch_id);
-
-      batchTaskMetaRef.current[result.batch_id] = {
-
-        startChapterNumber: values.startChapterNumber,
-
-        count: values.count,
-
-        autoAnalyze: values.enableAnalysis,
-
-        projectId: currentProject.id,
-
-      };
-
-      persistBatchTaskMeta(result.batch_id, batchTaskMetaRef.current[result.batch_id]);
-
-      setBatchProgress({
-
-        status: 'running',
-
-        total: result.chapters_to_generate.length,
-
-        completed: 0,
-
-        current_chapter_number: values.startChapterNumber,
-
-        checkpoint: {
-          current_chapter_number: values.startChapterNumber,
-          candidate_index: 1,
-          candidate_count: 1,
-          word_count: 0,
-          generation_path: 'single_pass',
-          attempt_kind: 'initial_candidate',
-          rerank_used: false,
-          word_budget_repair_used: false,
-          winner_candidate_index: null,
-        },
-
-        estimated_time_minutes: result.estimated_time_minutes,
-
-        latest_quality_metrics: undefined,
-
-        quality_metrics_summary: undefined,
-
-        quality_profile_summary: null,
-
-        active_story_repair_payload: undefined,
-
-      });
-
-
-
-      message.success(`已开始批量生成，预计耗时 ${result.estimated_time_minutes} 分钟。`);
-
-
-
-
-      showBrowserNotification(
-
-        '批量生成已开始',
-
-        `计划生成 ${result.chapters_to_generate.length} 章，预计耗时 ${result.estimated_time_minutes} 分钟。`,
-
-        'info'
-
-      );
-
-
-
-      // 启动批量任务轮询
-
-      startBatchPolling(result.batch_id);
-
-
-
-    } catch (error: unknown) {
-
-      const err = error as Error;
-
-      message.error('批量生成失败：' + (err.message || '未知错误'));
-
-      setBatchGenerating(false);
-
-      setBatchGenerateVisible(false);
-
-    }
-
+    await startBatchGenerationWorkflow({
+      values,
+      projectId: currentProject.id,
+      selectedStyleId,
+      targetWordCount,
+      model: batchSelectedModel,
+      creativeMode: batchSelectedCreativeMode,
+      storyFocus: batchSelectedStoryFocus,
+      plotStage: batchSelectedPlotStage,
+      qualityPreset: batchSelectedQualityPreset,
+      qualityNotes: batchSelectedQualityNotes,
+      qualityMetricsSummary: batchProgress?.quality_metrics_summary ?? null,
+      batchStoryCreationBriefDraft,
+      batchDefaultStoryCreationBrief,
+      batchStoryBeatPlannerDraft,
+      batchStorySceneOutlineDraft,
+      knownStructureChapterCount,
+      resolveStoryCreationPromptState,
+      resolveCreationPresetByModes,
+      saveStoryCreationSnapshot: saveBatchStoryCreationSnapshot,
+      setBatchGenerating,
+      setBatchGenerateVisible,
+      setBatchTaskId,
+      rememberTaskMeta: (taskId, taskMeta) => {
+        batchTaskMetaRef.current[taskId] = taskMeta;
+      },
+      persistTaskMeta: persistChapterBatchTaskMeta,
+      setBatchProgress,
+      startBatchPolling,
+      showBrowserNotification,
+    });
   };
+
+
 
 
 
 
   const startBatchPolling = (taskId: string) => {
-
-    if (batchPollingIntervalRef.current) {
-
-      clearInterval(batchPollingIntervalRef.current);
-
-    }
-
-
-
-    const poll = async () => {
-
-      try {
-
-        const status = await chapterBatchTaskApi.getBatchGenerateStatus(taskId, currentProject?.id);
-
-        setBatchProgress({
-
-          status: status.status,
-
-          total: status.total,
-
-          completed: status.completed,
-
-          current_chapter_number: status.current_chapter_number ?? null,
-
-          checkpoint: normalizeBatchGenerationCheckpoint(status.checkpoint),
-
-          latest_quality_metrics: (status.latest_quality_metrics as {
-
-            overall_score?: number;
-
-            conflict_chain_hit_rate?: number;
-
-            rule_grounding_hit_rate?: number;
-
-            opening_hook_rate?: number;
-
-            payoff_chain_rate?: number;
-
-            cliffhanger_rate?: number;
-
-          } | null | undefined) ?? undefined,
-
-          quality_metrics_summary: (status.quality_metrics_summary as {
-
-            avg_overall_score?: number;
-
-            avg_conflict_chain_hit_rate?: number;
-
-            avg_rule_grounding_hit_rate?: number;
-
-            avg_opening_hook_rate?: number;
-
-            avg_payoff_chain_rate?: number;
-
-            avg_cliffhanger_rate?: number;
-
-            chapter_count?: number;
-
-          } | null | undefined) ?? undefined,
-
-          quality_profile_summary: status.quality_profile_summary ?? null,
-
-          failed_chapters: status.failed_chapters ?? [],
-
-          active_story_repair_payload: status.active_story_repair_payload ?? null,
-
-        });
-
-
-
-
-
-        if (status.completed > 0) {
-
-          const latestChapters = await refreshChapters();
-
-          await loadAnalysisTasks(latestChapters);
-
-
-
-
-          if (currentProject?.id) {
-
-            const updatedProject = await projectApi.getProject(currentProject.id);
-
-            setCurrentProject(updatedProject);
-
-          }
-
-        }
-
-
-
-
-        if (status.status === 'completed' || status.status === 'failed' || status.status === 'cancelled') {
-
-          if (batchPollingIntervalRef.current) {
-
-            clearInterval(batchPollingIntervalRef.current);
-
-            batchPollingIntervalRef.current = null;
-
-          }
-
-
-
-          setBatchGenerating(false);
-
-          const taskMeta = batchTaskMetaRef.current[taskId] ?? getPersistedBatchTaskMeta(taskId, currentProject?.id);
-
-
-
-
-
-          const finalChapters = await refreshChapters();
-
-          await loadAnalysisTasks(finalChapters);
-
-
-
-
-          if (currentProject?.id) {
-
-            const updatedProject = await projectApi.getProject(currentProject.id);
-
-            setCurrentProject(updatedProject);
-
-          }
-
-
-
-          if (status.status === 'completed') {
-
-            message.success(`批量生成完成，共生成 ${status.completed} 章。`);
-
-
-            showBrowserNotification(
-
-              '批量生成已完成',
-
-              `项目“${currentProject?.title || '未命名项目'}”已完成 ${status.completed} 章生成。`,
-
-              'success'
-
-            );
-
-
-
-            if (taskMeta?.autoAnalyze) {
-
-              void triggerDeferredBatchAnalysis(taskMeta.startChapterNumber, taskMeta.count, finalChapters);
-
-            }
-
-          } else if (status.status === 'failed') {
-
-            const manualReviewInfo = getBatchManualReviewInfo(status.failed_chapters, status.error_message, status.terminal_reason, status.terminal_label, status.review_required);
-
-            if (manualReviewInfo) {
-
-              const manualReviewMessage = manualReviewInfo.failedMetrics.length > 0
-                ? `${manualReviewInfo.message}（关注：${manualReviewInfo.failedMetrics.slice(0, 3).join('、')}）`
-                : manualReviewInfo.message;
-
-              message.warning(`批量生成需人工复核：${manualReviewMessage}`);
-
-
-              showBrowserNotification(
-
-                '批量生成需人工复核',
-
-                manualReviewMessage,
-
-                'info'
-
-              );
-
-            } else {
-
-              message.error(`批量生成失败：${status.error_message || '未知错误'}`);
-
-
-              showBrowserNotification(
-
-                '批量生成失败',
-
-                status.error_message || '未知错误',
-
-                'error'
-
-              );
-
-            }
-
-          } else if (status.status === 'cancelled') {
-
-
-            message.warning('批量生成已取消。');
-
-          }
-
-
-
-          delete batchTaskMetaRef.current[taskId];
-
-          removePersistedBatchTaskMeta(taskId);
-
-
-
-
-          setTimeout(() => {
-
-            setBatchGenerateVisible(false);
-
-            setBatchTaskId(null);
-
-            setBatchProgress(null);
-
-          }, 2000);
-
-        }
-
-      } catch (error) {
-
-        console.error('Failed to cancel batch generate task.', error);
-
-      }
-
-    };
-
-
-
-
-    poll();
-
-
-
-
-    batchPollingIntervalRef.current = window.setInterval(poll, 2000);
-
+    startBatchPollingWorkflow({
+      taskId,
+      projectId: currentProject?.id,
+      projectTitle: currentProject?.title,
+      batchPollingIntervalRef,
+      batchTaskMetaRef,
+      normalizeBatchGenerationCheckpoint,
+      refreshChapters,
+      loadAnalysisTasks,
+      reloadCurrentProject,
+      setBatchProgress,
+      setBatchGenerating,
+      getPersistedTaskMeta: getPersistedChapterBatchTaskMeta,
+      removePersistedTaskMeta: removePersistedChapterBatchTaskMeta,
+      triggerDeferredBatchAnalysis,
+      showBrowserNotification,
+      setBatchGenerateVisible,
+      setBatchTaskId,
+    });
   };
-
-
-
-
   const handleCancelBatchGenerate = async () => {
-
-    if (!batchTaskId) return;
-
-
-
-    try {
-
-      await chapterBatchTaskApi.cancelBatchGenerateTask(batchTaskId, currentProject?.id);
-
-      delete batchTaskMetaRef.current[batchTaskId];
-
-      removePersistedBatchTaskMeta(batchTaskId);
-
-
-
-      message.success('批量生成已取消。');
-
-
-
-
-      await refreshChapters();
-
-      await loadAnalysisTasks();
-
-
-
-
-      if (currentProject?.id) {
-
-        const updatedProject = await projectApi.getProject(currentProject.id);
-
-        setCurrentProject(updatedProject);
-
-      }
-
-    } catch (error: unknown) {
-
-      const err = error as Error;
-
-      message.error('取消批量生成失败：' + (err.message || '未知错误'));
-
-    }
-
+    await cancelBatchGenerationWorkflow({
+      batchTaskId,
+      projectId: currentProject?.id,
+      removeTaskMeta: (taskId) => {
+        delete batchTaskMetaRef.current[taskId];
+        removePersistedChapterBatchTaskMeta(taskId);
+      },
+      refreshChapters,
+      loadAnalysisTasks,
+      reloadCurrentProject,
+    });
   };
-
 
 
 
   const handleOpenBatchGenerate = async () => {
-
-    if (batchGenerating) {
-
-      message.info('批量生成进行中，请等待当前任务完成。');
-
-      return;
-
-    }
-
-
-
-
-
-    if (!firstIncompleteChapter) {
-
-      message.info('没有可生成的未完成章节。');
-
-      return;
-
-    }
-
-
-
-
-    if (!canGenerateChapter(firstIncompleteChapter)) {
-
-      const reason = getGenerateDisabledReason(firstIncompleteChapter);
-
-      message.warning(reason);
-
-      return;
-
-    }
-
-
-
-
-    const defaultModel = await loadAvailableModels();
-
-
-
-
-
-
-
-    resetBatchStoryCreationCockpit();
-    setBatchSelectedModel(defaultModel || undefined);
-    setBatchSelectedPlotStage(projectDefaultPlotStage);
-
-    if (!projectDefaultPlotStage) {
-      const inferredStage = await inferPlotStage({
-        chapterNumber: firstIncompleteChapter.chapter_number,
-        totalChapters: knownStructureChapterCount,
-      });
-      setBatchSelectedPlotStage(inferredStage);
-    }
-
-
-
-    batchForm.setFieldsValue({
-
-      startChapterNumber: firstIncompleteChapter.chapter_number,
-
-      count: 5,
-
-      enableAnalysis: true,
-
-      styleId: selectedStyleId,
-
-      targetWordCount: getCachedWordCount(),
-
+    await openBatchGenerationWorkflow({
+      batchGenerating,
+      firstIncompleteChapter,
+      canGenerateChapter,
+      getGenerateDisabledReason,
+      loadAvailableModels,
+      resetBatchStoryCreationCockpit,
+      setBatchSelectedModel,
+      setBatchSelectedPlotStage,
+      projectDefaultPlotStage,
+      inferPlotStage,
+      knownStructureChapterCount,
+      batchForm,
+      selectedStyleId,
+      cachedWordCount: getCachedWordCount(),
+      setBatchGenerateVisible,
     });
-
-
-
-    setBatchGenerateVisible(true);
-
   };
 
 
@@ -3870,38 +2049,20 @@ export default function Chapters() {
 
   const getStatusText = (status: string) => {
     const texts: Record<string, string> = {
-      draft: "草稿",
-      writing: "创作中",
-      completed: "已完成",
+      draft: "Draft",
+      writing: "Writing",
+      completed: "Completed",
     };
 
     return texts[status] || status;
   };
 
   const handleExport = () => {
-    if (!currentProject) {
-      return;
-    }
-
-    if (chapters.length === 0) {
-      message.warning("暂无可导出的章节");
-      return;
-    }
-
-    modal.confirm({
-      title: "导出项目",
-      content: `确定导出项目《${currentProject.title}》吗？`,
-      centered: true,
-      okText: "导出",
-      cancelText: "取消",
-      onOk: () => {
-        try {
-          projectApi.exportProject(currentProject.id);
-          message.success("已开始导出");
-        } catch {
-          message.error("导出失败");
-        }
-      },
+    confirmChapterExportWorkflow({
+      currentProject,
+      chapterCount: chapters.length,
+      modal,
+      message,
     });
   };
 
@@ -3911,16 +2072,12 @@ export default function Chapters() {
   }, []);
 
   const showManualCreateChapterModal = async () => {
-    const { openManualCreateChapterDialog } = await import('../utils/chapterActionDialogs');
-
-    openManualCreateChapterDialog({
+    await openManualCreateChapterWorkflow({
       modal,
       chapters,
       manualCreateForm,
       sortedOutlines,
       currentProject,
-      chapterApi,
-      projectApi,
       refreshChapters,
       setCurrentProject,
       message,
@@ -3930,26 +2087,22 @@ export default function Chapters() {
   };
 
   const handleDeleteChapter = useCallback(async (chapterId: string) => {
-    try {
-      await deleteChapter(chapterId);
-      await refreshChapters();
-
-      if (currentProject) {
-        const updatedProject = await projectApi.getProject(currentProject.id);
-        setCurrentProject(updatedProject);
-      }
-
-      message.success("章节删除成功");
-    } catch (error: unknown) {
-      const err = error as Error;
-      message.error("章节删除失败：" + (err.message || "未知错误"));
-    }
-  }, [currentProject, deleteChapter, refreshChapters, setCurrentProject]);
+    await deleteChapterWithRefreshWorkflow({
+      chapterId,
+      deleteChapter,
+      refreshChapters,
+      reloadCurrentProject,
+      onSuccess: () => {
+        message.success("Chapter deleted.");
+      },
+      onError: (error) => {
+        message.error("Delete chapter failed: " + (error.message || "Unknown error"));
+      },
+    });
+  }, [deleteChapter, refreshChapters, reloadCurrentProject]);
 
   const showExpansionPlanModal = useCallback(async (chapter: Chapter) => {
-    const { openExpansionPlanPreviewDialog } = await import('../utils/chapterActionDialogs');
-
-    openExpansionPlanPreviewDialog({
+    await openExpansionPlanPreviewWorkflow({
       modal,
       chapter,
       isMobile,
@@ -3958,112 +2111,62 @@ export default function Chapters() {
   }, [isMobile, modal]);
 
   const handleOpenPlanEditor = useCallback((chapter: Chapter) => {
-
-
-    setEditingPlanChapter(chapter);
-
-    setPlanEditorVisible(true);
-
+    openChapterPlanEditor({
+      chapter,
+      setEditingPlanChapter,
+      setPlanEditorVisible,
+    });
   }, []);
 
-
-
+  const handleClosePlanEditor = useCallback(() => {
+    closeChapterPlanEditor({
+      setEditingPlanChapter,
+      setPlanEditorVisible,
+    });
+  }, []);
 
   const handleSavePlan = async (planData: ExpansionPlanData) => {
-
-    if (!editingPlanChapter) return;
-
-
-
-    try {
-
-      const response = await fetch(`/api/chapters/${editingPlanChapter.id}/expansion-plan`, {
-
-        method: 'PUT',
-
-        headers: {
-
-          'Content-Type': 'application/json',
-
-        },
-
-        body: JSON.stringify(planData),
-
-      });
-
-
-
-      if (!response.ok) {
-
-        const error = await response.json();
-
-        throw new Error(error.detail || 'Save plan failed.');
-
-      }
-
-
-
-
-      await refreshChapters();
-
-
-
-      message.success('章节规划已保存。');
-
-
-
-
-      setPlanEditorVisible(false);
-
-      setEditingPlanChapter(null);
-
-    } catch (error: unknown) {
-
-      const err = error as Error;
-
-      message.error('保存章节规划失败：' + (err.message || '未知错误'));
-
-      throw error;
-
+    if (!editingPlanChapter) {
+      return;
     }
 
+    await saveChapterPlan({
+      chapterId: editingPlanChapter.id,
+      planData,
+      refreshChapters,
+      closePlanEditor: handleClosePlanEditor,
+    });
   };
 
 
 
   const handleChapterSelect = (chapterId: string) => {
 
-    const element = document.getElementById(`chapter-item-${chapterId}`);
-
-    if (element) {
-
-      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-      // Optional: add a visual highlight effect
-
-      element.style.transition = 'background-color 0.5s ease';
-
-      element.style.backgroundColor = '#e6f7ff';
-
-      setTimeout(() => {
-
-        element.style.backgroundColor = '';
-
-      }, 1500);
-
-    }
+    selectChapterListItem({ chapterId });
 
   };
 
 
 
-  // 打开阅读器
+  // 濠电姷鏁告慨鐑藉极閸涘﹥鍙忛柣鎴ｆ閺嬩線鏌涘☉姗堟敾闁告瑥绻橀弻锝夊箣閿濆棭妫勯梺鍝勵儎缁舵岸寮诲☉妯锋婵鐗婇弫楣冩⒑閸涘﹦鎳冪紒缁橈耿瀵鏁愭径濠勵吅闂佹寧绻傚Λ顓炍涢崟顖涒拺闁告繂瀚烽崕搴ｇ磼閼搁潧鍝虹€殿喖顭烽幃銏ゅ礂鐏忔牗瀚介梺璇查叄濞佳勭珶婵犲伣锝夘敊閸撗咃紲闂佺粯鍔﹂崜娆撳礉閵堝棎浜滄い鎾跺Т閸樺鈧鍠栭…鐑藉极閹邦厼绶炲┑鐘插閺夊憡淇婇悙顏勨偓鏍暜婵犲洦鍊块柨鏇炲€哥壕鍧楁煙閹冾暢缁炬崘妫勯湁闁挎繂鎳忛幆鍫ュ冀閳ユ枼鏀芥い鏃囶潡濠婂牆绀夐柟杈剧畱閺勩儵鏌嶈閸撴岸濡甸崟顖氱闁糕剝銇炴竟鏇㈡⒒娴ｅ憡鍟為拑杈╃磼椤旇姤灏柣锝囧厴楠炲鏁冮埀顒傜不閼姐倗纾藉ù锝堫嚃閻掍粙鏌涘鈧禍璺侯潖濞差亜浼犻柛鏇ㄥ墮閸嬪秹姊洪崨濠冪叆闁哄牜鍓涚划瀣吋婢跺鈧兘鏌ｉ幋鐑嗙劷闁告妫勯埞鎴︽倷閺夋垹浠搁梺缁橆殕濞茬喎鐣峰┑瀣櫆闁兼亽鍎卞鎸庣節閻㈤潧孝闁哥噥鍨舵俊闈涒攽閸艾浜鹃悷娆忓婢跺嫰鏌涚€ｎ亷宸ラ柣锝囧厴閹垻鍠婃潏銊︽珝濠电姰鍨煎▔娑㈡嚐椤栫偛鐓濋柛顐犲劜閻撴盯鎮橀悙鎻掆挃婵炴彃顕埀顒侇問閸ｎ噣宕滃☉銏犵闁告洦鍨版儫闂佽婢橀懟顖炲箠婢舵劕纾婚柟鎹愬煐閸犲棝鏌涢弴銊ュ闁宠绋撶槐鎾诲磼濮樻瘷婊堟煕鐎ｎ偅灏电紒杈ㄦ尰閹峰懘宕崟鎴悼缁辨帞鈧綆鍋勯悘鎾煕閳瑰灝鍔滅€垫澘瀚换娑㈡倷椤掑倵鍋撴繝姘拺闁荤喐澹嗛幗鐘电磼鐠囨彃鈧崵鍒掗鐑嗘僵闁煎摜顣介幏濠氭⒑缁嬫寧婀伴柣鐔濆泚鍥晝閸屾稓鍘甸柣鐘叉厂閸涱垽绱甸梻浣烘嚀缁犲秹宕归挊澶屾殾闁圭儤鍨熼弨锕傛煙椤栧棗鍊搁ˉ姘節濞堝灝鏋熸い顓炴喘瀹曘垼顦叉い鏇秮椤㈡瑩鏌ㄩ姘闁荤喐鐟ョ€氼厾绮堥埀顒勬⒑閸濄儱鏋欐繛澶嬫礋瀹曪綁宕ㄩ褎瀵岄梺闈涚墕閹虫劗绮绘导瀛樼厵闁惧浚鍋勬慨宥団偓瑙勬磸閸ㄤ粙寮婚崱妤婂悑闁糕剝鐟ラ獮宥夋⒒娴ｇ鎮戠紒浣规尦瀵煡鎮欓懜纰夌磽闂傚倸鍊风欢姘跺焵椤掑倸浠滈柤娲诲灡閺呭爼顢涢悙瀵稿幈闂佸湱鍋撳娆撳传閾忓厜鍋撶憴鍕缂佽鍟銉╁礋椤栨氨鐤€濡炪倖鎸荤粙鎺斺偓姘偢濮婂宕掑顑藉亾閹间焦鍋嬪┑鐘插閻瑩鏌熼悜姗嗘當缂佺姴缍婇弻鐔煎箥椤旂⒈鏆梺绋匡工閻忔岸骞堥妸銉建闁糕剝顨呯粻铏圭磽娴ｈ姤纭剧€殿喖鐖兼俊鐢稿礋椤栨艾宓嗗銈呯箰濡稖鈪靛┑锛勫亼閸婃垿宕归崫鍕殕闁归棿绀侀弰銉╂煃瑜滈崜姘跺Φ閸曨垰绠抽柛鈩冦仦婢规洟姊绘担椋庝覆缂佹彃娼″畷妤€顫滈埀顒勬偘椤曗偓瀹曞崬鈽夊▎鎴濆Ш闂備焦瀵ч弻銊ㄣ亹閵娾晛惟闁挎柨澧介惁鍫濃攽閻愯尙澧曢柣蹇旂箞瀵悂鏁傛慨鎰盎濡炪倖鍔戦崺鍕熼埀顒勬⒑闂堟稒顥滈柛鐔告綑閻ｉ攱绺界粙娆炬綂闂佸疇妫勫Λ娆戠礊濡ゅ懏鈷掑ù锝囩摂濞兼劙鏌涙惔銏犫枙闁诡喗妞芥俊鎼佹晝閳ь剟宕归弮鍫熺厵缂備降鍨归弸鐔兼煟閹惧瓨绀嬮柡宀€鍠栭獮鍡氼槻闁哄棜浜槐鎺楁偑濞嗗繑鍣界紒鐘虫閺岀喓鈧數顭堟禒褏绱掗埦鈧崑鎾绘⒒娴ｅ湱婀介柛銊ㄦ椤洩顦崇紒鍌涘笒椤劑宕奸悢鍝勫箺闂備線娼ц噹闁告劑鍔岀粻锝夋⒒娴ｈ櫣銆婇柡鍌欑窔瀹曟垿骞橀幇浣瑰瘜闂侀潧鐗嗗Λ妤冪箔閸屾粎纾奸柍褜鍓氶幏鍛喆閸曨剛褰挎俊鐐€栭悧妤冪矙閹惧墎涓嶅Δ锝呭暞閻撴洟鐓崶銊ㄥ濞存粎鎳撻…鑳檨濞存粠浜璇差吋閸ャ劌鏋傞梺鍛婃处閸嬪棙瀵煎畝鍕拺閻犲洠鈧櫕鐏€闂佸搫鎳忕换鍫ュ春閳ь剚銇勯幒鍡椾壕濠电姭鍋撻弶鍫涘妽閸欏繘鏌熺紒銏犳殙濠㈣泛艌閺€浠嬫倵閿濆骸浜愰柟椋庣帛缁绘稒娼忛崜褎鍋у銈庡幖閻楁捇骞婂鍛枂闁告洦鍘鹃鏇㈡煟閻樺弶鍘傞柛鎰亾閸犳﹢姊绘担鐑樺殌缂佺姴绉瑰畷纭呫亹閹烘垹鍙€婵犮垼鍩栭崝鏇綖閸涘瓨鐓熸俊顖涙た閸熷繘鏌涘顒佸殗婵﹦绮幏鍛存惞閻熸壆顐奸梻浣规偠閸旀垵顭囪閻忓鈹戦悙鏉戠仧闁搞劌婀辩划鍫熷緞閹邦厸鎷洪梺鍓茬厛閸ｎ噣宕曢幋鐘电＜闁绘宕甸悾娲煙椤旂瓔娈滈柟顔挎閳绘挾鎹勯妸銉バ梻浣告惈缁嬪嫮鎹㈠┑鍡╂綎闁惧繐婀遍惌娆撴煕椤垵娅橀柛鏂款槹缁绘繈鎮介棃娑楃捕闂佹寧娲︽禍婊堟偩瀹勬噴娲敂閸涱厸鍋撻悜鑺ョ厱婵犻潧妫楅顐ｃ亜閹惧瓨銇濇慨濠冩そ楠炴劖鎯旈姀鈺傗挅婵犵妲呴崑鍕偓姘煎幘缁顓兼径瀣画闂備緡鍙忛梽鍕偓闈涚焸濮婃椽妫冨☉姘暫濠碘槅鍋呴悷鈺勬＂闂佺硶鍓濈粙鎺楁偂閺囥垺鍊甸柨婵嗛娴滄粌鈹戦鑲╁ⅱ缂佽鲸甯″畷鎺戔槈濡槒鐧佹俊銈囧Х閸嬫稑螞濠婂煪銊︽媴閸︻厾顔曢梺鍦亾閸撴岸鎮℃總鍛婄厸閻忕偟鍋撶粈瀣偓瑙勬礈閸樠囧煘閹寸姭鍋撻敐鍥舵毌闁稿鎸歌灃濞撴艾娲﹂鏃堟⒑缂佹ê濮囨い鏇ㄥ幗閺呭爼顢楅崒婊咃紲缂傚倷鐒﹂…鍥Υ閹烘嚚褰掓偑閸涱垳鏆ら悗瑙勬礃鐢帡锝炲┑瀣垫晢濠㈣泛澶囬崑鎾诲箮閼恒儮鎷洪梺鍛婄☉椤剙鈻撳鍏犵懓顭ㄩ崘顏勭厽閻庢鍠栭…鐑藉箖閵忋倕绀傞柣鎾崇凹缂冩洟姊绘担绋款棌闁稿妫濆畷浼村箻鐠囪尙顦╅梺鎸庣☉鐎氼喚澹曢挊澹濆綊鏁愰崨顔藉創闂傚顑呴埞鎴︽倷閸欏娅ゅ┑鐐插级椤洨鍒掑顓熺秶闁靛ě鍛闂備焦鎮堕崕娲倶濞戞粠妯勯梺鍝勬湰缁嬫挻绂掗敃鍌氱鐟滃繘宕ｅ┑鍥╃瘈闁靛骏缍嗗鎰箾閸欏鐭屾俊鍙夊姍楠炴鎷犻懠顒婄床婵犵數鍋涘Λ娆戞暜閹烘鍌ㄩ柍鈺佸暟缁♀偓濠电偛鐗嗛悘婵嬫倶閻樼偨浜滈柡鍥ュ妼楠炴牗銇勯弴妯哄姕缂佺粯绻堝畷鎯邦槾妞わ富鍙冮幃宄邦煥閸愵噮鈧鏌ｉ敐鍥у幋鐎规洩绲惧鍕暆閳ь剟鎯侀崼銉︹拻闁稿本姘ㄦ晶娑樸€掑顓ф疁鐎规洘娲熼獮鍥敇濠娾偓缁ㄥ姊洪棃娑辨Ф闁稿氦娅曢弲璺衡槈濮樿京锛滅紓鍌欑劍椤洤煤鐎涙﹩娈介柣鎰▕閸庢棃鏌熼鐣屾噮闁圭懓瀚粭鐔碱敍濞戣鲸锛堝┑鐘殿暜缁辨洟宕戦幋锕€纾归柟杈剧畱绾惧綊鏌熼悧鍫熺凡缁炬儳顭烽弻鐔兼倷椤掍胶浼囬梺琛″亾?
+  const {
+    floatingIndexPanelState,
+    floatingIndexPanelTriggerProps,
+    handleCloseIndexPanel,
+  } = useFloatingIndexPanelBindings({
+    groupedChapters,
+    icon: <BookOutlined />,
+    isMobile,
+  });
+
 
   const handleOpenReader = useCallback((chapter: Chapter) => {
 
-    setReadingChapter(chapter);
-
-    setReaderVisible(true);
+    openChapterReader({
+      chapter,
+      setReadingChapter,
+      setReaderVisible,
+    });
 
   }, []);
 
@@ -4072,33 +2175,30 @@ export default function Chapters() {
 
   const handleReaderChapterChange = async (chapterId: string) => {
 
-    try {
-
-      const response = await fetch(`/api/chapters/${chapterId}`);
-
-      if (!response.ok) throw new Error('Failed to load chapter.');
-
-      const newChapter = await response.json();
-
-      setReadingChapter(newChapter);
-
-    } catch {
-
-      message.error('加载章节失败。');
-
-    }
+    await loadReaderChapter({
+      chapterId,
+      setReadingChapter,
+    });
 
   };
 
+  const handleCloseReader = useCallback(() => {
+    closeChapterReader({
+      setReadingChapter,
+      setReaderVisible,
+    });
+  }, []);
 
 
-  // 关闭编辑器
 
+  // 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵割槮缁炬儳缍婇弻鐔兼⒒鐎靛壊妲紒鐐劤缂嶅﹪寮婚悢鍏尖拻閻庨潧澹婂Σ顔剧磼閻愵剙鍔ょ紓宥咃躬瀵鎮㈤崗灏栨嫽闁诲酣娼ф竟濠偽ｉ鍓х＜闁绘劦鍓欓崝銈囩磽瀹ュ拑韬€殿喖顭烽幃銏ゅ礂鐏忔牗瀚介梺璇查叄濞佳勭珶婵犲伣锝夘敊閸撗咃紲闂佺粯鍔﹂崜娆撳礉閵堝洨纾界€广儱鎷戦煬顒傗偓娈垮枛椤兘骞冮姀銈呯閻忓繑鐗楃€氫粙姊虹拠鏌ュ弰婵炰匠鍕彾濠电姴浼ｉ敐澶樻晪闁逞屽墮椤繘宕崟鎳峰洤鐐婄憸澶愬磻閹捐围濠㈣泛锕﹂悰銉モ攽鎺抽崐鏇㈠箠鎼淬埄鏀伴梻鍌欑閹测€趁洪敃鍌氬瀭闁规鍠氭稉宥嗙箾閹存瑥鐏柣鎾存礋閺岀喖骞戦幇顒冩暱闂佺绻愰惌鍌炲蓟閿熺姴骞㈡繛鍡楄閵壯呯＜閺夊牄鍔嶇亸浼存煙瀹勭増鍤囩€规洦鍋婂畷鐔煎箣濞嗗繐濮庨梺瀹狀潐閸ㄥ潡骞冨▎鎾崇厸濞达絽鍢查ˉ姘舵⒒閸屾艾鈧绮堟笟鈧獮鏍敃閿旇棄鍓舵繝闈涘€婚…鍫㈢玻濡ゅ懏鐓涚€广儱楠搁獮鏍磼閻樺磭澧紒缁樼洴瀹曞崬螣缂佹ê鍓梻浣芥〃缁€浣肝涘Δ鍛畳闂備焦瀵х换鍌炲箠鎼淬劌绠栧〒姘ｅ亾闁哄瞼鍠撻埀顒傛暩椤牓宕㈢€涙ɑ鍙忓┑鐘插鐢盯鏌熷畡鐗堝殗闁瑰磭鍋ゆ俊鐑芥晲閸屾矮澹曢梺鍛婂姦娴滅偟澹曟總鍛婄厓鐟滄粓宕滃杈╃當闁绘梻鍘ч悞鍨亜閹烘垵顏ラ柍褜鍏涚欢姘嚕娴犲鏁囬柣鎰皺閻涒晠姊虹拠鎻掝劉缂佸甯￠垾锕傚炊椤掍礁浠奸梺瑙勫劶婵倝鍩涢幒妤佺厱閻忕偛澧介幊鍡涙煕韫囨挻婀伴柕鍥у椤㈡﹢鎮欓棃娑掑彙闂備胶鎳撶粻宥夊垂娴犲宓侀柛銉墮缁狙囨煠閹颁礁鐎洪柡鍥ュ灪閻撶喖骞栭幖顓炵仯缂佸鏁婚弻娑㈠箻鐎垫悶鈧帞绱掗鑲╁缂佺粯绻堝畷鍫曞Ω瑜嶉獮宥夋⒑閸濆嫷妲搁柣妤佹尵缁寮借閻庤埖銇勯弴妤€浜鹃梺鍝勮嫰缁夊綊寮婚妸褉鍋撻敐搴濈凹閻犲洨鍋ゅ娲传閸曨剚鎷辩紓浣割儐閹歌崵绮嬮幒妤佹櫆闁绘劦鍓欓悵鏉库攽閻愬瓨缍戞い鎴濇噺缁傚秵銈ｉ崘鈺冨幐闂佹悶鍎崕閬嶆倶椤忓牊鐓曞┑鐘插€婚崺锝夋煛鐏炶濮傜€殿喗鎸抽幃娆徝圭€ｎ亙澹曢悷婊呭鐢宕戦崒娑氱闁瑰瓨鐟ラ悘顏堟煕婵犲倻鍩ｉ柡宀嬬秮楠炲洭鎮ч崼鐔兼暘濠电偛鐡ㄧ划灞炬櫠閻ｅ本顫曢柟鐑橆殔閻掑灚銇勯幒鎴濐仼缂佲偓閸愨斂浜滈煫鍥ㄦ尰椤ョ娀鏌ㄥ☉娆戠煂缂佽鲸鎹囧畷鎺戔枎閹存繂顬夋俊鐐€ら崢鐓幟洪妶鍥у疾闂佽娴烽弫鍝ユ兜閸洖纾婚柟鎹愬煐閸犲棝鏌涢弴銊ュ妞わ负鍎崇槐鎾诲磼濮樻瘷銏ゆ煥閺囥劋閭┑鈥崇摠閹峰懐鍖栭弴鐔衡偓濠氭⒑閸︻厼浜炬繛鍏肩懄缁傛帡顢橀悢鍓佺畾濡炪倖鍔х€靛矂寮抽幒鏃傜＜闁逞屽墯缁楃喖鍩€椤掑啯锛傛繝娈垮枟閿曗晠宕㈤崜褍濮柍褜鍓熼幃妤呭礂缁嬪灝绁梺琛″亾闁告鍎愰悢鍡樻叏濡炶浜鹃梺绯曟杹閸嬫挸顪冮妶鍡楃瑐闁绘帪濡囩划鍫⑩偓锝庡亽濞堜粙鏌ｉ幇顖ｅ殝濮掝偅姘ㄧ槐鎺楁偐瀹曞洠妲堥梺瀹犳椤︻垵鐏掔紒缁㈠弮椤ユ捇鐛姀銈嗏拻闁稿本鐟︾粊鐗堢箾婢跺绀嬬€规洑鍗抽獮妯尖偓娑櫭鍧楁⒑濮瑰洤鐏╅柟璇х節瀹曟垿宕掗悙闈涘絼闂佹悶鍎崝搴ㄥΥ閹烘鐓曟繛鍡樺姈瀹曞矂鏌＄仦鍓ф创濠碉紕鍏橀獮瀣攽婵犲偆浼冮梻浣告啞閹哥兘宕￠崘宸綎闁惧繗顫夌€氭岸鏌涘▎蹇ｆШ妞も晙鍗冲娲传閵夈儛锝団偓鍏夊亾闁归棿绀佺粻姘舵煃瑜滈崜姘跺Φ閸曨喚鐤€闁规崘娉涢。娲⒑濞茶骞楁い銊ワ躬瀵寮撮悢铏瑰骄濡炪倖鐗楃喊宥夊闯娴犲鐓曟慨妤€妫楅悘锔芥叏婵犲嫮甯涢柟宄版嚇瀹曘劍绻濋崘銊ュ闂傚倷绀侀幖顐︽偋濠婂牆绀堟繛鎴炶壘閸ㄦ繃绻涢崱妯诲碍缂佺姴顭烽幃妤呮濞戞﹩妫屽┑鐐存綑鐎氭澘顫忓ú顏勭閹兼番鍨婚ˇ銉╂⒑缁嬪尅宸ラ柟鑺ョ矌閸掓帡宕奸妷銉╁敹闂侀潧绻嗛埀顒冩珪閻庨箖姊虹拠鎻掑毐缂傚秴妫濆畷浼村冀椤撶喎鈧潡鏌涢…鎴濅簴濞存粍绮撻弻鐔煎传閸曨厜銈嗐亜閿旂厧顩紒杈ㄥ笒铻栧ù锝呮憸閻熸煡姊洪棃娑欐悙閻庢矮鍗抽妴浣割潨閳ь剟宕规ィ鍐ㄧ闁圭粯宕奸妷锔跨箚闁绘劦浜滈埀顑懐涓嶉柟鐑樻煣閻掑﹥绻涢崱妯诲鞍闁稿骸顦伴妵鍕疀閹炬惌妫ょ紒鐐劤閵堟悂寮婚弴锛勭杸闁哄洨鍊姀銏㈢＜闁绘ü璀﹂崵娆撴煃鐟欏嫬鐏撮柛銊╃畺瀹曟﹢鎳犻鍕礈闂傚倷绀侀幉鈥愁潖瑜版帗鍋￠柍鍝勬噺閸嬫ɑ銇勯弴妤€浜惧Δ鐘靛仦鐢帟鐏冮梺閫炲苯澧扮紒顔剧帛缁轰粙宕ㄦ繝鍕箞闂備礁鎼ú銏ゅ礉瀹€鍕祦婵せ鍋撻柡宀嬬秮楠炴﹢寮堕幋鐘辨缂傚倷鑳剁划顖滄崲閸儱绠栧ù鐘差儐椤ュ牊绻涢幋鐐茬瑲闁诲海澧楃换婵嬫偨闂堟稐绮ч梺鍛婄墱婵炩偓鐎规洘顨婇幃娆擃敆閸屾稑鍨遍柣搴㈩問閸ｎ噣宕抽敐鍛殾闁绘挸绨堕弨浠嬫煕椤愮姴鐏╅柣鎰攻缁绘繈鎮介棃娴躲儵鏌℃担鍛婂暈闁逛究鍔戝鍫曞箠閵婏附銇濋柡浣稿暣瀹曟帒顫濋幉瀣覆闂傚倷鐒﹂惇褰掑垂瑜版帒绠熼柨鐔哄Т绾惧鏌嶉埡浣告殶缂佺娀绠栭弻娑㈠焺閸愮偓鐣肩紓浣哄Х婢ф濡甸崟顔剧杸闁挎繂瀚弫鏍磽娴ｄ粙鍝洪悽顖ょ節瀹曟椽鍩€椤掍降浜滈柟鐑樺灥椤忊晝绱掗埀顒勫礃椤旂晫鍘繝鐢靛仜閻忔繈鎮橀鍫熺厸闁稿本顨呮禍楣冩⒒閸屾艾鈧兘鎳楅崜浣稿灊妞ゆ牜鍋涚粈澶嬫叏濡炶浜惧銈冨灪閼归箖鈥﹂妸鈺侀唶婵犻潧鐗嗛幗瀣⒑閼姐倕孝婵炲眰鍔岄…鍥箰鎼淬垹鍔呴梺闈涱焾閸庢娊宕愰悙鐑樺仭婵犲﹤瀚粻鐐烘煟閹垮啫澧存い銏☆殕缁楃喖宕堕…鎴濇櫖闂傚倷鑳剁划顖炲礉閺囥埄鏁嬫い鎾跺枑濞呯姵銇勯幒鎴濐仾闁绘挻鐟ч埀顒傛嚀鐎氼喗鏅跺Δ鍛棷濞寸姴顑嗛悡娆撴煕濞嗗浚妲归悘蹇ュ閳ь剝顫夊ú婊堝窗閺嶎厹鈧礁螖閸涱厾锛滃┑顔筋焾妞存悂宕戣濮婂宕掑顑藉亾閹间礁纾归柟闂寸绾剧懓顪冪€ｎ亜顒㈡い鎰Г閹便劌螣閹稿海銆愰梺缁樺笒閻忔岸濡甸崟顖氱闁瑰瓨绺鹃崑鎾诲川婵犲嫷娴勫┑鐘诧工閻楀﹪鎮￠悩宕囩闁煎ジ顤傞崵娆撴煟韫囥儳绡€闁哄矉绻濆畷銊╊敇閻樿尙鍘芥俊鐐€戦崹铏圭矙閹达腹鈧箓濡搁埡浣哥獩濡炪倖鐗撻崐妤佹償婵犲洦鈷掗柛灞剧懆閸忓本銇勯鐐靛ⅵ鐎殿喚鏁婚、妤呭磼濠婂懐鍘梻浣烘嚀椤曨厽鎱ㄦ搴ｄ笉闁哄啫鐗婇悡娆撴煟閹寸倖鎴犱焊椤忓娊鐟邦煥閸曨厾鐓侀梺闈涙搐鐎氫即鐛崶顒€绀堝ù锝囨嚀娴犲綊姊绘担瑙勩仧闁告鏅弫顕€鏁撻悩鑼舵憰濠电偞鍨崹褰掓偂濮椻偓閺岀喖顢涢崱妤€鈧悂藟濮橆厾绡€缁炬澘顦辩壕鍧楁煕鐎ｎ偄鐏寸€规洘鍔欏浠嬵敃閿濆棙顔囬梻浣告贡閸庛倝寮婚敓鐘茬；闁圭偓鍓氬鈺呮煟閹炬娊顎楅柍宄邦儔濮?
 
 
   const handleCloseEditor = useCallback(() => {
-    setChapterQualityMetrics(null);
-    setIsEditorOpen(false);
+    closeChapterEditor({
+      setChapterQualityMetrics,
+      setIsEditorOpen,
+    });
   }, []);
 
   const editorAiSectionProps = useMemo(() => ({
@@ -4169,7 +2269,6 @@ export default function Chapters() {
     availableModels,
     canSaveSingleStoryCreationSnapshot,
     chapterQualityRefreshToken,
-    copyStoryCreationPrompt,
     currentEditingChapter?.chapter_number,
     currentEditingChapter?.id,
     deleteSingleStoryCreationSnapshot,
@@ -4248,6 +2347,70 @@ export default function Chapters() {
     onCloseEditor: handleCloseEditor,
   };
 
+  const batchGenerateModalProps: ChapterBatchGenerateModalProps = {
+    applyBatchCreationPreset,
+    applyBatchStoryCreationSnapshot,
+    applyInferredBatchPlotStage,
+    availableModels,
+    batchEnableAnalysis,
+    batchForm,
+    batchGenerateVisible,
+    batchGenerating,
+    batchProgress,
+    batchSelectedCreativeMode,
+    batchSelectedModel,
+    batchSelectedPlotStage,
+    batchSelectedQualityNotes,
+    batchSelectedQualityPreset,
+    batchSelectedStoryFocus,
+    batchStartChapterOptions,
+    batchStoryBeatPlannerDraft,
+    batchStoryCreationBriefDraft,
+    batchStoryCreationCurrentDraft,
+    batchStoryCreationSnapshots,
+    batchStorySceneOutlineDraft,
+    batchSuggestedStorySceneOutline,
+    batchSystemStoryBeatPlanner,
+    canSaveBatchStoryCreationSnapshot,
+    copyStoryCreationPrompt,
+    CREATIVE_MODE_OPTIONS,
+    deleteBatchStoryCreationSnapshot,
+    handleBatchGenerate,
+    handleCancelBatchGenerate,
+    isBatchStoryBeatPlannerCustomized,
+    isBatchStoryCreationBriefCustomized,
+    isBatchStoryCreationControlCustomized,
+    isBatchStorySceneOutlineCustomized,
+    isMobile,
+    modal,
+    knownStructureChapterCount,
+    projectDefaultCreativeMode,
+    projectDefaultPlotStage,
+    projectDefaultQualityNotes,
+    projectDefaultQualityPreset,
+    projectDefaultStoryFocus,
+    resolvedBatchStoryCreationBrief,
+    batchStoryCreationPromptLayerLabels,
+    batchStoryCreationPromptCharCount,
+    isBatchStoryCreationPromptVerbose,
+    STORY_CREATION_PROMPT_WARN_THRESHOLD,
+    saveBatchStoryCreationSnapshot,
+    selectedModel,
+    selectedStyleId,
+    setBatchGenerateVisible,
+    setBatchSelectedCreativeMode,
+    setBatchSelectedModel,
+    setBatchSelectedPlotStage,
+    setBatchSelectedQualityNotes,
+    setBatchSelectedQualityPreset,
+    setBatchSelectedStoryFocus,
+    setBatchStoryBeatPlannerDraft,
+    setBatchStoryCreationBriefDraft,
+    setBatchStorySceneOutlineDraft,
+    sortedChapters,
+    STORY_FOCUS_OPTIONS,
+    writingStyles,
+  };
   if (!currentProject) return null;
 
 
@@ -4290,7 +2453,7 @@ export default function Chapters() {
 
           <BookOutlined style={{ marginRight: 8 }} />
 
-          章节
+          缂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵割槮缁炬儳缍婇弻鐔兼⒒鐎靛壊妲紒鐐劤缂嶅﹪寮婚悢鍏尖拻閻庨潧澹婂Σ顔剧磼閻愵剙鍔ょ紓宥咃躬瀵鎮㈤崗灏栨嫽闁诲酣娼ф竟濠偽ｉ鍓х＜闁绘劦鍓欓崝銈囩磽瀹ュ拑韬€殿喖顭烽弫鎰緞婵犲嫷鍚呴梻浣瑰缁诲倿骞夊☉銏犵缂備焦顭囬崢杈ㄧ節閻㈤潧孝闁稿﹤缍婂畷鎴﹀Ψ閳哄倻鍘搁柣蹇曞仩椤曆勬叏閸屾壕鍋撳▓鍨灍婵炲吋鐟ㄩ悘鍐⒑闁偛鑻晶顖滅磼閸屾氨效妤犵偛妫滈¨浣圭箾閹炬剚鐓奸柡灞炬礋瀹曠厧鈹戠€ｇ鍋撳Δ鈧湁婵犲﹤瀚惌宀€绱掓潏銊ョ缂佽鲸甯掕灒闁惧繗顕栭崕灞剧節绾版ǚ鍋撻崘鑼獓闂佸憡姊归悷鈺呮偘椤曗偓楠炴帒螖閳ь剛绮婚悩纰樺亾鐟欏嫭绀€婵炲眰鍊濆鎼佸籍閸喓鍘垫俊鐐差儏妤犳悂鍩㈤崼鐕佹闁绘劕鐡ㄥ畷灞绢殽閻愭潙绗掓い鎾炽偢瀹曞爼鍩℃繝鍐冄囨⒒閸屾艾鈧悂宕愰幖浣哥９闁归棿绀佺壕褰掓煟閹达絽袚闁搞倕瀚伴弻娑㈠箻閼碱剦妲梺鎼炲妽缁诲啴濡甸崟顖氬唨妞ゆ劦婢€缁墎绱撴担鎻掍壕婵犮垼鍩栭崝鏍偂閵夆晜鐓涢柛銉㈡櫅娴犳粓鏌嶈閸撴瑩骞楀鍛灊闁割偁鍎辩壕鍏肩箾閹寸偞鐨戞い鏃€娲熷娲偡闁箑娈堕梺绋款儑閸犳牠濡撮崒鐐村殤妞ゆ垼妫勬禍?
 
         </h2>
 
@@ -4310,7 +2473,7 @@ export default function Chapters() {
 
             >
 
-              新建章节
+              闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵割槮缁炬儳缍婇弻鐔兼⒒鐎靛壊妲紒鐐劤缂嶅﹪寮婚悢鍏尖拻閻庨潧澹婂Σ顔剧磼閹冣挃闁硅櫕鎹囬垾鏃堝礃椤忎礁浜鹃柨婵嗙凹缁ㄥジ鏌熼惂鍝ョМ闁哄矉缍侀、姗€鎮欓幖顓燁棧闂備線娼уΛ娆戞暜閹烘缍栨繝闈涱儐閺呮煡鏌涘☉鍗炲妞ゃ儲鑹鹃埞鎴炲箠闁稿﹥顨嗛幈銊╂倻閽樺锛涢梺缁樺姉閸庛倝宕戠€ｎ喗鐓熸俊顖濆吹濠€浠嬫煃瑜滈崗娑氭濮橆剦鍤曢柟缁㈠枛椤懘鏌嶉埡浣告殲闁绘繃鐗犲缁樼瑹閳ь剟鍩€椤掑倸浠滈柤娲诲灡閺呭爼寮跺▎鍓у數闁荤喐鐟ョ€氼厾绮堟径鎰厪闁搞儯鍔屾慨宥嗩殽閻愭潙娴鐐搭焽閹瑰嫰宕崟顓у晥闂傚倸鍊搁崐鐑芥嚄閸撲礁鍨濇い鏍ㄥ嚬濞兼牕鈹戦悩瀹犲闁稿被鍔庨幉鍛婃償閿濆洨鐒块悗骞垮劚濡顢氶柆宥嗗€垫繛鎴炵懐閻掍粙鏌涘Ο鍦煓婵﹥妞藉畷顐﹀礋椤愮喎浜鹃柛锔诲幐閸嬫挾绮☉妯荤〗濠㈣埖鍔栭崐鐑芥煟椤愵偄澧梺甯到閻ｇ兘骞嗛柇锔筋€夐梻鍌氼煬閸擄箓宕滃璺何﹂柛鏇ㄥ灠椤懘鏌ㄥ☉妯侯仱婵℃彃鐗撳铏光偓鍦濞兼劙鏌涢妸銉т虎闁伙絿鍏橀弻鍡楊吋閸涱厼绁梻浣虹帛濮婂宕曢妶鍥╃閹艰揪绲跨壕浠嬫煕鐏炴崘澹橀柍褜鍓涢崗姗€骞冮悙鐑樻櫇闁稿本姘ㄩ敍鐔兼煟鎼粹剝璐″┑顔惧缁傚秷銇愰幒鎾跺幗闂佽澹嗘晶妤€鈽夎閺屾盯濡搁敂鍓х暫缂備胶绮惄顖氱暦閸楃倣鐔烘嫚閼碱剦鏆￠梻鍌欐祰濡嫰宕导鏉戠獥闁哄稁鍘奸拑鐔兼煥濠靛棭妲哥紒顐㈢Ч閺屾稓浠﹂幑鎰棟婵炲濮甸…鍥╂閹惧瓨濯撮柛婵嗗珔閿濆棙鍙忔俊顖滎焾婵倹顨ラ悙宸Ш缂侇喗鐟ラ埢搴ㄥ箚瑜庨崐顖氣攽閻橆喖鐏辨繛澶嬬洴閹囧礃椤旇偐锛涢梺瑙勫礃椤曆呭婵傚憡鐓熼柟閭﹀灠閻ㄧ儤銇勯弬鎸庡殗婵﹥妞藉畷妤呮⒒绾惧鐒婚梻浣侯焾鐎涒晜绻涙繝鍌滄殾闁靛繈鍊曠涵鈧梺缁樺姀閺呮粓寮埀顒勬⒑閸︻厼鍔嬪┑鐐诧工閻ｇ兘骞囬弶璺啋闂佸憡鎸烽懗鍫曟倿閸忚偐绠鹃柟鐐綑閻掑綊鏌涚€ｎ偅灏甸柍褜鍓濋～澶娒洪敃鍌氱；闁告洦鍘煎鍙変繆閻愵亜鈧洜鎹㈤幇鏉跨疇闁圭増婢橀崒銊╂煙闂傚鍔嶉柛濠勬暬閺屾稖绠涢幙鍐┬︽繛瀛樼矒缁犳牠寮婚敐鍡樺劅妞ゆ牗绮庢牎闂備礁鎲￠幐濠氭偡閳轰胶鏆﹂柛婵嗗閺嗗棝鏌涢弴銊ュ闁告瑥瀚换娑㈠级閹存繃鍊梺鑽ゅ暀閸涱垳鐓嬪銈嗘磵閸嬫捇鏌＄仦绯曞亾瀹曞洦娈曢柣搴秵閸撴稖鈪靛┑掳鍊楁慨鐑藉磻濞戙埄鏁勫鑸靛姇缁犳牗绻涢崱妯诲碍妤犵偑鍨烘穱濠囶敍濠靛浂浠╂繛瀵稿帶閻倿骞冨Δ鍐╁枂闁告洦鍓涢ˇ銊モ攽閻愯泛鐨洪柛鐘崇墵閹即顢欓崲澶屽枛閹虫牠鍩￠崘璺ㄥ簥濠电姷顣藉Σ鍛村垂閹惰棄鍌ㄧ憸宥夘敋?
 
             </Button>
 
@@ -4334,7 +2497,7 @@ export default function Chapters() {
 
           >
 
-            批量生成
+            闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵割槮缁炬儳缍婇弻鐔兼⒒鐎靛壊妲紒鐐劤缂嶅﹪寮婚悢鍏尖拻閻庨潧澹婂Σ顔剧磼閹冣挃闁硅櫕鎹囬垾鏃堝礃椤忎礁浜鹃柨婵嗙凹缁ㄥジ鏌熼惂鍝ョМ闁哄矉缍侀、姗€鎮欓幖顓燁棧闂傚倸娲らˇ鐢稿蓟閵娿儮鏀介柛鈩冪懃椤も偓婵＄偑鍊曠换鎺撴叏妞嬪孩顫曢柟鐑橆殔閻掑灚銇勯幒宥堝厡缂佲檧鍋撻梻浣侯焾閺堫剟銆冮崱娑樻闁逞屽墴濮婄粯鎷呴搹鐟扮闁藉啳浜幉鎼佸级閸喗娈茬紓浣稿€哥粔褰掑箖濞嗘挻鍊绘俊顖滃帶楠炴姊绘担鍛婅础闁稿簺鍊曢～蹇涙偡閹佃櫕鐎洪梺鍝勬储閸ㄦ椽鎮″▎鎾寸厱婵炲棗娴氬Σ娲煙閽樺鏆熺紒杈ㄥ浮閹晛鐣烽崶銊ュ灡闁诲孩顔栭崰妤呭箰閹惰棄绠栭柕鍫濇婵挳鏌涢敂璇插箻闁崇鍎靛濠氬磼濮橆兘鍋撻悜鑺ュ殑闁告挷绀侀崹婵囥亜閺嶎偄浠滅紒鈧径鎰厸闁搞儯鍎遍悞娲煛娴ｅ壊鍎愰柕鍥у楠炴鎹勯惄鎺嬪灩閳规垿顢氶崨顓炩拫闂佸搫鑻粔鐑铰ㄦ笟鈧弻娑㈠箻鐠虹儤鐎诲銈庡亜缁绘劗鍙呭銈呯箰鐎氼噣顢欓幇鐗堚拺缂備焦锚婵牏鎲搁弶鍨殲濞ｅ洤锕ㄩˇ瑙勬叏婵犲啯銇濇鐐寸墵閹瑩骞撻幒鎳躲倝姊绘担铏瑰笡闁瑰憡鎮傝棟闁告鍊ｉ敐澶婄疀闂侇叏闄勯弲銏ゆ⒑闁偛鑻晶鎾煕閳哄啫浠辨鐐差儔閺佸倿鎸婃径澶嬬潖闂傚倷绀佹竟濠囨偂閸儱纾婚柛娑卞帨閹烘绀嬫い鏍ㄧ▓閹疯櫣绱撴担鍓插剱妞ゆ垶鐟╁畷鏇㈠箛椤斿墽锛滈柣搴秵閸嬪嫰鎮橀柆宥嗙厽闊洦鏌ㄧ粭姘辩磼缂佹绠為柟顔荤矙濡啫霉闊彃鐏查柡灞剧洴閹垻鎹勯崫鍕偖闂備線娼уΛ妤呭箠濡櫣鏆﹂柨婵嗘缁剁偟鈧厜鍋撻柍褜鍓熼幆渚€宕奸妷锔规嫽闂佺鏈銊︽櫠濞戞ǜ鈧帒顫濋褎鐤侀悗瑙勬礃濞叉繄绮诲☉銏犲嵆闁绘顒茬槐锟犳⒒娴ｇ瓔鍤冮柛銊ラ閻ｆ繈鍩€椤掑嫬瑙﹂悗锝庡枟閳锋垿鏌涘┑鍡楊仾婵犫偓閻楀牏绠鹃柛娆忣樈閻掍粙鏌熼獮鍨仼闁宠棄顦垫慨鈧柍銉︽灱閸嬫捇鏌ㄧ€ｃ劋绨婚梺鐟版惈缁夌兘宕楀畝鈧幉鎼佸级閹稿寒妫﹀┑顔硷功缁垶骞忛崨瀛樻優闁荤喐澹嗛濂告⒒娴ｇ瓔娼愰柟顔煎€荤划濠氬冀瑜忛弳锕€霉閸忓吋缍戦柛鎰ㄥ亾婵＄偑鍊栭幐楣冨磻閻樿绠洪柡鍥ュ灪閳锋垿鎮归幁鎺戝闁哄鏌ㄩ埞鎴︻敊绾板崬娈剁紓渚囧枛閻楁挸鐣峰鈧、娆撴偩鐏炶棄濡囨繝鐢靛Х閺佹悂宕戝☉銏″€舵繝闈涱儏缁€澶嬬箾閸℃ê鐏╃痪鎯с偢閺屾洘绻涢崹顔瑰亾濡ゅ懏鍎楁繛鍡樺姈閸欏繐鈹戦悩鍙夊櫤妞ゅ繒濮风槐鎺撴綇閵娿儳鐟ㄩ柧浼欑秮閺岋綁骞嬮悜鍡欏姼闂佽皫鍌濆厡缂佽鲸鎹囧畷鎺戔枎閹烘垵甯┑鐘愁問閸犳岸寮繝姘畺鐟滄棃骞冮埡渚囧晠妞ゆ柨鍚嬮?
 
           </Button>
 
@@ -4354,7 +2517,7 @@ export default function Chapters() {
 
           >
 
-            导出
+            闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵割槮缁炬儳缍婇弻鐔兼⒒鐎靛壊妲紒鐐劤濠€閬嶅焵椤掑倹鍤€閻庢凹鍙冨畷宕囧鐎ｃ劋姹楅梺鍦劋閸ㄥ綊宕愰悙宸富闁靛牆妫楃粭鎺撱亜閿斿灝宓嗙€殿喗鐓￠、鏃堝醇閻旇渹鐢绘繝鐢靛Т閿曘倝宕悧鍫熸珡濠电姷鏁告慨顓㈠磻閹剧偨鈧帒顫濋敐鍛婵犳鍠栭敃銊モ枍閿濆洦顫曢柟鐑樺殾閻斿吋鎯為梺顐ｇ〒缁€鍐ㄢ攽閻樻鏆俊鎻掓嚇瀹曟垿宕熼娑樹壕婵﹩鍘界欢鍙夈亜閺囶亞绉€规洏鍔嶇换婵嬪礋椤撶喎娈為梻鍌欑窔閳ь剛鍋涢懟顖涙櫠鐎电硶鍋撳▓鍨灈妞ゎ厾鍏橀獮鍐閵堝懐顦ч柣蹇撶箲閻楁鈧矮绮欏铏规嫚閺屻儱寮板┑鐐板尃閸曨厾褰炬繝鐢靛Т娴硷綁鏁愭径妯绘櫔闂侀€炲苯澧い顐㈢箻閹煎綊宕烽鐘靛幆闂備礁鍚嬮崜姘跺垂閻撳寒鐒介柛顐ｆ礃閳锋垿鏌涘☉姗堟敾闁绘挶鍎靛铏规暜椤斿墽袦闂佺粯渚楅崰妤€顕ラ崟顖氱疀妞ゆ帒鍋嗛崯鍥р攽閻愯埖褰х紒韫矙楠炲鏁撻悩鎾愁槸閳规垹鈧綆鍋嗛崢浠嬫⒑缂佹◤顏堝储閺嶎厽鍤嬫い蹇撶墛閻撴洟鏌￠崒婵囩《鐎涙繈姊?
 
           </Button>
 
@@ -4364,10 +2527,10 @@ export default function Chapters() {
 
               {currentProject.outline_mode === 'one-to-one'
 
-                ? "一章一纲"
+                ? "One outline per chapter"
 
-                : "一纲多章"}
-
+                : "Grouped outline mode"
+              }
             </Tag>
 
           )}
@@ -4375,207 +2538,41 @@ export default function Chapters() {
         </Space>
 
       </div>
-
-
-
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-
-        {chapters.length === 0 ? (
-
-          <Empty description="暂无章节" />
-
-        ) : currentProject.outline_mode === 'one-to-one' ? (
-
-          <List
-
-            rowKey="id"
-
-            dataSource={sortedChapters}
-
-            renderItem={(item) => (
-
-              <ChapterListItem
-
-                chapter={item}
-
-                variant="flat"
-
-                isMobile={isMobile}
-
-                showOutlineActions={false}
-
-                analysisTask={analysisTasksMap[item.id]}
-
-                canGenerate={chapterGenerationStateById[item.id]?.canGenerate ?? false}
-
-                generateDisabledReason={chapterGenerationStateById[item.id]?.disabledReason ?? ''}
-
-                onOpenReader={handleOpenReader}
-
-                onOpenEditor={handleOpenEditor}
-
-                onShowAnalysis={handleShowAnalysis}
-
-                onOpenSettings={handleOpenModal}
-
-                onDeleteChapter={handleDeleteChapter}
-
-                onShowExpansionPlan={showExpansionPlanModal}
-
-                onOpenPlanEditor={handleOpenPlanEditor}
-
-              />
-
-            )}
-
-          />
-
-        ) : (
-
-
-          <Collapse
-
-            bordered={false}
-
-            defaultActiveKey={expandedChapterGroupKeys}
-
-            expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} />}
-
-            style={{ background: 'transparent' }}
-
-          >
-
-            {groupedChapters.map((group) => (
-
-              <Collapse.Panel
-
-                key={group.key}
-
-                header={
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-
-                    <Tag color={group.outlineId ? 'blue' : 'default'} style={{ margin: 0 }}>
-
-                      {group.outlineId ? `大纲 ${group.outlineOrder}` : "未分组"}
-
-                    </Tag>
-
-                    <span style={{ fontWeight: 600, fontSize: 16 }}>
-
-                      {group.outlineTitle}
-
-                    </span>
-
-                    <Badge
-
-                      count={`${group.chapters.length}?`}
-
-                      style={{ backgroundColor: 'var(--color-success)' }}
-
-                    />
-
-                    <Badge
-
-                      count={`${group.totalWordCount}?`}
-
-                      style={{ backgroundColor: 'var(--color-primary)' }}
-
-                    />
-
-                  </div>
-
-                }
-
-                style={{
-
-                  marginBottom: 16,
-
-                  background: '#fff',
-
-                  borderRadius: 8,
-
-                  border: '1px solid #f0f0f0',
-
-                }}
-
-              >
-
-                <List
-
-                  rowKey="id"
-
-                  dataSource={group.chapters}
-
-                  renderItem={(item) => (
-
-                    <ChapterListItem
-
-                      chapter={item}
-
-                      variant="grouped"
-
-                      isMobile={isMobile}
-
-                      showOutlineActions={currentProject.outline_mode === 'one-to-many'}
-
-                      analysisTask={analysisTasksMap[item.id]}
-
-                      canGenerate={chapterGenerationStateById[item.id]?.canGenerate ?? false}
-
-                      generateDisabledReason={chapterGenerationStateById[item.id]?.disabledReason ?? ''}
-
-                      onOpenReader={handleOpenReader}
-
-                      onOpenEditor={handleOpenEditor}
-
-                      onShowAnalysis={handleShowAnalysis}
-
-                      onOpenSettings={handleOpenModal}
-
-                      onDeleteChapter={handleDeleteChapter}
-
-                      onShowExpansionPlan={showExpansionPlanModal}
-
-                      onOpenPlanEditor={handleOpenPlanEditor}
-
-                    />
-
-                  )}
-
-                />
-
-              </Collapse.Panel>
-
-            ))}
-
-          </Collapse>
-
-        )}
-
+        <ChapterListSection
+          chapters={chapters}
+          sortedChapters={sortedChapters}
+          outlineMode={currentProject.outline_mode}
+          groupedChapters={groupedChapters}
+          expandedChapterGroupKeys={expandedChapterGroupKeys}
+          isMobile={isMobile}
+          analysisTasksMap={analysisTasksMap}
+          chapterGenerationStateById={chapterGenerationStateById}
+          onOpenReader={handleOpenReader}
+          onOpenEditor={handleOpenEditor}
+          onShowAnalysis={handleShowAnalysis}
+          onOpenSettings={handleOpenModal}
+          onDeleteChapter={handleDeleteChapter}
+          onShowExpansionPlan={showExpansionPlanModal}
+          onOpenPlanEditor={handleOpenPlanEditor}
+        />
       </div>
 
-
-
-      {isModalOpen ? (
-        <Suspense fallback={null}>
-          <LazyChapterBasicModal
-            open={isModalOpen}
-            title={editingId ? "编辑章节" : "新建章节"}
-            isMobile={isMobile}
-            outlineMode={currentProject.outline_mode}
-            submitText={editingId ? "保存修改" : "创建章节"}
-            form={form}
-            onCancel={() => setIsModalOpen(false)}
-            onFinish={handleSubmit}
-          />
-        </Suspense>
-      ) : null}
+      <ChapterBasicModalEntry
+        open={isModalOpen}
+        title={editingId ? "Edit chapter" : "Create chapter"}
+        isMobile={isMobile}
+        outlineMode={currentProject.outline_mode}
+        submitText={editingId ? "Save changes" : "Create chapter"}
+        form={form}
+        onCancel={() => setIsModalOpen(false)}
+        onFinish={handleSubmit}
+      />
 
       {isEditorOpen ? (
         <Modal
 
-        title="编辑章节内容"
+        title={'Edit chapter content'}
 
         open={isEditorOpen}
 
@@ -4631,332 +2628,82 @@ export default function Chapters() {
 
 
 
-      {analysisChapterId ? (
-
-        <Suspense fallback={null}>
-
-          <LazyChapterAnalysis
-
-            chapterId={analysisChapterId}
-
-            visible={analysisVisible}
-
-            onClose={() => {
-
-              setAnalysisVisible(false);
-
-
-
-
-            refreshChapters();
-
-
-
-
-            if (currentProject) {
-
-              projectApi.getProject(currentProject.id)
-
-                .then(updatedProject => {
-
-                  setCurrentProject(updatedProject);
-
-                })
-
-                .catch(error => {
-
-                  console.error('Failed to refresh chapter analysis after closing modal.', error);
-
-                });
-
-            }
-
-
-
-
-            if (analysisChapterId) {
-
-              const chapterIdToRefresh = analysisChapterId;
-
-
-
-              setTimeout(() => {
-
-                refreshChapterAnalysisTask(chapterIdToRefresh)
-
-                  .catch(error => {
-
-                    console.error('Failed to refresh chapter analysis after delayed retry.', error);
-
-
-                    setTimeout(() => {
-
-                      refreshChapterAnalysisTask(chapterIdToRefresh)
-
-                        .catch(err => console.error('Failed to refresh chapter analysis after second retry.', err));
-
-                    }, 1000);
-
-                  });
-
-              }, 500);
-
-            }
-
-
-
-            setAnalysisChapterId(null);
-
-          }}
-
-          />
-
-        </Suspense>
-
-      ) : null}
-
-
-
-      {batchGenerateVisible || batchGenerating ? (
-        <Suspense fallback={null}>
-          <LazyChapterBatchGenerateModal
-            applyBatchCreationPreset={applyBatchCreationPreset}
-            applyBatchStoryCreationSnapshot={applyBatchStoryCreationSnapshot}
-            applyInferredBatchPlotStage={applyInferredBatchPlotStage}
-            availableModels={availableModels}
-            batchEnableAnalysis={batchEnableAnalysis}
-            batchForm={batchForm}
-            batchGenerateVisible={batchGenerateVisible}
-            batchGenerating={batchGenerating}
-            batchProgress={batchProgress}
-            batchSelectedCreativeMode={batchSelectedCreativeMode}
-            batchSelectedModel={batchSelectedModel}
-            batchSelectedPlotStage={batchSelectedPlotStage}
-            batchSelectedQualityNotes={batchSelectedQualityNotes}
-            batchSelectedQualityPreset={batchSelectedQualityPreset}
-            batchSelectedStoryFocus={batchSelectedStoryFocus}
-            batchStartChapterOptions={batchStartChapterOptions}
-            batchStoryBeatPlannerDraft={batchStoryBeatPlannerDraft}
-            batchStoryCreationBriefDraft={batchStoryCreationBriefDraft}
-            batchStoryCreationCurrentDraft={batchStoryCreationCurrentDraft}
-            batchStoryCreationSnapshots={batchStoryCreationSnapshots}
-            batchStorySceneOutlineDraft={batchStorySceneOutlineDraft}
-            batchSuggestedStorySceneOutline={batchSuggestedStorySceneOutline}
-            batchSystemStoryBeatPlanner={batchSystemStoryBeatPlanner}
-            canSaveBatchStoryCreationSnapshot={canSaveBatchStoryCreationSnapshot}
-            copyStoryCreationPrompt={copyStoryCreationPrompt}
-            CREATIVE_MODE_OPTIONS={CREATIVE_MODE_OPTIONS}
-            deleteBatchStoryCreationSnapshot={deleteBatchStoryCreationSnapshot}
-            handleBatchGenerate={handleBatchGenerate}
-            handleCancelBatchGenerate={handleCancelBatchGenerate}
-            isBatchStoryBeatPlannerCustomized={isBatchStoryBeatPlannerCustomized}
-            isBatchStoryCreationBriefCustomized={isBatchStoryCreationBriefCustomized}
-            isBatchStoryCreationControlCustomized={isBatchStoryCreationControlCustomized}
-            isBatchStorySceneOutlineCustomized={isBatchStorySceneOutlineCustomized}
-            isMobile={isMobile}
-            modal={modal}
-            knownStructureChapterCount={knownStructureChapterCount}
-            projectDefaultCreativeMode={projectDefaultCreativeMode}
-            projectDefaultPlotStage={projectDefaultPlotStage}
-            projectDefaultQualityNotes={projectDefaultQualityNotes}
-            projectDefaultQualityPreset={projectDefaultQualityPreset}
-            projectDefaultStoryFocus={projectDefaultStoryFocus}
-            resolvedBatchStoryCreationBrief={resolvedBatchStoryCreationBrief}
-            batchStoryCreationPromptLayerLabels={batchStoryCreationPromptLayerLabels}
-            batchStoryCreationPromptCharCount={batchStoryCreationPromptCharCount}
-            isBatchStoryCreationPromptVerbose={isBatchStoryCreationPromptVerbose}
-            STORY_CREATION_PROMPT_WARN_THRESHOLD={STORY_CREATION_PROMPT_WARN_THRESHOLD}
-            saveBatchStoryCreationSnapshot={saveBatchStoryCreationSnapshot}
-            selectedModel={selectedModel}
-            selectedStyleId={selectedStyleId}
-            setBatchGenerateVisible={setBatchGenerateVisible}
-            setBatchSelectedCreativeMode={setBatchSelectedCreativeMode}
-            setBatchSelectedModel={setBatchSelectedModel}
-            setBatchSelectedPlotStage={setBatchSelectedPlotStage}
-            setBatchSelectedQualityNotes={setBatchSelectedQualityNotes}
-            setBatchSelectedQualityPreset={setBatchSelectedQualityPreset}
-            setBatchSelectedStoryFocus={setBatchSelectedStoryFocus}
-            setBatchStoryBeatPlannerDraft={setBatchStoryBeatPlannerDraft}
-            setBatchStoryCreationBriefDraft={setBatchStoryCreationBriefDraft}
-            setBatchStorySceneOutlineDraft={setBatchStorySceneOutlineDraft}
-            sortedChapters={sortedChapters}
-            STORY_FOCUS_OPTIONS={STORY_FOCUS_OPTIONS}
-            writingStyles={writingStyles}
-          />
-        </Suspense>
-      ) : null}
-
-
-      {isGenerating ? (
-
-        <Suspense fallback={null}>
-
-          <LazySSELoadingOverlay
-
-            loading={isGenerating}
-
-            progress={singleChapterProgress}
-
-            message={singleChapterProgressMessage}
-
-            blocking={false}
-
-          />
-
-        </Suspense>
-
-      ) : null}
-
-
-
-
-      {batchGenerating ? (
-
-        <Suspense fallback={null}>
-
-          <LazySSEProgressModal
-
-            visible={batchGenerating}
-
-            progress={batchProgress ? Math.round((batchProgress.completed / batchProgress.total) * 100) : 0}
-
-            message={
-              batchProgress?.current_chapter_number
-                ? `正在生成第 ${batchProgress.current_chapter_number} 章... (${batchProgress.completed}/${batchProgress.total})${
-                    batchProgress.latest_quality_metrics?.overall_score !== undefined
-                      ? ` 评分：${batchProgress.latest_quality_metrics.overall_score}`
-                      : ''
-                  }${batchProgressCheckpointLabel ? ` | ${batchProgressCheckpointLabel}` : ''}${batchProgressRepairLabel ? ` | ${batchProgressRepairLabel}` : ''}`
-                : `批量生成进行中... (${batchProgress?.completed || 0}/${batchProgress?.total || 0})${
-                    batchProgress?.latest_quality_metrics?.overall_score !== undefined
-                      ? ` 评分：${batchProgress.latest_quality_metrics.overall_score}`
-                      : ''
-                  }${batchProgressCheckpointLabel ? ` | ${batchProgressCheckpointLabel}` : ''}${batchProgressRepairLabel ? ` | ${batchProgressRepairLabel}` : ''}`
-            }
-            title="批量生成进度"
-
-            onCancel={() => {
-
-              modal.confirm({
-
-                title: '确认取消批量生成？',
-
-                content: '取消后当前批量生成任务将停止，已生成的章节会保留。确定要取消吗？',
-
-                okText: '确认取消',
-
-                cancelText: '继续生成',
-
-                okButtonProps: { danger: true },
-
-                centered: true,
-
-                onOk: handleCancelBatchGenerate,
-
-              });
-
-            }}
-
-            cancelButtonText="取消生成"
-
-            blocking={false}
-
-          />
-
-        </Suspense>
-
-      ) : null}
-
-
-
-      <FloatButton
-
-        icon={<BookOutlined />}
-
-        type="primary"
-
-        tooltip="打开章节目录"
-
-        onClick={() => setIsIndexPanelVisible(true)}
-
-        style={{ right: isMobile ? 24 : 48, bottom: isMobile ? 80 : 48 }}
-
+      <ChapterAnalysisEntry
+        chapterId={analysisChapterId}
+        visible={analysisVisible}
+        onClose={handleCloseAnalysis}
+      />
+      <ChapterBatchGenerateModalEntry
+        visible={batchGenerateVisible || batchGenerating}
+        modalProps={batchGenerateModalProps}
+      />
+      <SingleChapterGenerationOverlayEntry
+        loading={isGenerating}
+        progress={singleChapterProgress}
+        message={singleChapterProgressMessage}
+      />
+      <ChapterBatchProgressEntry
+        visible={batchGenerating}
+        progress={batchProgress ? Math.round((batchProgress.completed / batchProgress.total) * 100) : 0}
+        message={
+          batchProgress?.current_chapter_number
+            ? [
+                `Generating chapter ${batchProgress.current_chapter_number}/${batchProgress.total}`,
+                batchProgress.latest_quality_metrics?.overall_score !== undefined
+                  ? `Score ${batchProgress.latest_quality_metrics.overall_score}`
+                  : null,
+                batchProgressCheckpointLabel,
+                batchProgressRepairLabel,
+              ].filter(Boolean).join(' | ')
+            : [
+                'Preparing batch generation',
+                batchProgress?.latest_quality_metrics?.overall_score !== undefined
+                  ? `Score ${batchProgress.latest_quality_metrics.overall_score}`
+                  : null,
+                batchProgressCheckpointLabel,
+                batchProgressRepairLabel,
+              ].filter(Boolean).join(' | ')
+        }
+        onCancel={() => {
+          modal.confirm({
+            title: 'Cancel batch generation',
+            content: 'Stop the current batch generation task?',
+            okText: 'Stop',
+            cancelText: 'Keep running',
+            okButtonProps: { danger: true },
+            centered: true,
+            onOk: handleCancelBatchGenerate,
+          });
+        }}
+      />
+
+      <FloatingIndexPanelEntry
+        floatingIndexPanelState={floatingIndexPanelState}
+        floatingIndexPanelTriggerProps={floatingIndexPanelTriggerProps}
+        onClose={handleCloseIndexPanel}
+        onChapterSelect={handleChapterSelect}
       />
 
 
 
-      {isIndexPanelVisible ? (
 
-        <Suspense fallback={null}>
-
-          <LazyFloatingIndexPanel
-
-            visible={isIndexPanelVisible}
-
-            onClose={() => setIsIndexPanelVisible(false)}
-
-            groupedChapters={groupedChapters}
-
-            onChapterSelect={handleChapterSelect}
-
-          />
-
-        </Suspense>
-
-      ) : null}
+      <ChapterReaderEntry
+        chapterReaderModalState={chapterReaderModalState}
+        onClose={handleCloseReader}
+        onChapterChange={handleReaderChapterChange}
+      />
 
 
 
 
-      {readerVisible && readingChapter ? (
-
-        <Suspense fallback={null}>
-
-          <LazyChapterReader
-
-            visible={readerVisible}
-
-            chapter={readingChapter}
-
-            onClose={() => {
-
-              setReaderVisible(false);
-
-              setReadingChapter(null);
-
-            }}
-
-            onChapterChange={handleReaderChapterChange}
-
-          />
-
-        </Suspense>
-
-      ) : null}
-
-
-
-
-      {planEditorVisible && editingPlanChapter && currentProject ? (
-        <Suspense fallback={null}>
-          <LazyExpansionPlanEditor
-            visible={planEditorVisible}
-            planData={parsedEditingPlanData}
-            chapterSummary={editingPlanChapter.summary || null}
-            projectId={currentProject.id}
-            onSave={handleSavePlan}
-            onCancel={() => {
-              setPlanEditorVisible(false);
-              setEditingPlanChapter(null);
-            }}
-          />
-        </Suspense>
-      ) : null}
+      <ChapterPlanEditorEntry
+        planEditorModalState={planEditorModalState}
+        onSave={handleSavePlan}
+        onCancel={handleClosePlanEditor}
+      />
 
     </div>
     </>
   );
 
 }
-
-

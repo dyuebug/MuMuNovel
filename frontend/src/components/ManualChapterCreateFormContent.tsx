@@ -1,16 +1,25 @@
 import { Form, Input, InputNumber, Select } from 'antd';
 import type { FormInstance } from 'antd';
+import type { Chapter } from '../types';
 
 const { TextArea } = Input;
 
-type ManualChapterCreateOutlineOption = {
+export type ManualChapterCreateOutlineOption = {
   id: string;
   order_index: number;
   title: string;
 };
 
+export type ManualChapterCreateFormValues = {
+  chapter_number: number;
+  title: string;
+  outline_id: string;
+  summary?: string;
+  status: Chapter['status'];
+};
+
 type ManualChapterCreateFormContentProps = {
-  form: FormInstance;
+  form: FormInstance<ManualChapterCreateFormValues>;
   nextChapterNumber: number;
   sortedOutlines: ManualChapterCreateOutlineOption[];
 };
@@ -31,29 +40,29 @@ export default function ManualChapterCreateFormContent({
       style={{ marginTop: 16 }}
     >
       <Form.Item
-        label="章节编号"
+        label="Chapter number"
         name="chapter_number"
-        rules={[{ required: true, message: '请输入章节编号' }]}
-        tooltip="用于章节排序"
+        rules={[{ required: true, message: 'Please enter the chapter number' }]}
+        tooltip="Used for chapter ordering"
       >
-        <InputNumber min={1} style={{ width: '100%' }} placeholder="请输入章节编号" />
+        <InputNumber min={1} style={{ width: '100%' }} placeholder="Enter the chapter number" />
       </Form.Item>
 
       <Form.Item
-        label="章节标题"
+        label="Chapter title"
         name="title"
-        rules={[{ required: true, message: '请输入章节标题' }]}
+        rules={[{ required: true, message: 'Please enter the chapter title' }]}
       >
-        <Input placeholder="请输入章节标题" />
+        <Input placeholder="Enter the chapter title" />
       </Form.Item>
 
       <Form.Item
-        label="大纲"
+        label="Outline"
         name="outline_id"
-        rules={[{ required: true, message: '请选择大纲' }]}
-        tooltip="每章必须归属到某个大纲"
+        rules={[{ required: true, message: 'Please select an outline' }]}
+        tooltip="Each chapter must belong to an outline"
       >
-        <Select placeholder="请选择大纲">
+        <Select placeholder="Select an outline">
           {sortedOutlines.map((outline) => (
             <Select.Option key={outline.id} value={outline.id}>
               {`#${outline.order_index} ${outline.title}`}
@@ -63,18 +72,18 @@ export default function ManualChapterCreateFormContent({
       </Form.Item>
 
       <Form.Item
-        label="概要"
+        label="Summary"
         name="summary"
-        tooltip="章节的简要概要。"
+        tooltip="A short summary of this chapter"
       >
-        <TextArea rows={4} placeholder="请输入简要概要" />
+        <TextArea rows={4} placeholder="Enter a short summary" />
       </Form.Item>
 
-      <Form.Item label="状态" name="status">
+      <Form.Item label="Status" name="status">
         <Select>
-          <Select.Option value="draft">草稿</Select.Option>
-          <Select.Option value="writing">写作中</Select.Option>
-          <Select.Option value="completed">已完成</Select.Option>
+          <Select.Option value="draft">Draft</Select.Option>
+          <Select.Option value="writing">Writing</Select.Option>
+          <Select.Option value="completed">Completed</Select.Option>
         </Select>
       </Form.Item>
     </Form>

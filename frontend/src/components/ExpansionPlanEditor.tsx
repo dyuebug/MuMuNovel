@@ -2,7 +2,7 @@ import { Modal, Form, Input, InputNumber, Select, Tag, Space, Button, message, D
 import { PlusOutlined } from '@ant-design/icons';
 import { useState, useEffect, useCallback } from 'react';
 import type { ExpansionPlanData, Character } from '../types';
-import { characterApi } from '../services/api';
+import { characterApi } from '../services/modularApi';
 
 const { TextArea } = Input;
 

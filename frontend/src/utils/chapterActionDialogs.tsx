@@ -1,16 +1,105 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { InfoCircleOutlined } from '@ant-design/icons';
+import type { FormInstance } from 'antd';
 import { Space } from 'antd';
 import ChapterExpansionPlanPreviewContent from '../components/ChapterExpansionPlanPreviewContent';
 import ChapterNumberConflictConfirmContent from '../components/ChapterNumberConflictConfirmContent';
 import ContinueGenerateConfirmContent from '../components/ContinueGenerateConfirmContent';
-import ManualChapterCreateFormContent from '../components/ManualChapterCreateFormContent';
-import { CREATION_PLOT_STAGE_OPTIONS } from '../utils/creationPresetsCore';
-import type { ExpansionPlanData } from '../types';
+import ManualChapterCreateFormContent, {
+  type ManualChapterCreateFormValues,
+  type ManualChapterCreateOutlineOption,
+} from '../components/ManualChapterCreateFormContent';
+import type { Chapter, ChapterCreate, ExpansionPlanData, Project, WritingStyle } from '../types';
+import { CREATION_PLOT_STAGE_OPTIONS } from './creationPresetsCore';
+import {
+  CREATIVE_MODE_OPTIONS,
+  STORY_FOCUS_OPTIONS,
+} from './generationPreferenceOptions';
 
-const resolveOptionLabel = (options: any[], value: string | undefined, fallback = '未选择') => {
-  if (!value) return fallback;
-  return options.find((item) => item.value === value)?.label || value;
+type SelectionOption = {
+  value: string;
+  label: string;
+};
+
+type MessageApiLike = {
+  error: (content: string) => void;
+  success: (content: string) => void;
+};
+
+type ModalConfirmInstance = {
+  update: (config: Record<string, unknown>) => void;
+  destroy: () => void;
+};
+
+type ModalInstanceApiLike = {
+  confirm: (config: Record<string, unknown>) => ModalConfirmInstance;
+};
+
+type ModalConfirmApiLike = {
+  confirm: (config: Record<string, unknown>) => unknown;
+};
+
+type ModalInfoApiLike = {
+  info: (config: Record<string, unknown>) => unknown;
+};
+
+type ContinueGenerateChapterPreview = Pick<Chapter, 'id' | 'chapter_number' | 'title' | 'word_count'>;
+type ContinueGenerateChapterContext = Pick<Chapter, 'chapter_number'>;
+type WritingStylePreview = Pick<WritingStyle, 'id' | 'name'>;
+type ManualCreateChapterRequest = ChapterCreate & { outline_id: string; status: Chapter['status'] };
+type ChapterApiLike = {
+  createChapter: (data: ManualCreateChapterRequest) => Promise<Chapter>;
+};
+
+type ProjectApiLike = {
+  getProject: (id: string) => Promise<Project>;
+};
+
+type ContinueGenerateDialogParams = {
+  modal: ModalInstanceApiLike;
+  chapter: ContinueGenerateChapterContext;
+  sortedChapters: ContinueGenerateChapterPreview[];
+  writingStyles: WritingStylePreview[];
+  selectedStyleId?: WritingStyle['id'];
+  selectedCreativeMode?: string;
+  selectedStoryFocus?: string;
+  selectedPlotStage?: string;
+  targetWordCount: number;
+  handleGenerate: () => Promise<void>;
+  message: Pick<MessageApiLike, 'error'>;
+};
+
+type ManualCreateDialogParams = {
+  modal: ModalConfirmApiLike;
+  chapters: Chapter[];
+  manualCreateForm: FormInstance<ManualChapterCreateFormValues>;
+  sortedOutlines: ManualChapterCreateOutlineOption[];
+  currentProject: Project | null;
+  chapterApi: ChapterApiLike;
+  projectApi: ProjectApiLike;
+  refreshChapters: () => Promise<Chapter[]> | void;
+  setCurrentProject: (project: Project | null) => void;
+  message: MessageApiLike;
+  handleDeleteChapter: (chapterId: string) => Promise<void>;
+  getStatusText: (status: Chapter['status']) => string;
+};
+
+type ExpansionPlanPreviewDialogParams = {
+  modal: ModalConfirmApiLike & ModalInfoApiLike;
+  chapter: Pick<Chapter, 'chapter_number' | 'title' | 'expansion_plan'>;
+  isMobile: boolean;
+  message: Pick<MessageApiLike, 'error'>;
+};
+
+const resolveOptionLabel = (
+  options: SelectionOption[] | undefined,
+  value: string | undefined,
+  fallback = 'Not selected',
+): string => {
+  if (!value) {
+    return fallback;
+  }
+
+  return options?.find((item) => item.value === value)?.label || value;
 };
 
 export const openContinueGenerateDialog = ({
@@ -20,16 +109,14 @@ export const openContinueGenerateDialog = ({
   writingStyles,
   selectedStyleId,
   selectedCreativeMode,
-  CREATIVE_MODE_OPTIONS,
   selectedStoryFocus,
-  STORY_FOCUS_OPTIONS,
   selectedPlotStage,
   targetWordCount,
   handleGenerate,
   message,
-}: any) => {
-  const previousChapters = sortedChapters.filter((item: any) => item.chapter_number < chapter.chapter_number);
-  const selectedStyle = writingStyles.find((item: any) => item.id === selectedStyleId);
+}: ContinueGenerateDialogParams): void => {
+  const previousChapters = sortedChapters.filter((item) => item.chapter_number < chapter.chapter_number);
+  const selectedStyle = writingStyles.find((item) => item.id === selectedStyleId);
   const creativeModeLabel = resolveOptionLabel(CREATIVE_MODE_OPTIONS, selectedCreativeMode);
   const storyFocusLabel = resolveOptionLabel(STORY_FOCUS_OPTIONS, selectedStoryFocus);
   const plotStageLabel = resolveOptionLabel(CREATION_PLOT_STAGE_OPTIONS, selectedPlotStage);
@@ -43,7 +130,7 @@ export const openContinueGenerateDialog = ({
   };
 
   const instance = modal.confirm({
-    title: '确认继续生成',
+    title: 'Confirm continue generation',
     width: 700,
     centered: true,
     content: (
@@ -56,9 +143,9 @@ export const openContinueGenerateDialog = ({
         previousChapters={previousChapters}
       />
     ),
-    okText: '继续生成',
+    okText: 'Continue',
     okButtonProps: { danger: true },
-    cancelText: '取消',
+    cancelText: 'Cancel',
     onOk: async () => {
       instance.update({
         okButtonProps: { danger: true, loading: true },
@@ -70,7 +157,7 @@ export const openContinueGenerateDialog = ({
 
       try {
         if (!selectedStyleId) {
-          message.error('请先选择写作风格');
+          message.error('Please select a writing style first');
           instance.update(restoreState);
           return;
         }
@@ -97,33 +184,36 @@ export const openManualCreateChapterDialog = ({
   message,
   handleDeleteChapter,
   getStatusText,
-}: any) => {
-  if (!currentProject) return;
+}: ManualCreateDialogParams): void => {
+  if (!currentProject) {
+    return;
+  }
 
   const nextChapterNumber = chapters.length > 0
-    ? Math.max(...chapters.map((chapter: any) => chapter.chapter_number)) + 1
+    ? Math.max(...chapters.map((chapter) => chapter.chapter_number)) + 1
     : 1;
 
-  const createChapter = async (values: any) => {
+  const createChapter = async (values: ManualChapterCreateFormValues): Promise<void> => {
     try {
       await chapterApi.createChapter({
         project_id: currentProject.id,
         ...values,
       });
 
-      message.success('章节创建成功');
+      message.success('Chapter created successfully');
       await refreshChapters();
       const updatedProject = await projectApi.getProject(currentProject.id);
       setCurrentProject(updatedProject);
       manualCreateForm.resetFields();
-    } catch (error: any) {
-      message.error(`章节创建失败：${error?.message || '未知错误'}`);
+    } catch (error) {
+      const err = error as Error;
+      message.error(`Failed to create chapter: ${err.message || 'Unknown error'}`);
       throw error;
     }
   };
 
   modal.confirm({
-    title: '手动创建章节',
+    title: 'Create chapter manually',
     width: 600,
     centered: true,
     content: (
@@ -133,15 +223,15 @@ export const openManualCreateChapterDialog = ({
         sortedOutlines={sortedOutlines}
       />
     ),
-    okText: '创建章节',
-    cancelText: '取消',
+    okText: 'Create chapter',
+    cancelText: 'Cancel',
     onOk: async () => {
       const values = await manualCreateForm.validateFields();
-      const conflictChapter = chapters.find((chapter: any) => chapter.chapter_number === values.chapter_number);
+      const conflictChapter = chapters.find((chapter) => chapter.chapter_number === values.chapter_number);
 
       if (conflictChapter) {
         modal.confirm({
-          title: '章节编号冲突',
+          title: 'Chapter number conflict',
           icon: <InfoCircleOutlined style={{ color: '#ff4d4f' }} />,
           width: 500,
           centered: true,
@@ -152,12 +242,12 @@ export const openManualCreateChapterDialog = ({
               statusText={getStatusText(conflictChapter.status)}
             />
           ),
-          okText: '删除原章节并创建',
+          okText: 'Delete existing chapter and create',
           okButtonProps: { danger: true },
-          cancelText: '取消',
+          cancelText: 'Cancel',
           onOk: async () => {
             await handleDeleteChapter(conflictChapter.id);
-            await new Promise((resolve) => setTimeout(resolve, 300));
+            await new Promise((resolve) => window.setTimeout(resolve, 300));
             await createChapter(values);
           },
         });
@@ -175,8 +265,10 @@ export const openExpansionPlanPreviewDialog = ({
   chapter,
   isMobile,
   message,
-}: any) => {
-  if (!chapter.expansion_plan) return;
+}: ExpansionPlanPreviewDialogParams): void => {
+  if (!chapter.expansion_plan) {
+    return;
+  }
 
   try {
     const planData: ExpansionPlanData = JSON.parse(chapter.expansion_plan);
@@ -185,7 +277,7 @@ export const openExpansionPlanPreviewDialog = ({
       title: (
         <Space style={{ flexWrap: 'wrap' }}>
           <InfoCircleOutlined style={{ color: 'var(--color-primary)' }} />
-          <span style={{ wordBreak: 'break-word' }}>{`第 ${chapter.chapter_number} 章扩写计划`}</span>
+          <span style={{ wordBreak: 'break-word' }}>{`Chapter ${chapter.chapter_number} expansion plan`}</span>
         </Space>
       ),
       width: isMobile ? 'calc(100vw - 32px)' : 800,
@@ -210,10 +302,10 @@ export const openExpansionPlanPreviewDialog = ({
           planData={planData}
         />
       ),
-      okText: '关闭',
+      okText: 'Close',
     });
   } catch (error) {
     console.error('Failed to load expansion plan:', error);
-    message.error('加载扩写计划失败');
+    message.error('Failed to load expansion plan');
   }
 };

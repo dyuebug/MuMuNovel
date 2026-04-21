@@ -59,7 +59,7 @@ import {
 
 const { TextArea } = Input;
 
-type ChapterBatchGenerateModalProps = {
+export type ChapterBatchGenerateModalProps = {
   batchForm: FormInstance;
   [key: string]: any;
 };

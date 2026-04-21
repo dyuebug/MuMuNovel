@@ -24,13 +24,13 @@ export default function ContinueGenerateConfirmContent({
 }: ContinueGenerateConfirmContentProps) {
   return (
     <div style={{ marginTop: 16 }}>
-      <p>将按当前设置继续生成本章内容。</p>
+      <p>Continue generating this chapter with the current settings.</p>
       <ul>
-        <li>写作风格：{selectedStyleName ?? '未选择'}</li>
-        <li>创作模式：{creativeModeLabel}</li>
-        <li>故事焦点：{storyFocusLabel}</li>
-        <li>剧情阶段：{plotStageLabel}</li>
-        <li>目标字数：{targetWordCount}</li>
+        <li>{`Writing style: ${selectedStyleName ?? 'Not selected'}`}</li>
+        <li>{`Creative mode: ${creativeModeLabel}`}</li>
+        <li>{`Story focus: ${storyFocusLabel}`}</li>
+        <li>{`Plot stage: ${plotStageLabel}`}</li>
+        <li>{`Target word count: ${targetWordCount}`}</li>
       </ul>
       {previousChapters.length > 0 ? (
         <div
@@ -43,22 +43,22 @@ export default function ContinueGenerateConfirmContent({
           }}
         >
           <div style={{ marginBottom: 8, fontWeight: 500, color: 'var(--color-primary)' }}>
-            已生成的 {previousChapters.length} 章将作为参考：
+            {`${previousChapters.length} earlier chapters will be used as context:`}
           </div>
           <div style={{ maxHeight: 150, overflowY: 'auto' }}>
             {previousChapters.map((chapter) => (
               <div key={chapter.id} style={{ padding: '4px 0', fontSize: 13 }}>
-                {`第${chapter.chapter_number}章：${chapter.title}（${chapter.word_count || 0}字）`}
+                {`Chapter ${chapter.chapter_number}: ${chapter.title} (${chapter.word_count || 0} words)`}
               </div>
             ))}
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
-            继续操作将覆盖当前章节内容。
+            Continuing will overwrite the current chapter content.
           </div>
         </div>
       ) : null}
       <p style={{ color: '#ff4d4f', marginTop: 16, marginBottom: 0 }}>
-        请先确认重要内容已经保存，再继续操作。
+        Please make sure important content is already saved before continuing.
       </p>
     </div>
   );

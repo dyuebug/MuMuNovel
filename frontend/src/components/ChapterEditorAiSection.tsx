@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Form, Input, InputNumber, Select, Space, Tag } from 'antd';
-import { chapterApi } from '../services/api';
+import { chapterApi } from '../services/modularApi';
 import type { ChapterQualityMetrics, ChapterQualityProfileSummary, CreativeMode, PlotStage, StoryFocus } from '../types';
 import CompactPromptPreviewPanel from './CompactPromptPreviewPanel';
 import StoryCreationSnapshotPanel from './StoryCreationSnapshotPanel';

@@ -23,11 +23,11 @@ export default function ChapterExpansionPlanPreviewContent({
     <div style={{ marginTop: 16 }}>
       {renderCompactFactGrid(
         [
-          ['章节标题', chapterTitle || '未命名章节'],
-          ['情感基调', planData.emotional_tone],
-          ['冲突类型', planData.conflict_type],
-          ['预计字数', `${planData.estimated_words} 字`],
-          ['叙事目标', planData.narrative_goal],
+          ['Chapter title', chapterTitle || 'Untitled chapter'],
+          ['Emotional tone', planData.emotional_tone],
+          ['Conflict type', planData.conflict_type],
+          ['Estimated words', `${planData.estimated_words} words`],
+          ['Narrative goal', planData.narrative_goal],
         ],
         {
           minColumnWidth: isMobile ? 160 : 220,
@@ -35,9 +35,9 @@ export default function ChapterExpansionPlanPreviewContent({
         },
       )}
 
-      {renderCompactListCard('关键事件', planData.key_events, {
+      {renderCompactListCard('Key events', planData.key_events, {
         numbered: true,
-        tagText: `${planData.key_events.length} 项`,
+        tagText: `${planData.key_events.length} items`,
         tagColor: 'purple',
         style: { marginBottom: 12 },
       })}
@@ -45,16 +45,20 @@ export default function ChapterExpansionPlanPreviewContent({
       {planData.character_focus.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           {renderCompactStoryControlHeader(
-            '关注角色',
-            '这些角色会在本章承担主要戏份。',
+            'Focus characters',
+            'These characters carry the main dramatic weight in this chapter.',
             {
-              tagText: `${planData.character_focus.length} 人`,
+              tagText: `${planData.character_focus.length} characters`,
               tagColor: 'cyan',
               style: { marginBottom: 8 },
             },
           )}
           {renderCompactSelectionSummary(
-            planData.character_focus.map((char) => ({ label: '角色', value: char, color: 'cyan' })),
+            planData.character_focus.map((character) => ({
+              label: 'Character',
+              value: character,
+              color: 'cyan',
+            })),
             { style: { marginBottom: 0 } },
           )}
         </div>
@@ -63,10 +67,10 @@ export default function ChapterExpansionPlanPreviewContent({
       {planData.scenes && planData.scenes.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           {renderCompactStoryControlHeader(
-            '场景列表',
-            '按场景查看地点、角色与目的，落笔时更容易照着走。',
+            'Scene list',
+            'Review each scene location, purpose, and cast before drafting.',
             {
-              tagText: `${planData.scenes.length} 段`,
+              tagText: `${planData.scenes.length} scenes`,
               tagColor: 'purple',
               style: { marginBottom: 8 },
             },
@@ -83,18 +87,18 @@ export default function ChapterExpansionPlanPreviewContent({
                 }}
               >
                 {renderCompactStoryControlHeader(
-                  `场景 ${index + 1}`,
-                  scene.location || '未填写地点',
+                  `Scene ${index + 1}`,
+                  scene.location || 'Location not specified',
                   {
-                    tagText: scene.characters?.length ? `${scene.characters.length} 人` : undefined,
+                    tagText: scene.characters?.length ? `${scene.characters.length} characters` : undefined,
                     tagColor: 'blue',
                     style: { marginBottom: 8 },
                   },
                 )}
                 {renderCompactFactGrid(
                   [
-                    ['场景地点', scene.location || '未填写'],
-                    ['场景目的', scene.purpose || '未填写'],
+                    ['Scene location', scene.location || 'Not specified'],
+                    ['Scene purpose', scene.purpose || 'Not specified'],
                   ],
                   {
                     minColumnWidth: isMobile ? 160 : 220,
@@ -103,7 +107,11 @@ export default function ChapterExpansionPlanPreviewContent({
                 )}
                 {scene.characters?.length > 0
                   ? renderCompactSelectionSummary(
-                      scene.characters.map((char) => ({ label: '角色', value: char, color: 'cyan' })),
+                      scene.characters.map((character) => ({
+                        label: 'Character',
+                        value: character,
+                        color: 'cyan',
+                      })),
                       { style: { marginBottom: 0 } },
                     )
                   : null}
@@ -114,8 +122,8 @@ export default function ChapterExpansionPlanPreviewContent({
       )}
 
       {renderCompactSettingHint(
-        '扩写计划只作为写作辅助。',
-        '落笔前建议再核对场景、冲突与角色目标，再按实际需要微调。',
+        'The expansion plan is a writing aid only.',
+        'Before drafting, review scenes, conflicts, and character goals, then adjust the plan as needed.',
         { style: { marginTop: 16, marginBottom: 0 } },
       )}
     </div>

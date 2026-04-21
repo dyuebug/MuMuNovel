@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Modal, Button, Card, Statistic, Row, Col, message, theme, Tag, Space, Typography } from 'antd';
 import { CheckOutlined, CloseOutlined, SwapOutlined } from '@ant-design/icons';
 import ReactDiffViewer from 'react-diff-viewer-continued';
-import { chapterApi } from '../services/api';
+import { chapterApi } from '../services/modularApi';
 import type { ChapterCandidateDraftQualityEvidence, ChapterCandidateDraftQualityFacet, ChapterCandidateDraftQualityHighlights } from '../types';
 
 const { Text } = Typography;
