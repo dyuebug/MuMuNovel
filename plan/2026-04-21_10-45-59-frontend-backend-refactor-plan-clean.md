@@ -959,3 +959,12 @@ Final delivery update:
 - Confirmed the working tree is clean after the refactor and documentation submission chain.
 - Confirmed the superseded legacy roadmap artifact remains excluded only through local `.git/info/exclude`, so repository history stays focused on the clean-plan baseline.
 - The refactor track should now be considered closed unless a new follow-up task is opened for performance, package-size, or residual transition-debt cleanup.
+
+
+## Progress Refresh / 2026-04-21 / Iteration 166
+
+Release-note update:
+- Added a team-facing release note / MR description draft that summarizes the refactor scope, validation status, risks, rollback guidance, and recommended review order.
+- This closes the gap between internal handoff documents and reviewer-facing communication material.
+- The repository remains clean after generating the release-note draft, so the remaining work is purely optional follow-up communication.
+- The current refactor track should now be considered closed both technically and operationally.
