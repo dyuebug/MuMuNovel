@@ -933,3 +933,20 @@ Updated backend recommendation:
 1. If the next action is staging or submission, stop coding and use the staging-commands document directly.
 2. Prefer the conservative two-batch path unless there is a strong review reason to split more aggressively.
 3. Resume backend development only after the staged batches reveal a concrete follow-up issue.
+
+## Progress Refresh / 2026-04-21 / Iteration 163
+
+Frontend stabilization update:
+- Completed runtime validation for the current frontend refactor batch: `npm run validate:services`, `npx tsc -b --pretty false`, `npm run build`, and `npm run lint -- --quiet` all passed.
+- This confirms the service-layer modularization, chapter-page helper extraction, floating-index layering, and background-task presentation split are currently in a stable acceptance state rather than a speculative in-progress state.
+- Added frontend handoff documents for milestone summary, change inventory, commit grouping, and staging commands so the next iteration can move directly into selective staging instead of reopening broad exploratory refactors.
+- The recommended next action is to stop expanding the frontend code surface, stage the frontend changes in focused batches, and only resume code edits if batch validation exposes a concrete defect.
+
+
+## Progress Refresh / 2026-04-21 / Iteration 164
+
+Frontend staging update:
+- Staged frontend batch A for the service-layer modularization track, including the facade guard script, modular service entry, domain service modules, shared HTTP client, service-layer lint/build hooks, and the service-layer conventions document.
+- Verified the staged file scope stays inside the intended batch boundary and does not accidentally mix `Chapters.tsx`, floating-index refactors, or background-task-center changes into the service batch.
+- `git diff --cached --check` passed for the staged batch, so the current index is ready for a focused frontend service-layer commit when desired.
+- Recommended next action: either commit batch A now, or keep the current staged index intact and prepare the batch B staging pass only after batch A is submitted.
