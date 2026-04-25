@@ -968,3 +968,34 @@ Release-note update:
 - This closes the gap between internal handoff documents and reviewer-facing communication material.
 - The repository remains clean after generating the release-note draft, so the remaining work is purely optional follow-up communication.
 - The current refactor track should now be considered closed both technically and operationally.
+
+
+## Progress Refresh / 2026-04-23 / Iteration 167
+
+Frontend and backend integration stabilization update:
+- Completed a real backend auth smoke verification against the Docker-exposed application on port 8004. The backend auth contract remained healthy for config fetch, login, current-user lookup, refresh, project access, and logout flow.
+- Completed a real Playwright auth regression against the same backend and identified the frontend auth interceptor as the primary failure point rather than the backend API.
+- Updated `frontend/src/services/core/httpClient.ts` so 401 handling now preserves backend error details, avoids forced redirect loops on auth requests and auth pages, and redirects unauthenticated non-auth pages through the shared redirect builder instead of a bare `/login` jump.
+- Re-ran frontend validation and real end-to-end auth regression successfully: `npm run validate:text`, `npm run build`, and `APP_PORT=8004 E2E_REAL_BACKEND=1 npm run e2e:auth` all passed, with Playwright reporting 7/7 passing tests.
+- This closes the currently exposed auth-state regression chain and reduces the risk of user-facing `Network request failed` / misplaced login redirects during fast page switching while background work is active.
+
+Updated recommendation:
+1. Keep the new 401 strategy as the default shared behavior unless a specific module requires a stricter redirect policy.
+2. If the next iteration continues frontend stabilization, prioritize visual spot checks around the chapter reader and chapter analysis panel under expired-session conditions.
+3. If later regressions appear, inspect shared HTTP interception first before expanding backend debugging scope.
+
+
+## Progress Refresh / 2026-04-24 / Iteration 168
+
+Frontend chapter-reader and analysis-panel stabilization update:
+- Completed a focused display and state-boundary sweep for `frontend/src/pages/ChapterReader.tsx` and `frontend/src/components/ChapterAnalysis.tsx` after the earlier auth-chain fixes.
+- Added abort-driven request cleanup for the chapter reader load flow so rapid module switching or chapter switching no longer leaves stale responses racing back into the UI.
+- Added the same request-cancellation and stale-state protection to the chapter analysis modal flow, including initial status fetch, result fetch, polling requests, and modal-close cleanup.
+- Fixed a reader-side rendering bug where invalid annotation positions were detected but the original unfiltered annotation list was still rendered, which could produce display anomalies in the annotated text view and sidebar.
+- Fixed analysis-panel state reset behavior so a chapter with no analysis task no longer reuses stale analysis results from the previous chapter session.
+- Validation passed after the changes: `npm run validate:text`, `npm run validate:services`, and `npm run build` all succeeded.
+
+Updated recommendation:
+1. Treat the chapter reader and chapter analysis panel as stabilized for the current front-end cleanup pass.
+2. If a final polish round is still desired, prioritize manual visual checks for mobile drawer layout, long-title wrapping, and background-task polling under deliberately slow network conditions.
+3. Keep using abort-based cleanup for other long-lived page panels that still rely on route-driven or modal-driven async loading.

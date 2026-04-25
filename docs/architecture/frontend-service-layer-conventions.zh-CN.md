@@ -1,76 +1,139 @@
 # 前端服务层约定
 
-## 目标
+## 1. 目标
 
-本文档用于固化 MuMuNovel 前端服务层的长期约定，避免新增代码或文档再次把
-`src/services/api.ts` 误当成主要实现入口。
+前端服务层的设计目标是：
 
-## 当前结构
+- 统一请求入口
+- 明确模块边界
+- 避免页面直接依赖底层请求细节
+- 为后续重构与兼容迁移提供稳定出口
 
-前端服务层采用以下分层：
+## 2. 分层结构
 
-- `src/services/core/httpClient.ts`：唯一真实 HTTP 客户端实现，统一承载 axios 配置、鉴权和通用拦截逻辑。
-- `src/services/modules/*.ts`：按业务域拆分的 API 实现文件。
-- `src/services/modularApi.ts`：推荐的聚合导入入口，对外统一暴露常用 `*Api` 与类型导出。
-- `src/services/api.ts`：兼容门面，仅保留历史导出路径与默认 `api` 转发，不再承载新的业务实现。
+推荐分层如下：
 
-## 导入规则
-
-### 默认规则
-
-- 新运行时代码优先从 `src/services/modularApi.ts` 导入。
-- 只有在代码确实需要强聚焦、并且只依赖单一业务域时，才直接从 `src/services/modules/*` 导入。
-- 除兼容需求外，不再为新代码增加对 `src/services/api.ts` 的运行时依赖。
-
-### 推荐写法
-
-```ts
-import { projectApi, outlineApi } from '../services/modularApi'
+```text
+core/httpClient.ts
+    ↓
+modules/*
+    ↓
+modularApi.ts
+    ↓
+api.ts（兼容门面）
+    ↓
+pages / hooks / store / components
 ```
 
-### 按域直引示例
+### 2.1 `core/httpClient.ts`
+
+职责：
+
+- 封装底层 HTTP 请求能力
+- 提供统一的错误处理辅助能力
+- 提供请求配置与公共类型
+
+不负责：
+
+- 具体业务领域 API 命名
+- 跨模块业务聚合
+
+### 2.2 `modules/*`
+
+职责：
+
+- 按业务领域组织 API 调用
+- 暴露领域级命名函数
+- 维持领域内的相对内聚
+
+建议按领域拆分，例如：
+
+- chapters
+- outlines
+- characters
+- projects
+- background tasks
+
+### 2.3 `modularApi.ts`
+
+职责：
+
+- 汇总 `modules/*` 的命名导出
+- 汇总 `core/httpClient.ts` 中需要对外暴露的核心能力
+- 作为新的统一导入出口
+
+要求：
+
+- 只做聚合，不写业务逻辑
+- 只保留受约定保护的导出来源
+
+### 2.4 `api.ts`
+
+职责：
+
+- 作为兼容门面保留旧调用入口
+- 避免旧代码一次性大面积替换
+
+要求：
+
+- 必须显式标注兼容层性质
+- 不直接从 `modules/*` 拼装业务实现
+- 后续新代码优先依赖 `modularApi.ts`
+
+## 3. 导入约定
+
+推荐：
 
 ```ts
-import { chapterApi } from '../services/modules/chapters'
+import { projectApi, chapterApi } from '../services/modularApi'
 ```
 
-### 不推荐新增
+兼容场景下允许：
 
 ```ts
-import { projectApi } from '../services/api'
+import api from '../services/api'
 ```
 
-## 维护规则
+不推荐：
 
-### 新增 API 时
+```ts
+import { ... } from '../services/modules/some-module'
+```
 
-1. 优先在对应 `src/services/modules/*.ts` 中添加实现。
-2. 如需给多数运行时代码复用，再在 `src/services/modularApi.ts` 中补充聚合导出。
-3. 不要把新的业务实现重新堆回 `src/services/api.ts`。
+除非是在服务层内部，否则页面、组件、store、hooks 不应绕过统一出口直接依赖 `modules/*`。
 
-### 调整 HTTP 行为时
+## 4. 命名约定
 
-- 统一修改 `src/services/core/httpClient.ts`。
-- 不要在多个模块里复制新的 axios 实例或重复拦截器逻辑。
+- 聚合对象统一采用 `xxxApi`
+- 请求配置与公共能力放在 `core/httpClient.ts`
+- 兼容导出保持最小集合，不扩大 `api.ts` 的职责
 
-### 兼容层边界
+## 5. 反模式
 
-- `src/services/api.ts` 只处理历史导出兼容。
-- 除非存在真实的遗留集成需求，否则不要继续扩大该文件职责。
+以下做法应避免：
 
-## 约束与验证
+- 在 `api.ts` 中直接实现新业务逻辑
+- 页面层直接依赖底层 HTTP client
+- 在多个页面中复制粘贴相同的请求包装逻辑
+- 为兼容旧接口而无限扩大兼容层职责
 
-- `frontend/eslint.config.js` 已限制新增运行时代码继续导入 `services/api.ts`。
-- `frontend/scripts/check-service-facade.mjs` 会语义校验 `services/api.ts` 与 `services/modularApi.ts` 的导出关系，确保兼容层仍是薄门面、主入口仍暴露核心 HTTP 合同。
-- `npm run lint` 与 `npm run build` 已接入该校验，兼容层一旦回退到手工维护导出清单、或主入口丢失核心导出时会立即失败。
-- 变更服务层后，至少执行一次：
-  - `cd frontend && npm run validate:services`
-  - `cd frontend && npm run lint`
-  - `cd frontend && npm run build`
+## 6. 校验与治理
 
-## 相关文档
+当前已接入以下治理措施：
 
-- `docs/05-代码结构.md`
-- `docs/07-前端开发.md`
-- `frontend/README.md`
-- `frontend/src/services/CLAUDE.md`
+- 服务层兼容门面语义校验
+- 前端可见文本编码校验
+
+推荐在合并前至少执行：
+
+```bash
+cd frontend
+npm run build
+```
+
+## 7. 后续建议
+
+- 新增 API 能力时，优先落在 `modules/*`
+- 需要对外暴露时，再通过 `modularApi.ts` 聚合
+- 只有在兼容旧代码时，才允许经过 `api.ts`
+- 当兼容层使用点收敛到足够少时，再考虑逐步清理 `api.ts`

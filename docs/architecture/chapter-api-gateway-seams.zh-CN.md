@@ -1,93 +1,111 @@
-# 章节 API Gateway / Seam 分层说明
+# 章节 API 网关边界说明
 
-## 背景
+## 1. 目的
 
-为了降低 `backend/app/api/chapters.py` 的职责耦合，项目已逐步将章节 API 按 route 层、gateway/seam 层和 compat/service 层进行拆分。
+章节相关接口是 MuMuNovel 中最复杂、最容易继续膨胀的一条业务链路。
 
-本文档用于说明什么逻辑应该放在哪一层，以及后续如何继续将变更从 `chapters.py` 中拆离。
+本文档用于说明：
 
-## 分层原则
+- 路由层应该保留什么职责
+- 哪些逻辑应该下沉到 workflow / service / helper
+- 后续继续拆分时应该遵守哪些边界
 
-1. route 层只负责 HTTP 入口、参数解析、权限校验和 response 组装
-2. gateway / seam 层用于暴露稳定的 monkeypatch 入口与 facade
-3. compat / service 层承载可复用的领域逻辑，避免 route 中堆积业务细节
+## 2. 总体原则
 
-## 当前结构
+章节 API 路由层应只承担以下职责：
 
-### 1. route 层
+- request boundary
+- 参数解析与基础校验
+- 权限与上下文接入
+- 调用下层 workflow / service
+- 输出兼容响应结构
 
-下列文件以 FastAPI route 为主：
-- `backend/app/api/chapter_crud_routes.py`
-- `backend/app/api/chapter_generation_routes.py`
-- `backend/app/api/chapter_batch_generation_routes.py`
-- `backend/app/api/chapter_quality_routes.py`
-- `backend/app/api/chapter_analysis_routes.py`
-- `backend/app/api/chapter_analysis_task_routes.py`
-- `backend/app/api/chapter_partial_regeneration_routes.py`
-- `backend/app/api/chapter_regeneration_routes.py`
-- `backend/app/api/chapter_draft_routes.py`
-- `backend/app/api/chapter_annotation_routes.py`
-- `backend/app/api/chapter_expansion_plan_routes.py`
+路由层不应长期承载：
 
-这些文件应优先保持轻量，主要处理路由声明、request/response schema 绑定与 dependency injection。
+- 大段业务决策逻辑
+- 多分支流程编排
+- 复杂状态组装
+- 大量与展示层强绑定的兼容拼接
 
-### 2. gateway / seam 层
+## 3. 建议边界划分
 
-`backend/app/api/chapters.py` 现在更接近 gateway / seam 聚合层，主要负责对外暴露调用入口与保留历史 seam。
+### 3.1 `chapter_draft`
 
-常见 facade / seam 包括：
-- batch generation facade
-- single chapter generation facade
-- candidate 选择 / rerank seam
-- runtime/cache facade
-- prompt/text facade
+适合承载：
 
-这一层的价值在于：
-- 保留 `chapters_api.*` monkeypatch seam
-- 让 route 层不直接依赖大量业务组装逻辑
-- 让 wiring 口更集中、更容易迁移
+- 草稿生成
+- 自动修订草稿
+- 候选草稿处理
+- 与草稿状态相关的查询与落库协调
 
-### 3. compat / service 层
+### 3.2 `chapter_crud`
 
-当前与 `chapters.py` 拆分相关的 compat/service 文件包括：
-- `backend/app/services/chapter_candidate_entry_compat_service.py`
-- `backend/app/services/chapter_candidate_executor_compat_service.py`
-- `backend/app/services/chapter_generated_text_compat_service.py`
-- `backend/app/services/chapter_prompt_quality_compat_service.py`
-- `backend/app/services/task_workflow_runtime_compat_service.py`
-- `backend/app/services/batch_generation_entry_compat_service.py`
-- `backend/app/services/batch_generation_run_compat_service.py`
-- `backend/app/services/project_quality_trend_compat_service.py`
+适合承载：
 
-这些 service 更适合承载：
-- 章节生成、重写、批量生成的组装逻辑
-- quality gate、runtime snapshot、prompt 与 artifact 协作
-- 可单测试的纯逻辑单元
+- 章节基础创建、更新、删除
+- 章节基础查询
+- 常规内容持久化相关逻辑
 
-## 迁移策略
+### 3.3 `chapter_regeneration`
 
-对 `chapters.py` 的后续调整建议按以下顺序进行：
-1. 先把 route 依赖的业务装配移入 facade 或 wrapper
-2. 再把稳定的领域逻辑下沉到 compat/service
-3. 在测试和调用方未完全迁移前，保留 `chapters_api.*` seam
-4. 最后再收缩 `chapters.py` 中仅作中转的 wrapper
+适合承载：
 
-## 测试要点
+- 章节重生成任务创建与查询
+- regeneration 相关工作流编排
+- 任务恢复、状态查询与阶段输出
 
-迁移过程中建议持续检查：
-- `chapters_api.*` monkeypatch seam 是否仍可用
-- `chapters.router` 对外路由是否仍稳定
-- `_split_sentences` 、runtime snapshot sentinel 等历史辅助逻辑是否仍被正确维持
-- candidate entry/runtime compat 类逻辑是否有单测试覆盖
+### 3.4 `chapter_batch_generation`
 
-## 风险与注意事项
+适合承载：
 
-1. 不要一次性删掉所有 wrapper，否则容易引发测试断裂
-2. 不要让 route 文件再回流新的重业务逻辑
-3. 与 batch generation、candidate 评估、quality gate 相关变更要同步回归
+- 批量生成任务入口
+- 批量任务状态流转
+- 批量任务恢复、取消、进度查询
+- 与批量分析、修复策略联动的协调逻辑
 
-## 建议的下一步
+## 4. Route seam 约定
 
-1. 列出 `chapters.py` 中仍只做中转的入口
-2. 为每个 facade 标注对应 service 归属
-3. 在不破坏 seam 的前提下，继续把可纯化的逻辑移入 service
+所谓 seam，可以理解为“可继续抽离的结构边界”。
+
+在章节 API 中，优先保留以下 seam：
+
+- route → workflow
+- route → query service
+- route → compat response adapter
+- route → access / request context helper
+
+这样做的价值在于：
+
+- 便于逐步拆分，而不是一次性重写
+- 便于为高风险链路补测试
+- 便于在不改变接口的前提下继续重构内部结构
+
+## 5. 测试建议
+
+每次沿 seam 做拆分时，建议至少补以下验证：
+
+1. route delegation regression
+2. 输入参数与错误分支验证
+3. 兼容响应结构验证
+4. 高风险任务状态流转验证
+
+## 6. 变更建议
+
+后续继续重构章节 API 时，应遵守以下顺序：
+
+1. 先抽离 query / workflow / helper
+2. 再收缩 route 文件体积
+3. 最后考虑是否引入更细粒度 domain service
+
+不建议直接大规模重写 route 文件，否则容易同时引入结构变更和行为变更。
+
+## 7. 结论
+
+章节 API 的关键不是“把文件拆小”，而是让边界稳定：
+
+- 路由只负责边界
+- 工作流负责流程
+- 服务负责领域逻辑
+- 兼容层负责旧响应与旧调用的平滑过渡
+
+只要 seam 保持清晰，后续重构就可以持续小步推进。

@@ -422,7 +422,8 @@ npm run build  # 生产构建
 #### 编码体检（可选）
 
 ```bash
-python backend/tools/check_text_encoding_health.py
+python backend/tools/check_text_encoding_health.py              # ????????????
+python backend/tools/check_text_encoding_health.py --include-docs  # ???? docs/ ??
 ```
 ## ⚙️ 配置说明
 
