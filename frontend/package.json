@@ -6,12 +6,13 @@
   "scripts": {
     "dev": "vite",
     "validate:services": "node ./scripts/check-service-facade.mjs",
-    "build": "npm run validate:services && tsc -b && vite build",
-    "build:analyze": "npm run validate:services && tsc -b && node ./scripts/build-analyze.mjs",
-    "lint": "npm run validate:services && eslint .",
+    "build": "npm run validate:services && npm run validate:text && tsc -b && vite build",
+    "build:analyze": "npm run validate:services && npm run validate:text && tsc -b && node ./scripts/build-analyze.mjs",
+    "lint": "npm run validate:services && npm run validate:text && eslint .",
     "preview": "vite preview",
     "e2e": "playwright test",
-    "e2e:auth": "playwright test e2e/auth.spec.ts"
+    "e2e:auth": "playwright test e2e/auth.spec.ts",
+    "validate:text": "node ./scripts/check-ui-text-health.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",

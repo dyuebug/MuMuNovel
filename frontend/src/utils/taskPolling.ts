@@ -217,6 +217,9 @@ export const startBackgroundTaskPolling = <TTask extends PollableBackgroundTask>
     polling = true;
     try {
       const task = await pollTask(taskId);
+      if (stopped) {
+        return;
+      }
       consecutivePollErrors = 0;
       onTask?.(task);
 
@@ -238,6 +241,9 @@ export const startBackgroundTaskPolling = <TTask extends PollableBackgroundTask>
         return;
       }
     } catch (error) {
+      if (stopped) {
+        return;
+      }
       consecutivePollErrors += 1;
       if (consecutivePollErrors < maxConsecutiveErrors) {
         return;

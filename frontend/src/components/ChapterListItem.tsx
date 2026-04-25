@@ -60,6 +60,12 @@ const isAnalysisTaskInProgress = (task?: AnalysisTask | null): boolean => (
   task?.status === 'pending' || task?.status === 'running'
 );
 
+const mobileActionButtonStyle: CSSProperties = {
+  minHeight: 34,
+  paddingInline: 10,
+  borderRadius: 8,
+};
+
 const renderAnalysisStatus = (task?: AnalysisTask) => {
   if (!task) {
     return null;
@@ -69,7 +75,7 @@ const renderAnalysisStatus = (task?: AnalysisTask) => {
     case 'pending':
       return (
         <Tag icon={<SyncOutlined spin />} color="processing">
-          等待分析
+          {"等待分析"}
         </Tag>
       );
     case 'running': {
@@ -87,21 +93,19 @@ const renderAnalysisStatus = (task?: AnalysisTask) => {
     case 'completed':
       return (
         <Tag icon={<CheckCircleOutlined />} color="success">
-          分析完成
+          {"分析完成"}
         </Tag>
       );
     case 'failed':
       return (
         <Tag icon={<CloseCircleOutlined />} color="error" title={task.error_message || undefined}>
-          分析失败
+          {"分析失败"}
         </Tag>
       );
     default:
       return null;
   }
 };
-
-
 
 function ChapterListItem({
   chapter,
@@ -159,7 +163,7 @@ function ChapterListItem({
         disabled={!hasContent}
         title={!hasContent ? '暂无内容可阅读' : '阅读'}
       >
-        阅读
+        {"阅读"}
       </Button>
     ),
     (
@@ -169,7 +173,7 @@ function ChapterListItem({
         icon={<EditOutlined />}
         onClick={() => onOpenEditor(chapter.id)}
       >
-        编辑
+        {"编辑"}
       </Button>
     ),
     (
@@ -192,7 +196,7 @@ function ChapterListItem({
         icon={<SettingOutlined />}
         onClick={() => onOpenSettings(chapter.id)}
       >
-        设置
+        {"设置"}
       </Button>
     ),
     ...(showOutlineActions
@@ -208,7 +212,7 @@ function ChapterListItem({
               okButtonProps={{ danger: true }}
             >
               <Button type="text" danger icon={<DeleteOutlined />}>
-                删除
+                {"删除"}
               </Button>
             </Popconfirm>
           ),
@@ -231,16 +235,16 @@ function ChapterListItem({
                 width: '100%',
               }}
             >
-              <span style={{ fontSize: isMobile ? 14 : 16, fontWeight: 500, flexShrink: 0 }}>
+              <span style={{ fontSize: isMobile ? 14 : 16, fontWeight: 500, minWidth: 0, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                 {titleText}
               </span>
-              <Space wrap size={isMobile ? 4 : 8}>
+              <Space wrap size={isMobile ? 4 : 8} style={{ minWidth: 0 }}>
                 <Tag color={getStatusColor(chapter.status)}>{getStatusText(chapter.status)}</Tag>
                 <Badge count={`${chapter.word_count || 0}字`} style={{ backgroundColor: 'var(--color-success)' }} />
                 {renderAnalysisStatus(analysisTask)}
                 {!canGenerate ? (
                   <Tag icon={<LockOutlined />} color="warning" title={generateDisabledReason}>
-                    暂不可生成
+                    {"暂不可生成"}
                   </Tag>
                 ) : null}
                 {showOutlineActions ? (
@@ -270,49 +274,61 @@ function ChapterListItem({
           }
           description={
             hasContent ? (
-              <div style={{ marginTop: 8, color: 'rgba(0,0,0,0.65)', lineHeight: 1.6, fontSize: isMobile ? 12 : 14 }}>
+              <div style={{ marginTop: 8, color: 'rgba(0,0,0,0.65)', lineHeight: 1.6, fontSize: isMobile ? 12 : 14, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                 {previewText}
                 {hasMorePreview ? '...' : ''}
               </div>
             ) : (
-              <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>暂无正文</span>
+              <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>{"暂无正文"}</span>
             )
           }
         />
 
         {isMobile ? (
-          <Space style={{ marginTop: 12, width: '100%', justifyContent: 'flex-end' }} wrap>
+          <Space style={{ marginTop: 12, width: '100%', justifyContent: 'flex-start' }} wrap size={8}>
             <Button
-              type="text"
+              type="default"
               icon={<ReadOutlined />}
               onClick={() => onOpenReader(chapter)}
-              size="small"
+              size="middle"
+              style={mobileActionButtonStyle}
               disabled={!hasContent}
               title={!hasContent ? '暂无内容可阅读' : '阅读'}
-            />
+            >
+              {"阅读"}
+            </Button>
             <Button
-              type="text"
+              type="default"
               icon={<EditOutlined />}
               onClick={() => onOpenEditor(chapter.id)}
-              size="small"
+              size="middle"
+              style={mobileActionButtonStyle}
               title="编辑"
-            />
+            >
+              {"编辑"}
+            </Button>
             <Button
-              type="text"
+              type="default"
               icon={isAnalyzing ? <SyncOutlined spin /> : <FundOutlined />}
               onClick={() => onShowAnalysis(chapter.id)}
-              size="small"
+              size="middle"
+              style={mobileActionButtonStyle}
               disabled={!hasContent || isAnalyzing}
               loading={isAnalyzing}
               title={analysisButtonTitle}
-            />
+            >
+              {analysisButtonText}
+            </Button>
             <Button
-              type="text"
+              type="default"
               icon={<SettingOutlined />}
               onClick={() => onOpenSettings(chapter.id)}
-              size="small"
+              size="middle"
+              style={mobileActionButtonStyle}
               title="设置"
-            />
+            >
+              {"设置"}
+            </Button>
             {showOutlineActions ? (
               <Popconfirm
                 title="确认删除"
@@ -323,12 +339,15 @@ function ChapterListItem({
                 okButtonProps={{ danger: true }}
               >
                 <Button
-                  type="text"
+                  type="default"
                   danger
                   icon={<DeleteOutlined />}
-                  size="small"
+                  size="middle"
+                  style={mobileActionButtonStyle}
                   title="删除"
-                />
+                >
+                  {"删除"}
+                </Button>
               </Popconfirm>
             ) : null}
           </Space>

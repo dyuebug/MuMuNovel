@@ -809,7 +809,7 @@ export default function SettingsCurrentTab(props: any) {
                                   <Text style={{ display: 'block', color: 'var(--color-text-secondary)', marginBottom: 14 }}>
                                     更适合抓取可追溯来源、链接与事实型资料。
                                   </Text>
-                                  <Form.Item name="web_research_exa_api_key" label="Exa API Key">
+                                  <Form.Item name="web_research_exa_api_key" label="Exa ????">
                                     <Input.Password placeholder="填写 Exa API Key" autoComplete="new-password" />
                                   </Form.Item>
                                   <Form.Item
@@ -863,7 +863,7 @@ export default function SettingsCurrentTab(props: any) {
                                   <Text style={{ display: 'block', color: 'var(--color-text-secondary)', marginBottom: 14 }}>
                                     更适合实时讨论、趋势摘要与表达参考；启用 GrokSearch 后会优先走当前项目内置的深度联网搜索逻辑。
                                   </Text>
-                                  <Form.Item name="web_research_grok_api_key" label="Grok API Key">
+                                  <Form.Item name="web_research_grok_api_key" label="Grok ????">
                                     <Input.Password placeholder="填写 Grok API Key" autoComplete="new-password" />
                                   </Form.Item>
                                   <Form.Item
@@ -1043,16 +1043,16 @@ export default function SettingsCurrentTab(props: any) {
                                         fontSize: isMobile ? '12px' : '13px',
                                       }}
                                     >
-                                      <div style={{ fontWeight: 500, marginBottom: 6 }}>Endpoint diagnostics</div>
+                                      <div style={{ fontWeight: 500, marginBottom: 6 }}>端点诊断</div>
                                       <div style={{ marginBottom: 4 }}>
-                                        Primary endpoint: <code style={{ wordBreak: 'break-all' }}>{endpointDiagnostics.primary_endpoint || 'Not set'}</code>
+                                        主端点：<code style={{ wordBreak: 'break-all' }}>{endpointDiagnostics.primary_endpoint || '未设置'}</code>
                                       </div>
-                                      <div style={{ marginBottom: 4 }}>Backup endpoints: {backupEndpoints.length}</div>
-                                      <div style={{ marginBottom: 4 }}>Strategy: {endpointDiagnostics.fallback_strategy || 'auto'}</div>
-                                      <div>Auto failover: {endpointDiagnostics.auto_failover_enabled ? 'Enabled' : 'Disabled'}</div>
+                                      <div style={{ marginBottom: 4 }}>备用端点数：{backupEndpoints.length}</div>
+                                      <div style={{ marginBottom: 4 }}>回退策略：{endpointDiagnostics.fallback_strategy || 'auto'}</div>
+                                      <div>自动故障切换：{endpointDiagnostics.auto_failover_enabled ? '已启用' : '已禁用'}</div>
                                       {backupEndpoints.length > 0 && (
                                         <div style={{ marginTop: 8 }}>
-                                          <div style={{ fontWeight: 500, marginBottom: 4 }}>Backup endpoint list:</div>
+                                          <div style={{ fontWeight: 500, marginBottom: 4 }}>备用端点列表：</div>
                                           <Space direction="vertical" size={4} style={{ width: '100%' }}>
                                             {backupEndpoints.map((endpoint: string, index: number) => (
                                               <code key={`${endpoint}-${index}`} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
@@ -1075,33 +1075,33 @@ export default function SettingsCurrentTab(props: any) {
                                         fontSize: isMobile ? '12px' : '13px',
                                       }}
                                     >
-                                      <div style={{ fontWeight: 500, marginBottom: 6 }}>Transport diagnostics</div>
-                                      <div style={{ marginBottom: 4 }}>Total attempts: {transportDiagnostics.summary?.total_attempts ?? 0}</div>
-                                      <div style={{ marginBottom: 4 }}>Successful attempts: {transportDiagnostics.summary?.successful_attempts ?? 0}</div>
-                                      <div style={{ marginBottom: 4 }}>API modes tried: {(transportDiagnostics.summary?.api_modes_tried || []).join(' -> ') || 'Unknown'}</div>
-                                      <div style={{ marginBottom: 4 }}>Backup endpoint used: {transportDiagnostics.summary?.backup_endpoint_used ? 'Yes' : 'No'}</div>
-                                      <div style={{ marginBottom: 4 }}>API mode fallback: {transportDiagnostics.summary?.api_mode_fallback_used ? 'Yes' : 'No'}</div>
-                                      <div style={{ marginBottom: 4 }}>Forced chat completions: {transportDiagnostics.summary?.forced_chat_completions ? 'Yes' : 'No'}</div>
-                                      <div>Normalized base URL used: {transportDiagnostics.summary?.normalized_base_url_used ? 'Yes' : 'No'}</div>
+                                      <div style={{ fontWeight: 500, marginBottom: 6 }}>传输诊断</div>
+                                      <div style={{ marginBottom: 4 }}>总尝试次数：{transportDiagnostics.summary?.total_attempts ?? 0}</div>
+                                      <div style={{ marginBottom: 4 }}>成功次数：{transportDiagnostics.summary?.successful_attempts ?? 0}</div>
+                                      <div style={{ marginBottom: 4 }}>尝试过的 API 模式：{(transportDiagnostics.summary?.api_modes_tried || []).join(' -> ') || '未知'}</div>
+                                      <div style={{ marginBottom: 4 }}>是否使用备用端点：{transportDiagnostics.summary?.backup_endpoint_used ? '是' : '否'}</div>
+                                      <div style={{ marginBottom: 4 }}>是否触发 API 模式回退：{transportDiagnostics.summary?.api_mode_fallback_used ? '是' : '否'}</div>
+                                      <div style={{ marginBottom: 4 }}>是否强制使用 Chat Completions：{transportDiagnostics.summary?.forced_chat_completions ? '是' : '否'}</div>
+                                      <div>是否使用规范化 Base URL：{transportDiagnostics.summary?.normalized_base_url_used ? '是' : '否'}</div>
                                       {transportAttempts.length > 0 && (
                                         <div style={{ marginTop: 8 }}>
-                                          <div style={{ fontWeight: 500, marginBottom: 4 }}>Recent attempts:</div>
+                                          <div style={{ fontWeight: 500, marginBottom: 4 }}>最近尝试：</div>
                                           <Space direction="vertical" size={4} style={{ width: '100%' }}>
                                             {transportAttempts.map((attempt, index) => (
                                               <div key={`${attempt.base_url || 'attempt'}-${attempt.attempt_number || index}-${index}`}>
                                                 <div>
-                                                  <code>{attempt.api_mode || 'unknown'}</code>
-                                                  {' ? '}
-                                                  <strong>{attempt.result || 'unknown'}</strong>
-                                                  {' ? '}
-                                                  {attempt.endpoint_role || 'primary'}
-                                                  {' ? '}
+                                                  <code>{attempt.api_mode || '未知'}</code>
+                                                  {' / '}
+                                                  <strong>{attempt.result || '未知'}</strong>
+                                                  {' / '}
+                                                  {attempt.endpoint_role === 'backup' ? '备用端点' : '主端点'}
+                                                  {' / '}
                                                   {attempt.attempt_number || 1}/{attempt.max_attempts || 1}
-                                                  {attempt.status_code ? ` ? HTTP ${attempt.status_code}` : ''}
-                                                  {attempt.error_type ? ` ? ${attempt.error_type}` : ''}
+                                                  {attempt.status_code ? ` / HTTP ${attempt.status_code}` : ''}
+                                                  {attempt.error_type ? ` / ${attempt.error_type}` : ''}
                                                 </div>
                                                 <code style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                                                  {`${attempt.base_url || ''}${attempt.endpoint_path || ''}` || 'Unknown endpoint'}
+                                                  {`${attempt.base_url || ''}${attempt.endpoint_path || ''}` || '未知端点'}
                                                 </code>
                                               </div>
                                             ))}

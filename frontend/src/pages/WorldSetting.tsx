@@ -7,6 +7,7 @@ import { cardStyles } from '../components/CardStyles';
 import { backgroundTaskApi, projectApi } from '../services/modularApi';
 import { formatBackgroundTaskError } from '../utils/taskPolling';
 import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
+import { isRequestCancelledError } from '../services/core/httpClient';
 import { SSELoadingOverlay } from '../components/SSELoadingOverlay';
 import type { QualityPreset } from '../types';
 import {
@@ -102,7 +103,7 @@ export default function WorldSetting() {
       setIsRegenerating(true);
       setIsCancellingTask(false);
       setRegenerateProgress(progress || 0);
-      setRegenerateMessage(taskMessage || '姝ｅ湪鎭㈠涓栫晫瑙傞噸寤轰换鍔?..');
+      setRegenerateMessage(taskMessage || '正在恢复世界观重建任务...');
     },
     createPollingOptions: () => ({
       pollTask: (currentPollingTaskId) => backgroundTaskApi.getTaskStatus(currentPollingTaskId),
@@ -148,6 +149,9 @@ export default function WorldSetting() {
         message.info(task.message || '已取消重生');
       },
       onPollingError: (error) => {
+        if (isRequestCancelledError(error)) {
+          return;
+        }
         console.error('世界设定轮询失败:', error);
         stopTaskPolling();
         currentTaskIdRef.current = null;

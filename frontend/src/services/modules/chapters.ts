@@ -1,4 +1,5 @@
 import { api } from '../core/httpClient';
+import type { RequestConfigWithToastControl } from '../core/httpClient';
 import { chapterAnalysisApi } from './chapterAnalysis';
 import { chapterPartialRegenerationApi } from './chapterPartialRegeneration';
 import { chapterRegenerationTaskApi } from './chapterRegenerationTasks';
@@ -19,7 +20,7 @@ export const chapterApi = {
   getChapters: (projectId: string) =>
     api.get<unknown, { total: number; items: Chapter[] }>(`/chapters/project/${projectId}`).then((res) => res.items),
 
-  getChapter: (id: string) => api.get<unknown, Chapter>(`/chapters/${id}`),
+  getChapter: (id: string, config?: RequestConfigWithToastControl) => api.get<unknown, Chapter>(`/chapters/${id}`, config),
 
   createChapter: (data: ChapterCreate) => api.post<unknown, Chapter>('/chapters', data),
 

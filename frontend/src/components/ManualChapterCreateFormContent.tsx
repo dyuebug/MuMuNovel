@@ -40,29 +40,29 @@ export default function ManualChapterCreateFormContent({
       style={{ marginTop: 16 }}
     >
       <Form.Item
-        label="Chapter number"
+        label="章节序号"
         name="chapter_number"
-        rules={[{ required: true, message: 'Please enter the chapter number' }]}
-        tooltip="Used for chapter ordering"
+        rules={[{ required: true, message: '请输入章节序号' }]}
+        tooltip="用于章节排序"
       >
-        <InputNumber min={1} style={{ width: '100%' }} placeholder="Enter the chapter number" />
+        <InputNumber min={1} style={{ width: '100%' }} placeholder="请输入章节序号" />
       </Form.Item>
 
       <Form.Item
-        label="Chapter title"
+        label="章节标题"
         name="title"
-        rules={[{ required: true, message: 'Please enter the chapter title' }]}
+        rules={[{ required: true, message: '请输入章节标题' }]}
       >
-        <Input placeholder="Enter the chapter title" />
+        <Input placeholder="请输入章节标题" />
       </Form.Item>
 
       <Form.Item
-        label="Outline"
+        label="所属大纲"
         name="outline_id"
-        rules={[{ required: true, message: 'Please select an outline' }]}
-        tooltip="Each chapter must belong to an outline"
+        rules={[{ required: true, message: '请选择所属大纲' }]}
+        tooltip="每个章节都需要归属一个大纲"
       >
-        <Select placeholder="Select an outline">
+        <Select placeholder="请选择大纲">
           {sortedOutlines.map((outline) => (
             <Select.Option key={outline.id} value={outline.id}>
               {`#${outline.order_index} ${outline.title}`}
@@ -72,18 +72,18 @@ export default function ManualChapterCreateFormContent({
       </Form.Item>
 
       <Form.Item
-        label="Summary"
+        label="章节摘要"
         name="summary"
-        tooltip="A short summary of this chapter"
+        tooltip="用于记录本章内容摘要"
       >
-        <TextArea rows={4} placeholder="Enter a short summary" />
+        <TextArea rows={4} placeholder="请输入章节摘要" />
       </Form.Item>
 
-      <Form.Item label="Status" name="status">
+      <Form.Item label="章节状态" name="status">
         <Select>
-          <Select.Option value="draft">Draft</Select.Option>
-          <Select.Option value="writing">Writing</Select.Option>
-          <Select.Option value="completed">Completed</Select.Option>
+          <Select.Option value="draft">草稿</Select.Option>
+          <Select.Option value="writing">写作中</Select.Option>
+          <Select.Option value="completed">已完成</Select.Option>
         </Select>
       </Form.Item>
     </Form>

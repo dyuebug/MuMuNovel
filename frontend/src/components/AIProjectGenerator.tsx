@@ -6,6 +6,7 @@ import { wizardStreamApi } from '../services/modularApi';
 import { backgroundTaskApi, type BackgroundTaskStatus } from '../services/modularApi';
 import { useBackgroundTaskStore } from '../store/backgroundTasks';
 import { formatBackgroundTaskError, waitForBackgroundTaskCompletion } from '../utils/taskPolling';
+import { isRequestCancelledError } from '../services/core/httpClient';
 import { isProjectWizardCompleted } from '../utils/projectWizardState';
 import type { SSEClientOptions } from '../utils/sseClient';
 import type { ApiError, CreativeMode, PlotStage, QualityPreset, ResearchAssetSummary, StoryFocus } from '../types';
@@ -504,6 +505,12 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     failureFallbackMessage: '后台任务执行失败',
     pollErrorFallbackMessage: '轮询后台任务失败',
     createPollError: (error, fallbackMessage) => {
+      if (isRequestCancelledError(error)) {
+        const cancelledError = new Error('请求已取消') as Error & { code?: string };
+        cancelledError.name = 'TaskCancelledError';
+        cancelledError.code = 'TASK_CANCELLED';
+        return cancelledError;
+      }
       const apiError = error as ApiError;
       const errorMessage = apiError.response?.data?.detail || apiError.message || fallbackMessage;
       return new Error(errorMessage);

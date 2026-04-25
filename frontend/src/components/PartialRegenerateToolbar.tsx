@@ -44,6 +44,8 @@ export const PartialRegenerateToolbar: React.FC<PartialRegenerateToolbarProps> =
         gap: 8,
         animation: 'fadeIn 0.2s ease-out',
         border: `1px solid ${token.colorBorderSecondary}`,
+        maxWidth: 'calc(100vw - 24px)',
+        flexWrap: 'wrap',
       }}
     >
       <Tooltip

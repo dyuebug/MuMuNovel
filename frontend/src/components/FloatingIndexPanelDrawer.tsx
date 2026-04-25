@@ -15,9 +15,13 @@ function FloatingIndexPanelDrawer({ children, visible, onClose }: FloatingIndexP
       placement="right"
       onClose={onClose}
       open={visible}
-      width={320}
+      width="min(320px, calc(100vw - 24px))"
       styles={{
-        body: { padding: 0 },
+        body: {
+          padding: 0,
+          maxHeight: 'calc(100dvh - 56px)',
+          overflow: 'hidden',
+        },
       }}
     >
       {children}

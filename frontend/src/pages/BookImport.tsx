@@ -16,6 +16,7 @@ import {
 } from 'antd';
 import { InboxOutlined, ReloadOutlined } from '@ant-design/icons';
 import { bookImportApi } from '../services/modularApi';
+import { isRequestCancelledError } from '../services/core/httpClient';
 import { MAX_CONSECUTIVE_TASK_POLL_ERRORS } from '../utils/taskPolling';
 import { syncProjectToStoreById } from '../store/hooks';
 import type {
@@ -296,14 +297,21 @@ export default function BookImport() {
     if (!taskId) return;
     if (isTaskTerminal) return;
 
+    let disposed = false;
     taskPollErrorCountRef.current = 0;
 
     const timer = setInterval(async () => {
       try {
         const status = await bookImportApi.getTaskStatus(taskId);
+        if (disposed) {
+          return;
+        }
         taskPollErrorCountRef.current = 0;
         setTaskStatus(status);
       } catch (error) {
+        if (disposed || isRequestCancelledError(error)) {
+          return;
+        }
         console.error('轮询任务状态失败:', error);
         if (isNotFoundError(error)) {
           clearBookImportCache();
@@ -327,7 +335,10 @@ export default function BookImport() {
       }
     }, 1500);
 
-    return () => clearInterval(timer);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
   }, [taskId, isTaskTerminal]);
 
   useEffect(() => {
@@ -393,6 +404,9 @@ export default function BookImport() {
       const status = await bookImportApi.getTaskStatus(taskId);
       setTaskStatus(status);
     } catch (error) {
+      if (isRequestCancelledError(error)) {
+        return;
+      }
       console.error('刷新状态失败:', error);
       if (isNotFoundError(error)) {
         clearBookImportCache();

@@ -1,6 +1,6 @@
 /**
- * Store Hooks - ?????????????
- * ?? hooks ??????????????? store
+ * Store Hooks - 项目状态同步工具
+ * 为常用实体提供便捷 hooks，用于同步 API 数据与 store
  */
 
 import { useCallback } from 'react';
@@ -83,7 +83,7 @@ export async function loadProjectChapters(projectId?: string, options: RefreshCo
 }
 
 /**
- * ?????? Hook
+ * 项目同步 Hook
  */
 export function useProjectSync() {
   const { addProject, updateProject, removeProject } = useStore();
@@ -131,7 +131,7 @@ export function useProjectSync() {
 }
 
 /**
- * ?????? Hook
+ * 角色同步 Hook
  */
 export function useCharacterSync() {
   const addCharacter = useStore((state) => state.addCharacter);
@@ -174,7 +174,7 @@ export function useCharacterSync() {
 }
 
 /**
- * ?????? Hook
+ * 大纲同步 Hook
  */
 export function useOutlineSync() {
   const addOutline = useStore((state) => state.addOutline);
@@ -219,7 +219,7 @@ export function useOutlineSync() {
 }
 
 /**
- * ?????? Hook
+ * 章节同步 Hook
  */
 export function useChapterSync() {
   const currentProject = useStore((state) => state.currentProject);

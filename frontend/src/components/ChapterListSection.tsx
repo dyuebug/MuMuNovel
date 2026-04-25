@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { Badge, Collapse, Empty, List, Tag } from 'antd';
+import { Collapse, Empty, List, Tag } from 'antd';
 import { CaretRightOutlined } from '@ant-design/icons';
 import type { AnalysisTask, Chapter } from '../types';
 import ChapterListItem from './ChapterListItem';
@@ -54,7 +54,7 @@ function ChapterListSection({
   onOpenPlanEditor,
 }: ChapterListSectionProps) {
   if (chapters.length === 0) {
-    return <Empty description="No chapters yet" />;
+    return <Empty description="暂无章节" />;
   }
 
   if (outlineMode === 'one-to-one') {
@@ -95,21 +95,28 @@ function ChapterListSection({
         <Collapse.Panel
           key={group.key}
           header={
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <Tag color={group.outlineId ? 'blue' : 'default'} style={{ margin: 0 }}>
-                {group.outlineId ? `Outline #${group.outlineId}` : 'Manual group'}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <Tag color={group.outlineId ? 'blue' : 'default'} style={{ margin: 0, flexShrink: 0 }}>
+                {group.outlineId
+                  ? `大纲 ${group.outlineOrder ?? '-'}`
+                  : '手动章节'}
               </Tag>
-              <span style={{ fontWeight: 600, fontSize: 16 }}>
-                {group.outlineTitle}
+              <span
+                style={{
+                  fontWeight: 600,
+                  fontSize: 16,
+                  wordBreak: 'break-word',
+                  lineHeight: 1.5,
+                }}
+              >
+                {group.outlineTitle || '未命名大纲'}
               </span>
-              <Badge
-                count={`${group.chapters.length}`}
-                style={{ backgroundColor: 'var(--color-success)' }}
-              />
-              <Badge
-                count={`${group.totalWordCount}`}
-                style={{ backgroundColor: 'var(--color-primary)' }}
-              />
+              <Tag color="green" style={{ margin: 0 }}>
+                章节数 {group.chapters.length}
+              </Tag>
+              <Tag color="blue" style={{ margin: 0 }}>
+                总字数 {group.totalWordCount}
+              </Tag>
             </div>
           }
           style={{

@@ -23,7 +23,12 @@ function FloatingIndexPanelResults({ resultsModel }: FloatingIndexPanelResultsPr
           outlineTagColor={group.outlineTagColor}
         />
       )}
-      style={{ height: 'calc(100vh - 120px)', overflowY: 'auto' }}
+      style={{
+        height: 'calc(100dvh - 120px)',
+        maxHeight: 'calc(100dvh - 120px)',
+        overflowY: 'auto',
+        overflowX: 'hidden',
+      }}
     />
   ) : (
     <Empty description={FLOATING_INDEX_PANEL_EMPTY_DESCRIPTION} style={{ marginTop: 48 }} />

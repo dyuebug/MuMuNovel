@@ -93,7 +93,7 @@ type ExpansionPlanPreviewDialogParams = {
 const resolveOptionLabel = (
   options: SelectionOption[] | undefined,
   value: string | undefined,
-  fallback = 'Not selected',
+  fallback = '未选择',
 ): string => {
   if (!value) {
     return fallback;
@@ -130,7 +130,7 @@ export const openContinueGenerateDialog = ({
   };
 
   const instance = modal.confirm({
-    title: 'Confirm continue generation',
+    title: '确认继续生成',
     width: 700,
     centered: true,
     content: (
@@ -143,9 +143,9 @@ export const openContinueGenerateDialog = ({
         previousChapters={previousChapters}
       />
     ),
-    okText: 'Continue',
+    okText: '继续生成',
     okButtonProps: { danger: true },
-    cancelText: 'Cancel',
+    cancelText: '取消',
     onOk: async () => {
       instance.update({
         okButtonProps: { danger: true, loading: true },
@@ -157,7 +157,7 @@ export const openContinueGenerateDialog = ({
 
       try {
         if (!selectedStyleId) {
-          message.error('Please select a writing style first');
+          message.error('请先选择写作风格');
           instance.update(restoreState);
           return;
         }
@@ -200,20 +200,20 @@ export const openManualCreateChapterDialog = ({
         ...values,
       });
 
-      message.success('Chapter created successfully');
+      message.success('章节创建成功');
       await refreshChapters();
       const updatedProject = await projectApi.getProject(currentProject.id);
       setCurrentProject(updatedProject);
       manualCreateForm.resetFields();
     } catch (error) {
       const err = error as Error;
-      message.error(`Failed to create chapter: ${err.message || 'Unknown error'}`);
+      message.error(`创建章节失败：${err.message || '未知错误'}`);
       throw error;
     }
   };
 
   modal.confirm({
-    title: 'Create chapter manually',
+    title: '手动创建章节',
     width: 600,
     centered: true,
     content: (
@@ -223,15 +223,15 @@ export const openManualCreateChapterDialog = ({
         sortedOutlines={sortedOutlines}
       />
     ),
-    okText: 'Create chapter',
-    cancelText: 'Cancel',
+    okText: '创建章节',
+    cancelText: '取消',
     onOk: async () => {
       const values = await manualCreateForm.validateFields();
       const conflictChapter = chapters.find((chapter) => chapter.chapter_number === values.chapter_number);
 
       if (conflictChapter) {
         modal.confirm({
-          title: 'Chapter number conflict',
+          title: '章节序号冲突',
           icon: <InfoCircleOutlined style={{ color: '#ff4d4f' }} />,
           width: 500,
           centered: true,
@@ -242,9 +242,9 @@ export const openManualCreateChapterDialog = ({
               statusText={getStatusText(conflictChapter.status)}
             />
           ),
-          okText: 'Delete existing chapter and create',
+          okText: '删除已有章节并创建',
           okButtonProps: { danger: true },
-          cancelText: 'Cancel',
+          cancelText: '取消',
           onOk: async () => {
             await handleDeleteChapter(conflictChapter.id);
             await new Promise((resolve) => window.setTimeout(resolve, 300));
@@ -277,7 +277,7 @@ export const openExpansionPlanPreviewDialog = ({
       title: (
         <Space style={{ flexWrap: 'wrap' }}>
           <InfoCircleOutlined style={{ color: 'var(--color-primary)' }} />
-          <span style={{ wordBreak: 'break-word' }}>{`Chapter ${chapter.chapter_number} expansion plan`}</span>
+          <span style={{ wordBreak: 'break-word' }}>{`第 ${chapter.chapter_number} 章扩写计划`}</span>
         </Space>
       ),
       width: isMobile ? 'calc(100vw - 32px)' : 800,
@@ -302,10 +302,10 @@ export const openExpansionPlanPreviewDialog = ({
           planData={planData}
         />
       ),
-      okText: 'Close',
+      okText: '关闭',
     });
   } catch (error) {
     console.error('Failed to load expansion plan:', error);
-    message.error('Failed to load expansion plan');
+    message.error('加载扩写计划失败');
   }
 };

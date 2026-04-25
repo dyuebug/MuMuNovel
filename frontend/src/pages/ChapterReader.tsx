@@ -13,6 +13,7 @@ import {
   RightOutlined,
 } from '@ant-design/icons';
 import { api, chapterApi } from '../services/modularApi';
+import { isRequestCancelledError } from '../services/core/httpClient';
 import AnnotatedText, { type MemoryAnnotation } from '../components/AnnotatedText';
 import MemorySidebar from '../components/MemorySidebar';
 
@@ -79,68 +80,104 @@ const ChapterReader: React.FC = () => {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [navigation, setNavigation] = useState<NavigationData | null>(null);
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   const analysisPollIntervalRef = useRef<number | null>(null);
   const analysisPollTimeoutRef = useRef<number | null>(null);
   const analysisPollErrorCountRef = useRef(0);
   const analyzingRef = useRef(false);
+  const loadAbortRef = useRef<AbortController | null>(null);
+
+  const abortPendingLoad = useCallback(() => {
+    loadAbortRef.current?.abort();
+    loadAbortRef.current = null;
+  }, []);
 
   const loadChapterData = useCallback(async () => {
+    if (!chapterId) {
+      return;
+    }
+
+    abortPendingLoad();
+    const abortController = new AbortController();
+    loadAbortRef.current = abortController;
+
     try {
       setLoading(true);
       setError(null);
 
-      // 并行加载章节内容、标注数据和导航信息
-      // 注意：api拦截器已经解析了response.data，所以直接返回数据对象
-      const [chapterData, annotationsData, navigationData] = await Promise.all([
-        api.get<unknown, ChapterData>(`/chapters/${chapterId}`).catch(err => {
-          console.error('加载章节失败:', err);
+      const requestConfig = { signal: abortController.signal };
+
+      // Load chapter content, annotations, and navigation in parallel
+      // The API interceptor already unwraps response.data
+      const [chapterData, loadedAnnotationsData, navigationData] = await Promise.all([
+        api.get<unknown, ChapterData>(`/chapters/${chapterId}`, requestConfig).catch(err => {
+          console.error('Failed to load chapter:', err);
           throw err;
         }),
-        api.get<unknown, AnnotationsData>(`/chapters/${chapterId}/annotations`).catch(err => {
-          console.warn('加载标注失败:', err);
+        api.get<unknown, AnnotationsData>(`/chapters/${chapterId}/annotations`, requestConfig).catch(err => {
+          if (isRequestCancelledError(err)) {
+            throw err;
+          }
+          console.warn('Failed to load annotations:', err);
           return null;
-        }), // 如果没有分析数据也不报错
-        api.get<unknown, NavigationData>(`/chapters/${chapterId}/navigation`).catch(err => {
-          console.warn('加载导航信息失败:', err);
+        }),
+        api.get<unknown, NavigationData>(`/chapters/${chapterId}/navigation`, requestConfig).catch(err => {
+          if (isRequestCancelledError(err)) {
+            throw err;
+          }
+          console.warn('Failed to load chapter navigation:', err);
           return null;
         }),
       ]);
 
-      console.log('章节数据:', chapterData);
-      console.log('标注数据:', annotationsData);
-      console.log('导航数据:', navigationData);
+      if (abortController.signal.aborted || loadAbortRef.current !== abortController) {
+        return;
+      }
 
-      // 验证数据
+      console.log('Chapter payload:', chapterData);
+      console.log('Annotations payload:', loadedAnnotationsData);
+      console.log('Navigation payload:', navigationData);
+
+      // Validate chapter payload
       if (!chapterData || !chapterData.content) {
-        throw new Error('章节数据无效：缺少内容');
+        throw new Error('\u7ae0\u8282\u6570\u636e\u65e0\u6548\uff1a\u7f3a\u5c11\u5185\u5bb9');
       }
 
       setChapter(chapterData);
       setNavigation(navigationData);
-      
-      // 验证标注数据
-      if (annotationsData) {
-        const validAnnotations = annotationsData.annotations.filter(
-          (a: MemoryAnnotation) => a.position >= 0 && a.position < chapterData.content.length
+
+      // Validate annotations before rendering
+      if (loadedAnnotationsData) {
+        const validAnnotations = loadedAnnotationsData.annotations.filter(
+          (a: MemoryAnnotation) => a.position >= 0 && a.position < chapterData.content.length,
         );
-        const invalidCount = annotationsData.annotations.length - validAnnotations.length;
-        
+        const invalidCount = loadedAnnotationsData.annotations.length - validAnnotations.length;
+
         if (invalidCount > 0) {
-          console.warn(`${invalidCount}个标注位置无效，将仅显示${validAnnotations.length}个有效标注`);
+          console.warn(`${invalidCount} annotation positions are invalid; rendering ${validAnnotations.length} valid annotations only.`);
         }
-        
-        setAnnotationsData(annotationsData);
+
+        setAnnotationsData({
+          ...loadedAnnotationsData,
+          annotations: validAnnotations,
+        });
       } else {
         setAnnotationsData(null);
       }
     } catch (err: unknown) {
-      console.error('加载章节数据失败:', err);
-      const error = err as { response?: { data?: { detail?: string } }; message?: string };
-      setError(error.response?.data?.detail || error.message || '加载失败');
+      if (isRequestCancelledError(err) || abortController.signal.aborted) {
+        return;
+      }
+      console.error('Failed to load chapter reader data:', err);
+      const loadError = err as { response?: { data?: { detail?: string } }; message?: string };
+      setError(loadError.response?.data?.detail || loadError.message || '\u52a0\u8f7d\u5931\u8d25');
     } finally {
-      setLoading(false);
+      if (loadAbortRef.current === abortController) {
+        loadAbortRef.current = null;
+        setLoading(false);
+      }
     }
-  }, [chapterId]);
+  }, [abortPendingLoad, chapterId]);
 
   const stopAnalysisPolling = () => {
     if (analysisPollIntervalRef.current) {
@@ -159,18 +196,30 @@ const ChapterReader: React.FC = () => {
   }, [analyzing]);
 
   useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, []);
+
+  useEffect(() => {
     if (chapterId) {
-      loadChapterData();
+      void loadChapterData();
     }
     return () => {
+      abortPendingLoad();
       stopAnalysisPolling();
     };
-  }, [chapterId, loadChapterData]);
+  }, [abortPendingLoad, chapterId, loadChapterData]);
 
   const handleAnnotationClick = (annotation: MemoryAnnotation) => {
     setActiveAnnotationId(annotation.id);
     // 移动端显示侧边栏
-    if (window.innerWidth < 768) {
+    if (isMobile) {
       setSidebarVisible(true);
     }
   };
@@ -250,6 +299,9 @@ const ChapterReader: React.FC = () => {
             });
           }
         } catch (err) {
+          if (isRequestCancelledError(err)) {
+            return;
+          }
           analysisPollErrorCountRef.current += 1;
           console.error('轮询分析状态失败:', err);
           if (analysisPollErrorCountRef.current < MAX_CONSECUTIVE_TASK_POLL_ERRORS) {
@@ -312,10 +364,12 @@ const ChapterReader: React.FC = () => {
     );
   }
 
-  const hasAnnotations = annotationsData && annotationsData.annotations.length > 0;
+  const annotationItems = annotationsData?.annotations ?? [];
+  const hasAnnotations = annotationItems.length > 0;
+  const desktopSidebarVisible = Boolean(hasAnnotations && !isMobile);
 
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: '100dvh', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* 顶部工具栏 */}
       <Card
         size="small"
@@ -326,8 +380,16 @@ const ChapterReader: React.FC = () => {
           borderTop: 0,
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Space>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: isMobile ? 'stretch' : 'center',
+            gap: 12,
+            flexWrap: 'wrap',
+          }}
+        >
+          <Space wrap size={isMobile ? 8 : 12} style={{ flex: '1 1 420px', minWidth: 0 }}>
             <Button icon={<ArrowLeftOutlined />} onClick={handleBackClick}>
               返回
             </Button>
@@ -339,7 +401,7 @@ const ChapterReader: React.FC = () => {
             >
               上一章
             </Button>
-            <span style={{ fontSize: 16, fontWeight: 600 }}>
+            <span style={{ fontSize: isMobile ? 15 : 16, fontWeight: 600, lineHeight: 1.5, flex: '1 1 auto', minWidth: 0, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
               第{chapter.chapter_number}章: {chapter.title}
             </span>
             <Button
@@ -352,7 +414,7 @@ const ChapterReader: React.FC = () => {
             </Button>
           </Space>
 
-          <Space>
+          <Space wrap size={isMobile ? 8 : 12} style={{ justifyContent: isMobile ? 'flex-start' : 'flex-end' }}>
             <Button
               icon={<ReloadOutlined />}
               onClick={handleReanalyze}
@@ -373,7 +435,7 @@ const ChapterReader: React.FC = () => {
                 <Button
                   icon={<MenuOutlined />}
                   onClick={() => setSidebarVisible(true)}
-                  style={{ display: window.innerWidth < 768 ? 'inline-block' : 'none' }}
+                  style={{ display: isMobile ? 'inline-block' : 'none' }}
                 >
                   分析
                 </Button>
@@ -412,8 +474,8 @@ const ChapterReader: React.FC = () => {
           style={{
             flex: 1,
             overflowY: 'auto',
-            padding: '32px 48px',
-            maxWidth: hasAnnotations ? 'calc(100% - 400px)' : '100%',
+            padding: isMobile ? '16px 12px 24px' : '32px 40px',
+            maxWidth: desktopSidebarVisible ? 'calc(100% - 360px)' : '100%',
           }}
         >
           <Card>
@@ -431,7 +493,7 @@ const ChapterReader: React.FC = () => {
               {showAnnotations && hasAnnotations && annotationsData ? (
                 <AnnotatedText
                   content={chapter.content}
-                  annotations={annotationsData.annotations}
+                  annotations={annotationItems}
                   onAnnotationClick={handleAnnotationClick}
                   activeAnnotationId={activeAnnotationId}
                 />
@@ -450,19 +512,29 @@ const ChapterReader: React.FC = () => {
 
               {/* 底部翻页按钮 */}
               <div style={{ marginTop: 48, paddingTop: 24, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
-                <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    width: '100%',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    flexWrap: isMobile ? 'wrap' : 'nowrap',
+                  }}
+                >
                   <Button
-                    size="large"
+                    size={isMobile ? 'middle' : 'large'}
+                    style={isMobile ? { flex: '1 1 100%', height: 'auto', whiteSpace: 'normal', textAlign: 'left', justifyContent: 'flex-start' } : undefined}
                     icon={<LeftOutlined />}
                     onClick={handlePreviousChapter}
                     disabled={!navigation?.previous}
                   >
                     {navigation?.previous
-                      ? `上一章: 第${navigation.previous.chapter_number}章 ${navigation.previous.title}`
+                      ? (isMobile ? `上一章 · 第${navigation.previous.chapter_number}章` : `上一章: 第${navigation.previous.chapter_number}章 ${navigation.previous.title}`)
                       : '已是第一章'}
                   </Button>
                   <Button
-                    size="large"
+                    size={isMobile ? 'middle' : 'large'}
+                    style={isMobile ? { flex: '1 1 100%', height: 'auto', whiteSpace: 'normal', textAlign: 'left', justifyContent: 'space-between' } : undefined}
                     type="primary"
                     icon={<RightOutlined />}
                     onClick={handleNextChapter}
@@ -470,27 +542,27 @@ const ChapterReader: React.FC = () => {
                     iconPosition="end"
                   >
                     {navigation?.next
-                      ? `下一章: 第${navigation.next.chapter_number}章 ${navigation.next.title}`
+                      ? (isMobile ? `下一章 · 第${navigation.next.chapter_number}章` : `下一章: 第${navigation.next.chapter_number}章 ${navigation.next.title}`)
                       : '已是最后一章'}
                   </Button>
-                </Space>
+                </div>
               </div>
             </div>
           </Card>
         </div>
 
         {/* 右侧：记忆侧边栏（桌面端） */}
-        {hasAnnotations && annotationsData && window.innerWidth >= 768 && (
+        {desktopSidebarVisible && (
           <div
             style={{
-              width: 400,
+              width: 360,
               borderLeft: `1px solid ${token.colorBorderSecondary}`,
               overflowY: 'auto',
               background: token.colorBgLayout,
             }}
           >
             <MemorySidebar
-              annotations={annotationsData.annotations}
+              annotations={annotationItems}
               activeAnnotationId={activeAnnotationId}
               onAnnotationClick={handleAnnotationClick}
             />
@@ -505,10 +577,10 @@ const ChapterReader: React.FC = () => {
           placement="right"
           onClose={() => setSidebarVisible(false)}
           open={sidebarVisible}
-          width="80%"
+          width={isMobile ? 'min(320px, calc(100vw - 24px))' : 420}
         >
           <MemorySidebar
-            annotations={annotationsData.annotations}
+            annotations={annotationItems}
             activeAnnotationId={activeAnnotationId}
             onAnnotationClick={(annotation) => {
               handleAnnotationClick(annotation);

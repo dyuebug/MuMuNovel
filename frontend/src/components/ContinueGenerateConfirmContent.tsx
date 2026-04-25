@@ -24,13 +24,13 @@ export default function ContinueGenerateConfirmContent({
 }: ContinueGenerateConfirmContentProps) {
   return (
     <div style={{ marginTop: 16 }}>
-      <p>Continue generating this chapter with the current settings.</p>
+      <p>将基于当前配置继续生成本章内容。</p>
       <ul>
-        <li>{`Writing style: ${selectedStyleName ?? 'Not selected'}`}</li>
-        <li>{`Creative mode: ${creativeModeLabel}`}</li>
-        <li>{`Story focus: ${storyFocusLabel}`}</li>
-        <li>{`Plot stage: ${plotStageLabel}`}</li>
-        <li>{`Target word count: ${targetWordCount}`}</li>
+        <li>{`写作风格：${selectedStyleName ?? '未选择'}`}</li>
+        <li>{`创作模式：${creativeModeLabel}`}</li>
+        <li>{`故事聚焦：${storyFocusLabel}`}</li>
+        <li>{`剧情阶段：${plotStageLabel}`}</li>
+        <li>{`目标字数：${targetWordCount}`}</li>
       </ul>
       {previousChapters.length > 0 ? (
         <div
@@ -43,22 +43,22 @@ export default function ContinueGenerateConfirmContent({
           }}
         >
           <div style={{ marginBottom: 8, fontWeight: 500, color: 'var(--color-primary)' }}>
-            {`${previousChapters.length} earlier chapters will be used as context:`}
+            {`将使用前 ${previousChapters.length} 章作为上下文：`}
           </div>
           <div style={{ maxHeight: 150, overflowY: 'auto' }}>
             {previousChapters.map((chapter) => (
               <div key={chapter.id} style={{ padding: '4px 0', fontSize: 13 }}>
-                {`Chapter ${chapter.chapter_number}: ${chapter.title} (${chapter.word_count || 0} words)`}
+                {`第 ${chapter.chapter_number} 章：${chapter.title}（${chapter.word_count || 0} 字）`}
               </div>
             ))}
           </div>
           <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
-            Continuing will overwrite the current chapter content.
+            继续生成将覆盖当前章节正文。
           </div>
         </div>
       ) : null}
       <p style={{ color: '#ff4d4f', marginTop: 16, marginBottom: 0 }}>
-        Please make sure important content is already saved before continuing.
+        继续前请确认重要内容已经保存。
       </p>
     </div>
   );

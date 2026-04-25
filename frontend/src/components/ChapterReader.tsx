@@ -214,6 +214,11 @@ export default function ChapterReader({
     setSettings(prev => ({ ...prev, [key]: value }));
   };
 
+
+  const navigationSummary = navigation
+    ? `${navigation.previous ? `← ${navigation.previous.title}` : '已是第一章'} | ${navigation.next ? `${navigation.next.title} →` : '已是最后一章'}`
+    : '';
+
   return (
     <Modal
       open={visible}
@@ -283,6 +288,7 @@ export default function ChapterReader({
             whiteSpace: 'nowrap',
             fontSize: isMobile ? 14 : 16
           }}
+          title={`第${chapter.chapter_number}章：${chapter.title}`}
         >
           第{chapter.chapter_number}章：{chapter.title}
         </Typography.Title>
@@ -414,7 +420,7 @@ export default function ChapterReader({
               color: currentTheme.text,
               opacity: 0.6
             }}>
-              暂无内容
+              暂无正文内容，请返回编辑器补充后再阅读
             </div>
           )}
           </div>
@@ -445,14 +451,18 @@ export default function ChapterReader({
         <div style={{ 
           textAlign: 'center',
           color: currentTheme.text,
-          fontSize: isMobile ? 12 : 14
+          fontSize: isMobile ? 12 : 14,
+          flex: 1,
+          minWidth: 0,
+          padding: isMobile ? '0 8px' : '0 16px'
         }}>
           <div>{chapter.word_count || 0} 字</div>
           {navigation && (
-            <div style={{ fontSize: isMobile ? 10 : 12, opacity: 0.7 }}>
-              {navigation.previous ? `← ${navigation.previous.title}` : '已是第一章'}
-              {' | '}
-              {navigation.next ? `${navigation.next.title} →` : '已是最后一章'}
+            <div
+              title={navigationSummary}
+              style={{ fontSize: isMobile ? 10 : 12, opacity: 0.7, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            >
+              {navigationSummary}
             </div>
           )}
         </div>

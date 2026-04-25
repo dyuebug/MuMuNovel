@@ -134,16 +134,16 @@ const renderEndpointDiagnostics = (details: Record<string, unknown> | undefined,
 
   return (
     <div style={{ marginBottom: 12, padding: 12, background: colorBgLayout, borderRadius: 8 }}>
-      <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>Endpoint diagnostics</Text>
+      <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>端点诊断</Text>
       <div style={{ fontSize: 12, lineHeight: 1.8 }}>
-        <div>Primary endpoint: <Text code>{diagnostics.primary_endpoint || 'Not set'}</Text></div>
-        <div>Backup endpoints: <Text strong>{backupEndpoints.length}</Text></div>
-        <div>Strategy: <Text strong>{diagnostics.fallback_strategy || 'auto'}</Text></div>
-        <div>Auto failover: <Text strong>{diagnostics.auto_failover_enabled ? 'Enabled' : 'Disabled'}</Text></div>
+        <div>主端点：<Text code>{diagnostics.primary_endpoint || '未设置'}</Text></div>
+        <div>备用端点数：<Text strong>{backupEndpoints.length}</Text></div>
+        <div>回退策略：<Text strong>{diagnostics.fallback_strategy || 'auto'}</Text></div>
+        <div>自动故障切换：<Text strong>{diagnostics.auto_failover_enabled ? '已启用' : '已禁用'}</Text></div>
       </div>
       {backupEndpoints.length > 0 && (
         <div style={{ marginTop: 8 }}>
-          <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>Backup endpoint list</Text>
+          <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>备用端点列表</Text>
           <Space direction="vertical" size={4} style={{ width: '100%' }}>
             {backupEndpoints.map((url, index) => (
               <Text code key={`${url}-${index}`} style={{ width: '100%', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
@@ -169,32 +169,32 @@ const renderTransportDiagnostics = (details: Record<string, unknown> | undefined
 
   return (
     <div style={{ marginBottom: 12, padding: 12, background: colorBgLayout, borderRadius: 8 }}>
-      <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>Transport diagnostics</Text>
+      <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>传输诊断</Text>
       <div style={{ fontSize: 12, lineHeight: 1.8 }}>
-        <div>Total attempts: <Text strong>{summary.total_attempts ?? 0}</Text></div>
-        <div>Successful attempts: <Text strong>{summary.successful_attempts ?? 0}</Text></div>
-        <div>API modes tried: <Text strong>{apiModes.length > 0 ? apiModes.join(' -> ') : 'Unknown'}</Text></div>
-        <div>Backup endpoint used: <Text strong>{summary.backup_endpoint_used ? 'Yes' : 'No'}</Text></div>
-        <div>API mode fallback: <Text strong>{summary.api_mode_fallback_used ? 'Yes' : 'No'}</Text></div>
-        <div>Forced chat completions: <Text strong>{summary.forced_chat_completions ? 'Yes' : 'No'}</Text></div>
-        <div>Normalized base URL used: <Text strong>{summary.normalized_base_url_used ? 'Yes' : 'No'}</Text></div>
+        <div>总尝试次数：<Text strong>{summary.total_attempts ?? 0}</Text></div>
+        <div>成功次数：<Text strong>{summary.successful_attempts ?? 0}</Text></div>
+        <div>尝试过的 API 模式：<Text strong>{apiModes.length > 0 ? apiModes.join(' -> ') : '未知'}</Text></div>
+        <div>是否使用备用端点：<Text strong>{summary.backup_endpoint_used ? '是' : '否'}</Text></div>
+        <div>是否触发 API 模式回退：<Text strong>{summary.api_mode_fallback_used ? '是' : '否'}</Text></div>
+        <div>是否强制使用 Chat Completions：<Text strong>{summary.forced_chat_completions ? '是' : '否'}</Text></div>
+        <div>是否使用规范化 Base URL：<Text strong>{summary.normalized_base_url_used ? '是' : '否'}</Text></div>
       </div>
       {attempts.length > 0 && (
         <div style={{ marginTop: 8 }}>
-          <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>Recent attempts</Text>
+          <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 4 }}>最近尝试</Text>
           <Space direction="vertical" size={4} style={{ width: '100%' }}>
             {attempts.map((attempt, index) => (
               <div key={`${attempt.base_url || 'attempt'}-${attempt.attempt_number || index}-${index}`} style={{ fontSize: 12, lineHeight: 1.6 }}>
-                <Text code>{attempt.api_mode || 'unknown'}</Text>
-                {' '}
-                <Text strong>{attempt.result || 'unknown'}</Text>
-                {' ? '}
-                <Text>{attempt.endpoint_role || 'primary'}</Text>
-                {' ? '}
+                <Text code>{attempt.api_mode || '未知'}</Text>
+                {' / '}
+                <Text strong>{attempt.result || '未知'}</Text>
+                {' / '}
+                <Text>{attempt.endpoint_role === 'backup' ? '备用端点' : '主端点'}</Text>
+                {' / '}
                 <Text>{attempt.attempt_number || 1}/{attempt.max_attempts || 1}</Text>
-                {attempt.status_code ? <> {' ? '}<Text>HTTP {attempt.status_code}</Text></> : null}
-                {attempt.error_type ? <> {' ? '}<Text type="danger">{attempt.error_type}</Text></> : null}
-                <div style={{ wordBreak: 'break-all' }}><Text code>{`${attempt.base_url || ''}${attempt.endpoint_path || ''}` || 'Unknown endpoint'}</Text></div>
+                {attempt.status_code ? <> {' / '}<Text>HTTP {attempt.status_code}</Text></> : null}
+                {attempt.error_type ? <> {' / '}<Text type="danger">{attempt.error_type}</Text></> : null}
+                <div style={{ wordBreak: 'break-all' }}><Text code>{`${attempt.base_url || ''}${attempt.endpoint_path || ''}` || '未知端点'}</Text></div>
               </div>
             ))}
           </Space>

@@ -15,6 +15,7 @@ import {
 } from '@ant-design/icons';
 import type { AnalysisTask, ChapterAnalysisResponse } from '../types';
 import { chapterApi } from '../services/modularApi';
+import { isRequestCancelledError } from '../services/core/httpClient';
 import { getQualityTrendLabel } from '../utils/storyCreationQualitySummary';
 import { MAX_CONSECUTIVE_TASK_POLL_ERRORS } from '../utils/taskPolling';
 import { isAnalysisTaskRetrying } from '../utils/analysisTasks';
@@ -69,6 +70,51 @@ const ANALYSIS_QUALITY_FOCUS_LABELS: Record<string, string> = {
   career_continuity: "职业成长连续性",
 };
 
+const ANALYSIS_HOOK_TYPE_LABELS: Record<string, string> = {
+  opening: '开场钩子',
+  conflict: '冲突钩子',
+  emotional: '情绪钩子',
+  suspense: '悬念钩子',
+  mystery: '谜团钩子',
+  reversal: '反转钩子',
+  payoff: '回报钩子',
+  cliffhanger: '章尾钩子',
+};
+
+const ANALYSIS_HOOK_POSITION_LABELS: Record<string, string> = {
+  beginning: '开头',
+  opening: '开头',
+  middle: '中段',
+  ending: '结尾',
+  end: '结尾',
+  closing: '结尾',
+};
+
+const ANALYSIS_EMOTION_LABELS: Record<string, string> = {
+  joy: '喜悦',
+  sadness: '悲伤',
+  anger: '愤怒',
+  fear: '恐惧',
+  surprise: '惊讶',
+  anticipation: '期待',
+  tension: '紧张',
+  relief: '释然',
+  anxiety: '焦虑',
+  calm: '平静',
+  excitement: '兴奋',
+};
+
+const ANALYSIS_CONFLICT_TYPE_LABELS: Record<string, string> = {
+  internal: '内在冲突',
+  interpersonal: '人际冲突',
+  external: '外部冲突',
+  environmental: '环境冲突',
+  ideological: '观念冲突',
+  relationship: '关系冲突',
+  survival: '生存冲突',
+  mystery: '谜团冲突',
+};
+
 const localizeQualityFocusArea = (value?: string | null): string => {
   if (!value) {
     return "";
@@ -100,6 +146,34 @@ const localizeAnalysisMemoryText = (value?: string | null): string => {
   );
 };
 
+const localizeHookType = (value?: string | null): string => {
+  if (!value) {
+    return '';
+  }
+  return ANALYSIS_HOOK_TYPE_LABELS[value] || value;
+};
+
+const localizeHookPosition = (value?: string | null): string => {
+  if (!value) {
+    return '';
+  }
+  return ANALYSIS_HOOK_POSITION_LABELS[value] || value;
+};
+
+const localizeEmotionLabel = (value?: string | null): string => {
+  if (!value) {
+    return '';
+  }
+  return ANALYSIS_EMOTION_LABELS[value] || value;
+};
+
+const localizeConflictType = (value?: string | null): string => {
+  if (!value) {
+    return '';
+  }
+  return ANALYSIS_CONFLICT_TYPE_LABELS[value] || value;
+};
+
 interface ChapterAnalysisProps {
   chapterId: string;
   visible: boolean;
@@ -124,6 +198,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
   const pollIntervalRef = useRef<number | null>(null);
   const pollTimeoutRef = useRef<number | null>(null);
   const pollErrorCountRef = useRef(0);
+  const requestAbortRef = useRef<AbortController | null>(null);
 
   const stopPolling = () => {
     if (pollIntervalRef.current) {
@@ -135,6 +210,18 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       pollTimeoutRef.current = null;
     }
     pollErrorCountRef.current = 0;
+  };
+
+  const abortActiveRequest = () => {
+    requestAbortRef.current?.abort();
+    requestAbortRef.current = null;
+  };
+
+  const beginRequest = () => {
+    abortActiveRequest();
+    const abortController = new AbortController();
+    requestAbortRef.current = abortController;
+    return abortController;
   };
 
   useEffect(() => {
@@ -150,15 +237,15 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      abortActiveRequest();
       stopPolling();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, chapterId]);
 
-  // 🔧 新增：独立的章节信息加载函数
-  const loadChapterInfo = async () => {
+  const loadChapterInfo = async (signal?: AbortSignal) => {
     try {
-      const chapterData = await chapterApi.getChapter(chapterId);
+      const chapterData = await chapterApi.getChapter(chapterId, signal ? { signal } : undefined);
       setChapterInfo({
         title: chapterData.title,
         chapter_number: chapterData.chapter_number,
@@ -167,26 +254,42 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       });
       return chapterData;
     } catch (error) {
-      console.error('❌ 加载章节信息失败:', error);
+      if (isRequestCancelledError(error)) {
+        throw error;
+      }
+      console.error('Failed to load chapter info:', error);
       return null;
     }
   };
 
   const fetchAnalysisStatus = async () => {
+    const abortController = beginRequest();
+
     try {
       setLoading(true);
       setError(null);
+      setTask(null);
+      setAnalysis(null);
 
-      const chapterData = await loadChapterInfo();
+      const chapterData = await loadChapterInfo(abortController.signal);
+      if (abortController.signal.aborted || requestAbortRef.current !== abortController) {
+        return;
+      }
+
       const taskData: AnalysisTask = await chapterApi.getChapterAnalysisStatus(
         chapterId,
-        chapterData?.project_id || chapterInfo?.project_id
+        chapterData?.project_id || chapterInfo?.project_id,
+        { signal: abortController.signal },
       );
 
-      // 如果状态为 none（无任务），设置 task 为 null，让前端显示"开始分析"按钮
+      if (abortController.signal.aborted || requestAbortRef.current !== abortController) {
+        return;
+      }
+
       if (taskData.status === 'none' || !taskData.has_task) {
         setTask(null);
-        setError(null); // 清除错误，这不是错误状态
+        setAnalysis(null);
+        setError(null);
         return;
       }
 
@@ -197,21 +300,43 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       } else if (taskData.status === 'running' || taskData.status === 'pending' || isAnalysisTaskRetrying(taskData)) {
         startPolling();
       } else if (taskData.status === 'failed' && taskData.auto_recovered) {
-        setError(taskData.error_message || '分析任务已自动恢复，请稍后重试');
+        setError(taskData.error_message || '\u5206\u6790\u4efb\u52a1\u5df2\u81ea\u52a8\u6062\u590d\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5');
       }
     } catch (err) {
+      if (isRequestCancelledError(err) || abortController.signal.aborted) {
+        return;
+      }
       setError((err as Error).message);
     } finally {
-      setLoading(false);
+      if (requestAbortRef.current === abortController) {
+        requestAbortRef.current = null;
+        setLoading(false);
+      }
     }
   };
 
   const fetchAnalysisResult = async () => {
+    const abortController = beginRequest();
+
     try {
-      const data: ChapterAnalysisResponse = await chapterApi.getChapterAnalysis(chapterId, false);
+      const data: ChapterAnalysisResponse = await chapterApi.getChapterAnalysis(
+        chapterId,
+        false,
+        { signal: abortController.signal },
+      );
+      if (abortController.signal.aborted || requestAbortRef.current !== abortController) {
+        return;
+      }
       setAnalysis(data);
     } catch (err) {
+      if (isRequestCancelledError(err) || abortController.signal.aborted) {
+        return;
+      }
       setError((err as Error).message);
+    } finally {
+      if (requestAbortRef.current === abortController) {
+        requestAbortRef.current = null;
+      }
     }
   };
 
@@ -220,13 +345,23 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
     pollErrorCountRef.current = 0;
 
     const poll = async () => {
+      const abortController = beginRequest();
+
       try {
         const taskData: AnalysisTask = await chapterApi.getChapterAnalysisStatus(
           chapterId,
-          chapterInfo?.project_id
+          chapterInfo?.project_id,
+          { signal: abortController.signal },
         );
+        if (abortController.signal.aborted || requestAbortRef.current !== abortController) {
+          return;
+        }
         pollErrorCountRef.current = 0;
-        if (taskData.status === 'none' || !taskData.has_task) return;
+        if (taskData.status === 'none' || !taskData.has_task) {
+          setTask(null);
+          setAnalysis(null);
+          return;
+        }
         setTask(taskData);
 
         if (taskData.status === 'completed') {
@@ -240,18 +375,25 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
 
           stopPolling();
           setError(taskData.auto_recovered
-            ? (taskData.error_message || '分析任务已自动恢复，请稍后重试')
-            : (taskData.error_message || '分析失败'));
+            ? (taskData.error_message || '\u5206\u6790\u4efb\u52a1\u5df2\u81ea\u52a8\u6062\u590d\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5')
+            : (taskData.error_message || '\u5206\u6790\u5931\u8d25'));
         }
       } catch (err) {
+        if (isRequestCancelledError(err) || abortController.signal.aborted) {
+          return;
+        }
         pollErrorCountRef.current += 1;
-        console.error('轮询错误:', err);
+        console.error('Failed to poll chapter analysis status:', err);
         if (pollErrorCountRef.current < MAX_CONSECUTIVE_TASK_POLL_ERRORS) {
           return;
         }
         stopPolling();
-        setError('章节分析状态同步失败，请稍后刷新重试');
-        message.error('章节分析状态同步失败，请稍后刷新重试');
+        setError('\u7ae0\u8282\u5206\u6790\u72b6\u6001\u540c\u6b65\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u5237\u65b0\u91cd\u8bd5');
+        message.error('\u7ae0\u8282\u5206\u6790\u72b6\u6001\u540c\u6b65\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u5237\u65b0\u91cd\u8bd5');
+      } finally {
+        if (requestAbortRef.current === abortController) {
+          requestAbortRef.current = null;
+        }
       }
     };
 
@@ -261,27 +403,45 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
     }, 2000);
 
     pollTimeoutRef.current = window.setTimeout(() => {
+      abortActiveRequest();
       stopPolling();
     }, 300000);
   };
 
   const triggerAnalysis = async () => {
+    const abortController = beginRequest();
+
     try {
       setLoading(true);
       setError(null);
+      setTask(null);
+      setAnalysis(null);
 
-      const chapterData = await loadChapterInfo();
+      const chapterData = await loadChapterInfo(abortController.signal);
+      if (abortController.signal.aborted || requestAbortRef.current !== abortController) {
+        return;
+      }
+
       await chapterApi.triggerChapterAnalysis(
         chapterId,
-        chapterData?.project_id || chapterInfo?.project_id
+        chapterData?.project_id || chapterInfo?.project_id,
       );
 
-      // 触发成功后立即关闭Modal，让父组件的状态管理接管
+      if (abortController.signal.aborted || requestAbortRef.current !== abortController) {
+        return;
+      }
+
       onClose();
     } catch (err) {
+      if (isRequestCancelledError(err) || abortController.signal.aborted) {
+        return;
+      }
       setError((err as Error).message);
     } finally {
-      setLoading(false);
+      if (requestAbortRef.current === abortController) {
+        requestAbortRef.current = null;
+        setLoading(false);
+      }
     }
   };
 
@@ -391,7 +551,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
         {task.status === 'failed' && task.error_message && (
           <Alert
             message="分析失败"
-            description={task.error_message}
+            description={<div style={{ wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{task.error_message}</div>}
             type="error"
             showIcon
             style={{
@@ -576,14 +736,17 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
     return (
       <Tabs
         defaultActiveKey="overview"
+        size={isMobile ? 'small' : 'middle'}
+        tabBarGutter={isMobile ? 8 : 16}
         style={{ height: '100%' }}
+        tabBarStyle={{ marginBottom: isMobile ? 8 : 16 }}
         items={[
           {
             key: 'overview',
             label: '概览',
             icon: <TrophyOutlined />,
             children: (
-              <div style={{ height: isMobile ? 'calc(80vh - 180px)' : 'calc(90vh - 220px)', overflowY: 'auto', paddingRight: '8px' }}>
+              <div style={{ height: isMobile ? 'calc(100dvh - 260px)' : 'calc(90vh - 220px)', overflowY: 'auto', paddingRight: isMobile ? 0 : '8px' }}>
                 {/* 根据建议重新生成按钮 */}
                 {hasSuggestions && (
                   <Alert
@@ -641,7 +804,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                               {recentFailedMetricCounts.map((item) => (
                                 <Tag key={`${item.key || item.label}-${item.count || 0}`} color="volcano">
                                   {item.label || item.key}
-                                  {typeof item.count === 'number' ? ` ?${item.count}` : ''}
+                                  {typeof item.count === 'number' ? ` ${item.count} 次` : ''}
                                 </Tag>
                               ))}
                             </div>
@@ -649,7 +812,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                         )}
                         {recentFocusAreas.length > 0 && (
                           <div style={{ marginBottom: 12 }}>
-                            <strong>建议动作：</strong>
+                            <strong>重点关注：</strong>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
                               {recentFocusAreas.map((area) => (
                                 <Tag key={area}>{localizeQualityFocusArea(area)}</Tag>
@@ -675,7 +838,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                     message="发现自动修订草稿"
                     description={
                       <div>
-                        <p style={{ marginBottom: 8 }}>
+                        <p style={{ marginBottom: 8, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                           {draftResult.change_summary || '系统已根据高优先问题生成一份自动修订草稿，您可以先预览，再决定是否应用。'}
                         </p>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: draftUnresolvedIssues.length > 0 ? 12 : 0 }}>
@@ -690,7 +853,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                             <div style={{ fontWeight: 500, marginBottom: 4 }}>仍待处理</div>
                             <ul style={{ margin: 0, paddingLeft: 20 }}>
                               {draftUnresolvedIssues.map((issue, index) => (
-                                <li key={`${issue}-${index}`}>{issue}</li>
+                                <li key={`${issue}-${index}`} style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{issue}</li>
                               ))}
                             </ul>
                           </div>
@@ -755,7 +918,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                           dataSource={checkerPriorityActions}
                           renderItem={(item, index) => (
                             <List.Item>
-                              <span>{index + 1}. {item}</span>
+                              <span style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{index + 1}. {item}</span>
                             </List.Item>
                           )}
                         />
@@ -775,12 +938,12 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                                   title={
                                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
                                       <Tag color={getSeverityTagColor(issue.severity)}>{getSeverityLabel(issue.severity)}</Tag>
-                                      <span>{issueTitle}</span>
-                                      {issueLocation && <Tag>{issueLocation}</Tag>}
+                                      <span style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{issueTitle}</span>
+                                      {issueLocation && <Tag style={{ maxWidth: '100%', whiteSpace: 'normal', wordBreak: 'break-word' }}>{issueLocation}</Tag>}
                                     </div>
                                   }
                                   description={
-                                    <div>
+                                    <div style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                                       {issue.evidence && <p style={{ marginBottom: 8 }}><strong>证据：</strong>{issue.evidence}</p>}
                                       {issue.impact && <p style={{ marginBottom: 8 }}><strong>影响：</strong>{issue.impact}</p>}
                                       {issue.suggestion && <p style={{ marginBottom: 0 }}><strong>建议：</strong>{issue.suggestion}</p>}
@@ -834,7 +997,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
 
                 {analysis_data.analysis_report && (
                   <Card title="分析摘要" style={{ marginBottom: 16 }} size={isMobile ? 'small' : 'default'}>
-                    <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: isMobile ? 13 : 14 }}>
+                    <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: isMobile ? 13 : 14, margin: 0, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                       {analysis_data.analysis_report}
                     </pre>
                   </Card>
@@ -846,7 +1009,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                       dataSource={analysis_data.suggestions}
                       renderItem={(item, index) => (
                         <List.Item>
-                          <span>{index + 1}. {item}</span>
+                          <span style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{index + 1}. {item}</span>
                         </List.Item>
                       )}
                     />
@@ -869,13 +1032,13 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                         <List.Item>
                           <List.Item.Meta
                             title={
-                              <div>
-                                <Tag color="blue">{hook.type}</Tag>
-                                <Tag color="orange">{hook.position}</Tag>
+                              <div style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                                <Tag color="blue">{localizeHookType(hook.type)}</Tag>
+                                <Tag color="orange">{localizeHookPosition(hook.position)}</Tag>
                                 <Tag color="red">强度: {hook.strength}/10</Tag>
                               </div>
                             }
-                            description={hook.content}
+                            description={<div style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{hook.content}</div>}
                           />
                         </List.Item>
                       )}
@@ -912,7 +1075,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                                 )}
                               </div>
                             }
-                            description={foreshadow.content}
+                            description={<div style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{foreshadow.content}</div>}
                           />
                         </List.Item>
                       )}
@@ -937,7 +1100,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                         <Col span={isMobile ? 24 : 12}>
                           <Statistic
                             title="主导情绪"
-                            value={analysis_data.emotional_tone}
+                            value={localizeEmotionLabel(analysis_data.emotional_tone)}
                           />
                         </Col>
                         <Col span={isMobile ? 24 : 12}>
@@ -956,7 +1119,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                             <strong>冲突类型：</strong>
                             {analysis_data.conflict_types.map((type, idx) => (
                               <Tag key={idx} color="red" style={{ margin: 4 }}>
-                                {type}
+                                {localizeConflictType(type)}
                               </Tag>
                             ))}
                           </div>
@@ -1026,16 +1189,16 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                         <List.Item>
                           <List.Item.Meta
                             title={
-                              <div>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
                                 <Tag color="blue">{localizeAnalysisMemoryType(memory.type)}</Tag>
                                 <Tag color="orange">重要性: {memory.importance.toFixed(1)}</Tag>
                                 {memory.is_foreshadow === 1 && <Tag color="green">已埋下伏笔</Tag>}
                                 {memory.is_foreshadow === 2 && <Tag color="purple">已回收伏笔</Tag>}
-                                <span style={{ marginLeft: 8 }}>{localizeAnalysisMemoryText(memory.title)}</span>
+                                <span style={{ minWidth: 0, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{localizeAnalysisMemoryText(memory.title)}</span>
                               </div>
                             }
                             description={
-                              <div>
+                              <div style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                                 <p>{memory.content}</p>
                                 <div>
                                   {memory.tags.map((tag, idx) => (
@@ -1076,52 +1239,63 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
         body: {
           padding: isMobile ? '12px' : '24px',
           paddingBottom: 0,
-          maxHeight: isMobile ? 'calc(100vh - 200px)' : 'calc(90vh - 150px)',
-          overflowY: 'auto'
+          maxHeight: isMobile ? 'calc(100dvh - 200px)' : 'calc(90vh - 150px)',
+          overflowY: 'auto',
+          overflowX: 'hidden'
         }
       }}
-      footer={[
-        <Button key="close" onClick={onClose} size={isMobile ? 'small' : 'middle'}>
-          关闭
-        </Button>,
-        !task && !loading && (
+      footer={(
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: isMobile ? 'stretch' : 'flex-end' }}>
           <Button
-            key="analyze"
-            type="primary"
-            icon={<ReloadOutlined />}
-            onClick={triggerAnalysis}
-            loading={loading}
-            size={isMobile ? 'small' : 'middle'}
+            key="close"
+            onClick={onClose}
+            size={isMobile ? 'middle' : 'middle'}
+            style={isMobile ? { flex: '1 1 100%', minHeight: 38 } : undefined}
           >
-            开始分析
+            关闭
           </Button>
-        ),
-        task && (task.status === 'failed') && (
-          <Button
-            key="reanalyze"
-            type="primary"
-            icon={<ReloadOutlined />}
-            onClick={triggerAnalysis}
-            loading={loading}
-            danger
-            size={isMobile ? 'small' : 'middle'}
-          >
-            重新分析
-          </Button>
-        ),
-        task && task.status === 'completed' && (
-          <Button
-            key="reanalyze"
-            type="default"
-            icon={<ReloadOutlined />}
-            onClick={triggerAnalysis}
-            loading={loading}
-            size={isMobile ? 'small' : 'middle'}
-          >
-            重新分析
-          </Button>
-        )
-      ].filter(Boolean)}
+          {!task && !loading && (
+            <Button
+              key="analyze"
+              type="primary"
+              icon={<ReloadOutlined />}
+              onClick={triggerAnalysis}
+              loading={loading}
+              size={isMobile ? 'middle' : 'middle'}
+              style={isMobile ? { flex: '1 1 100%', minHeight: 38 } : undefined}
+            >
+              开始分析
+            </Button>
+          )}
+          {task && task.status === 'failed' && (
+            <Button
+              key="reanalyze-failed"
+              type="primary"
+              icon={<ReloadOutlined />}
+              onClick={triggerAnalysis}
+              loading={loading}
+              danger
+              size={isMobile ? 'middle' : 'middle'}
+              style={isMobile ? { flex: '1 1 100%', minHeight: 38 } : undefined}
+            >
+              重新分析
+            </Button>
+          )}
+          {task && task.status === 'completed' && (
+            <Button
+              key="reanalyze-completed"
+              type="default"
+              icon={<ReloadOutlined />}
+              onClick={triggerAnalysis}
+              loading={loading}
+              size={isMobile ? 'middle' : 'middle'}
+              style={isMobile ? { flex: '1 1 100%', minHeight: 38 } : undefined}
+            >
+              重新分析
+            </Button>
+          )}
+        </div>
+      )}
     >
       {loading && !task && (
         <div style={{ textAlign: 'center', padding: '48px' }}>
@@ -1133,14 +1307,29 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       {error && (
         <Alert
           message="错误"
-          description={error}
+          description={<div style={{ wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{error}</div>}
           type="error"
           showIcon
         />
       )}
 
+      {!loading && !error && !task && !analysis && (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="暂无分析结果，可点击下方“开始分析”生成章节分析"
+          style={{ padding: isMobile ? '32px 0' : '48px 0' }}
+        />
+      )}
+
       {task && task.status !== 'completed' && renderProgress()}
       {task && task.status === 'completed' && analysis && renderAnalysisResult()}
+      {task && task.status === 'completed' && !analysis && !loading && (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="分析已完成，但暂无可展示结果，请稍后重试或重新分析"
+          style={{ padding: isMobile ? '32px 0' : '48px 0' }}
+        />
+      )}
 
       {/* 自动修订草稿预览 */}
       <Modal
@@ -1173,26 +1362,26 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
           <div>
             {draftResult && (
               <Card size="small" style={{ marginBottom: 16 }}>
-                <Row gutter={16}>
-                  <Col span={8}>
+                <Row gutter={isMobile ? 8 : 16}>
+                  <Col span={isMobile ? 24 : 8}>
                     <Statistic title="高优先问题" value={draftPriorityIssueCount} valueStyle={{ color: 'var(--color-error)' }} />
                   </Col>
-                  <Col span={8}>
+                  <Col span={isMobile ? 24 : 8}>
                     <Statistic title="已处理" value={draftAppliedIssueCount} valueStyle={{ color: 'var(--color-success)' }} />
                   </Col>
-                  <Col span={8}>
+                  <Col span={isMobile ? 24 : 8}>
                     <Statistic title="草稿字数" value={draftResult.revised_word_count} />
                   </Col>
                 </Row>
                 {draftResult.change_summary && (
-                  <div style={{ marginTop: 16 }}>
+                  <div style={{ marginTop: 16, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                     <strong>修订摘要：</strong>{draftResult.change_summary}
                   </div>
                 )}
               </Card>
             )}
             <Card size="small" title="修订正文">
-              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: isMobile ? 13 : 14, margin: 0 }}>
+              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: isMobile ? 13 : 14, margin: 0, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                 {draftContent || draftResult?.revised_text_preview || '暂无可预览内容'}
               </pre>
             </Card>

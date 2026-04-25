@@ -9,6 +9,7 @@ import SSEProgressModal from '../components/SSEProgressModal';
 import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgroundTasks';
 import { formatBackgroundTaskError } from '../utils/taskPolling';
 import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
+import { isRequestCancelledError } from '../services/core/httpClient';
 
 const { TextArea } = Input;
 const { Title, Text, Paragraph } = Typography;
@@ -127,6 +128,9 @@ export default function Careers() {
                 message.info(task.message || '任务已取消');
             },
             onPollingError: (error) => {
+                if (isRequestCancelledError(error)) {
+                    return;
+                }
                 console.error('轮询职业生成任务失败:', error);
                 stopAiTaskPolling();
                 aiTaskIdRef.current = null;

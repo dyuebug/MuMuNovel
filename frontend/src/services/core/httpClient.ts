@@ -1,10 +1,12 @@
 import axios from 'axios';
 import { message } from 'antd';
+import { buildLoginUrlFromLocation } from '../../utils/loginRedirect';
 
 export interface RequestConfigWithToastControl {
   suppressErrorToast?: boolean;
   suppressErrorLog?: boolean;
   params?: Record<string, unknown>;
+  signal?: AbortSignal;
 }
 
 const ERROR_TOAST_THROTTLE_MS = 3000;
@@ -50,6 +52,35 @@ export const getAxiosErrorStatus = (error: unknown): number | null => {
 
   return error.response?.status ?? null;
 };
+export const isRequestCancelledError = (error: unknown): boolean => {
+  if (axios.isCancel(error)) {
+    return true;
+  }
+
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+
+  const candidate = error as {
+    code?: unknown;
+    message?: unknown;
+    name?: unknown;
+    config?: { signal?: AbortSignal | null };
+  };
+
+  const errorCode = typeof candidate.code === 'string' ? candidate.code.toUpperCase() : '';
+  const errorMessage = typeof candidate.message === 'string' ? candidate.message.toLowerCase() : '';
+  const errorName = typeof candidate.name === 'string' ? candidate.name : '';
+  const isSignalAborted = Boolean(candidate.config?.signal?.aborted);
+
+  return (
+    errorCode === 'ERR_CANCELED'
+    || errorName === 'AbortError'
+    || isSignalAborted
+    || /\babort(ed)?\b/.test(errorMessage)
+    || /\bcancel(l)?ed\b/.test(errorMessage)
+  );
+};
 
 api.interceptors.request.use(
   (config) => {
@@ -68,20 +99,33 @@ api.interceptors.response.use(
     const requestConfig = (error?.config || {}) as RequestConfigWithToastControl;
     const suppressErrorToast = Boolean(requestConfig.suppressErrorToast);
     const suppressErrorLog = Boolean(requestConfig.suppressErrorLog);
+
+    if (isRequestCancelledError(error)) {
+      return Promise.reject(error);
+    }
+
     let errorMessage = 'Request failed';
 
     if (error.response) {
       const status = error.response.status;
       const data = error.response.data;
 
+      const requestUrl = typeof error.config?.url === 'string' ? error.config.url : '';
+      const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
+      const isAuthRequest = requestUrl.includes('/auth/');
+      const isAuthPage = pathname === '/login' || pathname.startsWith('/auth/callback');
+
       switch (status) {
         case 400:
           errorMessage = data?.detail || 'Invalid request';
           break;
         case 401:
-          errorMessage = 'Unauthorized, please login first';
-          if (window.location.pathname !== '/login') {
-            window.location.href = '/login';
+          errorMessage = data?.detail || data?.message || 'Unauthorized, please login first';
+          if (!isAuthRequest && !isAuthPage && typeof window !== 'undefined') {
+            const loginUrl = buildLoginUrlFromLocation(window.location);
+            if (window.location.href !== loginUrl && window.location.pathname + window.location.search + window.location.hash !== loginUrl) {
+              window.location.assign(loginUrl);
+            }
           }
           break;
         case 403:

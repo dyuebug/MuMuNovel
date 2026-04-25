@@ -16,6 +16,7 @@ import {
 import type { WizardBasicInfo } from '../types';
 import { isProjectWizardCompleted } from '../utils/projectWizardState';
 import { syncProjectToStoreById } from '../store/hooks';
+import { isRequestCancelledError } from '../services/core/httpClient';
 import {
   CREATIVE_MODE_OPTIONS,
   PLOT_STAGE_OPTIONS,
@@ -99,18 +100,26 @@ export default function ProjectWizardNew() {
   // 检查URL参数,如果有project_id则恢复生成
   useEffect(() => {
     const projectId = searchParams.get('project_id');
-    if (projectId) {
-      setResumeProjectId(projectId);
-      handleResumeGeneration(projectId);
+    if (!projectId) {
+      return;
     }
+
+    const abortController = new AbortController();
+    setResumeProjectId(projectId);
+    void handleResumeGeneration(projectId, abortController.signal);
+
+    return () => {
+      abortController.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   // Resume unfinished wizard generation
-  const handleResumeGeneration = async (projectId: string) => {
+  const handleResumeGeneration = async (projectId: string, signal?: AbortSignal) => {
     try {
       const response = await fetch(`/api/projects/${projectId}`, {
         credentials: 'include',
+        signal,
       });
       if (!response.ok) {
         throw new Error('获取项目信息失败');
@@ -173,6 +182,9 @@ export default function ProjectWizardNew() {
       setGenerationConfig(config);
       setCurrentStep('generating');
     } catch (error) {
+      if (isRequestCancelledError(error)) {
+        return;
+      }
       console.error('恢复生成失败:', error);
       message.error('恢复生成失败，请重试');
       navigate('/');

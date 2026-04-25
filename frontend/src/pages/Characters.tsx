@@ -12,6 +12,7 @@ import { backgroundTaskApi, characterApi } from '../services/modularApi';
 import { getCachedProjectCareers, loadProjectCareers } from '../services/projectCareers';
 import { formatBackgroundTaskError } from '../utils/taskPolling';
 import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
+import { isRequestCancelledError } from '../services/core/httpClient';
 
 
 
@@ -366,6 +367,9 @@ export default function Characters() {
         message.info(task.message || '任务已取消');
       },
       onPollingError: (error) => {
+        if (isRequestCancelledError(error)) {
+          return;
+        }
         console.error('轮询角色或组织生成任务失败:', error);
         stopTaskPolling();
         currentTaskIdRef.current = null;

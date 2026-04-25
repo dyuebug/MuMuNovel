@@ -18,9 +18,7 @@ export default function ChapterNumberConflictConfirmContent({
   return (
     <div>
       <p style={{ marginBottom: 12 }}>
-        {`Chapter number `}
-        <strong>{chapterNumber}</strong>
-        {' is already in use by an existing chapter.'}
+        章节号 <strong>{chapterNumber}</strong> 已被现有章节占用。
       </p>
 
       <div
@@ -33,31 +31,31 @@ export default function ChapterNumberConflictConfirmContent({
         }}
       >
         <div>
-          <strong>Title: </strong>
+          <strong>标题：</strong>
           {conflictChapter.title}
         </div>
         <div>
-          <strong>Status: </strong>
+          <strong>状态：</strong>
           {statusText}
         </div>
         <div>
-          <strong>Word count: </strong>
-          {`${conflictChapter.word_count || 0} words`}
+          <strong>字数：</strong>
+          {`${conflictChapter.word_count || 0} 字`}
         </div>
         {conflictChapter.outline_title ? (
           <div>
-            <strong>Outline: </strong>
+            <strong>所属大纲：</strong>
             {conflictChapter.outline_title}
           </div>
         ) : null}
       </div>
 
       <p style={{ color: '#ff4d4f', marginBottom: 8 }}>
-        If you continue, the existing chapter will be deleted before the new one is created.
+        如果继续，系统会先删除现有章节，再创建新章节。
       </p>
 
       <p style={{ fontSize: 12, color: '#666', marginBottom: 0 }}>
-        This action cannot be undone. Please confirm the existing chapter is no longer needed.
+        此操作不可撤销，请确认现有章节已不再需要。
       </p>
     </div>
   );

@@ -18,6 +18,7 @@ import { outlineApi, chapterApi } from '../services/modularApi';
 import { backgroundTaskApi, projectApi, settingsApi } from '../services/modularApi';
 import { formatBackgroundTaskError } from '../utils/taskPolling';
 import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
+import { isRequestCancelledError } from '../services/core/httpClient';
 import { hasUsableApiCredentials } from '../utils/apiKey';
 import InlineErrorBoundary from '../components/InlineErrorBoundary';
 
@@ -605,6 +606,9 @@ export default function Outline() {
         message.info(task.message || '任务已取消');
       },
       onPollingError: (error) => {
+        if (isRequestCancelledError(error)) {
+          return;
+        }
         console.error('轮询大纲生成任务失败:', {
           error,
           context: buildOutlineGenerateLogContext({
@@ -703,6 +707,9 @@ export default function Outline() {
         message.info(task.message || '任务已取消');
       },
       onPollingError: (error) => {
+        if (isRequestCancelledError(error)) {
+          return;
+        }
         console.error('轮询大纲展开任务失败:', error);
         stopExpandTaskPolling();
         expandPollingTaskIdRef.current = null;

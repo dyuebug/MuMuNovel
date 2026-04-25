@@ -1,5 +1,6 @@
 import { useBackgroundTaskStore } from '../../store/backgroundTasks';
 import { api, silentRequestConfig } from '../core/httpClient';
+import type { RequestConfigWithToastControl } from '../core/httpClient';
 import { upsertChapterAnalysisTaskToStore } from './chapterTaskState';
 import type {
   AnalysisTask,
@@ -60,16 +61,30 @@ export const chapterAnalysisApi = {
     messageOverride?: string,
   ) => upsertChapterAnalysisTaskToStore(task, projectId, messageOverride),
 
-  getChapterAnalysis: (chapterId: string, includeFullDraft = false) =>
+  getChapterAnalysis: (
+    chapterId: string,
+    includeFullDraft = false,
+    config?: RequestConfigWithToastControl,
+  ) =>
     api.get<unknown, ChapterAnalysisResponse>(
       `/chapters/${chapterId}/analysis`,
-      { params: { include_full_draft: includeFullDraft } },
+      {
+        ...(config || {}),
+        params: {
+          ...(config?.params || {}),
+          include_full_draft: includeFullDraft,
+        },
+      },
     ),
 
-  getChapterAnalysisStatus: async (chapterId: string, projectId?: string) => {
+  getChapterAnalysisStatus: async (
+    chapterId: string,
+    projectId?: string,
+    config?: RequestConfigWithToastControl,
+  ) => {
     const status = await api.get<unknown, AnalysisTask>(
       `/chapters/${chapterId}/analysis/status`,
-      silentRequestConfig(),
+      silentRequestConfig(config),
     );
     status.error_message = formatChapterAnalysisError(status.error_code, status.error_message);
     upsertChapterAnalysisTaskToStore(status, projectId);

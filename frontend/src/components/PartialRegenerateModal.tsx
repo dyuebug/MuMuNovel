@@ -307,7 +307,7 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
       )}
       open={visible}
       onCancel={handleCancel}
-      width={880}
+      width="min(880px, calc(100vw - 32px))"
       centered
       maskClosable={!isGenerating}
       closable={!isGenerating}
@@ -351,8 +351,9 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
       )}
       styles={{
         body: {
-          maxHeight: 'calc(100vh - 220px)',
+          maxHeight: 'calc(100dvh - 220px)',
           overflowY: 'auto',
+          overflowX: 'hidden',
           paddingTop: 12,
         },
       }}
