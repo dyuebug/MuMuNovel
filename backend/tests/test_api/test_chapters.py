@@ -67,6 +67,7 @@ async def test_should_handle_chapter_crud_and_project_word_count(
     outline = await create_outline(
         chapters_session_factory,
         project_id=project.id,
+        order_index=3,
         title="第一章总纲",
     )
 
@@ -91,6 +92,7 @@ async def test_should_handle_chapter_crud_and_project_word_count(
     list_body = list_response.json()
     assert list_body["total"] == 1
     assert list_body["items"][0]["outline_title"] == "第一章总纲"
+    assert list_body["items"][0]["outline_order"] == 3
 
     detail_response = await chapters_client.get(f"/api/chapters/{chapter_id}")
     assert detail_response.status_code == 200

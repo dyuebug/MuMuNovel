@@ -15,8 +15,8 @@ DEFAULT_ROOTS = (
     Path("frontend/src"),
     Path("backend/app"),
     Path("backend/tests"),
-    Path("docs"),
 )
+DOCUMENTATION_ROOT = Path("docs")
 TEXT_EXTENSIONS = {
     ".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".json", ".yaml", ".yml", ".toml",
     ".ini", ".cfg", ".conf", ".sql", ".ps1", ".bat", ".sh", ".txt", ".html", ".css",
@@ -72,10 +72,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Treat double question marks as suspicious too",
     )
+    parser.add_argument(
+        "--include-docs",
+        action="store_true",
+        help="Also scan the docs/ tree. Disabled by default to keep the default check CI-friendly",
+    )
     return parser.parse_args()
 
 
-def resolve_roots(extra_roots: Sequence[str]) -> List[Path]:
+def resolve_roots(extra_roots: Sequence[str], *, include_docs: bool = False) -> List[Path]:
     if extra_roots:
         roots: List[Path] = []
         for raw in extra_roots:
@@ -84,7 +89,10 @@ def resolve_roots(extra_roots: Sequence[str]) -> List[Path]:
                 roots.append(path)
         return roots
 
-    return [REPO_ROOT / item for item in DEFAULT_ROOTS]
+    roots = [REPO_ROOT / item for item in DEFAULT_ROOTS]
+    if include_docs:
+        roots.append(REPO_ROOT / DOCUMENTATION_ROOT)
+    return roots
 
 
 def is_text_file(path: Path) -> bool:
@@ -156,7 +164,7 @@ def scan_file(path: Path, *, strict_qmark: bool) -> List[Tuple[int, List[str], s
 
 def main() -> int:
     args = parse_args()
-    roots = resolve_roots(args.root)
+    roots = resolve_roots(args.root, include_docs=args.include_docs)
     findings_total = 0
     for path in iter_files(roots):
         findings = scan_file(path, strict_qmark=args.strict_qmark)

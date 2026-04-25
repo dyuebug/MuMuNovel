@@ -1,4 +1,10 @@
-from tools.check_text_encoding_health import REPO_ROOT, detect_reasons, resolve_roots, strip_safe_qmark_contexts
+from tools.check_text_encoding_health import (
+    DOCUMENTATION_ROOT,
+    REPO_ROOT,
+    detect_reasons,
+    resolve_roots,
+    strip_safe_qmark_contexts,
+)
 
 
 def test_should_flag_plain_qmark_runs_in_normal_text():
@@ -46,3 +52,15 @@ def test_should_use_only_explicit_roots_when_root_is_provided():
     roots = resolve_roots(["backend/app/main.py"])
 
     assert roots == [(REPO_ROOT / "backend/app/main.py").resolve()]
+
+
+def test_should_exclude_docs_from_default_roots():
+    roots = resolve_roots([])
+
+    assert (REPO_ROOT / DOCUMENTATION_ROOT).resolve() not in roots
+
+
+def test_should_include_docs_when_requested():
+    roots = resolve_roots([], include_docs=True)
+
+    assert (REPO_ROOT / DOCUMENTATION_ROOT).resolve() in roots

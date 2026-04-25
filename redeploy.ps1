@@ -383,6 +383,28 @@ function Invoke-LoggedCommand {
 
     Write-LogLine("Command finish [$Label]: exit=$exitCode duration_ms=$durationMs")
     if (-not $IgnoreExitCode -and $exitCode -ne 0) {
+        $hint = $null
+        if ($Label -like "docker compose build*" -and (
+            $outputText -match "deb\.debian\.org" -or
+            $outputText -match "security\.debian\.org" -or
+            $outputText -match "502\s+Bad Gateway" -or
+            $outputText -match "apt-get update"
+        )) {
+            $hint = "Hint: detected Debian mirror failure during image build. Retry with: redeploy.bat -UseCnMirror"
+        }
+        elseif ($Label -like "docker compose build*" -and (
+            $outputText -match "huggingface\.co" -or
+            $outputText -match "HF mirror" -or
+            $outputText -match "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2" -or
+            $outputText -match "Embedding model download failed"
+        )) {
+            $hint = "Hint: detected embedding model download failure during image build. Ensure backend/embedding/models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2 exists, then retry redeploy. You can also try: redeploy.bat -UseCnMirror"
+        }
+
+        if ($hint) {
+            throw "Command failed with exit code ${exitCode}: $commandDisplay`n$hint"
+        }
+
         throw "Command failed with exit code ${exitCode}: $commandDisplay"
     }
 
@@ -391,6 +413,80 @@ function Invoke-LoggedCommand {
         Output = $outputText
         DurationMs = $durationMs
         CommandLine = $commandDisplay
+    }
+}
+
+function Test-IsDebianMirrorFailure {
+    param([string]$Message)
+
+    if ([string]::IsNullOrWhiteSpace($Message)) {
+        return $false
+    }
+
+    return (
+        $Message -match 'deb\.debian\.org' -or
+        $Message -match 'security\.debian\.org' -or
+        $Message -match '502\s+Bad Gateway' -or
+        $Message -match 'apt-get update' -or
+        $Message -match 'Debian mirror failure' -or
+        $Message -match 'UseCnMirror'
+    )
+}
+
+function New-DockerComposeBuildArgs {
+    param([switch]$EnableCnMirror)
+
+    $args = @('compose', 'build')
+    if ($NoCache) {
+        $args += '--no-cache'
+    }
+    if ($EnableCnMirror) {
+        $args += '--build-arg'
+        $args += 'USE_CN_MIRROR=true'
+    }
+    if ($SkipFrontendBuild) {
+        $args += '--build-arg'
+        $args += 'SKIP_FRONTEND_BUILD=true'
+    }
+
+    $proxyEnvNames = @('HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY')
+    foreach ($proxyEnvName in $proxyEnvNames) {
+        $proxyEnvValue = [Environment]::GetEnvironmentVariable($proxyEnvName)
+        if (-not [string]::IsNullOrWhiteSpace($proxyEnvValue)) {
+            $args += '--build-arg'
+            $args += "${proxyEnvName}=$proxyEnvValue"
+
+            $lowerProxyEnvName = $proxyEnvName.ToLowerInvariant()
+            $args += '--build-arg'
+            $args += "${lowerProxyEnvName}=$proxyEnvValue"
+        }
+    }
+
+    $args += $AppService
+    return $args
+}
+
+function Invoke-AppImageBuild {
+    param([switch]$EnableCnMirror)
+
+    $effectiveUseCnMirror = $EnableCnMirror.IsPresent
+    $buildArgs = New-DockerComposeBuildArgs -EnableCnMirror:$effectiveUseCnMirror
+    $buildLabelSuffix = if ($effectiveUseCnMirror) { ' [cn-mirror]' } else { '' }
+
+    try {
+        Invoke-LoggedCommand -Command (@('docker') + $buildArgs) -Label "docker compose build$buildLabelSuffix" | Out-Null
+        return
+    }
+    catch {
+        $buildErrorMessage = $_.Exception.Message
+        if (-not $effectiveUseCnMirror -and (Test-IsDebianMirrorFailure -Message $buildErrorMessage)) {
+            Write-Warning 'Detected Debian mirror failure. Retrying build with USE_CN_MIRROR=true.'
+            Write-LogLine 'Detected Debian mirror failure during docker compose build; retrying with USE_CN_MIRROR=true.'
+            Invoke-LoggedCommand -Command (@('docker') + (New-DockerComposeBuildArgs -EnableCnMirror)) -Label 'docker compose build [cn-mirror retry]' | Out-Null
+            return
+        }
+
+        throw
     }
 }
 
@@ -575,23 +671,9 @@ else {
     Write-Step "Keeping dependent services running; only app container will be recreated"
 }
 
-$buildArgs = @("compose", "build")
-if ($NoCache) {
-    $buildArgs += "--no-cache"
-}
-if ($UseCnMirror) {
-    $buildArgs += "--build-arg"
-    $buildArgs += "USE_CN_MIRROR=true"
-}
-if ($SkipFrontendBuild) {
-    $buildArgs += "--build-arg"
-    $buildArgs += "SKIP_FRONTEND_BUILD=true"
-}
-$buildArgs += $AppService
-
 if (-not $SkipBuild) {
     Write-Step "Building application image"
-    Invoke-LoggedCommand -Command (@("docker") + $buildArgs) -Label "docker compose build" | Out-Null
+    Invoke-AppImageBuild -EnableCnMirror:$UseCnMirror
 }
 
 Invoke-AlembicVersionCapacityPreflight

@@ -50,7 +50,7 @@ async def load_project_chapter_list_payload(
             'sub_index': chapter.sub_index,
             'expansion_plan': chapter.expansion_plan,
             'outline_title': getattr(outline, 'title', None),
-            'outline_order': getattr(outline, 'outline_order', None),
+            'outline_order': getattr(outline, 'order_index', None),
             'created_at': chapter.created_at,
             'updated_at': chapter.updated_at,
         })
