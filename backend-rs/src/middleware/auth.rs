@@ -53,6 +53,7 @@ fn is_public(path: &str) -> bool {
         || path == "/openapi.json"
         || path.starts_with("/assets")
         || path == "/api/auth/login"
+        || path == "/api/auth/local/login"
         || path == "/api/auth/register"
         || path == "/api/auth/logout"
         || path == "/api/auth/config"
