@@ -16,7 +16,7 @@ use crate::middleware::auth::AuthLayer;
 use crate::tasks::registry::TaskRegistry;
 use crate::tasks::stream::TaskStreamHub;
 
-use super::{admin, ai_test, auth, background_tasks, careers, chapters, characters, foreshadows, health, organizations, outlines, projects, relationships, settings, users, writing_styles};
+use super::{admin, ai_test, auth, background_tasks, careers, changelog, chapters, characters, foreshadows, health, organizations, outlines, projects, relationships, settings, users, writing_styles};
 
 pub fn build(db: Option<DatabaseConnection>, cfg: &AppConfig, task_registry: TaskRegistry) -> Router {
     let cors = if cfg.debug {
@@ -47,6 +47,7 @@ pub fn build(db: Option<DatabaseConnection>, cfg: &AppConfig, task_registry: Tas
         .merge(writing_styles::routes())
         .merge(foreshadows::routes())
         .merge(admin::routes())
+        .merge(changelog::routes())
         .merge(ai_test::routes())
         .merge(background_tasks::routes())
         .layer(Extension(task_registry))

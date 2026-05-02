@@ -3,6 +3,7 @@ pub mod ai_test;
 pub mod auth;
 pub mod background_tasks;
 pub mod careers;
+pub mod changelog;
 pub mod chapters;
 pub mod characters;
 pub mod foreshadows;

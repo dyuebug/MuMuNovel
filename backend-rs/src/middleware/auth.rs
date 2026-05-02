@@ -56,6 +56,8 @@ fn is_public(path: &str) -> bool {
         || path == "/api/auth/register"
         || path == "/api/auth/logout"
         || path == "/api/auth/config"
+        || path == "/api/changelog"
+        || path == "/api/changelog/refresh"
 }
 
 impl<S, ReqBody> Service<Request<ReqBody>> for AuthMiddleware<S>
