@@ -5,9 +5,9 @@ import httpx
 import pytest
 from unittest.mock import AsyncMock
 
-from app.services.ai_config import AIClientConfig
-from app.services.ai_clients import base_client as base_client_module
-from app.services.ai_clients.openai_client import OpenAIClient
+from app.services.ai_gateway.ai_config import AIClientConfig
+from app.services.ai_gateway.ai_clients import base_client as base_client_module
+from app.services.ai_gateway.ai_clients.openai_client import OpenAIClient
 
 
 class FakeStreamResponse:

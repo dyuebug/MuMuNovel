@@ -514,3 +514,77 @@ async def test_should_reuse_existing_active_background_task_on_duplicate_create(
         project_id,
         payload,
     )
+
+
+async def test_should_defer_background_runner_until_create_response_returns(monkeypatch, test_db: AsyncSession):
+    captured = {"run_job_started": False, "inner_job_started": False}
+    scheduled_tasks = []
+    original_create_task = background_tasks_api.asyncio.create_task
+
+    async def fake_verify_project_access(project_id: str, user_id: str, db: AsyncSession):
+        return None
+
+    async def fake_find_active_task(**kwargs):
+        return None
+
+    async def fake_create_task(**kwargs):
+        return BackgroundTaskRecord(
+            task_id=kwargs["task_id"],
+            task_type=kwargs["task_type"],
+            user_id=kwargs["user_id"],
+            project_id=kwargs["project_id"],
+            message=kwargs.get("message", "后台任务已创建"),
+            stage_code=kwargs.get("stage_code"),
+            execution_mode=kwargs.get("execution_mode", "interactive"),
+            workflow_scope=kwargs.get("workflow_scope"),
+            checkpoint=kwargs.get("checkpoint"),
+            payload_fingerprint=kwargs.get("payload_fingerprint"),
+        )
+
+    async def fake_inner_job(**kwargs):
+        captured["inner_job_started"] = True
+
+    async def fake_attach_runner(task_id: str, runner_task):
+        captured["attached_task"] = runner_task
+        captured["attached_task_id"] = task_id
+
+    async def fake_run_job(task_id: str, job):
+        captured["run_job_started"] = True
+        captured["run_job_task_id"] = task_id
+        await job
+
+    def tracking_create_task(coro):
+        task = original_create_task(coro)
+        scheduled_tasks.append(task)
+        return task
+
+    monkeypatch.setattr(background_tasks_api, 'verify_project_access', fake_verify_project_access)
+    monkeypatch.setattr(background_tasks_api.background_task_manager, 'find_active_task', fake_find_active_task)
+    monkeypatch.setattr(background_tasks_api.background_task_manager, 'create_task', fake_create_task)
+    monkeypatch.setattr(background_tasks_api.background_task_manager, 'attach_runner', fake_attach_runner)
+    monkeypatch.setattr(background_tasks_api.background_task_manager, 'run_job', fake_run_job)
+    monkeypatch.setattr(background_tasks_api, '_run_generation_task', fake_inner_job)
+    monkeypatch.setattr(background_tasks_api.asyncio, 'create_task', tracking_create_task)
+
+    request = SimpleNamespace(state=SimpleNamespace(user_id='user-1'))
+    data = background_tasks_api.BackgroundTaskCreateRequest(
+        task_type='outline_generate',
+        project_id='project-1',
+        payload={'theme': 'urban fantasy'},
+        execution_mode='auto',
+    )
+
+    result = await background_tasks_api.create_background_task(data, request, test_db)
+
+    assert result['task_type'] == 'outline_generate'
+    assert captured['run_job_started'] is False
+    assert captured['inner_job_started'] is False
+    assert len(scheduled_tasks) == 1
+
+    await scheduled_tasks[0]
+
+    assert captured['run_job_started'] is True
+    assert captured['inner_job_started'] is True
+    assert captured['attached_task_id'] == result['task_id']
+    assert captured['attached_task'] is scheduled_tasks[0]
+    assert captured['run_job_task_id'] == result['task_id']

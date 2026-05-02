@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.services import ai_service
+from app.services.ai_gateway import ai_service
 
 pytestmark = pytest.mark.asyncio
 

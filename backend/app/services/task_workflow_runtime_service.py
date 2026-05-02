@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from asyncio import Lock, Queue
+from asyncio import Queue
 from datetime import datetime
 from typing import Any, Dict, Optional
+
+from app.services.task_system import infer_workflow_phase
+from app.services.task_system.task_state_store import workflow_runtime_state_store
+from app.services.task_system.task_stream_hub import task_stream_hub
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -16,17 +20,16 @@ from app.services.story_repair_payload_service import StoryRepairPayload
 
 logger = get_logger(__name__)
 
-_task_stream_subscribers: dict[str, list[Queue]] = {}
-_task_stream_lock = Lock()
-_task_workflow_state_cache: dict[str, Dict[str, Any]] = {}
-_task_workflow_lock = Lock()
 _SNAPSHOT_UNSET = object()
 SNAPSHOT_UNSET = _SNAPSHOT_UNSET
 
-task_stream_subscribers = _task_stream_subscribers
-task_stream_lock = _task_stream_lock
-task_workflow_state_cache = _task_workflow_state_cache
-task_workflow_lock = _task_workflow_lock
+task_stream_subscribers = task_stream_hub.subscribers
+# Backward compatible alias for callers/tests that import this name.
+task_stream_lock = task_stream_hub.lock
+
+task_workflow_state_cache = workflow_runtime_state_store.cache
+# Backward compatible alias for callers/tests that import this name.
+task_workflow_lock = workflow_runtime_state_store.lock
 
 
 def _normalize_runtime_payload(value: Any) -> Any:
@@ -46,34 +49,23 @@ def _normalize_runtime_payload(value: Any) -> Any:
 
 
 async def subscribe_task_stream(task_id: str) -> Queue:
-    queue: Queue = Queue(maxsize=200)
-    async with _task_stream_lock:
-        _task_stream_subscribers.setdefault(task_id, []).append(queue)
-    return queue
+    return await task_stream_hub.subscribe(task_id, maxsize=200)
 
 
 async def unsubscribe_task_stream(task_id: str, queue: Queue) -> None:
-    async with _task_stream_lock:
-        queues = _task_stream_subscribers.get(task_id, [])
-        if queue in queues:
-            queues.remove(queue)
-        if not queues and task_id in _task_stream_subscribers:
-            del _task_stream_subscribers[task_id]
+    await task_stream_hub.unsubscribe(task_id, queue)
 
 
 async def clear_task_workflow_runtime_cache(task_id: str) -> None:
-    async with _task_workflow_lock:
-        _task_workflow_state_cache.pop(task_id, None)
+    await workflow_runtime_state_store.clear(task_id)
 
 
 async def set_task_workflow_runtime_snapshot(task_id: str, snapshot: Dict[str, Any]) -> None:
-    async with _task_workflow_lock:
-        _task_workflow_state_cache[task_id] = dict(snapshot or {})
+    await workflow_runtime_state_store.set(task_id, snapshot)
 
 
 async def get_cached_task_workflow_runtime_snapshot(task_id: str) -> Dict[str, Any]:
-    async with _task_workflow_lock:
-        return dict(_task_workflow_state_cache.get(task_id) or {})
+    return await workflow_runtime_state_store.get(task_id)
 
 
 async def batch_task_exists(db_session: AsyncSession, task_id: str) -> bool:
@@ -186,56 +178,6 @@ async def get_task_workflow_runtime_snapshot(
     return dict(runtime_snapshot)
 
 
-def _infer_batch_progress_phase(
-    *,
-    event_type: str,
-    progress: Optional[int],
-    message: Optional[str],
-) -> Optional[str]:
-    normalized_event = (event_type or '').strip().lower()
-    text = (message or '').strip().lower()
-
-    if normalized_event == 'error':
-        return 'failed'
-    if normalized_event == 'done':
-        return 'complete'
-    if normalized_event in {'chunk', 'chapter_start'}:
-        return 'generating'
-    if normalized_event == 'analysis_started':
-        return 'parsing'
-
-    if '取消' in text or 'cancel' in text:
-        return 'cancelled'
-    if '完成' in text or 'complete' in text or 'done' in text:
-        return 'complete'
-    if '保存' in text or 'save' in text:
-        return 'saving'
-    if '分析' in text or 'analysis' in text or '解析' in text or 'parse' in text:
-        return 'parsing'
-    if '重试' in text or 'retry' in text:
-        return 'generating'
-    if '生成' in text or '写作' in text or 'generate' in text:
-        return 'generating'
-    if '准备' in text or 'prepare' in text:
-        return 'preparing'
-    if '加载' in text or 'load' in text:
-        return 'loading'
-
-    if progress is None:
-        return None
-    if progress >= 100:
-        return 'complete'
-    if progress >= 93:
-        return 'saving'
-    if progress >= 85:
-        return 'parsing'
-    if progress >= 20:
-        return 'generating'
-    if progress >= 10:
-        return 'preparing'
-    if progress > 0:
-        return 'loading'
-    return 'init'
 
 
 async def _update_task_workflow_runtime_state(
@@ -248,13 +190,12 @@ async def _update_task_workflow_runtime_state(
     progress = progress_raw if isinstance(progress_raw, int) else None
     message = str(event.get('message')) if event.get('message') is not None else None
 
-    async with _task_workflow_lock:
-        current = _task_workflow_state_cache.get(task_id) or {}
+    def updater(current: Dict[str, Any]) -> Dict[str, Any]:
         explicit_phase = event.get('phase')
         if isinstance(explicit_phase, str) and explicit_phase.strip():
             phase = explicit_phase.strip().lower()
         else:
-            phase = _infer_batch_progress_phase(
+            phase = infer_workflow_phase(
                 event_type=event_type,
                 progress=progress,
                 message=message,
@@ -335,7 +276,9 @@ async def _update_task_workflow_runtime_state(
         if phase:
             snapshot['phase'] = phase
 
-        _task_workflow_state_cache[task_id] = snapshot
+        return snapshot
+
+    snapshot = await workflow_runtime_state_store.update(task_id, updater)
 
     if db_session is not None:
         await persist_task_workflow_runtime_snapshot(db_session, task_id, snapshot)
@@ -346,8 +289,8 @@ async def _set_task_active_story_repair_payload(
     payload: Optional[Dict[str, Any]],
     db_session: Optional[AsyncSession] = None,
 ) -> None:
-    async with _task_workflow_lock:
-        current = dict(_task_workflow_state_cache.get(task_id) or {})
+    def updater(current: Dict[str, Any]) -> Dict[str, Any]:
+        current = dict(current or {})
         if isinstance(payload, dict):
             snapshot = dict(payload)
             snapshot['updated_at'] = str(snapshot.get('updated_at') or datetime.now().isoformat())
@@ -355,7 +298,9 @@ async def _set_task_active_story_repair_payload(
         else:
             current.pop('active_story_repair_payload', None)
         current['updated_at'] = datetime.now().isoformat()
-        _task_workflow_state_cache[task_id] = current
+        return current
+
+    current = await workflow_runtime_state_store.update(task_id, updater)
 
     if db_session is not None:
         await persist_task_workflow_runtime_snapshot(db_session, task_id, current)
@@ -403,25 +348,8 @@ async def publish_task_stream_event(
 ) -> None:
     await _update_task_workflow_runtime_state(task_id, event, db_session=db_session)
 
-    async with _task_stream_lock:
-        subscribers = list(_task_stream_subscribers.get(task_id, []))
-    if not subscribers:
-        return
-
-    stale_queues: list[Queue] = []
-    for queue in subscribers:
-        try:
-            queue.put_nowait(event)
-        except asyncio.QueueFull:
-            logger.debug(f'Task stream queue is full, drop event: task={task_id}, type={event.get("type")}')
-        except Exception:
-            stale_queues.append(queue)
-
-    if stale_queues:
-        async with _task_stream_lock:
-            queues = _task_stream_subscribers.get(task_id, [])
-            for queue in stale_queues:
-                if queue in queues:
-                    queues.remove(queue)
-            if not queues and task_id in _task_stream_subscribers:
-                del _task_stream_subscribers[task_id]
+    fanout_result = await task_stream_hub.fanout(task_id, event)
+    if fanout_result.dropped_full:
+        logger.debug(
+            f'Task stream queue is full, drop event: task={task_id}, type={event.get("type")}'
+        )

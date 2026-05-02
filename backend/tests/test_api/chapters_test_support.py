@@ -174,7 +174,16 @@ async def chapters_client(chapters_session_factory, fake_ai_service, mock_user, 
 
     async def override_get_db(_request=None):
         async with chapters_session_factory() as session:
-            yield session
+            try:
+                yield session
+            finally:
+                # Allow upstream services to manage transactions, but ensure we don't
+                # return a session to the pool with a pending/failed transaction.
+                try:
+                    if session.in_transaction():
+                        await session.rollback()
+                except Exception:
+                    pass
 
     async def override_get_user_ai_service():
         return fake_ai_service

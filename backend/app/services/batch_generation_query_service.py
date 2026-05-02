@@ -1,21 +1,9 @@
-from __future__ import annotations
+"""Compatibility shim for batch generation query service.
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+Prefer importing from app.services.batch_generation.query_service.
+"""
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.batch_generation_task import BatchGenerationTask
-from app.services.task_quality_snapshot_service import get_task_quality_metrics_snapshot
-from app.services.task_workflow_runtime_service import get_task_workflow_runtime_snapshot
-
-
-@dataclass(frozen=True)
-class BatchGenerationTaskViewContext:
-    task: BatchGenerationTask
-    quality_snapshot: Dict[str, Any]
-    workflow_snapshot: Dict[str, Any]
+from app.services.batch_generation.query_service import *  # noqa: F401,F403
 
 
 

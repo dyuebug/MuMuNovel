@@ -49,9 +49,7 @@ from app.schemas.generation_payload import (
     build_chapter_regeneration_stream_result_payload,
 )
 from app.services.ai_service import AIService
-from app.services.manual_chapter_analysis_execution_service import (
-    execute_chapter_analysis_background as analyze_chapter_background,
-)
+from app.services import chapter_generation_route_compat_service
 from app.services.prompt_service import (
     prompt_service,
     PromptService,
@@ -194,6 +192,10 @@ from app.services.project_quality_trend_service import (
     project_quality_trend_lock,
 )
 from app.services.chapter_analysis_response_service import build_chapter_analysis_payload
+
+# 保持别名兼容：让测试可通过 monkeypatch chapter_generation_route_compat_service.execute_chapter_analysis_background 生效
+async def analyze_chapter_background(**kwargs):
+    return await chapter_generation_route_compat_service.execute_chapter_analysis_background(**kwargs)
 from app.services.chapter_analysis_support_service import (
     _collect_reviser_priority_issues,
     build_checker_history_payload as _build_checker_history_payload,
@@ -227,7 +229,6 @@ from app.services.batch_generation_orchestration_service import (
     orchestrate_batch_generation_create,
     orchestrate_batch_generation_resume,
 )
-from app.services.batch_generation_run_service import execute_batch_generation_in_order_workflow
 from app.services.batch_generation_entry_compat_service import (
     execute_batch_generation_in_order as _execute_batch_generation_in_order_compat_service,
     generate_single_chapter_for_batch as _generate_single_chapter_for_batch_compat_service,

@@ -9,6 +9,15 @@ from pathlib import Path
 from typing import Any, AsyncIterable, Awaitable, Dict, Iterable, Optional
 
 from app.logger import get_logger
+from app.services.task_system import (
+    ActiveTaskQuery,
+    BackgroundTaskRegistry,
+    background_task_registry,
+    recover_orphan_tasks_on_boot,
+    resolve_progress_phase,
+    resolve_stage_code_for_phase,
+    touch_checkpoint,
+)
 from app.utils.exception_message import extract_exception_message
 
 logger = get_logger(__name__)
@@ -97,48 +106,17 @@ class BackgroundTaskRecord:
 
 class BackgroundTaskManager:
     """Stores task state and updates task progress from SSE messages."""
-    _PROGRESS_PHASE_ORDER: Dict[str, int] = {
-        "init": 0,
-        "loading": 1,
-        "preparing": 2,
-        "generating": 3,
-        "parsing": 4,
-        "saving": 5,
-        "complete": 6,
-    }
-    _TASK_STAGE_ROOTS: Dict[str, str] = {
-        "wizard_world_building": "0.creative",
-        "wizard_characters": "1.outline",
-        "wizard_outline": "1.outline",
-        "wizard_career_system": "1.outline",
-        "world_regenerate": "0.creative",
-        "outline_generate": "1.outline",
-        "outline_expand": "4.group",
-        "outline_batch_expand": "4.group",
-        "careers_generate_system": "1.outline",
-        "character_generate": "1.outline",
-        "organization_generate": "1.outline",
-        "chapters_batch_generate": "6.writing",
-        "chapter_single_generate": "6.writing",
-    }
-    _PHASE_KEYWORDS: Dict[str, tuple[str, ...]] = {
-        "init": ("开始", "启动", "初始化", "start", "init"),
-        "loading": ("加载", "读取", "获取", "检索", "loading", "load", "fetch"),
-        "preparing": ("准备", "预处理", "提示词", "prompt", "prepare", "preparing"),
-        "generating": ("生成", "创作", "推理", "草稿", "rewrite", "generate", "generating"),
-        "parsing": ("解析", "校验", "提取", "parsing", "parse", "validate"),
-        "saving": ("保存", "写入", "入库", "提交", "持久化", "saving", "save", "persist"),
-        "complete": ("完成", "结束", "done", "complete", "success"),
-    }
 
     def __init__(
         self,
         ttl_seconds: int = 7200,
         max_tasks: int = 2000,
         persistence_path: Optional[str] = None,
+        registry: Optional[BackgroundTaskRegistry] = None,
     ):
-        self._tasks: Dict[str, BackgroundTaskRecord] = {}
-        self._runner_tasks: Dict[str, asyncio.Task[None]] = {}
+        self._registry = registry or BackgroundTaskRegistry()
+        self._tasks = self._registry.tasks
+        self._runner_tasks = self._registry.runner_tasks
         self._lock = asyncio.Lock()
         self._ttl_seconds = ttl_seconds
         self._max_tasks = max_tasks
@@ -171,105 +149,13 @@ class BackgroundTaskManager:
         message: Optional[str] = None,
         extra: Optional[Dict[str, Any]] = None,
     ) -> None:
-        snapshot: Dict[str, Any] = {}
-        if isinstance(record.checkpoint, dict):
-            snapshot.update(record.checkpoint)
-        snapshot["event"] = event
-        snapshot["updated_at"] = datetime.now(timezone.utc).isoformat()
-        if progress is not None:
-            snapshot["progress"] = progress
-        if message is not None:
-            snapshot["message"] = message
-        if extra:
-            snapshot.update(extra)
-        record.checkpoint = snapshot
-
-    @classmethod
-    def _split_stage_code(cls, stage_code: Optional[str]) -> tuple[Optional[str], Optional[str]]:
-        raw = (stage_code or "").strip()
-        if not raw:
-            return None, None
-        base, sep, suffix = raw.rpartition(".")
-        if sep and suffix in cls._PROGRESS_PHASE_ORDER:
-            return base, suffix
-        return raw, None
-
-    @staticmethod
-    def _contains_retry_hint(message: Optional[str]) -> bool:
-        if not message:
-            return False
-        text = message.lower()
-        return "重试" in text or "retry" in text
-
-    @classmethod
-    def _detect_phase_by_message(cls, message: Optional[str]) -> Optional[str]:
-        if not message:
-            return None
-        text = message.strip().lower()
-        if not text:
-            return None
-        for phase in ("complete", "saving", "parsing", "generating", "preparing", "loading", "init"):
-            if any(keyword in text for keyword in cls._PHASE_KEYWORDS[phase]):
-                return phase
-        return None
-
-    @staticmethod
-    def _detect_phase_by_progress(progress: Optional[int]) -> Optional[str]:
-        if progress is None:
-            return None
-        normalized = max(0, min(int(progress), 100))
-        if normalized >= 100:
-            return "complete"
-        if normalized >= 93:
-            return "saving"
-        if normalized >= 86:
-            return "parsing"
-        if normalized >= 21:
-            return "generating"
-        if normalized >= 16:
-            return "preparing"
-        if normalized >= 6:
-            return "loading"
-        return "init"
-
-    @classmethod
-    def _resolve_progress_phase(
-        cls,
-        record: BackgroundTaskRecord,
-        *,
-        message: Optional[str],
-        progress: Optional[int],
-    ) -> Optional[str]:
-        detected = cls._detect_phase_by_message(message) or cls._detect_phase_by_progress(progress)
-        if not detected:
-            return None
-
-        _, current_phase = cls._split_stage_code(record.stage_code)
-        if not current_phase:
-            return detected
-
-        # Keep stage progression monotonic unless retry clearly restarts an earlier step.
-        if (
-            cls._PROGRESS_PHASE_ORDER.get(detected, -1) < cls._PROGRESS_PHASE_ORDER.get(current_phase, -1)
-            and not cls._contains_retry_hint(message)
-        ):
-            return current_phase
-        return detected
-
-    @classmethod
-    def _resolve_stage_code_for_phase(
-        cls,
-        record: BackgroundTaskRecord,
-        phase: Optional[str],
-    ) -> Optional[str]:
-        base, _ = cls._split_stage_code(record.stage_code)
-        if not base:
-            base = cls._TASK_STAGE_ROOTS.get(record.task_type)
-        if not base:
-            return record.stage_code
-        if not phase or phase == "init":
-            return base
-        return f"{base}.{phase}"
+        record.checkpoint = touch_checkpoint(
+            record.checkpoint,
+            event=event,
+            progress=progress,
+            message=message,
+            extra=extra,
+        )
 
     def _load_from_disk(self) -> None:
         """Load persisted task snapshots for cross-restart visibility."""
@@ -290,7 +176,12 @@ class BackgroundTaskManager:
                     continue
                 loaded[record.task_id] = record
             self._tasks = loaded
-            self._recover_orphan_tasks_on_boot_locked()
+            recovery = recover_orphan_tasks_on_boot(
+                self._tasks,
+                touch_checkpoint_fn=touch_checkpoint,
+            )
+            if recovery.changed:
+                self._persist_locked(force=True)
             self._cleanup_locked()
             logger.info(
                 "Loaded persisted background tasks: count=%s path=%s",
@@ -300,33 +191,6 @@ class BackgroundTaskManager:
         except Exception as exc:
             logger.warning(f"Failed to load background task persistence: {exc}")
 
-    def _recover_orphan_tasks_on_boot_locked(self) -> None:
-        """Mark pre-restart pending/running tasks as failed (worker context lost)."""
-        now = datetime.now(timezone.utc)
-        changed = False
-        for record in self._tasks.values():
-            if record.status not in {"pending", "running"}:
-                continue
-            record.status = "failed"
-            record.error = "服务重启导致任务上下文丢失"
-            record.message = "服务重启后未恢复执行上下文，请重新发起任务"
-            if not record.started_at:
-                record.started_at = record.updated_at or now
-            record.completed_at = now
-            record.updated_at = now
-            checkpoint_extra = {"error": record.error}
-            if record.stage_code:
-                checkpoint_extra["stage_code"] = record.stage_code
-            self._touch_checkpoint(
-                record,
-                event="failed",
-                progress=record.progress,
-                message=record.message,
-                extra=checkpoint_extra,
-            )
-            changed = True
-        if changed:
-            self._persist_locked(force=True)
 
     def _persist_locked(self, *, force: bool = False) -> None:
         """Persist task snapshots for recovery and cross-page sync."""
@@ -395,7 +259,7 @@ class BackgroundTaskManager:
                 payload_fingerprint=payload_fingerprint,
             )
             self._tasks[task_id] = record
-            self._persist_locked(force=True)
+            self._persist_locked()
             return record
 
     async def get_task(self, task_id: str, user_id: str) -> Optional[BackgroundTaskRecord]:
@@ -449,20 +313,26 @@ class BackgroundTaskManager:
         await self.ensure_loaded()
         async with self._lock:
             self._cleanup_locked()
+            query = ActiveTaskQuery(
+                user_id=user_id,
+                task_type=task_type,
+                project_id=project_id,
+                payload_fingerprint=payload_fingerprint,
+            )
             candidates = [
                 record
                 for record in self._tasks.values()
-                if record.user_id == user_id
-                and record.task_type == task_type
-                and record.project_id == project_id
+                if record.user_id == query.user_id
+                and record.task_type == query.task_type
+                and record.project_id == query.project_id
                 and record.status in {"pending", "running"}
             ]
 
-            if payload_fingerprint is not None:
+            if query.payload_fingerprint is not None:
                 candidates = [
                     record
                     for record in candidates
-                    if record.payload_fingerprint == payload_fingerprint
+                    if record.payload_fingerprint == query.payload_fingerprint
                 ]
 
             if not candidates:
@@ -584,12 +454,16 @@ class BackgroundTaskManager:
                 record.progress = max(0, min(int(progress), 100))
             if message:
                 record.message = message
-            progress_phase = self._resolve_progress_phase(
-                record,
+            progress_phase = resolve_progress_phase(
                 message=record.message,
                 progress=record.progress,
+                stage_code=record.stage_code,
             )
-            next_stage_code = self._resolve_stage_code_for_phase(record, progress_phase)
+            next_stage_code = resolve_stage_code_for_phase(
+                task_type=record.task_type,
+                stage_code=record.stage_code,
+                phase=progress_phase,
+            )
             if next_stage_code is not None:
                 record.stage_code = next_stage_code
             if not record.started_at:
@@ -637,7 +511,11 @@ class BackgroundTaskManager:
             record.progress = 100
             if message:
                 record.message = message
-            next_stage_code = self._resolve_stage_code_for_phase(record, "complete")
+            next_stage_code = resolve_stage_code_for_phase(
+                task_type=record.task_type,
+                stage_code=record.stage_code,
+                phase="complete",
+            )
             if next_stage_code is not None:
                 record.stage_code = next_stage_code
             if not record.started_at:
@@ -831,4 +709,4 @@ class BackgroundTaskManager:
         return payloads
 
 
-background_task_manager = BackgroundTaskManager()
+background_task_manager = BackgroundTaskManager(registry=background_task_registry)

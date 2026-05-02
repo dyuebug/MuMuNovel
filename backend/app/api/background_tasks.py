@@ -202,6 +202,20 @@ async def _consume_response_stream(task_id: str, response: Any, error_message: s
     await background_task_manager.consume_sse_stream(task_id, stream)
 
 
+async def _start_background_task_runner(task_id: str, job: Awaitable[None]) -> None:
+    await asyncio.sleep(0)
+    runner_task = asyncio.current_task()
+    if runner_task is not None:
+        await background_task_manager.attach_runner(task_id, runner_task)
+        cancelling = getattr(runner_task, "cancelling", None)
+        if callable(cancelling) and cancelling():
+            close = getattr(job, "close", None)
+            if callable(close):
+                close()
+            return
+    await background_task_manager.run_job(task_id, job)
+
+
 TaskRunner = Callable[[str, str, str, Dict[str, Any], AsyncSession, AIService, Any], Awaitable[None]]
 
 
@@ -485,8 +499,7 @@ async def create_background_task(
         project_id=task_project_id,
         payload=clean_payload,
     )
-    runner_task = asyncio.create_task(background_task_manager.run_job(task_id, job))
-    await background_task_manager.attach_runner(task_id, runner_task)
+    asyncio.create_task(_start_background_task_runner(task_id, job))
 
     logger.info(f"Created background task: user={user_id}, task={task_id}, type={data.task_type}")
     return record.to_dict()

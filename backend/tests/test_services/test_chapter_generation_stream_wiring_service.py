@@ -1,4 +1,4 @@
-from app.services.chapter_generation_stream_wiring_service import (
+from app.services.chapter_generation.stream.wiring_service import (
     build_default_chapter_generation_stream_dependencies,
 )
 

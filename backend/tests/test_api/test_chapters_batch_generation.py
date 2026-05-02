@@ -702,8 +702,15 @@ async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and
     monkeypatch.setattr(chapters_api, "_set_task_active_story_repair_payload", fake_set_task_active_story_repair_payload)
     monkeypatch.setattr(chapters_api, "publish_task_stream_event", fake_publish_task_stream_event)
     monkeypatch.setattr(chapters_api, "_record_task_quality_metrics", fake_record_task_quality_metrics)
+
+    # chapters_test_support.mock_side_effect_services 会 autouse monkeypatch chapters_api.analyze_chapter_background。
+    # 本测试需要覆盖该入口，确保 analysis_calls 可观测。
+    monkeypatch.setattr(chapters_api, "analyze_chapter_background", fake_analyze_chapter_background)
     monkeypatch.setattr(chapter_generation_route_compat_service, "execute_chapter_analysis_background", fake_analyze_chapter_background)
-    
+
+    # 断言批量流程确实会触发 analysis seam；避免未来入口漂移导致误报。
+    assert chapters_api.analyze_chapter_background is not None
+
     await REAL_EXECUTE_BATCH_GENERATION_IN_ORDER(
         batch_id=batch_id,
         user_id=mock_user.user_id,

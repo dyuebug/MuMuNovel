@@ -8,7 +8,7 @@ import pytest
 from app.models.chapter import Chapter
 from app.models.outline import Outline
 from app.models.project import Project
-from app.services import chapter_generation_stream_service as generation_stream_service
+from app.services.chapter_generation.stream import service as generation_stream_service
 from app.services.story_repair_payload_service import normalize_story_repair_payload
 
 

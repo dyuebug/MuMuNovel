@@ -17,6 +17,12 @@ logger = get_logger(__name__)
 class AuthMiddleware(BaseHTTPMiddleware):
     """认证中间件"""
 
+    HEALTH_CHECK_PATHS = frozenset({"/health", "/livez", "/readyz", "/health/db-sessions"})
+
+    @classmethod
+    def _should_skip_auth(cls, request: Request) -> bool:
+        return request.url.path in cls.HEALTH_CHECK_PATHS
+
     @staticmethod
     def _is_trusted_workshop_proxy_request(request: Request) -> bool:
         if not is_workshop_server():
@@ -41,7 +47,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         """
         处理请求，从 Cookie 或 Header 中提取用户 ID 并注入到 request.state
-        
+
         对于提示词工坊相关的代理请求（带有 X-Instance-ID Header），
         从 Header 中读取用户标识而不是 Cookie。
         """
@@ -49,6 +55,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.proxy_instance_id = None
         request.state.auth_backend_unavailable = False
         request.state.auth_backend_unavailable_message = None
+        request.state.user_id = None
+        request.state.user = None
+        request.state.is_admin = False
+
+        if self._should_skip_auth(request):
+            return await call_next(request)
 
         # 检查是否为来自其他实例的代理请求（提示词工坊）
         instance_id = request.headers.get("X-Instance-ID")

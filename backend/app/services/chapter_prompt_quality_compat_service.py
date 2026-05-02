@@ -1,17 +1,19 @@
-"""Compatibility helpers for chapter prompt/quality seams."""
+"""Compatibility shim for chapter prompt/quality seams.
+
+Deprecated: import from app.services.compat.chapter_prompt_quality_compat_service instead.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
 from app.models.project import Project
-from app.services.chapter_generation_runtime_prompt_service import (
-    build_chapter_runtime_system_prompt as _build_chapter_runtime_system_prompt_service,
-    detect_style_profile as _detect_style_profile_service,
-    resolve_generation_temperature as _resolve_generation_temperature_service,
-)
-from app.services.story_quality_feedback_service import (
-    compute_story_quality_metrics as _compute_story_quality_metrics_service,
-)
+from app.services.compat import chapter_prompt_quality_compat_service as _impl
+
+_compute_story_quality_metrics_service = _impl._compute_story_quality_metrics_service
+_detect_style_profile_service = _impl._detect_style_profile_service
+_resolve_generation_temperature_service = _impl._resolve_generation_temperature_service
+_build_chapter_runtime_system_prompt_service = _impl._build_chapter_runtime_system_prompt_service
 
 
 def compute_story_quality_metrics(

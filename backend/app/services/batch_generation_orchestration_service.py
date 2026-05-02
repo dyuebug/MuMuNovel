@@ -9,11 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.chapter import Chapter
 from app.models.project import Project
 from app.services.ai_service import AIService
-from app.services.batch_generation_create_service import (
+from app.services.batch_generation.create_service import (
     create_batch_generation_and_enqueue,
     prepare_batch_generation_create,
 )
-from app.services.batch_generation_resume_service import (
+from app.services.batch_generation.resume_service import (
     create_resumed_batch_generation_and_enqueue,
     prepare_batch_generation_resume,
 )

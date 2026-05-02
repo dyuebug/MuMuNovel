@@ -1,16 +1,18 @@
-"""Compatibility helpers for batch generation entry seams."""
+"""Compatibility shim for batch generation entry service.
+
+Deprecated: import from app.services.compat.batch_generation_entry_compat_service instead.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from app.services.batch_generation_run_wiring_service import (
-    execute_batch_generation_in_order_with_default_wiring,
-)
-from app.services.batch_generation_single_chapter_wiring_service import (
-    generate_single_chapter_for_batch_with_default_wiring,
-)
+from app.services.compat import batch_generation_entry_compat_service as _impl
 from app.services.chapter_quality_context_service import StoryPacket
 from app.services.story_repair_payload_service import StoryRepairPayload
+
+execute_batch_generation_in_order_with_default_wiring = _impl.execute_batch_generation_in_order_with_default_wiring
+generate_single_chapter_for_batch_with_default_wiring = _impl.generate_single_chapter_for_batch_with_default_wiring
 
 
 async def execute_batch_generation_in_order(

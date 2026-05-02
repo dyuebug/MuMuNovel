@@ -1,6 +1,6 @@
 import pytest
 
-from app.services import chapter_generation_stream_entry_service as entry_service
+from app.services.chapter_generation.stream import entry_service
 
 
 @pytest.mark.asyncio

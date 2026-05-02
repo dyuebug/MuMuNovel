@@ -1,7 +1,7 @@
 import pytest
 from fastapi import HTTPException
 
-from app.services import chapter_generation_background_entry_service as entry_service
+from app.services.chapter_generation import background_entry_service as entry_service
 
 
 class _ScalarResult:

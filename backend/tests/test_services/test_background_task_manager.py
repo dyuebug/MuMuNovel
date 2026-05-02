@@ -16,6 +16,29 @@ def _build_persistence_path() -> str:
     return str(base_dir / f"background_tasks_{uuid4().hex}.json")
 
 
+async def test_should_not_force_persist_when_creating_task(monkeypatch):
+    manager = BackgroundTaskManager(
+        ttl_seconds=3600,
+        max_tasks=100,
+        persistence_path=_build_persistence_path(),
+    )
+    persist_calls = []
+
+    def fake_persist_locked(*, force: bool = False) -> None:
+        persist_calls.append(force)
+
+    monkeypatch.setattr(manager, '_persist_locked', fake_persist_locked)
+
+    await manager.create_task(
+        task_id='task-persist-create',
+        task_type='outline_generate',
+        user_id='user-1',
+        project_id='project-1',
+    )
+
+    assert persist_calls == [False]
+
+
 async def test_should_list_tasks_with_user_project_and_status_filters():
     manager = BackgroundTaskManager(
         ttl_seconds=3600,
