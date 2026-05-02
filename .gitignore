@@ -134,3 +134,8 @@ backend/.instance_id
 /encoding_test.txt
 .codex-tmp/
 !docs/architecture/??????_???????.md
+.ace-tool/
+
+# Rust
+backend-rs/target/
+backend-rs/data/runtime/
