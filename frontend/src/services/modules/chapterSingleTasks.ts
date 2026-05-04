@@ -5,7 +5,7 @@ import type {
   QualityPreset,
   StoryFocus,
 } from '../../types';
-import { api, silentRequestConfig } from '../core/httpClient';
+import { api, silentRequestConfig, type RequestConfigWithToastControl } from '../core/httpClient';
 import {
   normalizeChapterTaskStatus,
   upsertChapterTaskToStore,
@@ -62,7 +62,7 @@ export const chapterSingleTaskApi = {
   getSingleGenerateTaskStatus: async (taskId: string, projectId?: string) => {
     const status = await api.get<unknown, ChapterBatchGenerateStatusResponse>(
       `/chapters/batch-generate/${taskId}/status`,
-      silentRequestConfig(),
+      { ...silentRequestConfig(), suppressAuthRedirect: true } as RequestConfigWithToastControl,
     );
     upsertChapterTaskToStore({
       taskType: 'chapter_single_generate',

@@ -87,6 +87,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./.env:/app/.env:ro
+      - ./backend/static:/app/static:ro
     environment:
       - APP_NAME=${APP_NAME:-MuMuNovel}
       - APP_VERSION=${APP_VERSION:-1.0.0}
@@ -161,6 +162,9 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
       - STATIC_DIR=/app/static
       - LOCAL_AUTH_ENABLED=${LOCAL_AUTH_ENABLED:-true}
+      - LOCAL_AUTH_USERNAME=${LOCAL_AUTH_USERNAME:-admin}
+      - LOCAL_AUTH_PASSWORD=${LOCAL_AUTH_PASSWORD:-admin123}
+      - LOCAL_AUTH_DISPLAY_NAME=${LOCAL_AUTH_DISPLAY_NAME:-本地管理员}
       - LINUXDO_CLIENT_ID=${LINUXDO_CLIENT_ID:-}
       - LINUXDO_CLIENT_SECRET=${LINUXDO_CLIENT_SECRET:-}
     volumes:

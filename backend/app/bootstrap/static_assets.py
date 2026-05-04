@@ -19,10 +19,16 @@ def register_static_assets(app: FastAPI) -> None:
     if static_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
 
+        # SPA catch-all: only handles non-API paths.
+        # API routes are registered *before* this catch-all and take priority,
+        # but FastAPI/Starlette will also match {full_path:path} for API paths.
+        # The guard below ensures unmatched API paths fall through to the
+        # default 404 handler instead of being treated as SPA routes.
         @app.get("/{full_path:path}")
         async def serve_spa(full_path: str):
             if full_path.startswith("api/"):
-                return JSONResponse(status_code=404, content={"detail": "API路径不存在"})
+                from fastapi import HTTPException
+                raise HTTPException(status_code=404, detail="Not Found")
 
             requested_path = (resolved_static_dir / full_path).resolve(strict=False)
             if not requested_path.is_relative_to(resolved_static_dir):

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { message } from 'antd';
 import type { NavigateFunction } from 'react-router-dom';
+import { noAuthRedirectConfig } from '../../../services/core/httpClient';
 import {
   backgroundTaskApi,
   chapterApi,
@@ -180,7 +181,7 @@ export const useBackgroundTaskCenterController = (params: {
               : undefined;
             if (!chapterId) return Promise.resolve(null);
             return chapterApi
-              .getChapterAnalysisStatus(chapterId, task.projectId)
+              .getChapterAnalysisStatus(chapterId, task.projectId, noAuthRedirectConfig())
               .catch((error: unknown) => handleMissingTask(task.taskId, error));
           }
           return backgroundTaskApi

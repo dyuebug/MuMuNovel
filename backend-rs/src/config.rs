@@ -1,4 +1,5 @@
 use std::env;
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct AppConfig {
@@ -14,6 +15,9 @@ pub struct AppConfig {
     pub jwt_secret: String,
     pub static_dir: String,
     pub local_auth_enabled: bool,
+    pub local_auth_username: String,
+    pub local_auth_password: String,
+    pub local_auth_display_name: String,
     pub linuxdo_client_id: String,
     pub linuxdo_client_secret: String,
 }
@@ -50,9 +54,21 @@ pub fn load() -> AppConfig {
         log_level: env_or("LOG_LEVEL", "info"),
         debug: env_or_bool("DEBUG", false),
         cors_origins: env_or("CORS_ORIGINS", "*"),
-        jwt_secret: env_or("JWT_SECRET", ""),
+        jwt_secret: {
+            let secret = env_or("JWT_SECRET", "");
+            if secret.is_empty() {
+                let generated = Uuid::new_v4().to_string().replace('-', "");
+                tracing::warn!("JWT_SECRET not set, generated random secret (set JWT_SECRET in .env for persistence)");
+                generated
+            } else {
+                secret
+            }
+        },
         static_dir: env_or("STATIC_DIR", "../backend/static"),
         local_auth_enabled: env_or_bool("LOCAL_AUTH_ENABLED", true),
+        local_auth_username: env_or("LOCAL_AUTH_USERNAME", ""),
+        local_auth_password: env_or("LOCAL_AUTH_PASSWORD", ""),
+        local_auth_display_name: env_or("LOCAL_AUTH_DISPLAY_NAME", "本地管理员"),
         linuxdo_client_id: env_or("LINUXDO_CLIENT_ID", ""),
         linuxdo_client_secret: env_or("LINUXDO_CLIENT_SECRET", ""),
     }

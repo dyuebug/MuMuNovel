@@ -7,7 +7,7 @@ import type {
   QualityPreset,
   StoryFocus,
 } from '../../types';
-import { api, getAxiosErrorStatus, silentRequestConfig } from '../core/httpClient';
+import { api, getAxiosErrorStatus, silentRequestConfig, type RequestConfigWithToastControl } from '../core/httpClient';
 import {
   upsertChapterTaskToStore,
   type ChapterGenerationTaskType,
@@ -90,7 +90,7 @@ export const chapterBatchTaskApi = {
   getBatchGenerateStatus: async (batchId: string, projectId?: string) => {
     const status = await api.get<unknown, ChapterBatchGenerateStatusResponse>(
       `/chapters/batch-generate/${batchId}/status`,
-      silentRequestConfig(),
+      { ...silentRequestConfig(), suppressAuthRedirect: true } as RequestConfigWithToastControl,
     );
     upsertChapterTaskToStore({
       taskType: 'chapters_batch_generate',
@@ -148,9 +148,7 @@ export const chapterBatchTaskApi = {
     try {
       response = await api.get<unknown, ChapterActiveTasksResponse>(
         '/chapters/batch-generate/active-tasks',
-        silentRequestConfig({
-          params: { limit },
-        }),
+        { ...silentRequestConfig({ params: { limit } }), suppressAuthRedirect: true } as RequestConfigWithToastControl,
       );
     } catch (error: unknown) {
       if (getAxiosErrorStatus(error) === 404) {

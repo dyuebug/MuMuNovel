@@ -6,6 +6,7 @@ from pathlib import Path
 import logging
 import os
 import uuid
+from urllib.parse import urlparse
 
 # 基于 backend 目录解析路径
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -142,6 +143,45 @@ class Settings(BaseSettings):
         env_file = ".env"
         case_sensitive = False
         extra = "ignore"  # 忽略未定义的环境变量，避免验证错误
+
+    @staticmethod
+    def _normalize_origin(origin: Optional[str]) -> Optional[str]:
+        if not origin:
+            return None
+
+        normalized = origin.strip().rstrip("/")
+        return normalized or None
+
+    @staticmethod
+    def _is_local_origin(origin: Optional[str]) -> bool:
+        normalized = Settings._normalize_origin(origin)
+        if not normalized:
+            return False
+
+        parsed = urlparse(normalized)
+        return parsed.hostname in {"localhost", "127.0.0.1", "0.0.0.0"}
+
+    def get_effective_cors_origins(self) -> list[str]:
+        origins = {
+            origin
+            for origin in (
+                self._normalize_origin(item)
+                for item in self.cors_origins
+            )
+            if origin
+        }
+
+        frontend_origin = self._normalize_origin(self.FRONTEND_URL)
+        if frontend_origin:
+            origins.add(frontend_origin)
+
+        if self.debug or self._is_local_origin(frontend_origin):
+            for host in ("localhost", "127.0.0.1"):
+                for port in (4173, 5173, 8000, 8003, 8005):
+                    origins.add(f"http://{host}:{port}")
+            origins.add("null")
+
+        return sorted(origins)
 
 
 # 创建全局配置实例

@@ -1,13 +1,55 @@
-import axios from 'axios';
+import axios, { type AxiosRequestConfig } from 'axios';
 import { message } from 'antd';
 import { buildLoginUrlFromLocation } from '../../utils/loginRedirect';
 
-export interface RequestConfigWithToastControl {
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0']);
+
+const trimTrailingSlashes = (value: string) => value.replace(/\/+$/, '');
+
+const ensureApiSuffix = (value: string) => {
+  const normalized = trimTrailingSlashes(value.trim());
+  if (!normalized) {
+    return '';
+  }
+
+  return normalized.endsWith('/api') ? normalized : `${normalized}/api`;
+};
+
+const stripApiSuffix = (value: string) => value.replace(/\/api$/i, '');
+
+const resolveApiBaseUrl = () => {
+  const explicitApiBaseUrl = ensureApiSuffix(import.meta.env.VITE_API_BASE_URL || '');
+  if (explicitApiBaseUrl) {
+    return explicitApiBaseUrl;
+  }
+
+  const fallbackApiBaseUrl = ensureApiSuffix(import.meta.env.VITE_API_FALLBACK_ORIGIN || '');
+  if (!fallbackApiBaseUrl || typeof window === 'undefined') {
+    return '/api';
+  }
+
+  const { protocol, hostname, origin } = window.location;
+  if (protocol === 'file:') {
+    return fallbackApiBaseUrl;
+  }
+
+  if (!LOCAL_HOSTNAMES.has(hostname)) {
+    return '/api';
+  }
+
+  const fallbackOrigin = stripApiSuffix(fallbackApiBaseUrl);
+  return origin === fallbackOrigin ? '/api' : fallbackApiBaseUrl;
+};
+
+export interface RequestConfigWithToastControl extends AxiosRequestConfig {
   suppressErrorToast?: boolean;
   suppressErrorLog?: boolean;
-  params?: Record<string, unknown>;
-  signal?: AbortSignal;
+  suppressAuthRedirect?: boolean;
 }
+
+/** 构建抑制 401 自动重定向的请求配置 */
+export const noAuthRedirectConfig = (base?: AxiosRequestConfig): RequestConfigWithToastControl =>
+  ({ ...(base || {}), suppressAuthRedirect: true });
 
 const ERROR_TOAST_THROTTLE_MS = 3000;
 const ERROR_TOAST_CACHE_RETENTION_MS = 120000;
@@ -33,11 +75,14 @@ const showErrorToastWithThrottle = (errorMessage: string) => {
   message.error(errorMessage);
 };
 
-export const silentRequestConfig = <T extends RequestConfigWithToastControl>(config?: T): T =>
+export const silentRequestConfig = <T extends RequestConfigWithToastControl = RequestConfigWithToastControl>(config?: T): T =>
   ({ ...(config || {}), suppressErrorToast: true, suppressErrorLog: true } as T);
 
+// 防止 401 重定向循环的标志位
+let isRedirectingToLogin = false;
+
 export const api = axios.create({
-  baseURL: '/api',
+  baseURL: resolveApiBaseUrl(),
   timeout: 120000,
   headers: {
     'Content-Type': 'application/json',
@@ -114,6 +159,7 @@ api.interceptors.response.use(
       const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
       const isAuthRequest = requestUrl.includes('/auth/');
       const isAuthPage = pathname === '/login' || pathname.startsWith('/auth/callback');
+      const suppressAuthRedirect = Boolean(requestConfig.suppressAuthRedirect);
 
       switch (status) {
         case 400:
@@ -121,9 +167,10 @@ api.interceptors.response.use(
           break;
         case 401:
           errorMessage = data?.detail || data?.message || 'Unauthorized, please login first';
-          if (!isAuthRequest && !isAuthPage && typeof window !== 'undefined') {
+          if (!isAuthRequest && !isAuthPage && !suppressAuthRedirect && !isRedirectingToLogin && typeof window !== 'undefined') {
             const loginUrl = buildLoginUrlFromLocation(window.location);
             if (window.location.href !== loginUrl && window.location.pathname + window.location.search + window.location.hash !== loginUrl) {
+              isRedirectingToLogin = true;
               window.location.assign(loginUrl);
             }
           }

@@ -1,12 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Card, Button, Modal, Form, Select, InputNumber, Input, message, Progress, Tag, Space, Divider, Typography, theme } from 'antd';
 import { EditOutlined, PlusOutlined, DeleteOutlined, TrophyOutlined } from '@ant-design/icons';
-import axios from 'axios';
+import { api } from '../services/core/httpClient';
 
 const { TextArea } = Input;
 const { Text, Paragraph } = Typography;
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 interface CareerDetail {
     id: string;
@@ -63,12 +61,11 @@ export const CharacterCareerCard: React.FC<Props> = ({
     const fetchCharacterCareers = useCallback(async () => {
         try {
             setLoading(true);
-            const response = await axios.get(
-                `${API_BASE_URL}/api/careers/character/${characterId}/careers`,
-                { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
-            );
-            setMainCareer(response.data.main_career || null);
-            setSubCareers(response.data.sub_careers || []);
+            const response = await api.get(
+                `/careers/character/${characterId}/careers`
+            ) as { main_career: CareerDetail | null; sub_careers: CareerDetail[] };
+            setMainCareer(response.main_career || null);
+            setSubCareers(response.sub_careers || []);
         } catch (error: unknown) {
             const axiosError = error as { response?: { data?: { detail?: string } } };
             message.error(axiosError.response?.data?.detail || '获取职业信息失败');
@@ -79,12 +76,11 @@ export const CharacterCareerCard: React.FC<Props> = ({
 
     const fetchAllCareers = useCallback(async () => {
         try {
-            const response = await axios.get(`${API_BASE_URL}/api/careers`, {
-                params: { project_id: projectId },
-                headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-            });
-            const main = response.data.main_careers || [];
-            const sub = response.data.sub_careers || [];
+            const response = await api.get('/careers', {
+                params: { project_id: projectId }
+            }) as { main_careers: Career[]; sub_careers: Career[] };
+            const main = response.main_careers || [];
+            const sub = response.sub_careers || [];
             setAllCareers([...main, ...sub]);
         } catch (error: unknown) {
             console.error('获取职业列表失败:', error);
@@ -100,10 +96,9 @@ export const CharacterCareerCard: React.FC<Props> = ({
 
     const handleSetMainCareer = async (values: { career_id: string; current_stage?: number; started_at?: string }) => {
         try {
-            await axios.post(
-                `${API_BASE_URL}/api/careers/character/${characterId}/careers/main`,
-                values,
-                { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
+            await api.post(
+                `/careers/character/${characterId}/careers/main`,
+                values
             );
             message.success('主职业设置成功');
             setIsMainModalOpen(false);
@@ -118,10 +113,9 @@ export const CharacterCareerCard: React.FC<Props> = ({
 
     const handleAddSubCareer = async (values: { career_id: string; current_stage?: number; started_at?: string }) => {
         try {
-            await axios.post(
-                `${API_BASE_URL}/api/careers/character/${characterId}/careers/sub`,
-                values,
-                { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
+            await api.post(
+                `/careers/character/${characterId}/careers/sub`,
+                values
             );
             message.success('副职业添加成功');
             setIsSubModalOpen(false);
@@ -138,10 +132,9 @@ export const CharacterCareerCard: React.FC<Props> = ({
         if (!selectedCareer) return;
 
         try {
-            await axios.put(
-                `${API_BASE_URL}/api/careers/character/${characterId}/careers/${selectedCareer.career_id}/stage`,
-                values,
-                { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
+            await api.put(
+                `/careers/character/${characterId}/careers/${selectedCareer.career_id}/stage`,
+                values
             );
             message.success('职业阶段更新成功');
             setIsProgressModalOpen(false);
@@ -161,9 +154,8 @@ export const CharacterCareerCard: React.FC<Props> = ({
             centered: true,
             onOk: async () => {
                 try {
-                    await axios.delete(
-                        `${API_BASE_URL}/api/careers/character/${characterId}/careers/${careerId}`,
-                        { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
+                    await api.delete(
+                        `/careers/character/${characterId}/careers/${careerId}`
                     );
                     message.success('副职业删除成功');
                     fetchCharacterCareers();

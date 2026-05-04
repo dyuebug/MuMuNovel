@@ -31,7 +31,24 @@ fn set_cookie(response: &mut Response, name: &str, value: &str) {
     );
     response
         .headers_mut()
-        .insert(header::SET_COOKIE, cookie.parse().unwrap());
+        .append(header::SET_COOKIE, cookie.parse().unwrap());
+}
+
+fn set_cookie_non_httponly(response: &mut Response, name: &str, value: &str, max_age: i64) {
+    let cookie = format!(
+        "{}={}; Path=/; SameSite=Lax; Max-Age={}",
+        name, value, max_age
+    );
+    response
+        .headers_mut()
+        .append(header::SET_COOKIE, cookie.parse().unwrap());
+}
+
+fn clear_cookie(response: &mut Response, name: &str) {
+    let cookie = format!("{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0", name);
+    response
+        .headers_mut()
+        .append(header::SET_COOKIE, cookie.parse().unwrap());
 }
 
 async fn login(
@@ -41,7 +58,7 @@ async fn login(
 ) -> Result<Response, (StatusCode, Json<Value>)> {
     let auth = AuthService::new(&cfg.jwt_secret);
 
-    match auth.login_local(&db, &body.username, &body.password).await {
+    match auth.login_local(&db, &cfg, &body.username, &body.password).await {
         Ok(Some((user, token))) => {
             let body = json!({
                 "success": true,
@@ -60,6 +77,11 @@ async fn login(
 
             let mut response = (StatusCode::OK, Json(body)).into_response();
             set_cookie(&mut response, "token", &token);
+            // Python 后端 AuthMiddleware 依赖 user_id cookie
+            set_cookie(&mut response, "user_id", &user.user_id);
+            // session_expire_at 供前端 sessionManager 判断会话过期
+            let expire_at = chrono::Utc::now().timestamp() + 604800;
+            set_cookie_non_httponly(&mut response, "session_expire_at", &expire_at.to_string(), 604800);
             Ok(response)
         }
         Ok(None) => Err((
@@ -114,7 +136,9 @@ async fn register(
 async fn logout() -> impl IntoResponse {
     let mut response =
         (StatusCode::OK, Json(json!({"success": true, "message": "已登出"}))).into_response();
-    set_cookie(&mut response, "token", "");
+    clear_cookie(&mut response, "token");
+    clear_cookie(&mut response, "user_id");
+    clear_cookie(&mut response, "session_expire_at");
     response
 }
 

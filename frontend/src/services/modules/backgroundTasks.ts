@@ -1,4 +1,4 @@
-import { api, getAxiosErrorStatus, silentRequestConfig } from '../core/httpClient';
+import { api, getAxiosErrorStatus, silentRequestConfig, type RequestConfigWithToastControl } from '../core/httpClient';
 import {
   buildMissingBackgroundTaskStatus,
   removeBackgroundTaskFromStore,
@@ -29,7 +29,7 @@ export const backgroundTaskApi = {
     try {
       const status = await api.get<unknown, BackgroundTaskStatus>(
         `/background-tasks/${taskId}`,
-        silentRequestConfig(),
+        { ...silentRequestConfig(), suppressAuthRedirect: true } as RequestConfigWithToastControl,
       );
       return syncBackgroundTaskToStore(status);
     } catch (error: unknown) {
@@ -55,7 +55,7 @@ export const backgroundTaskApi = {
     try {
       data = await api.get<unknown, BackgroundTaskListResponse>(
         '/background-tasks',
-        silentRequestConfig({ params }),
+        { ...silentRequestConfig({ params }), suppressAuthRedirect: true } as RequestConfigWithToastControl,
       );
     } catch (error: unknown) {
       if (getAxiosErrorStatus(error) === 404) {
