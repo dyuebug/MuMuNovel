@@ -1,0 +1,60 @@
+{
+  "meta": {
+    "base_url": "http://127.0.0.1:8004",
+    "scenario": "light",
+    "requests": 50,
+    "concurrency": 5,
+    "seed": 1337,
+    "project_id": null,
+    "chapter_id": null,
+    "generated_at_ms": 1777532107860
+  },
+  "cases": [
+    {
+      "case": {
+        "name": "health",
+        "method": "GET",
+        "path": "/health",
+        "requests": 50,
+        "concurrency": 5
+      },
+      "latency": {
+        "count": 50,
+        "min_ms": 9.614300012588501,
+        "p50_ms": 11.440349996089935,
+        "p95_ms": 14.324375006556512,
+        "p99_ms": 14.910333046913147,
+        "max_ms": 15.149600088596344,
+        "mean_ms": 11.614940005540848
+      },
+      "status_codes": {
+        "200": 50
+      },
+      "errors": [],
+      "error_count": 0
+    },
+    {
+      "case": {
+        "name": "livez",
+        "method": "GET",
+        "path": "/livez",
+        "requests": 50,
+        "concurrency": 5
+      },
+      "latency": {
+        "count": 50,
+        "min_ms": 9.34740000963211,
+        "p50_ms": 10.967849999666214,
+        "p95_ms": 12.798324993252754,
+        "p99_ms": 13.093205018639564,
+        "max_ms": 13.139999985694885,
+        "mean_ms": 11.145849997997283
+      },
+      "status_codes": {
+        "200": 50
+      },
+      "errors": [],
+      "error_count": 0
+    }
+  ]
+}

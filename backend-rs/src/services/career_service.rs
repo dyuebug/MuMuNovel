@@ -1,6 +1,6 @@
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
 };
 use uuid::Uuid;
 
@@ -56,6 +56,42 @@ impl CareerService {
             updated_at: Set(Some(now)),
         };
         model.insert(db).await.map_err(|e| format!("{}", e)).map(Some)
+    }
+
+    /// Create a career with full fields — used by wizard generator
+    pub async fn create_full(
+        db: &DatabaseConnection,
+        project_id: &str,
+        name: &str,
+        career_type: &str,
+        description: Option<&str>,
+        category: Option<&str>,
+        stages: &str,
+        max_stage: i32,
+        requirements: Option<&str>,
+        special_abilities: Option<&str>,
+        worldview_rules: Option<&str>,
+        attribute_bonuses: Option<&str>,
+    ) -> Result<career::Model, String> {
+        let now = Utc::now();
+        let model = career::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            project_id: Set(project_id.to_string()),
+            name: Set(name.to_string()),
+            career_type: Set(career_type.to_string()),
+            description: Set(description.map(|s| s.to_string())),
+            category: Set(category.map(|s| s.to_string())),
+            stages: Set(stages.to_string()),
+            max_stage: Set(max_stage),
+            requirements: Set(requirements.map(|s| s.to_string())),
+            special_abilities: Set(special_abilities.map(|s| s.to_string())),
+            worldview_rules: Set(worldview_rules.map(|s| s.to_string())),
+            attribute_bonuses: Set(attribute_bonuses.map(|s| s.to_string())),
+            source: Set("ai".to_string()),
+            created_at: Set(now),
+            updated_at: Set(Some(now)),
+        };
+        model.insert(db).await.map_err(|e| format!("{}", e))
     }
 
     pub async fn list(

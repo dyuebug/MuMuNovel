@@ -1,9 +1,11 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use axum::{Extension, Router};
 use sea_orm::DatabaseConnection;
 use tower_http::{
     cors::CorsLayer,
+    normalize_path::NormalizePathLayer,
     request_id::MakeRequestUuid,
     services::ServeDir,
     trace::TraceLayer,
@@ -13,10 +15,12 @@ use tracing::info;
 
 use crate::config::AppConfig;
 use crate::middleware::auth::AuthLayer;
+use crate::services::book_import_service::BookImportService;
+use crate::mcp::McpClientManager;
 use crate::tasks::registry::TaskRegistry;
 use crate::tasks::stream::TaskStreamHub;
 
-use super::{admin, ai_test, auth, background_tasks, careers, changelog, chapters, characters, foreshadows, health, organizations, outlines, projects, relationships, settings, users, writing_styles};
+use super::{admin, ai_test, auth, background_tasks, book_import, careers, changelog, chapters, characters, foreshadows, health, inspiration, mcp_plugins, organizations, outlines, polish, projects, prompt_templates, prompt_workshop, relationships, settings, users, wizard, writing_styles};
 
 pub fn build(db: Option<DatabaseConnection>, cfg: &AppConfig, task_registry: TaskRegistry) -> Router {
     let cors = if cfg.debug {
@@ -32,6 +36,7 @@ pub fn build(db: Option<DatabaseConnection>, cfg: &AppConfig, task_registry: Tas
         .layer(AuthLayer::new(&cfg.jwt_secret));
 
     let task_stream_hub = TaskStreamHub::new();
+    let book_import_service = Arc::new(BookImportService::new());
 
     let api_routes = Router::new()
         .merge(auth::routes())
@@ -50,8 +55,17 @@ pub fn build(db: Option<DatabaseConnection>, cfg: &AppConfig, task_registry: Tas
         .merge(changelog::routes())
         .merge(ai_test::routes())
         .merge(background_tasks::routes())
+        .merge(prompt_templates::routes())
+        .merge(prompt_workshop::routes())
+        .merge(mcp_plugins::routes())
+        .merge(book_import::routes())
+        .merge(polish::routes())
+        .merge(inspiration::routes())
+        .merge(wizard::routes())
         .layer(Extension(task_registry))
-        .layer(Extension(task_stream_hub));
+        .layer(Extension(task_stream_hub))
+        .layer(Extension(book_import_service))
+        .layer(Extension(Arc::new(McpClientManager::new())));
 
     let mut router = Router::new()
         .merge(health::routes())
@@ -77,6 +91,17 @@ pub fn build(db: Option<DatabaseConnection>, cfg: &AppConfig, task_registry: Tas
                 let static_dir = static_dir_clone.clone();
                 let index_html = index_html.clone();
                 async move {
+                    // API paths that don't match a route should return 404, not SPA HTML
+                    if path.starts_with("api/") {
+                        return Ok::<_, std::convert::Infallible>(
+                            axum::response::Response::builder()
+                                .status(404)
+                                .header("content-type", "application/json")
+                                .body(axum::body::Body::from(r#"{"detail":"Not Found"}"#))
+                                .unwrap(),
+                        );
+                    }
+
                     // Try to serve the exact file if it exists
                     let file_path = static_dir.join(path);
                     if file_path.exists() && file_path.is_file() {
@@ -119,5 +144,6 @@ pub fn build(db: Option<DatabaseConnection>, cfg: &AppConfig, task_registry: Tas
         router = router.layer(Extension(db));
     }
 
-    router
+    // Strip trailing slashes so /api/settings/ matches /api/settings
+    router.layer(NormalizePathLayer::trim_trailing_slash())
 }

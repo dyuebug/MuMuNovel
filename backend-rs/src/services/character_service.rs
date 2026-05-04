@@ -1,10 +1,10 @@
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
 };
 use uuid::Uuid;
 
-use crate::models::{character, project};
+use crate::models::{character, organization, project, relationship as charrel};
 
 pub struct CharacterService;
 
@@ -156,5 +156,135 @@ impl CharacterService {
             .await
             .map_err(|e| format!("{}", e))?;
         Ok(Some(()))
+    }
+
+    /// Create a character with full wizard fields
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_full(
+        db: &DatabaseConnection,
+        project_id: &str,
+        name: &str,
+        is_organization: bool,
+        role_type: Option<&str>,
+        personality: Option<&str>,
+        background: Option<&str>,
+        appearance: Option<&str>,
+        age: Option<&str>,
+        gender: Option<&str>,
+        traits: Option<&str>,
+        organization_type: Option<&str>,
+        organization_purpose: Option<&str>,
+        relationships_text: Option<&str>,
+    ) -> Result<character::Model, String> {
+        let now = Utc::now();
+        let model = character::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            project_id: Set(project_id.to_string()),
+            name: Set(name.to_string()),
+            is_organization: Set(is_organization),
+            role_type: Set(role_type.map(|s| s.to_string())),
+            personality: Set(personality.map(|s| s.to_string())),
+            background: Set(background.map(|s| s.to_string())),
+            appearance: Set(appearance.map(|s| s.to_string())),
+            age: Set(age.map(|s| s.to_string())),
+            gender: Set(gender.map(|s| s.to_string())),
+            relationships: Set(relationships_text.map(|s| s.to_string())),
+            organization_type: Set(organization_type.map(|s| s.to_string())),
+            organization_purpose: Set(organization_purpose.map(|s| s.to_string())),
+            organization_members: Set(None),
+            status: Set("active".to_string()),
+            status_changed_chapter: Set(None),
+            current_state: Set(None),
+            state_updated_chapter: Set(None),
+            main_career_id: Set(None),
+            main_career_stage: Set(None),
+            sub_careers: Set(None),
+            avatar_url: Set(None),
+            traits: Set(traits.map(|s| s.to_string())),
+            created_at: Set(now),
+            updated_at: Set(Some(now)),
+        };
+        model.insert(db).await.map_err(|e| format!("{}", e))
+    }
+
+    /// Update character's career assignment (embedded fields)
+    pub async fn assign_career(
+        db: &DatabaseConnection,
+        character_id: &str,
+        main_career_id: Option<&str>,
+        main_stage: Option<i32>,
+        sub_careers_json: Option<&str>,
+    ) -> Result<(), String> {
+        let model = character::Entity::find_by_id(character_id)
+            .one(db).await.map_err(|e| format!("{}", e))?
+            .ok_or("角色不存在")?;
+        let mut active: character::ActiveModel = model.into();
+        active.main_career_id = Set(main_career_id.map(|s| s.to_string()));
+        active.main_career_stage = Set(main_stage);
+        active.sub_careers = Set(sub_careers_json.map(|s| s.to_string()));
+        active.updated_at = Set(Some(Utc::now()));
+        active.update(db).await.map_err(|e| format!("{}", e))?;
+        Ok(())
+    }
+
+    /// Create an organization record linked to a character
+    pub async fn create_organization(
+        db: &DatabaseConnection,
+        character_id: &str,
+        project_id: &str,
+        power_level: i32,
+        location: Option<&str>,
+        motto: Option<&str>,
+        color: Option<&str>,
+    ) -> Result<organization::Model, String> {
+        let now = Utc::now();
+        let model = organization::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            character_id: Set(character_id.to_string()),
+            project_id: Set(project_id.to_string()),
+            parent_org_id: Set(None),
+            level: Set(0),
+            power_level: Set(power_level),
+            member_count: Set(0),
+            location: Set(location.map(|s| s.to_string())),
+            motto: Set(motto.map(|s| s.to_string())),
+            color: Set(color.map(|s| s.to_string())),
+            created_at: Set(now),
+            updated_at: Set(Some(now)),
+        };
+        model.insert(db).await.map_err(|e| format!("{}", e))
+    }
+
+    /// Create a relationship between two characters
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_relationship(
+        db: &DatabaseConnection,
+        project_id: &str,
+        from_id: &str,
+        to_id: &str,
+        relationship_type_id: Option<i32>,
+        relationship_name: Option<&str>,
+        intimacy_level: i32,
+        description: Option<&str>,
+        started_at: Option<&str>,
+    ) -> Result<charrel::Model, String> {
+        let now = Utc::now();
+        let model = charrel::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            project_id: Set(project_id.to_string()),
+            character_from_id: Set(from_id.to_string()),
+            character_to_id: Set(to_id.to_string()),
+            relationship_type_id: Set(relationship_type_id),
+            relationship_name: Set(relationship_name.map(|s| s.to_string())),
+            intimacy_level: Set(intimacy_level),
+            status: Set("active".to_string()),
+            description: Set(description.map(|s| s.to_string())),
+            started_at: Set(started_at.map(|s| s.to_string())),
+            ended_at: Set(None),
+            source: Set("ai".to_string()),
+            created_at: Set(now),
+            updated_at: Set(Some(now)),
+        };
+        model.insert(db).await.map_err(|e| format!("{}", e))
     }
 }

@@ -56,6 +56,32 @@ impl ChapterService {
         model.insert(db).await.map_err(|e| format!("{}", e)).map(Some)
     }
 
+    /// Create a pending chapter (used by wizard outline one-to-one mode)
+    pub async fn create_pending(
+        db: &DatabaseConnection,
+        project_id: &str,
+        title: &str,
+        chapter_number: i32,
+    ) -> Result<chapter::Model, String> {
+        let now = Utc::now();
+        let model = chapter::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            project_id: Set(project_id.to_string()),
+            title: Set(title.to_string()),
+            chapter_number: Set(chapter_number),
+            content: Set(None),
+            summary: Set(None),
+            word_count: Set(0),
+            status: Set("pending".to_string()),
+            outline_id: Set(None),
+            sub_index: Set(1),
+            expansion_plan: Set(None),
+            created_at: Set(now),
+            updated_at: Set(Some(now)),
+        };
+        model.insert(db).await.map_err(|e| format!("{}", e))
+    }
+
     pub async fn list_by_project(
         db: &DatabaseConnection,
         project_id: &str,
@@ -137,5 +163,124 @@ impl ChapterService {
             .await
             .map_err(|e| format!("{}", e))?;
         Ok(Some(()))
+    }
+
+    pub async fn navigation(
+        db: &DatabaseConnection,
+        chapter_id: &str,
+        user_id: &str,
+    ) -> Result<Option<(Option<chapter::Model>, Option<chapter::Model>, Option<chapter::Model>)>, String> {
+        let current = Self::get(db, chapter_id, user_id).await?;
+        let Some(ref ch) = current else {
+            return Ok(None);
+        };
+
+        let all = chapter::Entity::find()
+            .filter(chapter::Column::ProjectId.eq(&ch.project_id))
+            .order_by_asc(chapter::Column::ChapterNumber)
+            .all(db)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        let pos = all.iter().position(|c| c.id == *chapter_id);
+        let prev = pos.and_then(|p| p.checked_sub(1)).map(|i| all[i].clone());
+        let next = pos.and_then(|p| p.checked_add(1)).filter(|i| *i < all.len()).map(|i| all[i].clone());
+
+        Ok(Some((prev, current.map(|c| c.clone()), next)))
+    }
+
+    pub async fn update_expansion_plan(
+        db: &DatabaseConnection,
+        chapter_id: &str,
+        user_id: &str,
+        plan: &str,
+    ) -> Result<Option<chapter::Model>, String> {
+        let existing = Self::get(db, chapter_id, user_id).await?;
+        let Some(model) = existing else {
+            return Ok(None);
+        };
+        let mut active: chapter::ActiveModel = model.into();
+        active.expansion_plan = Set(Some(plan.to_string()));
+        active.updated_at = Set(Some(Utc::now()));
+        active.update(db).await.map_err(|e| format!("{}", e)).map(Some)
+    }
+
+    pub async fn quality_trend(
+        db: &DatabaseConnection,
+        project_id: &str,
+        user_id: &str,
+    ) -> Result<Option<Vec<serde_json::Value>>, String> {
+        if !Self::verify_project_access(db, project_id, user_id).await? {
+            return Ok(None);
+        }
+        let chapters = chapter::Entity::find()
+            .filter(chapter::Column::ProjectId.eq(project_id))
+            .order_by_asc(chapter::Column::ChapterNumber)
+            .all(db)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        let trend: Vec<serde_json::Value> = chapters
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "chapter_id": c.id,
+                    "chapter_number": c.chapter_number,
+                    "title": c.title,
+                    "word_count": c.word_count,
+                    "status": c.status,
+                    "created_at": c.created_at,
+                })
+            })
+            .collect();
+
+        Ok(Some(trend))
+    }
+
+    pub async fn can_generate(
+        db: &DatabaseConnection,
+        chapter_id: &str,
+        user_id: &str,
+    ) -> Result<Option<bool>, String> {
+        let ch = Self::get(db, chapter_id, user_id).await?;
+        let Some(ch) = ch else {
+            return Ok(None);
+        };
+
+        let has_content = ch.content.as_ref().map_or(false, |c| !c.trim().is_empty());
+        if has_content {
+            return Ok(Some(true));
+        }
+
+        // Check if previous chapter exists (for continuity)
+        if ch.chapter_number > 1 {
+            let prev_exists = chapter::Entity::find()
+                .filter(chapter::Column::ProjectId.eq(&ch.project_id))
+                .filter(chapter::Column::ChapterNumber.eq(ch.chapter_number - 1))
+                .one(db)
+                .await
+                .map_err(|e| format!("{}", e))?;
+            Ok(Some(prev_exists.is_some()))
+        } else {
+            Ok(Some(true))
+        }
+    }
+
+    pub async fn get_annotations(
+        db: &DatabaseConnection,
+        chapter_id: &str,
+        user_id: &str,
+    ) -> Result<Option<serde_json::Value>, String> {
+        let ch = Self::get(db, chapter_id, user_id).await?;
+        let Some(_ch) = ch else {
+            return Ok(None);
+        };
+        // Annotations are stored in expansion_plan or analysis tables
+        // Return basic chapter metadata for now
+        Ok(Some(serde_json::json!({
+            "chapter_id": chapter_id,
+            "annotations": [],
+            "memory_mapping": [],
+        })))
     }
 }

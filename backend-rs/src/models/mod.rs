@@ -1,11 +1,16 @@
 pub mod career;
 pub mod chapter;
+pub mod mcp_plugin;
 pub mod character;
 pub mod foreshadow;
 pub mod organization;
 pub mod outline;
 pub mod project;
 pub mod project_default_style;
+pub mod prompt_submission;
+pub mod prompt_template;
+pub mod prompt_workshop_item;
+pub mod prompt_workshop_like;
 pub mod relationship;
 pub mod settings;
 pub mod user;

@@ -1,0 +1,37 @@
+{
+  "meta": {
+    "base_url": "http://127.0.0.1:8004",
+    "scenario": "task-trigger",
+    "requests": 50,
+    "concurrency": 5,
+    "seed": 1337,
+    "project_id": "62cce54c-7dc1-46f4-b977-6aa2caacd1f0",
+    "chapter_id": null,
+    "generated_at_ms": 1777535351396
+  },
+  "cases": [
+    {
+      "case": {
+        "name": "bg_task_outline_generate",
+        "method": "POST",
+        "path": "/api/background-tasks",
+        "requests": 50,
+        "concurrency": 5
+      },
+      "latency": {
+        "count": 50,
+        "min_ms": 14.946399986743927,
+        "p50_ms": 19.46994999051094,
+        "p95_ms": 279.1834000021219,
+        "p99_ms": 281.0759440010786,
+        "max_ms": 281.60240000486374,
+        "mean_ms": 50.10609600186348
+      },
+      "status_codes": {
+        "200": 50
+      },
+      "errors": [],
+      "error_count": 0
+    }
+  ]
+}

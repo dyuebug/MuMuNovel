@@ -2,18 +2,18 @@ pub mod ai;
 pub mod api;
 pub mod config;
 pub mod db;
+pub mod mcp;
 pub mod middleware;
 pub mod models;
 pub mod services;
 pub mod tasks;
+pub mod utils;
 
 use std::net::SocketAddr;
 
 use sea_orm::{ConnectionTrait, Schema};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
-
-use crate::models::{career, chapter, character, foreshadow, organization, outline, project, project_default_style, relationship, settings, user, user_password, writing_style};
 
 #[tokio::main]
 async fn main() {
@@ -29,45 +29,36 @@ async fn main() {
     if let Some(ref db) = db {
         let builder = db.get_database_backend();
         let schema = Schema::new(builder);
-        let stmt = schema.create_table_from_entity(user::Entity);
-        db.execute(builder.build(&stmt)).await
-            .expect("failed to create users table");
-        let stmt = schema.create_table_from_entity(user_password::Entity);
-        db.execute(builder.build(&stmt)).await
-            .expect("failed to create user_passwords table");
-        let stmt = schema.create_table_from_entity(project::Entity);
-        db.execute(builder.build(&stmt)).await
-            .expect("failed to create projects table");
-        let stmt = schema.create_table_from_entity(outline::Entity);
-        db.execute(builder.build(&stmt)).await
-            .expect("failed to create outlines table");
-        let stmt = schema.create_table_from_entity(character::Entity);
-        db.execute(builder.build(&stmt)).await
-            .expect("failed to create characters table");
-        let stmt = schema.create_table_from_entity(career::Entity);
-        db.execute(builder.build(&stmt)).await
-            .expect("failed to create careers table");
-        let stmt = schema.create_table_from_entity(organization::Entity);
-        db.execute(builder.build(&stmt)).await
-            .expect("failed to create organizations table");
-        let stmt = schema.create_table_from_entity(relationship::Entity);
-        db.execute(builder.build(&stmt)).await
-            .expect("failed to create character_relationships table");
-        let stmt = schema.create_table_from_entity(chapter::Entity);
-        db.execute(builder.build(&stmt)).await
-            .expect("failed to create chapters table");
-        let stmt = schema.create_table_from_entity(settings::Entity);
-        db.execute(builder.build(&stmt)).await
-            .expect("failed to create settings table");
-        let stmt = schema.create_table_from_entity(writing_style::Entity);
-        db.execute(builder.build(&stmt)).await
-            .expect("failed to create writing_styles table");
-        let stmt = schema.create_table_from_entity(project_default_style::Entity);
-        db.execute(builder.build(&stmt)).await
-            .expect("failed to create project_default_styles table");
-        let stmt = schema.create_table_from_entity(foreshadow::Entity);
-        db.execute(builder.build(&stmt)).await
-            .expect("failed to create foreshadows table");
+
+        macro_rules! create_table_if_not_exists {
+            ($db:expr, $builder:expr, $schema:expr, $entity:ty) => {
+                let mut stmt = $schema.create_table_from_entity(<$entity>::default());
+                stmt.if_not_exists();
+                if let Err(e) = $db.execute($builder.build(&stmt)).await {
+                    tracing::warn!("create table skipped: {e}");
+                }
+            };
+        }
+
+        create_table_if_not_exists!(db, builder, schema, models::user::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::user_password::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::project::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::outline::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::character::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::career::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::organization::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::relationship::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::chapter::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::settings::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::writing_style::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::project_default_style::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::foreshadow::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::mcp_plugin::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::prompt_template::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::prompt_submission::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::prompt_workshop_item::Entity);
+        create_table_if_not_exists!(db, builder, schema, models::prompt_workshop_like::Entity);
+
         info!("Database schema synced");
     }
 
@@ -96,7 +87,6 @@ async fn main() {
 fn start_periodic_cleanup(registry: tasks::registry::TaskRegistry) {
     tokio::spawn(async move {
         loop {
-            // Run cleanup every 60 seconds
             tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
             registry.prune_old_tasks().await;
         }

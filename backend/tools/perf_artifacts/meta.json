@@ -1,0 +1,13 @@
+{
+  "base_url": "http://127.0.0.1:8004",
+  "requests": 200,
+  "concurrency": 10,
+  "seed": 1337,
+  "scenarios": [
+    "light",
+    "readyz",
+    "db",
+    "task-trigger"
+  ],
+  "started_at_ms": 1777531249184
+}

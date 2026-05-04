@@ -1,0 +1,60 @@
+{
+  "meta": {
+    "base_url": "http://127.0.0.1:8004",
+    "scenario": "db",
+    "requests": 50,
+    "concurrency": 5,
+    "seed": 1337,
+    "project_id": "e75e13aa-62b5-47bc-b63b-b64decab29d8",
+    "chapter_id": null,
+    "generated_at_ms": 1777532109235
+  },
+  "cases": [
+    {
+      "case": {
+        "name": "projects_list",
+        "method": "GET",
+        "path": "/api/projects",
+        "requests": 50,
+        "concurrency": 5
+      },
+      "latency": {
+        "count": 50,
+        "min_ms": 11.7746000289917,
+        "p50_ms": 14.151899993419647,
+        "p95_ms": 18.065214988589286,
+        "p99_ms": 18.54614197432995,
+        "max_ms": 18.553099989891052,
+        "mean_ms": 14.591951998472213
+      },
+      "status_codes": {
+        "200": 50
+      },
+      "errors": [],
+      "error_count": 0
+    },
+    {
+      "case": {
+        "name": "chapters_list",
+        "method": "GET",
+        "path": "/api/chapters/project/e75e13aa-62b5-47bc-b63b-b64decab29d8",
+        "requests": 50,
+        "concurrency": 5
+      },
+      "latency": {
+        "count": 50,
+        "min_ms": 9.112599968910217,
+        "p50_ms": 12.126749992370605,
+        "p95_ms": 14.726315009593963,
+        "p99_ms": 15.629142031073568,
+        "max_ms": 16.13100004196167,
+        "mean_ms": 12.100826003551482
+      },
+      "status_codes": {
+        "200": 50
+      },
+      "errors": [],
+      "error_count": 0
+    }
+  ]
+}

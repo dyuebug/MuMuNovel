@@ -3,6 +3,7 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Qu
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::ai::config::AIConfig;
 use crate::models::settings;
 
 const PLACEHOLDER_MASK: &str = "********";
@@ -221,6 +222,33 @@ impl SettingsService {
                 Ok(build_response(&saved, &web_research, &backup_urls))
             }
         }
+    }
+
+    pub async fn build_ai_config(
+        db: &DatabaseConnection,
+        user_id: &str,
+        provider_override: Option<&str>,
+        model_override: Option<&str>,
+        temperature_override: Option<f64>,
+    ) -> Result<AIConfig, String> {
+        let s = settings::Entity::find()
+            .filter(settings::Column::UserId.eq(user_id))
+            .one(db)
+            .await
+            .map_err(|e| format!("读取设置失败: {}", e))?
+            .ok_or("用户设置不存在，请先在设置页配置AI")?;
+
+        Ok(AIConfig {
+            provider: provider_override.map(|s| s.to_string()).unwrap_or(s.api_provider),
+            api_key: s.api_key,
+            base_url: s.api_base_url,
+            model: model_override.map(|s| s.to_string()).unwrap_or(s.llm_model),
+            temperature: temperature_override.unwrap_or(s.temperature),
+            max_tokens: s.max_tokens as u32,
+            system_prompt: s.system_prompt,
+            max_retries: 3,
+            request_delay_ms: 200,
+        })
     }
 
     pub async fn delete(

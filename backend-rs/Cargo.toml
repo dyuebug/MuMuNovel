@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["full"] }
 sea-orm = { version = "1", features = ["sqlx-postgres", "sqlx-sqlite", "runtime-tokio-rustls", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dotenvy = "0.15"
-tower-http = { version = "0.6", features = ["cors", "request-id", "trace", "util", "fs"] }
+tower-http = { version = "0.6", features = ["cors", "request-id", "trace", "util", "fs", "normalize-path"] }
 tower = "0.5"
 log = "0.4"
 jsonwebtoken = "9"
@@ -24,4 +24,12 @@ axum-extra = "0.10"
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 md5 = "0.7"
+sha2 = "0.10"
+hex = "0.4"
 mime_guess = "2"
+encoding_rs = "0.8"
+rmcp = { version = "1.5", features = [
+    "client",
+    "transport-streamable-http-client-reqwest",
+    "transport-child-process",
+] }

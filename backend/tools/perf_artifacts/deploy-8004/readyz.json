@@ -1,0 +1,60 @@
+{
+  "meta": {
+    "base_url": "http://127.0.0.1:8004",
+    "scenario": "readyz",
+    "requests": 50,
+    "concurrency": 5,
+    "seed": 1337,
+    "project_id": null,
+    "chapter_id": null,
+    "generated_at_ms": 1777532108532
+  },
+  "cases": [
+    {
+      "case": {
+        "name": "readyz",
+        "method": "GET",
+        "path": "/readyz",
+        "requests": 50,
+        "concurrency": 5
+      },
+      "latency": {
+        "count": 50,
+        "min_ms": 10.10999995470047,
+        "p50_ms": 11.615950047969818,
+        "p95_ms": 13.230829951167106,
+        "p99_ms": 13.649711987972259,
+        "max_ms": 13.772799968719482,
+        "mean_ms": 11.635583992004394
+      },
+      "status_codes": {
+        "200": 50
+      },
+      "errors": [],
+      "error_count": 0
+    },
+    {
+      "case": {
+        "name": "db_sessions",
+        "method": "GET",
+        "path": "/health/db-sessions",
+        "requests": 50,
+        "concurrency": 5
+      },
+      "latency": {
+        "count": 50,
+        "min_ms": 7.149600028991699,
+        "p50_ms": 11.923450022935867,
+        "p95_ms": 13.887499994039535,
+        "p99_ms": 15.032110008001327,
+        "max_ms": 15.160000026226044,
+        "mean_ms": 11.780164002180099
+      },
+      "status_codes": {
+        "200": 50
+      },
+      "errors": [],
+      "error_count": 0
+    }
+  ]
+}
