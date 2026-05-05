@@ -123,7 +123,36 @@ class PresetResponse(APIKeyPreset):
 class PresetListResponse(BaseModel):
     """预设列表响应"""
     model_config = ConfigDict(protected_namespaces=())
-    
+
     presets: List[PresetResponse] = Field(..., description="预设列表")
     total: int = Field(..., description="总数")
     active_preset_id: Optional[str] = Field(None, description="当前激活的预设ID")
+
+
+class FetchModelsRequest(BaseModel):
+    """获取模型列表请求"""
+    model_config = ConfigDict(protected_namespaces=())
+
+    api_key: str = Field(..., description="API密钥")
+    api_base_url: str = Field(..., description="API基础URL")
+    provider: str = Field(default="openai", description="提供商类型")
+    models_url: Optional[str] = Field(None, description="自定义模型列表端点URL")
+
+
+class FetchedModel(BaseModel):
+    """获取到的模型信息"""
+    model_config = ConfigDict(protected_namespaces=())
+
+    id: str = Field(..., description="模型ID")
+    owned_by: Optional[str] = Field(None, description="模型所有者/提供商")
+
+
+class FetchModelsResponse(BaseModel):
+    """获取模型列表响应"""
+    model_config = ConfigDict(protected_namespaces=())
+
+    success: bool = Field(..., description="是否成功")
+    models: List[FetchedModel] = Field(default_factory=list, description="模型列表")
+    message: Optional[str] = Field(None, description="提示信息")
+    error: Optional[str] = Field(None, description="错误信息")
+    error_type: Optional[str] = Field(None, description="错误类型")

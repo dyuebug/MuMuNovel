@@ -118,4 +118,13 @@ export const settingsApi = {
     api.post<unknown, APIKeyPreset>('/settings/presets/from-current', null, {
       params: { name, description }
     }),
+
+  fetchModels: (params: { api_key: string; api_base_url: string; provider: string; models_url?: string }) =>
+    api.post<unknown, {
+      success: boolean;
+      models: Array<{ id: string; owned_by: string | null }>;
+      message?: string;
+      error?: string;
+      error_type?: string;
+    }>('/settings/fetch-models', params),
 };

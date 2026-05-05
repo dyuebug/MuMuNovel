@@ -20,7 +20,8 @@ from app.models.settings import Settings
 from app.schemas.settings import (
     SettingsCreate, SettingsUpdate, SettingsResponse,
     APIKeyPreset, APIKeyPresetConfig, PresetCreateRequest,
-    PresetUpdateRequest, PresetResponse, PresetListResponse
+    PresetUpdateRequest, PresetResponse, PresetListResponse,
+    FetchModelsRequest, FetchModelsResponse, FetchedModel
 )
 from app.user_manager import User
 from app.api.common import require_request_user
@@ -1917,3 +1918,205 @@ async def create_preset_from_current(
     
     logger.info(f"用户 {user.user_id} 从当前配置创建预设: {name}")
     return await create_preset(create_request, user, db)
+
+
+# 已知的 Anthropic 协议兼容子路径后缀（按长度降序，最长前缀优先匹配）
+KNOWN_COMPAT_SUFFIXES = [
+    "/api/claudecode",
+    "/api/anthropic",
+    "/apps/anthropic",
+    "/api/coding",
+    "/claudecode",
+    "/anthropic",
+    "/step_plan",
+    "/coding",
+    "/claude",
+]
+
+
+def strip_compat_suffix(base_url: str) -> Optional[str]:
+    """
+    若 baseURL 以任一已知兼容子路径结尾，返回剥离后的剩余部分；否则 None
+
+    依赖 KNOWN_COMPAT_SUFFIXES 按长度降序排列，确保最长前缀优先命中
+    """
+    for suffix in KNOWN_COMPAT_SUFFIXES:
+        if base_url.endswith(suffix):
+            return base_url[:-len(suffix)]
+    return None
+
+
+@router.post("/fetch-models", response_model=FetchModelsResponse)
+async def fetch_models(
+    data: FetchModelsRequest,
+    user: User = Depends(require_login)
+):
+    """
+    从 AI 提供商获取可用模型列表
+
+    使用 OpenAI 兼容的 GET /v1/models 端点
+    支持多个候选端点自动尝试，包括：
+    - DeepSeek、GLM、Kimi 等国内提供商
+    - 硅基流动、OpenRouter 等聚合站
+    - 通过兼容子路径暴露的 Anthropic 协议端点
+    """
+    api_key = (data.api_key or "").strip()
+    base_url = (data.api_base_url or "").strip()
+    provider = (data.provider or "openai").strip().lower()
+
+    # 前端预检
+    if not api_key:
+        return FetchModelsResponse(
+            success=False,
+            message="请先填写 API Key",
+            error="Missing API Key",
+            error_type="ValidationError"
+        )
+
+    if not base_url:
+        return FetchModelsResponse(
+            success=False,
+            message="请先填写 API Base URL",
+            error="Missing Base URL",
+            error_type="ValidationError"
+        )
+
+    # 构建候选端点列表
+    candidates = []
+
+    # 1. 如果提供了自定义 models_url，优先使用
+    if data.models_url:
+        candidates.append(data.models_url.strip())
+        # 自定义 URL 优先级最高，直接返回
+        logger.info(f"用户 {user.user_id} 使用自定义 models_url: {data.models_url}")
+    else:
+        # 2. 标准 OpenAI 兼容端点
+        base_url_normalized = base_url.rstrip('/')
+
+        # 主候选：base_url/v1/models 或 base_url/models
+        if base_url_normalized.endswith('/v1'):
+            candidates.append(f"{base_url_normalized}/models")
+        else:
+            candidates.append(f"{base_url_normalized}/v1/models")
+
+        # 3. 兼容路径剥离：移除已知的 Anthropic 协议兼容子路径后重试
+        # 例如：https://api.deepseek.com/anthropic → https://api.deepseek.com/v1/models
+        stripped = strip_compat_suffix(base_url_normalized)
+        if stripped:
+            root = stripped.rstrip('/')
+            if root and "://" in root:
+                candidates.append(f"{root}/v1/models")
+                candidates.append(f"{root}/models")
+
+    # 去重并保持顺序
+    seen = set()
+    unique_candidates = []
+    for url in candidates:
+        if url not in seen:
+            seen.add(url)
+            unique_candidates.append(url)
+
+    logger.info(f"用户 {user.user_id} 请求获取模型列表")
+    logger.info(f"  - 提供商: {provider}")
+    logger.info(f"  - Base URL: {base_url}")
+    logger.info(f"  - 候选端点: {unique_candidates}")
+
+    # 依次尝试候选端点
+    last_error = None
+    last_status_code = None
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for candidate_url in unique_candidates:
+            try:
+                logger.info(f"尝试端点: {candidate_url}")
+
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+
+                response = await client.get(candidate_url, headers=headers)
+                response.raise_for_status()
+
+                # 解析响应
+                data_json = response.json()
+
+                # OpenAI 兼容格式：{"data": [...], "object": "list"}
+                if isinstance(data_json, dict) and "data" in data_json:
+                    models_data = data_json["data"]
+                elif isinstance(data_json, list):
+                    # 某些提供商直接返回数组
+                    models_data = data_json
+                else:
+                    logger.warning(f"端点 {candidate_url} 返回格式不符合预期")
+                    continue
+
+                # 转换为标准格式
+                models = []
+                for model_item in models_data:
+                    if isinstance(model_item, dict):
+                        model_id = model_item.get("id") or model_item.get("model")
+                        if model_id:
+                            models.append(FetchedModel(
+                                id=model_id,
+                                owned_by=model_item.get("owned_by") or model_item.get("owner")
+                            ))
+
+                if models:
+                    logger.info(f"成功获取 {len(models)} 个模型")
+                    return FetchModelsResponse(
+                        success=True,
+                        models=models,
+                        message=f"成功获取 {len(models)} 个可用模型"
+                    )
+                else:
+                    logger.warning(f"端点 {candidate_url} 返回空模型列表")
+                    continue
+
+            except httpx.HTTPStatusError as e:
+                last_status_code = e.response.status_code
+                last_error = f"HTTP {last_status_code}"
+                logger.warning(f"端点 {candidate_url} 返回 HTTP {last_status_code}")
+
+                if last_status_code in (401, 403):
+                    # 认证错误，不再尝试其他端点
+                    return FetchModelsResponse(
+                        success=False,
+                        message="API Key 认证失败",
+                        error=f"HTTP {last_status_code}: {e.response.text[:200]}",
+                        error_type="AuthenticationError"
+                    )
+
+            except httpx.TimeoutException:
+                last_error = "请求超时"
+                logger.warning(f"端点 {candidate_url} 请求超时")
+
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"端点 {candidate_url} 请求失败: {last_error}")
+
+    # 所有候选端点均失败
+    logger.error(f"所有候选端点均失败，最后错误: {last_error}")
+
+    if last_status_code in (404, 405):
+        return FetchModelsResponse(
+            success=False,
+            message="该提供商可能不支持模型列表接口",
+            error=f"所有候选端点均返回 {last_status_code}",
+            error_type="EndpointNotFound"
+        )
+
+    if "timeout" in str(last_error).lower():
+        return FetchModelsResponse(
+            success=False,
+            message="请求超时，请检查网络连接",
+            error=last_error,
+            error_type="TimeoutError"
+        )
+
+    return FetchModelsResponse(
+        success=False,
+        message="获取模型列表失败",
+        error=last_error or "所有候选端点均失败",
+        error_type="NetworkError"
+    )
