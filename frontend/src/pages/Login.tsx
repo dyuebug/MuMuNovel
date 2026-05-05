@@ -61,6 +61,8 @@ export default function Login() {
           setLinuxdoEnabled(config.linuxdo_enabled);
         } catch (configError) {
           console.error('获取认证配置失败:', configError);
+          // Fallback: enable both login methods when config fetch fails
+          setLocalAuthEnabled(true);
           setLinuxdoEnabled(true);
 
           const configServiceMessage = resolveServiceUnavailableMessage(configError);
