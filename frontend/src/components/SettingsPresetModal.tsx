@@ -1,7 +1,7 @@
 import { Button, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Spin } from 'antd';
 import { InfoCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
-import type { APIKeyPreset, PresetCreateRequest } from '../types';
+import type { APIKeyPreset, APIKeyPresetConfig } from '../types';
 
 type ModelOption = {
   value: string;
@@ -9,11 +9,17 @@ type ModelOption = {
   description: string;
 };
 
+type PresetFormValues = Partial<APIKeyPresetConfig> & {
+  name?: string;
+  description?: string;
+  models_url?: string;
+};
+
 type SettingsPresetModalProps = {
   open: boolean;
   isMobile: boolean;
   editingPreset: APIKeyPreset | null;
-  form: FormInstance<PresetCreateRequest>;
+  form: FormInstance<PresetFormValues>;
   fetchingPresetModels: boolean;
   presetModelsFetched: boolean;
   mergedPresetModelOptions: ModelOption[];
@@ -85,14 +91,7 @@ export default function SettingsPresetModal({
               style={{ marginBottom: 16 }}
             >
               <Select placeholder="选择提供商" onChange={onProviderChange}>
-                <Select.Option value="openai">OpenAI</Select.Option>
-                <Select.Option value="openai_responses">OpenAI Responses</Select.Option>
-                <Select.Option value="anthropic">Claude (Anthropic)</Select.Option>
-                <Select.Option value="azure">Azure OpenAI</Select.Option>
-                <Select.Option value="newapi">NewAPI</Select.Option>
-                <Select.Option value="custom">自定义</Select.Option>
-                <Select.Option value="sub2api">Sub2API</Select.Option>
-                <Select.Option value="gemini">Google Gemini</Select.Option>
+                <Select.Option value="openai">OpenAI 兼容接口</Select.Option>
               </Select>
             </Form.Item>
           </Col>
@@ -119,11 +118,25 @@ export default function SettingsPresetModal({
             </Form.Item>
           </Col>
           <Col xs={24} sm={12}>
-            <Form.Item name="api_base_url" label="API Base URL" style={{ marginBottom: 16 }}>
+            <Form.Item
+              name="api_base_url"
+              label="API Base URL"
+              rules={[{ type: 'url', message: '请输入有效的 URL' }]}
+              style={{ marginBottom: 16 }}
+            >
               <Input placeholder="https://api.openai.com/v1" />
             </Form.Item>
           </Col>
         </Row>
+
+        <Form.Item
+          name="models_url"
+          label="模型列表地址（可选）"
+          rules={[{ type: 'url', message: '请输入有效的 URL' }]}
+          style={{ marginBottom: 16 }}
+        >
+          <Input placeholder="留空自动探测，或填写 https://.../v1/models" />
+        </Form.Item>
 
         <Row gutter={16}>
           <Col xs={24} sm={12}>
@@ -251,7 +264,7 @@ export default function SettingsPresetModal({
               rules={[{ required: true, message: '必填' }]}
               style={{ marginBottom: 16 }}
             >
-              <InputNumber min={1} max={100000} style={{ width: '100%' }} placeholder="2000" />
+              <InputNumber min={1} max={200000} step={1000} style={{ width: '100%' }} placeholder="32000" />
             </Form.Item>
           </Col>
         </Row>

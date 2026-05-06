@@ -5,7 +5,7 @@ echo MuMuNovel Strangler Fig Deploy
 echo ==============================
 echo Python + Rust + Nginx (3-service architecture)
 echo.
-echo Usage: deploy-strangler.bat [-NoCache] [-UseCnMirror] [-SkipFrontendBuild] [-FullRestart]
+echo Usage: deploy-strangler.bat [-NoCache] [-UseCnMirror] [-SkipFrontendBuild] [-FullRestart] [-NoPause] [-RepairPostgresPassword]
 echo.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy-strangler.ps1" %*
 set "EXIT_CODE=%ERRORLEVEL%"

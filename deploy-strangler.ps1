@@ -5,6 +5,8 @@ param(
     [switch]$UseCnMirror,
     [switch]$SkipFrontendBuild,
     [switch]$FullRestart,
+    [switch]$NoPause,
+    [switch]$RepairPostgresPassword,
     [int]$HealthTimeoutSec = 180
 )
 
@@ -117,6 +119,140 @@ function Get-DockerComposeArgs {
     return $args
 }
 
+function Get-DotEnvValue {
+    param([string]$Name)
+
+    $dotEnvPath = Join-Path $PSScriptRoot ".env"
+    if (-not (Test-Path -Path $dotEnvPath)) { return $null }
+
+    foreach ($line in [System.IO.File]::ReadLines($dotEnvPath)) {
+        $trimmed = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith('#')) { continue }
+        $match = [regex]::Match($trimmed, '^(?:export\s+)?(?<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<value>.*)$')
+        if (-not $match.Success -or $match.Groups['key'].Value -ne $Name) { continue }
+        $value = $match.Groups['value'].Value.Trim()
+        if ($value.Length -ge 2) {
+            $first = $value.Substring(0, 1)
+            $last = $value.Substring($value.Length - 1, 1)
+            if (($first -eq '"' -and $last -eq '"') -or ($first -eq "'" -and $last -eq "'")) {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+        }
+        return $value
+    }
+    return $null
+}
+
+function Get-ComposeEnvironmentValue {
+    param(
+        [string]$Name,
+        [string]$Default = $null
+    )
+
+    $value = [Environment]::GetEnvironmentVariable($Name)
+    if (-not [string]::IsNullOrWhiteSpace($value)) { return $value }
+    $value = Get-DotEnvValue -Name $Name
+    if (-not [string]::IsNullOrWhiteSpace($value)) { return $value }
+    return $Default
+}
+
+function Test-RequiredStranglerEnvironment {
+    $jwtSecret = Get-ComposeEnvironmentValue -Name 'JWT_SECRET'
+    if ([string]::IsNullOrWhiteSpace($jwtSecret)) {
+        $message = @"
+JWT_SECRET is required for the strangler stack.
+
+Add a stable secret to the repository .env file, for example:
+JWT_SECRET=<random string with at least 32 characters>
+"@
+        Write-LogBlock $message
+        throw $message
+    }
+    Write-LogLine "Required environment OK: JWT_SECRET is set."
+}
+
+function Invoke-PostgresNetworkCredentialProbe {
+    param(
+        [string]$PostgresUser,
+        [string]$PostgresPassword,
+        [string]$PostgresDb
+    )
+
+    $previousPgPassword = [Environment]::GetEnvironmentVariable('PGPASSWORD')
+    [Environment]::SetEnvironmentVariable('PGPASSWORD', $PostgresPassword, 'Process')
+    try {
+        $command = @('docker', 'compose') + (Get-DockerComposeArgs) + @(
+            'run', '--rm', '--no-deps', '-T', '--entrypoint', 'psql', '-e', 'PGPASSWORD',
+            $PythonService,
+            '-h', $DbService, '-U', $PostgresUser, '-d', $PostgresDb,
+            '-v', 'ON_ERROR_STOP=1', '-c', 'select 1;'
+        )
+        return Invoke-LoggedCommand -Command $command -Label "verify postgres network credentials" -IgnoreExitCode
+    }
+    finally {
+        if ($null -eq $previousPgPassword) {
+            [Environment]::SetEnvironmentVariable('PGPASSWORD', $null, 'Process')
+        }
+        else {
+            [Environment]::SetEnvironmentVariable('PGPASSWORD', $previousPgPassword, 'Process')
+        }
+    }
+}
+
+function ConvertTo-PostgresSqlLiteral {
+    param([string]$Value)
+    return "'" + ($Value -replace "'", "''") + "'"
+}
+
+function ConvertTo-PostgresIdentifier {
+    param([string]$Value)
+    return '"' + ($Value -replace '"', '""') + '"'
+}
+
+function Repair-PostgresPassword {
+    param(
+        [string]$PostgresUser,
+        [string]$PostgresPassword,
+        [string]$PostgresDb
+    )
+
+    $userIdentifier = ConvertTo-PostgresIdentifier -Value $PostgresUser
+    $passwordLiteral = ConvertTo-PostgresSqlLiteral -Value $PostgresPassword
+    $sql = "ALTER USER $userIdentifier WITH PASSWORD $passwordLiteral;"
+    $command = @('docker', 'exec', $DbContainer, 'psql', '-U', $PostgresUser, '-d', $PostgresDb, '-v', 'ON_ERROR_STOP=1', '-c', $sql)
+    Invoke-LoggedCommand -Command $command -Label "repair postgres password" | Out-Null
+}
+
+function Test-PostgresNetworkCredentials {
+    $postgresUser = Get-ComposeEnvironmentValue -Name 'POSTGRES_USER' -Default 'mumuai'
+    $postgresPassword = Get-ComposeEnvironmentValue -Name 'POSTGRES_PASSWORD' -Default '123456'
+    $postgresDb = Get-ComposeEnvironmentValue -Name 'POSTGRES_DB' -Default 'mumuai_novel'
+    if ([string]::IsNullOrWhiteSpace($postgresPassword)) {
+        throw "POSTGRES_PASSWORD cannot be blank for the strangler stack."
+    }
+
+    $result = Invoke-PostgresNetworkCredentialProbe -PostgresUser $postgresUser -PostgresPassword $postgresPassword -PostgresDb $postgresDb
+    if ($result.ExitCode -ne 0 -and $RepairPostgresPassword) {
+        Write-Host "  PostgreSQL network credentials failed; repairing database user password..." -ForegroundColor Yellow
+        Write-LogLine "PostgreSQL credential repair requested."
+        Repair-PostgresPassword -PostgresUser $postgresUser -PostgresPassword $postgresPassword -PostgresDb $postgresDb
+        $result = Invoke-PostgresNetworkCredentialProbe -PostgresUser $postgresUser -PostgresPassword $postgresPassword -PostgresDb $postgresDb
+    }
+
+    if ($result.ExitCode -ne 0) {
+        $message = @(
+            "PostgreSQL is healthy, but configured credentials cannot connect from python-backend over the Docker network.",
+            "Current config:",
+            "  POSTGRES_USER=$postgresUser",
+            "  POSTGRES_DB=$postgresDb",
+            "  POSTGRES_PASSWORD=<hidden>",
+            "Restore the original POSTGRES_PASSWORD in .env, or rerun with -RepairPostgresPassword after confirming it is safe."
+        ) -join [Environment]::NewLine
+        Write-LogBlock $message
+        throw $message
+    }
+}
+
 function Wait-ContainerHealthy {
     param(
         [string]$ContainerName,
@@ -204,6 +340,9 @@ if (-not (Test-Path -Path $ComposeFile)) {
     throw $errorMessage
 }
 
+Write-Step "Checking required environment"
+Test-RequiredStranglerEnvironment
+
 Write-Step "Checking Docker daemon"
 Test-DockerDaemon
 
@@ -229,6 +368,9 @@ if (-not $SkipBuild) {
 Write-Step "Starting PostgreSQL"
 Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('up', '-d', $DbService)) -Label "docker compose up postgres" | Out-Null
 Wait-ContainerHealthy -ContainerName $DbContainer -Label "PostgreSQL" -TimeoutSec 60
+
+Write-Step "Verifying PostgreSQL network credentials"
+Test-PostgresNetworkCredentials
 
 # ---- Start backends ----
 Write-Step "Starting Python backend"
@@ -289,8 +431,8 @@ if (-not $isHealthy) {
 # ---- Verify both backends through Nginx ----
 Write-Step "Verifying Rust backend reachability via Nginx"
 try {
-    $rustResponse = Invoke-WebRequest -Uri "http://localhost:8005/api/admin/version" -UseBasicParsing -TimeoutSec 10
-    Write-Host "Rust version endpoint: $($rustResponse.Content)" -ForegroundColor DarkCyan
+    $rustResponse = Invoke-WebRequest -Uri "http://localhost:8005/readyz" -UseBasicParsing -TimeoutSec 10
+    Write-Host "Rust readiness endpoint: $($rustResponse.Content)" -ForegroundColor DarkCyan
     Write-LogLine "Rust backend reachable via Nginx: $($rustResponse.Content)"
 }
 catch {
@@ -311,11 +453,13 @@ catch {
 
 Write-Host ""
 Write-Host "=== Strangler Fig Deploy SUCCESS ===" -ForegroundColor Green
-Write-Host "   入口: http://localhost:8005 (Nginx :8005)" -ForegroundColor Green
-Write-Host "   Rust:  docker://$RustContainer:8001 (162 endpoints)" -ForegroundColor DarkCyan
-Write-Host "   Python: docker://$PythonContainer:8000 (fallback)" -ForegroundColor DarkCyan
-Write-Host "   DB:    docker://$DbContainer:5432" -ForegroundColor DarkCyan
+Write-Host "   Entry:  http://localhost:8005 (Nginx :8005)" -ForegroundColor Green
+Write-Host "   Rust:   docker://${RustContainer}:8001 (162 endpoints)" -ForegroundColor DarkCyan
+Write-Host "   Python: docker://${PythonContainer}:8000 (fallback)" -ForegroundColor DarkCyan
+Write-Host "   DB:     docker://${DbContainer}:5432" -ForegroundColor DarkCyan
 Write-LogLine "Strangler deploy succeeded."
 
-Write-Host ""
-Read-Host -Prompt "部署完成，按 Enter 关闭窗口"
+if (-not $NoPause) {
+    Write-Host ""
+    Read-Host -Prompt "部署完成，按 Enter 关闭窗口"
+}

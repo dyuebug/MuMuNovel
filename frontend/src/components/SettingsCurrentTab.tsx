@@ -8,7 +8,6 @@ const { TextArea } = Input;
 
 export default function SettingsCurrentTab(props: any) {
   const {
-  LazyAzureConfigGuide,
   LazyEndpointListEditor,
   LazyProviderSelector,
   activeSettingsSection,
@@ -315,14 +314,6 @@ export default function SettingsCurrentTab(props: any) {
                                 </div>
                               </Col>
 
-                              {selectedProvider === 'azure' && (
-                                <Col xs={24}>
-                                  <Suspense fallback={settingsLazyFallback}>
-                                    <LazyAzureConfigGuide visible />
-                                  </Suspense>
-                                </Col>
-                              )}
-
                               <Col xs={24} lg={10}>
                                 <div style={fieldPanelStyle}>
                                   <Text style={fieldHintTextStyle}>
@@ -354,7 +345,7 @@ export default function SettingsCurrentTab(props: any) {
                               <Col xs={24} lg={14}>
                                 <div style={fieldPanelStyle}>
                                   <Text style={fieldHintTextStyle}>
-                                    建议填写完整基础路径；若走代理或中转站，请优先确认是否需要显式追加 <code>/v1</code>。
+                                    建议填写 OpenAI 兼容基础路径；模型列表会自动尝试 <code>/v1/models</code>、<code>/models</code> 等常见端点。
                                   </Text>
                                   <Form.Item
                                     label={
@@ -385,6 +376,34 @@ export default function SettingsCurrentTab(props: any) {
                                           return updated;
                                         });
                                       }}
+                                    />
+                                  </Form.Item>
+                                </div>
+                              </Col>
+
+                              <Col xs={24}>
+                                <div style={fieldPanelStyle}>
+                                  <Text style={fieldHintTextStyle}>
+                                    可选。仅当服务商模型列表地址与 API 地址不一致时填写，例如 <code>https://example.com/v1/models</code>。
+                                  </Text>
+                                  <Form.Item
+                                    label={
+                                      <Space size={4}>
+                                        <span>模型列表地址</span>
+                                        <InfoCircleOutlined
+                                          title="自定义模型列表端点；留空时自动从 API 地址推导"
+                                          style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
+                                        />
+                                      </Space>
+                                    }
+                                    name="models_url"
+                                    rules={[{ type: 'url', message: '请输入有效的URL' }]}
+                                    style={{ marginBottom: 0 }}
+                                  >
+                                    <Input
+                                      size={isMobile ? 'middle' : 'large'}
+                                      placeholder="留空自动探测，或填写 https://.../v1/models"
+                                      onChange={() => setModelsFetched(false)}
                                     />
                                   </Form.Item>
                                 </div>
@@ -630,7 +649,7 @@ export default function SettingsCurrentTab(props: any) {
                                   }}
                                 >
                                   <Text style={fieldHintTextStyle}>
-                                    限制单次返回长度，能更稳定地控制成本和响应大小。
+                                    限制单次返回长度；长篇小说生成建议使用 32000 起步，按模型上下文能力调高或调低。
                                   </Text>
                                   <Form.Item
                                     label={
@@ -653,7 +672,9 @@ export default function SettingsCurrentTab(props: any) {
                                       size={isMobile ? 'middle' : 'large'}
                                       style={{ width: '100%' }}
                                       min={1}
-                                      placeholder="2000"
+                                      max={200000}
+                                      step={1000}
+                                      placeholder="32000"
                                     />
                                   </Form.Item>
                                 </div>
@@ -673,7 +694,7 @@ export default function SettingsCurrentTab(props: any) {
                                       <Space size={4}>
                                         <span>温度参数</span>
                                         <InfoCircleOutlined
-                                          title="控制输出的随机性，值越高越随机（0.0-2.0）"
+                                          title="控制输出随机性：0.3 更稳定，0.7 平衡，1.0+ 更有创意"
                                           style={{ color: 'var(--color-text-secondary)', fontSize: isMobile ? '12px' : '14px' }}
                                         />
                                       </Space>
@@ -687,8 +708,10 @@ export default function SettingsCurrentTab(props: any) {
                                       step={0.1}
                                       marks={{
                                         0: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '0.0' },
+                                        0.3: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '0.3' },
                                         0.7: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '0.7' },
                                         1: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '1.0' },
+                                        1.5: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '1.5' },
                                         2: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '2.0' }
                                       }}
                                     />

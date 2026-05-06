@@ -1922,12 +1922,18 @@ async def create_preset_from_current(
 
 # 已知的 Anthropic 协议兼容子路径后缀（按长度降序，最长前缀优先匹配）
 KNOWN_COMPAT_SUFFIXES = [
+    "/v1/chat/completions",
+    "/chat/completions",
+    "/v1/responses",
+    "/responses",
     "/api/claudecode",
     "/api/anthropic",
+    "/api/openai",
     "/apps/anthropic",
     "/api/coding",
     "/claudecode",
     "/anthropic",
+    "/openai",
     "/step_plan",
     "/coding",
     "/claude",
@@ -1944,6 +1950,84 @@ def strip_compat_suffix(base_url: str) -> Optional[str]:
         if base_url.endswith(suffix):
             return base_url[:-len(suffix)]
     return None
+
+
+def _append_model_url_candidates(candidates: List[str], base_url: str) -> None:
+    """按 OpenAI 兼容模型列表的常见位置追加候选 URL。"""
+    normalized = (base_url or "").strip().rstrip("/")
+    if not normalized or "://" not in normalized:
+        return
+
+    if normalized.endswith("/v1/models") or normalized.endswith("/models"):
+        candidates.append(normalized)
+        return
+
+    if normalized.endswith("/v1"):
+        root = normalized[:-3].rstrip("/")
+        candidates.append(f"{normalized}/models")
+        if root:
+            candidates.append(f"{root}/models")
+        return
+
+    candidates.append(f"{normalized}/v1/models")
+    candidates.append(f"{normalized}/models")
+
+
+def build_model_url_candidates(base_url: str, models_url: Optional[str] = None) -> List[str]:
+    """生成模型列表端点候选，兼容 cc-switch 的 OpenAI-compatible 探测方式。"""
+    candidates: List[str] = []
+
+    if models_url:
+        explicit_url = models_url.strip().rstrip("/")
+        if explicit_url:
+            candidates.append(explicit_url)
+
+    base_url_normalized = (base_url or "").strip().rstrip("/")
+    _append_model_url_candidates(candidates, base_url_normalized)
+
+    stripped = strip_compat_suffix(base_url_normalized)
+    if stripped:
+        _append_model_url_candidates(candidates, stripped)
+
+    seen = set()
+    unique_candidates = []
+    for url in candidates:
+        if url not in seen:
+            seen.add(url)
+            unique_candidates.append(url)
+    return unique_candidates
+
+
+def parse_fetched_models(data_json: Any) -> List[FetchedModel]:
+    """解析 OpenAI-compatible 与常见聚合站的模型列表响应。"""
+    if isinstance(data_json, dict):
+        models_data = data_json.get("data") or data_json.get("models")
+    elif isinstance(data_json, list):
+        models_data = data_json
+    else:
+        models_data = None
+
+    if not isinstance(models_data, list):
+        return []
+
+    models: List[FetchedModel] = []
+    seen = set()
+    for model_item in models_data:
+        owned_by = None
+        if isinstance(model_item, str):
+            model_id = model_item
+        elif isinstance(model_item, dict):
+            model_id = model_item.get("id") or model_item.get("model") or model_item.get("name")
+            owned_by = model_item.get("owned_by") or model_item.get("owner") or model_item.get("provider")
+            if isinstance(model_id, str) and model_id.startswith("models/"):
+                model_id = model_id.removeprefix("models/")
+        else:
+            continue
+
+        if model_id and model_id not in seen:
+            seen.add(model_id)
+            models.append(FetchedModel(id=model_id, owned_by=owned_by))
+    return models
 
 
 @router.post("/fetch-models", response_model=FetchModelsResponse)
@@ -1981,40 +2065,8 @@ async def fetch_models(
             error_type="ValidationError"
         )
 
-    # 构建候选端点列表
-    candidates = []
-
-    # 1. 如果提供了自定义 models_url，优先使用
-    if data.models_url:
-        candidates.append(data.models_url.strip())
-        # 自定义 URL 优先级最高，直接返回
-        logger.info(f"用户 {user.user_id} 使用自定义 models_url: {data.models_url}")
-    else:
-        # 2. 标准 OpenAI 兼容端点
-        base_url_normalized = base_url.rstrip('/')
-
-        # 主候选：base_url/v1/models 或 base_url/models
-        if base_url_normalized.endswith('/v1'):
-            candidates.append(f"{base_url_normalized}/models")
-        else:
-            candidates.append(f"{base_url_normalized}/v1/models")
-
-        # 3. 兼容路径剥离：移除已知的 Anthropic 协议兼容子路径后重试
-        # 例如：https://api.deepseek.com/anthropic → https://api.deepseek.com/v1/models
-        stripped = strip_compat_suffix(base_url_normalized)
-        if stripped:
-            root = stripped.rstrip('/')
-            if root and "://" in root:
-                candidates.append(f"{root}/v1/models")
-                candidates.append(f"{root}/models")
-
-    # 去重并保持顺序
-    seen = set()
-    unique_candidates = []
-    for url in candidates:
-        if url not in seen:
-            seen.add(url)
-            unique_candidates.append(url)
+    # 构建候选端点列表：自定义 models_url 优先，其后按 OpenAI 兼容规则探测
+    unique_candidates = build_model_url_candidates(base_url, data.models_url)
 
     logger.info(f"用户 {user.user_id} 请求获取模型列表")
     logger.info(f"  - 提供商: {provider}")
@@ -2038,29 +2090,10 @@ async def fetch_models(
                 response = await client.get(candidate_url, headers=headers)
                 response.raise_for_status()
 
-                # 解析响应
-                data_json = response.json()
-
-                # OpenAI 兼容格式：{"data": [...], "object": "list"}
-                if isinstance(data_json, dict) and "data" in data_json:
-                    models_data = data_json["data"]
-                elif isinstance(data_json, list):
-                    # 某些提供商直接返回数组
-                    models_data = data_json
-                else:
+                models = parse_fetched_models(response.json())
+                if not models:
                     logger.warning(f"端点 {candidate_url} 返回格式不符合预期")
                     continue
-
-                # 转换为标准格式
-                models = []
-                for model_item in models_data:
-                    if isinstance(model_item, dict):
-                        model_id = model_item.get("id") or model_item.get("model")
-                        if model_id:
-                            models.append(FetchedModel(
-                                id=model_id,
-                                owned_by=model_item.get("owned_by") or model_item.get("owner")
-                            ))
 
                 if models:
                     logger.info(f"成功获取 {len(models)} 个模型")

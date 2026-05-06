@@ -11,6 +11,26 @@ const { useBreakpoint } = Grid;
 
 type ModelOption = { value: string; label: string; description: string };
 type SettingsSectionKey = 'provider' | 'network' | 'model' | 'research';
+type SettingsFormValues = SettingsUpdate & { models_url?: string };
+type PresetFormValues = Partial<APIKeyPresetConfig> & {
+  name?: string;
+  description?: string;
+  models_url?: string;
+};
+
+const BASIC_API_PROVIDER = 'openai';
+const DEFAULT_API_BASE_URL = 'https://api.openai.com/v1';
+const DEFAULT_MAX_TOKENS = 32000;
+
+const normalizeApiProvider = () => BASIC_API_PROVIDER;
+
+const toModelOptions = (models: Array<{ id: string; owned_by: string | null }>): ModelOption[] => (
+  models.map((model) => ({
+    value: model.id,
+    label: model.id,
+    description: model.owned_by ? `Provider: ${model.owned_by}` : '',
+  }))
+);
 
 const buildModelSelectOptions = (
   options: ModelOption[],
@@ -36,7 +56,6 @@ const buildModelSelectOptions = (
 
 const LazyProviderSelector = lazy(() => import('../components/ProviderSelector'));
 const LazyEndpointListEditor = lazy(() => import('../components/EndpointListEditor'));
-const LazyAzureConfigGuide = lazy(() => import('../components/AzureConfigGuide'));
 const LazySettingsPresetModal = lazy(() => import('../components/SettingsPresetModal'));
 const LazySettingsPresetsTab = lazy(() => import('../components/SettingsPresetsTab'));
 const LazySettingsCurrentTab = lazy(() => import('../components/SettingsCurrentTab'));
@@ -50,7 +69,7 @@ const settingsLazyFallback = (
 export default function SettingsPage() {
   const screens = useBreakpoint();
   const isMobile = !screens.md; // md断点是768px
-  const [form] = Form.useForm();
+  const [form] = Form.useForm<SettingsFormValues>();
   const [modal, contextHolder] = Modal.useModal();
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -97,7 +116,7 @@ export default function SettingsPage() {
   const [editingPreset, setEditingPreset] = useState<APIKeyPreset | null>(null);
   const [isPresetModalVisible, setIsPresetModalVisible] = useState(false);
   const [testingPresetId, setTestingPresetId] = useState<string | null>(null);
-  const [presetForm] = Form.useForm();
+  const [presetForm] = Form.useForm<PresetFormValues>();
   
   // 预设编辑窗口的模型列表状态（独立于当前配置的模型列表）
   const [presetModelOptions, setPresetModelOptions] = useState<ModelOption[]>([]);
@@ -240,9 +259,11 @@ export default function SettingsPage() {
     try {
       const settings = await settingsApi.getSettings();
       form.setFieldsValue(settings);
+      form.setFieldValue('api_provider', normalizeApiProvider());
+      form.setFieldValue('provider_type', normalizeApiProvider());
 
       // 初始化 API 兼容性相关状态
-      setSelectedProvider(settings.provider_type || settings.api_provider || 'openai');
+      setSelectedProvider(normalizeApiProvider());
       setFallbackStrategy(settings.fallback_strategy || 'auto');
       // 构建端点列表：主端点 + 备端点
       const endpointList: Array<{ url: string; type: 'primary' | 'fallback'; status?: 'success' | 'error' | 'pending' | 'untested' }> = [];
@@ -270,11 +291,11 @@ export default function SettingsPage() {
         setHasSettings(false);
         setIsDefaultSettings(true);
         form.setFieldsValue({
-          api_provider: 'openai',
-          api_base_url: 'https://api.openai.com/v1',
+          api_provider: BASIC_API_PROVIDER,
+          api_base_url: DEFAULT_API_BASE_URL,
           llm_model: 'gpt-4',
           temperature: 0.7,
-          max_tokens: 2000,
+          max_tokens: DEFAULT_MAX_TOKENS,
           web_research_enabled: false,
           web_research_exa_enabled: true,
           web_research_grok_enabled: true,
@@ -289,13 +310,15 @@ export default function SettingsPage() {
     }
   };
 
-  const handleSave = async (values: SettingsUpdate) => {
+  const handleSave = async (values: SettingsFormValues) => {
     setLoading(true);
     try {
       // 注入 API 兼容性字段
+      const { models_url: _modelsUrl, ...persistableValues } = values;
       const saveData: SettingsUpdate = {
-        ...values,
-        provider_type: selectedProvider,
+        ...persistableValues,
+        api_provider: normalizeApiProvider(),
+        provider_type: normalizeApiProvider(),
         fallback_strategy: fallbackStrategy,
         api_backup_urls: endpoints.filter(e => e.type === 'fallback').map(e => e.url).filter(Boolean),
       };
@@ -432,12 +455,12 @@ export default function SettingsPage() {
       cancelText: '取消',
       onOk: () => {
         form.setFieldsValue({
-          api_provider: 'openai',
+          api_provider: BASIC_API_PROVIDER,
           api_key: '',
-          api_base_url: 'https://api.openai.com/v1',
+          api_base_url: DEFAULT_API_BASE_URL,
           llm_model: 'gpt-4',
           temperature: 0.7,
-          max_tokens: 2000,
+          max_tokens: DEFAULT_MAX_TOKENS,
           web_research_enabled: false,
           web_research_exa_enabled: true,
           web_research_grok_enabled: true,
@@ -480,20 +503,10 @@ export default function SettingsPage() {
     });
   };
 
-  const handleProviderChange = (value: string) => {
-    setSelectedProvider(value);
-    // 对于 openai 兼容族，统一走 openai 的默认 URL
-    const providerDefaultUrls: Record<string, string> = {
-      openai: 'https://api.openai.com/v1',
-      openai_responses: 'https://api.openai.com/v1',
-      anthropic: 'https://api.anthropic.com',
-      newapi: '',
-      azure: '',
-      custom: '',
-      sub2api: 'https://ai.qaq.al',
-      gemini: 'https://generativelanguage.googleapis.com/v1beta',
-    };
-    const defaultUrl = providerDefaultUrls[value] || '';
+  const handleProviderChange = (_value: string) => {
+    const provider = normalizeApiProvider();
+    setSelectedProvider(provider);
+    const defaultUrl = DEFAULT_API_BASE_URL;
     if (defaultUrl) {
       form.setFieldValue('api_base_url', defaultUrl);
       // 同步更新端点列表的主端点
@@ -504,7 +517,8 @@ export default function SettingsPage() {
         return updated;
       });
     }
-    form.setFieldValue('provider_type', value);
+    form.setFieldValue('api_provider', provider);
+    form.setFieldValue('provider_type', provider);
     // 清空模型列表，需要重新获取
     setModelOptions([]);
     setModelSearchText('');
@@ -525,7 +539,8 @@ export default function SettingsPage() {
   const handleFetchModels = async (silent: boolean = false) => {
     const apiKey = form.getFieldValue('api_key');
     const apiBaseUrl = getEffectiveApiBaseUrl();
-    const provider = form.getFieldValue('api_provider');
+    const provider = normalizeApiProvider();
+    const modelsUrl = String(form.getFieldValue('models_url') || '').trim();
 
     if (!hasUsableApiCredentials(apiKey, apiBaseUrl)) {
       if (!silent) {
@@ -540,16 +555,17 @@ export default function SettingsPage() {
 
     setFetchingModels(true);
     try {
-      const response = await settingsApi.getAvailableModels({
+      const response = await settingsApi.fetchModels({
         api_key: apiKey,
         api_base_url: apiBaseUrl,
-        provider: provider || 'openai'
+        provider,
+        models_url: modelsUrl || undefined,
       });
 
-      setModelOptions(response.models);
+      setModelOptions(toModelOptions(response.models));
       setModelsFetched(true);
       if (!silent) {
-        message.success(`成功获取 ${response.count || response.models.length} 个可用模型`);
+        message.success(`成功获取 ${response.models.length} 个可用模型`);
       }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
@@ -710,10 +726,10 @@ export default function SettingsPage() {
       setEditingPreset(null);
       presetForm.resetFields();
       presetForm.setFieldsValue({
-        api_provider: 'openai',
-        api_base_url: 'https://api.openai.com/v1',
+        api_provider: BASIC_API_PROVIDER,
+        api_base_url: DEFAULT_API_BASE_URL,
         temperature: 0.7,
-        max_tokens: 2000,
+        max_tokens: DEFAULT_MAX_TOKENS,
       });
     }
     setIsPresetModalVisible(true);
@@ -733,7 +749,8 @@ export default function SettingsPage() {
   const handleFetchPresetModels = async (silent: boolean = false) => {
     const apiKey = presetForm.getFieldValue('api_key');
     const apiBaseUrl = presetForm.getFieldValue('api_base_url');
-    const provider = presetForm.getFieldValue('api_provider');
+    const provider = normalizeApiProvider();
+    const modelsUrl = String(presetForm.getFieldValue('models_url') || '').trim();
 
     if (!hasUsableApiCredentials(apiKey, apiBaseUrl)) {
       if (!silent) {
@@ -748,16 +765,17 @@ export default function SettingsPage() {
 
     setFetchingPresetModels(true);
     try {
-      const response = await settingsApi.getAvailableModels({
+      const response = await settingsApi.fetchModels({
         api_key: apiKey,
         api_base_url: apiBaseUrl,
-        provider: provider || 'openai'
+        provider,
+        models_url: modelsUrl || undefined,
       });
 
-      setPresetModelOptions(response.models);
+      setPresetModelOptions(toModelOptions(response.models));
       setPresetModelsFetched(true);
       if (!silent) {
-        message.success(`成功获取 ${response.count || response.models.length} 个可用模型`);
+        message.success(`成功获取 ${response.models.length} 个可用模型`);
       }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
@@ -802,19 +820,11 @@ export default function SettingsPage() {
   };
 
   // 预设编辑窗口：提供商变更时更新默认URL并清空模型列表
-  const handlePresetProviderChange = (value: string) => {
-    const providerDefaultUrls: Record<string, string> = {
-      openai: 'https://api.openai.com/v1',
-      openai_responses: 'https://api.openai.com/v1',
-      anthropic: 'https://api.anthropic.com',
-      sub2api: 'https://ai.qaq.al',
-      gemini: 'https://generativelanguage.googleapis.com/v1beta',
-    };
-    const defaultUrl = providerDefaultUrls[value];
-    if (defaultUrl) {
-      presetForm.setFieldValue('api_base_url', defaultUrl);
-    }
-    presetForm.setFieldValue('provider_type', value);
+  const handlePresetProviderChange = (_value: string) => {
+    const provider = normalizeApiProvider();
+    presetForm.setFieldValue('api_provider', provider);
+    presetForm.setFieldValue('api_base_url', DEFAULT_API_BASE_URL);
+    presetForm.setFieldValue('provider_type', provider);
     // 清空模型列表，需要重新获取
     setPresetModelOptions([]);
     setPresetModelSearchText('');
@@ -823,15 +833,15 @@ export default function SettingsPage() {
 
   const handlePresetSave = async () => {
     try {
-      const values = await presetForm.validateFields();
+      const { models_url: _modelsUrl, ...values } = await presetForm.validateFields();
       const config: APIKeyPresetConfig = {
-        api_provider: values.api_provider,
-        api_key: values.api_key,
+        api_provider: normalizeApiProvider(),
+        api_key: values.api_key || '',
         api_base_url: values.api_base_url,
-        llm_model: values.llm_model,
-        temperature: values.temperature,
-        max_tokens: values.max_tokens,
-        provider_type: values.api_provider,
+        llm_model: values.llm_model || '',
+        temperature: values.temperature ?? 0.7,
+        max_tokens: values.max_tokens ?? DEFAULT_MAX_TOKENS,
+        provider_type: normalizeApiProvider(),
         api_backup_urls: values.api_backup_urls || [],
         fallback_strategy: values.fallback_strategy || 'auto',
         azure_api_version: values.azure_api_version,
@@ -846,7 +856,7 @@ export default function SettingsPage() {
         message.success('预设已更新');
       } else {
         const request: PresetCreateRequest = {
-          name: values.name,
+          name: values.name || '',
           description: values.description,
           config,
         };
@@ -1184,7 +1194,6 @@ export default function SettingsPage() {
                   children: activeTab === 'current' ? (
                     <Suspense fallback={settingsLazyFallback}>
                       <LazySettingsCurrentTab
-                        LazyAzureConfigGuide={LazyAzureConfigGuide}
                         LazyEndpointListEditor={LazyEndpointListEditor}
                         LazyProviderSelector={LazyProviderSelector}
                         activeSettingsSection={activeSettingsSection}
