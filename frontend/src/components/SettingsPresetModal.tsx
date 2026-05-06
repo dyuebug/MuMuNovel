@@ -92,6 +92,8 @@ export default function SettingsPresetModal({
             >
               <Select placeholder="选择提供商" onChange={onProviderChange}>
                 <Select.Option value="openai">OpenAI 兼容接口</Select.Option>
+                <Select.Option value="anthropic">Claude（Anthropic）</Select.Option>
+                <Select.Option value="gemini">Google Gemini</Select.Option>
               </Select>
             </Form.Item>
           </Col>

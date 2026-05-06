@@ -461,6 +461,17 @@ def _build_api_probe_exception_suggestions(
 
         return suggestions
 
+    if "non-json" in lowered or "non json" in lowered or "doctype html" in lowered:
+        suggestions = [
+            "The configured Base URL returned an HTML page, not an API JSON response",
+            "Use the provider's API root instead of its web console or homepage",
+            "For DeepSeek-compatible Chat Completions, try a documented endpoint such as `https://api.deepseek.com/v1` or the gateway's exact `/v1` API base path",
+            "If this gateway requires a vendor-specific path, copy the complete API Base URL from the gateway documentation",
+        ]
+        if normalized_base_url and not normalized_base_url.endswith("/v1"):
+            suggestions.insert(1, "The current Base URL does not end with `/v1`; the probe already tried a normalized `/v1` path and it did not return a valid API response")
+        return suggestions
+
     parsed_base_url = urlsplit(normalized_base_url) if normalized_base_url else None
     base_url_hostname = parsed_base_url.hostname if parsed_base_url else None
     if error_type in {"TimeoutError", "ReadTimeout", "ConnectTimeout", "PoolTimeout", "ConnectError"}:
@@ -1998,6 +2009,41 @@ def build_model_url_candidates(base_url: str, models_url: Optional[str] = None) 
     return unique_candidates
 
 
+def build_official_model_url_candidates(provider: str, base_url: str, models_url: Optional[str] = None) -> List[str]:
+    """生成官方协议模型列表端点，保留 models_url 作为最高优先级。"""
+    if provider == "gemini":
+        candidates = []
+        if models_url:
+            candidates.append(models_url.strip().rstrip("/"))
+        normalized = (base_url or "").strip().rstrip("/")
+        if normalized:
+            if normalized.endswith("/models"):
+                candidates.append(normalized)
+            else:
+                candidates.append(f"{normalized}/models")
+
+        seen = set()
+        return [url for url in candidates if url and not (url in seen or seen.add(url))]
+
+    if provider == "anthropic":
+        candidates = []
+        if models_url:
+            candidates.append(models_url.strip().rstrip("/"))
+        normalized = (base_url or "").strip().rstrip("/")
+        if normalized:
+            if normalized.endswith("/v1/models") or normalized.endswith("/models"):
+                candidates.append(normalized)
+            elif normalized.endswith("/v1"):
+                candidates.append(f"{normalized}/models")
+            else:
+                candidates.append(f"{normalized}/v1/models")
+
+        seen = set()
+        return [url for url in candidates if url and not (url in seen or seen.add(url))]
+
+    return build_model_url_candidates(base_url, models_url)
+
+
 def parse_fetched_models(data_json: Any) -> List[FetchedModel]:
     """解析 OpenAI-compatible 与常见聚合站的模型列表响应。"""
     if isinstance(data_json, dict):
@@ -2028,6 +2074,18 @@ def parse_fetched_models(data_json: Any) -> List[FetchedModel]:
             seen.add(model_id)
             models.append(FetchedModel(id=model_id, owned_by=owned_by))
     return models
+
+
+def build_fetch_models_headers(provider: str, api_key: str) -> Dict[str, str]:
+    if provider == "anthropic":
+        return {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        }
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
 
 
 @router.post("/fetch-models", response_model=FetchModelsResponse)
@@ -2065,8 +2123,8 @@ async def fetch_models(
             error_type="ValidationError"
         )
 
-    # 构建候选端点列表：自定义 models_url 优先，其后按 OpenAI 兼容规则探测
-    unique_candidates = build_model_url_candidates(base_url, data.models_url)
+    # 构建候选端点列表：自定义 models_url 优先，其后按 provider 规则探测
+    unique_candidates = build_official_model_url_candidates(provider, base_url, data.models_url)
 
     logger.info(f"用户 {user.user_id} 请求获取模型列表")
     logger.info(f"  - 提供商: {provider}")
@@ -2082,12 +2140,10 @@ async def fetch_models(
             try:
                 logger.info(f"尝试端点: {candidate_url}")
 
-                headers = {
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
-                }
+                headers = build_fetch_models_headers(provider, api_key)
 
-                response = await client.get(candidate_url, headers=headers)
+                params = {"key": api_key} if provider == "gemini" else None
+                response = await client.get(candidate_url, headers=headers, params=params)
                 response.raise_for_status()
 
                 models = parse_fetched_models(response.json())

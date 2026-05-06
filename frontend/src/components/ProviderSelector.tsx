@@ -34,6 +34,22 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
     group: '推荐协议',
     recommended: true,
   },
+  {
+    value: 'anthropic',
+    label: 'Claude（Anthropic）',
+    shortLabel: 'Claude',
+    description: 'Anthropic 官方 Messages API，适合直接使用 Claude 系列模型。',
+    features: ['Claude 官方', 'Messages API', '长上下文'],
+    group: '官方直连',
+  },
+  {
+    value: 'gemini',
+    label: 'Google Gemini',
+    shortLabel: 'Gemini',
+    description: 'Google 官方 Generative Language API，适合直接使用 Gemini 系列模型。',
+    features: ['Gemini 官方', '多模态', '模型列表'],
+    group: '官方直连',
+  },
 ];
 
 const ProviderSelector: React.FC<ProviderSelectorProps> = ({

@@ -21,8 +21,20 @@ type PresetFormValues = Partial<APIKeyPresetConfig> & {
 const BASIC_API_PROVIDER = 'openai';
 const DEFAULT_API_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_MAX_TOKENS = 32000;
+const SUPPORTED_API_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const;
+type SupportedApiProvider = typeof SUPPORTED_API_PROVIDERS[number];
 
-const normalizeApiProvider = () => BASIC_API_PROVIDER;
+const DEFAULT_API_BASE_URLS: Record<SupportedApiProvider, string> = {
+  openai: DEFAULT_API_BASE_URL,
+  anthropic: 'https://api.anthropic.com',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta',
+};
+
+const normalizeApiProvider = (provider?: string): SupportedApiProvider => (
+  SUPPORTED_API_PROVIDERS.includes(provider as SupportedApiProvider)
+    ? provider as SupportedApiProvider
+    : BASIC_API_PROVIDER
+);
 
 const toModelOptions = (models: Array<{ id: string; owned_by: string | null }>): ModelOption[] => (
   models.map((model) => ({
@@ -259,11 +271,12 @@ export default function SettingsPage() {
     try {
       const settings = await settingsApi.getSettings();
       form.setFieldsValue(settings);
-      form.setFieldValue('api_provider', normalizeApiProvider());
-      form.setFieldValue('provider_type', normalizeApiProvider());
+      const provider = normalizeApiProvider(settings.provider_type || settings.api_provider);
+      form.setFieldValue('api_provider', provider);
+      form.setFieldValue('provider_type', provider);
 
       // 初始化 API 兼容性相关状态
-      setSelectedProvider(normalizeApiProvider());
+      setSelectedProvider(provider);
       setFallbackStrategy(settings.fallback_strategy || 'auto');
       // 构建端点列表：主端点 + 备端点
       const endpointList: Array<{ url: string; type: 'primary' | 'fallback'; status?: 'success' | 'error' | 'pending' | 'untested' }> = [];
@@ -317,8 +330,8 @@ export default function SettingsPage() {
       const { models_url: _modelsUrl, ...persistableValues } = values;
       const saveData: SettingsUpdate = {
         ...persistableValues,
-        api_provider: normalizeApiProvider(),
-        provider_type: normalizeApiProvider(),
+        api_provider: normalizeApiProvider(values.api_provider || selectedProvider),
+        provider_type: normalizeApiProvider(values.api_provider || selectedProvider),
         fallback_strategy: fallbackStrategy,
         api_backup_urls: endpoints.filter(e => e.type === 'fallback').map(e => e.url).filter(Boolean),
       };
@@ -503,10 +516,10 @@ export default function SettingsPage() {
     });
   };
 
-  const handleProviderChange = (_value: string) => {
-    const provider = normalizeApiProvider();
+  const handleProviderChange = (value: string) => {
+    const provider = normalizeApiProvider(value);
     setSelectedProvider(provider);
-    const defaultUrl = DEFAULT_API_BASE_URL;
+    const defaultUrl = DEFAULT_API_BASE_URLS[provider];
     if (defaultUrl) {
       form.setFieldValue('api_base_url', defaultUrl);
       // 同步更新端点列表的主端点
@@ -539,7 +552,7 @@ export default function SettingsPage() {
   const handleFetchModels = async (silent: boolean = false) => {
     const apiKey = form.getFieldValue('api_key');
     const apiBaseUrl = getEffectiveApiBaseUrl();
-    const provider = normalizeApiProvider();
+    const provider = normalizeApiProvider(form.getFieldValue('api_provider') || selectedProvider);
     const modelsUrl = String(form.getFieldValue('models_url') || '').trim();
 
     if (!hasUsableApiCredentials(apiKey, apiBaseUrl)) {
@@ -749,7 +762,7 @@ export default function SettingsPage() {
   const handleFetchPresetModels = async (silent: boolean = false) => {
     const apiKey = presetForm.getFieldValue('api_key');
     const apiBaseUrl = presetForm.getFieldValue('api_base_url');
-    const provider = normalizeApiProvider();
+    const provider = normalizeApiProvider(presetForm.getFieldValue('api_provider'));
     const modelsUrl = String(presetForm.getFieldValue('models_url') || '').trim();
 
     if (!hasUsableApiCredentials(apiKey, apiBaseUrl)) {
@@ -820,10 +833,10 @@ export default function SettingsPage() {
   };
 
   // 预设编辑窗口：提供商变更时更新默认URL并清空模型列表
-  const handlePresetProviderChange = (_value: string) => {
-    const provider = normalizeApiProvider();
+  const handlePresetProviderChange = (value: string) => {
+    const provider = normalizeApiProvider(value);
     presetForm.setFieldValue('api_provider', provider);
-    presetForm.setFieldValue('api_base_url', DEFAULT_API_BASE_URL);
+    presetForm.setFieldValue('api_base_url', DEFAULT_API_BASE_URLS[provider]);
     presetForm.setFieldValue('provider_type', provider);
     // 清空模型列表，需要重新获取
     setPresetModelOptions([]);
@@ -835,13 +848,13 @@ export default function SettingsPage() {
     try {
       const { models_url: _modelsUrl, ...values } = await presetForm.validateFields();
       const config: APIKeyPresetConfig = {
-        api_provider: normalizeApiProvider(),
+        api_provider: normalizeApiProvider(values.api_provider),
         api_key: values.api_key || '',
         api_base_url: values.api_base_url,
         llm_model: values.llm_model || '',
         temperature: values.temperature ?? 0.7,
         max_tokens: values.max_tokens ?? DEFAULT_MAX_TOKENS,
-        provider_type: normalizeApiProvider(),
+        provider_type: normalizeApiProvider(values.api_provider),
         api_backup_urls: values.api_backup_urls || [],
         fallback_strategy: values.fallback_strategy || 'auto',
         azure_api_version: values.azure_api_version,
