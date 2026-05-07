@@ -71,16 +71,23 @@ export async function loadChapterAvailableModels({
   setSelectedModel: (value: string | undefined | ((previousModel: string | undefined) => string | undefined)) => void;
 }): Promise<string | null> {
   try {
-    const settingsResponse = await fetch('/api/settings');
-    if (settingsResponse.ok) {
-      const settings = await settingsResponse.json();
-      const { api_key, api_base_url, api_provider, provider_type } = settings;
-      const preferredModel = normalizeOptionalSelectValue(settings.llm_model);
+    const [settingsResponse, apiKeyResponse] = await Promise.all([
+      fetch('/api/settings'),
+      fetch('/api/settings/api-key'),
+    ]);
 
-      if (hasUsableApiCredentials(api_key, api_base_url)) {
+    if (settingsResponse.ok && apiKeyResponse.ok) {
+      const settings = await settingsResponse.json();
+      const apiKeyInfo = await apiKeyResponse.json();
+      const { api_base_url, api_provider, provider_type } = settings;
+      const preferredModel = normalizeOptionalSelectValue(settings.llm_model);
+      const storedApiKey = normalizeOptionalSelectValue(apiKeyInfo.api_key);
+
+      if (hasUsableApiCredentials(storedApiKey, api_base_url)) {
         try {
+          const resolvedApiKey = storedApiKey as string;
           const modelsResponse = await fetch(
-            `/api/settings/models?api_key=${encodeURIComponent(api_key)}&api_base_url=${encodeURIComponent(api_base_url)}&provider=${provider_type || api_provider}`
+            `/api/settings/models?api_key=${encodeURIComponent(resolvedApiKey)}&api_base_url=${encodeURIComponent(api_base_url)}&provider=${provider_type || api_provider}`
           );
 
           if (modelsResponse.ok) {

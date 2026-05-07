@@ -405,6 +405,9 @@ export default function SettingsPage() {
     try {
       const values = await settingsForm.validateFields();
       const payload = buildSettingsPayload(values);
+      if (!String(values.api_key || '').trim() && hasStoredApiKey) {
+        delete payload.api_key;
+      }
       setSavingSettings(true);
       const saved = settingsRecord
         ? await settingsApi.updateSettings(payload)
