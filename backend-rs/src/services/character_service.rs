@@ -40,7 +40,7 @@ impl CharacterService {
             return Ok(None);
         }
 
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let model = character::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             project_id: Set(project_id.to_string()),
@@ -137,7 +137,7 @@ impl CharacterService {
         if let Some(v) = gender { active.gender = Set(Some(v.to_string())); }
         if let Some(v) = status { active.status = Set(v.to_string()); }
         if let Some(v) = is_organization { active.is_organization = Set(v); }
-        active.updated_at = Set(Some(Utc::now()));
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
 
         active.update(db).await.map_err(|e| format!("{}", e)).map(Some)
     }
@@ -176,7 +176,7 @@ impl CharacterService {
         organization_purpose: Option<&str>,
         relationships_text: Option<&str>,
     ) -> Result<character::Model, String> {
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let model = character::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             project_id: Set(project_id.to_string()),
@@ -222,7 +222,7 @@ impl CharacterService {
         active.main_career_id = Set(main_career_id.map(|s| s.to_string()));
         active.main_career_stage = Set(main_stage);
         active.sub_careers = Set(sub_careers_json.map(|s| s.to_string()));
-        active.updated_at = Set(Some(Utc::now()));
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
         active.update(db).await.map_err(|e| format!("{}", e))?;
         Ok(())
     }
@@ -237,7 +237,7 @@ impl CharacterService {
         motto: Option<&str>,
         color: Option<&str>,
     ) -> Result<organization::Model, String> {
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let model = organization::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             character_id: Set(character_id.to_string()),
@@ -268,7 +268,7 @@ impl CharacterService {
         description: Option<&str>,
         started_at: Option<&str>,
     ) -> Result<charrel::Model, String> {
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let model = charrel::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             project_id: Set(project_id.to_string()),

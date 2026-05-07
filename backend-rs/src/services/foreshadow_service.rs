@@ -37,10 +37,10 @@ fn model_to_value(f: &foreshadow::Model) -> Value {
         "auto_remind": f.auto_remind,
         "remind_before_chapters": f.remind_before_chapters,
         "include_in_context": f.include_in_context,
-        "created_at": f.created_at.to_rfc3339(),
-        "updated_at": f.updated_at.to_rfc3339(),
-        "planted_at": f.planted_at.map(|t| t.to_rfc3339()),
-        "resolved_at": f.resolved_at.map(|t| t.to_rfc3339()),
+        "created_at": f.created_at.and_utc().to_rfc3339(),
+        "updated_at": f.updated_at.and_utc().to_rfc3339(),
+        "planted_at": f.planted_at.map(|t| t.and_utc().to_rfc3339()),
+        "resolved_at": f.resolved_at.map(|t| t.and_utc().to_rfc3339()),
     })
 }
 
@@ -243,7 +243,7 @@ impl ForeshadowService {
         db: &DatabaseConnection,
         body: &Value,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let id = Uuid::new_v4().to_string();
 
         let model = foreshadow::ActiveModel {
@@ -319,7 +319,7 @@ impl ForeshadowService {
         if let Some(v) = body.get("auto_remind").and_then(|v| v.as_bool()) { active.auto_remind = Set(v); }
         if let Some(v) = body.get("remind_before_chapters").and_then(|v| v.as_i64()) { active.remind_before_chapters = Set(v as i32); }
         if let Some(v) = body.get("include_in_context").and_then(|v| v.as_bool()) { active.include_in_context = Set(v); }
-        active.updated_at = Set(Utc::now());
+        active.updated_at = Set(Utc::now().naive_utc());
 
         let saved = active.update(db).await?;
         Ok(model_to_value(&saved))
@@ -343,7 +343,7 @@ impl ForeshadowService {
             .await?
             .ok_or("foreshadow not found")?;
 
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let mut active: foreshadow::ActiveModel = existing.into();
         active.status = Set("planted".to_string());
         active.plant_chapter_id = Set(body.get("chapter_id").and_then(|v| v.as_str()).map(String::from));
@@ -366,7 +366,7 @@ impl ForeshadowService {
             .await?
             .ok_or("foreshadow not found")?;
 
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let is_partial = body.get("is_partial").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let mut active: foreshadow::ActiveModel = existing.into();
@@ -391,7 +391,7 @@ impl ForeshadowService {
             .await?
             .ok_or("foreshadow not found")?;
 
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let mut active: foreshadow::ActiveModel = existing.into();
         active.status = Set("abandoned".to_string());
         if let Some(r) = reason { active.notes = Set(Some(format!("废弃原因: {}", r))); }

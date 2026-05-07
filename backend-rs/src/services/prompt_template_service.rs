@@ -119,7 +119,7 @@ impl PromptTemplateService {
                 "can_sync_to_default": user_template.is_some(),
                 "user_content_hash": user_template.map(|u| Self::calculate_content_hash(&u.template_content)),
                 "system_content_hash": null,
-                "updated_at": user_template.map(|u| u.updated_at),
+                "updated_at": user_template.map(|u| u.updated_at.and_utc().to_rfc3339()),
             });
         }
 
@@ -172,7 +172,7 @@ impl PromptTemplateService {
             "can_sync_to_default": true,
             "user_content_hash": user_hash,
             "system_content_hash": system_hash,
-            "updated_at": user.updated_at,
+            "updated_at": user.updated_at.and_utc().to_rfc3339(),
         })
     }
 
@@ -221,7 +221,7 @@ impl PromptTemplateService {
             }
             let params = serde_json::to_string(&info.parameters).unwrap_or_default();
             active.parameters = Set(Some(params));
-            active.updated_at = Set(Utc::now());
+            active.updated_at = Set(Utc::now().naive_utc());
 
             active
                 .update(db)
@@ -320,7 +320,7 @@ impl PromptTemplateService {
             if let Some(v) = data.get("is_active").and_then(|v| v.as_bool()) {
                 active.is_active = Set(v);
             }
-            active.updated_at = Set(Utc::now());
+            active.updated_at = Set(Utc::now().naive_utc());
             active
                 .update(db)
                 .await
@@ -360,8 +360,8 @@ impl PromptTemplateService {
                 parameters: Set(Some(params)),
                 is_active: Set(data.get("is_active").and_then(|v| v.as_bool()).unwrap_or(true)),
                 is_system_default: Set(false),
-                created_at: Set(Utc::now()),
-                updated_at: Set(Utc::now()),
+                created_at: Set(Utc::now().naive_utc()),
+                updated_at: Set(Utc::now().naive_utc()),
             };
             active
                 .insert(db)

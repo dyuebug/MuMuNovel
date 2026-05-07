@@ -23,8 +23,8 @@ fn style_to_value(s: &writing_style::Model, is_default: bool) -> Value {
         "prompt_content": s.prompt_content,
         "is_default": is_default,
         "order_index": s.order_index,
-        "created_at": s.created_at.to_rfc3339(),
-        "updated_at": s.updated_at.to_rfc3339(),
+        "created_at": s.created_at.and_utc().to_rfc3339(),
+        "updated_at": s.updated_at.and_utc().to_rfc3339(),
     })
 }
 
@@ -96,7 +96,7 @@ impl WritingStyleService {
         user_id: &str,
         body: &Value,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("Custom Style");
         let style_type = body.get("style_type").and_then(|v| v.as_str()).unwrap_or("custom");
         let prompt_content = body.get("prompt_content").and_then(|v| v.as_str()).unwrap_or("");
@@ -138,7 +138,7 @@ impl WritingStyleService {
         if let Some(v) = body.get("description").and_then(|v| v.as_str()) { active.description = Set(Some(v.to_string())); }
         if let Some(v) = body.get("prompt_content").and_then(|v| v.as_str()) { active.prompt_content = Set(v.to_string()); }
         if let Some(v) = body.get("order_index").and_then(|v| v.as_i64()) { active.order_index = Set(v as i32); }
-        active.updated_at = Set(Utc::now());
+        active.updated_at = Set(Utc::now().naive_utc());
 
         let saved = active.update(db).await?;
         Ok(style_to_value(&saved, false))
@@ -183,7 +183,7 @@ impl WritingStyleService {
             return Err("not your style".into());
         }
 
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
 
         // Upsert: delete existing default for this project, then insert new
         let existing_default = project_default_style::Entity::find()
@@ -211,7 +211,7 @@ impl WritingStyleService {
         db: &DatabaseConnection,
         _project_id: &str,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let mut styles: Vec<Value> = vec![];
 
         for (preset_id, name, description) in PRESET_DEFAULTS {

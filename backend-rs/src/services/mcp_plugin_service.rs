@@ -25,11 +25,11 @@ fn plugin_to_dict(p: &mcp_plugin::Model) -> Value {
         "enabled": p.enabled,
         "status": p.status,
         "last_error": p.last_error,
-        "last_test_at": p.last_test_at,
+        "last_test_at": p.last_test_at.map(|t| t.and_utc().to_rfc3339()),
         "category": p.category,
         "sort_order": p.sort_order,
-        "created_at": p.created_at,
-        "updated_at": p.updated_at,
+        "created_at": p.created_at.and_utc().to_rfc3339(),
+        "updated_at": p.updated_at.map(|t| t.and_utc().to_rfc3339()),
     })
 }
 
@@ -98,7 +98,7 @@ impl McpPluginService {
             return Err(format!("插件名已存在: {}", plugin_name));
         }
 
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let status = if enabled { "pending" } else { "inactive" };
         let model = mcp_plugin::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
@@ -164,7 +164,7 @@ impl McpPluginService {
             return Err("Stdio类型插件必须提供command字段".to_string());
         }
 
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let status = if enabled { "pending" } else { "inactive" };
 
         // Check if exists
@@ -251,7 +251,7 @@ impl McpPluginService {
         if let Some(v) = updates.get("config") { active.config = Set(Some(v.to_string())); }
         if let Some(v) = updates.get("args") { active.args = Set(Some(v.to_string())); }
         if let Some(v) = updates.get("env") { active.env = Set(Some(v.to_string())); }
-        active.updated_at = Set(Some(Utc::now()));
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
 
         let updated = active.update(db).await.map_err(|e| format!("{}", e))?;
         Ok(Some(plugin_to_dict(&updated)))
@@ -302,7 +302,7 @@ impl McpPluginService {
         } else {
             active.status = Set("inactive".to_string());
         }
-        active.updated_at = Set(Some(Utc::now()));
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
         let updated = active.update(db).await.map_err(|e| format!("{}", e))?;
         let mut result = plugin_to_dict(&updated);
         result["plugin_name"] = json!(plugin_name);
@@ -483,7 +483,7 @@ impl McpPluginService {
                 let mut active: mcp_plugin::ActiveModel = plugin.into();
                 active.status = Set("active".to_string());
                 active.last_error = Set(None);
-                active.updated_at = Set(Some(Utc::now()));
+                active.updated_at = Set(Some(Utc::now().naive_utc()));
                 let _ = active.clone().update(db).await;
 
                 // Cache tools to DB
@@ -505,7 +505,7 @@ impl McpPluginService {
                 };
                 active.status = Set("error".to_string());
                 active.last_error = Set(Some(e.clone()));
-                active.updated_at = Set(Some(Utc::now()));
+                active.updated_at = Set(Some(Utc::now().naive_utc()));
                 let _ = active.update(db).await;
                 Err(e)
             }
@@ -551,7 +551,7 @@ impl McpPluginService {
             let mut active: mcp_plugin::ActiveModel = plugin.into();
             active.status = Set("pending".to_string());
             active.last_error = Set(None);
-            active.updated_at = Set(Some(Utc::now()));
+            active.updated_at = Set(Some(Utc::now().naive_utc()));
             active.update(db).await.map_err(|e| format!("{}", e))?;
 
             // Try to connect
@@ -590,7 +590,7 @@ impl McpPluginService {
                     let mut a: mcp_plugin::ActiveModel = p.into();
                     a.status = Set("error".to_string());
                     a.last_error = Set(Some(e.clone()));
-                    a.updated_at = Set(Some(Utc::now()));
+                    a.updated_at = Set(Some(Utc::now().naive_utc()));
                     let _ = a.update(db).await;
                 }
                 return Ok(json!({
@@ -627,8 +627,8 @@ impl McpPluginService {
             let mut active: mcp_plugin::ActiveModel = plugin.into();
             active.status = Set("error".to_string());
             active.last_error = Set(Some(error.to_string()));
-            active.last_test_at = Set(Some(Utc::now()));
-            active.updated_at = Set(Some(Utc::now()));
+            active.last_test_at = Set(Some(Utc::now().naive_utc()));
+            active.updated_at = Set(Some(Utc::now().naive_utc()));
             let _ = active.update(db).await;
 
             return Ok(json!({
@@ -653,8 +653,8 @@ impl McpPluginService {
             let mut a: mcp_plugin::ActiveModel = p.into();
             a.status = Set(if ai_test_result.is_ok() { "active".to_string() } else { "error".to_string() });
             a.last_error = Set(ai_test_result.as_ref().err().map(|e| e.clone()));
-            a.last_test_at = Set(Some(Utc::now()));
-            a.updated_at = Set(Some(Utc::now()));
+            a.last_test_at = Set(Some(Utc::now().naive_utc()));
+            a.updated_at = Set(Some(Utc::now().naive_utc()));
             // Cache tools
             {
                 let pn = mcp_plugin::Entity::find()

@@ -71,7 +71,7 @@ impl ProjectService {
         outline_mode: Option<&str>,
         target_words: Option<i32>,
     ) -> Result<project::Model, String> {
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let model = project::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             user_id: Set(user_id.to_string()),
@@ -106,7 +106,7 @@ impl ProjectService {
 
     /// Full project creation with all wizard fields — used by wizard generator
     pub async fn create_full(db: &DatabaseConnection, params: CreateProjectParams) -> Result<project::Model, String> {
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let model = project::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             user_id: Set(params.user_id),
@@ -175,7 +175,7 @@ impl ProjectService {
         active.status = Set("writing".to_string());
         active.wizard_status = Set("completed".to_string());
         active.wizard_step = Set(4);
-        active.updated_at = Set(Some(Utc::now()));
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
         active.update(db).await.map_err(|e| format!("{}", e))?;
         Ok(())
     }
@@ -189,7 +189,7 @@ impl ProjectService {
             .ok_or("项目不存在")?;
         let mut active: project::ActiveModel = model.into();
         active.wizard_step = Set(step);
-        active.updated_at = Set(Some(Utc::now()));
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
         active.update(db).await.map_err(|e| format!("{}", e))?;
         Ok(())
     }
@@ -258,7 +258,7 @@ impl ProjectService {
         if let Some(v) = default_story_creation_brief { active.default_story_creation_brief = Set(Some(v.to_string())); }
         if let Some(v) = default_quality_preset { active.default_quality_preset = Set(Some(v.to_string())); }
         if let Some(v) = default_quality_notes { active.default_quality_notes = Set(Some(v.to_string())); }
-        active.updated_at = Set(Some(Utc::now()));
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
 
         active.update(db).await.map_err(|e| format!("{}", e)).map(Some)
     }

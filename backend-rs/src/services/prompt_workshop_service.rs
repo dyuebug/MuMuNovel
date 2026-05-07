@@ -40,7 +40,7 @@ fn item_to_dict(item: &prompt_workshop_item::Model, is_liked: bool) -> Value {
         "download_count": item.download_count,
         "like_count": item.like_count,
         "is_liked": is_liked,
-        "created_at": item.created_at,
+        "created_at": item.created_at.and_utc().to_rfc3339(),
     })
 }
 
@@ -56,8 +56,8 @@ fn submission_to_dict(s: &prompt_submission::Model) -> Value {
         "is_anonymous": s.is_anonymous,
         "status": s.status,
         "review_note": s.review_note,
-        "reviewed_at": s.reviewed_at,
-        "created_at": s.created_at,
+        "reviewed_at": s.reviewed_at.map(|t| t.and_utc().to_rfc3339()),
+        "created_at": s.created_at.and_utc().to_rfc3339(),
         "source_instance": s.source_instance,
         "submitter_name": s.submitter_name,
     })
@@ -276,7 +276,7 @@ impl PromptWorkshopService {
                 id: Set(Uuid::new_v4().to_string()),
                 user_identifier: Set(user_identifier.to_string()),
                 workshop_item_id: Set(item_id.to_string()),
-                created_at: Set(Utc::now()),
+                created_at: Set(Utc::now().naive_utc()),
             }
             .insert(db)
             .await
@@ -320,7 +320,7 @@ impl PromptWorkshopService {
         is_anonymous: bool,
         source_instance: &str,
     ) -> Result<Value, String> {
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let submission = prompt_submission::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             submitter_id: Set(user_identifier.to_string()),
@@ -348,7 +348,7 @@ impl PromptWorkshopService {
             "submission": {
                 "id": inserted.id,
                 "status": inserted.status,
-                "created_at": inserted.created_at,
+                "created_at": inserted.created_at.and_utc().to_rfc3339(),
             }
         }))
     }
@@ -475,7 +475,7 @@ impl PromptWorkshopService {
             return Err("该提交已被审核".to_string());
         }
 
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let mut active_sub: prompt_submission::ActiveModel = submission.clone().into();
 
         if action == "approve" {
@@ -534,7 +534,7 @@ impl PromptWorkshopService {
         category: &str,
         tags: Option<&str>,
     ) -> Result<Value, String> {
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let item = prompt_workshop_item::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             name: Set(name.to_string()),
@@ -576,7 +576,7 @@ impl PromptWorkshopService {
         if let Some(v) = updates.get("category").and_then(|v| v.as_str()) { active.category = Set(v.to_string()); }
         if let Some(v) = updates.get("tags") { active.tags = Set(Some(v.to_string())); }
         if let Some(v) = updates.get("status").and_then(|v| v.as_str()) { active.status = Set(v.to_string()); }
-        active.updated_at = Set(Some(Utc::now()));
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
 
         let updated = active.update(db).await.map_err(|e| format!("{}", e))?;
         Ok(json!({"success": true, "item": item_to_dict(&updated, false)}))

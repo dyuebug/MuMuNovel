@@ -37,7 +37,7 @@ impl RelationshipService {
         if !Self::verify_project_access(db, project_id, user_id).await? {
             return Ok(None);
         }
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let model = relationship::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             project_id: Set(project_id.to_string()),
@@ -112,7 +112,7 @@ impl RelationshipService {
         if let Some(v) = intimacy_level { active.intimacy_level = Set(v); }
         if let Some(v) = status { active.status = Set(v.to_string()); }
         if let Some(v) = description { active.description = Set(Some(v.to_string())); }
-        active.updated_at = Set(Some(Utc::now()));
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
         active.update(db).await.map_err(|e| format!("{}", e)).map(Some)
     }
 

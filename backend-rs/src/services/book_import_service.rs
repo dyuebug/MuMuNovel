@@ -639,7 +639,7 @@ impl BookImportService {
                                 updated = true;
                             }
                             if updated {
-                                active.updated_at = Set(Some(chrono::Utc::now()));
+                                active.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
                                 let _ = active.update(db).await;
                             }
                         }
@@ -840,7 +840,7 @@ impl BookImportService {
         pactive.wizard_step = Set(4);
         pactive.wizard_status = Set("completed".to_string());
         pactive.status = Set("writing".to_string());
-        pactive.updated_at = Set(Some(chrono::Utc::now()));
+        pactive.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
         let _ = pactive.update(db).await;
 
         // Update task + store failed_steps for retry
@@ -970,7 +970,7 @@ impl BookImportService {
                                             if let Some(v) = obj.get("location").and_then(|v| v.as_str()) { active.world_location = Set(Some(v.to_string())); updated = true; }
                                             if let Some(v) = obj.get("atmosphere").and_then(|v| v.as_str()) { active.world_atmosphere = Set(Some(v.to_string())); updated = true; }
                                             if let Some(v) = obj.get("rules").and_then(|v| v.as_str()) { active.world_rules = Set(Some(v.to_string())); updated = true; }
-                                            if updated { active.updated_at = Set(Some(chrono::Utc::now())); let _ = active.update(db).await; }
+                                            if updated { active.updated_at = Set(Some(chrono::Utc::now().naive_utc())); let _ = active.update(db).await; }
                                         }
                                         Ok(data)
                                     }
@@ -1165,7 +1165,7 @@ impl BookImportService {
                         updated = true;
                     }
                     if updated {
-                        active.updated_at = Set(Some(chrono::Utc::now()));
+                        active.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
                         let _ = active.update(db).await;
                     }
                     results.push(json!({"step": "world_building", "status": "ok"}));

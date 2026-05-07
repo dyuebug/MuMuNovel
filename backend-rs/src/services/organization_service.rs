@@ -38,7 +38,7 @@ impl OrganizationService {
         if !Self::verify_project_access(db, project_id, user_id).await? {
             return Ok(None);
         }
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let model = organization::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             character_id: Set(character_id.to_string()),
@@ -115,7 +115,7 @@ impl OrganizationService {
         if let Some(v) = location { active.location = Set(Some(v.to_string())); }
         if let Some(v) = motto { active.motto = Set(Some(v.to_string())); }
         if let Some(v) = color { active.color = Set(Some(v.to_string())); }
-        active.updated_at = Set(Some(Utc::now()));
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
         active.update(db).await.map_err(|e| format!("{}", e)).map(Some)
     }
 

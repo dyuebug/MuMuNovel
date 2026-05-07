@@ -37,7 +37,7 @@ impl CareerService {
         if !Self::verify_project_access(db, project_id, user_id).await? {
             return Ok(None);
         }
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let model = career::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             project_id: Set(project_id.to_string()),
@@ -73,7 +73,7 @@ impl CareerService {
         worldview_rules: Option<&str>,
         attribute_bonuses: Option<&str>,
     ) -> Result<career::Model, String> {
-        let now = Utc::now();
+        let now = Utc::now().naive_utc();
         let model = career::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
             project_id: Set(project_id.to_string()),
@@ -151,7 +151,7 @@ impl CareerService {
         if let Some(v) = stages { active.stages = Set(v.to_string()); }
         if let Some(v) = max_stage { active.max_stage = Set(v); }
         if let Some(v) = category { active.category = Set(Some(v.to_string())); }
-        active.updated_at = Set(Some(Utc::now()));
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
         active.update(db).await.map_err(|e| format!("{}", e)).map(Some)
     }
 
