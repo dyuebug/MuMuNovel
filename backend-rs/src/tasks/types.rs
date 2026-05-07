@@ -90,6 +90,7 @@ impl TaskRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskCreateRequest {
     pub task_type: String,
+    #[serde(default)]
     pub project_id: String,
     #[serde(default)]
     pub payload: Option<serde_json::Value>,

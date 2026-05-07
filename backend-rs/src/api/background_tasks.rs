@@ -24,6 +24,14 @@ pub async fn create_task(
     Extension(registry): Extension<TaskRegistry>,
     Json(req): Json<TaskCreateRequest>,
 ) -> impl IntoResponse {
+    if req.task_type != "wizard_world_building" && req.project_id.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"success": false, "message": "project_id is required for this task type"})),
+        )
+            .into_response();
+    }
+
     let task_id = Uuid::new_v4().to_string();
 
     let fingerprint = req.payload.as_ref().map(|p| {
