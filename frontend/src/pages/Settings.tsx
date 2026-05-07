@@ -1,1318 +1,1157 @@
-import { Suspense, lazy, useEffect, useState } from 'react';
-import { Card, Form, message, Space, Typography, Spin, Modal, Alert, Grid, Tabs, Tag, Row, Col } from 'antd';
-import { WarningOutlined } from '@ant-design/icons';
-import { mcpPluginApi, settingsApi } from '../services/modularApi';
-import type { SettingsUpdate, APIKeyPreset, PresetCreateRequest, APIKeyPresetConfig } from '../types';
-import { eventBus, EventNames } from '../store/eventBus';
-import { hasUsableApiCredentials, isPlaceholderApiKey } from '../utils/apiKey';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  Empty,
+  Form,
+  Input,
+  InputNumber,
+  List,
+  Modal,
+  Popconfirm,
+  Row,
+  Select,
+  Space,
+  Spin,
+  Switch,
+  Tabs,
+  Tag,
+  Typography,
+  message,
+  theme,
+} from 'antd';
+import {
+  ApiOutlined,
+  CheckCircleOutlined,
+  CopyOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  ExperimentOutlined,
+  PlayCircleOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SaveOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
+import { settingsApi } from '../services/modularApi';
+import type {
+  APIKeyPreset,
+  APIKeyPresetConfig,
+  PresetCreateRequest,
+  PresetUpdateRequest,
+  Settings,
+  SettingsUpdate,
+} from '../types';
+import { isPlaceholderApiKey } from '../utils/apiKey';
 
-const { Title, Text } = Typography;
-const { useBreakpoint } = Grid;
+const { Text, Paragraph, Title } = Typography;
+const { TextArea } = Input;
 
-type ModelOption = { value: string; label: string; description: string };
-type SettingsSectionKey = 'provider' | 'network' | 'model' | 'research';
-type SettingsFormValues = SettingsUpdate & { models_url?: string };
-type PresetFormValues = Partial<APIKeyPresetConfig> & {
-  name?: string;
+type ProviderValue = 'openai' | 'anthropic' | 'gemini';
+type AlertState = {
+  type: 'success' | 'info' | 'warning' | 'error';
+  title: string;
+  message: string;
+  suggestions?: string[];
+  extra?: string;
+};
+
+type SettingsFormValues = {
+  api_provider: ProviderValue;
+  provider_type?: ProviderValue;
+  api_key?: string;
+  api_base_url?: string;
+  api_backup_urls_text?: string;
+  fallback_strategy?: 'auto' | 'manual';
+  azure_api_version?: string;
+  llm_model?: string;
+  temperature?: number;
+  max_tokens?: number;
+  system_prompt?: string;
+  web_research_enabled?: boolean;
+  web_research_exa_enabled?: boolean;
+  web_research_grok_enabled?: boolean;
+  web_research_exa_api_key?: string;
+  web_research_exa_base_url?: string;
+  web_research_grok_api_key?: string;
+  web_research_grok_base_url?: string;
+  web_research_grok_model?: string;
+  web_research_grok_search_enabled?: boolean;
+};
+
+type PresetFormValues = {
+  name: string;
   description?: string;
-  models_url?: string;
+  api_provider: ProviderValue;
+  provider_type?: ProviderValue;
+  api_key?: string;
+  api_base_url?: string;
+  api_backup_urls_text?: string;
+  fallback_strategy?: 'auto' | 'manual';
+  azure_api_version?: string;
+  llm_model: string;
+  temperature?: number;
+  max_tokens?: number;
+  system_prompt?: string;
 };
 
-const BASIC_API_PROVIDER = 'openai';
-const DEFAULT_API_BASE_URL = 'https://api.openai.com/v1';
-const DEFAULT_MAX_TOKENS = 32000;
-const SUPPORTED_API_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const;
-type SupportedApiProvider = typeof SUPPORTED_API_PROVIDERS[number];
-
-const DEFAULT_API_BASE_URLS: Record<SupportedApiProvider, string> = {
-  openai: DEFAULT_API_BASE_URL,
-  anthropic: 'https://api.anthropic.com',
-  gemini: 'https://generativelanguage.googleapis.com/v1beta',
+type SnapshotFormValues = {
+  name: string;
+  description?: string;
 };
 
-const normalizeApiProvider = (provider?: string): SupportedApiProvider => (
-  SUPPORTED_API_PROVIDERS.includes(provider as SupportedApiProvider)
-    ? provider as SupportedApiProvider
-    : BASIC_API_PROVIDER
-);
+const providerOptions = [
+  { value: 'openai', label: 'OpenAI / DeepSeek / OpenRouter / 兼容网关' },
+  { value: 'anthropic', label: 'Claude / Anthropic' },
+  { value: 'gemini', label: 'Gemini' },
+] as const;
 
-const toModelOptions = (models: Array<{ id: string; owned_by: string | null }>): ModelOption[] => (
-  models.map((model) => ({
-    value: model.id,
-    label: model.id,
-    description: model.owned_by ? `Provider: ${model.owned_by}` : '',
-  }))
-);
-
-const buildModelSelectOptions = (
-  options: ModelOption[],
-  searchText: string
-): ModelOption[] => {
-  const keyword = searchText.trim();
-  if (!keyword) return options;
-
-  const exists = options.some(
-    (item) => item.value.toLowerCase() === keyword.toLowerCase()
-  );
-  if (exists) return options;
-
-  return [
-    {
-      value: keyword,
-      label: `${keyword} (自定义输入)`,
-      description: '手动输入的模型名称',
-    },
-    ...options,
-  ];
+const providerPlaceholders: Record<ProviderValue, { baseUrl: string; model: string }> = {
+  openai: {
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini / deepseek-chat / openrouter model id',
+  },
+  anthropic: {
+    baseUrl: 'https://api.anthropic.com',
+    model: 'claude-3-5-sonnet-latest',
+  },
+  gemini: {
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    model: 'gemini-2.5-pro',
+  },
 };
 
-const LazyProviderSelector = lazy(() => import('../components/ProviderSelector'));
-const LazyEndpointListEditor = lazy(() => import('../components/EndpointListEditor'));
-const LazySettingsPresetModal = lazy(() => import('../components/SettingsPresetModal'));
-const LazySettingsPresetsTab = lazy(() => import('../components/SettingsPresetsTab'));
-const LazySettingsCurrentTab = lazy(() => import('../components/SettingsCurrentTab'));
+const defaultSettingsValues: SettingsFormValues = {
+  api_provider: 'openai',
+  provider_type: 'openai',
+  api_key: '',
+  api_base_url: '',
+  api_backup_urls_text: '',
+  fallback_strategy: 'auto',
+  azure_api_version: '',
+  llm_model: '',
+  temperature: 0.7,
+  max_tokens: 4096,
+  system_prompt: '',
+  web_research_enabled: false,
+  web_research_exa_enabled: true,
+  web_research_grok_enabled: true,
+  web_research_exa_api_key: '',
+  web_research_exa_base_url: '',
+  web_research_grok_api_key: '',
+  web_research_grok_base_url: '',
+  web_research_grok_model: 'grok-4.1-fast',
+  web_research_grok_search_enabled: false,
+};
 
-const settingsLazyFallback = (
-  <div style={{ padding: '12px 0', textAlign: 'center' }}>
-    <Spin size="small" />
-  </div>
-);
+const normalizeMultilineUrls = (value?: string): string[] =>
+  String(value || '')
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const mergeModelOptions = (current: string[], incoming: string[]): string[] => {
+  const unique = new Set<string>();
+  [...current, ...incoming]
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .forEach((item) => unique.add(item));
+  return Array.from(unique);
+};
+
+const formatProbeResult = (result: {
+  success: boolean;
+  message: string;
+  response_preview?: string;
+  error?: string;
+  suggestions?: string[];
+}): AlertState => ({
+  type: result.success ? 'success' : 'error',
+  title: result.success ? '测试成功' : '测试失败',
+  message: result.error ? `${result.message}：${result.error}` : result.message,
+  suggestions: result.suggestions,
+  extra: result.response_preview,
+});
+
+const buildSettingsPayload = (values: SettingsFormValues): SettingsUpdate => {
+  const provider = (values.api_provider || 'openai') as ProviderValue;
+  const normalizedApiKey = String(values.api_key || '').trim();
+  const normalizedModel = String(values.llm_model || '').trim() || providerPlaceholders[provider].model.split(' / ')[0];
+  return {
+    api_provider: provider,
+    provider_type: provider,
+    ...(normalizedApiKey ? { api_key: normalizedApiKey } : {}),
+    api_base_url: String(values.api_base_url || '').trim(),
+    api_backup_urls: normalizeMultilineUrls(values.api_backup_urls_text),
+    fallback_strategy: values.fallback_strategy || 'auto',
+    azure_api_version: String(values.azure_api_version || '').trim() || undefined,
+    llm_model: normalizedModel,
+    temperature: Number(values.temperature ?? 0.7),
+    max_tokens: Number(values.max_tokens ?? 4096),
+    system_prompt: String(values.system_prompt || '').trim() || undefined,
+    web_research_enabled: Boolean(values.web_research_enabled),
+    web_research_exa_enabled: Boolean(values.web_research_exa_enabled),
+    web_research_grok_enabled: Boolean(values.web_research_grok_enabled),
+    web_research_exa_api_key: String(values.web_research_exa_api_key || '').trim() || undefined,
+    web_research_exa_base_url: String(values.web_research_exa_base_url || '').trim() || undefined,
+    web_research_grok_api_key: String(values.web_research_grok_api_key || '').trim() || undefined,
+    web_research_grok_base_url: String(values.web_research_grok_base_url || '').trim() || undefined,
+    web_research_grok_model: String(values.web_research_grok_model || '').trim() || undefined,
+    web_research_grok_search_enabled: Boolean(values.web_research_grok_search_enabled),
+  };
+};
+const buildPresetConfig = (values: PresetFormValues): APIKeyPresetConfig => {
+  const provider = (values.api_provider || 'openai') as ProviderValue;
+  return {
+    api_provider: provider,
+    api_key: String(values.api_key || '').trim(),
+    api_base_url: String(values.api_base_url || '').trim() || undefined,
+    api_backup_urls: normalizeMultilineUrls(values.api_backup_urls_text),
+    provider_type: provider,
+    fallback_strategy: values.fallback_strategy || 'auto',
+    azure_api_version: String(values.azure_api_version || '').trim() || undefined,
+    llm_model: String(values.llm_model || '').trim(),
+    temperature: Number(values.temperature ?? 0.7),
+    max_tokens: Number(values.max_tokens ?? 4096),
+    system_prompt: String(values.system_prompt || '').trim() || undefined,
+  };
+};
+
+const settingsToFormValues = (settings?: Settings | null): SettingsFormValues => {
+  const provider = ((settings?.provider_type || settings?.api_provider || 'openai').trim().toLowerCase() || 'openai') as ProviderValue;
+  return {
+    api_provider: provider,
+    provider_type: provider,
+    api_key: '',
+    api_base_url: settings?.api_base_url || '',
+    api_backup_urls_text: (settings?.api_backup_urls || []).join('\n'),
+    fallback_strategy: settings?.fallback_strategy || 'auto',
+    azure_api_version: settings?.azure_api_version || '',
+    llm_model: settings?.llm_model || '',
+    temperature: settings?.temperature ?? 0.7,
+    max_tokens: settings?.max_tokens ?? 4096,
+    system_prompt: settings?.system_prompt || '',
+    web_research_enabled: settings?.web_research_enabled ?? false,
+    web_research_exa_enabled: settings?.web_research_exa_enabled ?? true,
+    web_research_grok_enabled: settings?.web_research_grok_enabled ?? true,
+    web_research_exa_api_key: isPlaceholderApiKey(settings?.web_research_exa_api_key) ? '' : (settings?.web_research_exa_api_key || ''),
+    web_research_exa_base_url: settings?.web_research_exa_base_url || '',
+    web_research_grok_api_key: isPlaceholderApiKey(settings?.web_research_grok_api_key) ? '' : (settings?.web_research_grok_api_key || ''),
+    web_research_grok_base_url: settings?.web_research_grok_base_url || '',
+    web_research_grok_model: settings?.web_research_grok_model || 'grok-4.1-fast',
+    web_research_grok_search_enabled: settings?.web_research_grok_search_enabled ?? false,
+  };
+};
+
+const presetToFormValues = (preset?: APIKeyPreset | null): PresetFormValues => {
+  const provider = ((preset?.config.provider_type || preset?.config.api_provider || 'openai').trim().toLowerCase() || 'openai') as ProviderValue;
+  return {
+    name: preset?.name || '',
+    description: preset?.description || '',
+    api_provider: provider,
+    provider_type: provider,
+    api_key: preset?.config.api_key || '',
+    api_base_url: preset?.config.api_base_url || '',
+    api_backup_urls_text: (preset?.config.api_backup_urls || []).join('\n'),
+    fallback_strategy: preset?.config.fallback_strategy || 'auto',
+    azure_api_version: preset?.config.azure_api_version || '',
+    llm_model: preset?.config.llm_model || '',
+    temperature: preset?.config.temperature ?? 0.7,
+    max_tokens: preset?.config.max_tokens ?? 4096,
+    system_prompt: preset?.config.system_prompt || '',
+  };
+};
 
 export default function SettingsPage() {
-  const screens = useBreakpoint();
-  const isMobile = !screens.md; // md断点是768px
-  const [form] = Form.useForm<SettingsFormValues>();
-  const [modal, contextHolder] = Modal.useModal();
-  const [loading, setLoading] = useState(false);
-  const [initialLoading, setInitialLoading] = useState(true);
-  const [hasSettings, setHasSettings] = useState(false);
-  const [isDefaultSettings, setIsDefaultSettings] = useState(false);
-  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
-  const [modelSearchText, setModelSearchText] = useState('');
-  const [fetchingModels, setFetchingModels] = useState(false);
-  const [modelsFetched, setModelsFetched] = useState(false);
-  const [testingApi, setTestingApi] = useState(false);
-  const [testResult, setTestResult] = useState<{
-    success: boolean;
-    message: string;
-    response_time_ms?: number;
-    response_preview?: string;
-    error?: string;
-    error_type?: string;
-    suggestions?: string[];
-    details?: Record<string, unknown>;
-  } | null>(null);
-  const [showTestResult, setShowTestResult] = useState(false);
-  const [testingWebResearchProvider, setTestingWebResearchProvider] = useState<'exa' | 'grok' | null>(null);
-  const [webResearchTestResult, setWebResearchTestResult] = useState<{
-    success: boolean;
-    provider: string;
-    message: string;
-    response_preview?: string;
-    result_count?: number;
-    source_count?: number;
-    search_status?: 'success_with_sources' | 'success_without_sources' | 'failed';
-    status_note?: string;
-    sources_backfilled?: boolean;
-    error?: string;
-    error_type?: string;
-    suggestions?: string[];
-  } | null>(null);
-
-  // 预设相关状态
-  const [activeTab, setActiveTab] = useState('current');
-  const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSectionKey>('provider');
-  const [presets, setPresets] = useState<APIKeyPreset[]>([]);
-  const [presetsLoading, setPresetsLoading] = useState(false);
-  const [activePresetId, setActivePresetId] = useState<string | undefined>();
-  const [editingPreset, setEditingPreset] = useState<APIKeyPreset | null>(null);
-  const [isPresetModalVisible, setIsPresetModalVisible] = useState(false);
-  const [testingPresetId, setTestingPresetId] = useState<string | null>(null);
+  const [settingsForm] = Form.useForm<SettingsFormValues>();
   const [presetForm] = Form.useForm<PresetFormValues>();
-  
-  // 预设编辑窗口的模型列表状态（独立于当前配置的模型列表）
-  const [presetModelOptions, setPresetModelOptions] = useState<ModelOption[]>([]);
-  const [presetModelSearchText, setPresetModelSearchText] = useState('');
-  const [fetchingPresetModels, setFetchingPresetModels] = useState(false);
-  const [presetModelsFetched, setPresetModelsFetched] = useState(false);
+  const [snapshotForm] = Form.useForm<SnapshotFormValues>();
+  const { token } = theme.useToken();
+  const isMobile = window.innerWidth <= 768;
 
-  // API 兼容性相关状态
-  const [selectedProvider, setSelectedProvider] = useState('openai');
-  const [endpoints, setEndpoints] = useState<Array<{
-    url: string;
-    type: 'primary' | 'fallback';
-    status?: 'success' | 'error' | 'pending' | 'untested';
-  }>>([]);
-  const [fallbackStrategy, setFallbackStrategy] = useState<'auto' | 'manual'>('auto');
+  const [loadingSettings, setLoadingSettings] = useState(true);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [testingWebResearch, setTestingWebResearch] = useState(false);
+  const [checkingFunctionCalling, setCheckingFunctionCalling] = useState(false);
+  const [loadingPresets, setLoadingPresets] = useState(false);
+  const [submittingPreset, setSubmittingPreset] = useState(false);
+  const [creatingSnapshot, setCreatingSnapshot] = useState(false);
 
-  const watchedProvider = Form.useWatch('api_provider', form) || selectedProvider;
-  const watchedModel = Form.useWatch('llm_model', form) || '未设置';
-  const watchedBaseUrl = Form.useWatch('api_base_url', form) || '未设置';
-  const watchedTemperature = Form.useWatch('temperature', form) ?? 0.7;
-  const watchedMaxTokens = Form.useWatch('max_tokens', form) ?? '未设置';
-  const watchedWebResearchEnabled = Boolean(Form.useWatch('web_research_enabled', form));
-  const watchedExaEnabled = Form.useWatch('web_research_exa_enabled', form) !== false;
-  const watchedGrokEnabled = Form.useWatch('web_research_grok_enabled', form) !== false;
-  const watchedGrokSearchEnabled = Boolean(Form.useWatch('web_research_grok_search_enabled', form));
+  const [settingsRecord, setSettingsRecord] = useState<Settings | null>(null);
+  const [presets, setPresets] = useState<APIKeyPreset[]>([]);
+  const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [probeAlert, setProbeAlert] = useState<AlertState | null>(null);
+  const [webResearchAlert, setWebResearchAlert] = useState<AlertState | null>(null);
+  const [functionCallingAlert, setFunctionCallingAlert] = useState<AlertState | null>(null);
+  const [editingPreset, setEditingPreset] = useState<APIKeyPreset | null>(null);
+  const [presetModalOpen, setPresetModalOpen] = useState(false);
+  const [snapshotModalOpen, setSnapshotModalOpen] = useState(false);
+  const [showStoredApiKey, setShowStoredApiKey] = useState(false);
+  const [storedApiKeyPreview, setStoredApiKeyPreview] = useState('');
+  const [loadingStoredApiKey, setLoadingStoredApiKey] = useState(false);
 
-  const clipDisplayText = (value: string, limit = isMobile ? 20 : 32) => {
-    const normalized = value.trim();
-    if (!normalized) return '未设置';
-    return normalized.length <= limit ? normalized : `${normalized.slice(0, limit - 1)}…`;
-  };
+  const providerValue = Form.useWatch('api_provider', settingsForm) || 'openai';
+  const webResearchEnabled = Form.useWatch('web_research_enabled', settingsForm) ?? false;
+  const exaEnabled = Form.useWatch('web_research_exa_enabled', settingsForm) ?? true;
+  const grokEnabled = Form.useWatch('web_research_grok_enabled', settingsForm) ?? true;
 
-  const sectionCardStyle = {
-    marginBottom: isMobile ? 16 : 20,
-    borderRadius: isMobile ? 14 : 18,
-    border: '1px solid #edf2f7',
-    boxShadow: '0 10px 30px rgba(15, 23, 42, 0.05)',
-    background: 'linear-gradient(180deg, #ffffff 0%, #fbfdff 100%)',
-    overflow: 'hidden' as const,
-  };
+  const hasStoredApiKey = Boolean(settingsRecord?.has_api_key)
+  const apiKeyPlaceholder = hasStoredApiKey
+    ? '已保存密钥；留空表示保持不变，输入新值可覆盖'
+    : 'sk-...';
 
-  const sectionCardStyles = {
-    header: {
-      padding: isMobile ? '14px 16px' : '16px 20px',
-      borderBottom: '1px solid #f1f5f9',
-      background: 'rgba(248, 250, 252, 0.9)',
-    },
-    body: {
-      padding: isMobile ? 16 : 20,
-    },
-  };
+  const providerHint = providerPlaceholders[(providerValue as ProviderValue) || 'openai'];
 
-  const fieldPanelStyle = {
-    padding: isMobile ? 14 : 16,
-    borderRadius: 14,
-    border: '1px solid #eef2f7',
-    background: 'linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)',
-    height: '100%',
-  };
-
-  const fieldHintTextStyle = {
-    display: 'block',
-    marginBottom: 12,
-    color: 'var(--color-text-secondary)',
-    fontSize: isMobile ? 12 : 13,
-    lineHeight: 1.65,
-  };
-
-  const renderSectionTitle = (title: string, description: string, tagLabel: string, tagColor: string) => (
-    <Space direction="vertical" size={2} style={{ width: '100%' }}>
-      <Space wrap size={8}>
-        <Text strong style={{ fontSize: isMobile ? 15 : 16 }}>{title}</Text>
-        <Tag color={tagColor} style={{ marginInlineEnd: 0 }}>{tagLabel}</Tag>
-      </Space>
-      <Text style={{ fontSize: isMobile ? 12 : 13, color: 'var(--color-text-secondary)' }}>
-        {description}
-      </Text>
-    </Space>
+  const modelSelectOptions = useMemo(
+    () => modelOptions.map((model) => ({ label: model, value: model })),
+    [modelOptions],
   );
 
-  const settingsSectionItems: Array<{
-    key: SettingsSectionKey;
-    label: string;
-    description: string;
-    summary: string;
-  }> = [
-    {
-      key: 'provider',
-      label: '基础接入',
-      description: '选择 API 提供商，并填写 Key 与基础地址。',
-      summary: String(watchedProvider).toUpperCase(),
-    },
-    {
-      key: 'network',
-      label: '网络容灾',
-      description: '维护主备端点与切换策略，提升稳定性。',
-      summary: `${Math.max(endpoints.length, watchedBaseUrl === '未设置' ? 0 : 1)} 个端点 / ${fallbackStrategy === 'auto' ? '自动降级' : '手动切换'}`,
-    },
-    {
-      key: 'model',
-      label: '生成参数',
-      description: '配置模型、温度、Token 与系统提示词。',
-      summary: `${clipDisplayText(String(watchedModel), isMobile ? 12 : 18)} / Token ${String(watchedMaxTokens)}`,
-    },
-    {
-      key: 'research',
-      label: '联网检索',
-      description: '分别配置 Exa 与 Grok 的检索增强能力。',
-      summary: watchedWebResearchEnabled ? `Exa ${watchedExaEnabled ? '开' : '关'} / Grok ${watchedGrokEnabled ? '开' : '关'} / 深搜 ${watchedGrokSearchEnabled ? '开' : '关'}` : '总开关关闭',
-    },
-  ];
-
-  const activeSettingsSectionMeta =
-    settingsSectionItems.find((item) => item.key === activeSettingsSection) || settingsSectionItems[0];
-
-  useEffect(() => {
-    loadSettings();
-    if (activeTab === 'presets') {
-      loadPresets();
+  const loadPresets = useCallback(async () => {
+    try {
+      setLoadingPresets(true);
+      const response = await settingsApi.getPresets();
+      setPresets(response.presets || []);
+    } catch (error) {
+      console.error('load presets failed', error);
+      message.error('加载预设失败');
+    } finally {
+      setLoadingPresets(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    if (activeTab === 'presets') {
-      loadPresets();
-    } else if (activeTab === 'current') {
-      // 切换到当前配置Tab时，刷新设置以获取最新数据
-      loadSettings();
-      // 清除旧的测试结果，因为可能是其他配置的测试结果
-      setTestResult(null);
-      setShowTestResult(false);
-      setWebResearchTestResult(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
-
-  const loadSettings = async () => {
-    setInitialLoading(true);
+  const loadSettings = useCallback(async () => {
     try {
-      const settings = await settingsApi.getSettings();
-      form.setFieldsValue(settings);
-      const provider = normalizeApiProvider(settings.provider_type || settings.api_provider);
-      form.setFieldValue('api_provider', provider);
-      form.setFieldValue('provider_type', provider);
-
-      // 初始化 API 兼容性相关状态
-      setSelectedProvider(provider);
-      setFallbackStrategy(settings.fallback_strategy || 'auto');
-      // 构建端点列表：主端点 + 备端点
-      const endpointList: Array<{ url: string; type: 'primary' | 'fallback'; status?: 'success' | 'error' | 'pending' | 'untested' }> = [];
-      if (settings.api_base_url) {
-        endpointList.push({ url: settings.api_base_url, type: 'primary', status: 'untested' });
-      }
-      if (settings.api_backup_urls && settings.api_backup_urls.length > 0) {
-        settings.api_backup_urls.forEach(url => {
-          endpointList.push({ url, type: 'fallback', status: 'untested' });
-        });
-      }
-      setEndpoints(endpointList);
-
-      // 判断是否为默认设置（id='0'表示来自.env的默认配置）
-      if (settings.id === '0' || !settings.id) {
-        setIsDefaultSettings(true);
-        setHasSettings(false);
-      } else {
-        setIsDefaultSettings(false);
-        setHasSettings(true);
-      }
-    } catch (error) {
-      // 如果404表示还没有设置，使用默认值
-      if ((error as { response?: { status?: number } } | undefined)?.response?.status === 404) {
-        setHasSettings(false);
-        setIsDefaultSettings(true);
-        form.setFieldsValue({
-          api_provider: BASIC_API_PROVIDER,
-          api_base_url: DEFAULT_API_BASE_URL,
-          llm_model: 'gpt-4',
-          temperature: 0.7,
-          max_tokens: DEFAULT_MAX_TOKENS,
-          web_research_enabled: false,
-          web_research_exa_enabled: true,
-          web_research_grok_enabled: true,
-          web_research_exa_base_url: '',
-          web_research_grok_model: 'grok-4.1-fast',
-        });
-      } else {
-        message.error('加载设置失败');
-      }
-    } finally {
-      setInitialLoading(false);
-    }
-  };
-
-  const handleSave = async (values: SettingsFormValues) => {
-    setLoading(true);
-    try {
-      // 注入 API 兼容性字段
-      const { models_url: _modelsUrl, ...persistableValues } = values;
-      const saveData: SettingsUpdate = {
-        ...persistableValues,
-        api_provider: normalizeApiProvider(values.api_provider || selectedProvider),
-        provider_type: normalizeApiProvider(values.api_provider || selectedProvider),
-        fallback_strategy: fallbackStrategy,
-        api_backup_urls: endpoints.filter(e => e.type === 'fallback').map(e => e.url).filter(Boolean),
+      setLoadingSettings(true);
+      const response = await settingsApi.getSettings();
+      const normalizedResponse = {
+        ...response,
+        llm_model: String(response.llm_model || '').trim(),
+        has_api_key: Boolean(response.has_api_key),
       };
-      // 如果主端点列表有值，同步 api_base_url
-      const primaryEndpoint = endpoints.find(e => e.type === 'primary');
-      if (primaryEndpoint?.url) {
-        saveData.api_base_url = primaryEndpoint.url;
-      }
-
-      // 检查是否与 MCP 缓存的配置不一致
-      const verifiedConfigStr = localStorage.getItem('mcp_verified_config');
-      let configChanged = false;
-      
-      if (verifiedConfigStr) {
-        try {
-          const verifiedConfig = JSON.parse(verifiedConfigStr);
-          configChanged =
-            verifiedConfig.provider !== saveData.api_provider ||
-            verifiedConfig.baseUrl !== saveData.api_base_url ||
-            verifiedConfig.model !== saveData.llm_model;
-        } catch (e) {
-          console.error('Failed to parse verified config:', e);
-        }
-      }
-      
-      await settingsApi.saveSettings(saveData);
-      message.success('设置已保存');
-      setHasSettings(true);
-      setIsDefaultSettings(false);
-      
-      // 保存后清除测试结果，因为配置可能已变更
-      setTestResult(null);
-      setShowTestResult(false);
-      setWebResearchTestResult(null);
-      
-      // 手动保存配置后，需要同步更新预设激活状态
-      // 因为用户手动修改的配置可能与之前激活的预设不一致了
-      // 重新加载预设列表以确保状态正确（后端在save时会自动取消激活状态）
-      if (activePresetId) {
-        // 检查当前保存的配置是否与激活预设一致
-        const activePreset = presets.find(p => p.id === activePresetId);
-        if (activePreset) {
-          const presetConfig = activePreset.config;
-          const configMismatch =
-            presetConfig.api_provider !== saveData.api_provider ||
-            presetConfig.api_key !== saveData.api_key ||
-            presetConfig.api_base_url !== saveData.api_base_url ||
-            presetConfig.llm_model !== saveData.llm_model ||
-            presetConfig.temperature !== saveData.temperature ||
-            presetConfig.max_tokens !== saveData.max_tokens;
-          
-          if (configMismatch) {
-            // 配置已变更，清除前端的激活状态标记
-            setActivePresetId(undefined);
-            message.info('配置已更改，预设激活状态已取消');
-            // 刷新预设列表以同步后端取消激活的状态
-            loadPresets();
-          }
-        }
-      }
-      
-      // 如果配置发生变化，需要处理 MCP 插件
-      if (configChanged) {
-        // 清除 MCP 验证缓存
-        localStorage.removeItem('mcp_verified_config');
-        
-        // 检查并禁用所有 MCP 插件
-        try {
-          const plugins = await mcpPluginApi.getPlugins();
-          const activePlugins = plugins.filter(p => p.enabled);
-          
-          if (activePlugins.length > 0) {
-            // 禁用所有插件
-            message.loading({ content: '正在禁用 MCP 插件...', key: 'disable_mcp' });
-            await Promise.all(activePlugins.map(p => mcpPluginApi.togglePlugin(p.id, false)));
-            message.success({ content: '已禁用所有 MCP 插件', key: 'disable_mcp' });
-            
-            // 显示提示弹窗
-            modal.warning({
-              title: (
-                <Space>
-                  <WarningOutlined style={{ color: '#faad14' }} />
-                  <span>API 配置已更改</span>
-                </Space>
-              ),
-              centered: true,
-              content: (
-                <div style={{ padding: '8px 0' }}>
-                  <Alert
-                    message="检测到您修改了 API 配置（提供商、地址或模型），为确保 MCP 插件正常工作，系统已自动禁用所有插件。"
-                    type="warning"
-                    showIcon
-                    style={{ marginBottom: 16 }}
-                  />
-                  <div style={{
-                    padding: 12,
-                    background: 'var(--color-info-bg)',
-                    border: '1px solid var(--color-info-border)',
-                    borderRadius: 8
-                  }}>
-                    <Text strong style={{ display: 'block', marginBottom: 8 }}>请完成以下步骤：</Text>
-                    <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
-                      <li>前往 MCP 插件管理页面</li>
-                      <li>重新进行"模型能力检查"</li>
-                      <li>确认新模型支持 Function Calling 后再启用插件</li>
-                    </ol>
-                  </div>
-                </div>
-              ),
-              okText: '前往 MCP 页面',
-              cancelText: '稍后处理',
-              onOk: () => {
-                eventBus.emit(EventNames.SWITCH_TO_MCP_VIEW);
-              },
-            });
-          }
-        } catch (err) {
-          console.error('Failed to disable MCP plugins:', err);
-        }
-      }
-    } catch {
-      message.error('保存设置失败');
+      setSettingsRecord(normalizedResponse);
+      setShowStoredApiKey(false);
+      setStoredApiKeyPreview('');
+      settingsForm.setFieldsValue(settingsToFormValues(normalizedResponse));
+      setModelOptions((current) => mergeModelOptions(current, [normalizedResponse.llm_model || '']));
+      setProbeAlert(null);
+      setWebResearchAlert(null);
+      setFunctionCallingAlert(null);
+    } catch (error) {
+      console.error('load settings failed', error);
+      message.error('加载设置失败');
     } finally {
-      setLoading(false);
+      setLoadingSettings(false);
     }
-  };
+  }, [settingsForm]);
 
-  const handleReset = () => {
-    modal.confirm({
-      title: '重置设置',
-      content: '确定要重置为默认值吗？',
-      centered: true,
-      okText: '确定',
-      cancelText: '取消',
-      onOk: () => {
-        form.setFieldsValue({
-          api_provider: BASIC_API_PROVIDER,
-          api_key: '',
-          api_base_url: DEFAULT_API_BASE_URL,
-          llm_model: 'gpt-4',
-          temperature: 0.7,
-          max_tokens: DEFAULT_MAX_TOKENS,
-          web_research_enabled: false,
-          web_research_exa_enabled: true,
-          web_research_grok_enabled: true,
-          web_research_exa_api_key: '',
-          web_research_exa_base_url: '',
-          web_research_grok_api_key: '',
-          web_research_grok_base_url: '',
-          web_research_grok_model: 'grok-4.1-fast',
-        });
-        setSelectedProvider('openai');
-        setEndpoints([{ url: 'https://api.openai.com/v1', type: 'primary', status: 'untested' }]);
-        setFallbackStrategy('auto');
-        setWebResearchTestResult(null);
-        message.info('已重置为默认值，请点击保存');
-      },
-    });
-  };
+  useEffect(() => {
+    void loadSettings();
+    void loadPresets();
+  }, [loadPresets, loadSettings]);
 
-  const handleDelete = () => {
-    modal.confirm({
-      title: '删除设置',
-      content: '确定要删除所有设置吗？此操作不可恢复。',
-      centered: true,
-      okText: '确定',
-      cancelText: '取消',
-      okType: 'danger',
-      onOk: async () => {
-        setLoading(true);
-        try {
-          await settingsApi.deleteSettings();
-          message.success('设置已删除');
-          setHasSettings(false);
-          form.resetFields();
-        } catch {
-          message.error('删除设置失败');
-        } finally {
-          setLoading(false);
-        }
-      },
-    });
-  };
-
-  const handleProviderChange = (value: string) => {
-    const provider = normalizeApiProvider(value);
-    setSelectedProvider(provider);
-    const defaultUrl = DEFAULT_API_BASE_URLS[provider];
-    if (defaultUrl) {
-      form.setFieldValue('api_base_url', defaultUrl);
-      // 同步更新端点列表的主端点
-      setEndpoints(prev => {
-        if (prev.length === 0) return [{ url: defaultUrl, type: 'primary', status: 'untested' as const }];
-        const updated = [...prev];
-        updated[0] = { ...updated[0], url: defaultUrl, status: 'untested' as const };
-        return updated;
-      });
-    }
-    form.setFieldValue('api_provider', provider);
-    form.setFieldValue('provider_type', provider);
-    // 清空模型列表，需要重新获取
-    setModelOptions([]);
-    setModelSearchText('');
-    setModelsFetched(false);
-  };
-
-  const getEffectiveApiBaseUrl = () => {
-    const primaryEndpoint = endpoints.find(endpoint => endpoint.type === 'primary');
-    const endpointUrl = typeof primaryEndpoint?.url === 'string' ? primaryEndpoint.url.trim() : '';
-    if (endpointUrl) {
-      return endpointUrl;
-    }
-
-    const formUrl = String(form.getFieldValue('api_base_url') || '').trim();
-    return formUrl;
-  };
-
-  const handleFetchModels = async (silent: boolean = false) => {
-    const apiKey = form.getFieldValue('api_key');
-    const apiBaseUrl = getEffectiveApiBaseUrl();
-    const provider = normalizeApiProvider(form.getFieldValue('api_provider') || selectedProvider);
-    const modelsUrl = String(form.getFieldValue('models_url') || '').trim();
-
-    if (!hasUsableApiCredentials(apiKey, apiBaseUrl)) {
-      if (!silent) {
-        message.warning(
-          isPlaceholderApiKey(apiKey)
-            ? '当前 API 密钥仍为示例占位值，请先填写真实密钥'
-            : '请先填写 API 密钥和 API 地址'
-        );
-      }
+  const handleToggleStoredApiKey = useCallback(async () => {
+    if (showStoredApiKey) {
+      setShowStoredApiKey(false);
+      setStoredApiKeyPreview('');
       return;
     }
 
-    setFetchingModels(true);
+    if (!hasStoredApiKey) {
+      message.info('当前没有已保存的 API Key');
+      return;
+    }
+
     try {
-      const response = await settingsApi.fetchModels({
+      setLoadingStoredApiKey(true);
+      const response = await settingsApi.getStoredApiKey();
+      if (!response.has_api_key || !String(response.api_key || '').trim()) {
+        message.warning('没有读取到已保存的 API Key');
+        return;
+      }
+      setStoredApiKeyPreview(String(response.api_key || '').trim());
+      setShowStoredApiKey(true);
+    } catch (error) {
+      console.error('load stored api key failed', error);
+      message.error('读取已保存 API Key 失败');
+    } finally {
+      setLoadingStoredApiKey(false);
+    }
+  }, [hasStoredApiKey, showStoredApiKey]);
+
+  const ensureCurrentModelVisible = useCallback(() => {
+    const currentModel = String(settingsForm.getFieldValue('llm_model') || '').trim();
+    if (!currentModel) {
+      return;
+    }
+    setModelOptions((current) => mergeModelOptions(current, [currentModel]));
+  }, [settingsForm]);
+
+  const resolveApiKeyForAction = useCallback((formValues: SettingsFormValues) => {
+    const raw = String(formValues.api_key || '').trim();
+    if (raw) {
+      return raw;
+    }
+    if (hasStoredApiKey) {
+      return '';
+    }
+    return '';
+  }, [hasStoredApiKey]);
+  const handleSaveSettings = async () => {
+    try {
+      const values = await settingsForm.validateFields();
+      const payload = buildSettingsPayload(values);
+      setSavingSettings(true);
+      const saved = settingsRecord
+        ? await settingsApi.updateSettings(payload)
+        : await settingsApi.saveSettings(payload);
+      const normalizedSaved = {
+        ...saved,
+        llm_model: String(saved.llm_model || values.llm_model || providerHint.model || '').trim(),
+        has_api_key: Boolean(saved.has_api_key),
+      };
+      setSettingsRecord(normalizedSaved);
+      setShowStoredApiKey(false);
+      setStoredApiKeyPreview('');
+      settingsForm.setFieldsValue(settingsToFormValues(normalizedSaved));
+      setModelOptions((current) => mergeModelOptions(current, [normalizedSaved.llm_model || String(values.llm_model || ''), providerHint.model]));
+      message.success('设置已保存');
+    } catch (error) {
+      if (error && typeof error === 'object' && 'errorFields' in error) {
+        return;
+      }
+      console.error('save settings failed', error);
+      message.error('保存设置失败');
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const handleFetchModels = async () => {
+    try {
+      const values = await settingsForm.validateFields(['api_provider', 'api_base_url']);
+      const apiKey = resolveApiKeyForAction(settingsForm.getFieldsValue(true));
+      if (!apiKey || isPlaceholderApiKey(apiKey)) {
+        if (!hasStoredApiKey) {
+          message.warning('请先输入 API Key，或先保存一个真实密钥');
+          return;
+        }
+      }
+
+      setFetchingModels(true);
+      const result = await settingsApi.fetchModels({
+        provider: values.api_provider,
         api_key: apiKey,
-        api_base_url: apiBaseUrl,
-        provider,
-        models_url: modelsUrl || undefined,
+        api_base_url: String(values.api_base_url || '').trim(),
       });
 
-      setModelOptions(toModelOptions(response.models));
-      setModelsFetched(true);
-      if (!silent) {
-        message.success(`成功获取 ${response.models.length} 个可用模型`);
+      if (!result.success) {
+        message.error(result.message || result.error || '获取模型失败');
+        return;
       }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (error: any) {
-      const errorMsg = error?.response?.data?.detail || '获取模型列表失败';
-      if (!silent) {
-        message.error(errorMsg);
+
+      const models = (result.models || []).map((item) => item.id).filter(Boolean);
+      setModelOptions((current) => mergeModelOptions(current, models));
+      ensureCurrentModelVisible();
+      message.success(result.message || `已获取 ${models.length} 个模型`);
+    } catch (error) {
+      if (error && typeof error === 'object' && 'errorFields' in error) {
+        return;
       }
-      setModelOptions([]);
-      setModelsFetched(true); // 即使失败也标记为已尝试，避免重复请求
+      console.error('fetch models failed', error);
+      message.error('获取模型失败');
     } finally {
       setFetchingModels(false);
     }
   };
 
-  const handleModelSelectFocus = () => {
-    // 如果还没有获取过模型列表，自动获取
-    if (!modelsFetched && !fetchingModels) {
-      handleFetchModels(true); // silent模式，不显示成功消息
-    }
-  };
-
   const handleTestConnection = async () => {
-    const apiKey = form.getFieldValue('api_key');
-    const apiBaseUrl = getEffectiveApiBaseUrl();
-    const provider = form.getFieldValue('api_provider');
-    const modelName = form.getFieldValue('llm_model');
-    const temperature = form.getFieldValue('temperature');
-    const maxTokens = form.getFieldValue('max_tokens');
-
-    if (!apiKey || !apiBaseUrl || !provider || !modelName) {
-      message.warning('请先填写完整的配置信息');
-      return;
-    }
-
-    setTestingApi(true);
-    setTestResult(null);
-
     try {
+      const values = await settingsForm.validateFields(['api_provider', 'api_base_url', 'llm_model']);
+      const allValues = settingsForm.getFieldsValue(true);
+      const apiKey = resolveApiKeyForAction(allValues);
+      if (!apiKey || isPlaceholderApiKey(apiKey)) {
+        if (!hasStoredApiKey) {
+          message.warning('请先输入 API Key，或先保存一个真实密钥');
+          return;
+        }
+      }
+
+      setTestingConnection(true);
       const result = await settingsApi.testApiConnection({
+        provider: values.api_provider,
         api_key: apiKey,
-        api_base_url: apiBaseUrl,
-        provider: provider,
-        llm_model: modelName,
-        temperature: temperature,
-        max_tokens: maxTokens,
-        api_backup_urls: endpoints.filter(endpoint => endpoint.type === 'fallback').map(endpoint => endpoint.url).filter(Boolean),
-        fallback_strategy: fallbackStrategy,
+        api_base_url: String(values.api_base_url || '').trim(),
+        llm_model: String(values.llm_model || '').trim(),
+        temperature: Number(allValues.temperature ?? 0.7),
+        max_tokens: Number(allValues.max_tokens ?? 4096),
+        api_backup_urls: normalizeMultilineUrls(allValues.api_backup_urls_text),
+        fallback_strategy: allValues.fallback_strategy || 'auto',
       });
 
-      setTestResult(result);
-      setShowTestResult(true);
-
+      setProbeAlert(formatProbeResult(result));
       if (result.success) {
-        message.success(`测试成功！响应时间: ${result.response_time_ms}ms`);
+        message.success('API 测试成功');
       } else {
-        message.error('API 测试失败，请查看详细信息');
-      }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (error: any) {
-      const errorMsg = error?.response?.data?.detail || '测试请求失败';
-      message.error(errorMsg);
-      setTestResult({
-        success: false,
-        message: '测试请求失败',
-        error: errorMsg,
-        error_type: 'RequestError',
-        suggestions: ['请检查网络连接', '请确认后端服务是否正常运行']
-      });
-      setShowTestResult(true);
-    } finally {
-      setTestingApi(false);
-    }
-  };
-
-  const handleTestWebResearch = async (provider: 'exa' | 'grok') => {
-    const exaApiKey = form.getFieldValue('web_research_exa_api_key');
-    const exaBaseUrl = form.getFieldValue('web_research_exa_base_url');
-    const grokApiKey = form.getFieldValue('web_research_grok_api_key');
-    const grokBaseUrl = form.getFieldValue('web_research_grok_base_url');
-    const grokModel = form.getFieldValue('web_research_grok_model');
-    const grokSearchEnabled = form.getFieldValue('web_research_grok_search_enabled');
-
-    if (provider === 'exa' && !exaApiKey) {
-      message.warning('请先填写 Exa API Key');
-      return;
-    }
-    if (provider === 'grok' && (!grokApiKey || !grokBaseUrl)) {
-      message.warning('请先填写 Grok API Key 和 Base URL');
-      return;
-    }
-
-    setTestingWebResearchProvider(provider);
-    setWebResearchTestResult(null);
-    try {
-      const result = await settingsApi.testWebResearchConnection({
-        provider,
-        exa_api_key: exaApiKey,
-        exa_base_url: exaBaseUrl,
-        grok_api_key: grokApiKey,
-        grok_base_url: grokBaseUrl,
-        grok_model: grokModel,
-        grok_search_enabled: grokSearchEnabled,
-      });
-      setWebResearchTestResult(result);
-      if (result.success) {
-        message.success(`${provider.toUpperCase()} 检索测试成功`);
-      } else {
-        message.error(`${provider.toUpperCase()} 检索测试失败`);
+        message.warning('API 测试失败，请检查诊断信息');
       }
     } catch (error) {
-      const errorMsg = (
-        error as { response?: { data?: { detail?: string } } } | undefined
-      )?.response?.data?.detail || '请求失败，请稍后重试';
-      setWebResearchTestResult({
-        success: false,
-        provider,
-        message: `${provider.toUpperCase()} 检索测试失败`,
-        error: errorMsg,
-        error_type: 'RequestError',
-        suggestions: ['请检查后端服务是否正常', '请检查网络和技能目录配置'],
-      });
-      message.error(errorMsg);
+      if (error && typeof error === 'object' && 'errorFields' in error) {
+        return;
+      }
+      console.error('test api failed', error);
+      message.error('API 测试失败');
     } finally {
-      setTestingWebResearchProvider(null);
+      setTestingConnection(false);
     }
   };
 
-  // ========== 预设管理函数 ==========
-
-  const loadPresets = async () => {
-    setPresetsLoading(true);
+  const handleCheckFunctionCalling = async () => {
     try {
-      const response = await settingsApi.getPresets();
-      setPresets(response.presets);
-      setActivePresetId(response.active_preset_id);
+      const values = await settingsForm.validateFields(['api_provider', 'api_base_url', 'llm_model']);
+      const allValues = settingsForm.getFieldsValue(true);
+      const apiKey = resolveApiKeyForAction(allValues);
+      if (!apiKey || isPlaceholderApiKey(apiKey)) {
+        if (!hasStoredApiKey) {
+          message.warning('请先输入 API Key，或先保存一个真实密钥');
+          return;
+        }
+      }
+
+      setCheckingFunctionCalling(true);
+      const result = await settingsApi.checkFunctionCalling({
+        provider: values.api_provider,
+        api_key: apiKey,
+        api_base_url: String(values.api_base_url || '').trim(),
+        llm_model: String(values.llm_model || '').trim(),
+        api_backup_urls: normalizeMultilineUrls(allValues.api_backup_urls_text),
+        fallback_strategy: allValues.fallback_strategy || 'auto',
+      });
+
+      setFunctionCallingAlert({
+        type: result.success ? 'success' : 'warning',
+        title: result.supported ? 'Function Calling 可用' : 'Function Calling 不可用或未确认',
+        message: result.error ? `${result.message}：${result.error}` : result.message,
+        suggestions: result.suggestions,
+        extra: result.response_preview,
+      });
     } catch (error) {
-      message.error('加载预设失败');
-      console.error(error);
+      if (error && typeof error === 'object' && 'errorFields' in error) {
+        return;
+      }
+      console.error('check function calling failed', error);
+      message.error('Function Calling 检测失败');
     } finally {
-      setPresetsLoading(false);
+      setCheckingFunctionCalling(false);
     }
   };
 
-  const showPresetModal = (preset?: APIKeyPreset) => {
-    // 重置预设模型列表状态
-    setPresetModelOptions([]);
-    setPresetModelSearchText('');
-    setPresetModelsFetched(false);
-    
-    if (preset) {
-      setEditingPreset(preset);
-      presetForm.setFieldsValue({
-        name: preset.name,
-        description: preset.description,
-        ...preset.config,
-      });
-    } else {
-      setEditingPreset(null);
-      presetForm.resetFields();
-      presetForm.setFieldsValue({
-        api_provider: BASIC_API_PROVIDER,
-        api_base_url: DEFAULT_API_BASE_URL,
-        temperature: 0.7,
-        max_tokens: DEFAULT_MAX_TOKENS,
-      });
+  const handleTestWebResearch = async () => {
+    try {
+      const values = settingsForm.getFieldsValue(true);
+      const exaApiKey = String(values.web_research_exa_api_key || '').trim();
+      const grokApiKey = String(values.web_research_grok_api_key || '').trim();
+      const grokBaseUrl = String(values.web_research_grok_base_url || '').trim();
+
+      if (exaEnabled && exaApiKey) {
+        setTestingWebResearch(true);
+        const result = await settingsApi.testWebResearchConnection({
+          provider: 'exa',
+          exa_api_key: exaApiKey,
+          exa_base_url: String(values.web_research_exa_base_url || '').trim() || undefined,
+        });
+        setWebResearchAlert(formatProbeResult(result));
+        return;
+      }
+
+      if (grokEnabled && grokApiKey && grokBaseUrl) {
+        setTestingWebResearch(true);
+        const result = await settingsApi.testWebResearchConnection({
+          provider: 'grok',
+          grok_api_key: grokApiKey,
+          grok_base_url: grokBaseUrl,
+          grok_model: String(values.web_research_grok_model || '').trim() || undefined,
+          grok_search_enabled: Boolean(values.web_research_grok_search_enabled),
+        });
+        setWebResearchAlert(formatProbeResult(result));
+        return;
+      }
+
+      message.warning('请至少填写一组可测试的 Web Research 配置');
+    } catch (error) {
+      console.error('test web research failed', error);
+      message.error('Web Research 测试失败');
+    } finally {
+      setTestingWebResearch(false);
     }
-    setIsPresetModalVisible(true);
   };
 
-  const handlePresetCancel = () => {
-    setIsPresetModalVisible(false);
+  const openCreatePreset = () => {
     setEditingPreset(null);
-    presetForm.resetFields();
-    // 清除预设模型列表状态
-    setPresetModelOptions([]);
-    setPresetModelSearchText('');
-    setPresetModelsFetched(false);
+    presetForm.setFieldsValue({
+      ...presetToFormValues(null),
+      ...presetToFormValues({
+        id: '',
+        name: '',
+        description: '',
+        is_active: false,
+        created_at: '',
+        config: buildPresetConfig({
+          name: '',
+          description: '',
+          api_provider: providerValue as ProviderValue,
+          provider_type: providerValue as ProviderValue,
+          api_key: String(settingsForm.getFieldValue('api_key') || '').trim(),
+          api_base_url: String(settingsForm.getFieldValue('api_base_url') || '').trim(),
+          api_backup_urls_text: String(settingsForm.getFieldValue('api_backup_urls_text') || ''),
+          fallback_strategy: settingsForm.getFieldValue('fallback_strategy') || 'auto',
+          azure_api_version: String(settingsForm.getFieldValue('azure_api_version') || ''),
+          llm_model: String(settingsForm.getFieldValue('llm_model') || '').trim(),
+          temperature: Number(settingsForm.getFieldValue('temperature') ?? 0.7),
+          max_tokens: Number(settingsForm.getFieldValue('max_tokens') ?? 4096),
+          system_prompt: String(settingsForm.getFieldValue('system_prompt') || ''),
+        }),
+      }),
+    });
+    setPresetModalOpen(true);
   };
 
-  // 预设编辑窗口：获取模型列表
-  const handleFetchPresetModels = async (silent: boolean = false) => {
-    const apiKey = presetForm.getFieldValue('api_key');
-    const apiBaseUrl = presetForm.getFieldValue('api_base_url');
-    const provider = normalizeApiProvider(presetForm.getFieldValue('api_provider'));
-    const modelsUrl = String(presetForm.getFieldValue('models_url') || '').trim();
+  const openEditPreset = (preset: APIKeyPreset) => {
+    setEditingPreset(preset);
+    presetForm.setFieldsValue(presetToFormValues(preset));
+    setPresetModalOpen(true);
+  };
 
-    if (!hasUsableApiCredentials(apiKey, apiBaseUrl)) {
-      if (!silent) {
-        message.warning(
-          isPlaceholderApiKey(apiKey)
-            ? '当前 API 密钥仍为示例占位值，请先填写真实密钥'
-            : '请先填写 API 密钥和 API 地址'
-        );
-      }
-      return;
-    }
-
-    setFetchingPresetModels(true);
+  const handleSubmitPreset = async () => {
     try {
-      const response = await settingsApi.fetchModels({
-        api_key: apiKey,
-        api_base_url: apiBaseUrl,
-        provider,
-        models_url: modelsUrl || undefined,
-      });
-
-      setPresetModelOptions(toModelOptions(response.models));
-      setPresetModelsFetched(true);
-      if (!silent) {
-        message.success(`成功获取 ${response.models.length} 个可用模型`);
+      const values = await presetForm.validateFields();
+      const config = buildPresetConfig(values);
+      if (!config.api_key || isPlaceholderApiKey(config.api_key)) {
+        message.warning('预设必须保存真实 API Key');
+        return;
       }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (error: any) {
-      const errorMsg = error?.response?.data?.detail || '获取模型列表失败';
-      if (!silent) {
-        message.error(errorMsg);
-      }
-      setPresetModelOptions([]);
-      setPresetModelsFetched(true);
-    } finally {
-      setFetchingPresetModels(false);
-    }
-  };
 
-  // 预设编辑窗口：模型选择框获得焦点时自动获取
-  const handlePresetModelSelectFocus = () => {
-    if (!presetModelsFetched && !fetchingPresetModels) {
-      handleFetchPresetModels(true);
-    }
-  };
-
-  const handlePresetModelSearchChange = (value: string) => {
-    setPresetModelSearchText(value);
-  };
-
-  const handlePresetModelChange = () => {
-    setPresetModelSearchText('');
-  };
-
-  const handlePresetModelCommit = () => {
-    const customModel = presetModelSearchText.trim();
-    if (customModel) {
-      presetForm.setFieldValue('llm_model', customModel);
-    }
-  };
-
-  const handlePresetModelReload = () => {
-    if (!fetchingPresetModels) {
-      setPresetModelsFetched(false);
-      handleFetchPresetModels(false);
-    }
-  };
-
-  // 预设编辑窗口：提供商变更时更新默认URL并清空模型列表
-  const handlePresetProviderChange = (value: string) => {
-    const provider = normalizeApiProvider(value);
-    presetForm.setFieldValue('api_provider', provider);
-    presetForm.setFieldValue('api_base_url', DEFAULT_API_BASE_URLS[provider]);
-    presetForm.setFieldValue('provider_type', provider);
-    // 清空模型列表，需要重新获取
-    setPresetModelOptions([]);
-    setPresetModelSearchText('');
-    setPresetModelsFetched(false);
-  };
-
-  const handlePresetSave = async () => {
-    try {
-      const { models_url: _modelsUrl, ...values } = await presetForm.validateFields();
-      const config: APIKeyPresetConfig = {
-        api_provider: normalizeApiProvider(values.api_provider),
-        api_key: values.api_key || '',
-        api_base_url: values.api_base_url,
-        llm_model: values.llm_model || '',
-        temperature: values.temperature ?? 0.7,
-        max_tokens: values.max_tokens ?? DEFAULT_MAX_TOKENS,
-        provider_type: normalizeApiProvider(values.api_provider),
-        api_backup_urls: values.api_backup_urls || [],
-        fallback_strategy: values.fallback_strategy || 'auto',
-        azure_api_version: values.azure_api_version,
-      };
-
+      setSubmittingPreset(true);
       if (editingPreset) {
-        await settingsApi.updatePreset(editingPreset.id, {
+        const payload: PresetUpdateRequest = {
           name: values.name,
           description: values.description,
           config,
-        });
+        };
+        await settingsApi.updatePreset(editingPreset.id, payload);
         message.success('预设已更新');
       } else {
-        const request: PresetCreateRequest = {
-          name: values.name || '',
+        const payload: PresetCreateRequest = {
+          name: values.name,
           description: values.description,
           config,
         };
-        await settingsApi.createPreset(request);
+        await settingsApi.createPreset(payload);
         message.success('预设已创建');
       }
 
-      handlePresetCancel();
-      loadPresets();
+      setPresetModalOpen(false);
+      await loadPresets();
     } catch (error) {
-      console.error('保存失败:', error);
+      if (error && typeof error === 'object' && 'errorFields' in error) {
+        return;
+      }
+      console.error('submit preset failed', error);
+      message.error('保存预设失败');
+    } finally {
+      setSubmittingPreset(false);
     }
   };
-
-  const handlePresetDelete = async (presetId: string) => {
+  const handleDeletePreset = async (presetId: string) => {
     try {
       await settingsApi.deletePreset(presetId);
       message.success('预设已删除');
-      loadPresets();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (error: any) {
-      message.error(error.response?.data?.detail || '删除失败');
-      console.error(error);
-    }
-  };
-
-  const handlePresetActivate = async (presetId: string, presetName: string) => {
-    try {
-      // 获取预设配置用于比较
-      const preset = presets.find(p => p.id === presetId);
-      
-      await settingsApi.activatePreset(presetId);
-      message.success(`已激活预设: ${presetName}`);
-      
-      // 激活预设后清除当前配置Tab的测试结果
-      setTestResult(null);
-      setShowTestResult(false);
-      
-      // 清除模型列表缓存，因为API配置可能已变更
-      setModelOptions([]);
-      setModelsFetched(false);
-      
-      loadPresets();
-      loadSettings(); // 重新加载当前配置
-      
-      // 检查是否与 MCP 缓存的配置不一致
-      if (preset) {
-        const verifiedConfigStr = localStorage.getItem('mcp_verified_config');
-        let configChanged = false;
-        
-        if (verifiedConfigStr) {
-          try {
-            const verifiedConfig = JSON.parse(verifiedConfigStr);
-            configChanged =
-              verifiedConfig.provider !== preset.config.api_provider ||
-              verifiedConfig.baseUrl !== preset.config.api_base_url ||
-              verifiedConfig.model !== preset.config.llm_model;
-          } catch (e) {
-            console.error('Failed to parse verified config:', e);
-            configChanged = true; // 解析失败也视为配置变化
-          }
-        } else {
-          // 没有缓存的配置，如果有启用的插件也需要处理
-          configChanged = true;
-        }
-        
-        if (configChanged) {
-          // 清除 MCP 验证缓存
-          localStorage.removeItem('mcp_verified_config');
-          
-          // 检查并禁用所有 MCP 插件
-          try {
-            const plugins = await mcpPluginApi.getPlugins();
-            const activePlugins = plugins.filter(p => p.enabled);
-            
-            if (activePlugins.length > 0) {
-              // 禁用所有插件
-              message.loading({ content: '正在禁用 MCP 插件...', key: 'disable_mcp' });
-              await Promise.all(activePlugins.map(p => mcpPluginApi.togglePlugin(p.id, false)));
-              message.success({ content: '已禁用所有 MCP 插件', key: 'disable_mcp' });
-              
-              // 显示提示弹窗
-              modal.warning({
-                title: (
-                  <Space>
-                    <WarningOutlined style={{ color: '#faad14' }} />
-                    <span>API 配置已更改</span>
-                  </Space>
-                ),
-                centered: true,
-                content: (
-                  <div style={{ padding: '8px 0' }}>
-                    <Alert
-                      message={`切换到预设「${presetName}」后，API 配置发生了变化。为确保 MCP 插件正常工作，系统已自动禁用所有插件。`}
-                      type="warning"
-                      showIcon
-                      style={{ marginBottom: 16 }}
-                    />
-                    <div style={{
-                      padding: 12,
-                      background: 'var(--color-info-bg)',
-                      border: '1px solid var(--color-info-border)',
-                      borderRadius: 8
-                    }}>
-                      <Text strong style={{ display: 'block', marginBottom: 8 }}>请完成以下步骤：</Text>
-                      <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
-                        <li>前往 MCP 插件管理页面</li>
-                        <li>重新进行"模型能力检查"</li>
-                        <li>确认新模型支持 Function Calling 后再启用插件</li>
-                      </ol>
-                    </div>
-                  </div>
-                ),
-                okText: '前往 MCP 页面',
-                cancelText: '稍后处理',
-                onOk: () => {
-                  eventBus.emit(EventNames.SWITCH_TO_MCP_VIEW);
-                },
-              });
-            }
-          } catch (err) {
-            console.error('Failed to disable MCP plugins:', err);
-          }
-        }
-      }
+      await loadPresets();
     } catch (error) {
-      message.error('激活失败');
-      console.error(error);
+      console.error('delete preset failed', error);
+      message.error('删除预设失败');
     }
   };
 
-  const handlePresetTest = async (presetId: string) => {
-    setTestingPresetId(presetId);
+  const handleActivatePreset = async (presetId: string) => {
+    try {
+      await settingsApi.activatePreset(presetId);
+      message.success('预设已激活');
+      await Promise.all([loadSettings(), loadPresets()]);
+    } catch (error) {
+      console.error('activate preset failed', error);
+      message.error('激活预设失败');
+    }
+  };
+
+  const handleTestPreset = async (presetId: string) => {
     try {
       const result = await settingsApi.testPreset(presetId);
-      if (result.success) {
-        modal.success({
-          title: '测试成功',
-          centered: true,
-          width: isMobile ? '90%' : 600,
-          content: (
-            <div style={{ padding: '8px 0' }}>
-              <div style={{ marginBottom: 24, padding: 16, background: 'var(--color-success-bg)', border: '1px solid var(--color-success-border)', borderRadius: 8 }}>
-                <Typography.Text strong style={{ color: 'var(--color-success)' }}>
-                  ✓ API 连接正常
-                </Typography.Text>
-              </div>
-
-              <div style={{
-                padding: 16,
-                background: 'var(--color-bg-layout)',
-                borderRadius: 8,
-                marginBottom: 16
-              }}>
-                <div style={{ marginBottom: 8, fontSize: 14 }}>
-                  <Text type="secondary">提供商：</Text>
-                  <Text strong>{result.provider?.toUpperCase() || 'N/A'}</Text>
-                </div>
-                <div style={{ marginBottom: 8, fontSize: 14 }}>
-                  <Text type="secondary">模型：</Text>
-                  <Text strong>{result.model || 'N/A'}</Text>
-                </div>
-                {result.response_time_ms !== undefined && (
-                  <div style={{ fontSize: 14 }}>
-                    <Text type="secondary">响应时间：</Text>
-                    <Text strong>{result.response_time_ms}ms</Text>
-                  </div>
-                )}
-              </div>
-
-              <Alert
-                message="预设配置测试通过，可以正常使用"
-                type="success"
-                showIcon
-              />
-            </div>
-          ),
-        });
-      } else {
-        modal.error({
-          title: '测试失败',
-          centered: true,
-          width: isMobile ? '90%' : 600,
-          content: (
-            <div style={{ padding: '8px 0' }}>
-              <div style={{ marginBottom: 16 }}>
-                <Alert
-                  message={result.message || 'API 测试失败'}
-                  type="error"
-                  showIcon
-                />
-              </div>
-
-              {result.error && (
-                <div style={{
-                  padding: 16,
-                  background: 'var(--color-error-bg)',
-                  border: '1px solid var(--color-error-border)',
-                  borderRadius: 8,
-                  marginBottom: 16
-                }}>
-                  <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 8 }}>错误信息:</Text>
-                  <Text style={{ fontSize: 13, color: 'var(--color-error)', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                    {result.error}
-                  </Text>
-                </div>
-              )}
-
-              {result.suggestions && result.suggestions.length > 0 && (
-                <div style={{
-                  padding: 16,
-                  background: 'var(--color-warning-bg)',
-                  border: '1px solid var(--color-warning-border)',
-                  borderRadius: 8,
-                  marginBottom: 16
-                }}>
-                  <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 8 }}>💡 建议:</Text>
-                  <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
-                    {result.suggestions.map((s, i) => (
-                      <li key={i} style={{ marginBottom: 4 }}>{s}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              <Alert
-                message="预设配置存在问题，请检查后重试"
-                type="warning"
-                showIcon
-              />
-            </div>
-          ),
-        });
-      }
+      setProbeAlert(formatProbeResult(result));
+      message[result.success ? 'success' : 'warning'](result.message || '预设测试完成');
     } catch (error) {
-      message.error('测试失败');
-      console.error(error);
-    } finally {
-      setTestingPresetId(null);
+      console.error('test preset failed', error);
+      message.error('测试预设失败');
     }
   };
 
-  const handleCreateFromCurrent = () => {
-    const currentConfig = form.getFieldsValue();
-    presetForm.setFieldsValue({
-      name: '',
-      description: '',
-      ...currentConfig,
-    });
-    setEditingPreset(null);
-    setIsPresetModalVisible(true);
+  const handleCreateSnapshotPreset = async () => {
+    try {
+      const values = await snapshotForm.validateFields();
+      setCreatingSnapshot(true);
+      await settingsApi.createPresetFromCurrent(values.name, values.description);
+      message.success('已从当前配置创建预设');
+      setSnapshotModalOpen(false);
+      await loadPresets();
+    } catch (error) {
+      if (error && typeof error === 'object' && 'errorFields' in error) {
+        return;
+      }
+      console.error('create preset from current failed', error);
+      message.error('从当前配置创建预设失败');
+    } finally {
+      setCreatingSnapshot(false);
+    }
   };
 
-  const mergedModelOptions = buildModelSelectOptions(modelOptions, modelSearchText);
-  const mergedPresetModelOptions = buildModelSelectOptions(
-    presetModelOptions,
-    presetModelSearchText
-  );
+  const renderAlert = (alert: AlertState | null) => {
+    if (!alert) {
+      return null;
+    }
+
+    return (
+      <Alert
+        showIcon
+        type={alert.type}
+        message={alert.title}
+        description={
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            <Text>{alert.message}</Text>
+            {alert.suggestions?.length ? (
+              <div>
+                <Text strong>建议：</Text>
+                <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
+                  {alert.suggestions.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {alert.extra ? (
+              <Paragraph copyable={{ text: alert.extra }} style={{ marginBottom: 0 }}>
+                {alert.extra}
+              </Paragraph>
+            ) : null}
+          </Space>
+        }
+      />
+    );
+  };
 
   return (
-    <>
-      {contextHolder}
-      <div style={{
-        minHeight: '90vh',
-        background: 'linear-gradient(180deg, var(--color-bg-base) 0%, #EEF2F3 100%)',
-        padding: isMobile ? '20px 16px 70px' : '24px 24px 70px',
-        display: 'flex',
-        flexDirection: 'column',
-      }}>
-        <div style={{
-          maxWidth: 1400,
-          margin: '0 auto',
-          width: '100%',
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-        }}>
-          {/* 顶部导航卡片 */}
-          <Card
-            variant="borderless"
-            style={{
-              background: 'linear-gradient(135deg, var(--color-primary) 0%, #5A9BA5 50%, var(--color-primary-hover) 100%)',
-              borderRadius: isMobile ? 16 : 24,
-              boxShadow: '0 12px 40px rgba(77, 128, 136, 0.25), 0 4px 12px rgba(0, 0, 0, 0.06)',
-              marginBottom: isMobile ? 20 : 24,
-              border: 'none',
-              position: 'relative',
-              overflow: 'hidden'
-            }}
-          >
-            {/* 装饰性背景元素 */}
-            <div style={{ position: 'absolute', top: -60, right: -60, width: 200, height: 200, borderRadius: '50%', background: 'rgba(255, 255, 255, 0.08)', pointerEvents: 'none' }} />
-            <div style={{ position: 'absolute', bottom: -40, left: '30%', width: 120, height: 120, borderRadius: '50%', background: 'rgba(255, 255, 255, 0.05)', pointerEvents: 'none' }} />
-            <div style={{ position: 'absolute', top: '50%', right: '15%', width: 80, height: 80, borderRadius: '50%', background: 'rgba(255, 255, 255, 0.06)', pointerEvents: 'none' }} />
-
-            <Row align="middle" justify="space-between" gutter={[16, 16]} style={{ position: 'relative', zIndex: 1 }}>
-              <Col xs={24} sm={12}>
-                <Space direction="vertical" size={4}>
-                  <Title level={isMobile ? 3 : 2} style={{ margin: 0, color: '#fff', textShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-                    AI API 设置
-                  </Title>
-                  <Text style={{ fontSize: isMobile ? 12 : 14, color: 'rgba(255,255,255,0.85)', marginLeft: isMobile ? 40 : 48 }}>
-                    配置AI接口参数，管理多个API配置预设
-                  </Text>
-                </Space>
-              </Col>
-              <Col xs={24} sm={12}>
-                {/* 按钮区域预留 */}
-              </Col>
-            </Row>
-          </Card>
-
-          {/* 主内容卡片 */}
-          <Card
-            variant="borderless"
-            style={{
-              background: 'rgba(255, 255, 255, 0.95)',
-              borderRadius: isMobile ? 12 : 16,
-              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)',
-              flex: 1,
-            }}
-            styles={{
-              body: {
-                padding: isMobile ? '16px' : '24px'
-              }
-            }}
-          >
-            <Tabs
-              activeKey={activeTab}
-              onChange={setActiveTab}
-              items={[
-                {
-                  key: 'current',
-                  label: '当前配置',
-                  children: activeTab === 'current' ? (
-                    <Suspense fallback={settingsLazyFallback}>
-                      <LazySettingsCurrentTab
-                        LazyEndpointListEditor={LazyEndpointListEditor}
-                        LazyProviderSelector={LazyProviderSelector}
-                        activeSettingsSection={activeSettingsSection}
-                        activeSettingsSectionMeta={activeSettingsSectionMeta}
-                        clipDisplayText={clipDisplayText}
-                        endpoints={endpoints}
-                        fallbackStrategy={fallbackStrategy}
-                        fetchingModels={fetchingModels}
-                        fieldHintTextStyle={fieldHintTextStyle}
-                        fieldPanelStyle={fieldPanelStyle}
-                        form={form}
-                        handleDelete={handleDelete}
-                        handleFetchModels={handleFetchModels}
-                        handleModelSelectFocus={handleModelSelectFocus}
-                        handleProviderChange={handleProviderChange}
-                        handleReset={handleReset}
-                        handleSave={handleSave}
-                        handleTestConnection={handleTestConnection}
-                        handleTestWebResearch={handleTestWebResearch}
-                        hasSettings={hasSettings}
-                        initialLoading={initialLoading}
-                        isDefaultSettings={isDefaultSettings}
-                        isMobile={isMobile}
-                        loading={loading}
-                        mergedModelOptions={mergedModelOptions}
-                        modelOptions={modelOptions}
-                        modelSearchText={modelSearchText}
-                        modelsFetched={modelsFetched}
-                        renderSectionTitle={renderSectionTitle}
-                        sectionCardStyle={sectionCardStyle}
-                        sectionCardStyles={sectionCardStyles}
-                        selectedProvider={selectedProvider}
-                        setActiveSettingsSection={setActiveSettingsSection}
-                        setEndpoints={setEndpoints}
-                        setFallbackStrategy={setFallbackStrategy}
-                        setModelsFetched={setModelsFetched}
-                        setModelSearchText={setModelSearchText}
-                        setShowTestResult={setShowTestResult}
-                        settingsLazyFallback={settingsLazyFallback}
-                        settingsSectionItems={settingsSectionItems}
-                        setWebResearchTestResult={setWebResearchTestResult}
-                        showTestResult={showTestResult}
-                        testResult={testResult}
-                        testingApi={testingApi}
-                        testingWebResearchProvider={testingWebResearchProvider}
-                        watchedBaseUrl={watchedBaseUrl}
-                        watchedExaEnabled={watchedExaEnabled}
-                        watchedGrokEnabled={watchedGrokEnabled}
-                        watchedGrokSearchEnabled={watchedGrokSearchEnabled}
-                        watchedMaxTokens={watchedMaxTokens}
-                        watchedModel={watchedModel}
-                        watchedProvider={watchedProvider}
-                        watchedTemperature={watchedTemperature}
-                        watchedWebResearchEnabled={watchedWebResearchEnabled}
-                        webResearchTestResult={webResearchTestResult}
-                      />
-                    </Suspense>
-                  ) : null,
-                },
-                {
-                  key: 'presets',
-                  label: '配置预设',
-                  children: activeTab === 'presets' ? (
-                    <Suspense fallback={settingsLazyFallback}>
-                      <LazySettingsPresetsTab
-                        presetsLoading={presetsLoading}
-                        presets={presets}
-                        activePresetId={activePresetId}
-                        testingPresetId={testingPresetId}
-                        onCreateFromCurrent={handleCreateFromCurrent}
-                        onCreatePreset={() => showPresetModal()}
-                        onActivatePreset={handlePresetActivate}
-                        onTestPreset={handlePresetTest}
-                        onEditPreset={showPresetModal}
-                        onDeletePreset={handlePresetDelete}
-                      />
-                    </Suspense>
-                  ) : null,
-                },
-              ]}
-            />
-          </Card>
-        </div>
-
-        {isPresetModalVisible ? (
-          <Suspense fallback={null}>
-            <LazySettingsPresetModal
-              open={isPresetModalVisible}
-              isMobile={isMobile}
-              editingPreset={editingPreset}
-              form={presetForm}
-              fetchingPresetModels={fetchingPresetModels}
-              presetModelsFetched={presetModelsFetched}
-              mergedPresetModelOptions={mergedPresetModelOptions}
-              onOk={handlePresetSave}
-              onCancel={handlePresetCancel}
-              onProviderChange={handlePresetProviderChange}
-              onModelSelectFocus={handlePresetModelSelectFocus}
-              onModelSearchChange={handlePresetModelSearchChange}
-              onModelChange={handlePresetModelChange}
-              onModelCommit={handlePresetModelCommit}
-              onModelReload={handlePresetModelReload}
-            />
-          </Suspense>
-        ) : null}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingBottom: 24 }}>
+      <div
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 10,
+          background: token.colorBgContainer,
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          padding: isMobile ? '12px 0' : '16px 0',
+        }}
+      >
+        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+          <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}>
+            <ApiOutlined style={{ marginRight: 8 }} />
+            API 设置
+          </Title>
+          <Text type="secondary">
+            这里管理主模型配置、模型列表探测以及 API 预设。已保存的密钥不会再次明文回显。
+          </Text>
+        </Space>
       </div>
-    </>
+
+      <Spin spinning={loadingSettings} tip="正在加载设置...">
+        <Tabs
+          items={[
+            {
+              key: 'current',
+              label: '当前配置',
+              children: (
+                <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  <Card>
+                    <Row gutter={[16, 16]}>
+                      <Col xs={24} lg={16}>
+                        <Form form={settingsForm} layout="vertical" initialValues={defaultSettingsValues}>
+                          <Row gutter={[16, 0]}>
+                            <Col xs={24} md={12}>
+                              <Form.Item label="提供商" name="api_provider" rules={[{ required: true, message: '请选择提供商' }]}>
+                                <Select options={providerOptions as unknown as { label: string; value: string }[]} />
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} md={12}>
+                              <Form.Item label="回退策略" name="fallback_strategy">
+                                <Select
+                                  options={[
+                                    { value: 'auto', label: '自动回退' },
+                                    { value: 'manual', label: '手动切换' },
+                                  ]}
+                                />
+                              </Form.Item>
+                            </Col>
+                            <Col span={24}>
+                              <Form.Item label="API Key" name="api_key">
+                                <Input.Password
+                                  placeholder={apiKeyPlaceholder}
+                                  autoComplete="new-password"
+                                  addonAfter={hasStoredApiKey ? (
+                                    <Button
+                                      type="link"
+                                      size="small"
+                                      loading={loadingStoredApiKey}
+                                      onClick={() => void handleToggleStoredApiKey()}
+                                    >
+                                      {showStoredApiKey ? '隐藏已保存密钥' : '显示已保存密钥'}
+                                    </Button>
+                                  ) : undefined}
+                                />
+                              </Form.Item>
+                              {showStoredApiKey && storedApiKeyPreview ? (
+                                <Alert
+                                  type="info"
+                                  showIcon
+                                  message="已保存 API Key"
+                                  description={
+                                    <Typography.Text code copyable={{ text: storedApiKeyPreview }}>
+                                      {storedApiKeyPreview}
+                                    </Typography.Text>
+                                  }
+                                  style={{ marginTop: -12, marginBottom: 16 }}
+                                />
+                              ) : null}
+                            </Col>
+                            <Col span={24}>
+                              <Form.Item label="API Base URL" name="api_base_url" rules={[{ required: true, message: '请输入 API Base URL' }]}>
+                                <Input placeholder={providerHint.baseUrl} />
+                              </Form.Item>
+                            </Col>
+                            <Col span={24}>
+                              <Form.Item label="备用 Base URL（每行一个，可选）" name="api_backup_urls_text">
+                                <TextArea rows={3} placeholder="https://example-1.com/v1&#10;https://example-2.com/v1" />
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} md={12}>
+                              <Form.Item label="模型" name="llm_model" rules={[{ required: true, message: '请输入或选择模型' }]}>
+                                <Select
+                                  showSearch
+                                  allowClear
+                                  options={modelSelectOptions}
+                                  placeholder={providerHint.model}
+                                  onDropdownVisibleChange={(open) => {
+                                    if (open) {
+                                      ensureCurrentModelVisible();
+                                    }
+                                  }}
+                                  dropdownRender={(menu) => (
+                                    <>
+                                      {menu}
+                                      <div style={{ padding: 8, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
+                                        <Text type="secondary">若列表为空，可直接输入模型名并保存。</Text>
+                                      </div>
+                                    </>
+                                  )}
+                                  mode={undefined}
+                                />
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} md={12}>
+                              <Form.Item label="Azure API Version（可选）" name="azure_api_version">
+                                <Input placeholder="2024-02-01" />
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} md={12}>
+                              <Form.Item label="Temperature" name="temperature">
+                                <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} md={12}>
+                              <Form.Item label="Max Tokens" name="max_tokens">
+                                <InputNumber min={1} max={200000} step={256} style={{ width: '100%' }} />
+                              </Form.Item>
+                            </Col>
+                            <Col span={24}>
+                              <Form.Item label="System Prompt（可选）" name="system_prompt">
+                                <TextArea rows={5} placeholder="给模型的系统提示词" />
+                              </Form.Item>
+                            </Col>
+                          </Row>
+                        </Form>
+                      </Col>
+                      <Col xs={24} lg={8}>
+                        <Card size="small" title="当前状态" style={{ background: token.colorFillAlter }}>
+                          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                            <Text>已保存密钥：{hasStoredApiKey ? '是' : '否'}</Text>
+                            <Text>当前模型：{settingsForm.getFieldValue('llm_model') || '未设置'}</Text>
+                            <Text>已加载预设：{presets.length}</Text>
+                            <Text type="secondary">
+                              如果 API Key 输入框留空，保存时会保持现有密钥，不会被 `********` 覆盖。
+                            </Text>
+                          </Space>
+                        </Card>
+                      </Col>
+                    </Row>
+                    <Space wrap>
+                      <Button type="primary" icon={<SaveOutlined />} loading={savingSettings} onClick={() => void handleSaveSettings()}>
+                        保存设置
+                      </Button>
+                      <Button icon={<ReloadOutlined />} loading={fetchingModels} onClick={() => void handleFetchModels()}>
+                        获取模型
+                      </Button>
+                      <Button icon={<PlayCircleOutlined />} loading={testingConnection} onClick={() => void handleTestConnection()}>
+                        测试连接
+                      </Button>
+                      <Button icon={<ThunderboltOutlined />} loading={checkingFunctionCalling} onClick={() => void handleCheckFunctionCalling()}>
+                        检测 Function Calling
+                      </Button>
+                    </Space>
+                  </Card>
+
+                  {renderAlert(probeAlert)}
+                  {renderAlert(functionCallingAlert)}
+
+                  <Card title="生成前网络检索（Web Research）">
+                    <Form form={settingsForm} layout="vertical">
+                      <Row gutter={[16, 0]}>
+                        <Col xs={24} md={8}>
+                          <Form.Item label="启用 Web Research" name="web_research_enabled" valuePropName="checked">
+                            <Switch />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={8}>
+                          <Form.Item label="启用 Exa" name="web_research_exa_enabled" valuePropName="checked">
+                            <Switch disabled={!webResearchEnabled} />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={8}>
+                          <Form.Item label="启用 Grok" name="web_research_grok_enabled" valuePropName="checked">
+                            <Switch disabled={!webResearchEnabled} />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={12}>
+                          <Form.Item label="Exa API Key" name="web_research_exa_api_key">
+                            <Input.Password placeholder="exa_..." disabled={!webResearchEnabled || !exaEnabled} />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={12}>
+                          <Form.Item label="Exa Base URL（可选）" name="web_research_exa_base_url">
+                            <Input placeholder="https://api.exa.ai" disabled={!webResearchEnabled || !exaEnabled} />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={12}>
+                          <Form.Item label="Grok API Key" name="web_research_grok_api_key">
+                            <Input.Password placeholder="xai-..." disabled={!webResearchEnabled || !grokEnabled} />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={12}>
+                          <Form.Item label="Grok Base URL" name="web_research_grok_base_url">
+                            <Input placeholder="https://api.x.ai/v1" disabled={!webResearchEnabled || !grokEnabled} />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={12}>
+                          <Form.Item label="Grok Model" name="web_research_grok_model">
+                            <Input placeholder="grok-4.1-fast" disabled={!webResearchEnabled || !grokEnabled} />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={12}>
+                          <Form.Item label="启用 Grok Search" name="web_research_grok_search_enabled" valuePropName="checked">
+                            <Switch disabled={!webResearchEnabled || !grokEnabled} />
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                    </Form>
+                    <Space wrap>
+                      <Button icon={<ExperimentOutlined />} loading={testingWebResearch} onClick={() => void handleTestWebResearch()}>
+                        测试 Web Research
+                      </Button>
+                    </Space>
+                  </Card>
+
+                  {renderAlert(webResearchAlert)}
+                </Space>
+              ),
+            },
+            {
+              key: 'presets',
+              label: '配置预设',
+              children: (
+                <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  <Card>
+                    <Space wrap>
+                      <Button type="primary" icon={<PlusOutlined />} onClick={openCreatePreset}>
+                        新建预设
+                      </Button>
+                      <Button icon={<CopyOutlined />} onClick={() => { snapshotForm.resetFields(); setSnapshotModalOpen(true); }}>
+                        从当前配置创建预设
+                      </Button>
+                      <Button icon={<ReloadOutlined />} loading={loadingPresets} onClick={() => void loadPresets()}>
+                        刷新预设
+                      </Button>
+                    </Space>
+                  </Card>
+
+                  <Card>
+                    <Spin spinning={loadingPresets}>
+                      {presets.length === 0 ? (
+                        <Empty description="暂无 API 预设" />
+                      ) : (
+                        <List
+                          itemLayout="vertical"
+                          dataSource={presets}
+                          renderItem={(preset) => (
+                            <List.Item
+                              key={preset.id}
+                              actions={[
+                                <Button key="activate" type={preset.is_active ? 'default' : 'link'} icon={<CheckCircleOutlined />} onClick={() => void handleActivatePreset(preset.id)}>
+                                  {preset.is_active ? '当前启用' : '激活'}
+                                </Button>,
+                                <Button key="test" type="link" icon={<PlayCircleOutlined />} onClick={() => void handleTestPreset(preset.id)}>
+                                  测试
+                                </Button>,
+                                <Button key="edit" type="link" icon={<EditOutlined />} onClick={() => openEditPreset(preset)}>
+                                  编辑
+                                </Button>,
+                                <Popconfirm
+                                  key="delete"
+                                  title="确认删除这个预设吗？"
+                                  description="激活中的预设不能直接删除。"
+                                  onConfirm={() => void handleDeletePreset(preset.id)}
+                                >
+                                  <Button danger type="link" icon={<DeleteOutlined />}>删除</Button>
+                                </Popconfirm>,
+                              ]}
+                            >
+                              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                <Space wrap>
+                                  <Text strong>{preset.name}</Text>
+                                  {preset.is_active ? <Tag color="success">已激活</Tag> : null}
+                                  <Tag color="blue">{preset.config.api_provider}</Tag>
+                                  <Tag>{preset.config.llm_model}</Tag>
+                                </Space>
+                                {preset.description ? <Paragraph style={{ marginBottom: 0 }}>{preset.description}</Paragraph> : null}
+                                <Text type="secondary">Base URL：{preset.config.api_base_url || '未设置'} · Temperature：{preset.config.temperature} · Max Tokens：{preset.config.max_tokens}</Text>
+                              </Space>
+                            </List.Item>
+                          )}
+                        />
+                      )}
+                    </Spin>
+                  </Card>
+                </Space>
+              ),
+            },
+          ]}
+        />
+      </Spin>
+
+      <Modal
+        title={editingPreset ? '编辑预设' : '新建预设'}
+        open={presetModalOpen}
+        onCancel={() => setPresetModalOpen(false)}
+        onOk={() => void handleSubmitPreset()}
+        okText={editingPreset ? '保存修改' : '创建预设'}
+        confirmLoading={submittingPreset}
+        width={720}
+        destroyOnClose
+      >
+        <Form form={presetForm} layout="vertical">
+          <Row gutter={[16, 0]}>
+            <Col xs={24} md={12}>
+              <Form.Item label="预设名称" name="name" rules={[{ required: true, message: '请输入预设名称' }]}>
+                <Input placeholder="例如：DeepSeek 主线写作" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="提供商" name="api_provider" rules={[{ required: true, message: '请选择提供商' }]}>
+                <Select options={providerOptions as unknown as { label: string; value: string }[]} />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item label="描述" name="description">
+                <Input placeholder="给这个预设补充说明" />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item label="API Key" name="api_key" rules={[{ required: true, message: '预设必须包含真实 API Key' }]}>
+                <Input.Password placeholder="请输入真实 API Key" autoComplete="new-password" />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item label="API Base URL" name="api_base_url" rules={[{ required: true, message: '请输入 API Base URL' }]}>
+                <Input placeholder="https://api.openai.com/v1" />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item label="备用 Base URL（每行一个，可选）" name="api_backup_urls_text">
+                <TextArea rows={3} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="模型" name="llm_model" rules={[{ required: true, message: '请输入模型名' }]}>
+                <Input placeholder="deepseek-chat / claude-3-5-sonnet-latest / gemini-2.5-pro" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="回退策略" name="fallback_strategy">
+                <Select options={[{ value: 'auto', label: '自动回退' }, { value: 'manual', label: '手动切换' }]} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="Temperature" name="temperature">
+                <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item label="Max Tokens" name="max_tokens">
+                <InputNumber min={1} max={200000} step={256} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item label="System Prompt（可选）" name="system_prompt">
+                <TextArea rows={4} />
+              </Form.Item>
+            </Col>
+          </Row>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="从当前配置创建预设"
+        open={snapshotModalOpen}
+        onCancel={() => setSnapshotModalOpen(false)}
+        onOk={() => void handleCreateSnapshotPreset()}
+        okText="创建预设"
+        confirmLoading={creatingSnapshot}
+        destroyOnClose
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="此操作会把当前已保存配置复制为新的预设。"
+        />
+        <Form form={snapshotForm} layout="vertical">
+          <Form.Item label="预设名称" name="name" rules={[{ required: true, message: '请输入预设名称' }]}>
+            <Input placeholder="例如：当前生产配置" />
+          </Form.Item>
+          <Form.Item label="描述" name="description">
+            <Input placeholder="可选备注" />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </div>
   );
 }
