@@ -823,6 +823,15 @@ export default function SettingsPage() {
                                   ) : undefined}
                                 />
                               </Form.Item>
+                              {hasStoredApiKey && !showStoredApiKey ? (
+                                <Alert
+                                  type="info"
+                                  showIcon
+                                  message="已保存 API Key"
+                                  description="当前输入框留空表示保持已保存密钥不变；只有输入新值并保存时才会覆盖。"
+                                  style={{ marginTop: -12, marginBottom: 16 }}
+                                />
+                              ) : null}
                               {showStoredApiKey && storedApiKeyPreview ? (
                                 <Alert
                                   type="info"
