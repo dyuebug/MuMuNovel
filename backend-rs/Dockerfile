@@ -26,7 +26,7 @@ RUN CARGO_BUILD_JOBS=2 \
     cargo build --release && cp target/release/mumu-novel-backend /app/server
 
 # Runtime
-FROM debian:bookworm-slim
+FROM rust:1.88-slim-bookworm AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl libssl3 && rm -rf /var/lib/apt/lists/*
 
