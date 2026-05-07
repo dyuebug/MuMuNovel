@@ -103,7 +103,24 @@ fn env_u32(key: &str, default: u32) -> u32 {
 }
 
 fn normalize_api_key(key: Option<String>) -> Option<String> {
-    key.filter(|value| !value.is_empty() && !is_placeholder(value))
+    key
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && !is_placeholder(value))
+}
+
+fn normalize_non_empty_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+}
+
+fn resolve_stored_model(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        default_model()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn default_ai_provider() -> String {
@@ -279,7 +296,9 @@ impl SettingsService {
                 if let Some(v) = body.get("provider_type").and_then(|v| v.as_str()) { active.provider_type = Set(v.to_string()); }
                 if let Some(v) = body.get("fallback_strategy").and_then(|v| v.as_str()) { active.fallback_strategy = Set(v.to_string()); }
                 if let Some(v) = body.get("azure_api_version").and_then(|v| v.as_str()) { active.azure_api_version = Set(Some(v.to_string())); }
-                if let Some(v) = body.get("llm_model").and_then(|v| v.as_str()) { active.llm_model = Set(v.to_string()); }
+                if let Some(v) = normalize_non_empty_string(body.get("llm_model").and_then(|v| v.as_str())) {
+                    active.llm_model = Set(v);
+                }
                 if let Some(v) = body.get("temperature").and_then(|v| v.as_f64()) { active.temperature = Set(v); }
                 if let Some(v) = body.get("max_tokens").and_then(|v| v.as_i64()) { active.max_tokens = Set(v as i32); }
                 if let Some(v) = body.get("system_prompt").and_then(|v| v.as_str()) { active.system_prompt = Set(Some(v.to_string())); }
@@ -320,7 +339,10 @@ impl SettingsService {
                     provider_type: Set(body.get("provider_type").and_then(|v| v.as_str()).unwrap_or(&default_provider).to_string()),
                     fallback_strategy: Set(body.get("fallback_strategy").and_then(|v| v.as_str()).unwrap_or("auto").to_string()),
                     azure_api_version: Set(body.get("azure_api_version").and_then(|v| v.as_str()).map(String::from)),
-                    llm_model: Set(body.get("llm_model").and_then(|v| v.as_str()).unwrap_or(&default_model()).to_string()),
+                    llm_model: Set(
+                        normalize_non_empty_string(body.get("llm_model").and_then(|v| v.as_str()))
+                            .unwrap_or_else(default_model)
+                    ),
                     temperature: Set(body.get("temperature").and_then(|v| v.as_f64()).unwrap_or(default_temperature())),
                     max_tokens: Set(body.get("max_tokens").and_then(|v| v.as_i64()).unwrap_or(default_max_tokens() as i64) as i32),
                     system_prompt: Set(body.get("system_prompt").and_then(|v| v.as_str()).map(String::from)),
@@ -417,12 +439,13 @@ fn build_response(saved: &settings::Model, web_research: &Value, backup_urls: &[
         "user_id": saved.user_id,
         "api_provider": saved.api_provider,
         "api_key": mask_api_key(&saved.api_key),
+        "has_api_key": normalize_api_key(Some(saved.api_key.clone())).is_some(),
         "api_base_url": saved.api_base_url,
         "api_backup_urls": backup_urls,
         "provider_type": saved.provider_type,
         "fallback_strategy": saved.fallback_strategy,
         "azure_api_version": saved.azure_api_version,
-        "llm_model": saved.llm_model,
+        "llm_model": resolve_stored_model(&saved.llm_model),
         "temperature": saved.temperature,
         "max_tokens": saved.max_tokens,
         "system_prompt": saved.system_prompt,
@@ -629,7 +652,9 @@ impl SettingsService {
             if let Some(v) = cfg.get("provider_type").and_then(|v| v.as_str()) { active.provider_type = Set(v.to_string()); }
             if let Some(v) = cfg.get("fallback_strategy").and_then(|v| v.as_str()) { active.fallback_strategy = Set(v.to_string()); }
             if let Some(v) = cfg.get("azure_api_version").and_then(|v| v.as_str()) { active.azure_api_version = Set(Some(v.to_string())); }
-            if let Some(v) = cfg.get("llm_model").and_then(|v| v.as_str()) { active.llm_model = Set(v.to_string()); }
+            if let Some(v) = normalize_non_empty_string(cfg.get("llm_model").and_then(|v| v.as_str())) {
+                active.llm_model = Set(v);
+            }
             if let Some(v) = cfg.get("temperature").and_then(|v| v.as_f64()) { active.temperature = Set(v); }
             if let Some(v) = cfg.get("max_tokens").and_then(|v| v.as_i64()) { active.max_tokens = Set(v as i32); }
             if let Some(v) = cfg.get("system_prompt").and_then(|v| v.as_str()) { active.system_prompt = Set(Some(v.to_string())); }
@@ -662,7 +687,7 @@ impl SettingsService {
             "provider_type": settings.provider_type,
             "fallback_strategy": settings.fallback_strategy,
             "azure_api_version": settings.azure_api_version,
-            "llm_model": settings.llm_model,
+            "llm_model": resolve_stored_model(&settings.llm_model),
             "temperature": settings.temperature,
             "max_tokens": settings.max_tokens,
             "system_prompt": settings.system_prompt,
