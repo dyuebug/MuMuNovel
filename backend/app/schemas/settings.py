@@ -47,6 +47,7 @@ class SettingsResponse(SettingsBase):
     model_config = ConfigDict(from_attributes=True, protected_namespaces=())
 
     id: str
+    has_api_key: bool = Field(default=False, description="是否已保存 API 密钥")
     user_id: str
     created_at: datetime
     updated_at: datetime

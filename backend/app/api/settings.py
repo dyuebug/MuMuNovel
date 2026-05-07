@@ -205,6 +205,84 @@ def read_env_defaults() -> Dict[str, Any]:
     }
 
 
+
+async def _load_user_settings_or_none(user: User, db: AsyncSession) -> Optional[Settings]:
+    result = await db.execute(
+        select(Settings).where(Settings.user_id == user.user_id)
+    )
+    return result.scalar_one_or_none()
+
+
+def _provider_default_model(provider: Optional[str]) -> str:
+    normalized = str(provider or '').strip().lower()
+    if normalized == 'anthropic':
+        return 'claude-3-5-sonnet-latest'
+    if normalized == 'gemini':
+        return 'gemini-2.5-pro'
+    return str(app_settings.default_model or 'gpt-4o-mini').strip() or 'gpt-4o-mini'
+
+
+def _normalize_settings_write_payload(payload: Dict[str, Any], existing_settings: Optional[Settings] = None) -> Dict[str, Any]:
+    normalized = dict(payload)
+
+    provider = str(normalized.get('api_provider') or normalized.get('provider_type') or getattr(existing_settings, 'api_provider', '') or 'openai').strip().lower()
+    normalized['api_provider'] = provider
+    normalized['provider_type'] = provider
+
+    if 'api_key' in normalized:
+        incoming_api_key = str(normalized.get('api_key') or '').strip()
+        if incoming_api_key:
+            normalized['api_key'] = incoming_api_key
+        else:
+            normalized.pop('api_key', None)
+
+    if 'api_base_url' in normalized:
+        normalized['api_base_url'] = str(normalized.get('api_base_url') or '').strip()
+
+    if 'llm_model' in normalized:
+        llm_model = str(normalized.get('llm_model') or '').strip()
+        normalized['llm_model'] = llm_model or _provider_default_model(provider)
+
+    return normalized
+
+
+async def _resolve_probe_credentials(
+    *,
+    user: User,
+    db: AsyncSession,
+    api_key: Optional[str],
+    api_base_url: Optional[str],
+    provider: Optional[str],
+    llm_model: Optional[str],
+) -> Dict[str, str]:
+    resolved_api_key = str(api_key or '').strip()
+    resolved_api_base_url = str(api_base_url or '').strip()
+    resolved_provider = str(provider or '').strip().lower() or 'openai'
+    resolved_llm_model = str(llm_model or '').strip()
+
+    stored_settings = None
+    if not resolved_api_key or not resolved_api_base_url or not resolved_llm_model:
+        stored_settings = await _load_user_settings_or_none(user, db)
+
+    if stored_settings is not None:
+        if not resolved_api_key:
+            resolved_api_key = str(stored_settings.api_key or '').strip()
+        if not resolved_api_base_url:
+            resolved_api_base_url = str(stored_settings.api_base_url or '').strip()
+        if not resolved_llm_model:
+            resolved_llm_model = str(stored_settings.llm_model or '').strip()
+        if not provider:
+            resolved_provider = str(stored_settings.api_provider or resolved_provider or 'openai').strip().lower() or 'openai'
+
+    if not resolved_llm_model:
+        resolved_llm_model = _provider_default_model(resolved_provider)
+
+    return {
+        'api_key': resolved_api_key,
+        'api_base_url': resolved_api_base_url,
+        'provider': resolved_provider,
+        'llm_model': resolved_llm_model,
+    }
 def _should_route_probe_via_chat_completions(provider: str, api_base_url: str) -> bool:
     normalized_provider = str(provider or "").strip().lower()
     normalized_base_url = str(api_base_url or "").strip().rstrip("/")
@@ -552,9 +630,11 @@ def merge_web_research_preferences(preferences: Dict[str, Any], values: Dict[str
 
 def serialize_settings_response(settings_obj: Settings) -> Dict[str, Any]:
     base = SettingsResponse.model_validate(settings_obj).model_dump()
+    actual_api_key = str(getattr(settings_obj, "api_key", "") or "").strip()
+    base["has_api_key"] = bool(actual_api_key)
+    base["api_key"] = "********" if actual_api_key else ""
     base.update(extract_web_research_payload(load_settings_preferences(settings_obj)))
     return base
-
 
 def require_login(request: Request) -> User:
     """依赖：要求用户已登录"""
@@ -664,6 +744,18 @@ async def get_settings(
     return serialize_settings_response(settings)
 
 
+@router.get("/api-key")
+async def get_settings_api_key(
+    user: User = Depends(require_login),
+    db: AsyncSession = Depends(get_db)
+):
+    """?????????????? API Key?"""
+    settings = await _load_user_settings_or_none(user, db)
+    if not settings or not str(settings.api_key or "").strip():
+        return {"api_key": "", "has_api_key": False}
+    return {"api_key": str(settings.api_key or "").strip(), "has_api_key": True}
+
+
 @router.post("", response_model=SettingsResponse)
 async def save_settings(
     data: SettingsCreate,
@@ -685,7 +777,7 @@ async def save_settings(
     settings = result.scalar_one_or_none()
     
     # 准备数据
-    settings_dict = data.model_dump(exclude_unset=True)
+    settings_dict = _normalize_settings_write_payload(data.model_dump(exclude_unset=True), settings)
     web_research_values = pop_web_research_fields(settings_dict)
 
     # api_backup_urls 需要序列化为 JSON 字符串存储
@@ -773,7 +865,7 @@ async def update_settings(
         raise HTTPException(status_code=404, detail="设置不存在，请先创建设置")
     
     # 更新设置
-    update_data = data.model_dump(exclude_unset=True)
+    update_data = _normalize_settings_write_payload(data.model_dump(exclude_unset=True), settings)
     web_research_values = pop_web_research_fields(update_data)
 
     # api_backup_urls 需要序列化为 JSON 字符串存储
@@ -1051,7 +1143,7 @@ class WebResearchTestRequest(BaseModel):
 
 
 @router.post("/check-function-calling")
-async def check_function_calling_support(data: ApiTestRequest):
+async def check_function_calling_support(data: ApiTestRequest, user: User = Depends(require_login), db: AsyncSession = Depends(get_db)):
     """
     检查模型是否支持 Function Calling（工具调用）
     
@@ -1066,10 +1158,18 @@ async def check_function_calling_support(data: ApiTestRequest):
     Returns:
         检测结果包含支持状态、详细信息和建议
     """
-    api_key = data.api_key
-    api_base_url = data.api_base_url
-    provider = data.provider
-    llm_model = data.llm_model
+    resolved = await _resolve_probe_credentials(
+        user=user,
+        db=db,
+        api_key=data.api_key,
+        api_base_url=data.api_base_url,
+        provider=data.provider,
+        llm_model=data.llm_model,
+    )
+    api_key = resolved["api_key"]
+    api_base_url = resolved["api_base_url"]
+    provider = resolved["provider"]
+    llm_model = resolved["llm_model"]
     api_backup_urls = _normalize_probe_backup_urls(data.api_backup_urls)
     fallback_strategy = str(data.fallback_strategy or "auto").strip().lower() or "auto"
     cache_key = _build_probe_cache_key(
@@ -1392,7 +1492,7 @@ async def check_function_calling_support(data: ApiTestRequest):
 
 
 @router.post("/test")
-async def test_api_connection(data: ApiTestRequest):
+async def test_api_connection(data: ApiTestRequest, user: User = Depends(require_login), db: AsyncSession = Depends(get_db)):
     """
     Test API connectivity and basic text generation.
 
@@ -1402,10 +1502,18 @@ async def test_api_connection(data: ApiTestRequest):
     Returns:
         Probe result including latency, preview, and endpoint diagnostics.
     """
-    api_key = data.api_key
-    api_base_url = data.api_base_url
-    provider = data.provider
-    llm_model = data.llm_model
+    resolved = await _resolve_probe_credentials(
+        user=user,
+        db=db,
+        api_key=data.api_key,
+        api_base_url=data.api_base_url,
+        provider=data.provider,
+        llm_model=data.llm_model,
+    )
+    api_key = resolved["api_key"]
+    api_base_url = resolved["api_base_url"]
+    provider = resolved["provider"]
+    llm_model = resolved["llm_model"]
     api_backup_urls = _normalize_probe_backup_urls(data.api_backup_urls)
     fallback_strategy = str(data.fallback_strategy or "auto").strip().lower() or "auto"
     temperature = data.temperature if data.temperature is not None else 0.7
@@ -2101,26 +2209,31 @@ def build_fetch_models_headers(provider: str, api_key: str) -> Dict[str, str]:
 @router.post("/fetch-models", response_model=FetchModelsResponse)
 async def fetch_models(
     data: FetchModelsRequest,
-    user: User = Depends(require_login)
+    user: User = Depends(require_login),
+    db: AsyncSession = Depends(get_db)
 ):
     """
-    从 AI 提供商获取可用模型列表
+    获取 AI 提供商可用模型列表。
 
-    使用 OpenAI 兼容的 GET /v1/models 端点
-    支持多个候选端点自动尝试，包括：
-    - DeepSeek、GLM、Kimi 等国内提供商
-    - 硅基流动、OpenRouter 等聚合站
-    - 通过兼容子路径暴露的 Anthropic 协议端点
+    优先使用官方模型列表接口，并兼容 OpenAI 风格网关、DeepSeek、
+    OpenRouter、Anthropic 和 Gemini 的模型列表响应格式。
     """
-    api_key = (data.api_key or "").strip()
-    base_url = (data.api_base_url or "").strip()
-    provider = (data.provider or "openai").strip().lower()
+    resolved = await _resolve_probe_credentials(
+        user=user,
+        db=db,
+        api_key=data.api_key,
+        api_base_url=data.api_base_url,
+        provider=data.provider,
+        llm_model=None,
+    )
+    api_key = resolved["api_key"]
+    base_url = resolved["api_base_url"]
+    provider = resolved["provider"]
 
-    # 前端预检
     if not api_key:
         return FetchModelsResponse(
             success=False,
-            message="请先填写 API Key",
+            message="缺少 API Key",
             error="Missing API Key",
             error_type="ValidationError"
         )
@@ -2128,87 +2241,74 @@ async def fetch_models(
     if not base_url:
         return FetchModelsResponse(
             success=False,
-            message="请先填写 API Base URL",
+            message="缺少 API Base URL",
             error="Missing Base URL",
             error_type="ValidationError"
         )
 
-    # 构建候选端点列表：自定义 models_url 优先，其后按 provider 规则探测
     unique_candidates = build_official_model_url_candidates(provider, base_url, data.models_url)
 
-    logger.info(f"用户 {user.user_id} 请求获取模型列表")
+    logger.info(f"用户 {user.user_id} 获取模型列表")
     logger.info(f"  - 提供商: {provider}")
     logger.info(f"  - Base URL: {base_url}")
     logger.info(f"  - 候选端点: {unique_candidates}")
 
-    # 依次尝试候选端点
     last_error = None
     last_status_code = None
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         for candidate_url in unique_candidates:
             try:
-                logger.info(f"尝试端点: {candidate_url}")
+                logger.info(f"尝试获取模型列表: {candidate_url}")
 
                 headers = build_fetch_models_headers(provider, api_key)
-
                 params = {"key": api_key} if provider == "gemini" else None
                 response = await client.get(candidate_url, headers=headers, params=params)
                 response.raise_for_status()
 
                 models = parse_fetched_models(response.json())
                 if not models:
-                    logger.warning(f"端点 {candidate_url} 返回格式不符合预期")
+                    logger.warning(f"端点 {candidate_url} 未返回可用模型")
                     continue
 
-                if models:
-                    logger.info(f"成功获取 {len(models)} 个模型")
-                    return FetchModelsResponse(
-                        success=True,
-                        models=models,
-                        message=f"成功获取 {len(models)} 个可用模型"
-                    )
-                else:
-                    logger.warning(f"端点 {candidate_url} 返回空模型列表")
-                    continue
-
+                return FetchModelsResponse(
+                    success=True,
+                    models=models,
+                    message=f"已获取 {len(models)} 个模型"
+                )
             except httpx.HTTPStatusError as e:
                 last_status_code = e.response.status_code
                 last_error = f"HTTP {last_status_code}"
                 logger.warning(f"端点 {candidate_url} 返回 HTTP {last_status_code}")
 
                 if last_status_code in (401, 403):
-                    # 认证错误，不再尝试其他端点
                     return FetchModelsResponse(
                         success=False,
-                        message="API Key 认证失败",
+                        message="API Key 无效或权限不足",
                         error=f"HTTP {last_status_code}: {e.response.text[:200]}",
                         error_type="AuthenticationError"
                     )
-
             except httpx.TimeoutException:
                 last_error = "请求超时"
                 logger.warning(f"端点 {candidate_url} 请求超时")
-
             except Exception as e:
                 last_error = str(e)
-                logger.warning(f"端点 {candidate_url} 请求失败: {last_error}")
+                logger.warning(f"端点 {candidate_url} 获取模型失败: {last_error}")
 
-    # 所有候选端点均失败
-    logger.error(f"所有候选端点均失败，最后错误: {last_error}")
+    logger.error(f"所有候选模型端点均失败: {last_error}")
 
     if last_status_code in (404, 405):
         return FetchModelsResponse(
             success=False,
-            message="该提供商可能不支持模型列表接口",
-            error=f"所有候选端点均返回 {last_status_code}",
+            message="模型列表端点不存在或不支持",
+            error=f"端点返回 HTTP {last_status_code}",
             error_type="EndpointNotFound"
         )
 
     if "timeout" in str(last_error).lower():
         return FetchModelsResponse(
             success=False,
-            message="请求超时，请检查网络连接",
+            message="模型列表请求超时",
             error=last_error,
             error_type="TimeoutError"
         )
@@ -2216,6 +2316,6 @@ async def fetch_models(
     return FetchModelsResponse(
         success=False,
         message="获取模型列表失败",
-        error=last_error or "所有候选端点均失败",
+        error=last_error or "未返回可用模型",
         error_type="NetworkError"
     )
