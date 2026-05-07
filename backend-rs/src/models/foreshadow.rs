@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::NaiveDateTime;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -41,10 +41,10 @@ pub struct Model {
     pub auto_remind: bool,
     pub remind_before_chapters: i32,
     pub include_in_context: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub planted_at: Option<DateTime<Utc>>,
-    pub resolved_at: Option<DateTime<Utc>>,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+    pub planted_at: Option<NaiveDateTime>,
+    pub resolved_at: Option<NaiveDateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

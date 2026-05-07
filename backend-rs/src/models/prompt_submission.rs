@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::NaiveDateTime;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -24,10 +24,10 @@ pub struct Model {
     pub reviewer_id: Option<String>,
     #[sea_orm(column_type = "Text")]
     pub review_note: Option<String>,
-    pub reviewed_at: Option<DateTime<Utc>>,
+    pub reviewed_at: Option<NaiveDateTime>,
     pub workshop_item_id: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: Option<DateTime<Utc>>,
+    pub created_at: NaiveDateTime,
+    pub updated_at: Option<NaiveDateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
