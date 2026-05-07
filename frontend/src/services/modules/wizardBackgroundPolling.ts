@@ -7,10 +7,16 @@ export const runBackgroundTaskWithPolling = async <T>(
   payload: Record<string, unknown>,
   options?: SSEClientOptions<T>,
 ): Promise<T> => {
-  const createdTask = await backgroundTaskApi.createTask({
+  const createPayload: Parameters<typeof backgroundTaskApi.createTask>[0] = {
     task_type: taskType,
-    project_id: projectId,
     payload,
+  };
+  if (projectId) {
+    createPayload.project_id = projectId;
+  }
+
+  const createdTask = await backgroundTaskApi.createTask({
+    ...createPayload,
   });
 
   options?.onTaskCreated?.(createdTask.task_id);

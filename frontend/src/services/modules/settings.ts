@@ -24,6 +24,8 @@ const sanitizeSettingsUpdate = (data: SettingsUpdate): SettingsUpdate => {
 export const settingsApi = {
   getSettings: () => api.get<unknown, Settings>('/settings'),
 
+  getStoredApiKey: () => api.get<unknown, { api_key: string; has_api_key: boolean }>('/settings/api-key'),
+
   saveSettings: (data: SettingsUpdate) =>
     api.post<unknown, Settings>('/settings', sanitizeSettingsUpdate(data)),
 

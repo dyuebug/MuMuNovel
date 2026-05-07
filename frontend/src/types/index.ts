@@ -17,6 +17,7 @@ export interface Settings {
   user_id: string;
   api_provider: string;
   api_key: string;
+  has_api_key?: boolean;
   api_base_url: string;
   api_backup_urls?: string[];
   provider_type?: string;

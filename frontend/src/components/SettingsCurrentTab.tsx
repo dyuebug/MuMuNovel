@@ -64,6 +64,8 @@ export default function SettingsCurrentTab(props: any) {
   watchedWebResearchEnabled,
   webResearchTestResult
   } = props;
+  const providerHint = props.providerHint ?? {};
+
 
   const apiKeyInputPlaceholder = form.getFieldValue('api_key')
     ? 'sk-...'
@@ -182,7 +184,7 @@ export default function SettingsCurrentTab(props: any) {
                                 },
                                 {
                                   label: '主端点',
-                                  value: clipDisplayText(String(watchedBaseUrl), isMobile ? 18 : 28),
+                                  value: clipDisplayText(String(watchedBaseUrl || providerHint?.baseUrl || ''), isMobile ? 18 : 28),
                                   hint: `已配置 ${Math.max(endpoints.length, watchedBaseUrl === '未设置' ? 0 : 1)} 个端点`,
                                 },
                                 {
