@@ -57,14 +57,10 @@ export const useGenerationExecutionSettings = () => {
   const loadDefaults = useCallback(async () => {
     setFetchingModels(true);
     try {
-      const [settings, storedApiKeyResponse] = await Promise.all([
-        settingsApi.getSettings(),
-        settingsApi.getStoredApiKey(),
-      ]);
+      const { settings, storedApiKey } = await settingsApi.getSettingsWithStoredApiKey();
       const provider = (settings.provider_type || settings.api_provider || '').trim() || undefined;
       const model = settings.llm_model?.trim() || undefined;
       const webResearchEnabled = Boolean(settings.web_research_enabled);
-      const storedApiKey = String(storedApiKeyResponse.api_key || '').trim();
 
       setRuntimeProvider(provider);
       setCurrentSettingsModel(model);

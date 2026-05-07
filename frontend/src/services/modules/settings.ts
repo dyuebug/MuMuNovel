@@ -9,6 +9,17 @@ import type {
 import { api } from '../core/httpClient';
 import { isPlaceholderApiKey } from '../../utils/apiKey';
 
+export type StoredApiKeyResponse = {
+  api_key: string;
+  has_api_key: boolean;
+};
+
+export type SettingsWithStoredApiKey = {
+  settings: Settings;
+  storedApiKey: string;
+  hasStoredApiKey: boolean;
+};
+
 const sanitizeSettingsUpdate = (data: SettingsUpdate): SettingsUpdate => {
   const normalized: SettingsUpdate = { ...data };
   if (typeof normalized.api_key === 'string') {
@@ -21,10 +32,31 @@ const sanitizeSettingsUpdate = (data: SettingsUpdate): SettingsUpdate => {
   }
   return normalized;
 };
+
+const getStoredApiKey = () =>
+  api.get<unknown, StoredApiKeyResponse>('/settings/api-key');
+
+const getSettingsWithStoredApiKey = async (): Promise<SettingsWithStoredApiKey> => {
+  const [settings, storedApiKeyResponse] = await Promise.all([
+    api.get<unknown, Settings>('/settings'),
+    getStoredApiKey(),
+  ]);
+
+  const storedApiKey = String(storedApiKeyResponse.api_key || '').trim();
+
+  return {
+    settings,
+    storedApiKey,
+    hasStoredApiKey: Boolean(storedApiKeyResponse.has_api_key && storedApiKey),
+  };
+};
+
 export const settingsApi = {
   getSettings: () => api.get<unknown, Settings>('/settings'),
 
-  getStoredApiKey: () => api.get<unknown, { api_key: string; has_api_key: boolean }>('/settings/api-key'),
+  getStoredApiKey,
+
+  getSettingsWithStoredApiKey,
 
   saveSettings: (data: SettingsUpdate) =>
     api.post<unknown, Settings>('/settings', sanitizeSettingsUpdate(data)),

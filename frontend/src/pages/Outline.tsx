@@ -2504,13 +2504,9 @@ export default function Outline() {
     try {
       const hasOutlines = outlines.length > 0;
 
-      const [settings, storedApiKeyResponse] = await Promise.all([
-        settingsApi.getSettings(),
-        settingsApi.getStoredApiKey(),
-      ]);
+      const { settings, storedApiKey: api_key } = await settingsApi.getSettingsWithStoredApiKey();
 
       const { api_base_url, api_provider, provider_type } = settings;
-      const api_key = String(storedApiKeyResponse.api_key || '').trim();
 
       let loadedModels: Array<{ value: string, label: string }> = [];
 

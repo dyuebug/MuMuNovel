@@ -584,11 +584,7 @@ export default function MCPPluginsPage() {
     // 从设置中获取当前配置
     setCheckingFunctionCalling(true);
     try {
-      const [settings, storedApiKeyResponse] = await Promise.all([
-        settingsApi.getSettings(),
-        settingsApi.getStoredApiKey(),
-      ]);
-      const storedApiKey = String(storedApiKeyResponse.api_key || '').trim();
+      const { settings, storedApiKey } = await settingsApi.getSettingsWithStoredApiKey();
       
       if (!storedApiKey || !settings.llm_model) {
         message.warning('请先在设置页面配置 API Key 和模型');
