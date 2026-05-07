@@ -15,6 +15,22 @@ from app.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _build_generation_request_options(ai_service: AIService, provider: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    normalized_provider = str(provider or getattr(ai_service, "api_provider", "") or "").strip().lower()
+    if normalized_provider not in {"sub2api", "openai_responses"}:
+        return None
+
+    retry_cfg = getattr(getattr(ai_service, "config", None), "retry", None)
+    configured_retry_budget = int(getattr(retry_cfg, "max_retries", 2) or 2)
+    return {
+        "prefer_chat_completions": True,
+        "prefer_normalized_v1_candidate": True,
+        "transport_max_retries": max(1, min(configured_retry_budget, 2)),
+        "first_chunk_timeout": 20.0,
+        "allow_non_stream_fallback": False,
+    }
+
+
 class PlotExpansionService:
     """大纲剧情展开服务"""
     
@@ -134,10 +150,12 @@ class PlotExpansionService:
         # 调用AI生成章节规划
         logger.info(f"调用AI生成章节规划...")
         accumulated_text = ""
+        request_options = _build_generation_request_options(self.ai_service, provider)
         async for chunk in self.ai_service.generate_text_stream(
             prompt=prompt,
             provider=provider,
-            model=model
+            model=model,
+            request_options=request_options,
         ):
             accumulated_text += chunk
         
@@ -263,10 +281,12 @@ class PlotExpansionService:
             # 调用AI生成当前批次
             logger.info(f"调用AI生成第{batch_num + 1}批...")
             accumulated_text = ""
+            request_options = _build_generation_request_options(self.ai_service, provider)
             async for chunk in self.ai_service.generate_text_stream(
                 prompt=prompt,
                 provider=provider,
-                model=model
+                model=model,
+                request_options=request_options,
             ):
                 accumulated_text += chunk
             

@@ -33,6 +33,25 @@ router = APIRouter(prefix="/organizations", tags=["组织管理"])
 logger = get_logger(__name__)
 
 
+def _build_generation_request_options(ai_service: AIService) -> dict[str, object]:
+    retry_cfg = getattr(getattr(ai_service, "config", None), "retry", None)
+    configured_retry_budget = int(getattr(retry_cfg, "max_retries", 2) or 2)
+    provider = str(getattr(ai_service, "api_provider", "") or "").strip().lower()
+    request_options: dict[str, object] = {
+        "transport_max_retries": max(1, min(configured_retry_budget, 2)),
+    }
+    if provider in {"sub2api", "openai_responses"}:
+        request_options.update(
+            {
+                "prefer_chat_completions": True,
+                "prefer_normalized_v1_candidate": True,
+                "first_chunk_timeout": 20.0,
+                "allow_non_stream_fallback": False,
+            }
+        )
+    return request_options
+
+
 class OrganizationGenerateRequest(BaseModel):
     """AI生成组织的请求模型"""
     project_id: str = Field(..., description="项目ID")
@@ -499,8 +518,9 @@ async def generate_organization_stream(
                 ai_content = ""
                 chunk_count = 0
                 estimated_total = max(3000, len(prompt) * 8)
+                request_options = _build_generation_request_options(user_ai_service)
                 
-                async for chunk in user_ai_service.generate_text_stream(prompt=prompt):
+                async for chunk in user_ai_service.generate_text_stream(prompt=prompt, request_options=request_options):
                     chunk_count += 1
                     ai_content += chunk
                     

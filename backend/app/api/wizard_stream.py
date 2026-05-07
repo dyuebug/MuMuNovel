@@ -46,6 +46,29 @@ from app.api.settings import get_user_ai_service
 router = APIRouter(prefix="/wizard-stream", tags=["项目创建向导(流式)"])
 logger = get_logger(__name__)
 
+WIZARD_RESPONSES_TEXT_GENERATION_PROVIDERS = {"sub2api", "openai_responses"}
+WIZARD_GENERATION_FIRST_CHUNK_TIMEOUT = 20.0
+
+
+def _build_wizard_generation_request_options(
+    ai_service: AIService,
+    provider: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    normalized_provider = str(provider or getattr(ai_service, "api_provider", "") or "").strip().lower()
+    if normalized_provider not in WIZARD_RESPONSES_TEXT_GENERATION_PROVIDERS:
+        return None
+
+    retry_cfg = getattr(getattr(ai_service, "config", None), "retry", None)
+    configured_retry_budget = int(getattr(retry_cfg, "max_retries", 2) or 2)
+    transport_max_retries = max(1, min(configured_retry_budget, 2))
+    return {
+        "prefer_chat_completions": True,
+        "prefer_normalized_v1_candidate": True,
+        "transport_max_retries": transport_max_retries,
+        "first_chunk_timeout": WIZARD_GENERATION_FIRST_CHUNK_TIMEOUT,
+        "allow_non_stream_fallback": False,
+    }
+
 
 def _coerce_story_packet_like(
     value: Any,
@@ -370,6 +393,7 @@ async def world_building_generator(
         web_research_query = data.get("web_research_query")
         user_id = data.get("user_id")  # 从中间件注入
         reference_research_assets = _normalize_reference_research_assets(data.get("reference_research_assets"))
+        request_options = _build_wizard_generation_request_options(user_ai_service, provider)
         
         if not title or not description or not theme or not genre:
             yield await tracker.error("title、description、theme 和 genre 是必需的参数", 400)
@@ -420,6 +444,7 @@ async def world_building_generator(
         MAX_WORLD_RETRIES = 3  # 最多重试3次
         world_retry_count = 0
         world_generation_success = False
+        request_options = _build_wizard_generation_request_options(user_ai_service, provider)
         world_data = {}
         estimated_total = 1000
         
@@ -446,6 +471,7 @@ async def world_building_generator(
                     model=model,
                     tool_choice="required",
                     auto_mcp=enable_mcp,
+                    request_options=request_options,
                 ):
                     chunk_count += 1
                     accumulated_text += chunk
@@ -753,6 +779,7 @@ async def career_system_generator(
             reference_assets=careers_research_assets,
         )
         
+        request_options = _build_wizard_generation_request_options(user_ai_service, provider)
         estimated_total = 5000
         MAX_CAREER_RETRIES = 3  # 最多重试3次
         career_retry_count = 0
@@ -780,6 +807,7 @@ async def career_system_generator(
                     provider=provider,
                     model=model,
                     auto_mcp=enable_mcp,
+                    request_options=request_options,
                 ):
                     chunk_count += 1
                     career_response += chunk
@@ -1098,6 +1126,7 @@ async def characters_generator(
         BATCH_SIZE = 5  # 每批生成5个角色
         MAX_RETRIES = 3  # 每批最多重试3次
         all_characters = []
+        request_options = _build_wizard_generation_request_options(user_ai_service, provider)
         total_batches = (count + BATCH_SIZE - 1) // BATCH_SIZE
         
         for batch_idx in range(total_batches):
@@ -1183,6 +1212,7 @@ async def characters_generator(
                         model=model,
                         tool_choice="required",
                         auto_mcp=enable_mcp,
+                        request_options=request_options,
                     ):
                         chunk_count += 1
                         accumulated_text += chunk
@@ -1845,6 +1875,7 @@ async def outline_generator(
             project=project,
             chapter_count=outline_count
         )
+        request_options = _build_wizard_generation_request_options(user_ai_service, provider)
         
         # 流式生成大纲
         estimated_total = 1000
@@ -1859,6 +1890,7 @@ async def outline_generator(
             provider=provider,
             model=model,
             auto_mcp=enable_mcp,
+            request_options=request_options,
         ):
             chunk_count += 1
             accumulated_text += chunk
@@ -1896,6 +1928,7 @@ async def outline_generator(
                     provider=provider,
                     model=model,
                     auto_mcp=enable_mcp,
+                    request_options=request_options,
                 )
                 outline_data = _normalize_outline_items(retry_data)
                 yield await tracker.parsing("已自动修复返回格式，继续保存...", 0.8)
@@ -2153,6 +2186,7 @@ async def world_building_regenerate_generator(
                     model=model,
                     tool_choice="required",
                     auto_mcp=enable_mcp,
+                    request_options=request_options,
                 ):
                     chunk_count += 1
                     accumulated_text += chunk

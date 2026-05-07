@@ -13,6 +13,25 @@ import difflib
 logger = get_logger(__name__)
 
 
+def _build_generation_request_options(ai_service: AIService) -> Dict[str, Any]:
+    retry_cfg = getattr(getattr(ai_service, "config", None), "retry", None)
+    configured_retry_budget = int(getattr(retry_cfg, "max_retries", 2) or 2)
+    provider = str(getattr(ai_service, "api_provider", "") or "").strip().lower()
+    request_options: Dict[str, Any] = {
+        "transport_max_retries": max(1, min(configured_retry_budget, 2)),
+    }
+    if provider in {"sub2api", "openai_responses"}:
+        request_options.update(
+            {
+                "prefer_chat_completions": True,
+                "prefer_normalized_v1_candidate": True,
+                "first_chunk_timeout": 20.0,
+                "allow_non_stream_fallback": False,
+            }
+        )
+    return request_options
+
+
 FOCUS_AREA_LABELS: Dict[str, str] = {
     "pacing": "节奏把控 - 调整叙事速度，避免拖沓或过快",
     "emotion": "情感渲染 - 深化人物情感表达，增强感染力",
@@ -182,11 +201,13 @@ class ChapterRegenerator:
             # 4. 流式生成新内容，同时跟踪进度
             target_word_count = regenerate_request.target_word_count
             accumulated_length = 0
+            request_options = _build_generation_request_options(self.ai_service)
             
             async for chunk in self.ai_service.generate_text_stream(
                 prompt=full_prompt,
                 system_prompt=system_prompt_with_style,
-                temperature=0.7
+                temperature=0.7,
+                request_options=request_options,
             ):
                 # 发送内容块
                 yield {'type': 'chunk', 'content': chunk}

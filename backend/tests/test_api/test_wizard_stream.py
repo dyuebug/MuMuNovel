@@ -124,6 +124,54 @@ async def test_should_use_custom_web_research_query_for_world_building(monkeypat
     assert any("custom worldbuilding reference set" in chunk for chunk in chunks)
 
 
+async def test_should_forward_openai_compatible_request_options_to_world_building_stream(
+    monkeypatch,
+    wizard_stream_db: AsyncSession,
+    mock_user,
+):
+    fake_ai_service = FakeAIService()
+    fake_ai_service.api_provider = "sub2api"
+    fake_ai_service.config = SimpleNamespace(retry=SimpleNamespace(max_retries=5))
+
+    async def fake_collect_assets(**kwargs):
+        return {"assets": []}
+
+    async def fake_get_template(*args, **kwargs):
+        return "template"
+
+    def fake_format_prompt(template, **kwargs):
+        return "world prompt"
+
+    monkeypatch.setattr(wizard_stream.chapter_web_research_service, "collect_assets", fake_collect_assets)
+    monkeypatch.setattr(wizard_stream.PromptService, "get_template", fake_get_template)
+    monkeypatch.setattr(wizard_stream.PromptService, "format_prompt", fake_format_prompt)
+
+    chunks = []
+    async for chunk in wizard_stream.world_building_generator(
+        {
+            "title": "World Project",
+            "description": "seed project",
+            "theme": "mystery",
+            "genre": "fantasy",
+            "provider": "sub2api",
+            "model": "deepseek-v4-pro",
+            "user_id": mock_user.user_id,
+        },
+        wizard_stream_db,
+        fake_ai_service,
+    ):
+        chunks.append(chunk)
+
+    assert fake_ai_service.calls
+    request_options = fake_ai_service.calls[0]["request_options"]
+    assert request_options["prefer_chat_completions"] is True
+    assert request_options["prefer_normalized_v1_candidate"] is True
+    assert request_options["transport_max_retries"] == 2
+    assert request_options["first_chunk_timeout"] == 20.0
+    assert request_options["allow_non_stream_fallback"] is False
+    assert chunks
+
+
 
 
 async def test_should_use_custom_web_research_query_for_career_system(monkeypatch, wizard_stream_db: AsyncSession, mock_user):

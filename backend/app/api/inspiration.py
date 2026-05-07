@@ -17,6 +17,25 @@ router = APIRouter(prefix="/inspiration", tags=["灵感模式"])
 logger = get_logger(__name__)
 
 
+def _build_generation_request_options(ai_service: AIService) -> dict[str, object]:
+    retry_cfg = getattr(getattr(ai_service, "config", None), "retry", None)
+    configured_retry_budget = int(getattr(retry_cfg, "max_retries", 2) or 2)
+    provider = str(getattr(ai_service, "api_provider", "") or "").strip().lower()
+    request_options: dict[str, object] = {
+        "transport_max_retries": max(1, min(configured_retry_budget, 2)),
+    }
+    if provider in {"sub2api", "openai_responses"}:
+        request_options.update(
+            {
+                "prefer_chat_completions": True,
+                "prefer_normalized_v1_candidate": True,
+                "first_chunk_timeout": 20.0,
+                "allow_non_stream_fallback": False,
+            }
+        )
+    return request_options
+
+
 # 不同阶段的temperature设置（递减以保持一致性）
 TEMPERATURE_SETTINGS = {
     "title": 0.9,
@@ -616,13 +635,15 @@ async def generate_options(
             # 关键改进：使用递减的temperature以保持后续阶段与前文的一致性
             temperature = TEMPERATURE_SETTINGS.get(step, 0.7)
             logger.info(f"调用AI生成{step}选项... (temperature={temperature})")
+            request_options = _build_generation_request_options(ai_service)
             
             # 流式生成并累积文本
             accumulated_text = ""
             async for chunk in ai_service.generate_text_stream(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
-                temperature=temperature
+                temperature=temperature,
+                request_options=request_options,
             ):
                 accumulated_text += chunk
             
@@ -807,13 +828,15 @@ async def refine_options(
             # 反馈生成时使用稍高的temperature以获得更多样化的结果
             temperature = min(temperature + 0.1, 0.9)
             logger.info(f"调用AI根据反馈生成{step}选项... (temperature={temperature})")
+            request_options = _build_generation_request_options(ai_service)
             
             # 流式生成并累积文本
             accumulated_text = ""
             async for chunk in ai_service.generate_text_stream(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
-                temperature=temperature
+                temperature=temperature,
+                request_options=request_options,
             ):
                 accumulated_text += chunk
             
@@ -931,10 +954,12 @@ async def quick_generate(
         
         # 调用AI - 流式生成并累积文本
         accumulated_text = ""
+        request_options = _build_generation_request_options(ai_service)
         async for chunk in ai_service.generate_text_stream(
             prompt=prompts["user"],
             system_prompt=prompts["system"],
-            temperature=0.78
+            temperature=0.78,
+            request_options=request_options,
         ):
             accumulated_text += chunk
         
