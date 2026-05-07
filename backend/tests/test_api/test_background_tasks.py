@@ -362,6 +362,24 @@ async def test_should_not_override_known_metadata_when_background_task_missing(m
     assert result["error"] == "task_missing"
 
 
+async def test_should_return_missing_semantics_when_cancelling_missing_background_task(monkeypatch):
+    async def fake_cancel_task(task_id: str, user_id: str):
+        return None
+
+    monkeypatch.setattr(background_tasks_api.background_task_manager, "cancel_task", fake_cancel_task)
+
+    request = SimpleNamespace(state=SimpleNamespace(user_id="user-1"))
+    result = await background_tasks_api.cancel_background_task("missing-task", request)
+
+    assert result["task_id"] == "missing-task"
+    assert result["task_type"] is None
+    assert result["project_id"] is None
+    assert result["execution_mode"] is None
+    assert result["created_at"] is None
+    assert result["status"] == "cancelled"
+    assert result["error"] == "task_missing"
+
+
 async def test_should_inject_user_id_into_world_regenerate_background_task(monkeypatch, test_db: AsyncSession):
     captured = {}
     session_maker = async_sessionmaker(

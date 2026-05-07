@@ -27,7 +27,7 @@ from app.services.background_task_manager import background_task_manager
 from app.services.background_task_wizard_executor import run_wizard_background_task
 
 logger = get_logger(__name__)
-router = APIRouter(prefix="/background-tasks", tags=["后台任务"])
+router = APIRouter(prefix="/background-tasks", tags=["background-tasks"])
 
 USER_AI_SERVICE_CONFIG_TTL_SECONDS = 30.0
 _user_ai_service_config_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
@@ -96,10 +96,10 @@ class BackgroundTaskCreateRequest(BaseModel):
     task_type: TaskType
     project_id: str | None = None
     payload: Dict[str, Any] = Field(default_factory=dict)
-    stage_code: str | None = Field(default=None, description="当前工作流阶段编码，如 1.outline")
-    execution_mode: ExecutionMode = Field(default="interactive", description="执行模式：interactive/auto")
-    workflow_scope: str | None = Field(default=None, description="可选的执行范围说明")
-    checkpoint: Dict[str, Any] | None = Field(default=None, description="可选的阶段检查点快照")
+    stage_code: str | None = Field(default=None, description="Workflow stage code, for example 1.outline")
+    execution_mode: ExecutionMode = Field(default="interactive", description="Execution mode: interactive or auto")
+    workflow_scope: str | None = Field(default=None, description="Workflow scope")
+    checkpoint: Dict[str, Any] | None = Field(default=None, description="Workflow checkpoint payload")
 
 
 class BackgroundTaskWorkflowStateUpdateRequest(BaseModel):
@@ -438,7 +438,7 @@ async def _run_generation_task(
         raise RuntimeError(f"unsupported task type: {task_type}")
 
 
-@router.post("", summary="创建后台生成任务")
+@router.post("", summary="Create background task")
 async def create_background_task(
     data: BackgroundTaskCreateRequest,
     request: Request,
@@ -446,7 +446,7 @@ async def create_background_task(
 ):
     user_id = getattr(request.state, "user_id", None)
     if not user_id:
-        raise HTTPException(status_code=401, detail="未登录")
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     if data.task_type != "wizard_world_building":
         if not data.project_id:
@@ -457,7 +457,7 @@ async def create_background_task(
     stage_code = (data.stage_code or payload_stage_code or TASK_STAGE_DEFAULTS.get(data.task_type))
     execution_mode = (data.execution_mode or "interactive").lower()
     if execution_mode not in EXECUTION_MODES:
-        raise HTTPException(status_code=400, detail="非法执行模式")
+        raise HTTPException(status_code=400, detail="Invalid execution mode")
     workflow_scope = data.workflow_scope or payload_scope
     checkpoint = data.checkpoint if isinstance(data.checkpoint, dict) else payload_checkpoint
 
@@ -484,7 +484,7 @@ async def create_background_task(
         task_type=data.task_type,
         user_id=user_id,
         project_id=task_project_id,
-        message="后台任务已创建",
+        message="Background task created",
         stage_code=stage_code,
         execution_mode=execution_mode,
         workflow_scope=workflow_scope,
@@ -505,17 +505,17 @@ async def create_background_task(
     return record.to_dict()
 
 
-@router.get("", summary="查询后台任务列表")
+@router.get("", summary="List background tasks")
 async def list_background_tasks(
     request: Request,
-    project_id: str | None = Query(default=None, description="按项目ID过滤"),
-    statuses: str | None = Query(default=None, description="按状态过滤，逗号分隔"),
-    active_only: bool = Query(default=False, description="仅返回进行中任务"),
-    limit: int = Query(default=20, ge=1, le=100, description="返回数量上限"),
+    project_id: str | None = Query(default=None, description="Project ID filter"),
+    statuses: str | None = Query(default=None, description="Comma-separated task statuses to filter by"),
+    active_only: bool = Query(default=False, description="Only return active tasks"),
+    limit: int = Query(default=20, ge=1, le=100, description="Maximum number of tasks to return"),
 ):
     user_id = getattr(request.state, "user_id", None)
     if not user_id:
-        raise HTTPException(status_code=401, detail="未登录")
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     status_filters: set[str] = set()
     if statuses:
@@ -525,7 +525,7 @@ async def list_background_tasks(
         if invalid:
             raise HTTPException(
                 status_code=400,
-                detail=f"非法任务状态: {', '.join(invalid)}",
+                detail=f"Invalid task statuses: {", ".join(invalid)}",
             )
     if active_only:
         status_filters = status_filters.intersection({"pending", "running"}) if status_filters else {"pending", "running"}
@@ -543,11 +543,11 @@ async def list_background_tasks(
     }
 
 
-@router.get("/{task_id}", summary="查询后台任务状态")
+@router.get("/{task_id}", summary="Get background task status")
 async def get_background_task_status(task_id: str, request: Request):
     user_id = getattr(request.state, "user_id", None)
     if not user_id:
-        raise HTTPException(status_code=401, detail="未登录")
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     record = await background_task_manager.get_task(task_id, user_id)
     if not record:
@@ -559,7 +559,7 @@ async def get_background_task_status(task_id: str, request: Request):
             "project_id": None,
             "status": "cancelled",
             "progress": 100,
-            "message": "任务不存在",
+            "message": "Task not found",
             "error": "task_missing",
             "stage_code": None,
             "execution_mode": None,
@@ -574,20 +574,38 @@ async def get_background_task_status(task_id: str, request: Request):
     return record.to_dict()
 
 
-@router.post("/{task_id}/cancel", summary="取消后台任务")
+@router.post("/{task_id}/cancel", summary="Cancel background task")
 async def cancel_background_task(task_id: str, request: Request):
     user_id = getattr(request.state, "user_id", None)
     if not user_id:
-        raise HTTPException(status_code=401, detail="未登录")
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     record = await background_task_manager.cancel_task(task_id, user_id)
     if not record:
-        raise HTTPException(status_code=404, detail="任务不存在")
+        now = datetime.now(timezone.utc).isoformat()
+        logger.warning(f"Background task missing during cancel: user={user_id}, task={task_id}")
+        return {
+            "task_id": task_id,
+            "task_type": None,
+            "project_id": None,
+            "status": "cancelled",
+            "progress": 100,
+            "message": "Task not found",
+            "error": "task_missing",
+            "stage_code": None,
+            "execution_mode": None,
+            "workflow_scope": None,
+            "checkpoint": None,
+            "created_at": None,
+            "updated_at": now,
+            "started_at": None,
+            "completed_at": now,
+        }
 
     return record.to_dict()
 
 
-@router.patch("/{task_id}/workflow-state", summary="更新后台任务工作流状态")
+@router.patch("/{task_id}/workflow-state", summary="Update background task workflow state")
 async def update_background_task_workflow_state(
     task_id: str,
     data: BackgroundTaskWorkflowStateUpdateRequest,
@@ -595,7 +613,7 @@ async def update_background_task_workflow_state(
 ):
     user_id = getattr(request.state, "user_id", None)
     if not user_id:
-        raise HTTPException(status_code=401, detail="未登录")
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     record = await background_task_manager.update_workflow_state(
         task_id=task_id,
@@ -608,5 +626,5 @@ async def update_background_task_workflow_state(
         progress=data.progress,
     )
     if not record:
-        raise HTTPException(status_code=404, detail="任务不存在")
+        raise HTTPException(status_code=404, detail="Task not found")
     return record.to_dict()
