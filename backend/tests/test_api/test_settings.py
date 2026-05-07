@@ -121,7 +121,8 @@ async def test_should_auto_create_settings_on_first_get(
     assert response.status_code == 200
     body = response.json()
     assert body["api_provider"] == "custom-provider"
-    assert body["api_key"] == "env-key"
+    assert body["api_key"] == "********"
+    assert body["has_api_key"] is True
     assert body["llm_model"] == "env-model"
     assert body["max_tokens"] == 3210
 
@@ -200,9 +201,12 @@ async def test_should_update_existing_settings_via_post_and_deactivate_changed_a
     assert response.status_code == 200
     body = response.json()
     assert body["llm_model"] == "gpt-4.1"
-    assert body["api_key"] == "sk-updated"
+    assert body["api_key"] == "********"
+    assert body["has_api_key"] is True
 
     saved = await fetch_settings(test_db, mock_user.user_id)
+    assert saved is not None
+    assert saved.api_key == "sk-updated"
     prefs = json.loads(saved.preferences)
     assert prefs["api_presets"]["presets"][0]["is_active"] is False
 
@@ -240,6 +244,26 @@ async def test_should_update_settings_via_put(async_client, mock_settings):
     assert body["llm_model"] == "gpt-4o-updated"
     assert body["temperature"] == 0.25
     assert body["api_backup_urls"] == ["https://one.example.com/v1"]
+
+
+async def test_should_keep_existing_api_key_when_put_settings_omits_key(
+    async_client,
+    test_db,
+    mock_settings,
+):
+    payload = {
+        "llm_model": "gpt-4o-updated",
+        "temperature": 0.25,
+    }
+    response = await async_client.put("/api/settings", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["api_key"] == "********"
+    assert body["has_api_key"] is True
+
+    saved = await fetch_settings(test_db, mock_settings.user_id)
+    assert saved is not None
+    assert saved.api_key == mock_settings.api_key
 
 
 async def test_should_return_404_when_put_settings_without_existing(async_client):

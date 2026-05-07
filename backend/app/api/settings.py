@@ -234,7 +234,12 @@ def _normalize_settings_write_payload(payload: Dict[str, Any], existing_settings
         if incoming_api_key:
             normalized['api_key'] = incoming_api_key
         else:
-            normalized.pop('api_key', None)
+            # 前端常会把已保存的 key 以空值或掩码回填到表单里；
+            # 更新设置时若没有提交新 key，应保留数据库中的真实值。
+            if existing_settings is not None and str(existing_settings.api_key or '').strip():
+                normalized['api_key'] = str(existing_settings.api_key or '').strip()
+            else:
+                normalized.pop('api_key', None)
 
     if 'api_base_url' in normalized:
         normalized['api_base_url'] = str(normalized.get('api_base_url') or '').strip()
