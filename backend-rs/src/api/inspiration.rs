@@ -12,6 +12,26 @@ use serde_json::{json, Value};
 use crate::services::auth::Claims;
 use crate::services::inspiration_service::InspirationService;
 
+fn inspiration_error_status(detail: &str) -> StatusCode {
+    let lower = detail.to_lowercase();
+    let is_bad_request = lower.contains("api key")
+        || lower.contains("base url")
+        || lower.contains("invalid token")
+        || lower.contains("unauthorized")
+        || lower.contains("authentication")
+        || detail.contains("用户设置不存在")
+        || detail.contains("请先在设置")
+        || detail.contains("缺少有效")
+        || detail.contains("配置")
+        || detail.contains("密钥");
+
+    if is_bad_request {
+        StatusCode::BAD_REQUEST
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
 #[derive(Deserialize)]
 struct GenerateOptionsRequest {
     step: String,
@@ -43,10 +63,13 @@ async fn generate_options(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match InspirationService::generate_options(&db, &claims.sub, &body.step, &body.context).await {
         Ok(data) => Ok(Json(data)),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail": format!("生成选项失败: {}", e)})),
-        )),
+        Err(e) => {
+            let detail = format!("生成选项失败: {}", e);
+            Err((
+                inspiration_error_status(&detail),
+                Json(json!({ "detail": detail })),
+            ))
+        }
     }
 }
 
@@ -66,10 +89,13 @@ async fn refine_options(
     .await
     {
         Ok(data) => Ok(Json(data)),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail": format!("生成选项失败: {}", e)})),
-        )),
+        Err(e) => {
+            let detail = format!("生成选项失败: {}", e);
+            Err((
+                inspiration_error_status(&detail),
+                Json(json!({ "detail": detail })),
+            ))
+        }
     }
 }
 
@@ -91,10 +117,13 @@ async fn quick_generate(
     .await
     {
         Ok(data) => Ok(Json(data)),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail": format!("智能补全失败: {}", e)})),
-        )),
+        Err(e) => {
+            let detail = format!("智能补全失败: {}", e);
+            Err((
+                inspiration_error_status(&detail),
+                Json(json!({ "detail": detail })),
+            ))
+        }
     }
 }
 

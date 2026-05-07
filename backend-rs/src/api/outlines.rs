@@ -216,7 +216,7 @@ async fn create_single_chapter(
         ));
     }
 
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
     let content_str = ol.content.unwrap_or_default();
     let ch = chapter::ActiveModel {
         id: Set(Uuid::new_v4().to_string()),
@@ -395,7 +395,7 @@ async fn create_chapters_from_plans(
     }
 
     let mut created = Vec::new();
-    let now = Utc::now();
+    let now = Utc::now().naive_utc();
 
     for (i, plan) in body.plans.iter().enumerate() {
         let chapter_number = start_chapter_num + i as i32;

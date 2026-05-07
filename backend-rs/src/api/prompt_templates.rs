@@ -110,8 +110,8 @@ async fn get_templates_by_category(
             "parameters": t.parameters,
             "is_active": t.is_active,
             "is_system_default": false,
-            "created_at": t.created_at,
-            "updated_at": t.updated_at,
+            "created_at": t.created_at.and_utc().to_rfc3339(),
+            "updated_at": t.updated_at.and_utc().to_rfc3339(),
         });
         category_map.entry(cat).or_default().push(tmpl);
     }

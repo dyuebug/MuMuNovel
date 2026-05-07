@@ -7,15 +7,28 @@ import type {
   SettingsUpdate,
 } from '../../types';
 import { api } from '../core/httpClient';
+import { isPlaceholderApiKey } from '../../utils/apiKey';
 
+const sanitizeSettingsUpdate = (data: SettingsUpdate): SettingsUpdate => {
+  const normalized: SettingsUpdate = { ...data };
+  if (typeof normalized.api_key === 'string') {
+    const trimmed = normalized.api_key.trim();
+    if (!trimmed || isPlaceholderApiKey(trimmed)) {
+      delete normalized.api_key;
+    } else {
+      normalized.api_key = trimmed;
+    }
+  }
+  return normalized;
+};
 export const settingsApi = {
   getSettings: () => api.get<unknown, Settings>('/settings'),
 
   saveSettings: (data: SettingsUpdate) =>
-    api.post<unknown, Settings>('/settings', data),
+    api.post<unknown, Settings>('/settings', sanitizeSettingsUpdate(data)),
 
   updateSettings: (data: SettingsUpdate) =>
-    api.put<unknown, Settings>('/settings', data),
+    api.put<unknown, Settings>('/settings', sanitizeSettingsUpdate(data)),
 
   deleteSettings: () => api.delete<unknown, { message: string; user_id: string }>('/settings'),
 
