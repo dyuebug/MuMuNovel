@@ -1,5 +1,6 @@
 @echo off
 setlocal EnableExtensions
+chcp 65001 >nul
 set "NO_PAUSE_FLAG="
 if defined CI set "NO_PAUSE_FLAG=1"
 if not exist CONIN$ set "NO_PAUSE_FLAG=1"
