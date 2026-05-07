@@ -1,4 +1,6 @@
-use chrono::Utc;
+use std::env;
+
+use chrono::{DateTime, NaiveDateTime, Utc};
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -31,7 +33,7 @@ fn is_placeholder(key: &str) -> bool {
         "your_gemini_api_key_here",
         "your_api_key_here",
     ];
-    placeholders.contains(&key) || key.starts_with("sk-placeholder")
+    placeholders.contains(&key) || key == PLACEHOLDER_MASK || key.starts_with("sk-placeholder")
 }
 
 fn mask_api_key(key: &str) -> String {
@@ -81,6 +83,110 @@ fn set_web_research(prefs_json: Option<&str>, wr: &Value) -> serde_json::Result<
 
 pub struct SettingsService;
 
+fn format_timestamp(value: NaiveDateTime) -> String {
+    DateTime::<Utc>::from_naive_utc_and_offset(value, Utc).to_rfc3339()
+}
+
+
+fn env_string(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn env_u32(key: &str, default: u32) -> u32 {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .unwrap_or(default)
+}
+
+fn normalize_api_key(key: Option<String>) -> Option<String> {
+    key.filter(|value| !value.is_empty() && !is_placeholder(value))
+}
+
+fn default_ai_provider() -> String {
+    env_string("DEFAULT_AI_PROVIDER").unwrap_or_else(|| "openai".to_string())
+}
+
+fn default_model() -> String {
+    env_string("DEFAULT_MODEL").unwrap_or_else(|| "gpt-4".to_string())
+}
+
+fn default_temperature() -> f64 {
+    env::var("DEFAULT_TEMPERATURE")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .unwrap_or(0.7)
+}
+
+fn default_max_tokens() -> u32 {
+    env_u32("DEFAULT_MAX_TOKENS", 32000)
+}
+
+fn env_api_key_for_provider(provider: &str) -> Option<String> {
+    match provider {
+        "anthropic" => normalize_api_key(env_string("ANTHROPIC_API_KEY")),
+        "gemini" => normalize_api_key(env_string("GEMINI_API_KEY")),
+        _ => normalize_api_key(env_string("OPENAI_API_KEY")),
+    }
+}
+
+fn env_base_url_for_provider(provider: &str) -> Option<String> {
+    match provider {
+        "anthropic" => env_string("ANTHROPIC_BASE_URL"),
+        "gemini" => env_string("GEMINI_BASE_URL"),
+        _ => env_string("OPENAI_BASE_URL"),
+    }
+}
+
+fn normalize_openai_compatible_base_url(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "https://api.openai.com/v1".to_string();
+    }
+
+    if let Ok(mut url) = reqwest::Url::parse(trimmed) {
+        let path = url.path().trim_matches('/');
+        if path.is_empty() {
+            url.set_path("/v1");
+            return url.to_string().trim_end_matches('/').to_string();
+        }
+    }
+
+    trimmed.to_string()
+}
+
+fn resolve_provider(explicit_provider: Option<&str>, stored_provider_type: &str, stored_provider: &str) -> String {
+    explicit_provider
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let value = stored_provider_type.trim().to_lowercase();
+            (!value.is_empty()).then_some(value)
+        })
+        .or_else(|| {
+            let value = stored_provider.trim().to_lowercase();
+            (!value.is_empty()).then_some(value)
+        })
+        .unwrap_or_else(default_ai_provider)
+}
+
+fn resolve_base_url(provider: &str, stored_base_url: &str) -> String {
+    let candidate = {
+        let trimmed = stored_base_url.trim();
+        (!trimmed.is_empty())
+            .then_some(trimmed.to_string())
+            .or_else(|| env_base_url_for_provider(provider))
+    };
+
+    match provider {
+        "anthropic" => candidate.unwrap_or_default().trim_end_matches('/').to_string(),
+        _ => normalize_openai_compatible_base_url(candidate.as_deref().unwrap_or("https://api.openai.com/v1")),
+    }
+}
+
 impl SettingsService {
     pub async fn get_or_create(
         db: &DatabaseConnection,
@@ -99,22 +205,25 @@ impl SettingsService {
             }
             None => {
                 let id = Uuid::new_v4().to_string();
-                let now = Utc::now();
+                let now = Utc::now().naive_utc();
                 let prefs_str = serde_json::to_string(&json!({"web_research": web_research_defaults()}))?;
+                let default_provider = default_ai_provider();
+                let default_key = env_api_key_for_provider(&default_provider).unwrap_or_default();
+                let default_base_url = resolve_base_url(&default_provider, "");
 
                 let model = settings::ActiveModel {
                     id: Set(id.clone()),
                     user_id: Set(user_id.to_string()),
-                    api_provider: Set("openai".into()),
-                    api_key: Set(String::new()),
-                    api_base_url: Set(String::new()),
+                    api_provider: Set(default_provider.clone()),
+                    api_key: Set(default_key),
+                    api_base_url: Set(default_base_url),
                     api_backup_urls: Set(None),
-                    provider_type: Set("openai".into()),
+                    provider_type: Set(default_provider),
                     fallback_strategy: Set("auto".into()),
                     azure_api_version: Set(None),
-                    llm_model: Set("gpt-4".into()),
-                    temperature: Set(0.7),
-                    max_tokens: Set(2000),
+                    llm_model: Set(default_model()),
+                    temperature: Set(default_temperature()),
+                    max_tokens: Set(default_max_tokens() as i32),
                     system_prompt: Set(None),
                     preferences: Set(Some(prefs_str)),
                     created_at: Set(now),
@@ -160,7 +269,10 @@ impl SettingsService {
                 let mut active: settings::ActiveModel = s.into();
                 if let Some(v) = body.get("api_provider").and_then(|v| v.as_str()) { active.api_provider = Set(v.to_string()); }
                 if let Some(v) = body.get("api_key").and_then(|v| v.as_str()) {
-                    if !is_placeholder(v) { active.api_key = Set(v.to_string()); }
+                    let trimmed = v.trim();
+                    if !trimmed.is_empty() && !is_placeholder(trimmed) {
+                        active.api_key = Set(trimmed.to_string());
+                    }
                 }
                 if let Some(v) = body.get("api_base_url").and_then(|v| v.as_str()) { active.api_base_url = Set(v.to_string()); }
                 active.api_backup_urls = Set(serialize_api_backup_urls(&backup_urls));
@@ -173,7 +285,7 @@ impl SettingsService {
                 if let Some(v) = body.get("system_prompt").and_then(|v| v.as_str()) { active.system_prompt = Set(Some(v.to_string())); }
                 if let Some(v) = body.get("preferences").and_then(|v| v.as_str()) { active.preferences = Set(Some(v.to_string())); }
                 if let Some(p) = new_prefs { active.preferences = Set(Some(p)); }
-                active.updated_at = Set(Utc::now());
+                active.updated_at = Set(Utc::now().naive_utc());
 
                 let saved = active.update(db).await?;
                 let web_research = merge_web_research(saved.preferences.as_deref());
@@ -182,9 +294,10 @@ impl SettingsService {
             }
             None => {
                 let id = Uuid::new_v4().to_string();
-                let now = Utc::now();
+                let now = Utc::now().naive_utc();
                 let wr_patch = extract_web_research_patch(body);
                 let default_prefs = serde_json::to_string(&json!({"web_research": web_research_defaults()}))?;
+                let default_provider = default_ai_provider();
                 let prefs = if wr_patch.is_object() && wr_patch.as_object().map(|o| o.len()).unwrap_or(0) > 0 {
                     Some(set_web_research(Some(&default_prefs), &wr_patch)?)
                 } else {
@@ -195,21 +308,21 @@ impl SettingsService {
                     .and_then(|v| v.as_array())
                     .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                     .unwrap_or_default();
-                let api_key = body.get("api_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let api_key = normalize_api_key(body.get("api_key").and_then(|v| v.as_str()).map(|v| v.trim().to_string())).unwrap_or_default();
 
                 let model = settings::ActiveModel {
                     id: Set(id.clone()),
                     user_id: Set(user_id.to_string()),
-                    api_provider: Set(body.get("api_provider").and_then(|v| v.as_str()).unwrap_or("openai").to_string()),
+                    api_provider: Set(body.get("api_provider").and_then(|v| v.as_str()).unwrap_or(&default_provider).to_string()),
                     api_key: Set(api_key),
-                    api_base_url: Set(body.get("api_base_url").and_then(|v| v.as_str()).unwrap_or("").to_string()),
+                    api_base_url: Set(body.get("api_base_url").and_then(|v| v.as_str()).map(String::from).unwrap_or_else(|| resolve_base_url(&default_provider, ""))),
                     api_backup_urls: Set(serialize_api_backup_urls(&backup_urls)),
-                    provider_type: Set(body.get("provider_type").and_then(|v| v.as_str()).unwrap_or("openai").to_string()),
+                    provider_type: Set(body.get("provider_type").and_then(|v| v.as_str()).unwrap_or(&default_provider).to_string()),
                     fallback_strategy: Set(body.get("fallback_strategy").and_then(|v| v.as_str()).unwrap_or("auto").to_string()),
                     azure_api_version: Set(body.get("azure_api_version").and_then(|v| v.as_str()).map(String::from)),
-                    llm_model: Set(body.get("llm_model").and_then(|v| v.as_str()).unwrap_or("gpt-4").to_string()),
-                    temperature: Set(body.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.7)),
-                    max_tokens: Set(body.get("max_tokens").and_then(|v| v.as_i64()).unwrap_or(2000) as i32),
+                    llm_model: Set(body.get("llm_model").and_then(|v| v.as_str()).unwrap_or(&default_model()).to_string()),
+                    temperature: Set(body.get("temperature").and_then(|v| v.as_f64()).unwrap_or(default_temperature())),
+                    max_tokens: Set(body.get("max_tokens").and_then(|v| v.as_i64()).unwrap_or(default_max_tokens() as i64) as i32),
                     system_prompt: Set(body.get("system_prompt").and_then(|v| v.as_str()).map(String::from)),
                     preferences: Set(prefs.clone()),
                     created_at: Set(now),
@@ -235,16 +348,44 @@ impl SettingsService {
             .filter(settings::Column::UserId.eq(user_id))
             .one(db)
             .await
-            .map_err(|e| format!("读取设置失败: {}", e))?
-            .ok_or("用户设置不存在，请先在设置页配置AI")?;
+            .map_err(|e| format!("failed to load settings: {}", e))?
+            .ok_or("settings not found")?;
+
+        let provider = resolve_provider(provider_override, &s.provider_type, &s.api_provider);
+        let api_key = normalize_api_key(Some(s.api_key))
+            .or_else(|| env_api_key_for_provider(&provider))
+            .unwrap_or_default();
+        if api_key.is_empty() {
+            return Err(format!(
+                "current AI settings are missing a usable API key for provider {}",
+                provider
+            ));
+        }
+        let base_url = resolve_base_url(&provider, &s.api_base_url);
+        let model = model_override
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| {
+                let stored = s.llm_model.trim().to_string();
+                if stored.is_empty() {
+                    default_model()
+                } else {
+                    stored
+                }
+            });
+        let max_tokens = if s.max_tokens > 0 {
+            s.max_tokens as u32
+        } else {
+            default_max_tokens()
+        };
 
         Ok(AIConfig {
-            provider: provider_override.map(|s| s.to_string()).unwrap_or(s.api_provider),
-            api_key: s.api_key,
-            base_url: s.api_base_url,
-            model: model_override.map(|s| s.to_string()).unwrap_or(s.llm_model),
+            provider,
+            api_key,
+            base_url,
+            model,
             temperature: temperature_override.unwrap_or(s.temperature),
-            max_tokens: s.max_tokens as u32,
+            max_tokens,
             system_prompt: s.system_prompt,
             max_retries: 3,
             request_delay_ms: 200,
@@ -263,9 +404,9 @@ impl SettingsService {
         match existing {
             Some(s) => {
                 settings::Entity::delete_by_id(&s.id).exec(db).await?;
-                Ok(json!({"message": "设置已删除", "user_id": user_id}))
+                Ok(json!({"message": "settings deleted", "user_id": user_id}))
             }
-            None => Ok(json!({"message": "无设置可删除", "user_id": user_id})),
+            None => Ok(json!({"message": "no settings to delete", "user_id": user_id})),
         }
     }
 }
@@ -295,8 +436,8 @@ fn build_response(saved: &settings::Model, web_research: &Value, backup_urls: &[
         "web_research_grok_model": web_research["web_research_grok_model"],
         "web_research_grok_search_enabled": web_research["web_research_grok_search_enabled"],
         "preferences": saved.preferences,
-        "created_at": saved.created_at.to_rfc3339(),
-        "updated_at": saved.updated_at.to_rfc3339(),
+        "created_at": format_timestamp(saved.created_at),
+        "updated_at": format_timestamp(saved.updated_at),
     })
 }
 
@@ -375,7 +516,7 @@ impl SettingsService {
 
         let mut active: settings::ActiveModel = settings.into();
         active.preferences = Set(Some(new_prefs));
-        active.updated_at = Set(Utc::now());
+        active.updated_at = Set(Utc::now().naive_utc());
         active.update(db).await?;
 
         Ok(new_preset)
@@ -414,7 +555,7 @@ impl SettingsService {
 
         let mut active: settings::ActiveModel = settings.into();
         active.preferences = Set(Some(new_prefs));
-        active.updated_at = Set(Utc::now());
+        active.updated_at = Set(Utc::now().naive_utc());
         active.update(db).await?;
 
         Ok(result)
@@ -437,10 +578,10 @@ impl SettingsService {
 
         let mut active: settings::ActiveModel = settings.into();
         active.preferences = Set(Some(new_prefs));
-        active.updated_at = Set(Utc::now());
+        active.updated_at = Set(Utc::now().naive_utc());
         active.update(db).await?;
 
-        Ok(json!({"success": true, "message": "预设已删除"}))
+        Ok(json!({"success": true, "message": "preset deleted"}))
     }
 
     pub async fn activate_preset(
@@ -475,7 +616,10 @@ impl SettingsService {
         if let Some(cfg) = config {
             if let Some(v) = cfg.get("api_provider").and_then(|v| v.as_str()) { active.api_provider = Set(v.to_string()); }
             if let Some(v) = cfg.get("api_key").and_then(|v| v.as_str()) {
-                if !is_placeholder(v) { active.api_key = Set(v.to_string()); }
+                let trimmed = v.trim();
+                if !trimmed.is_empty() && !is_placeholder(trimmed) {
+                    active.api_key = Set(trimmed.to_string());
+                }
             }
             if let Some(v) = cfg.get("api_base_url").and_then(|v| v.as_str()) { active.api_base_url = Set(v.to_string()); }
             if let Some(v) = cfg.get("api_backup_urls") {
@@ -491,10 +635,10 @@ impl SettingsService {
             if let Some(v) = cfg.get("system_prompt").and_then(|v| v.as_str()) { active.system_prompt = Set(Some(v.to_string())); }
         }
         active.preferences = Set(Some(new_prefs));
-        active.updated_at = Set(Utc::now());
+        active.updated_at = Set(Utc::now().naive_utc());
         active.update(db).await?;
 
-        Ok(json!({"success": true, "message": "预设已激活", "preset": result}))
+        Ok(json!({"success": true, "message": "preset activated", "preset": result}))
     }
 
     pub async fn create_preset_from_current(
@@ -541,7 +685,7 @@ impl SettingsService {
 
         let mut active: settings::ActiveModel = settings.into();
         active.preferences = Set(Some(new_prefs));
-        active.updated_at = Set(Utc::now());
+        active.updated_at = Set(Utc::now().naive_utc());
         active.update(db).await?;
 
         Ok(new_preset)
