@@ -1,5 +1,5 @@
 use futures::StreamExt;
-use reqwest::Client;
+use reqwest::{header::CONTENT_TYPE, Client};
 use serde_json::Value;
 use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
@@ -13,6 +13,32 @@ pub struct OpenAIClient {
 }
 
 impl OpenAIClient {
+
+    fn preview_text(text: &str) -> String {
+        let trimmed = text.trim();
+        let collapsed = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
+        if collapsed.len() > 240 {
+            format!("{}...", &collapsed[..240])
+        } else {
+            collapsed
+        }
+    }
+
+    fn invalid_content_error(prefix: &str, status: reqwest::StatusCode, text: &str) -> String {
+        let preview = Self::preview_text(text);
+        if text.trim_start().starts_with('<') {
+            format!(
+                "{} returned non-JSON content. The Base URL may be incorrect (for example, missing /v1). HTTP {}, response preview: {}",
+                prefix, status, preview
+            )
+        } else {
+            format!(
+                "{} returned invalid JSON. HTTP {}, response preview: {}",
+                prefix, status, preview
+            )
+        }
+    }
+
     pub fn new(api_key: &str, base_url: &str) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
@@ -56,13 +82,15 @@ impl OpenAIClient {
             .await
             .map_err(|e| format!("OpenAI request failed: {}", e))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+
+        if !status.is_success() {
             return Err(format!("OpenAI HTTP {}: {}", status, text));
         }
 
-        let json: Value = resp.json().await.map_err(|e| format!("{}", e))?;
+        let json: Value = serde_json::from_str(&text)
+            .map_err(|_| Self::invalid_content_error("OpenAI", status, &text))?;
         Self::parse_response(&json)
     }
 
@@ -126,10 +154,45 @@ impl OpenAIClient {
             .await
             .map_err(|e| format!("OpenAI stream request failed: {}", e))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
+        let status = resp.status();
+        if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
             return Err(format!("OpenAI stream HTTP {}: {}", status, text));
+        }
+
+        let content_type = resp
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        if !content_type.contains("text/event-stream") {
+            let text = resp.text().await.unwrap_or_default();
+            if let Ok(json) = serde_json::from_str::<Value>(&text) {
+                let parsed = Self::parse_response(&json)?;
+                if !parsed.content.is_empty() {
+                    let _ = tx
+                        .send(Ok(AIStreamChunk {
+                            content: Some(parsed.content),
+                            tool_calls: None,
+                            done: false,
+                            finish_reason: None,
+                        }))
+                        .await;
+                }
+                let _ = tx
+                    .send(Ok(AIStreamChunk {
+                        content: None,
+                        tool_calls: parsed.tool_calls,
+                        done: true,
+                        finish_reason: parsed.finish_reason.or(Some("stop".into())),
+                    }))
+                    .await;
+                return Ok(());
+            }
+
+            return Err(Self::invalid_content_error("OpenAI stream", status, &text));
         }
 
         let mut stream = resp.bytes_stream();
