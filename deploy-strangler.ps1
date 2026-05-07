@@ -6,6 +6,7 @@ param(
     [switch]$SkipFrontendBuild,
     [switch]$FullRestart,
     [switch]$NoPause,
+    [switch]$NonInteractive,
     [switch]$RepairPostgresPassword,
     [int]$HealthTimeoutSec = 180
 )
@@ -13,6 +14,31 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 Set-Location -Path $PSScriptRoot
+
+function Test-InteractiveConsole {
+    if (
+        $NoPause -or
+        $NonInteractive -or
+        -not [Environment]::UserInteractive -or
+        -not [string]::IsNullOrWhiteSpace($env:CI)
+    ) {
+        return $false
+    }
+
+    try {
+        return (
+            $Host.Name -eq 'ConsoleHost' -and
+            -not [Console]::IsInputRedirected -and
+            -not [Console]::IsOutputRedirected -and
+            -not [Console]::IsErrorRedirected
+        )
+    } catch {
+        return $false
+    }
+}
+
+$ShouldPauseOnExit = Test-InteractiveConsole
+
 
 $ComposeFile = "docker-compose.strangler.yml"
 $DbService = "postgres"
@@ -168,7 +194,20 @@ JWT_SECRET=<random string with at least 32 characters>
         Write-LogBlock $message
         throw $message
     }
-    Write-LogLine "Required environment OK: JWT_SECRET is set."
+    if ($jwtSecret.Length -lt 32) {
+        $message = "JWT_SECRET is set but too short. Use at least 32 characters for a stable deployment secret."
+        Write-LogBlock $message
+        throw $message
+    }
+
+    $postgresPassword = Get-ComposeEnvironmentValue -Name 'POSTGRES_PASSWORD' -Default '123456'
+    if ([string]::IsNullOrWhiteSpace($postgresPassword)) {
+        $message = "POSTGRES_PASSWORD resolved to blank after applying compose defaults. Set POSTGRES_PASSWORD in .env to override it."
+        Write-LogBlock $message
+        throw $message
+    }
+
+    Write-LogLine "Required environment OK: JWT_SECRET is set and POSTGRES_PASSWORD resolved successfully."
 }
 
 function Invoke-PostgresNetworkCredentialProbe {
@@ -253,6 +292,18 @@ function Test-PostgresNetworkCredentials {
     }
 }
 
+function Show-ContainerDiagnostics {
+    param(
+        [string]$ContainerName,
+        [string]$ServiceName,
+        [string]$Label,
+        [int]$Tail = 80
+    )
+    Write-LogLine "Collecting diagnostics for $Label ($ContainerName/$ServiceName)."
+    Invoke-LoggedCommand -Command @('docker','inspect',$ContainerName) -Label "diag inspect $ServiceName" -IgnoreExitCode | Out-Null
+    Invoke-LoggedCommand -Command (@('docker','compose') + (Get-DockerComposeArgs) + @('logs',"--tail=$Tail",$ServiceName)) -Label "diag logs $ServiceName" -IgnoreExitCode | Out-Null
+}
+
 function Wait-ContainerHealthy {
     param(
         [string]$ContainerName,
@@ -280,6 +331,19 @@ function Wait-ContainerHealthy {
         }
         Start-Sleep -Seconds 3
     }
+    Write-LogLine "$Label health wait timed out. Last status: $lastStatus"
+    if ($ContainerName -eq $PythonContainer) {
+        Show-ContainerDiagnostics -ContainerName $PythonContainer -ServiceName $PythonService -Label $Label -Tail 120
+    }
+    elseif ($ContainerName -eq $RustContainer) {
+        Show-ContainerDiagnostics -ContainerName $RustContainer -ServiceName $RustService -Label $Label -Tail 120
+    }
+    elseif ($ContainerName -eq $NginxContainer) {
+        Show-ContainerDiagnostics -ContainerName $NginxContainer -ServiceName $NginxService -Label $Label -Tail 120
+    }
+    elseif ($ContainerName -eq $DbContainer) {
+        Show-ContainerDiagnostics -ContainerName $DbContainer -ServiceName $DbService -Label $Label -Tail 120
+    }
     throw "Timed out waiting for $Label. Last status: $lastStatus"
 }
 
@@ -292,8 +356,8 @@ function Test-DockerDaemon {
     $errorMessage = @"
 Docker daemon is not running.
 
-请先启动 Docker Desktop，确认 Engine running 后再试。
-原始错误: $($result.Output)
+閻犲洤鍢查崢娑㈠触椤栨艾袟 Docker Desktop闁挎稑鐬奸垾妯兼媼?Engine running 闁告艾楠搁崯鈧悹鍥ㄦ磸閳?
+闁告鍠庨～鎰版煥濞嗘帩鍤? $($result.Output)
 "@
     Write-LogBlock $errorMessage
     throw $errorMessage
@@ -380,7 +444,7 @@ Write-Step "Starting Rust backend"
 Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('up', '-d', '--force-recreate', $RustService)) -Label "docker compose up rust-backend" | Out-Null
 
 Write-Step "Waiting for backends to be healthy"
-Wait-ContainerHealthy -ContainerName $PythonContainer -Label "Python backend" -TimeoutSec 120
+Wait-ContainerHealthy -ContainerName $PythonContainer -Label "Python backend" -TimeoutSec 180
 Wait-ContainerHealthy -ContainerName $RustContainer -Label "Rust backend" -TimeoutSec 60
 
 # ---- Start Nginx ----
@@ -459,7 +523,7 @@ Write-Host "   Python: docker://${PythonContainer}:8000 (fallback)" -ForegroundC
 Write-Host "   DB:     docker://${DbContainer}:5432" -ForegroundColor DarkCyan
 Write-LogLine "Strangler deploy succeeded."
 
-if (-not $NoPause) {
+if ($ShouldPauseOnExit) {
     Write-Host ""
-    Read-Host -Prompt "部署完成，按 Enter 关闭窗口"
+    Read-Host -Prompt "Deployment finished, press Enter to close this window"
 }
