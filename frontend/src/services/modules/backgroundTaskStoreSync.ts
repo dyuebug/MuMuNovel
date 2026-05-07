@@ -15,7 +15,7 @@ export const buildMissingBackgroundTaskStatus = (taskId: string): BackgroundTask
     progress: 100,
     message: '任务不存在',
     result: null,
-    error: null,
+    error: 'task_missing',
     created_at: now,
     updated_at: now,
     completed_at: now,

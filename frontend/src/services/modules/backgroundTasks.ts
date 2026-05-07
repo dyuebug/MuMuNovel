@@ -84,7 +84,15 @@ export const backgroundTaskApi = {
   },
 
   cancelTask: async (taskId: string) => {
-    const cancelled = await api.post<unknown, BackgroundTaskStatus>(`/background-tasks/${taskId}/cancel`);
-    return syncBackgroundTaskToStore(cancelled);
+    try {
+      const cancelled = await api.post<unknown, BackgroundTaskStatus>(`/background-tasks/${taskId}/cancel`);
+      return syncBackgroundTaskToStore(cancelled);
+    } catch (error: unknown) {
+      if (getAxiosErrorStatus(error) === 404) {
+        removeBackgroundTaskFromStore(taskId);
+        return buildMissingBackgroundTaskStatus(taskId);
+      }
+      throw error;
+    }
   },
 };

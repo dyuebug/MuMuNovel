@@ -124,7 +124,7 @@ const isMissingBackgroundTask = (task?: BackgroundTaskStatus | null) => (
   !task
   || task.task_type === 'unknown'
   || task.error === 'task_missing'
-  || (task.status === 'cancelled' && task.message === '任务不存在')
+  || (task.status === 'cancelled' && (task.message === '任务不存在' || task.message === 'Task not found'))
 );
 
 const buildGenerationSignature = (config: GenerationConfig, resumeProjectId = '') => JSON.stringify({
@@ -349,7 +349,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       setCurrentTaskId(null);
       setStoredTaskId(null);
       setProgressMessage(cancelMsg || '后台任务已取消');
-      if (cancelMsg === '任务不存在') {
+      if (cancelMsg === '任务不存在' || cancelMsg === 'Task not found') {
         setGenerationSteps((prev) => ({ ...prev, worldBuilding: 'error' }));
         setErrorDetails('上一次后台任务已过期，请重新生成');
       }
@@ -618,7 +618,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     try {
       cancelledByUserRef.current = false;
       setIsCancelled(false);
-      setCurrentTaskId(taskId);
+      setCurrentTaskId(null);
       setStoredTaskId(taskId);
       setIsCancelling(false);
       setLoading(true);
@@ -641,6 +641,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       }
 
       if (task.task_type !== 'wizard_world_building') {
+        setCurrentTaskId(null);
         setStoredTaskId(null);
         await handleAutoGenerate(data);
         return;
@@ -683,6 +684,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         return;
       }
 
+      setCurrentTaskId(taskId);
       setProgress(task.progress || 0);
       setProgressMessage(task.message || '正在恢复世界观生成任务...');
       const worldResult = await waitForExistingBackgroundTask<WorldBuildingResult>(task, buildTaskOptions<WorldBuildingResult>({

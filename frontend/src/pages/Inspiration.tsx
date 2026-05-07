@@ -3,7 +3,7 @@ import { useBusyNavigationGuard } from '../hooks/useBusyNavigationGuard';
 import { useNavigate } from 'react-router-dom';
 import { Card, Input, Button, Space, Typography, message, Spin, Modal, Switch, theme } from 'antd';
 import { SendOutlined, ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons';
-import { inspirationApi } from '../services/modularApi';
+import { backgroundTaskApi, inspirationApi } from '../services/modularApi';
 import { AIProjectGenerator, type GenerationConfig } from '../components/AIProjectGenerator';
 import {
   GenerationExecutionSettingsPanel,
@@ -324,11 +324,11 @@ const Inspiration: React.FC = () => {
 
 
   // Restore generation state from storage
-  const restoreGenerationFromStorage = useCallback((): boolean => {
+  const restoreGenerationFromStorage = useCallback(async (): Promise<boolean> => {
     try {
       const storedStep = localStorage.getItem('inspiration_current_step');
       const rawConfig = localStorage.getItem('inspiration_generation_data');
-      const storedTaskId = localStorage.getItem('inspiration_task_id');
+      const storedTaskId = localStorage.getItem('inspiration_task_id')?.trim();
       if (storedStep !== 'generating' || !rawConfig) {
         if (storedStep || rawConfig || storedTaskId) {
           clearGenerationResumeStorage();
@@ -343,6 +343,15 @@ const Inspiration: React.FC = () => {
       }
 
       const storedProjectId = localStorage.getItem('inspiration_project_id');
+      if (storedTaskId && !storedProjectId?.trim()) {
+        const task = await backgroundTaskApi.getTaskStatus(storedTaskId);
+        if (task.error === 'task_missing' || task.task_type === 'unknown') {
+          clearGenerationResumeStorage();
+          message.warning('上一次后台任务已失效，请重新开始生成', 2);
+          return false;
+        }
+      }
+
       setGenerationConfig(parsed);
       setResumeProjectId(storedProjectId?.trim() ? storedProjectId : null);
       setCurrentStep('generating');
@@ -404,12 +413,14 @@ const Inspiration: React.FC = () => {
 
   useEffect(() => {
     if (!cacheLoaded) {
-      const restoredGenerating = restoreGenerationFromStorage();
-      const restoredConversation = !restoredGenerating && restoreFromCache();
-      if (!restoredGenerating && !restoredConversation) {
-        void loadExecutionDefaults({ syncWebResearch: true });
-      }
-      setCacheLoaded(true);
+      void (async () => {
+        const restoredGenerating = await restoreGenerationFromStorage();
+        const restoredConversation = !restoredGenerating && restoreFromCache();
+        if (!restoredGenerating && !restoredConversation) {
+          await loadExecutionDefaults({ syncWebResearch: true });
+        }
+        setCacheLoaded(true);
+      })();
     }
   }, [cacheLoaded, loadExecutionDefaults, restoreFromCache, restoreGenerationFromStorage]);
 
