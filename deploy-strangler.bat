@@ -17,7 +17,9 @@ echo Python + Rust + Nginx (3-service architecture)
 echo.
 echo Usage: deploy-strangler.bat [-NoCache] [-UseCnMirror] [-SkipFrontendBuild] [-FullRestart] [-NoPause^|-NonInteractive] [-RepairPostgresPassword]
 echo.
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy-strangler.ps1" %*
+set "PS_HOST_FLAGS="
+if defined NO_PAUSE_FLAG set "PS_HOST_FLAGS=-NonInteractive"
+powershell.exe %PS_HOST_FLAGS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy-strangler.ps1" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (
   echo.

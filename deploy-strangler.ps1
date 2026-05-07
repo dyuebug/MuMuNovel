@@ -134,6 +134,9 @@ function Invoke-LoggedCommand {
         if ($Label -like "docker compose build*" -and ($outputText -match "deb\.debian\.org|security\.debian\.org|502\s+Bad Gateway|apt-get update")) {
             $hint = "Hint: Debian mirror failure during build. Retry with: deploy-strangler.bat -UseCnMirror"
         }
+        elseif ($Label -like "docker compose build*" -and ($outputText -match "docker\.m\.daocloud\.io|failed to resolve source metadata|401 Unauthorized|pull token")) {
+            $hint = "Hint: Docker registry mirror/auth failure while pulling base images. Check Docker Desktop registry mirror settings, or retry after disabling the failing mirror."
+        }
         if ($hint) { throw "Command failed: $display`n$hint" }
         throw "Command failed with exit code ${exitCode}: $display"
     }
@@ -356,8 +359,8 @@ function Test-DockerDaemon {
     $errorMessage = @"
 Docker daemon is not running.
 
-閻犲洤鍢查崢娑㈠触椤栨艾袟 Docker Desktop闁挎稑鐬奸垾妯兼媼?Engine running 闁告艾楠搁崯鈧悹鍥ㄦ磸閳?
-闁告鍠庨～鎰版煥濞嗘帩鍤? $($result.Output)
+Please make sure Docker Desktop is started and the Docker Engine is running.
+Current docker info output: $($result.Output)
 "@
     Write-LogBlock $errorMessage
     throw $errorMessage
