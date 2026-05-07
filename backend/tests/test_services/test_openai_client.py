@@ -708,6 +708,50 @@ async def test_should_fallback_from_normalized_v1_candidate_to_root_for_openai_t
 
 
 @pytest.mark.asyncio
+async def test_should_retry_v1_when_root_chat_completions_returns_html_for_text_request():
+    client = OpenAIClient(
+        api_key="sk-test",
+        base_url="https://gateway.example.com",
+        compat_profile="openai",
+    )
+
+    call_log = []
+
+    async def fake_request(method, endpoint, payload, stream=False, **kwargs):
+        current_base_url = kwargs.get("base_url_override") or client.base_url
+        call_log.append((current_base_url, endpoint, kwargs.get("request_options")))
+        if current_base_url == "https://gateway.example.com":
+            raise RuntimeError(
+                "API returned non-JSON content. The Base URL may be incorrect "
+                "(for example, missing /v1). HTTP 200, response preview: <!doctype html>"
+            )
+        return {
+            "choices": [
+                {
+                    "message": {"content": "v1 candidate", "tool_calls": None},
+                    "finish_reason": "stop",
+                }
+            ]
+        }
+
+    client._request_with_retry = AsyncMock(side_effect=fake_request)
+
+    result = await client.chat_completion(
+        messages=[{"role": "user", "content": "ping"}],
+        model="deepseek-v4-pro",
+        temperature=0.2,
+        max_tokens=64,
+    )
+
+    assert call_log == [
+        ("https://gateway.example.com", "/chat/completions", None),
+        ("https://gateway.example.com/v1", "/chat/completions", None),
+    ]
+    assert result["content"] == "v1 candidate"
+    assert result["finish_reason"] == "stop"
+
+
+@pytest.mark.asyncio
 async def test_should_prefer_normalized_v1_candidate_for_openai_stream_request_when_requested():
     client = OpenAIClient(
         api_key="sk-test",

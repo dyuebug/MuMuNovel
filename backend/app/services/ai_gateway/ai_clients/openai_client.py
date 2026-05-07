@@ -146,10 +146,10 @@ class OpenAIClient(BaseAIClient):
         primary = self.base_url.rstrip('/')
         normalized_v1 = primary if primary.endswith('/v1') else f'{primary}/v1'
 
-        if self.compat_profile == 'sub2api':
+        if self.compat_profile in {'sub2api', 'openai_responses'}:
             candidates = [normalized_v1]
         elif prefer_normalized_v1_candidate and not primary.endswith('/v1'):
-            candidates = [normalized_v1]
+            candidates = [normalized_v1, primary]
         else:
             candidates = [primary]
             if not primary.endswith('/v1'):
@@ -800,6 +800,20 @@ class OpenAIClient(BaseAIClient):
                 **fallback_kwargs,
             )
             endpoint = "/chat/completions"
+        elif not use_responses_api:
+            try:
+                data = await self._request_chat_completions_fallback(
+                    messages,
+                    model,
+                    temperature,
+                    max_tokens,
+                    tools,
+                    tool_choice,
+                    request_options=request_options,
+                    allow_without_tools=True,
+                )
+            except (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException, RuntimeError):
+                raise
         else:
             try:
                 request_kwargs = {}
@@ -975,7 +989,15 @@ class OpenAIClient(BaseAIClient):
                     return
                 raise
 
-        async for chunk in self._chat_completions_stream(payload, request_options=request_options):
+        async for chunk in self._chat_completions_stream_with_fallback(
+            messages,
+            model,
+            temperature,
+            max_tokens,
+            tools,
+            tool_choice,
+            request_options=request_options,
+        ):
             yield chunk
 
     async def _chat_completions_stream_with_fallback(
