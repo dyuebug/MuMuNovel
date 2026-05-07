@@ -120,6 +120,24 @@ const RESUMABLE_WIZARD_TASK_TYPES: ResumableWizardTaskType[] = [
   'wizard_outline',
 ];
 
+const isMissingBackgroundTask = (task?: BackgroundTaskStatus | null) => (
+  !task
+  || task.task_type === 'unknown'
+  || task.error === 'task_missing'
+  || (task.status === 'cancelled' && task.message === '任务不存在')
+);
+
+const buildGenerationSignature = (config: GenerationConfig, resumeProjectId = '') => JSON.stringify({
+  title: config.title,
+  description: config.description,
+  theme: config.theme,
+  genre: Array.isArray(config.genre) ? config.genre.join('|') : config.genre,
+  target_words: config.target_words,
+  chapter_count: config.chapter_count,
+  character_count: config.character_count,
+  resumeProjectId,
+});
+
 export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   config,
   storagePrefix,
@@ -167,15 +185,18 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     generationData: `${storagePrefix}_generation_data`,
     currentStep: `${storagePrefix}_current_step`,
     taskId: `${storagePrefix}_task_id`,
+    taskSignature: `${storagePrefix}_task_signature`,
   };
 
   const setStoredTaskId = (taskId: string | null) => {
     try {
       if (taskId) {
         localStorage.setItem(storageKeys.taskId, taskId);
+        localStorage.setItem(storageKeys.taskSignature, buildGenerationSignature(config, resumeProjectId || ''));
         return;
       }
       localStorage.removeItem(storageKeys.taskId);
+      localStorage.removeItem(storageKeys.taskSignature);
     } catch (error) {
       console.error('Failed to persist resumable task info:', error);
     }
@@ -198,6 +219,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     localStorage.removeItem(storageKeys.generationData);
     localStorage.removeItem(storageKeys.currentStep);
     localStorage.removeItem(storageKeys.taskId);
+    localStorage.removeItem(storageKeys.taskSignature);
   };
 
   const buildResearchFields = (data: GenerationConfig, step: ResearchStepKey) => {
@@ -327,6 +349,10 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       setCurrentTaskId(null);
       setStoredTaskId(null);
       setProgressMessage(cancelMsg || '后台任务已取消');
+      if (cancelMsg === '任务不存在') {
+        setGenerationSteps((prev) => ({ ...prev, worldBuilding: 'error' }));
+        setErrorDetails('上一次后台任务已过期，请重新生成');
+      }
       setLoading(false);
       setIsCancelling(false);
       // 【修复】释放操作锁
@@ -555,17 +581,18 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       return;
     }
 
+    const currentGenerationSignature = buildGenerationSignature(config, resumeProjectId || '');
     const storedTaskId = localStorage.getItem(storageKeys.taskId)?.trim();
+    const storedTaskSignature = localStorage.getItem(storageKeys.taskSignature)?.trim();
+    const resumableStoredTaskId = storedTaskId && storedTaskSignature === currentGenerationSignature
+      ? storedTaskId
+      : '';
+    if (storedTaskId && !resumableStoredTaskId) {
+      setStoredTaskId(null);
+    }
     const autoStartSignature = JSON.stringify({
-      title: config.title,
-      description: config.description,
-      theme: config.theme,
-      genre: Array.isArray(config.genre) ? config.genre.join('|') : config.genre,
-      target_words: config.target_words,
-      chapter_count: config.chapter_count,
-      character_count: config.character_count,
-      resumeProjectId: resumeProjectId || '',
-      storedTaskId: storedTaskId || '',
+      generation: currentGenerationSignature,
+      storedTaskId: resumableStoredTaskId,
     });
 
     if (autoStartSignatureRef.current === autoStartSignature) {
@@ -577,9 +604,9 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     if (resumeProjectId) {
       // Resume existing generation
       handleResumeGenerate(config, resumeProjectId);
-    } else if (storedTaskId) {
+    } else if (resumableStoredTaskId) {
       // Resume world-building task before projectId is available
-      handleResumeWorldBuildingTask(config, storedTaskId);
+      handleResumeWorldBuildingTask(config, resumableStoredTaskId);
     } else {
       // Resume existing generation
       handleAutoGenerate(config);
@@ -603,6 +630,16 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       setGenerationSteps({ worldBuilding: 'processing', careers: 'pending', characters: 'pending', outline: 'pending' });
 
       const task = await backgroundTaskApi.getTaskStatus(taskId);
+      if (isMissingBackgroundTask(task)) {
+        cancelledByUserRef.current = false;
+        setIsCancelled(false);
+        setCurrentTaskId(null);
+        setStoredTaskId(null);
+        setProgressMessage('上一次后台任务已过期，正在重新生成世界观...');
+        await handleAutoGenerate(data);
+        return;
+      }
+
       if (task.task_type !== 'wizard_world_building') {
         setStoredTaskId(null);
         await handleAutoGenerate(data);
