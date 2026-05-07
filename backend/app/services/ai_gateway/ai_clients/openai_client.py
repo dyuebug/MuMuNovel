@@ -149,7 +149,7 @@ class OpenAIClient(BaseAIClient):
         if self.compat_profile == 'sub2api':
             candidates = [normalized_v1]
         elif prefer_normalized_v1_candidate and not primary.endswith('/v1'):
-            candidates = [normalized_v1, primary]
+            candidates = [normalized_v1]
         else:
             candidates = [primary]
             if not primary.endswith('/v1'):

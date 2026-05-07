@@ -469,7 +469,7 @@ def _build_api_probe_exception_suggestions(
             "If this gateway requires a vendor-specific path, copy the complete API Base URL from the gateway documentation",
         ]
         if normalized_base_url and not normalized_base_url.endswith("/v1"):
-            suggestions.insert(1, "The current Base URL does not end with `/v1`; the probe already tried a normalized `/v1` path and it did not return a valid API response")
+            suggestions.insert(1, "The current Base URL does not end with `/v1`; configure the exact API base path from the gateway instead of relying on the homepage root")
         return suggestions
 
     parsed_base_url = urlsplit(normalized_base_url) if normalized_base_url else None
@@ -836,6 +836,16 @@ async def get_available_models(
     Returns:
         模型列表
     """
+    api_key = (api_key or "").strip()
+    api_base_url = (api_base_url or "").strip()
+    provider = (provider or "openai").strip().lower()
+
+    if not api_key:
+        raise HTTPException(status_code=400, detail="请先填写 API Key，再获取模型列表")
+
+    if not api_base_url:
+        raise HTTPException(status_code=400, detail="请先填写 API Base URL，再获取模型列表")
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             # OpenAI 兼容接口（包括 openai/openai_responses/azure/newapi/custom/sub2api）

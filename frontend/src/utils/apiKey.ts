@@ -3,6 +3,7 @@ const PLACEHOLDER_API_KEYS = new Set([
   'your_anthropic_api_key_here',
   'your_gemini_api_key_here',
   'your_api_key_here',
+  '********',
 ]);
 
 const normalizeApiKey = (apiKey?: string | null): string =>

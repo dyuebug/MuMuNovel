@@ -65,6 +65,10 @@ export default function SettingsCurrentTab(props: any) {
   webResearchTestResult
   } = props;
 
+  const apiKeyInputPlaceholder = form.getFieldValue('api_key')
+    ? 'sk-...'
+    : '已保存密钥；留空表示保持不变，输入新值可覆盖';
+
   const endpointDiagnostics = testResult?.details?.endpoint_diagnostics as {
     primary_endpoint?: string;
     backup_endpoints?: string[];
@@ -335,7 +339,7 @@ export default function SettingsCurrentTab(props: any) {
                                   >
                                     <Input.Password
                                       size={isMobile ? 'middle' : 'large'}
-                                      placeholder="sk-..."
+                                      placeholder={apiKeyInputPlaceholder}
                                       autoComplete="new-password"
                                     />
                                   </Form.Item>
