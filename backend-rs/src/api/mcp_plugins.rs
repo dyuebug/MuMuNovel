@@ -356,6 +356,7 @@ pub fn routes() -> Router {
         .route("/mcp/plugins", get(list_plugins).post(create_plugin))
         .route("/mcp/plugins/simple", post(create_plugin_simple))
         .route("/mcp/plugins/call", post(call_mcp_tool))
+        .route("/mcp/call", post(call_mcp_tool))
         .route("/mcp/plugins/metrics", get(get_metrics))
         .route("/mcp/plugins/cache/stats", get(get_cache_stats))
         .route("/mcp/plugins/cache/clear", post(clear_cache))

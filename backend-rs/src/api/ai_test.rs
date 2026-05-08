@@ -105,6 +105,8 @@ async fn test_ai_stream(
 
 pub fn routes() -> Router {
     Router::new()
+        .route("/ai-test", post(test_ai))
+        .route("/ai-test-stream", post(test_ai_stream))
         .route("/ai/test", post(test_ai))
         .route("/ai/test-stream", post(test_ai_stream))
 }
