@@ -78,12 +78,20 @@ impl WritingStyleService {
         db: &DatabaseConnection,
         user_id: &str,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let styles = writing_style::Entity::find()
+        let preset_styles = writing_style::Entity::find()
+            .filter(writing_style::Column::UserId.is_null())
+            .all(db)
+            .await?;
+        let user_styles = writing_style::Entity::find()
             .filter(writing_style::Column::UserId.eq(user_id))
             .all(db)
             .await?;
 
-        let items: Vec<Value> = styles.iter().map(|s| style_to_value(s, false)).collect();
+        let items: Vec<Value> = preset_styles
+            .iter()
+            .chain(user_styles.iter())
+            .map(|s| style_to_value(s, false))
+            .collect();
 
         Ok(json!({ "styles": items, "total": items.len() }))
     }
@@ -93,6 +101,10 @@ impl WritingStyleService {
         user_id: &str,
         project_id: &str,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+        let preset_styles = writing_style::Entity::find()
+            .filter(writing_style::Column::UserId.is_null())
+            .all(db)
+            .await?;
         let user_styles = writing_style::Entity::find()
             .filter(writing_style::Column::UserId.eq(user_id))
             .all(db)
@@ -105,8 +117,9 @@ impl WritingStyleService {
 
         let default_style_id = default_style.map(|ds| ds.style_id);
 
-        let items: Vec<Value> = user_styles
+        let items: Vec<Value> = preset_styles
             .iter()
+            .chain(user_styles.iter())
             .map(|s| style_to_value(s, Some(s.id) == default_style_id))
             .collect();
 

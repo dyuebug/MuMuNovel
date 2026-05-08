@@ -1159,9 +1159,22 @@ pub async fn generate_characters(
                     .unwrap_or(project.genre.as_deref().unwrap_or("未设定"))
                     .into(),
             );
+            let organization_requirement = if batch_idx == total_batches - 1
+                && !all_characters.iter().any(|c| {
+                    c.get("is_organization")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                }) {
+                "\n\nOrganization requirement: include at least one organization/faction in this batch. Set is_organization=true, and provide organization_type, organization_purpose, power_level, location, motto, and color."
+            } else {
+                ""
+            };
             params.insert(
                 "requirements".into(),
-                format!("{}{}", batch_req, careers_context),
+                format!(
+                    "{}{}{}",
+                    batch_req, careers_context, organization_requirement
+                ),
             );
             params.insert("external_assets".into(), String::new());
             params.insert("reference_assets".into(), String::new());
