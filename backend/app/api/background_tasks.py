@@ -525,7 +525,7 @@ async def list_background_tasks(
         if invalid:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid task statuses: {", ".join(invalid)}",
+                detail=f"Invalid task statuses: {', '.join(invalid)}",
             )
     if active_only:
         status_filters = status_filters.intersection({"pending", "running"}) if status_filters else {"pending", "running"}
