@@ -53,7 +53,11 @@ impl OrganizationService {
             created_at: Set(now),
             updated_at: Set(Some(now)),
         };
-        model.insert(db).await.map_err(|e| format!("{}", e)).map(Some)
+        model
+            .insert(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
     }
 
     pub async fn list(
@@ -109,14 +113,30 @@ impl OrganizationService {
             return Ok(None);
         };
         let mut active: organization::ActiveModel = model.into();
-        if let Some(v) = parent_org_id { active.parent_org_id = Set(Some(v.to_string())); }
-        if let Some(v) = level { active.level = Set(v); }
-        if let Some(v) = power_level { active.power_level = Set(v); }
-        if let Some(v) = location { active.location = Set(Some(v.to_string())); }
-        if let Some(v) = motto { active.motto = Set(Some(v.to_string())); }
-        if let Some(v) = color { active.color = Set(Some(v.to_string())); }
+        if let Some(v) = parent_org_id {
+            active.parent_org_id = Set(Some(v.to_string()));
+        }
+        if let Some(v) = level {
+            active.level = Set(v);
+        }
+        if let Some(v) = power_level {
+            active.power_level = Set(v);
+        }
+        if let Some(v) = location {
+            active.location = Set(Some(v.to_string()));
+        }
+        if let Some(v) = motto {
+            active.motto = Set(Some(v.to_string()));
+        }
+        if let Some(v) = color {
+            active.color = Set(Some(v.to_string()));
+        }
         active.updated_at = Set(Some(Utc::now().naive_utc()));
-        active.update(db).await.map_err(|e| format!("{}", e)).map(Some)
+        active
+            .update(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
     }
 
     pub async fn delete(

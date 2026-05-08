@@ -1,6 +1,7 @@
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder,
 };
 use uuid::Uuid;
 
@@ -55,7 +56,11 @@ impl CareerService {
             created_at: Set(now),
             updated_at: Set(Some(now)),
         };
-        model.insert(db).await.map_err(|e| format!("{}", e)).map(Some)
+        model
+            .insert(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
     }
 
     /// Create a career with full fields — used by wizard generator
@@ -92,6 +97,42 @@ impl CareerService {
             updated_at: Set(Some(now)),
         };
         model.insert(db).await.map_err(|e| format!("{}", e))
+    }
+
+    pub async fn create_full_for_user(
+        db: &DatabaseConnection,
+        project_id: &str,
+        user_id: &str,
+        name: &str,
+        career_type: &str,
+        description: Option<&str>,
+        category: Option<&str>,
+        stages: &str,
+        max_stage: i32,
+        requirements: Option<&str>,
+        special_abilities: Option<&str>,
+        worldview_rules: Option<&str>,
+        attribute_bonuses: Option<&str>,
+    ) -> Result<Option<career::Model>, String> {
+        if !Self::verify_project_access(db, project_id, user_id).await? {
+            return Ok(None);
+        }
+        Self::create_full(
+            db,
+            project_id,
+            name,
+            career_type,
+            description,
+            category,
+            stages,
+            max_stage,
+            requirements,
+            special_abilities,
+            worldview_rules,
+            attribute_bonuses,
+        )
+        .await
+        .map(Some)
     }
 
     pub async fn list(
@@ -146,13 +187,81 @@ impl CareerService {
             return Ok(None);
         };
         let mut active: career::ActiveModel = model.into();
-        if let Some(v) = name { active.name = Set(v.to_string()); }
-        if let Some(v) = description { active.description = Set(Some(v.to_string())); }
-        if let Some(v) = stages { active.stages = Set(v.to_string()); }
-        if let Some(v) = max_stage { active.max_stage = Set(v); }
-        if let Some(v) = category { active.category = Set(Some(v.to_string())); }
+        if let Some(v) = name {
+            active.name = Set(v.to_string());
+        }
+        if let Some(v) = description {
+            active.description = Set(Some(v.to_string()));
+        }
+        if let Some(v) = stages {
+            active.stages = Set(v.to_string());
+        }
+        if let Some(v) = max_stage {
+            active.max_stage = Set(v);
+        }
+        if let Some(v) = category {
+            active.category = Set(Some(v.to_string()));
+        }
         active.updated_at = Set(Some(Utc::now().naive_utc()));
-        active.update(db).await.map_err(|e| format!("{}", e)).map(Some)
+        active
+            .update(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
+    }
+
+    pub async fn update_full_for_user(
+        db: &DatabaseConnection,
+        career_id: &str,
+        user_id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        stages: Option<&str>,
+        max_stage: Option<i32>,
+        category: Option<&str>,
+        requirements: Option<&str>,
+        special_abilities: Option<&str>,
+        worldview_rules: Option<&str>,
+        attribute_bonuses: Option<&str>,
+    ) -> Result<Option<career::Model>, String> {
+        let existing = Self::get(db, career_id, user_id).await?;
+        let Some(model) = existing else {
+            return Ok(None);
+        };
+        let mut active: career::ActiveModel = model.into();
+        if let Some(v) = name {
+            active.name = Set(v.to_string());
+        }
+        if let Some(v) = description {
+            active.description = Set(Some(v.to_string()));
+        }
+        if let Some(v) = stages {
+            active.stages = Set(v.to_string());
+        }
+        if let Some(v) = max_stage {
+            active.max_stage = Set(v);
+        }
+        if let Some(v) = category {
+            active.category = Set(Some(v.to_string()));
+        }
+        if let Some(v) = requirements {
+            active.requirements = Set(Some(v.to_string()));
+        }
+        if let Some(v) = special_abilities {
+            active.special_abilities = Set(Some(v.to_string()));
+        }
+        if let Some(v) = worldview_rules {
+            active.worldview_rules = Set(Some(v.to_string()));
+        }
+        if let Some(v) = attribute_bonuses {
+            active.attribute_bonuses = Set(Some(v.to_string()));
+        }
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
+        active
+            .update(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
     }
 
     pub async fn delete(

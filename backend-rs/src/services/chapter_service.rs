@@ -53,7 +53,11 @@ impl ChapterService {
             created_at: Set(now),
             updated_at: Set(Some(now)),
         };
-        model.insert(db).await.map_err(|e| format!("{}", e)).map(Some)
+        model
+            .insert(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
     }
 
     /// Create a pending chapter (used by wizard outline one-to-one mode)
@@ -135,18 +139,32 @@ impl ChapterService {
             return Ok(None);
         };
         let mut active: chapter::ActiveModel = model.into();
-        if let Some(v) = title { active.title = Set(v.to_string()); }
+        if let Some(v) = title {
+            active.title = Set(v.to_string());
+        }
         if let Some(v) = content {
             let wc = v.chars().count() as i32;
             active.content = Set(Some(v.to_string()));
             active.word_count = Set(wc);
         }
-        if let Some(v) = summary { active.summary = Set(Some(v.to_string())); }
-        if let Some(v) = status { active.status = Set(v.to_string()); }
-        if let Some(v) = chapter_number { active.chapter_number = Set(v); }
-        if let Some(v) = expansion_plan { active.expansion_plan = Set(Some(v.to_string())); }
+        if let Some(v) = summary {
+            active.summary = Set(Some(v.to_string()));
+        }
+        if let Some(v) = status {
+            active.status = Set(v.to_string());
+        }
+        if let Some(v) = chapter_number {
+            active.chapter_number = Set(v);
+        }
+        if let Some(v) = expansion_plan {
+            active.expansion_plan = Set(Some(v.to_string()));
+        }
         active.updated_at = Set(Some(Utc::now().naive_utc()));
-        active.update(db).await.map_err(|e| format!("{}", e)).map(Some)
+        active
+            .update(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
     }
 
     pub async fn delete(
@@ -169,7 +187,14 @@ impl ChapterService {
         db: &DatabaseConnection,
         chapter_id: &str,
         user_id: &str,
-    ) -> Result<Option<(Option<chapter::Model>, Option<chapter::Model>, Option<chapter::Model>)>, String> {
+    ) -> Result<
+        Option<(
+            Option<chapter::Model>,
+            Option<chapter::Model>,
+            Option<chapter::Model>,
+        )>,
+        String,
+    > {
         let current = Self::get(db, chapter_id, user_id).await?;
         let Some(ref ch) = current else {
             return Ok(None);
@@ -184,7 +209,10 @@ impl ChapterService {
 
         let pos = all.iter().position(|c| c.id == *chapter_id);
         let prev = pos.and_then(|p| p.checked_sub(1)).map(|i| all[i].clone());
-        let next = pos.and_then(|p| p.checked_add(1)).filter(|i| *i < all.len()).map(|i| all[i].clone());
+        let next = pos
+            .and_then(|p| p.checked_add(1))
+            .filter(|i| *i < all.len())
+            .map(|i| all[i].clone());
 
         Ok(Some((prev, current.map(|c| c.clone()), next)))
     }
@@ -202,7 +230,11 @@ impl ChapterService {
         let mut active: chapter::ActiveModel = model.into();
         active.expansion_plan = Set(Some(plan.to_string()));
         active.updated_at = Set(Some(Utc::now().naive_utc()));
-        active.update(db).await.map_err(|e| format!("{}", e)).map(Some)
+        active
+            .update(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
     }
 
     pub async fn quality_trend(

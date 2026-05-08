@@ -134,9 +134,10 @@ impl McpPluginService {
         category: Option<&str>,
         enabled: bool,
     ) -> Result<Value, String> {
-        let config: Value = serde_json::from_str(config_json)
-            .map_err(|e| format!("配置JSON格式错误: {}", e))?;
-        let servers = config.get("mcpServers")
+        let config: Value =
+            serde_json::from_str(config_json).map_err(|e| format!("配置JSON格式错误: {}", e))?;
+        let servers = config
+            .get("mcpServers")
             .and_then(|s| s.as_object())
             .ok_or("配置JSON必须包含mcpServers字段")?;
         if servers.is_empty() {
@@ -144,19 +145,28 @@ impl McpPluginService {
         }
         let (plugin_name, server_config) = servers.iter().next().unwrap();
 
-        let server_type = server_config.get("type").and_then(|v| v.as_str()).unwrap_or("http");
+        let server_type = server_config
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("http");
         if !["http", "stdio", "streamable_http", "sse"].contains(&server_type) {
             return Err(format!("不支持的服务器类型: {}", server_type));
         }
 
-        let server_url = server_config.get("url").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let server_url = server_config
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let headers_str = server_config.get("headers").map(|h| h.to_string());
 
         if ["http", "streamable_http", "sse"].contains(&server_type) && server_url.is_none() {
             return Err(format!("{}类型插件必须提供url字段", server_type));
         }
 
-        let command = server_config.get("command").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let command = server_config
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let args_str = server_config.get("args").map(|a| a.to_string());
         let env_str = server_config.get("env").map(|e| e.to_string());
 
@@ -240,17 +250,39 @@ impl McpPluginService {
         };
         let mut active: mcp_plugin::ActiveModel = plugin.into();
 
-        if let Some(v) = updates.get("display_name").and_then(|v| v.as_str()) { active.display_name = Set(v.to_string()); }
-        if let Some(v) = updates.get("description").and_then(|v| v.as_str()) { active.description = Set(Some(v.to_string())); }
-        if let Some(v) = updates.get("plugin_type").and_then(|v| v.as_str()) { active.plugin_type = Set(v.to_string()); }
-        if let Some(v) = updates.get("server_url").and_then(|v| v.as_str()) { active.server_url = Set(Some(v.to_string())); }
-        if let Some(v) = updates.get("command").and_then(|v| v.as_str()) { active.command = Set(Some(v.to_string())); }
-        if let Some(v) = updates.get("category").and_then(|v| v.as_str()) { active.category = Set(v.to_string()); }
-        if let Some(v) = updates.get("sort_order").and_then(|v| v.as_i64()) { active.sort_order = Set(v as i32); }
-        if let Some(v) = updates.get("headers") { active.headers = Set(Some(v.to_string())); }
-        if let Some(v) = updates.get("config") { active.config = Set(Some(v.to_string())); }
-        if let Some(v) = updates.get("args") { active.args = Set(Some(v.to_string())); }
-        if let Some(v) = updates.get("env") { active.env = Set(Some(v.to_string())); }
+        if let Some(v) = updates.get("display_name").and_then(|v| v.as_str()) {
+            active.display_name = Set(v.to_string());
+        }
+        if let Some(v) = updates.get("description").and_then(|v| v.as_str()) {
+            active.description = Set(Some(v.to_string()));
+        }
+        if let Some(v) = updates.get("plugin_type").and_then(|v| v.as_str()) {
+            active.plugin_type = Set(v.to_string());
+        }
+        if let Some(v) = updates.get("server_url").and_then(|v| v.as_str()) {
+            active.server_url = Set(Some(v.to_string()));
+        }
+        if let Some(v) = updates.get("command").and_then(|v| v.as_str()) {
+            active.command = Set(Some(v.to_string()));
+        }
+        if let Some(v) = updates.get("category").and_then(|v| v.as_str()) {
+            active.category = Set(v.to_string());
+        }
+        if let Some(v) = updates.get("sort_order").and_then(|v| v.as_i64()) {
+            active.sort_order = Set(v as i32);
+        }
+        if let Some(v) = updates.get("headers") {
+            active.headers = Set(Some(v.to_string()));
+        }
+        if let Some(v) = updates.get("config") {
+            active.config = Set(Some(v.to_string()));
+        }
+        if let Some(v) = updates.get("args") {
+            active.args = Set(Some(v.to_string()));
+        }
+        if let Some(v) = updates.get("env") {
+            active.env = Set(Some(v.to_string()));
+        }
         active.updated_at = Set(Some(Utc::now().naive_utc()));
 
         let updated = active.update(db).await.map_err(|e| format!("{}", e))?;
@@ -320,7 +352,9 @@ impl McpPluginService {
             .one(db)
             .await
             .map_err(|e| format!("{}", e))?;
-        let Some(plugin) = plugin else { return Ok(None) };
+        let Some(plugin) = plugin else {
+            return Ok(None);
+        };
         Ok(Some(json!({
             "plugin_id": plugin.id,
             "plugin_name": plugin.plugin_name,
@@ -377,11 +411,14 @@ impl McpPluginService {
             .one(db)
             .await
             .map_err(|e| format!("{}", e))?;
-        let Some(plugin) = plugin else { return Ok(None) };
+        let Some(plugin) = plugin else {
+            return Ok(None);
+        };
         if !plugin.enabled {
             return Err("插件未启用".to_string());
         }
-        let tools: Value = plugin.tools
+        let tools: Value = plugin
+            .tools
             .as_ref()
             .and_then(|t| serde_json::from_str(t).ok())
             .unwrap_or(json!([]));
@@ -414,14 +451,22 @@ impl McpPluginService {
         }
 
         // Try real MCP call if session exists
-        if mcp_manager.is_registered(user_id, &plugin.plugin_name).await {
-            match mcp_manager.call_tool(user_id, &plugin.plugin_name, tool_name, arguments).await {
-                Ok(result) => return Ok(json!({
-                    "success": true,
-                    "plugin_name": plugin.plugin_name,
-                    "tool_name": tool_name,
-                    "result": result,
-                })),
+        if mcp_manager
+            .is_registered(user_id, &plugin.plugin_name)
+            .await
+        {
+            match mcp_manager
+                .call_tool(user_id, &plugin.plugin_name, tool_name, arguments)
+                .await
+            {
+                Ok(result) => {
+                    return Ok(json!({
+                        "success": true,
+                        "plugin_name": plugin.plugin_name,
+                        "tool_name": tool_name,
+                        "result": result,
+                    }))
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -454,24 +499,41 @@ impl McpPluginService {
         };
 
         // Already registered?
-        if mcp_manager.is_registered(user_id, &plugin.plugin_name).await {
-            return Ok(json!({"success": true, "message": "插件会话已存在", "plugin_name": plugin.plugin_name}));
+        if mcp_manager
+            .is_registered(user_id, &plugin.plugin_name)
+            .await
+        {
+            return Ok(
+                json!({"success": true, "message": "插件会话已存在", "plugin_name": plugin.plugin_name}),
+            );
         }
 
         // Connect based on plugin type
         let plugin_type = plugin.plugin_type.as_str();
         let result = match plugin_type {
             "sse" | "http" | "streamable_http" => {
-                let url = plugin.server_url.as_deref().ok_or("SSE/HTTP插件缺少server_url")?;
-                mcp_manager.connect_sse(user_id, &plugin.plugin_name, url).await
+                let url = plugin
+                    .server_url
+                    .as_deref()
+                    .ok_or("SSE/HTTP插件缺少server_url")?;
+                mcp_manager
+                    .connect_sse(user_id, &plugin.plugin_name, url)
+                    .await
             }
             "stdio" => {
                 let cmd = plugin.command.as_deref().ok_or("Stdio插件缺少command")?;
-                let args: Vec<String> = plugin.args.as_deref()
+                let args: Vec<String> = plugin
+                    .args
+                    .as_deref()
                     .and_then(|a| serde_json::from_str::<Vec<String>>(a).ok())
                     .unwrap_or_default();
-                let env = plugin.env.as_ref().and_then(|e| serde_json::from_str::<Value>(e).ok());
-                mcp_manager.connect_stdio(user_id, &plugin.plugin_name, cmd, &args, env.as_ref()).await
+                let env = plugin
+                    .env
+                    .as_ref()
+                    .and_then(|e| serde_json::from_str::<Value>(e).ok());
+                mcp_manager
+                    .connect_stdio(user_id, &plugin.plugin_name, cmd, &args, env.as_ref())
+                    .await
             }
             _ => Err(format!("不支持的插件类型: {}", plugin_type)),
         };
@@ -499,7 +561,9 @@ impl McpPluginService {
                 let mut active: mcp_plugin::ActiveModel = {
                     let p = mcp_plugin::Entity::find()
                         .filter(mcp_plugin::Column::Id.eq(plugin_id))
-                        .one(db).await.map_err(|e2| format!("{}", e2))?
+                        .one(db)
+                        .await
+                        .map_err(|e2| format!("{}", e2))?
                         .ok_or("插件不存在")?;
                     p.into()
                 };
@@ -570,13 +634,21 @@ impl McpPluginService {
                         let cmd = cmd.as_deref().ok_or("Stdio插件缺少command")?;
                         let p2 = mcp_plugin::Entity::find()
                             .filter(mcp_plugin::Column::Id.eq(&plugin_id_clone))
-                            .one(db).await.map_err(|e2| format!("{}", e2))?;
-                        let args: Vec<String> = p2.as_ref().and_then(|p| p.args.as_deref())
+                            .one(db)
+                            .await
+                            .map_err(|e2| format!("{}", e2))?;
+                        let args: Vec<String> = p2
+                            .as_ref()
+                            .and_then(|p| p.args.as_deref())
                             .and_then(|a| serde_json::from_str::<Vec<String>>(a).ok())
                             .unwrap_or_default();
-                        let env = p2.as_ref().and_then(|p| p.env.as_deref())
+                        let env = p2
+                            .as_ref()
+                            .and_then(|p| p.env.as_deref())
                             .and_then(|e| serde_json::from_str::<Value>(e).ok());
-                        mcp_manager.connect_stdio(&uid, &pn, cmd, &args, env.as_ref()).await
+                        mcp_manager
+                            .connect_stdio(&uid, &pn, cmd, &args, env.as_ref())
+                            .await
                     }
                     _ => Err(format!("不支持的插件类型: {}", pt)),
                 }
@@ -585,7 +657,9 @@ impl McpPluginService {
             if let Err(e) = connect_result {
                 let p = mcp_plugin::Entity::find()
                     .filter(mcp_plugin::Column::Id.eq(&plugin_id_clone))
-                    .one(db).await.map_err(|e2| format!("{}", e2))?;
+                    .one(db)
+                    .await
+                    .map_err(|e2| format!("{}", e2))?;
                 if let Some(p) = p {
                     let mut a: mcp_plugin::ActiveModel = p.into();
                     a.status = Set("error".to_string());
@@ -609,7 +683,9 @@ impl McpPluginService {
             mcp_plugin::Entity::find()
                 .filter(mcp_plugin::Column::Id.eq(&plugin_id_clone))
                 .filter(mcp_plugin::Column::UserId.eq(&user_id_clone))
-                .one(db).await.map_err(|e| format!("{}", e))?
+                .one(db)
+                .await
+                .map_err(|e| format!("{}", e))?
                 .ok_or("插件不存在")?
         } else {
             plugin
@@ -617,12 +693,21 @@ impl McpPluginService {
 
         // Connection test
         let start = std::time::Instant::now();
-        let conn_result = mcp_manager.test_connection(user_id, &plugin.plugin_name).await
+        let conn_result = mcp_manager
+            .test_connection(user_id, &plugin.plugin_name)
+            .await
             .map_err(|e| format!("连接测试失败: {}", e))?;
         let elapsed = start.elapsed().as_millis();
 
-        if !conn_result.get("success").and_then(|v: &Value| v.as_bool()).unwrap_or(false) {
-            let error = conn_result.get("error").and_then(|v: &Value| v.as_str()).unwrap_or("未知错误");
+        if !conn_result
+            .get("success")
+            .and_then(|v: &Value| v.as_bool())
+            .unwrap_or(false)
+        {
+            let error = conn_result
+                .get("error")
+                .and_then(|v: &Value| v.as_str())
+                .unwrap_or("未知错误");
             // Update DB
             let mut active: mcp_plugin::ActiveModel = plugin.into();
             active.status = Set("error".to_string());
@@ -640,7 +725,10 @@ impl McpPluginService {
             }));
         }
 
-        let tools_count = conn_result.get("tools_count").and_then(|v: &Value| v.as_i64()).unwrap_or(0);
+        let tools_count = conn_result
+            .get("tools_count")
+            .and_then(|v: &Value| v.as_i64())
+            .unwrap_or(0);
 
         // Try AI-powered tool test
         let ai_test_result = Self::test_plugin_with_ai(db, mcp_manager, user_id, &plugin).await;
@@ -648,10 +736,16 @@ impl McpPluginService {
         // Update DB
         let p = mcp_plugin::Entity::find()
             .filter(mcp_plugin::Column::Id.eq(plugin_id))
-            .one(db).await.map_err(|e| format!("{}", e))?;
+            .one(db)
+            .await
+            .map_err(|e| format!("{}", e))?;
         if let Some(p) = p {
             let mut a: mcp_plugin::ActiveModel = p.into();
-            a.status = Set(if ai_test_result.is_ok() { "active".to_string() } else { "error".to_string() });
+            a.status = Set(if ai_test_result.is_ok() {
+                "active".to_string()
+            } else {
+                "error".to_string()
+            });
             a.last_error = Set(ai_test_result.as_ref().err().map(|e| e.clone()));
             a.last_test_at = Set(Some(Utc::now().naive_utc()));
             a.updated_at = Set(Some(Utc::now().naive_utc()));
@@ -659,7 +753,10 @@ impl McpPluginService {
             {
                 let pn = mcp_plugin::Entity::find()
                     .filter(mcp_plugin::Column::Id.eq(plugin_id))
-                    .one(db).await.ok().flatten()
+                    .one(db)
+                    .await
+                    .ok()
+                    .flatten()
                     .map(|p| p.plugin_name)
                     .unwrap_or_default();
                 if let Ok(tools) = mcp_manager.list_tools(user_id, &pn).await {
@@ -703,11 +800,14 @@ impl McpPluginService {
         use crate::services::prompt_template_service::PromptTemplateService;
         use crate::services::settings_service::SettingsService;
 
-        let ai_config = SettingsService::build_ai_config(db, user_id, None, None, None).await
+        let ai_config = SettingsService::build_ai_config(db, user_id, None, None, None)
+            .await
             .map_err(|e| format!("AI配置加载失败: {}", e))?;
         let ai_service = AIService::new(ai_config);
 
-        let openai_tools = mcp_manager.format_tools_for_openai(user_id, &plugin.plugin_name).await?;
+        let openai_tools = mcp_manager
+            .format_tools_for_openai(user_id, &plugin.plugin_name)
+            .await?;
         if openai_tools.is_empty() {
             return Err("插件没有提供任何工具".to_string());
         }
@@ -724,38 +824,43 @@ impl McpPluginService {
         );
 
         // Call AI with tool calling — convert Value tools to ToolDef
-        let tool_defs: Vec<crate::ai::types::ToolDef> = openai_tools.iter().filter_map(|t| {
-            let func = t.get("function")?;
-            Some(crate::ai::types::ToolDef {
-                tool_type: "function".into(),
-                function: crate::ai::types::ToolFunction {
-                    name: func.get("name")?.as_str()?.into(),
-                    description: func.get("description")?.as_str()?.into(),
-                    parameters: func.get("parameters")?.clone(),
-                },
+        let tool_defs: Vec<crate::ai::types::ToolDef> = openai_tools
+            .iter()
+            .filter_map(|t| {
+                let func = t.get("function")?;
+                Some(crate::ai::types::ToolDef {
+                    tool_type: "function".into(),
+                    function: crate::ai::types::ToolFunction {
+                        name: func.get("name")?.as_str()?.into(),
+                        description: func.get("description")?.as_str()?.into(),
+                        parameters: func.get("parameters")?.clone(),
+                    },
+                })
             })
-        }).collect();
+            .collect();
 
-        let response = ai_service.generate_text(
-            &user_prompt,
-            Some(&system_prompt),
-            Some(&tool_defs),
-        ).await.map_err(|e| format!("AI调用失败: {}", e))?;
+        let response = ai_service
+            .generate_text(&user_prompt, Some(&system_prompt), Some(&tool_defs))
+            .await
+            .map_err(|e| format!("AI调用失败: {}", e))?;
 
         let tool_calls = response.tool_calls.ok_or("AI未返回工具调用")?;
         let first_call = &tool_calls[0];
         let function = &first_call.function;
 
         // Parse tool name and arguments
-        let (plugin_name, tool_name) = crate::mcp::McpClientManager::parse_function_name(&function.name)
-            .map_err(|e| format!("解析函数名失败: {}", e))?;
+        let (plugin_name, tool_name) =
+            crate::mcp::McpClientManager::parse_function_name(&function.name)
+                .map_err(|e| format!("解析函数名失败: {}", e))?;
 
-        let arguments: Value = serde_json::from_str(&function.arguments)
-            .unwrap_or_else(|_| json!({}));
+        let arguments: Value =
+            serde_json::from_str(&function.arguments).unwrap_or_else(|_| json!({}));
 
         // Call the MCP tool
         let call_start = std::time::Instant::now();
-        let tool_result = mcp_manager.call_tool(user_id, &plugin_name, &tool_name, Some(&arguments)).await?;
+        let tool_result = mcp_manager
+            .call_tool(user_id, &plugin_name, &tool_name, Some(&arguments))
+            .await?;
         let call_time = call_start.elapsed().as_millis();
 
         let result_str = serde_json::to_string(&tool_result).unwrap_or_default();

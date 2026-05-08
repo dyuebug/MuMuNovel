@@ -49,7 +49,8 @@ struct DonePayload {
 
 /// Format any serializable payload into an SSE event string
 pub fn format_sse(data: &impl Serialize) -> String {
-    let json = serde_json::to_string(data).unwrap_or_else(|_| r#"{"type":"error","error":"serialize failed"}"#.into());
+    let json = serde_json::to_string(data)
+        .unwrap_or_else(|_| r#"{"type":"error","error":"serialize failed"}"#.into());
     format!("data: {}\n\n", json)
 }
 
@@ -110,11 +111,7 @@ impl SseProgress {
 
     pub fn start(&mut self) -> Event {
         self.current_progress = 0;
-        sse_progress(
-            &format!("开始生成{}...", self.task_name),
-            0,
-            "processing",
-        )
+        sse_progress(&format!("开始生成{}...", self.task_name), 0, "processing")
     }
 
     pub fn progress(&mut self, message: &str, progress: u32) -> Event {
@@ -210,9 +207,7 @@ pub struct SseChannel {
 }
 
 impl SseChannel {
-    pub fn new(
-        tx: tokio::sync::mpsc::Sender<Result<Event, std::convert::Infallible>>,
-    ) -> Self {
+    pub fn new(tx: tokio::sync::mpsc::Sender<Result<Event, std::convert::Infallible>>) -> Self {
         Self { tx }
     }
 

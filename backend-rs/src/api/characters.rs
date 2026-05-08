@@ -85,7 +85,9 @@ async fn list_characters(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match CharacterService::list(&db, &query.project_id, &claims.sub).await {
-        Ok(Some(characters)) => Ok(Json(json!({"success": true, "data": characters, "total": characters.len()}))),
+        Ok(Some(characters)) => Ok(Json(
+            json!({"success": true, "data": characters, "total": characters.len()}),
+        )),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({"success": false, "message": "项目不存在或无权限"})),
@@ -217,7 +219,10 @@ async fn validate_characters_import(
         errors.push("缺少version字段".to_string());
     }
     if export_type != Some("characters") {
-        errors.push(format!("export_type应为'characters'，当前为{:?}", export_type));
+        errors.push(format!(
+            "export_type应为'characters'，当前为{:?}",
+            export_type
+        ));
     }
     if items.is_none() {
         errors.push("缺少data字段或data不是数组".to_string());
@@ -226,7 +231,11 @@ async fn validate_characters_import(
             warnings.push("没有需要导入的角色数据".to_string());
         }
         for (i, item) in arr.iter().enumerate() {
-            if item.get("name").and_then(|n| n.as_str()).map_or(true, |n| n.is_empty()) {
+            if item
+                .get("name")
+                .and_then(|n| n.as_str())
+                .map_or(true, |n| n.is_empty())
+            {
                 errors.push(format!("第{}项缺少name字段", i + 1));
             }
         }
@@ -235,7 +244,11 @@ async fn validate_characters_import(
     let char_count = items.map_or(0, |a| a.len());
     let org_count = items.map_or(0, |a| {
         a.iter()
-            .filter(|i| i.get("is_organization").and_then(|v| v.as_bool()).unwrap_or(false))
+            .filter(|i| {
+                i.get("is_organization")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            })
             .count()
     });
 
@@ -258,7 +271,9 @@ async fn list_characters_by_project(
     Path(project_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match CharacterService::list(&db, &project_id, &claims.sub).await {
-        Ok(Some(characters)) => Ok(Json(json!({"success": true, "data": characters, "total": characters.len()}))),
+        Ok(Some(characters)) => Ok(Json(
+            json!({"success": true, "data": characters, "total": characters.len()}),
+        )),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({"success": false, "message": "项目不存在或无权限"})),
@@ -272,11 +287,19 @@ async fn list_characters_by_project(
 
 pub fn routes() -> Router {
     Router::new()
-        .route("/characters/project/{project_id}", get(list_characters_by_project))
+        .route(
+            "/characters/project/{project_id}",
+            get(list_characters_by_project),
+        )
         .route("/characters", post(create_character).get(list_characters))
         .route(
             "/characters/{character_id}",
-            get(get_character).put(update_character).delete(delete_character),
+            get(get_character)
+                .put(update_character)
+                .delete(delete_character),
         )
-        .route("/characters/validate-import", post(validate_characters_import))
+        .route(
+            "/characters/validate-import",
+            post(validate_characters_import),
+        )
 }

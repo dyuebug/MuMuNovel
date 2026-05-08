@@ -58,7 +58,10 @@ async fn login(
 ) -> Result<Response, (StatusCode, Json<Value>)> {
     let auth = AuthService::new(&cfg.jwt_secret);
 
-    match auth.login_local(&db, &cfg, &body.username, &body.password).await {
+    match auth
+        .login_local(&db, &cfg, &body.username, &body.password)
+        .await
+    {
         Ok(Some((user, token))) => {
             let body = json!({
                 "success": true,
@@ -81,7 +84,12 @@ async fn login(
             set_cookie(&mut response, "user_id", &user.user_id);
             // session_expire_at 供前端 sessionManager 判断会话过期
             let expire_at = chrono::Utc::now().timestamp() + 604800;
-            set_cookie_non_httponly(&mut response, "session_expire_at", &expire_at.to_string(), 604800);
+            set_cookie_non_httponly(
+                &mut response,
+                "session_expire_at",
+                &expire_at.to_string(),
+                604800,
+            );
             Ok(response)
         }
         Ok(None) => Err((
@@ -134,8 +142,11 @@ async fn register(
 }
 
 async fn logout() -> impl IntoResponse {
-    let mut response =
-        (StatusCode::OK, Json(json!({"success": true, "message": "已登出"}))).into_response();
+    let mut response = (
+        StatusCode::OK,
+        Json(json!({"success": true, "message": "已登出"})),
+    )
+        .into_response();
     clear_cookie(&mut response, "token");
     clear_cookie(&mut response, "user_id");
     clear_cookie(&mut response, "session_expire_at");
@@ -175,10 +186,7 @@ async fn get_current_user(
             "created_at": user.created_at.to_rfc3339(),
             "last_login": user.last_login.to_rfc3339(),
         }))),
-        None => Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({"detail": "用户不存在"})),
-        )),
+        None => Err((StatusCode::NOT_FOUND, Json(json!({"detail": "用户不存在"})))),
     }
 }
 
@@ -271,14 +279,22 @@ async fn set_password(
     Json(body): Json<SetPasswordRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let hash = hash_password(&body.password).map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": e})),
+        )
     })?;
 
     let now = Utc::now();
     let existing = user_password::Entity::find_by_id(&claims.sub)
         .one(&db)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": format!("{}", e)}))))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": format!("{}", e)})),
+            )
+        })?;
 
     match existing {
         Some(p) => {
@@ -287,14 +303,22 @@ async fn set_password(
             active.has_custom_password = Set(true);
             active.updated_at = Set(now);
             active.update(&db).await.map_err(|e| {
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": format!("{}", e)})))
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"detail": format!("{}", e)})),
+                )
             })?;
         }
         None => {
             let user = user::Entity::find_by_id(&claims.sub)
                 .one(&db)
                 .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": format!("{}", e)}))))?
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"detail": format!("{}", e)})),
+                    )
+                })?
                 .ok_or((StatusCode::NOT_FOUND, Json(json!({"detail": "用户不存在"}))))?;
 
             let pwd = user_password::ActiveModel {
@@ -306,7 +330,10 @@ async fn set_password(
                 updated_at: Set(now),
             };
             pwd.insert(&db).await.map_err(|e| {
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": format!("{}", e)})))
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"detail": format!("{}", e)})),
+                )
             })?;
         }
     }
@@ -321,23 +348,39 @@ async fn initialize_password(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     // Same logic as set_password but for initialization
     let hash = hash_password(&body.password).map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": e})),
+        )
     })?;
 
     let now = Utc::now();
     let existing = user_password::Entity::find_by_id(&claims.sub)
         .one(&db)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": format!("{}", e)}))))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": format!("{}", e)})),
+            )
+        })?;
 
     if existing.is_some() {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"detail": "密码已存在，请使用密码设置接口"}))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "密码已存在，请使用密码设置接口"})),
+        ));
     }
 
     let user = user::Entity::find_by_id(&claims.sub)
         .one(&db)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": format!("{}", e)}))))?
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": format!("{}", e)})),
+            )
+        })?
         .ok_or((StatusCode::NOT_FOUND, Json(json!({"detail": "用户不存在"}))))?;
 
     let pwd = user_password::ActiveModel {
@@ -349,7 +392,10 @@ async fn initialize_password(
         updated_at: Set(now),
     };
     pwd.insert(&db).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": format!("{}", e)})))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": format!("{}", e)})),
+        )
     })?;
 
     Ok(Json(json!({"success": true, "message": "密码初始化成功"})))

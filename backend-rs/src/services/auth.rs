@@ -4,7 +4,10 @@ use argon2::{
 };
 use chrono::Utc;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    Set,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -86,10 +89,17 @@ impl AuthService {
 
         // Generate deterministic user_id from username (same as Python: local_{md5[:16]})
         let digest = md5::compute(username.as_bytes());
-        let user_id = format!("local_{:x}", digest).chars().take(22).collect::<String>();
+        let user_id = format!("local_{:x}", digest)
+            .chars()
+            .take(22)
+            .collect::<String>();
 
         // Check if admin already exists
-        if user_entity::Entity::find_by_id(&user_id).one(db).await?.is_some() {
+        if user_entity::Entity::find_by_id(&user_id)
+            .one(db)
+            .await?
+            .is_some()
+        {
             return Ok(None); // Already created, normal login flow will handle it
         }
 
@@ -131,7 +141,10 @@ impl AuthService {
             .await?
             .ok_or("inserted admin user not found")?;
 
-        tracing::info!("Local admin user '{}' auto-created from .env config", username);
+        tracing::info!(
+            "Local admin user '{}' auto-created from .env config",
+            username
+        );
         Ok(Some(user))
     }
 
@@ -143,9 +156,7 @@ impl AuthService {
         password: &str,
     ) -> Result<Option<(user::Model, String)>, Box<dyn std::error::Error + Send + Sync>> {
         // 1. Try finding user by username in user_passwords table (primary key = user_id)
-        let pwd = user_password::Entity::find_by_id(username)
-            .one(db)
-            .await?;
+        let pwd = user_password::Entity::find_by_id(username).one(db).await?;
 
         let pwd = match pwd {
             Some(p) => p,

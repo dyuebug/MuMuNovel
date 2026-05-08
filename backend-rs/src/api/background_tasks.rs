@@ -157,7 +157,7 @@ pub async fn get_task(
                 }),
             })),
         )
-            .into_response()
+            .into_response(),
     }
 }
 

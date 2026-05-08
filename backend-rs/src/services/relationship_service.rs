@@ -54,7 +54,11 @@ impl RelationshipService {
             created_at: Set(now),
             updated_at: Set(Some(now)),
         };
-        model.insert(db).await.map_err(|e| format!("{}", e)).map(Some)
+        model
+            .insert(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
     }
 
     pub async fn list(
@@ -108,12 +112,24 @@ impl RelationshipService {
             return Ok(None);
         };
         let mut active: relationship::ActiveModel = model.into();
-        if let Some(v) = relationship_name { active.relationship_name = Set(Some(v.to_string())); }
-        if let Some(v) = intimacy_level { active.intimacy_level = Set(v); }
-        if let Some(v) = status { active.status = Set(v.to_string()); }
-        if let Some(v) = description { active.description = Set(Some(v.to_string())); }
+        if let Some(v) = relationship_name {
+            active.relationship_name = Set(Some(v.to_string()));
+        }
+        if let Some(v) = intimacy_level {
+            active.intimacy_level = Set(v);
+        }
+        if let Some(v) = status {
+            active.status = Set(v.to_string());
+        }
+        if let Some(v) = description {
+            active.description = Set(Some(v.to_string()));
+        }
         active.updated_at = Set(Some(Utc::now().naive_utc()));
-        active.update(db).await.map_err(|e| format!("{}", e)).map(Some)
+        active
+            .update(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
     }
 
     pub async fn delete(

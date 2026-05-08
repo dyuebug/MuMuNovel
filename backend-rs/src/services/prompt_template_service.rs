@@ -223,10 +223,7 @@ impl PromptTemplateService {
             active.parameters = Set(Some(params));
             active.updated_at = Set(Utc::now().naive_utc());
 
-            active
-                .update(db)
-                .await
-                .map_err(|e| format!("{}", e))?;
+            active.update(db).await.map_err(|e| format!("{}", e))?;
             synced += 1;
         }
         Ok(synced)
@@ -240,8 +237,8 @@ impl PromptTemplateService {
     ) -> Result<(Vec<prompt_template::Model>, Vec<String>), String> {
         use sea_orm::QueryOrder;
 
-        let mut query = prompt_template::Entity::find()
-            .filter(prompt_template::Column::UserId.eq(user_id));
+        let mut query =
+            prompt_template::Entity::find().filter(prompt_template::Column::UserId.eq(user_id));
 
         if let Some(cat) = category {
             query = query.filter(prompt_template::Column::Category.eq(cat));
@@ -321,10 +318,7 @@ impl PromptTemplateService {
                 active.is_active = Set(v);
             }
             active.updated_at = Set(Utc::now().naive_utc());
-            active
-                .update(db)
-                .await
-                .map_err(|e| format!("{}", e))
+            active.update(db).await.map_err(|e| format!("{}", e))
         } else {
             let id = Uuid::new_v4().to_string();
             let params = data
@@ -335,38 +329,34 @@ impl PromptTemplateService {
                 id: Set(id),
                 user_id: Set(user_id.to_string()),
                 template_key: Set(template_key.to_string()),
-                template_name: Set(
-                    data.get("template_name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                ),
-                template_content: Set(
-                    data.get("template_content")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                ),
-                description: Set(
-                    data.get("description")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                ),
-                category: Set(
-                    data.get("category")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                ),
+                template_name: Set(data
+                    .get("template_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()),
+                template_content: Set(data
+                    .get("template_content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()),
+                description: Set(data
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())),
+                category: Set(data
+                    .get("category")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())),
                 parameters: Set(Some(params)),
-                is_active: Set(data.get("is_active").and_then(|v| v.as_bool()).unwrap_or(true)),
+                is_active: Set(data
+                    .get("is_active")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true)),
                 is_system_default: Set(false),
                 created_at: Set(Utc::now().naive_utc()),
                 updated_at: Set(Utc::now().naive_utc()),
             };
-            active
-                .insert(db)
-                .await
-                .map_err(|e| format!("{}", e))
+            active.insert(db).await.map_err(|e| format!("{}", e))
         }
     }
 
@@ -387,7 +377,10 @@ impl PromptTemplateService {
         }
     }
 
-    pub fn format_prompt(template: &str, parameters: &HashMap<String, String>) -> Result<String, String> {
+    pub fn format_prompt(
+        template: &str,
+        parameters: &HashMap<String, String>,
+    ) -> Result<String, String> {
         let mut result = template.to_string();
         for (key, value) in parameters {
             let placeholder = format!("{{{}}}", key);

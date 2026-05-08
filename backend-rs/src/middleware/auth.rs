@@ -69,7 +69,8 @@ where
 {
     type Response = Response;
     type Error = S::Error;
-    type Future = Pin<Box<dyn Send + std::future::Future<Output = Result<Self::Response, Self::Error>>>>;
+    type Future =
+        Pin<Box<dyn Send + std::future::Future<Output = Result<Self::Response, Self::Error>>>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx)
@@ -95,7 +96,11 @@ where
                     .and_then(|cookies| {
                         cookies.split(';').find_map(|c| {
                             let (k, v) = c.trim().split_once('=')?;
-                            if k == "token" { Some(v) } else { None }
+                            if k == "token" {
+                                Some(v)
+                            } else {
+                                None
+                            }
                         })
                     })
             })

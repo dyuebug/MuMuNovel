@@ -5,11 +5,31 @@ use serde_json::{json, Value};
 use crate::models::{project_default_style, writing_style};
 
 const PRESET_DEFAULTS: &[(&str, &str, &str)] = &[
-    ("natural", "自然风格", "使用自然流畅的语言，平实而富有感染力地进行叙述。注重情感的真实表达和细节的生动描绘。"),
-    ("classical", "古典风格", "采用典雅庄重的语言风格，注重词藻的华丽和修辞的运用。适合历史、玄幻等题材。"),
-    ("modern", "现代风格", "使用简洁明快的现代语言，节奏紧凑，适合都市、言情等题材。强调对话和内心独白。"),
-    ("literary", "文学风格", "追求语言的艺术性和哲理性，善用比喻、象征等修辞手法。适合文学性较强的作品。"),
-    ("humorous", "幽默风格", "以轻松诙谐的语言为主，善用夸张、反讽等手法。适合喜剧、讽刺类作品。"),
+    (
+        "natural",
+        "自然风格",
+        "使用自然流畅的语言，平实而富有感染力地进行叙述。注重情感的真实表达和细节的生动描绘。",
+    ),
+    (
+        "classical",
+        "古典风格",
+        "采用典雅庄重的语言风格，注重词藻的华丽和修辞的运用。适合历史、玄幻等题材。",
+    ),
+    (
+        "modern",
+        "现代风格",
+        "使用简洁明快的现代语言，节奏紧凑，适合都市、言情等题材。强调对话和内心独白。",
+    ),
+    (
+        "literary",
+        "文学风格",
+        "追求语言的艺术性和哲理性，善用比喻、象征等修辞手法。适合文学性较强的作品。",
+    ),
+    (
+        "humorous",
+        "幽默风格",
+        "以轻松诙谐的语言为主，善用夸张、反讽等手法。适合喜剧、讽刺类作品。",
+    ),
 ];
 
 fn style_to_value(s: &writing_style::Model, is_default: bool) -> Value {
@@ -41,12 +61,14 @@ impl WritingStyleService {
 
         let items: Vec<Value> = styles
             .iter()
-            .map(|s| json!({
-                "id": s.preset_id.clone().unwrap_or_else(|| s.id.to_string()),
-                "name": s.name,
-                "description": s.description,
-                "prompt_content": s.prompt_content,
-            }))
+            .map(|s| {
+                json!({
+                    "id": s.preset_id.clone().unwrap_or_else(|| s.id.to_string()),
+                    "name": s.name,
+                    "description": s.description,
+                    "prompt_content": s.prompt_content,
+                })
+            })
             .collect();
 
         Ok(json!(items))
@@ -97,16 +119,31 @@ impl WritingStyleService {
         body: &Value,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let now = Utc::now().naive_utc();
-        let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("Custom Style");
-        let style_type = body.get("style_type").and_then(|v| v.as_str()).unwrap_or("custom");
-        let prompt_content = body.get("prompt_content").and_then(|v| v.as_str()).unwrap_or("");
+        let name = body
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Custom Style");
+        let style_type = body
+            .get("style_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("custom");
+        let prompt_content = body
+            .get("prompt_content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
 
         let model = writing_style::ActiveModel {
             user_id: Set(Some(user_id.to_string())),
             name: Set(name.to_string()),
             style_type: Set(style_type.to_string()),
-            preset_id: Set(body.get("preset_id").and_then(|v| v.as_str()).map(String::from)),
-            description: Set(body.get("description").and_then(|v| v.as_str()).map(String::from)),
+            preset_id: Set(body
+                .get("preset_id")
+                .and_then(|v| v.as_str())
+                .map(String::from)),
+            description: Set(body
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(String::from)),
             prompt_content: Set(prompt_content.to_string()),
             order_index: Set(0),
             created_at: Set(now),
@@ -134,10 +171,18 @@ impl WritingStyleService {
         }
 
         let mut active: writing_style::ActiveModel = existing.into();
-        if let Some(v) = body.get("name").and_then(|v| v.as_str()) { active.name = Set(v.to_string()); }
-        if let Some(v) = body.get("description").and_then(|v| v.as_str()) { active.description = Set(Some(v.to_string())); }
-        if let Some(v) = body.get("prompt_content").and_then(|v| v.as_str()) { active.prompt_content = Set(v.to_string()); }
-        if let Some(v) = body.get("order_index").and_then(|v| v.as_i64()) { active.order_index = Set(v as i32); }
+        if let Some(v) = body.get("name").and_then(|v| v.as_str()) {
+            active.name = Set(v.to_string());
+        }
+        if let Some(v) = body.get("description").and_then(|v| v.as_str()) {
+            active.description = Set(Some(v.to_string()));
+        }
+        if let Some(v) = body.get("prompt_content").and_then(|v| v.as_str()) {
+            active.prompt_content = Set(v.to_string());
+        }
+        if let Some(v) = body.get("order_index").and_then(|v| v.as_i64()) {
+            active.order_index = Set(v as i32);
+        }
         active.updated_at = Set(Utc::now().naive_utc());
 
         let saved = active.update(db).await?;
@@ -163,7 +208,9 @@ impl WritingStyleService {
             .exec(db)
             .await?;
 
-        writing_style::Entity::delete_by_id(style_id).exec(db).await?;
+        writing_style::Entity::delete_by_id(style_id)
+            .exec(db)
+            .await?;
         Ok(json!({"message": "风格已删除"}))
     }
 
@@ -192,7 +239,9 @@ impl WritingStyleService {
             .await?;
 
         if let Some(ed) = existing_default {
-            project_default_style::Entity::delete_by_id(ed.id).exec(db).await?;
+            project_default_style::Entity::delete_by_id(ed.id)
+                .exec(db)
+                .await?;
         }
 
         let pd = project_default_style::ActiveModel {

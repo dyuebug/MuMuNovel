@@ -119,7 +119,11 @@ impl TxtParserService {
 
             let title = {
                 let t = lines[start_idx].trim();
-                if t.len() > 200 { &t[..200] } else { t }
+                if t.len() > 200 {
+                    &t[..200]
+                } else {
+                    t
+                }
             };
 
             let body_start = start_idx + 1;
@@ -186,7 +190,12 @@ impl TxtParserService {
         let mut i = 1;
         while i < chars.len() {
             let ch = chars[i];
-            if self.is_chinese_digit(ch) || ch.is_ascii_digit() || ch == '零' || ch == '〇' || ch == '两' {
+            if self.is_chinese_digit(ch)
+                || ch.is_ascii_digit()
+                || ch == '零'
+                || ch == '〇'
+                || ch == '两'
+            {
                 has_digit = true;
                 i += 1;
             } else {
@@ -202,7 +211,21 @@ impl TxtParserService {
     }
 
     fn is_chinese_digit(&self, ch: char) -> bool {
-        matches!(ch, '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十' | '百' | '千' | '万')
+        matches!(
+            ch,
+            '一' | '二'
+                | '三'
+                | '四'
+                | '五'
+                | '六'
+                | '七'
+                | '八'
+                | '九'
+                | '十'
+                | '百'
+                | '千'
+                | '万'
+        )
     }
 
     fn match_english_chapter(&self, line: &str) -> bool {
@@ -236,7 +259,9 @@ impl TxtParserService {
             return false;
         }
         // Check for sentence-ending punctuation
-        let punct = ['，', '。', '！', '？', '；', '：', ',', '.', '!', '?', ';', ':'];
+        let punct = [
+            '，', '。', '！', '？', '；', '：', ',', '.', '!', '?', ';', ':',
+        ];
         if line.contains(&punct[..]) {
             return false;
         }
@@ -263,10 +288,7 @@ impl TxtParserService {
             } else {
                 let search_from = (start + min_window).min(n);
                 let segment: String = chars[search_from..ideal_end].iter().collect();
-                let offset = boundary
-                    .iter()
-                    .filter_map(|p| segment.rfind(*p))
-                    .max();
+                let offset = boundary.iter().filter_map(|p| segment.rfind(*p)).max();
                 match offset {
                     Some(o) => search_from + o + 1,
                     None => ideal_end,

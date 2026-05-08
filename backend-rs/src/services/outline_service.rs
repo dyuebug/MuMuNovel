@@ -47,7 +47,11 @@ impl OutlineService {
             created_at: Set(now),
             updated_at: Set(Some(now)),
         };
-        model.insert(db).await.map_err(|e| format!("{}", e)).map(Some)
+        model
+            .insert(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
     }
 
     pub async fn list(
@@ -102,13 +106,25 @@ impl OutlineService {
         };
 
         let mut active: outline::ActiveModel = model.into();
-        if let Some(v) = title { active.title = Set(v.to_string()); }
-        if let Some(v) = content { active.content = Set(Some(v.to_string())); }
-        if let Some(v) = order_index { active.order_index = Set(Some(v)); }
-        if let Some(v) = structure { active.structure = Set(Some(v.to_string())); }
+        if let Some(v) = title {
+            active.title = Set(v.to_string());
+        }
+        if let Some(v) = content {
+            active.content = Set(Some(v.to_string()));
+        }
+        if let Some(v) = order_index {
+            active.order_index = Set(Some(v));
+        }
+        if let Some(v) = structure {
+            active.structure = Set(Some(v.to_string()));
+        }
         active.updated_at = Set(Some(Utc::now().naive_utc()));
 
-        active.update(db).await.map_err(|e| format!("{}", e)).map(Some)
+        active
+            .update(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
     }
 
     pub async fn delete(

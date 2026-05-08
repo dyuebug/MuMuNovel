@@ -1,6 +1,7 @@
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set,
 };
 use uuid::Uuid;
 
@@ -105,7 +106,10 @@ impl ProjectService {
     }
 
     /// Full project creation with all wizard fields — used by wizard generator
-    pub async fn create_full(db: &DatabaseConnection, params: CreateProjectParams) -> Result<project::Model, String> {
+    pub async fn create_full(
+        db: &DatabaseConnection,
+        params: CreateProjectParams,
+    ) -> Result<project::Model, String> {
         let now = Utc::now().naive_utc();
         let model = project::ActiveModel {
             id: Set(Uuid::new_v4().to_string()),
@@ -140,7 +144,10 @@ impl ProjectService {
     }
 
     /// Auto-assign first global writing style to a project
-    pub async fn assign_default_style(db: &DatabaseConnection, project_id: &str) -> Result<(), String> {
+    pub async fn assign_default_style(
+        db: &DatabaseConnection,
+        project_id: &str,
+    ) -> Result<(), String> {
         let style = writing_style::Entity::find()
             .filter(writing_style::Column::UserId.is_null())
             .filter(writing_style::Column::OrderIndex.eq(1))
@@ -161,16 +168,22 @@ impl ProjectService {
 
     /// Finalize project after wizard outline completes
     pub async fn complete_wizard(
-        db: &DatabaseConnection, project_id: &str,
-        chapter_count: i32, narrative_perspective: Option<&str>,
+        db: &DatabaseConnection,
+        project_id: &str,
+        chapter_count: i32,
+        narrative_perspective: Option<&str>,
         target_words: i32,
     ) -> Result<(), String> {
         let model = project::Entity::find_by_id(project_id)
-            .one(db).await.map_err(|e| format!("{}", e))?
+            .one(db)
+            .await
+            .map_err(|e| format!("{}", e))?
             .ok_or("项目不存在")?;
         let mut active: project::ActiveModel = model.into();
         active.chapter_count = Set(Some(chapter_count));
-        if let Some(np) = narrative_perspective { active.narrative_perspective = Set(Some(np.to_string())); }
+        if let Some(np) = narrative_perspective {
+            active.narrative_perspective = Set(Some(np.to_string()));
+        }
         active.target_words = Set(target_words);
         active.status = Set("writing".to_string());
         active.wizard_status = Set("completed".to_string());
@@ -181,7 +194,11 @@ impl ProjectService {
     }
 
     /// Update project wizard step after each wizard phase completes
-    pub async fn update_wizard_step(db: &DatabaseConnection, project_id: &str, step: i32) -> Result<(), String> {
+    pub async fn update_wizard_step(
+        db: &DatabaseConnection,
+        project_id: &str,
+        step: i32,
+    ) -> Result<(), String> {
         let model = project::Entity::find_by_id(project_id)
             .one(db)
             .await
@@ -244,23 +261,55 @@ impl ProjectService {
         };
 
         let mut active: project::ActiveModel = model.into();
-        if let Some(v) = title { active.title = Set(v.to_string()); }
-        if let Some(v) = description { active.description = Set(Some(v.to_string())); }
-        if let Some(v) = theme { active.theme = Set(Some(v.to_string())); }
-        if let Some(v) = genre { active.genre = Set(Some(v.to_string())); }
-        if let Some(v) = status { active.status = Set(v.to_string()); }
-        if let Some(v) = target_words { active.target_words = Set(v); }
-        if let Some(v) = outline_mode { active.outline_mode = Set(v.to_string()); }
-        if let Some(v) = narrative_perspective { active.narrative_perspective = Set(Some(v.to_string())); }
-        if let Some(v) = default_creative_mode { active.default_creative_mode = Set(Some(v.to_string())); }
-        if let Some(v) = default_story_focus { active.default_story_focus = Set(Some(v.to_string())); }
-        if let Some(v) = default_plot_stage { active.default_plot_stage = Set(Some(v.to_string())); }
-        if let Some(v) = default_story_creation_brief { active.default_story_creation_brief = Set(Some(v.to_string())); }
-        if let Some(v) = default_quality_preset { active.default_quality_preset = Set(Some(v.to_string())); }
-        if let Some(v) = default_quality_notes { active.default_quality_notes = Set(Some(v.to_string())); }
+        if let Some(v) = title {
+            active.title = Set(v.to_string());
+        }
+        if let Some(v) = description {
+            active.description = Set(Some(v.to_string()));
+        }
+        if let Some(v) = theme {
+            active.theme = Set(Some(v.to_string()));
+        }
+        if let Some(v) = genre {
+            active.genre = Set(Some(v.to_string()));
+        }
+        if let Some(v) = status {
+            active.status = Set(v.to_string());
+        }
+        if let Some(v) = target_words {
+            active.target_words = Set(v);
+        }
+        if let Some(v) = outline_mode {
+            active.outline_mode = Set(v.to_string());
+        }
+        if let Some(v) = narrative_perspective {
+            active.narrative_perspective = Set(Some(v.to_string()));
+        }
+        if let Some(v) = default_creative_mode {
+            active.default_creative_mode = Set(Some(v.to_string()));
+        }
+        if let Some(v) = default_story_focus {
+            active.default_story_focus = Set(Some(v.to_string()));
+        }
+        if let Some(v) = default_plot_stage {
+            active.default_plot_stage = Set(Some(v.to_string()));
+        }
+        if let Some(v) = default_story_creation_brief {
+            active.default_story_creation_brief = Set(Some(v.to_string()));
+        }
+        if let Some(v) = default_quality_preset {
+            active.default_quality_preset = Set(Some(v.to_string()));
+        }
+        if let Some(v) = default_quality_notes {
+            active.default_quality_notes = Set(Some(v.to_string()));
+        }
         active.updated_at = Set(Some(Utc::now().naive_utc()));
 
-        active.update(db).await.map_err(|e| format!("{}", e)).map(Some)
+        active
+            .update(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
     }
 
     pub async fn delete(

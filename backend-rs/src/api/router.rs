@@ -4,25 +4,29 @@ use std::sync::Arc;
 use axum::{Extension, Router};
 use sea_orm::DatabaseConnection;
 use tower_http::{
-    cors::CorsLayer,
-    normalize_path::NormalizePathLayer,
-    request_id::MakeRequestUuid,
-    services::ServeDir,
-    trace::TraceLayer,
-    ServiceBuilderExt as _,
+    cors::CorsLayer, normalize_path::NormalizePathLayer, request_id::MakeRequestUuid,
+    services::ServeDir, trace::TraceLayer, ServiceBuilderExt as _,
 };
 use tracing::info;
 
 use crate::config::AppConfig;
+use crate::mcp::McpClientManager;
 use crate::middleware::auth::AuthLayer;
 use crate::services::book_import_service::BookImportService;
-use crate::mcp::McpClientManager;
 use crate::tasks::registry::TaskRegistry;
 use crate::tasks::stream::TaskStreamHub;
 
-use super::{admin, ai_test, auth, background_tasks, book_import, careers, changelog, chapters, characters, foreshadows, health, inspiration, mcp_plugins, organizations, outlines, polish, projects, prompt_templates, prompt_workshop, relationships, settings, users, wizard, writing_styles};
+use super::{
+    admin, ai_test, auth, background_tasks, book_import, careers, changelog, chapters, characters,
+    foreshadows, health, inspiration, mcp_plugins, organizations, outlines, polish, projects,
+    prompt_templates, prompt_workshop, relationships, settings, users, wizard, writing_styles,
+};
 
-pub fn build(db: Option<DatabaseConnection>, cfg: &AppConfig, task_registry: TaskRegistry) -> Router {
+pub fn build(
+    db: Option<DatabaseConnection>,
+    cfg: &AppConfig,
+    task_registry: TaskRegistry,
+) -> Router {
     let cors = if cfg.debug {
         CorsLayer::permissive()
     } else {
@@ -86,58 +90,57 @@ pub fn build(db: Option<DatabaseConnection>, cfg: &AppConfig, task_registry: Tas
         if index_path.exists() {
             let index_html = std::fs::read_to_string(&index_path).unwrap_or_default();
             let static_dir_clone = static_dir.to_path_buf();
-            router = router.fallback_service(tower::service_fn(move |req: axum::http::Request<axum::body::Body>| {
-                let path = req.uri().path().trim_start_matches('/').to_string();
-                let static_dir = static_dir_clone.clone();
-                let index_html = index_html.clone();
-                async move {
-                    // API paths that don't match a route should return 404, not SPA HTML
-                    if path.starts_with("api/") {
-                        return Ok::<_, std::convert::Infallible>(
-                            axum::response::Response::builder()
-                                .status(404)
-                                .header("content-type", "application/json")
-                                .body(axum::body::Body::from(r#"{"detail":"Not Found"}"#))
-                                .unwrap(),
-                        );
-                    }
-
-                    // Try to serve the exact file if it exists
-                    let file_path = static_dir.join(path);
-                    if file_path.exists() && file_path.is_file() {
-                        let content_type = mime_guess::from_path(&file_path)
-                            .first_or_octet_stream()
-                            .to_string();
-                        match tokio::fs::read(&file_path).await {
-                            Ok(data) => {
-                                return Ok::<_, std::convert::Infallible>(
-                                    axum::response::Response::builder()
-                                        .status(200)
-                                        .header("content-type", content_type)
-                                        .body(axum::body::Body::from(data))
-                                        .unwrap(),
-                                );
-                            }
-                            Err(_) => {}
+            router = router.fallback_service(tower::service_fn(
+                move |req: axum::http::Request<axum::body::Body>| {
+                    let path = req.uri().path().trim_start_matches('/').to_string();
+                    let static_dir = static_dir_clone.clone();
+                    let index_html = index_html.clone();
+                    async move {
+                        // API paths that don't match a route should return 404, not SPA HTML
+                        if path.starts_with("api/") {
+                            return Ok::<_, std::convert::Infallible>(
+                                axum::response::Response::builder()
+                                    .status(404)
+                                    .header("content-type", "application/json")
+                                    .body(axum::body::Body::from(r#"{"detail":"Not Found"}"#))
+                                    .unwrap(),
+                            );
                         }
+
+                        // Try to serve the exact file if it exists
+                        let file_path = static_dir.join(path);
+                        if file_path.exists() && file_path.is_file() {
+                            let content_type = mime_guess::from_path(&file_path)
+                                .first_or_octet_stream()
+                                .to_string();
+                            match tokio::fs::read(&file_path).await {
+                                Ok(data) => {
+                                    return Ok::<_, std::convert::Infallible>(
+                                        axum::response::Response::builder()
+                                            .status(200)
+                                            .header("content-type", content_type)
+                                            .body(axum::body::Body::from(data))
+                                            .unwrap(),
+                                    );
+                                }
+                                Err(_) => {}
+                            }
+                        }
+                        // SPA fallback: serve index.html
+                        Ok::<_, std::convert::Infallible>(
+                            axum::response::Response::builder()
+                                .status(200)
+                                .header("content-type", "text/html; charset=utf-8")
+                                .body(axum::body::Body::from(index_html))
+                                .unwrap(),
+                        )
                     }
-                    // SPA fallback: serve index.html
-                    Ok::<_, std::convert::Infallible>(
-                        axum::response::Response::builder()
-                            .status(200)
-                            .header("content-type", "text/html; charset=utf-8")
-                            .body(axum::body::Body::from(index_html))
-                            .unwrap(),
-                    )
-                }
-            }));
+                },
+            ));
             info!("Static file serving enabled from {}", cfg.static_dir);
         }
     } else {
-        info!(
-            "Static dir {} not found, running API-only",
-            cfg.static_dir
-        );
+        info!("Static dir {} not found, running API-only", cfg.static_dir);
     }
 
     if let Some(db) = db {

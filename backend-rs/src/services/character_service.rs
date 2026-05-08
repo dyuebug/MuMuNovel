@@ -1,6 +1,7 @@
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder,
 };
 use uuid::Uuid;
 
@@ -68,7 +69,11 @@ impl CharacterService {
             created_at: Set(now),
             updated_at: Set(Some(now)),
         };
-        model.insert(db).await.map_err(|e| format!("{}", e)).map(Some)
+        model
+            .insert(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
     }
 
     pub async fn list(
@@ -128,18 +133,40 @@ impl CharacterService {
         };
 
         let mut active: character::ActiveModel = model.into();
-        if let Some(v) = name { active.name = Set(v.to_string()); }
-        if let Some(v) = role_type { active.role_type = Set(Some(v.to_string())); }
-        if let Some(v) = personality { active.personality = Set(Some(v.to_string())); }
-        if let Some(v) = background { active.background = Set(Some(v.to_string())); }
-        if let Some(v) = appearance { active.appearance = Set(Some(v.to_string())); }
-        if let Some(v) = age { active.age = Set(Some(v.to_string())); }
-        if let Some(v) = gender { active.gender = Set(Some(v.to_string())); }
-        if let Some(v) = status { active.status = Set(v.to_string()); }
-        if let Some(v) = is_organization { active.is_organization = Set(v); }
+        if let Some(v) = name {
+            active.name = Set(v.to_string());
+        }
+        if let Some(v) = role_type {
+            active.role_type = Set(Some(v.to_string()));
+        }
+        if let Some(v) = personality {
+            active.personality = Set(Some(v.to_string()));
+        }
+        if let Some(v) = background {
+            active.background = Set(Some(v.to_string()));
+        }
+        if let Some(v) = appearance {
+            active.appearance = Set(Some(v.to_string()));
+        }
+        if let Some(v) = age {
+            active.age = Set(Some(v.to_string()));
+        }
+        if let Some(v) = gender {
+            active.gender = Set(Some(v.to_string()));
+        }
+        if let Some(v) = status {
+            active.status = Set(v.to_string());
+        }
+        if let Some(v) = is_organization {
+            active.is_organization = Set(v);
+        }
         active.updated_at = Set(Some(Utc::now().naive_utc()));
 
-        active.update(db).await.map_err(|e| format!("{}", e)).map(Some)
+        active
+            .update(db)
+            .await
+            .map_err(|e| format!("{}", e))
+            .map(Some)
     }
 
     pub async fn delete(
@@ -216,7 +243,9 @@ impl CharacterService {
         sub_careers_json: Option<&str>,
     ) -> Result<(), String> {
         let model = character::Entity::find_by_id(character_id)
-            .one(db).await.map_err(|e| format!("{}", e))?
+            .one(db)
+            .await
+            .map_err(|e| format!("{}", e))?
             .ok_or("角色不存在")?;
         let mut active: character::ActiveModel = model.into();
         active.main_career_id = Set(main_career_id.map(|s| s.to_string()));

@@ -6,9 +6,7 @@ use sea_orm::{
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::models::{
-    prompt_submission, prompt_workshop_item, prompt_workshop_like, writing_style,
-};
+use crate::models::{prompt_submission, prompt_workshop_item, prompt_workshop_like, writing_style};
 
 const WORKSHOP_SERVER_MODE: &str = "server";
 
@@ -117,12 +115,8 @@ impl PromptWorkshopService {
         }
         if let Some(s) = search {
             let sf = format!("%{}%", s);
-            query = query.filter(
-                C::Name.like(&sf).or(C::Description.like(&sf))
-            );
-            count_query = count_query.filter(
-                C::Name.like(&sf).or(C::Description.like(&sf))
-            );
+            query = query.filter(C::Name.like(&sf).or(C::Description.like(&sf)));
+            count_query = count_query.filter(C::Name.like(&sf).or(C::Description.like(&sf)));
         }
 
         query = match sort {
@@ -152,8 +146,13 @@ impl PromptWorkshopService {
 
         // Category stats
         let mut cat_stats: Vec<Value> = Vec::new();
-        let all_active = Entity::find().filter(C::Status.eq("active")).all(db).await.unwrap_or_default();
-        let mut cat_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let all_active = Entity::find()
+            .filter(C::Status.eq("active"))
+            .all(db)
+            .await
+            .unwrap_or_default();
+        let mut cat_count: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for item in &all_active {
             *cat_count.entry(item.category.clone()).or_default() += 1;
         }
@@ -188,7 +187,9 @@ impl PromptWorkshopService {
         let Some(item) = item else {
             return Ok(None);
         };
-        Ok(Some(json!({"success": true, "data": item_to_dict(&item, false)})))
+        Ok(Some(
+            json!({"success": true, "data": item_to_dict(&item, false)}),
+        ))
     }
 
     pub async fn import_item(
@@ -221,7 +222,10 @@ impl PromptWorkshopService {
             user_id: Set(Some(user_id.to_string())),
             name: Set(custom_name.unwrap_or(&item.name).to_string()),
             style_type: Set("custom".to_string()),
-            description: Set(Some(format!("从提示词工坊导入: {}", item.description.as_deref().unwrap_or("")))),
+            description: Set(Some(format!(
+                "从提示词工坊导入: {}",
+                item.description.as_deref().unwrap_or("")
+            ))),
             prompt_content: Set(item.prompt_content.clone()),
             order_index: Set(count as i32 + 1),
             ..Default::default()
@@ -289,10 +293,7 @@ impl PromptWorkshopService {
         Ok(json!({"success": true, "liked": liked, "like_count": updated.like_count}))
     }
 
-    pub async fn record_download(
-        db: &DatabaseConnection,
-        item_id: &str,
-    ) -> Result<Value, String> {
+    pub async fn record_download(db: &DatabaseConnection, item_id: &str) -> Result<Value, String> {
         let item = prompt_workshop_item::Entity::find_by_id(item_id)
             .one(db)
             .await
@@ -331,7 +332,9 @@ impl PromptWorkshopService {
             prompt_content: Set(prompt_content.to_string()),
             category: Set(category.to_string()),
             tags: Set(tags.map(|s| s.to_string())),
-            author_display_name: Set(Some(author_display_name.unwrap_or(submitter_name).to_string())),
+            author_display_name: Set(Some(
+                author_display_name.unwrap_or(submitter_name).to_string(),
+            )),
             is_anonymous: Set(is_anonymous),
             status: Set("pending".to_string()),
             reviewer_id: Set(None),
@@ -486,8 +489,16 @@ impl PromptWorkshopService {
                 prompt_content: Set(submission.prompt_content.clone()),
                 category: Set(category.unwrap_or(&submission.category).to_string()),
                 tags: Set(tags.map(|s| s.to_string()).or(submission.tags.clone())),
-                author_id: Set(if submission.is_anonymous { None } else { Some(submission.submitter_id.clone()) }),
-                author_name: Set(if submission.is_anonymous { None } else { submission.author_display_name.clone() }),
+                author_id: Set(if submission.is_anonymous {
+                    None
+                } else {
+                    Some(submission.submitter_id.clone())
+                }),
+                author_name: Set(if submission.is_anonymous {
+                    None
+                } else {
+                    submission.author_display_name.clone()
+                }),
                 source_instance: Set(Some(submission.source_instance.clone())),
                 is_official: Set(false),
                 download_count: Set(0),
@@ -570,12 +581,24 @@ impl PromptWorkshopService {
         };
         let mut active: prompt_workshop_item::ActiveModel = item.into();
 
-        if let Some(v) = updates.get("name").and_then(|v| v.as_str()) { active.name = Set(v.to_string()); }
-        if let Some(v) = updates.get("description").and_then(|v| v.as_str()) { active.description = Set(Some(v.to_string())); }
-        if let Some(v) = updates.get("prompt_content").and_then(|v| v.as_str()) { active.prompt_content = Set(v.to_string()); }
-        if let Some(v) = updates.get("category").and_then(|v| v.as_str()) { active.category = Set(v.to_string()); }
-        if let Some(v) = updates.get("tags") { active.tags = Set(Some(v.to_string())); }
-        if let Some(v) = updates.get("status").and_then(|v| v.as_str()) { active.status = Set(v.to_string()); }
+        if let Some(v) = updates.get("name").and_then(|v| v.as_str()) {
+            active.name = Set(v.to_string());
+        }
+        if let Some(v) = updates.get("description").and_then(|v| v.as_str()) {
+            active.description = Set(Some(v.to_string()));
+        }
+        if let Some(v) = updates.get("prompt_content").and_then(|v| v.as_str()) {
+            active.prompt_content = Set(v.to_string());
+        }
+        if let Some(v) = updates.get("category").and_then(|v| v.as_str()) {
+            active.category = Set(v.to_string());
+        }
+        if let Some(v) = updates.get("tags") {
+            active.tags = Set(Some(v.to_string()));
+        }
+        if let Some(v) = updates.get("status").and_then(|v| v.as_str()) {
+            active.status = Set(v.to_string());
+        }
         active.updated_at = Set(Some(Utc::now().naive_utc()));
 
         let updated = active.update(db).await.map_err(|e| format!("{}", e))?;
@@ -604,9 +627,22 @@ impl PromptWorkshopService {
         use prompt_workshop_item::Column as C;
         use prompt_workshop_item::Entity;
 
-        let total_items = Entity::find().filter(C::Status.eq("active")).count(db).await.map_err(|e| format!("{}", e))?;
-        let total_official = Entity::find().filter(C::Status.eq("active")).filter(C::IsOfficial.eq(true)).count(db).await.map_err(|e| format!("{}", e))?;
-        let total_pending = prompt_submission::Entity::find().filter(prompt_submission::Column::Status.eq("pending")).count(db).await.map_err(|e| format!("{}", e))?;
+        let total_items = Entity::find()
+            .filter(C::Status.eq("active"))
+            .count(db)
+            .await
+            .map_err(|e| format!("{}", e))?;
+        let total_official = Entity::find()
+            .filter(C::Status.eq("active"))
+            .filter(C::IsOfficial.eq(true))
+            .count(db)
+            .await
+            .map_err(|e| format!("{}", e))?;
+        let total_pending = prompt_submission::Entity::find()
+            .filter(prompt_submission::Column::Status.eq("pending"))
+            .count(db)
+            .await
+            .map_err(|e| format!("{}", e))?;
 
         // Sum of download_count and like_count
         let all_items = Entity::find().all(db).await.map_err(|e| format!("{}", e))?;

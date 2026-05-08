@@ -76,7 +76,9 @@ async fn list_outlines(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match OutlineService::list(&db, &query.project_id, &claims.sub).await {
-        Ok(Some(outlines)) => Ok(Json(json!({"success": true, "data": outlines, "total": outlines.len()}))),
+        Ok(Some(outlines)) => Ok(Json(
+            json!({"success": true, "data": outlines, "total": outlines.len()}),
+        )),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({"success": false, "message": "项目不存在或无权限"})),
@@ -166,10 +168,7 @@ async fn create_single_chapter(
                 Json(json!({"detail": format!("{}", e)})),
             )
         })?
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            Json(json!({"detail": "大纲不存在"})),
-        ))?;
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"detail": "大纲不存在"}))))?;
 
     let proj = project::Entity::find_by_id(&ol.project_id)
         .one(&db)
@@ -180,10 +179,7 @@ async fn create_single_chapter(
                 Json(json!({"detail": format!("{}", e)})),
             )
         })?
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            Json(json!({"detail": "项目不存在"})),
-        ))?;
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"detail": "项目不存在"}))))?;
 
     if proj.outline_mode != "one-to-one" {
         return Err((
@@ -290,9 +286,9 @@ async fn get_outline_chapters(
     let expansion_plans: Vec<Value> = chapters
         .iter()
         .filter_map(|c| {
-            c.expansion_plan.as_ref().and_then(|p| {
-                serde_json::from_str::<Value>(p).ok()
-            })
+            c.expansion_plan
+                .as_ref()
+                .and_then(|p| serde_json::from_str::<Value>(p).ok())
         })
         .collect();
 
@@ -340,10 +336,7 @@ async fn create_chapters_from_plans(
                 Json(json!({"detail": format!("{}", e)})),
             )
         })?
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            Json(json!({"detail": "大纲不存在"})),
-        ))?;
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"detail": "大纲不存在"}))))?;
 
     // Count existing chapters before this outline to determine starting chapter number
     let existing_count = chapter::Entity::find()
@@ -443,7 +436,9 @@ async fn list_outlines_by_project(
     Path(project_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match OutlineService::list(&db, &project_id, &claims.sub).await {
-        Ok(Some(outlines)) => Ok(Json(json!({"success": true, "data": outlines, "total": outlines.len()}))),
+        Ok(Some(outlines)) => Ok(Json(
+            json!({"success": true, "data": outlines, "total": outlines.len()}),
+        )),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({"success": false, "message": "项目不存在或无权限"})),
@@ -457,13 +452,22 @@ async fn list_outlines_by_project(
 
 pub fn routes() -> Router {
     Router::new()
-        .route("/outlines/project/{project_id}", get(list_outlines_by_project))
+        .route(
+            "/outlines/project/{project_id}",
+            get(list_outlines_by_project),
+        )
         .route("/outlines", post(create_outline).get(list_outlines))
         .route(
             "/outlines/{outline_id}",
             get(get_outline).put(update_outline).delete(delete_outline),
         )
-        .route("/outlines/{outline_id}/create-single-chapter", post(create_single_chapter))
+        .route(
+            "/outlines/{outline_id}/create-single-chapter",
+            post(create_single_chapter),
+        )
         .route("/outlines/{outline_id}/chapters", get(get_outline_chapters))
-        .route("/outlines/{outline_id}/create-chapters-from-plans", post(create_chapters_from_plans))
+        .route(
+            "/outlines/{outline_id}/create-chapters-from-plans",
+            post(create_chapters_from_plans),
+        )
 }

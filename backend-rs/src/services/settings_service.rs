@@ -45,7 +45,8 @@ fn mask_api_key(key: &str) -> String {
 }
 
 fn parse_api_backup_urls(raw: Option<&str>) -> Vec<String> {
-    raw.and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default()
+    raw.and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default()
 }
 
 fn serialize_api_backup_urls(urls: &[String]) -> Option<String> {
@@ -87,7 +88,6 @@ fn format_timestamp(value: NaiveDateTime) -> String {
     DateTime::<Utc>::from_naive_utc_and_offset(value, Utc).to_rfc3339()
 }
 
-
 fn env_string(key: &str) -> Option<String> {
     env::var(key)
         .ok()
@@ -103,8 +103,7 @@ fn env_u32(key: &str, default: u32) -> u32 {
 }
 
 fn normalize_api_key(key: Option<String>) -> Option<String> {
-    key
-        .map(|value| value.trim().to_string())
+    key.map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty() && !is_placeholder(value))
 }
 
@@ -175,7 +174,11 @@ fn normalize_openai_compatible_base_url(base_url: &str) -> String {
     trimmed.to_string()
 }
 
-fn resolve_provider(explicit_provider: Option<&str>, stored_provider_type: &str, stored_provider: &str) -> String {
+fn resolve_provider(
+    explicit_provider: Option<&str>,
+    stored_provider_type: &str,
+    stored_provider: &str,
+) -> String {
     explicit_provider
         .map(|value| value.trim().to_lowercase())
         .filter(|value| !value.is_empty())
@@ -199,8 +202,13 @@ fn resolve_base_url(provider: &str, stored_base_url: &str) -> String {
     };
 
     match provider {
-        "anthropic" => candidate.unwrap_or_default().trim_end_matches('/').to_string(),
-        _ => normalize_openai_compatible_base_url(candidate.as_deref().unwrap_or("https://api.openai.com/v1")),
+        "anthropic" => candidate
+            .unwrap_or_default()
+            .trim_end_matches('/')
+            .to_string(),
+        _ => normalize_openai_compatible_base_url(
+            candidate.as_deref().unwrap_or("https://api.openai.com/v1"),
+        ),
     }
 }
 
@@ -223,7 +231,8 @@ impl SettingsService {
             None => {
                 let id = Uuid::new_v4().to_string();
                 let now = Utc::now().naive_utc();
-                let prefs_str = serde_json::to_string(&json!({"web_research": web_research_defaults()}))?;
+                let prefs_str =
+                    serde_json::to_string(&json!({"web_research": web_research_defaults()}))?;
                 let default_provider = default_ai_provider();
                 let default_key = env_api_key_for_provider(&default_provider).unwrap_or_default();
                 let default_base_url = resolve_base_url(&default_provider, "");
@@ -268,13 +277,16 @@ impl SettingsService {
             Some(s) => {
                 let current_prefs = s.preferences.clone().unwrap_or_default();
                 let wr_patch = extract_web_research_patch(body);
-                let new_prefs = if wr_patch.is_object() && wr_patch.as_object().map(|o| o.len()).unwrap_or(0) > 0 {
+                let new_prefs = if wr_patch.is_object()
+                    && wr_patch.as_object().map(|o| o.len()).unwrap_or(0) > 0
+                {
                     Some(set_web_research(Some(&current_prefs), &wr_patch)?)
                 } else {
                     None
                 };
 
-                let backup_urls = body.get("api_backup_urls")
+                let backup_urls = body
+                    .get("api_backup_urls")
                     .and_then(|v| v.as_array())
                     .map(|arr| {
                         arr.iter()
@@ -284,26 +296,48 @@ impl SettingsService {
                     .unwrap_or_else(|| parse_api_backup_urls(s.api_backup_urls.as_deref()));
 
                 let mut active: settings::ActiveModel = s.into();
-                if let Some(v) = body.get("api_provider").and_then(|v| v.as_str()) { active.api_provider = Set(v.to_string()); }
+                if let Some(v) = body.get("api_provider").and_then(|v| v.as_str()) {
+                    active.api_provider = Set(v.to_string());
+                }
                 if let Some(v) = body.get("api_key").and_then(|v| v.as_str()) {
                     let trimmed = v.trim();
                     if !trimmed.is_empty() && !is_placeholder(trimmed) {
                         active.api_key = Set(trimmed.to_string());
                     }
                 }
-                if let Some(v) = body.get("api_base_url").and_then(|v| v.as_str()) { active.api_base_url = Set(v.to_string()); }
+                if let Some(v) = body.get("api_base_url").and_then(|v| v.as_str()) {
+                    active.api_base_url = Set(v.to_string());
+                }
                 active.api_backup_urls = Set(serialize_api_backup_urls(&backup_urls));
-                if let Some(v) = body.get("provider_type").and_then(|v| v.as_str()) { active.provider_type = Set(v.to_string()); }
-                if let Some(v) = body.get("fallback_strategy").and_then(|v| v.as_str()) { active.fallback_strategy = Set(v.to_string()); }
-                if let Some(v) = body.get("azure_api_version").and_then(|v| v.as_str()) { active.azure_api_version = Set(Some(v.to_string())); }
-                if let Some(v) = normalize_non_empty_string(body.get("llm_model").and_then(|v| v.as_str())) {
+                if let Some(v) = body.get("provider_type").and_then(|v| v.as_str()) {
+                    active.provider_type = Set(v.to_string());
+                }
+                if let Some(v) = body.get("fallback_strategy").and_then(|v| v.as_str()) {
+                    active.fallback_strategy = Set(v.to_string());
+                }
+                if let Some(v) = body.get("azure_api_version").and_then(|v| v.as_str()) {
+                    active.azure_api_version = Set(Some(v.to_string()));
+                }
+                if let Some(v) =
+                    normalize_non_empty_string(body.get("llm_model").and_then(|v| v.as_str()))
+                {
                     active.llm_model = Set(v);
                 }
-                if let Some(v) = body.get("temperature").and_then(|v| v.as_f64()) { active.temperature = Set(v); }
-                if let Some(v) = body.get("max_tokens").and_then(|v| v.as_i64()) { active.max_tokens = Set(v as i32); }
-                if let Some(v) = body.get("system_prompt").and_then(|v| v.as_str()) { active.system_prompt = Set(Some(v.to_string())); }
-                if let Some(v) = body.get("preferences").and_then(|v| v.as_str()) { active.preferences = Set(Some(v.to_string())); }
-                if let Some(p) = new_prefs { active.preferences = Set(Some(p)); }
+                if let Some(v) = body.get("temperature").and_then(|v| v.as_f64()) {
+                    active.temperature = Set(v);
+                }
+                if let Some(v) = body.get("max_tokens").and_then(|v| v.as_i64()) {
+                    active.max_tokens = Set(v as i32);
+                }
+                if let Some(v) = body.get("system_prompt").and_then(|v| v.as_str()) {
+                    active.system_prompt = Set(Some(v.to_string()));
+                }
+                if let Some(v) = body.get("preferences").and_then(|v| v.as_str()) {
+                    active.preferences = Set(Some(v.to_string()));
+                }
+                if let Some(p) = new_prefs {
+                    active.preferences = Set(Some(p));
+                }
                 active.updated_at = Set(Utc::now().naive_utc());
 
                 let saved = active.update(db).await?;
@@ -315,37 +349,79 @@ impl SettingsService {
                 let id = Uuid::new_v4().to_string();
                 let now = Utc::now().naive_utc();
                 let wr_patch = extract_web_research_patch(body);
-                let default_prefs = serde_json::to_string(&json!({"web_research": web_research_defaults()}))?;
+                let default_prefs =
+                    serde_json::to_string(&json!({"web_research": web_research_defaults()}))?;
                 let default_provider = default_ai_provider();
-                let prefs = if wr_patch.is_object() && wr_patch.as_object().map(|o| o.len()).unwrap_or(0) > 0 {
+                let prefs = if wr_patch.is_object()
+                    && wr_patch.as_object().map(|o| o.len()).unwrap_or(0) > 0
+                {
                     Some(set_web_research(Some(&default_prefs), &wr_patch)?)
                 } else {
                     Some(default_prefs)
                 };
 
-                let backup_urls: Vec<String> = body.get("api_backup_urls")
+                let backup_urls: Vec<String> = body
+                    .get("api_backup_urls")
                     .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
                     .unwrap_or_default();
-                let api_key = normalize_api_key(body.get("api_key").and_then(|v| v.as_str()).map(|v| v.trim().to_string())).unwrap_or_default();
+                let api_key = normalize_api_key(
+                    body.get("api_key")
+                        .and_then(|v| v.as_str())
+                        .map(|v| v.trim().to_string()),
+                )
+                .unwrap_or_default();
 
                 let model = settings::ActiveModel {
                     id: Set(id.clone()),
                     user_id: Set(user_id.to_string()),
-                    api_provider: Set(body.get("api_provider").and_then(|v| v.as_str()).unwrap_or(&default_provider).to_string()),
+                    api_provider: Set(body
+                        .get("api_provider")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&default_provider)
+                        .to_string()),
                     api_key: Set(api_key),
-                    api_base_url: Set(body.get("api_base_url").and_then(|v| v.as_str()).map(String::from).unwrap_or_else(|| resolve_base_url(&default_provider, ""))),
+                    api_base_url: Set(body
+                        .get("api_base_url")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                        .unwrap_or_else(|| resolve_base_url(&default_provider, ""))),
                     api_backup_urls: Set(serialize_api_backup_urls(&backup_urls)),
-                    provider_type: Set(body.get("provider_type").and_then(|v| v.as_str()).unwrap_or(&default_provider).to_string()),
-                    fallback_strategy: Set(body.get("fallback_strategy").and_then(|v| v.as_str()).unwrap_or("auto").to_string()),
-                    azure_api_version: Set(body.get("azure_api_version").and_then(|v| v.as_str()).map(String::from)),
-                    llm_model: Set(
-                        normalize_non_empty_string(body.get("llm_model").and_then(|v| v.as_str()))
-                            .unwrap_or_else(default_model)
-                    ),
-                    temperature: Set(body.get("temperature").and_then(|v| v.as_f64()).unwrap_or(default_temperature())),
-                    max_tokens: Set(body.get("max_tokens").and_then(|v| v.as_i64()).unwrap_or(default_max_tokens() as i64) as i32),
-                    system_prompt: Set(body.get("system_prompt").and_then(|v| v.as_str()).map(String::from)),
+                    provider_type: Set(body
+                        .get("provider_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&default_provider)
+                        .to_string()),
+                    fallback_strategy: Set(body
+                        .get("fallback_strategy")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("auto")
+                        .to_string()),
+                    azure_api_version: Set(body
+                        .get("azure_api_version")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)),
+                    llm_model: Set(normalize_non_empty_string(
+                        body.get("llm_model").and_then(|v| v.as_str()),
+                    )
+                    .unwrap_or_else(default_model)),
+                    temperature: Set(body
+                        .get("temperature")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(default_temperature())),
+                    max_tokens: Set(body
+                        .get("max_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(default_max_tokens() as i64)
+                        as i32),
+                    system_prompt: Set(body
+                        .get("system_prompt")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)),
                     preferences: Set(prefs.clone()),
                     created_at: Set(now),
                     updated_at: Set(now),
@@ -469,12 +545,16 @@ fn build_response(saved: &settings::Model, web_research: &Value, backup_urls: &[
 const API_PRESETS_KEY: &str = "api_presets";
 
 fn get_api_presets(prefs_json: Option<&str>) -> (Vec<Value>, String) {
-    let prefs: Value = prefs_json.and_then(|s| serde_json::from_str(s).ok()).unwrap_or(json!({}));
-    let api_presets = prefs.get(API_PRESETS_KEY)
+    let prefs: Value = prefs_json
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(json!({}));
+    let api_presets = prefs
+        .get(API_PRESETS_KEY)
         .and_then(|ap| ap.get("presets"))
         .and_then(|p| p.as_array().cloned())
         .unwrap_or_default();
-    let version = prefs.get(API_PRESETS_KEY)
+    let version = prefs
+        .get(API_PRESETS_KEY)
         .and_then(|ap| ap.get("version"))
         .and_then(|v| v.as_str())
         .unwrap_or("1.0")
@@ -483,7 +563,9 @@ fn get_api_presets(prefs_json: Option<&str>) -> (Vec<Value>, String) {
 }
 
 fn set_api_presets(prefs_json: Option<&str>, presets: &[Value]) -> serde_json::Result<String> {
-    let mut prefs: Value = prefs_json.and_then(|s| serde_json::from_str(s).ok()).unwrap_or(json!({}));
+    let mut prefs: Value = prefs_json
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(json!({}));
     prefs[API_PRESETS_KEY] = json!({"presets": presets, "version": "1.0"});
     serde_json::to_string(&prefs)
 }
@@ -498,9 +580,15 @@ impl SettingsService {
             .one(db)
             .await?;
 
-        let (presets, _version) = get_api_presets(settings.as_ref().and_then(|s| s.preferences.as_deref()));
-        let active_preset_id = presets.iter()
-            .find(|p| p.get("is_active").and_then(|v| v.as_bool()).unwrap_or(false))
+        let (presets, _version) =
+            get_api_presets(settings.as_ref().and_then(|s| s.preferences.as_deref()));
+        let active_preset_id = presets
+            .iter()
+            .find(|p| {
+                p.get("is_active")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            })
             .and_then(|p| p.get("id").and_then(|v| v.as_str()))
             .map(String::from);
 
@@ -559,7 +647,9 @@ impl SettingsService {
 
         let (mut presets, _version) = get_api_presets(settings.preferences.as_deref());
 
-        let idx = presets.iter().position(|p| p.get("id").and_then(|v| v.as_str()) == Some(preset_id))
+        let idx = presets
+            .iter()
+            .position(|p| p.get("id").and_then(|v| v.as_str()) == Some(preset_id))
             .ok_or("preset not found")?;
 
         let target = &mut presets[idx];
@@ -637,27 +727,52 @@ impl SettingsService {
         let config = result.get("config");
         let mut active: settings::ActiveModel = settings.into();
         if let Some(cfg) = config {
-            if let Some(v) = cfg.get("api_provider").and_then(|v| v.as_str()) { active.api_provider = Set(v.to_string()); }
+            if let Some(v) = cfg.get("api_provider").and_then(|v| v.as_str()) {
+                active.api_provider = Set(v.to_string());
+            }
             if let Some(v) = cfg.get("api_key").and_then(|v| v.as_str()) {
                 let trimmed = v.trim();
                 if !trimmed.is_empty() && !is_placeholder(trimmed) {
                     active.api_key = Set(trimmed.to_string());
                 }
             }
-            if let Some(v) = cfg.get("api_base_url").and_then(|v| v.as_str()) { active.api_base_url = Set(v.to_string()); }
+            if let Some(v) = cfg.get("api_base_url").and_then(|v| v.as_str()) {
+                active.api_base_url = Set(v.to_string());
+            }
             if let Some(v) = cfg.get("api_backup_urls") {
-                let urls: Vec<String> = v.as_array().map(|arr| arr.iter().filter_map(|u| u.as_str().map(String::from)).collect()).unwrap_or_default();
+                let urls: Vec<String> = v
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|u| u.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 active.api_backup_urls = Set(serialize_api_backup_urls(&urls));
             }
-            if let Some(v) = cfg.get("provider_type").and_then(|v| v.as_str()) { active.provider_type = Set(v.to_string()); }
-            if let Some(v) = cfg.get("fallback_strategy").and_then(|v| v.as_str()) { active.fallback_strategy = Set(v.to_string()); }
-            if let Some(v) = cfg.get("azure_api_version").and_then(|v| v.as_str()) { active.azure_api_version = Set(Some(v.to_string())); }
-            if let Some(v) = normalize_non_empty_string(cfg.get("llm_model").and_then(|v| v.as_str())) {
+            if let Some(v) = cfg.get("provider_type").and_then(|v| v.as_str()) {
+                active.provider_type = Set(v.to_string());
+            }
+            if let Some(v) = cfg.get("fallback_strategy").and_then(|v| v.as_str()) {
+                active.fallback_strategy = Set(v.to_string());
+            }
+            if let Some(v) = cfg.get("azure_api_version").and_then(|v| v.as_str()) {
+                active.azure_api_version = Set(Some(v.to_string()));
+            }
+            if let Some(v) =
+                normalize_non_empty_string(cfg.get("llm_model").and_then(|v| v.as_str()))
+            {
                 active.llm_model = Set(v);
             }
-            if let Some(v) = cfg.get("temperature").and_then(|v| v.as_f64()) { active.temperature = Set(v); }
-            if let Some(v) = cfg.get("max_tokens").and_then(|v| v.as_i64()) { active.max_tokens = Set(v as i32); }
-            if let Some(v) = cfg.get("system_prompt").and_then(|v| v.as_str()) { active.system_prompt = Set(Some(v.to_string())); }
+            if let Some(v) = cfg.get("temperature").and_then(|v| v.as_f64()) {
+                active.temperature = Set(v);
+            }
+            if let Some(v) = cfg.get("max_tokens").and_then(|v| v.as_i64()) {
+                active.max_tokens = Set(v as i32);
+            }
+            if let Some(v) = cfg.get("system_prompt").and_then(|v| v.as_str()) {
+                active.system_prompt = Set(Some(v.to_string()));
+            }
         }
         active.preferences = Set(Some(new_prefs));
         active.updated_at = Set(Utc::now().naive_utc());
@@ -719,10 +834,15 @@ impl SettingsService {
 
 fn extract_web_research_patch(body: &Value) -> Value {
     let web_research_keys = [
-        "web_research_enabled", "web_research_exa_enabled", "web_research_grok_enabled",
-        "web_research_exa_api_key", "web_research_exa_base_url",
-        "web_research_grok_api_key", "web_research_grok_base_url",
-        "web_research_grok_model", "web_research_grok_search_enabled",
+        "web_research_enabled",
+        "web_research_exa_enabled",
+        "web_research_grok_enabled",
+        "web_research_exa_api_key",
+        "web_research_exa_base_url",
+        "web_research_grok_api_key",
+        "web_research_grok_base_url",
+        "web_research_grok_model",
+        "web_research_grok_search_enabled",
     ];
     let mut patch = json!({});
     if let Some(obj) = body.as_object() {

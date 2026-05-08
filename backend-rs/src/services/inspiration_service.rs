@@ -33,26 +33,38 @@ const STYLE_GUARD_BASE: &str = r#"【风格与可读性要求（必须遵守）�
 12. 优先给可传播的记忆点：反常识信息、极端选择、倒计时压力，至少命中其一。"#;
 
 const STEP_EXTRA_GUARD: &[(&str, &str)] = &[
-    ("title", r#"【书名专项】
+    (
+        "title",
+        r#"【书名专项】
     - 风格要拉开差异，避免同构词组批量改写。
     - 名称要顺口、好记，避免生造拗口长词。
-    - 至少覆盖以下命名策略中的四种：身份反差、强事件、关系张力、情绪钩子、世界观异化、命运投择。"#),
-    ("description", r#"【简介专项】
+    - 至少覆盖以下命名策略中的四种：身份反差、强事件、关系张力、情绪钩子、世界观异化、命运投择。"#,
+    ),
+    (
+        "description",
+        r#"【简介专项】
     - 每个选项都要体现：主角当前目标 + 关键阻碍或代价。
     - 冲突必须让读者感知得到，不能只写抽象观点。
     - 六个选项的开场方式要明显变化，比如动作切入、对话切入、结果倒叙、困境切入等。
     - 开头尽量尽快出现冲突触发、异常变化或高压任务，不要慢热铺垫。
-    - 至少两个选项使用短句爆点开场，至少两个选项带明确转折连接词。"#),
-    ("theme", r#"【主题专项】
+    - 至少两个选项使用短句爆点开场，至少两个选项带明确转折连接词。"#,
+    ),
+    (
+        "theme",
+        r#"【主题专项】
     - 主题要先给人话结论，再落回角色冲突现场，避免高概念空转。
     - 保持情绪温度，不要写成教科书总结。
     - 每个主题都要包含一个价值冲突对撞点，避免全是正确废话。
     - 优先采用"命题句 → 冲突现场 → 情绪余震"的三拍结构。
-    - 至少一个主题要体现"反常识但合理"的价值碰撞。"#),
-    ("genre", r#"【类型专项】
+    - 至少一个主题要体现"反常识但合理"的价值碰撞。"#,
+    ),
+    (
+        "genre",
+        r#"【类型专项】
     - 标签以读者常见认知为主，可以组合，但不要互相冲突。
     - 禁止生造难懂标签。
-    - 至少体现"主赛道 + 冲突气质"两个维度。"#),
+    - 至少体现"主赛道 + 冲突气质"两个维度。"#,
+    ),
 ];
 
 impl InspirationService {
@@ -67,7 +79,10 @@ impl InspirationService {
     fn template_keys(step: &str) -> Option<(&'static str, &'static str)> {
         match step {
             "title" => Some(("INSPIRATION_TITLE_SYSTEM", "INSPIRATION_TITLE_USER")),
-            "description" => Some(("INSPIRATION_DESCRIPTION_SYSTEM", "INSPIRATION_DESCRIPTION_USER")),
+            "description" => Some((
+                "INSPIRATION_DESCRIPTION_SYSTEM",
+                "INSPIRATION_DESCRIPTION_USER",
+            )),
             "theme" => Some(("INSPIRATION_THEME_SYSTEM", "INSPIRATION_THEME_USER")),
             "genre" => Some(("INSPIRATION_GENRE_SYSTEM", "INSPIRATION_GENRE_USER")),
             _ => None,
@@ -90,7 +105,11 @@ impl InspirationService {
         if let Some(inner) = trimmed
             .strip_prefix("```json")
             .and_then(|s| s.strip_suffix("```"))
-            .or_else(|| trimmed.strip_prefix("```").and_then(|s| s.strip_suffix("```")))
+            .or_else(|| {
+                trimmed
+                    .strip_prefix("```")
+                    .and_then(|s| s.strip_suffix("```"))
+            })
         {
             return inner.trim().to_string();
         }
@@ -113,7 +132,10 @@ impl InspirationService {
             .ok_or("缺少options字段或不是数组")?;
 
         if options.len() < 3 {
-            return Err(format!("选项数量不足，至少需要3个，当前只有{}个", options.len()));
+            return Err(format!(
+                "选项数量不足，至少需要3个，当前只有{}个",
+                options.len()
+            ));
         }
         if options.len() > 10 {
             return Err(format!("选项数量过多，最多10个，当前有{}个", options.len()));
@@ -255,8 +277,11 @@ impl InspirationService {
             .ok_or(format!("模板 {} 不存在", user_key))?;
 
         let format_params = Self::build_format_params(context);
-        let system_prompt =
-            format!("{}\n\n{}", system_template.content, Self::build_style_guard(step));
+        let system_prompt = format!(
+            "{}\n\n{}",
+            system_template.content,
+            Self::build_style_guard(step)
+        );
         let user_prompt = Self::format_template(&user_template.content, &format_params);
         let temperature = Self::step_temperature(step);
 
@@ -313,8 +338,11 @@ impl InspirationService {
             .ok_or(format!("模板 {} 不存在", user_key))?;
 
         let format_params = Self::build_format_params(context);
-        let mut system_prompt =
-            format!("{}\n\n{}", system_template.content, Self::build_style_guard(step));
+        let mut system_prompt = format!(
+            "{}\n\n{}",
+            system_template.content,
+            Self::build_style_guard(step)
+        );
         let user_prompt = Self::format_template(&user_template.content, &format_params);
 
         // Append feedback instruction
@@ -424,10 +452,8 @@ impl InspirationService {
 
         let mut fmt_params: HashMap<String, String> = HashMap::new();
         fmt_params.insert("existing".to_string(), existing_text);
-        let mut system_prompt = PromptTemplateService::format_prompt(
-            &template.content,
-            &fmt_params,
-        )?;
+        let mut system_prompt =
+            PromptTemplateService::format_prompt(&template.content, &fmt_params)?;
 
         system_prompt.push_str(&format!(
             "\n\n{}\n【智能补全专项】保证四个字段像同一部小说，人物语气自然，信息前后一致；\
@@ -440,10 +466,9 @@ impl InspirationService {
         let user_prompt = "请在不偏离现有信息的前提下补全缺失字段，只返回JSON。";
         let temperature = 0.78;
 
-        let content =
-            Self::call_ai_for_json(db, user_id, &system_prompt, user_prompt, temperature)
-                .await
-                .map_err(|e| format!("AI调用失败: {}", e))?;
+        let content = Self::call_ai_for_json(db, user_id, &system_prompt, user_prompt, temperature)
+            .await
+            .map_err(|e| format!("AI调用失败: {}", e))?;
 
         let cleaned = Self::clean_json_response(&content);
         let result: Value =
@@ -481,8 +506,9 @@ impl InspirationService {
         if let Some(arr) = value.as_array() {
             for item in arr {
                 if let Some(s) = item.as_str() {
-                    for part in s.split(|c: char| c == '，' || c == ',' || c == '、' || c == '/' || c == '|' || c == '｜')
-                    {
+                    for part in s.split(|c: char| {
+                        c == '，' || c == ',' || c == '、' || c == '/' || c == '|' || c == '｜'
+                    }) {
                         let trimmed = part.trim();
                         if !trimmed.is_empty() {
                             items.push(trimmed.to_string());
@@ -491,8 +517,9 @@ impl InspirationService {
                 }
             }
         } else if let Some(s) = value.as_str() {
-            for part in s.split(|c: char| c == '，' || c == ',' || c == '、' || c == '/' || c == '|' || c == '｜')
-            {
+            for part in s.split(|c: char| {
+                c == '，' || c == ',' || c == '、' || c == '/' || c == '|' || c == '｜'
+            }) {
                 let trimmed = part.trim();
                 if !trimmed.is_empty() {
                     items.push(trimmed.to_string());
@@ -526,7 +553,8 @@ mod tests {
 
     #[test]
     fn test_validate_options_ok() {
-        let result = json!({"options": ["选项一", "选项二", "选项三", "选项四", "选项五", "选项六"]});
+        let result =
+            json!({"options": ["选项一", "选项二", "选项三", "选项四", "选项五", "选项六"]});
         assert!(InspirationService::validate_options("title", &result).is_ok());
     }
 

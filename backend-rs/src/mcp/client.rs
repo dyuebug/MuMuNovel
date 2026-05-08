@@ -14,7 +14,10 @@ use rmcp::ServiceExt;
 type McpClient = RunningService<RoleClient, ClientInfo>;
 
 #[derive(Clone, Copy, PartialEq)]
-enum TransportType { Sse, Stdio }
+enum TransportType {
+    Sse,
+    Stdio,
+}
 
 #[allow(dead_code)]
 struct McpSession {
@@ -30,7 +33,9 @@ pub struct McpClientManager {
 
 impl McpClientManager {
     pub fn new() -> Self {
-        Self { sessions: Arc::new(Mutex::new(HashMap::new())) }
+        Self {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     pub async fn is_registered(&self, user_id: &str, plugin_name: &str) -> bool {
@@ -58,7 +63,9 @@ impl McpClientManager {
             ClientCapabilities::default(),
             Implementation::new("mumu-novel-backend", env!("CARGO_PKG_VERSION")),
         );
-        let client = client_info.serve(transport).await
+        let client = client_info
+            .serve(transport)
+            .await
             .map_err(|e| format!("MCP SSE连接失败: {}", e))?;
 
         let session = McpSession {
@@ -100,7 +107,9 @@ impl McpClientManager {
             ClientCapabilities::default(),
             Implementation::new("mumu-novel-backend", env!("CARGO_PKG_VERSION")),
         );
-        let client = client_info.serve(transport).await
+        let client = client_info
+            .serve(transport)
+            .await
             .map_err(|e| format!("MCP stdio连接失败: {}", e))?;
 
         let session = McpSession {
@@ -126,19 +135,28 @@ impl McpClientManager {
         let sessions = self.sessions.lock().await;
         let key = (user_id.to_string(), plugin_name.to_string());
         let session = sessions.get(&key).ok_or("MCP会话不存在，请先启用插件")?;
-        let tools_result = session.client.list_tools(Default::default()).await
+        let tools_result = session
+            .client
+            .list_tools(Default::default())
+            .await
             .map_err(|e| format!("获取工具列表失败: {}", e))?;
 
-        let tools: Vec<Value> = tools_result.tools.iter().map(|t| {
-            let desc: String = t.description.clone()
-                .map(|d| d.to_string())
-                .unwrap_or_default();
-            json!({
-                "name": t.name.to_string(),
-                "description": desc,
-                "inputSchema": t.input_schema,
+        let tools: Vec<Value> = tools_result
+            .tools
+            .iter()
+            .map(|t| {
+                let desc: String = t
+                    .description
+                    .clone()
+                    .map(|d| d.to_string())
+                    .unwrap_or_default();
+                json!({
+                    "name": t.name.to_string(),
+                    "description": desc,
+                    "inputSchema": t.input_schema,
+                })
             })
-        }).collect();
+            .collect();
         Ok(tools)
     }
 
@@ -160,17 +178,26 @@ impl McpClientManager {
             }
         }
 
-        let result = session.client.call_tool(params).await
+        let result = session
+            .client
+            .call_tool(params)
+            .await
             .map_err(|e| format!("调用MCP工具失败: {}", e))?;
 
-        let content: Vec<Value> = result.content.iter().map(|c| {
-            match &**c {
+        let content: Vec<Value> = result
+            .content
+            .iter()
+            .map(|c| match &**c {
                 rmcp::model::RawContent::Text(tc) => json!({"type": "text", "text": tc.text}),
-                rmcp::model::RawContent::Image(img) => json!({"type": "image", "data": img.data, "mimeType": img.mime_type}),
-                rmcp::model::RawContent::Resource(res) => json!({"type": "resource", "resource": res.resource}),
+                rmcp::model::RawContent::Image(img) => {
+                    json!({"type": "image", "data": img.data, "mimeType": img.mime_type})
+                }
+                rmcp::model::RawContent::Resource(res) => {
+                    json!({"type": "resource", "resource": res.resource})
+                }
                 _ => json!({"type": "unknown"}),
-            }
-        }).collect();
+            })
+            .collect();
 
         Ok(json!({
             "content": content,
@@ -186,11 +213,15 @@ impl McpClientManager {
         match self.list_tools(user_id, plugin_name).await {
             Ok(tools) => {
                 let elapsed = start.elapsed().as_millis();
-                Ok(json!({"success": true, "message": "连接测试成功", "response_time_ms": elapsed, "tools_count": tools.len()}))
+                Ok(
+                    json!({"success": true, "message": "连接测试成功", "response_time_ms": elapsed, "tools_count": tools.len()}),
+                )
             }
             Err(e) => {
                 let elapsed = start.elapsed().as_millis();
-                Ok(json!({"success": false, "message": "连接测试失败", "response_time_ms": elapsed, "error": e}))
+                Ok(
+                    json!({"success": false, "message": "连接测试失败", "response_time_ms": elapsed, "error": e}),
+                )
             }
         }
     }
@@ -201,19 +232,25 @@ impl McpClientManager {
         plugin_name: &str,
     ) -> Result<Vec<Value>, String> {
         let tools = self.list_tools(user_id, plugin_name).await?;
-        let openai_tools: Vec<Value> = tools.iter().map(|t| {
-            let name = t["name"].as_str().unwrap_or("");
-            let description = t["description"].as_str().unwrap_or("");
-            let input_schema = t.get("inputSchema").cloned().unwrap_or(json!({"type": "object", "properties": {}}));
-            json!({
-                "type": "function",
-                "function": {
-                    "name": format!("{}__{}", plugin_name, name),
-                    "description": description,
-                    "parameters": input_schema,
-                }
+        let openai_tools: Vec<Value> = tools
+            .iter()
+            .map(|t| {
+                let name = t["name"].as_str().unwrap_or("");
+                let description = t["description"].as_str().unwrap_or("");
+                let input_schema = t
+                    .get("inputSchema")
+                    .cloned()
+                    .unwrap_or(json!({"type": "object", "properties": {}}));
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": format!("{}__{}", plugin_name, name),
+                        "description": description,
+                        "parameters": input_schema,
+                    }
+                })
             })
-        }).collect();
+            .collect();
         Ok(openai_tools)
     }
 

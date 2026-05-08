@@ -55,7 +55,11 @@ async fn fetch_github_commits(page: u32, per_page: u32) -> Result<Vec<Value>, St
     let url = "https://api.github.com/repos/dyuebug/MuMuNovel/commits";
     let resp = client()
         .get(url)
-        .query(&[("author", "dyuebug"), ("page", &page.to_string()), ("per_page", &per_page.to_string())])
+        .query(&[
+            ("author", "dyuebug"),
+            ("page", &page.to_string()),
+            ("per_page", &per_page.to_string()),
+        ])
         .header("Accept", "application/vnd.github.v3+json")
         .send()
         .await
@@ -66,7 +70,10 @@ async fn fetch_github_commits(page: u32, per_page: u32) -> Result<Vec<Value>, St
         return Err(format!("GitHub API returned {}", status));
     }
 
-    let raw: Vec<Value> = resp.json().await.map_err(|e| format!("Failed to parse response: {}", e))?;
+    let raw: Vec<Value> = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
 
     let commits: Vec<Value> = raw
         .into_iter()
@@ -106,11 +113,18 @@ async fn get_changelog(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let page: u32 = params.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
-    let per_page: u32 = params.get("per_page").and_then(|p| p.parse().ok()).unwrap_or(30).min(100);
+    let per_page: u32 = params
+        .get("per_page")
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(30)
+        .min(100);
 
     if page == 1 && is_cache_valid() {
         if let Some(data) = read_cache() {
-            let cache_time = CACHE.read().ok().and_then(|g| g.as_ref().map(|c| c.timestamp.to_rfc3339()));
+            let cache_time = CACHE
+                .read()
+                .ok()
+                .and_then(|g| g.as_ref().map(|c| c.timestamp.to_rfc3339()));
             return Ok(Json(json!({
                 "commits": data,
                 "cached": true,
@@ -124,7 +138,9 @@ async fn get_changelog(
             if page == 1 {
                 write_cache(commits.clone());
             }
-            Ok(Json(json!({"commits": commits, "cached": false, "cache_time": null})))
+            Ok(Json(
+                json!({"commits": commits, "cached": false, "cache_time": null}),
+            ))
         }
         Err(e) => Err((StatusCode::BAD_GATEWAY, Json(json!({"detail": e})))),
     }

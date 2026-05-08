@@ -1,10 +1,4 @@
-use axum::{
-    extract::Extension,
-    http::StatusCode,
-    response::Json,
-    routing::post,
-    Router,
-};
+use axum::{extract::Extension, http::StatusCode, response::Json, routing::post, Router};
 use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use serde_json::{json, Value};

@@ -3,7 +3,9 @@ use tracing::info;
 
 use crate::config::AppConfig;
 
-pub async fn connect(cfg: &AppConfig) -> Result<DatabaseConnection, Box<dyn std::error::Error + Send + Sync>> {
+pub async fn connect(
+    cfg: &AppConfig,
+) -> Result<DatabaseConnection, Box<dyn std::error::Error + Send + Sync>> {
     let url = if cfg.database_url.is_empty() {
         "sqlite::memory:".to_string()
     } else {

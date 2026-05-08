@@ -45,15 +45,19 @@ async fn get_all_templates(
             )
         })?;
 
-    let (templates, categories) =
-        PromptTemplateService::list_user_templates(&db, &claims.sub, params.category.as_deref(), params.is_active)
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"detail": format!("{}", e)})),
-                )
-            })?;
+    let (templates, categories) = PromptTemplateService::list_user_templates(
+        &db,
+        &claims.sub,
+        params.category.as_deref(),
+        params.is_active,
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": format!("{}", e)})),
+        )
+    })?;
 
     Ok(Json(json!({
         "templates": templates,
@@ -382,7 +386,9 @@ async fn delete_template(
             )
         })?;
 
-    Ok(Json(json!({"message": "模板已删除", "template_key": template_key})))
+    Ok(Json(
+        json!({"message": "模板已删除", "template_key": template_key}),
+    ))
 }
 
 // POST /prompt-templates/{template_key}/reset
@@ -511,17 +517,20 @@ async fn import_templates(
     for item in templates {
         let template_key = item["template_key"].as_str().unwrap_or("");
         let is_customized = item["is_customized"].as_bool().unwrap_or(false);
-        let imported_content = item["template_content"].as_str().unwrap_or("").trim().to_string();
+        let imported_content = item["template_content"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
 
-        let existing =
-            PromptTemplateService::find_user_template(&db, &claims.sub, template_key)
-                .await
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"detail": format!("{}", e)})),
-                    )
-                })?;
+        let existing = PromptTemplateService::find_user_template(&db, &claims.sub, template_key)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"detail": format!("{}", e)})),
+                )
+            })?;
 
         let system = system_dict.get(template_key);
 
@@ -637,9 +646,18 @@ async fn preview_template(
 pub fn routes() -> Router {
     Router::new()
         .route("/prompt-templates", get(get_all_templates))
-        .route("/prompt-templates/categories", get(get_templates_by_category))
-        .route("/prompt-templates/system-defaults", get(get_system_defaults))
-        .route("/prompt-templates/sync-status", get(get_template_sync_status))
+        .route(
+            "/prompt-templates/categories",
+            get(get_templates_by_category),
+        )
+        .route(
+            "/prompt-templates/system-defaults",
+            get(get_system_defaults),
+        )
+        .route(
+            "/prompt-templates/sync-status",
+            get(get_template_sync_status),
+        )
         .route(
             "/prompt-templates/{template_key}/sync-to-default",
             post(sync_template_to_default),

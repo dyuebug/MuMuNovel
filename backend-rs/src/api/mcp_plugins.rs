@@ -46,8 +46,12 @@ struct CreateRequest {
     enabled: bool,
 }
 
-fn default_type() -> String { "http".to_string() }
-fn default_true() -> bool { true }
+fn default_type() -> String {
+    "http".to_string()
+}
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Deserialize)]
 struct SimpleCreateRequest {
@@ -80,9 +84,19 @@ async fn list_plugins(
     Extension(claims): Extension<Claims>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    match McpPluginService::list(&db, &claims.sub, query.enabled_only, query.category.as_deref()).await {
+    match McpPluginService::list(
+        &db,
+        &claims.sub,
+        query.enabled_only,
+        query.category.as_deref(),
+    )
+    .await
+    {
         Ok(plugins) => Ok(Json(json!(plugins))),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e})))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": e})),
+        )),
     }
 }
 
@@ -91,14 +105,24 @@ async fn create_plugin(
     Extension(claims): Extension<Claims>,
     Json(body): Json<CreateRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let display_name = body.display_name.unwrap_or_else(|| body.plugin_name.clone());
+    let display_name = body
+        .display_name
+        .unwrap_or_else(|| body.plugin_name.clone());
     match McpPluginService::create(
-        &db, &claims.sub, &body.plugin_name, &display_name,
-        body.description.as_deref(), &body.plugin_type,
-        body.server_url.as_deref(), body.command.as_deref(),
-        body.args.as_deref(), body.env.as_deref(),
-        body.headers.as_deref(), body.config.as_deref(),
-        body.category.as_deref(), body.enabled,
+        &db,
+        &claims.sub,
+        &body.plugin_name,
+        &display_name,
+        body.description.as_deref(),
+        &body.plugin_type,
+        body.server_url.as_deref(),
+        body.command.as_deref(),
+        body.args.as_deref(),
+        body.env.as_deref(),
+        body.headers.as_deref(),
+        body.config.as_deref(),
+        body.category.as_deref(),
+        body.enabled,
     )
     .await
     {
@@ -113,7 +137,11 @@ async fn create_plugin_simple(
     Json(body): Json<SimpleCreateRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match McpPluginService::create_or_update_simple(
-        &db, &claims.sub, &body.config_json, body.category.as_deref(), body.enabled,
+        &db,
+        &claims.sub,
+        &body.config_json,
+        body.category.as_deref(),
+        body.enabled,
     )
     .await
     {
@@ -131,7 +159,10 @@ async fn update_plugin(
     match McpPluginService::update(&db, &plugin_id, &claims.sub, body).await {
         Ok(Some(data)) => Ok(Json(data)),
         Ok(None) => Err((StatusCode::NOT_FOUND, Json(json!({"detail": "插件不存在"})))),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e})))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": e})),
+        )),
     }
 }
 
@@ -143,7 +174,10 @@ async fn delete_plugin(
     match McpPluginService::delete(&db, &plugin_id, &claims.sub).await {
         Ok(Some(data)) => Ok(Json(data)),
         Ok(None) => Err((StatusCode::NOT_FOUND, Json(json!({"detail": "插件不存在"})))),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e})))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": e})),
+        )),
     }
 }
 
@@ -162,7 +196,8 @@ async fn toggle_plugin(
                 let pid = plugin_id.clone();
                 let uid = claims.sub.clone();
                 tokio::spawn(async move {
-                    let _ = McpPluginService::register_plugin(&db_clone, &mcp_clone, &pid, &uid).await;
+                    let _ =
+                        McpPluginService::register_plugin(&db_clone, &mcp_clone, &pid, &uid).await;
                 });
             } else {
                 let plugin_name = data
@@ -176,7 +211,10 @@ async fn toggle_plugin(
             Ok(Json(data))
         }
         Ok(None) => Err((StatusCode::NOT_FOUND, Json(json!({"detail": "插件不存在"})))),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e})))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": e})),
+        )),
     }
 }
 
@@ -188,7 +226,10 @@ async fn get_plugin(
     match McpPluginService::get(&db, &plugin_id, &claims.sub).await {
         Ok(Some(data)) => Ok(Json(data)),
         Ok(None) => Err((StatusCode::NOT_FOUND, Json(json!({"detail": "插件不存在"})))),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e})))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": e})),
+        )),
     }
 }
 
@@ -201,7 +242,10 @@ async fn get_plugin_status(
     match McpPluginService::get_status(&db, &plugin_id, &claims.sub).await {
         Ok(Some(data)) => {
             // Enrich with real session status from MCP manager
-            let plugin_name = data.get("plugin_name").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let plugin_name = data
+                .get("plugin_name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             if let Some(name) = plugin_name {
                 let is_reg = mcp.is_registered(&claims.sub, &name).await;
                 let sess = mcp.get_session_status(&claims.sub, &name).await;
@@ -214,13 +258,14 @@ async fn get_plugin_status(
             }
         }
         Ok(None) => Err((StatusCode::NOT_FOUND, Json(json!({"detail": "插件不存在"})))),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e})))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": e})),
+        )),
     }
 }
 
-async fn get_metrics(
-    Query(query): Query<MetricsQuery>,
-) -> Json<Value> {
+async fn get_metrics(Query(query): Query<MetricsQuery>) -> Json<Value> {
     Json(McpPluginService::get_metrics(query.tool_name.as_deref()))
 }
 
@@ -228,19 +273,18 @@ async fn get_cache_stats() -> Json<Value> {
     Json(McpPluginService::get_cache_stats())
 }
 
-async fn get_session_stats(
-    Extension(mcp): Extension<Arc<McpClientManager>>,
-) -> Json<Value> {
+async fn get_session_stats(Extension(mcp): Extension<Arc<McpClientManager>>) -> Json<Value> {
     Json(json!({
         "session_stats": {"active_sessions": mcp.session_count().await},
         "timestamp": chrono::Utc::now().to_rfc3339(),
     }))
 }
 
-async fn clear_cache(
-    Query(query): Query<CacheClearQuery>,
-) -> Json<Value> {
-    Json(McpPluginService::clear_cache(query.user_id.as_deref(), query.plugin_name.as_deref()))
+async fn clear_cache(Query(query): Query<CacheClearQuery>) -> Json<Value> {
+    Json(McpPluginService::clear_cache(
+        query.user_id.as_deref(),
+        query.plugin_name.as_deref(),
+    ))
 }
 
 async fn get_plugin_tools(
@@ -278,7 +322,12 @@ async fn call_mcp_tool(
     Json(body): Json<ToolCallRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match McpPluginService::call_tool(
-        &db, &mcp, &body.plugin_id, &claims.sub, &body.tool_name, body.arguments.as_ref(),
+        &db,
+        &mcp,
+        &body.plugin_id,
+        &claims.sub,
+        &body.tool_name,
+        body.arguments.as_ref(),
     )
     .await
     {
@@ -295,7 +344,10 @@ async fn test_plugin(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match McpPluginService::test_plugin(&db, &mcp, &plugin_id, &claims.sub).await {
         Ok(data) => Ok(Json(data)),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e})))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": e})),
+        )),
     }
 }
 
@@ -308,7 +360,10 @@ pub fn routes() -> Router {
         .route("/mcp/plugins/cache/stats", get(get_cache_stats))
         .route("/mcp/plugins/cache/clear", post(clear_cache))
         .route("/mcp/plugins/sessions/stats", get(get_session_stats))
-        .route("/mcp/plugins/{plugin_id}", get(get_plugin).put(update_plugin).delete(delete_plugin))
+        .route(
+            "/mcp/plugins/{plugin_id}",
+            get(get_plugin).put(update_plugin).delete(delete_plugin),
+        )
         .route("/mcp/plugins/{plugin_id}/toggle", post(toggle_plugin))
         .route("/mcp/plugins/{plugin_id}/status", get(get_plugin_status))
         .route("/mcp/plugins/{plugin_id}/tools", get(get_plugin_tools))

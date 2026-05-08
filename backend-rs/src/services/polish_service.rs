@@ -10,10 +10,22 @@ use crate::services::settings_service::SettingsService;
 pub struct PolishService;
 
 const FOCUS_INSTRUCTIONS: &[(&str, &str)] = &[
-    ("balanced", "- 平衡处理叙事、对话、情绪和节奏，整体降低模板腔。"),
-    ("dialogue", "- 优先处理人物对白，让说话方式更像真人，保住角色区分度。"),
-    ("pacing", "- 优先处理叙事节奏，减少拖沓解释，强化场面推进和段落落点。"),
-    ("emotion", "- 优先处理情绪表达，让反应更具体，少空泛感慨和统一抒情。"),
+    (
+        "balanced",
+        "- 平衡处理叙事、对话、情绪和节奏，整体降低模板腔。",
+    ),
+    (
+        "dialogue",
+        "- 优先处理人物对白，让说话方式更像真人，保住角色区分度。",
+    ),
+    (
+        "pacing",
+        "- 优先处理叙事节奏，减少拖沓解释，强化场面推进和段落落点。",
+    ),
+    (
+        "emotion",
+        "- 优先处理情绪表达，让反应更具体，少空泛感慨和统一抒情。",
+    ),
     ("hook", "- 优先处理开场与结尾牵引，保住追读钩子和信息差。"),
 ];
 
@@ -75,7 +87,8 @@ impl PolishService {
         model_override: Option<&str>,
         temperature_override: Option<f64>,
     ) -> Result<Value, String> {
-        let mut params = Self::build_runtime_blocks(style, focus_mode, preserve_paragraphs, retain_hooks);
+        let mut params =
+            Self::build_runtime_blocks(style, focus_mode, preserve_paragraphs, retain_hooks);
         params.insert("original_text".to_string(), original_text.to_string());
 
         let template = PromptTemplateService::system_template_info("AI_DENOISING")
@@ -83,7 +96,11 @@ impl PolishService {
         let prompt = PromptTemplateService::format_prompt(&template.content, &params)?;
 
         let config = SettingsService::build_ai_config(
-            db, user_id, provider_override, model_override, temperature_override,
+            db,
+            user_id,
+            provider_override,
+            model_override,
+            temperature_override,
         )
         .await?;
         let service = AIService::new(config);
@@ -109,13 +126,18 @@ impl PolishService {
         model_override: Option<&str>,
         temperature_override: Option<f64>,
     ) -> Result<Value, String> {
-        let runtime_blocks = Self::build_runtime_blocks(style, focus_mode, preserve_paragraphs, retain_hooks);
+        let runtime_blocks =
+            Self::build_runtime_blocks(style, focus_mode, preserve_paragraphs, retain_hooks);
 
         let template = PromptTemplateService::system_template_info("AI_DENOISING")
             .ok_or("AI_DENOISING 模板不存在")?;
 
         let config = SettingsService::build_ai_config(
-            db, user_id, provider_override, model_override, temperature_override,
+            db,
+            user_id,
+            provider_override,
+            model_override,
+            temperature_override,
         )
         .await?;
         let service = AIService::new(config);

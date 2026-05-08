@@ -82,7 +82,9 @@ async fn list_projects(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let uid = query.user_id.as_deref().unwrap_or(&claims.sub);
     match ProjectService::list(&db, uid).await {
-        Ok(projects) => Ok(Json(json!({"success": true, "data": projects, "total": projects.len()}))),
+        Ok(projects) => Ok(Json(
+            json!({"success": true, "data": projects, "total": projects.len()}),
+        )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"success": false, "message": e})),
@@ -178,10 +180,7 @@ async fn export_project_txt(
                 Json(json!({"detail": format!("{}", e)})),
             )
         })?
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            Json(json!({"detail": "项目不存在"})),
-        ))?;
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"detail": "项目不存在"}))))?;
 
     let chapters = chapter::Entity::find()
         .filter(chapter::Column::ProjectId.eq(&project_id))
@@ -229,7 +228,17 @@ async fn export_project_txt(
         text.push_str("\n\n---\n\n");
     }
 
-    let safe_title: String = project.title.chars().map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
+    let safe_title: String = project
+        .title
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     let filename = format!("{}.txt", safe_title);
     let headers = [
         (header::CONTENT_TYPE, "text/plain; charset=utf-8"),

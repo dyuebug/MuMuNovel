@@ -35,7 +35,9 @@ async fn test_ai(
     let cfg = AIConfig {
         provider: body.provider.unwrap_or_else(|| "openai".into()),
         api_key: body.api_key.unwrap_or_default(),
-        base_url: body.base_url.unwrap_or_else(|| "https://api.openai.com/v1".into()),
+        base_url: body
+            .base_url
+            .unwrap_or_else(|| "https://api.openai.com/v1".into()),
         model: body.model.unwrap_or_else(|| "gpt-4".into()),
         temperature: body.temperature.unwrap_or(0.7),
         max_tokens: body.max_tokens.unwrap_or(4096),
@@ -64,7 +66,9 @@ async fn test_ai_stream(
     let cfg = AIConfig {
         provider: body.provider.unwrap_or_else(|| "openai".into()),
         api_key: body.api_key.unwrap_or_default(),
-        base_url: body.base_url.unwrap_or_else(|| "https://api.openai.com/v1".into()),
+        base_url: body
+            .base_url
+            .unwrap_or_else(|| "https://api.openai.com/v1".into()),
         model: body.model.unwrap_or_else(|| "gpt-4".into()),
         temperature: body.temperature.unwrap_or(0.7),
         max_tokens: body.max_tokens.unwrap_or(4096),
@@ -78,10 +82,15 @@ async fn test_ai_stream(
 
     let sse_stream = rx.map(|chunk| {
         let event = match chunk {
-            Ok(AIStreamChunk { content: Some(text), .. }) => {
-                axum::response::sse::Event::default().data(text)
-            }
-            Ok(AIStreamChunk { done: true, finish_reason, .. }) => {
+            Ok(AIStreamChunk {
+                content: Some(text),
+                ..
+            }) => axum::response::sse::Event::default().data(text),
+            Ok(AIStreamChunk {
+                done: true,
+                finish_reason,
+                ..
+            }) => {
                 let reason = finish_reason.unwrap_or_else(|| "stop".into());
                 axum::response::sse::Event::default().data(format!("[DONE] {}", reason))
             }

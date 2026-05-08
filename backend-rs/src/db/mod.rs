@@ -9,7 +9,10 @@ pub async fn init_pool(cfg: &AppConfig) -> Option<DatabaseConnection> {
     match connection::connect(cfg).await {
         Ok(db) => Some(db),
         Err(e) => {
-            warn!("Database connection failed: {}. /readyz will report not_ready.", e);
+            warn!(
+                "Database connection failed: {}. /readyz will report not_ready.",
+                e
+            );
             None
         }
     }

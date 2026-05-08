@@ -4,7 +4,9 @@ use serde_json::Value;
 use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::ai::types::{AIResponse, AIStreamChunk, ChatMessage, ToolCall, ToolCallFunction, ToolDef};
+use crate::ai::types::{
+    AIResponse, AIStreamChunk, ChatMessage, ToolCall, ToolCallFunction, ToolDef,
+};
 
 pub struct AnthropicClient {
     client: Client,
@@ -86,8 +88,16 @@ impl AnthropicClient {
 
         tokio::spawn(async move {
             let result = Self::stream_inner(
-                client, api_key, base_url, messages, model, temperature, max_tokens,
-                system_prompt, tools, tx.clone(),
+                client,
+                api_key,
+                base_url,
+                messages,
+                model,
+                temperature,
+                max_tokens,
+                system_prompt,
+                tools,
+                tx.clone(),
             )
             .await;
             if let Err(e) = result {
@@ -169,18 +179,28 @@ impl AnthropicClient {
                             if let Some(delta_type) = delta.get("type").and_then(|t| t.as_str()) {
                                 match delta_type {
                                     "text_delta" => {
-                                        if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
-                                            let _ = tx.send(Ok(AIStreamChunk {
-                                                content: Some(text.to_string()),
-                                                tool_calls: None,
-                                                done: false,
-                                                finish_reason: None,
-                                            })).await;
+                                        if let Some(text) =
+                                            delta.get("text").and_then(|t| t.as_str())
+                                        {
+                                            let _ = tx
+                                                .send(Ok(AIStreamChunk {
+                                                    content: Some(text.to_string()),
+                                                    tool_calls: None,
+                                                    done: false,
+                                                    finish_reason: None,
+                                                }))
+                                                .await;
                                         }
                                     }
                                     "input_json_delta" => {
-                                        if let Some(partial) = delta.get("partial_json").and_then(|j| j.as_str()) {
-                                            let idx = event.get("index").and_then(|i| i.as_i64()).unwrap_or(0) as usize;
+                                        if let Some(partial) =
+                                            delta.get("partial_json").and_then(|j| j.as_str())
+                                        {
+                                            let idx = event
+                                                .get("index")
+                                                .and_then(|i| i.as_i64())
+                                                .unwrap_or(0)
+                                                as usize;
                                             while tool_calls_buffer.len() <= idx {
                                                 tool_calls_buffer.push(ToolCall {
                                                     id: format!("toolu_{}", idx),
@@ -191,7 +211,10 @@ impl AnthropicClient {
                                                     },
                                                 });
                                             }
-                                            tool_calls_buffer[idx].function.arguments.push_str(partial);
+                                            tool_calls_buffer[idx]
+                                                .function
+                                                .arguments
+                                                .push_str(partial);
                                         }
                                     }
                                     _ => {}
@@ -201,8 +224,11 @@ impl AnthropicClient {
                     }
                     "content_block_start" => {
                         if let Some(content_block) = event.get("content_block") {
-                            if content_block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                                let idx = event.get("index").and_then(|i| i.as_i64()).unwrap_or(0) as usize;
+                            if content_block.get("type").and_then(|t| t.as_str())
+                                == Some("tool_use")
+                            {
+                                let idx = event.get("index").and_then(|i| i.as_i64()).unwrap_or(0)
+                                    as usize;
                                 while tool_calls_buffer.len() <= idx {
                                     tool_calls_buffer.push(ToolCall {
                                         id: String::new(),
@@ -213,7 +239,9 @@ impl AnthropicClient {
                                         },
                                     });
                                 }
-                                if let Some(name) = content_block.get("name").and_then(|n| n.as_str()) {
+                                if let Some(name) =
+                                    content_block.get("name").and_then(|n| n.as_str())
+                                {
                                     tool_calls_buffer[idx].function.name = name.to_string();
                                 }
                                 if let Some(id) = content_block.get("id").and_then(|i| i.as_str()) {
@@ -228,20 +256,26 @@ impl AnthropicClient {
                             .and_then(|d| d.get("stop_reason"))
                             .and_then(|r| r.as_str())
                             .map(|s| s.to_string());
-                        let _ = tx.send(Ok(AIStreamChunk {
-                            content: None,
-                            tool_calls: if tool_calls_buffer.is_empty() {
-                                None
-                            } else {
-                                Some(std::mem::take(&mut tool_calls_buffer))
-                            },
-                            done: true,
-                            finish_reason,
-                        })).await;
+                        let _ = tx
+                            .send(Ok(AIStreamChunk {
+                                content: None,
+                                tool_calls: if tool_calls_buffer.is_empty() {
+                                    None
+                                } else {
+                                    Some(std::mem::take(&mut tool_calls_buffer))
+                                },
+                                done: true,
+                                finish_reason,
+                            }))
+                            .await;
                         return Ok(());
                     }
                     "error" => {
-                        let msg = event.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("unknown error");
+                        let msg = event
+                            .get("error")
+                            .and_then(|e| e.get("message"))
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("unknown error");
                         return Err(msg.to_string());
                     }
                     _ => {}
@@ -269,8 +303,16 @@ impl AnthropicClient {
                         }
                     }
                     "tool_use" => {
-                        let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
-                        let id = block.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+                        let name = block
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let id = block
+                            .get("id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or("")
+                            .to_string();
                         let arguments = block
                             .get("input")
                             .map(|input| serde_json::to_string(input).unwrap_or_default())
@@ -288,7 +330,11 @@ impl AnthropicClient {
 
         Ok(AIResponse {
             content,
-            tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+            tool_calls: if tool_calls.is_empty() {
+                None
+            } else {
+                Some(tool_calls)
+            },
             finish_reason,
         })
     }

@@ -1,6 +1,6 @@
+use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
-use chrono::Utc;
 use tokio::sync::RwLock;
 use tracing::info;
 
@@ -102,7 +102,9 @@ impl TaskRegistry {
         let tasks = self.tasks.read().await;
         tasks
             .values()
-            .filter(|t| t.user_id == user_id && t.task_type == task_type && t.project_id == project_id)
+            .filter(|t| {
+                t.user_id == user_id && t.task_type == task_type && t.project_id == project_id
+            })
             .filter(|t| t.status.is_active())
             .filter(|t| {
                 if let Some(fp) = fingerprint {
@@ -117,7 +119,10 @@ impl TaskRegistry {
 
     pub async fn count_active_for_user(&self, user_id: &str) -> usize {
         let tasks = self.tasks.read().await;
-        tasks.values().filter(|t| t.user_id == user_id && t.status.is_active()).count()
+        tasks
+            .values()
+            .filter(|t| t.user_id == user_id && t.status.is_active())
+            .count()
     }
 
     pub async fn all_records(&self) -> Vec<TaskRecord> {
@@ -155,10 +160,17 @@ impl TaskRegistry {
 
         // Enforce max task count
         if tasks.len() > MAX_TASKS {
-            let mut entries: Vec<_> = tasks.iter().map(|(k, v)| (k.clone(), v.updated_at)).collect();
+            let mut entries: Vec<_> = tasks
+                .iter()
+                .map(|(k, v)| (k.clone(), v.updated_at))
+                .collect();
             entries.sort_by(|a, b| a.1.cmp(&b.1));
             let to_remove = entries.len() - MAX_TASKS;
-            let ids_to_remove: Vec<String> = entries.iter().take(to_remove).map(|(id, _)| id.clone()).collect();
+            let ids_to_remove: Vec<String> = entries
+                .iter()
+                .take(to_remove)
+                .map(|(id, _)| id.clone())
+                .collect();
             for id in &ids_to_remove {
                 tasks.remove(id);
             }

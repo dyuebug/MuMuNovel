@@ -1,13 +1,13 @@
+use axum::response::sse::Event;
 use axum::{
     extract::{Extension, Path},
     response::Sse,
     routing::post,
     Json, Router,
 };
-use serde::Deserialize;
 use sea_orm::DatabaseConnection;
+use serde::Deserialize;
 use tokio::sync::mpsc;
-use axum::response::sse::Event;
 
 use serde_json::Value;
 
@@ -70,7 +70,9 @@ struct CharactersRequest {
     web_research_query: Option<String>,
 }
 
-fn default_count() -> usize { 5 }
+fn default_count() -> usize {
+    5
+}
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
@@ -96,8 +98,12 @@ struct OutlineRequest {
     web_research_query: Option<String>,
 }
 
-fn default_outline_count() -> usize { 3 }
-fn default_target_words() -> i32 { 100000 }
+fn default_outline_count() -> usize {
+    3
+}
+fn default_target_words() -> i32 {
+    100000
+}
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
@@ -146,7 +152,8 @@ async fn world_building(
             body.default_quality_notes.as_deref(),
             body.provider.as_deref(),
             body.model.as_deref(),
-        ).await;
+        )
+        .await;
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -172,7 +179,8 @@ async fn career_system(
             &project_id,
             body.provider.as_deref(),
             body.model.as_deref(),
-        ).await;
+        )
+        .await;
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -193,14 +201,19 @@ async fn characters(
 
     tokio::spawn(async move {
         wizard_service::generate_characters(
-            &db, &channel, &user_id, &project_id, count,
+            &db,
+            &channel,
+            &user_id,
+            &project_id,
+            count,
             body.world_context,
             body.theme.as_deref(),
             body.genre.as_deref(),
             body.requirements.as_deref(),
             body.provider.as_deref(),
             body.model.as_deref(),
-        ).await;
+        )
+        .await;
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -222,7 +235,10 @@ async fn outline(
 
     tokio::spawn(async move {
         wizard_service::generate_outline(
-            &db, &channel, &user_id, &project_id,
+            &db,
+            &channel,
+            &user_id,
+            &project_id,
             chapter_count,
             body.narrative_perspective.as_deref(),
             target_words,
@@ -235,7 +251,8 @@ async fn outline(
             body.quality_notes.as_deref(),
             body.provider.as_deref(),
             body.model.as_deref(),
-        ).await;
+        )
+        .await;
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -255,10 +272,14 @@ async fn regenerate_world_building(
 
     tokio::spawn(async move {
         wizard_service::regenerate_world_building(
-            &db, &channel, &user_id, &project_id,
+            &db,
+            &channel,
+            &user_id,
+            &project_id,
             body.provider.as_deref(),
             body.model.as_deref(),
-        ).await;
+        )
+        .await;
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -268,7 +289,10 @@ async fn regenerate_world_building(
 pub fn routes() -> Router {
     Router::new()
         .route("/wizard-stream/world-building", post(world_building))
-        .route("/wizard-stream/world-building/{project_id}/regenerate", post(regenerate_world_building))
+        .route(
+            "/wizard-stream/world-building/{project_id}/regenerate",
+            post(regenerate_world_building),
+        )
         .route("/wizard-stream/career-system", post(career_system))
         .route("/wizard-stream/characters", post(characters))
         .route("/wizard-stream/outline", post(outline))

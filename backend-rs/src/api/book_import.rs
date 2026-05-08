@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use axum::response::sse::Event;
 use axum::{
     extract::{Extension, Multipart, Path},
     http::StatusCode,
@@ -7,7 +8,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use axum::response::sse::Event;
 use sea_orm::DatabaseConnection;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -35,7 +35,10 @@ async fn create_task(
                 let fname = field.file_name().unwrap_or("unknown.txt").to_string();
                 filename = Some(fname);
                 let data = field.bytes().await.map_err(|e| {
-                    (StatusCode::BAD_REQUEST, Json(json!({"detail": format!("读取文件失败: {}", e)})))
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"detail": format!("读取文件失败: {}", e)})),
+                    )
                 })?;
                 file_content = Some(data.to_vec());
             }
@@ -62,11 +65,17 @@ async fn create_task(
     }
 
     let filename = filename.ok_or_else(|| {
-        (StatusCode::BAD_REQUEST, Json(json!({"detail": "未提供文件"})))
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "未提供文件"})),
+        )
     })?;
 
     if !filename.to_lowercase().ends_with(".txt") {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"detail": "仅支持 .txt 文件"}))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "仅支持 .txt 文件"})),
+        ));
     }
 
     if import_mode != "append" && import_mode != "overwrite" {
@@ -91,7 +100,10 @@ async fn create_task(
     }
 
     let file_content = file_content.ok_or_else(|| {
-        (StatusCode::BAD_REQUEST, Json(json!({"detail": "文件内容为空"})))
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "文件内容为空"})),
+        )
     })?;
 
     if file_content.len() > MAX_TXT_SIZE {
@@ -177,16 +189,37 @@ async fn apply_import(
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let project_suggestion = &body["project_suggestion"];
-    let chapters = body["chapters"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
-    let outlines = body["outlines"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    let chapters = body["chapters"]
+        .as_array()
+        .map(|a| a.as_slice())
+        .unwrap_or(&[]);
+    let outlines = body["outlines"]
+        .as_array()
+        .map(|a| a.as_slice())
+        .unwrap_or(&[]);
     let import_mode = body["import_mode"].as_str().unwrap_or("append");
 
-    match service.apply_import(&db, &task_id, &claims.sub, project_suggestion, chapters, outlines, import_mode).await {
+    match service
+        .apply_import(
+            &db,
+            &task_id,
+            &claims.sub,
+            project_suggestion,
+            chapters,
+            outlines,
+            import_mode,
+        )
+        .await
+    {
         Ok(data) => Ok(Json(data)),
         Err(e) => {
-            let status = if e.contains("不存在") { StatusCode::NOT_FOUND }
-                else if e.contains("无权") { StatusCode::FORBIDDEN }
-                else { StatusCode::BAD_REQUEST };
+            let status = if e.contains("不存在") {
+                StatusCode::NOT_FOUND
+            } else if e.contains("无权") {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::BAD_REQUEST
+            };
             Err((status, Json(json!({"detail": e}))))
         }
     }
@@ -209,11 +242,18 @@ async fn apply_stream(
     let user_id = claims.sub.clone();
 
     tokio::spawn(async move {
-        service.apply_import_stream(
-            &db, &task_id, &user_id,
-            &project_suggestion, &chapters, &outlines, &import_mode,
-            &channel,
-        ).await;
+        service
+            .apply_import_stream(
+                &db,
+                &task_id,
+                &user_id,
+                &project_suggestion,
+                &chapters,
+                &outlines,
+                &import_mode,
+                &channel,
+            )
+            .await;
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -230,13 +270,20 @@ async fn retry_stream(
     let (tx, rx) = mpsc::channel::<Result<Event, std::convert::Infallible>>(256);
     let channel = crate::utils::sse::SseChannel::new(tx);
 
-    let steps: Vec<String> = body["steps"].as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+    let steps: Vec<String> = body["steps"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
     let user_id = claims.sub.clone();
 
     tokio::spawn(async move {
-        service.retry_stream(&db, &task_id, &user_id, &steps, &channel).await;
+        service
+            .retry_stream(&db, &task_id, &user_id, &steps, &channel)
+            .await;
     });
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
@@ -252,6 +299,12 @@ pub fn routes() -> Router {
         )
         .route("/book-import/tasks/{task_id}/preview", get(get_preview))
         .route("/book-import/tasks/{task_id}/apply", post(apply_import))
-        .route("/book-import/tasks/{task_id}/apply-stream", post(apply_stream))
-        .route("/book-import/tasks/{task_id}/retry-stream", post(retry_stream))
+        .route(
+            "/book-import/tasks/{task_id}/apply-stream",
+            post(apply_stream),
+        )
+        .route(
+            "/book-import/tasks/{task_id}/retry-stream",
+            post(retry_stream),
+        )
 }

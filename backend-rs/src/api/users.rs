@@ -58,10 +58,7 @@ async fn get_current_user(
             "created_at": user.created_at.to_rfc3339(),
             "last_login": user.last_login.to_rfc3339(),
         }))),
-        None => Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({"detail": "用户不存在"})),
-        )),
+        None => Err((StatusCode::NOT_FOUND, Json(json!({"detail": "用户不存在"})))),
     }
 }
 

@@ -12,7 +12,10 @@ pub fn touch_checkpoint(
 
     if let Some(obj) = cp.as_object_mut() {
         obj.insert("event".into(), serde_json::Value::String(event.into()));
-        obj.insert("updated_at".into(), serde_json::Value::String(Utc::now().to_rfc3339()));
+        obj.insert(
+            "updated_at".into(),
+            serde_json::Value::String(Utc::now().to_rfc3339()),
+        );
 
         if let Some(p) = progress {
             obj.insert("progress".into(), serde_json::Value::Number(p.into()));
