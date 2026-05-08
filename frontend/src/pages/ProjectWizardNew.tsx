@@ -16,6 +16,8 @@ import {
 import type { WizardBasicInfo } from '../types';
 import { isProjectWizardCompleted } from '../utils/projectWizardState';
 import { syncProjectToStoreById } from '../store/hooks';
+import { invalidateAllProjectCollectionFreshness } from '../store/projectCollectionRefresh';
+import { invalidateProjectCareers } from '../services/projectCareers';
 import { isRequestCancelledError } from '../services/core/httpClient';
 import {
   CREATIVE_MODE_OPTIONS,
@@ -227,6 +229,8 @@ export default function ProjectWizardNew() {
 
   const syncCompletedProject = async (projectId: string) => {
     try {
+      invalidateAllProjectCollectionFreshness(projectId);
+      invalidateProjectCareers(projectId);
       await syncProjectToStoreById(projectId);
     } catch (error) {
       console.error('同步完成项目到 store 失败:', error);
@@ -234,11 +238,11 @@ export default function ProjectWizardNew() {
   };
 
   // Completion callback
-  const handleComplete = (projectId: string) => {
+  const handleComplete = async (projectId: string) => {
     console.log('项目创建完成:', projectId);
     clearWizardResumeStorage();
     setResumeProjectId(null);
-    void syncCompletedProject(projectId);
+    await syncCompletedProject(projectId);
     releaseGenerationBusy();
   };
 

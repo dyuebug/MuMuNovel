@@ -10,6 +10,8 @@ import {
   useGenerationExecutionSettings,
 } from '../components/GenerationExecutionSettings';
 import { syncProjectToStoreById } from '../store/hooks';
+import { invalidateAllProjectCollectionFreshness } from '../store/projectCollectionRefresh';
+import { invalidateProjectCareers } from '../services/projectCareers';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -1124,18 +1126,20 @@ const Inspiration: React.FC = () => {
   // Completion callback
   const syncCompletedProject = async (projectId: string) => {
     try {
+      invalidateAllProjectCollectionFreshness(projectId);
+      invalidateProjectCareers(projectId);
       await syncProjectToStoreById(projectId);
     } catch (error) {
       console.error('同步灵感模式完成项目到 store 失败:', error);
     }
   };
 
-  const handleComplete = (projectId: string) => {
+  const handleComplete = async (projectId: string) => {
     console.log('灵感模式项目创建完成:', projectId);
     clearCache();
     clearGenerationResumeStorage();
     setResumeProjectId(null);
-    void syncCompletedProject(projectId);
+    await syncCompletedProject(projectId);
     releaseGenerationBusy();
     setCurrentStep('complete');
   };

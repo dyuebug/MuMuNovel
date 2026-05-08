@@ -44,7 +44,7 @@ export interface GenerationConfig {
 interface AIProjectGeneratorProps {
   config: GenerationConfig;
   storagePrefix: 'wizard' | 'inspiration';
-  onComplete: (projectId: string) => void;
+  onComplete: (projectId: string) => void | Promise<void>;
   onBack?: () => void;
   onBusyChange?: (busy: boolean) => void;
   isMobile?: boolean;
@@ -369,17 +369,15 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     },
   });
 
-  const completeWizardGeneration = (pid: string) => {
+  const completeWizardGeneration = async (pid: string) => {
     setProgress(100);
     setProgressMessage('生成已完成，正在跳转...');
     message.success('项目创建完成，正在跳转...');
     clearStorage();
-    setLoading(false);
 
-    onComplete(pid);
-    setTimeout(() => {
-      navigate(`/project/${pid}`);
-    }, 1000);
+    await Promise.resolve(onComplete(pid));
+    setLoading(false);
+    navigate(`/project/${pid}`, { replace: true });
   };
 
   const buildCareerTaskOptions = (): SSEClientOptions<CareerSystemResult> => buildTaskOptions<CareerSystemResult>({
@@ -780,7 +778,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         setProgress(outlineTask.progress || 70);
         setProgressMessage(outlineTask.message || '正在继续生成大纲...');
         await waitForExistingBackgroundTask(outlineTask, buildOutlineTaskOptions());
-        completeWizardGeneration(projectIdParam);
+        await completeWizardGeneration(projectIdParam);
       } else if (activeWizardTasks.wizard_characters) {
         const charactersTask = activeWizardTasks.wizard_characters;
         message.info('检测到已存在的角色生成任务，正在接回...');
@@ -925,7 +923,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       buildOutlineTaskOptions()
     );
 
-    completeWizardGeneration(pid);
+    await completeWizardGeneration(pid);
   };
 
   const handleAutoGenerate = async (data: GenerationConfig) => {
@@ -1070,19 +1068,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         })
       );
 
-      // 全部完成 - 自动跳转到项目详情页
-      setProgress(100);
-      setProgressMessage('项目创建完成！正在跳转...');
-      message.success('项目创建成功！正在进入项目...');
-      clearStorage();
-
-      // 调用完成回调
-      onComplete(createdProjectId);
-
-      // 延迟1秒后自动跳转到项目详情页
-      setTimeout(() => {
-        navigate(`/project/${createdProjectId}`);
-      }, 1000);
+      await completeWizardGeneration(createdProjectId);
 
     } catch (error) {
       if (isTaskCancelledError(error)) {
@@ -1360,7 +1346,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       })
     );
 
-    completeWizardGeneration(pid);
+    await completeWizardGeneration(pid);
   };
 
   // 从职业体系步骤开始的完整流程
@@ -1471,21 +1457,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       })
     );
 
-    setProgress(100);
-    setProgressMessage('项目创建完成！正在跳转...');
-    message.success('项目创建成功！正在进入项目...');
-    clearStorage();
-    setLoading(false);
-
-    // 调用完成回调
-    if (pid) {
-      onComplete(pid);
-
-      // 延迟1秒后自动跳转到项目详情页
-      setTimeout(() => {
-        navigate(`/project/${pid}`);
-      }, 1000);
-    }
+    await completeWizardGeneration(pid);
   };
 
 
