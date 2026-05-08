@@ -86,7 +86,8 @@ export default function Careers() {
 
     useEffect(() => {
         if (projectId) {
-            fetchCareers();
+            invalidateProjectCareers(projectId);
+            void fetchCareers();
         }
     }, [projectId, fetchCareers]);
 

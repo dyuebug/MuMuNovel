@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 
 import { backgroundTaskApi, type BackgroundTaskStatus } from '../services/modularApi';
+import { useBackgroundTaskStore } from '../store/backgroundTasks';
 import type { TrackedBackgroundTask } from '../store/backgroundTasks';
 import {
   startBackgroundTaskPolling,
@@ -76,13 +77,25 @@ export const useRestorableBackgroundTaskPolling = <TTask extends PollableBackgro
       startTaskPolling(payload.taskId);
     };
 
+    const removeStaleTrackedTask = () => {
+      if (!activeTrackedTask?.taskId) {
+        return;
+      }
+
+      useBackgroundTaskStore.getState().removeTask(activeTrackedTask.taskId);
+    };
+
     const restoreTaskPolling = async () => {
+      let remoteActiveTasksLoaded = false;
+
       try {
         const { items } = await backgroundTaskApi.listTasks({
           project_id: projectId,
           active_only: true,
           limit: restoreListLimit,
         });
+
+        remoteActiveTasksLoaded = true;
 
         if (disposed) {
           return;
@@ -102,13 +115,17 @@ export const useRestorableBackgroundTaskPolling = <TTask extends PollableBackgro
             progress: activeTask.progress,
             message: activeTask.message,
           });
-          return;
         }
+        else if (!disposed) {
+          removeStaleTrackedTask();
+        }
+
+        return;
       } catch (error) {
         console.error('恢复后台任务失败:', error);
       }
 
-      if (!disposed && activeTrackedTask) {
+      if (!disposed && !remoteActiveTasksLoaded && activeTrackedTask) {
         restoreLocalTask({
           taskId: activeTrackedTask.taskId,
           progress: activeTrackedTask.progress,

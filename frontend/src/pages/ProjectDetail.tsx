@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, Outlet, Link, useLocation } from 'react-router-dom';
-import { Layout, Menu, Spin, Button, Drawer, theme } from 'antd';
+import { Layout, Menu, Spin, Button, Drawer, Typography, theme } from 'antd';
 import {
   ArrowLeftOutlined,
   FileTextOutlined,
@@ -33,6 +33,7 @@ import { getStoredSidebarCollapsed, setStoredSidebarCollapsed } from '../utils/s
 import { VERSION_INFO } from '../config/version';
 
 const { Header, Sider, Content } = Layout;
+const { Title, Text } = Typography;
 
 // 判断是否为移动端
 const isMobile = () => window.innerWidth <= 768;
@@ -58,8 +59,8 @@ export default function ProjectDetail() {
   const [collapsed, setCollapsed] = useState<boolean>(() => getStoredSidebarCollapsed());
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [mobile, setMobile] = useState(isMobile());
-  const [projectReady, setProjectReady] = useState(false);
   const [isProjectDataHydrating, setIsProjectDataHydrating] = useState(false);
+  const [projectLoadError, setProjectLoadError] = useState<string | null>(null);
   const shouldHydrateCollectionsRef = useRef(shouldHydrateProjectCollectionsForPath(location.pathname));
   const hydrateTimerRef = useRef<number | null>(null);
   const idleHydrationHandleRef = useRef<number | null>(null);
@@ -268,7 +269,7 @@ export default function ProjectDetail() {
 
     const loadProjectData = async (id: string) => {
       cancelScheduledProjectHydration();
-      setProjectReady(false);
+      setProjectLoadError(null);
       setIsProjectDataHydrating(false);
 
       let loadPromise = projectLoadPromises.get(id);
@@ -291,10 +292,10 @@ export default function ProjectDetail() {
         }
 
         setCurrentProject(project);
-        setProjectReady(true);
         scheduleProjectCollectionHydration(id);
       } catch (error) {
         console.error('加载项目数据失败:', error);
+        setProjectLoadError(error instanceof Error ? error.message : '加载项目数据失败，请稍后重试');
       }
     };
 
@@ -305,7 +306,6 @@ export default function ProjectDetail() {
     return () => {
       cancelled = true;
       cancelScheduledProjectHydration();
-      setProjectReady(false);
       setIsProjectDataHydrating(false);
       clearProjectData();
     };
@@ -500,7 +500,23 @@ export default function ProjectDetail() {
     return 'sponsor'; // 默认选中赞助支持
   }, [location.pathname]);
 
-  if (!projectReady || !currentProject || currentProject.id !== projectId) {
+  if (!currentProject || currentProject.id !== projectId) {
+    if (projectLoadError) {
+      return (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', padding: 24 }}>
+          <div style={{ textAlign: 'center', maxWidth: 420 }}>
+            <Title level={4}>项目数据加载失败</Title>
+            <Text type="secondary">{projectLoadError}</Text>
+            <div style={{ marginTop: 24 }}>
+              <Button type="primary" onClick={() => navigate('/projects')}>
+                返回项目列表
+              </Button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
         <Spin size="large" />

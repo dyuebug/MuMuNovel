@@ -34,6 +34,27 @@ export const isProjectCollectionFresh = (
   return typeof loadedAt === 'number' && Date.now() - loadedAt <= maxAgeMs;
 };
 
+export const invalidateProjectCollectionFreshness = (
+  collection: ProjectCollectionKey,
+  projectId?: string,
+) => {
+  if (!projectId) {
+    return;
+  }
+
+  collectionLoadedAt[collection].delete(projectId);
+};
+
+export const invalidateAllProjectCollectionFreshness = (projectId?: string) => {
+  if (!projectId) {
+    return;
+  }
+
+  invalidateProjectCollectionFreshness('characters', projectId);
+  invalidateProjectCollectionFreshness('outlines', projectId);
+  invalidateProjectCollectionFreshness('chapters', projectId);
+};
+
 export async function loadProjectCollection<T>({
   projectId,
   options = {},
