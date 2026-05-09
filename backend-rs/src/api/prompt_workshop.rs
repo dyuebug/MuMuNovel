@@ -123,7 +123,7 @@ async fn get_item(
         Ok(Some(data)) => Ok(Json(data)),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"detail": "提示词不存在"})),
+            Json(json!({"detail": "提示词项目不存在"})),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -258,7 +258,7 @@ fn check_admin(cfg: &AppConfig, claims: &Claims) -> Result<(), (StatusCode, Json
     if !PromptWorkshopService::check_workshop_server(cfg) {
         return Err((
             StatusCode::FORBIDDEN,
-            Json(json!({"detail": "此功能仅在云端服务可用"})),
+            Json(json!({"detail": "该功能仅在云端服务可用"})),
         ));
     }
     if !claims.is_admin {

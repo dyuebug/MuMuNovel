@@ -2,7 +2,7 @@ use axum::{
     extract::{Extension, Path, Query},
     http::StatusCode,
     response::Json,
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Router,
 };
 use sea_orm::DatabaseConnection;
@@ -14,6 +14,11 @@ use crate::services::writing_style_service::WritingStyleService;
 
 #[derive(Deserialize, Default)]
 struct SetDefaultQuery {
+    project_id: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct SetDefaultBody {
     project_id: Option<String>,
 }
 
@@ -116,8 +121,20 @@ async fn set_default_style(
     Extension(db): Extension<DatabaseConnection>,
     Path(style_id): Path<i32>,
     Query(params): Query<SetDefaultQuery>,
+    body: Option<Json<SetDefaultBody>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let project_id = params.project_id.unwrap_or_default();
+    let project_id = body
+        .and_then(|Json(payload)| payload.project_id)
+        .or(params.project_id)
+        .unwrap_or_default();
+
+    if project_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "project_id is required"})),
+        ));
+    }
+
     WritingStyleService::set_default_style(&db, &claims.sub, style_id, &project_id)
         .await
         .map(Json)
@@ -149,18 +166,24 @@ pub fn routes() -> Router {
         .route("/writing-styles/presets/list", get(list_presets))
         .route("/writing-styles/user", get(list_user_styles))
         .route(
-            "/writing-styles/project/{projectId}",
+            "/writing-styles/project/{project_id}",
             get(list_project_styles),
         )
         .route(
-            "/writing-styles/project/{projectId}/initialize",
+            "/writing-styles/project/{project_id}/initialize",
+            post(initialize_defaults),
+        )
+        .route(
+            "/writing-styles/project/{project_id}/init-defaults",
             post(initialize_defaults),
         )
         .route("/writing-styles", post(create_style))
-        .route("/writing-styles/{styleId}", put(update_style))
-        .route("/writing-styles/{styleId}", delete(delete_style))
         .route(
-            "/writing-styles/{styleId}/set-default",
+            "/writing-styles/{style_id}",
+            put(update_style).delete(delete_style),
+        )
+        .route(
+            "/writing-styles/{style_id}/set-default",
             post(set_default_style),
         )
 }

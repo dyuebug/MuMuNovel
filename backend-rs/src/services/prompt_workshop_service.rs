@@ -21,6 +21,31 @@ fn instance_id() -> String {
     std::env::var("INSTANCE_ID").unwrap_or_else(|_| "local".to_string())
 }
 
+fn cloud_url() -> String {
+    std::env::var("WORKSHOP_CLOUD_URL")
+        .unwrap_or_else(|_| "https://mumuverse.space:1566".to_string())
+}
+
+async fn check_cloud_connection(cloud_url: &str) -> bool {
+    let url = format!(
+        "{}/api/prompt-workshop/status",
+        cloud_url.trim_end_matches('/')
+    );
+    let client = match reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return false,
+    };
+
+    match client.get(url).send().await {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
+}
+
 fn user_identifier(instance_id: &str, user_id: &str) -> String {
     format!("{}:{}", instance_id, user_id)
 }
@@ -87,9 +112,10 @@ impl PromptWorkshopService {
             "instance_id": instance_id(),
         });
         if !is_workshop_server(cfg) {
-            result["cloud_url"] = json!(std::env::var("WORKSHOP_CLOUD_URL")
-                .unwrap_or_else(|_| "https://mumuverse.space:1566".to_string()));
-            result["cloud_connected"] = json!(null);
+            let cloud_url = cloud_url();
+            let cloud_connected = check_cloud_connection(&cloud_url).await;
+            result["cloud_url"] = json!(cloud_url);
+            result["cloud_connected"] = json!(cloud_connected);
         }
         result
     }

@@ -1,6 +1,7 @@
 pub mod career;
 pub mod chapter;
 pub mod character;
+pub mod character_career;
 pub mod foreshadow;
 pub mod mcp_plugin;
 pub mod organization;

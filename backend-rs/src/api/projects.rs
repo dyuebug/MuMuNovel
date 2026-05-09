@@ -41,6 +41,26 @@ struct UpdateRequest {
     default_quality_notes: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct ExportOptions {
+    #[serde(default)]
+    include_generation_history: bool,
+    #[serde(default)]
+    include_writing_styles: bool,
+    #[serde(default)]
+    include_careers: bool,
+    #[serde(default)]
+    include_memories: bool,
+    #[serde(default)]
+    include_plot_analysis: bool,
+}
+
+#[derive(Deserialize)]
+struct ListQuery {
+    #[serde(default)]
+    user_id: Option<String>,
+}
+
 async fn create_project(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
@@ -58,21 +78,12 @@ async fn create_project(
     )
     .await
     {
-        Ok(project) => Ok((
-            StatusCode::CREATED,
-            Json(json!({"success": true, "data": project})),
-        )),
+        Ok(project) => Ok((StatusCode::CREATED, Json(json!({"success": true, "data": project})))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"success": false, "message": e})),
         )),
     }
-}
-
-#[derive(Deserialize)]
-struct ListQuery {
-    #[serde(default)]
-    user_id: Option<String>,
 }
 
 async fn list_projects(
@@ -82,9 +93,7 @@ async fn list_projects(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let uid = query.user_id.as_deref().unwrap_or(&claims.sub);
     match ProjectService::list(&db, uid).await {
-        Ok(projects) => Ok(Json(
-            json!({"success": true, "data": projects, "total": projects.len()}),
-        )),
+        Ok(projects) => Ok(Json(json!({"success": true, "data": projects, "total": projects.len()}))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"success": false, "message": e})),
@@ -101,7 +110,7 @@ async fn get_project(
         Ok(Some(project)) => Ok(Json(json!({"success": true, "data": project}))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "项目不存在"})),
+            Json(json!({"success": false, "message": "Project not found"})),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -140,7 +149,7 @@ async fn update_project(
         Ok(Some(project)) => Ok(Json(json!({"success": true, "data": project}))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "项目不存在"})),
+            Json(json!({"success": false, "message": "Project not found"})),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -155,16 +164,92 @@ async fn delete_project(
     Path(project_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match ProjectService::delete(&db, &project_id, &claims.sub).await {
-        Ok(Some(())) => Ok(Json(json!({"success": true, "message": "项目已删除"}))),
+        Ok(Some(())) => Ok(Json(json!({"success": true, "message": "Project deleted successfully"}))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "项目不存在"})),
+            Json(json!({"success": false, "message": "Project not found"})),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"success": false, "message": e})),
         )),
     }
+}
+
+async fn export_project_data(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(project_id): Path<String>,
+    Json(options): Json<ExportOptions>,
+) -> Result<Response, (StatusCode, Json<Value>)> {
+    let project = ProjectService::get(&db, &project_id, &claims.sub)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": format!("{}", e)})),
+            )
+        })?
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"detail": "Project not found"}))))?;
+
+    let chapters = chapter::Entity::find()
+        .filter(chapter::Column::ProjectId.eq(&project_id))
+        .order_by_asc(chapter::Column::ChapterNumber)
+        .all(&db)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": format!("{}", e)})),
+            )
+        })?;
+
+    let export_payload = json!({
+        "version": "rust-strangler-1",
+        "export_type": "project",
+        "project": project,
+        "chapters": chapters,
+        "statistics": {
+            "chapter_count": chapters.len()
+        },
+        "options": {
+            "include_generation_history": options.include_generation_history,
+            "include_writing_styles": options.include_writing_styles,
+            "include_careers": options.include_careers,
+            "include_memories": options.include_memories,
+            "include_plot_analysis": options.include_plot_analysis
+        }
+    });
+
+    let safe_title: String = project
+        .title
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == ' ' || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let filename = format!("project_{}.json", safe_title.trim().replace(' ', "_"));
+    let encoded_filename = filename.clone();
+    let body = serde_json::to_vec_pretty(&export_payload).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": format!("{}", e)})),
+        )
+    })?;
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename*=UTF-8''{}", encoded_filename),
+        )
+        .body(axum::body::Body::from(body))
+        .unwrap())
 }
 
 async fn export_project_txt(
@@ -180,7 +265,7 @@ async fn export_project_txt(
                 Json(json!({"detail": format!("{}", e)})),
             )
         })?
-        .ok_or((StatusCode::NOT_FOUND, Json(json!({"detail": "项目不存在"}))))?;
+        .ok_or((StatusCode::NOT_FOUND, Json(json!({"detail": "Project not found"}))))?;
 
     let chapters = chapter::Entity::find()
         .filter(chapter::Column::ProjectId.eq(&project_id))
@@ -197,12 +282,12 @@ async fn export_project_txt(
     if chapters.is_empty() {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"detail": "项目暂无章节"})),
+            Json(json!({"detail": "Project has no chapters"})),
         ));
     }
 
     let mut text = String::new();
-    text.push_str(&format!("项目：《{}》\n", project.title));
+    text.push_str(&format!("项目：{}\n", project.title));
     if let Some(ref desc) = project.description {
         if !desc.is_empty() {
             text.push_str(&format!("简介：{}\n", desc));
@@ -221,7 +306,7 @@ async fn export_project_txt(
     text.push_str("\n\n");
 
     for ch in &chapters {
-        text.push_str(&format!("第{}章 {}\n\n", ch.chapter_number, ch.title));
+        text.push_str(&format!("第 {} 章：{}\n\n", ch.chapter_number, ch.title));
         if let Some(ref content) = ch.content {
             text.push_str(content);
         }
@@ -231,13 +316,7 @@ async fn export_project_txt(
     let safe_title: String = project
         .title
         .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
         .collect();
     let filename = format!("{}.txt", safe_title);
     let headers = [
@@ -262,7 +341,7 @@ async fn validate_import(
             let bytes = field.bytes().await.map_err(|e| {
                 (
                     StatusCode::BAD_REQUEST,
-                    Json(json!({"detail": format!("读取文件失败: {}", e)})),
+                    Json(json!({"detail": format!("Failed to read uploaded file: {}", e)})),
                 )
             })?;
             file_data = bytes.to_vec();
@@ -274,7 +353,7 @@ async fn validate_import(
     if !file_found {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"detail": "请上传JSON文件"})),
+            Json(json!({"detail": "Missing file field"})),
         ));
     }
 
@@ -286,34 +365,27 @@ async fn validate_import(
                 "version": null,
                 "project_name": null,
                 "statistics": {},
-                "errors": [format!("JSON解析失败: {}", e)],
+                "errors": [format!("Invalid JSON: {}", e)],
                 "warnings": [],
             })),
         )
     })?;
 
     let version = data.get("version").and_then(|v| v.as_str());
-    let mut errors = Vec::new();
-    let mut warnings = Vec::new();
+    let project = data.get("project");
+    let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
 
     if version.is_none() {
-        errors.push("缺少version字段".to_string());
+        errors.push("Missing version field".to_string());
     }
-
-    let project = data.get("project");
     if project.is_none() {
-        errors.push("缺少project字段".to_string());
-    } else if project
-        .and_then(|p| p.get("title"))
-        .and_then(|t| t.as_str())
-        .map_or(true, |t| t.is_empty())
-    {
-        errors.push("project.title不能为空".to_string());
+        errors.push("Missing project field".to_string());
     }
 
     if let Some(ver) = version {
-        if !["1.0.0", "1.1.0"].contains(&ver) {
-            warnings.push(format!("不支持的版本 {}，可能会有兼容性问题", ver));
+        if !["1.0.0", "1.1.0", "rust-strangler-1"].contains(&ver) {
+            warnings.push(format!("Unknown export version: {}", ver));
         }
     }
 
@@ -324,30 +396,15 @@ async fn validate_import(
             "outlines": proj.get("outlines").and_then(|c| c.as_array()).map_or(0, |a| a.len()),
             "relationships": proj.get("relationships").and_then(|c| c.as_array()).map_or(0, |a| a.len()),
             "organizations": proj.get("organizations").and_then(|c| c.as_array()).map_or(0, |a| a.len()),
-            "organization_members": proj.get("organization_members").and_then(|c| c.as_array()).map_or(0, |a| a.len()),
             "writing_styles": proj.get("writing_styles").and_then(|c| c.as_array()).map_or(0, |a| a.len()),
             "generation_history": proj.get("generation_history").and_then(|c| c.as_array()).map_or(0, |a| a.len()),
             "careers": proj.get("careers").and_then(|c| c.as_array()).map_or(0, |a| a.len()),
-            "character_careers": proj.get("character_careers").and_then(|c| c.as_array()).map_or(0, |a| a.len()),
-            "story_memories": proj.get("story_memories").and_then(|c| c.as_array()).map_or(0, |a| a.len()),
-            "plot_analysis": proj.get("plot_analysis").and_then(|c| c.as_array()).map_or(0, |a| a.len()),
-            "has_project_default_style": proj.get("project_default_style").is_some(),
+            "memories": proj.get("memories").and_then(|c| c.as_array()).map_or(0, |a| a.len()),
+            "plot_analysis": proj.get("plot_analysis").and_then(|c| c.as_array()).map_or(0, |a| a.len())
         })
     } else {
         json!({})
     };
-
-    if project
-        .and_then(|p| p.get("chapters"))
-        .and_then(|c| c.as_array())
-        .map_or(true, |a| a.is_empty())
-        && project
-            .and_then(|p| p.get("characters"))
-            .and_then(|c| c.as_array())
-            .map_or(true, |a| a.is_empty())
-    {
-        warnings.push("导入数据没有章节和角色".to_string());
-    }
 
     Ok(Json(json!({
         "valid": errors.is_empty(),
@@ -367,5 +424,6 @@ pub fn routes() -> Router {
             get(get_project).put(update_project).delete(delete_project),
         )
         .route("/projects/{project_id}/export", get(export_project_txt))
+        .route("/projects/{project_id}/export-data", post(export_project_data))
         .route("/projects/validate-import", post(validate_import))
 }

@@ -105,21 +105,10 @@ fn default_target_words() -> i32 {
     100000
 }
 
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct RegenerateWorldBuildingRequest {
-    provider: Option<String>,
-    model: Option<String>,
-    user_id: Option<String>,
-    enable_mcp: Option<bool>,
-    enable_web_research: Option<bool>,
-    web_research_query: Option<String>,
-}
-
-async fn world_building(
-    Extension(claims): Extension<Claims>,
-    Extension(db): Extension<DatabaseConnection>,
-    Json(body): Json<WorldBuildingRequest>,
+fn spawn_world_building_stream(
+    claims: Claims,
+    db: DatabaseConnection,
+    body: WorldBuildingRequest,
 ) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
     let (tx, rx) = mpsc::channel::<Result<Event, std::convert::Infallible>>(256);
     let channel = crate::utils::sse::SseChannel::new(tx);
@@ -158,6 +147,34 @@ async fn world_building(
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
     Sse::new(stream)
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct RegenerateWorldBuildingRequest {
+    provider: Option<String>,
+    model: Option<String>,
+    user_id: Option<String>,
+    enable_mcp: Option<bool>,
+    enable_web_research: Option<bool>,
+    web_research_query: Option<String>,
+}
+
+async fn world_building(
+    Extension(claims): Extension<Claims>,
+    Extension(db): Extension<DatabaseConnection>,
+    Json(body): Json<WorldBuildingRequest>,
+) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
+    spawn_world_building_stream(claims, db, body)
+}
+
+async fn world_building_with_project_id(
+    Path(_project_id): Path<String>,
+    Extension(claims): Extension<Claims>,
+    Extension(db): Extension<DatabaseConnection>,
+    Json(body): Json<WorldBuildingRequest>,
+) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
+    spawn_world_building_stream(claims, db, body)
 }
 
 async fn career_system(
@@ -289,6 +306,10 @@ async fn regenerate_world_building(
 pub fn routes() -> Router {
     Router::new()
         .route("/wizard-stream/world-building", post(world_building))
+        .route(
+            "/wizard-stream/world-building/{project_id}",
+            post(world_building_with_project_id),
+        )
         .route(
             "/wizard-stream/world-building/{project_id}/regenerate",
             post(regenerate_world_building),

@@ -2,7 +2,7 @@ use axum::{
     extract::{Extension, Path, Query},
     http::StatusCode,
     response::Json,
-    routing::{get, post},
+    routing::get,
     Router,
 };
 use sea_orm::DatabaseConnection;
@@ -38,6 +38,11 @@ struct ListQuery {
     project_id: String,
 }
 
+#[derive(Deserialize)]
+struct ExpansionPlanRequest {
+    plan: String,
+}
+
 async fn create_chapter(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
@@ -62,7 +67,7 @@ async fn create_chapter(
         )),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "项目不存在或无权限"})),
+            Json(json!({"success": false, "message": "Project not found or access denied"})),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -77,16 +82,37 @@ async fn list_chapters(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match ChapterService::list_by_project(&db, &query.project_id, &claims.sub).await {
-        Ok(Some(chapters)) => Ok(Json(
-            json!({"success": true, "data": chapters, "total": chapters.len()}),
-        )),
+        Ok(Some(chapters)) => Ok(Json(json!({
+            "success": true,
+            "data": chapters,
+            "items": chapters,
+            "total": chapters.len()
+        }))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "项目不存在或无权限"})),
+            Json(json!({"success": false, "message": "Project not found or access denied"})),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"success": false, "message": e})),
+        )),
+    }
+}
+
+async fn list_chapters_by_project_path(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(project_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match ChapterService::list_by_project(&db, &project_id, &claims.sub).await {
+        Ok(Some(chapters)) => Ok(Json(json!({"items": chapters, "total": chapters.len()}))),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Project not found"})),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": e})),
         )),
     }
 }
@@ -100,7 +126,7 @@ async fn get_chapter(
         Ok(Some(chapter)) => Ok(Json(json!({"success": true, "data": chapter}))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "章节不存在或无权限"})),
+            Json(json!({"success": false, "message": "Chapter not found or access denied"})),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -131,7 +157,7 @@ async fn update_chapter(
         Ok(Some(chapter)) => Ok(Json(json!({"success": true, "data": chapter}))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "章节不存在或无权限"})),
+            Json(json!({"success": false, "message": "Chapter not found or access denied"})),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -146,10 +172,10 @@ async fn delete_chapter(
     Path(chapter_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match ChapterService::delete(&db, &chapter_id, &claims.sub).await {
-        Ok(Some(())) => Ok(Json(json!({"success": true, "message": "章节已删除"}))),
+        Ok(Some(())) => Ok(Json(json!({"success": true, "message": "Chapter deleted successfully"}))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "章节不存在或无权限"})),
+            Json(json!({"success": false, "message": "Chapter not found or access denied"})),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -158,32 +184,24 @@ async fn delete_chapter(
     }
 }
 
-#[derive(Deserialize)]
-struct ExpansionPlanRequest {
-    plan: String,
-}
-
 async fn get_navigation(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
     Path(chapter_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match ChapterService::navigation(&db, &chapter_id, &claims.sub).await {
-        Ok(Some((prev, current, next))) => Ok(Json(json!({
-            "success": true,
-            "data": {
-                "prev": prev,
-                "current": current,
-                "next": next,
-            },
+        Ok(Some((previous, current, next))) => Ok(Json(json!({
+            "previous": previous,
+            "current": current,
+            "next": next,
         }))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "章节不存在或无权限"})),
+            Json(json!({"detail": "Chapter not found or access denied"})),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": e})),
+            Json(json!({"detail": e})),
         )),
     }
 }
@@ -198,7 +216,7 @@ async fn update_expansion_plan(
         Ok(Some(chapter)) => Ok(Json(json!({"success": true, "data": chapter}))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "章节不存在或无权限"})),
+            Json(json!({"success": false, "message": "Chapter not found or access denied"})),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -213,14 +231,14 @@ async fn get_annotations(
     Path(chapter_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match ChapterService::get_annotations(&db, &chapter_id, &claims.sub).await {
-        Ok(Some(annotations)) => Ok(Json(json!({"success": true, "data": annotations}))),
+        Ok(Some(annotations)) => Ok(Json(annotations)),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "章节不存在或无权限"})),
+            Json(json!({"detail": "Chapter not found or access denied"})),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": e})),
+            Json(json!({"detail": e})),
         )),
     }
 }
@@ -231,14 +249,14 @@ async fn get_quality_trend(
     Path(project_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match ChapterService::quality_trend(&db, &project_id, &claims.sub).await {
-        Ok(Some(trend)) => Ok(Json(json!({"success": true, "data": trend}))),
+        Ok(Some(trend)) => Ok(Json(trend.into())),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "项目不存在或无权限"})),
+            Json(json!({"detail": "Project not found or access denied"})),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": e})),
+            Json(json!({"detail": e})),
         )),
     }
 }
@@ -249,22 +267,21 @@ async fn get_can_generate(
     Path(chapter_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match ChapterService::can_generate(&db, &chapter_id, &claims.sub).await {
-        Ok(Some(can)) => Ok(Json(
-            json!({"success": true, "data": {"can_generate": can}}),
-        )),
+        Ok(Some(can_generate)) => Ok(Json(json!({"can_generate": can_generate}))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "章节不存在或无权限"})),
+            Json(json!({"detail": "Chapter not found or access denied"})),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": e})),
+            Json(json!({"detail": e})),
         )),
     }
 }
 
 pub fn routes() -> Router {
     Router::new()
+        .route("/chapters/project/{project_id}", get(list_chapters_by_project_path))
         .route(
             "/chapters/project/{project_id}/quality-trend",
             get(get_quality_trend),
@@ -276,7 +293,7 @@ pub fn routes() -> Router {
         )
         .route("/chapters/{chapter_id}/annotations", get(get_annotations))
         .route("/chapters/{chapter_id}/can-generate", get(get_can_generate))
-        .route("/chapters", post(create_chapter).get(list_chapters))
+        .route("/chapters", axum::routing::get(list_chapters).post(create_chapter))
         .route(
             "/chapters/{chapter_id}",
             get(get_chapter).put(update_chapter).delete(delete_chapter),
