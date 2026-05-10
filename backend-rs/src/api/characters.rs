@@ -86,7 +86,7 @@ async fn list_characters(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match CharacterService::list(&db, &query.project_id, &claims.sub).await {
         Ok(Some(characters)) => Ok(Json(
-            json!({"success": true, "data": characters, "total": characters.len()}),
+            json!({"success": true, "data": characters, "items": characters, "total": characters.len()}),
         )),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
@@ -272,7 +272,7 @@ async fn list_characters_by_project(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match CharacterService::list(&db, &project_id, &claims.sub).await {
         Ok(Some(characters)) => Ok(Json(
-            json!({"success": true, "data": characters, "total": characters.len()}),
+            json!({"success": true, "data": characters, "items": characters, "total": characters.len()}),
         )),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,

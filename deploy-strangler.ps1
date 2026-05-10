@@ -528,5 +528,5 @@ Write-LogLine "Strangler deploy succeeded."
 
 if ($ShouldPauseOnExit) {
     Write-Host ""
-    Read-Host -Prompt "Deployment finished, press Enter to close this window"
+    Write-Host "Deployment finished." -ForegroundColor Green
 }

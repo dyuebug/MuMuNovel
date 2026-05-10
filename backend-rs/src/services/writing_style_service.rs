@@ -48,16 +48,65 @@ fn style_to_value(s: &writing_style::Model, is_default: bool) -> Value {
     })
 }
 
+async fn ensure_preset_styles(
+    db: &DatabaseConnection,
+) -> Result<Vec<writing_style::Model>, Box<dyn std::error::Error + Send + Sync>> {
+    let now = Utc::now().naive_utc();
+    let existing_styles = writing_style::Entity::find()
+        .filter(writing_style::Column::UserId.is_null())
+        .all(db)
+        .await?;
+
+    let mut preset_map = std::collections::HashMap::new();
+    for style in existing_styles {
+        if let Some(preset_id) = style.preset_id.clone() {
+            preset_map.insert(preset_id, style);
+        }
+    }
+
+    for (preset_id, name, description) in PRESET_DEFAULTS {
+        if preset_map.contains_key(*preset_id) {
+            continue;
+        }
+
+        let prompt_content = format!(
+            "你是一位精通{}的作家。请按照以下风格进行创作：\n\n{}",
+            name, description
+        );
+
+        let model = writing_style::ActiveModel {
+            user_id: Set(None),
+            name: Set(name.to_string()),
+            style_type: Set("preset".to_string()),
+            preset_id: Set(Some(preset_id.to_string())),
+            description: Set(Some(description.to_string())),
+            prompt_content: Set(prompt_content),
+            order_index: Set(0),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        };
+
+        let saved = model.insert(db).await?;
+        preset_map.insert(preset_id.to_string(), saved);
+    }
+
+    let mut preset_styles = PRESET_DEFAULTS
+        .iter()
+        .filter_map(|(preset_id, _, _)| preset_map.get(*preset_id).cloned())
+        .collect::<Vec<_>>();
+
+    preset_styles.sort_by_key(|style| style.order_index);
+    Ok(preset_styles)
+}
+
 pub struct WritingStyleService;
 
 impl WritingStyleService {
     pub async fn list_presets(
         db: &DatabaseConnection,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let styles = writing_style::Entity::find()
-            .filter(writing_style::Column::UserId.is_null())
-            .all(db)
-            .await?;
+        let styles = ensure_preset_styles(db).await?;
 
         let items: Vec<Value> = styles
             .iter()
@@ -78,10 +127,7 @@ impl WritingStyleService {
         db: &DatabaseConnection,
         user_id: &str,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let preset_styles = writing_style::Entity::find()
-            .filter(writing_style::Column::UserId.is_null())
-            .all(db)
-            .await?;
+        let preset_styles = ensure_preset_styles(db).await?;
         let user_styles = writing_style::Entity::find()
             .filter(writing_style::Column::UserId.eq(user_id))
             .all(db)
@@ -101,10 +147,7 @@ impl WritingStyleService {
         user_id: &str,
         project_id: &str,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let preset_styles = writing_style::Entity::find()
-            .filter(writing_style::Column::UserId.is_null())
-            .all(db)
-            .await?;
+        let preset_styles = ensure_preset_styles(db).await?;
         let user_styles = writing_style::Entity::find()
             .filter(writing_style::Column::UserId.eq(user_id))
             .all(db)

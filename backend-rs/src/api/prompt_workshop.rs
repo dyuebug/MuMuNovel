@@ -59,7 +59,32 @@ struct UpdateQuery {
 }
 
 async fn get_status(Extension(cfg): Extension<AppConfig>) -> Json<Value> {
-    Json(PromptWorkshopService::get_status(&cfg).await)
+    let mut status = PromptWorkshopService::get_status(&cfg).await;
+    if let Some(map) = status.as_object_mut() {
+        let mode = map
+            .get("mode")
+            .and_then(|value| value.as_str())
+            .unwrap_or("client")
+            .to_string();
+        let cloud_url = map
+            .get("cloud_url")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| std::env::var("WORKSHOP_CLOUD_URL").unwrap_or_else(|_| "https://mumuverse.space:1566".to_string()));
+        let cloud_connected = map
+            .get("cloud_connected")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(mode == "server");
+
+        map.insert("mode".to_string(), json!(mode));
+        map.insert(
+            "instance_id".to_string(),
+            json!(std::env::var("INSTANCE_ID").unwrap_or_else(|_| "local".to_string())),
+        );
+        map.insert("cloud_url".to_string(), json!(cloud_url));
+        map.insert("cloud_connected".to_string(), json!(cloud_connected));
+    }
+    Json(status)
 }
 
 #[derive(Deserialize)]

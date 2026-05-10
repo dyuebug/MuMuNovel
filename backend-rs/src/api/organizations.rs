@@ -99,13 +99,23 @@ fn server_error(error: String) -> (StatusCode, Json<Value>) {
     )
 }
 
-fn org_detail_json(org: &organization::Model, char_model: &character::Model) -> Value {
+fn org_detail_json(org: &organization::Model, char_model: Option<&character::Model>) -> Value {
+    let name = char_model
+        .map(|model| model.name.clone())
+        .unwrap_or_else(|| format!("未关联组织角色 ({})", org.id));
+    let organization_type = char_model
+        .and_then(|model| model.organization_type.clone())
+        .unwrap_or_else(|| "未设置".to_string());
+    let purpose = char_model
+        .and_then(|model| model.organization_purpose.clone())
+        .unwrap_or_default();
+
     json!({
         "id": org.id,
         "character_id": org.character_id,
-        "name": char_model.name,
-        "type": char_model.organization_type,
-        "purpose": char_model.organization_purpose,
+        "name": name,
+        "type": organization_type,
+        "purpose": purpose,
         "member_count": org.member_count,
         "power_level": org.power_level,
         "location": org.location,
@@ -114,11 +124,18 @@ fn org_detail_json(org: &organization::Model, char_model: &character::Model) -> 
     })
 }
 
-fn member_detail_json(member: &organization_member::Model, char_model: &character::Model) -> Value {
+fn member_detail_json(
+    member: &organization_member::Model,
+    char_model: Option<&character::Model>,
+) -> Value {
+    let character_name = char_model
+        .map(|model| model.name.clone())
+        .unwrap_or_else(|| format!("??????? ({})", member.character_id));
+
     json!({
         "id": member.id,
         "character_id": member.character_id,
-        "character_name": char_model.name,
+        "character_name": character_name,
         "position": member.position,
         "rank": member.rank,
         "loyalty": member.loyalty,
@@ -201,11 +218,7 @@ async fn list_project_orgs(
 
     let payload: Vec<Value> = orgs
         .iter()
-        .filter_map(|org| {
-            character_map
-                .get(&org.character_id)
-                .map(|char_model| org_detail_json(org, char_model))
-        })
+        .map(|org| org_detail_json(org, character_map.get(&org.character_id)))
         .collect();
     Ok(Json(json!(payload)))
 }
@@ -241,7 +254,7 @@ async fn update_org(
     )
     .await
     {
-        Ok(Some(org)) => Ok(Json(json!(org))),
+        Ok(Some(org)) => Ok(Json(json!([org]))),
         Ok(None) => Err(forbidden_or_missing("组织不存在或无权限")),
         Err(e) => Err(server_error(e)),
     }
@@ -318,11 +331,7 @@ async fn list_members(
         .collect();
     let payload: Vec<Value> = members
         .iter()
-        .filter_map(|member| {
-            character_map
-                .get(&member.character_id)
-                .map(|char_model| member_detail_json(member, char_model))
-        })
+        .map(|member| member_detail_json(member, character_map.get(&member.character_id)))
         .collect();
     Ok(Json(json!(payload)))
 }
