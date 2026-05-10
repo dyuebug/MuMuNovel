@@ -8,6 +8,7 @@ pub mod inspiration_service;
 pub mod mcp_plugin_service;
 pub mod organization_service;
 pub mod outline_service;
+pub mod plot_expansion_service;
 pub mod polish_service;
 pub mod project_service;
 pub mod prompt_template_service;

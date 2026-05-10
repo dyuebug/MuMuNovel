@@ -13,6 +13,53 @@ use crate::config::AppConfig;
 use crate::services::auth::Claims;
 use crate::services::prompt_workshop_service::PromptWorkshopService;
 
+fn normalize_tags_value(tags: Option<&Value>) -> Option<String> {
+    let value = tags?;
+
+    match value {
+        Value::Null => None,
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+
+            if trimmed.starts_with('[') {
+                return Some(trimmed.to_string());
+            }
+
+            let items: Vec<String> = trimmed
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+                .collect();
+
+            if items.is_empty() {
+                None
+            } else {
+                serde_json::to_string(&items).ok()
+            }
+        }
+        Value::Array(items) => {
+            let normalized: Vec<String> = items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+                .collect();
+
+            if normalized.is_empty() {
+                None
+            } else {
+                serde_json::to_string(&normalized).ok()
+            }
+        }
+        _ => None,
+    }
+}
+
 #[derive(Deserialize)]
 struct ImportRequest {
     custom_name: Option<String>,
@@ -25,7 +72,7 @@ struct SubmitRequest {
     prompt_content: String,
     #[serde(default = "default_category")]
     category: String,
-    tags: Option<String>,
+    tags: Option<Value>,
     author_display_name: Option<String>,
     #[serde(default)]
     is_anonymous: bool,
@@ -40,7 +87,7 @@ struct ReviewRequest {
     action: String,
     review_note: Option<String>,
     category: Option<String>,
-    tags: Option<String>,
+    tags: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -50,7 +97,7 @@ struct AdminItemCreate {
     prompt_content: String,
     #[serde(default = "default_category")]
     category: String,
-    tags: Option<String>,
+    tags: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -210,6 +257,7 @@ async fn submit_prompt(
         .author_display_name
         .clone()
         .unwrap_or_else(|| claims.sub.clone());
+    let tags = normalize_tags_value(body.tags.as_ref());
     match PromptWorkshopService::submit_prompt(
         &db,
         &user_identifier,
@@ -218,7 +266,7 @@ async fn submit_prompt(
         body.description.as_deref(),
         &body.prompt_content,
         &body.category,
-        body.tags.as_deref(),
+        tags.as_deref(),
         body.author_display_name.as_deref(),
         body.is_anonymous,
         &instance_id,
@@ -337,13 +385,14 @@ async fn admin_review_submission(
     Json(body): Json<ReviewRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     check_admin(&cfg, &claims)?;
+    let tags = normalize_tags_value(body.tags.as_ref());
     match PromptWorkshopService::admin_review_submission(
         &db,
         &submission_id,
         &body.action,
         body.review_note.as_deref(),
         body.category.as_deref(),
-        body.tags.as_deref(),
+        tags.as_deref(),
         &claims.sub,
     )
     .await
@@ -360,13 +409,14 @@ async fn admin_create_item(
     Json(body): Json<AdminItemCreate>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     check_admin(&cfg, &claims)?;
+    let tags = normalize_tags_value(body.tags.as_ref());
     match PromptWorkshopService::admin_create_item(
         &db,
         &body.name,
         body.description.as_deref(),
         &body.prompt_content,
         &body.category,
-        body.tags.as_deref(),
+        tags.as_deref(),
     )
     .await
     {

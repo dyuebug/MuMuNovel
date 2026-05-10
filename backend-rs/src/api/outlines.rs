@@ -14,8 +14,11 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::models::{chapter, outline, project};
+use crate::ai::service::AIService;
 use crate::services::auth::Claims;
 use crate::services::outline_service::OutlineService;
+use crate::services::plot_expansion_service::create_plot_expansion_service;
+use crate::services::settings_service::SettingsService;
 use crate::services::wizard_service;
 use crate::utils::sse::SseChannel;
 use std::sync::Arc;
@@ -234,25 +237,25 @@ async fn expand_outline_compat(
     Path(outline_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let Some(outline_model) = OutlineService::get(&db, &outline_id, &claims.sub)
+    let Some(_outline_model) = OutlineService::get(&db, &outline_id, &claims.sub)
         .await
-        .map_err(|e| {
+        .map_err(|error| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": e})),
+                Json(json!({"success": false, "message": error})),
             )
         })?
     else {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "?????????"})),
+            Json(json!({"success": false, "message": "大纲不存在或无权限"})),
         ));
     };
 
     let target_chapter_count = body
         .get("target_chapter_count")
         .and_then(Value::as_i64)
-        .unwrap_or_default();
+        .unwrap_or_default() as usize;
     let expansion_strategy = body
         .get("expansion_strategy")
         .and_then(Value::as_str)
@@ -265,26 +268,57 @@ async fn expand_outline_compat(
         .get("enable_scene_analysis")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let provider = body.get("provider").and_then(Value::as_str);
+    let model = body.get("model").and_then(Value::as_str);
+    let batch_size = body
+        .get("batch_size")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .unwrap_or(5) as usize;
 
-    Err((
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({
-            "success": false,
-            "message": "Rust ???????????????????????????????????",
-            "outline_id": outline_id,
-            "outline_title": outline_model.title,
-            "target_chapter_count": target_chapter_count,
-            "actual_chapter_count": 0,
-            "expansion_strategy": expansion_strategy,
-            "enable_scene_analysis": enable_scene_analysis,
-            "auto_create_chapters": auto_create_chapters,
-            "chapter_plans": [],
-            "created_chapters": Value::Null,
-        })),
-    ))
+    let ai_config = SettingsService::build_ai_config(
+        &db,
+        &claims.sub,
+        provider,
+        model,
+        None,
+    )
+    .await
+    .map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": error})),
+        )
+    })?;
+    let ai_service = AIService::new(ai_config);
+    let service = create_plot_expansion_service(&ai_service);
+
+    service
+        .expand_outline(
+            &db,
+            &claims.sub,
+            &outline_id,
+            target_chapter_count,
+            expansion_strategy,
+            auto_create_chapters,
+            enable_scene_analysis,
+            provider,
+            model,
+            batch_size,
+        )
+        .await
+        .map(Json)
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": error})),
+            )
+        })
 }
 
 async fn batch_expand_outlines_compat(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let project_id = body
@@ -294,7 +328,7 @@ async fn batch_expand_outlines_compat(
     let chapters_per_outline = body
         .get("chapters_per_outline")
         .and_then(Value::as_i64)
-        .unwrap_or_default();
+        .unwrap_or_default() as usize;
     let expansion_strategy = body
         .get("expansion_strategy")
         .and_then(Value::as_str)
@@ -307,23 +341,54 @@ async fn batch_expand_outlines_compat(
         .get("enable_scene_analysis")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let provider = body.get("provider").and_then(Value::as_str);
+    let model = body.get("model").and_then(Value::as_str);
+    let outline_ids = body.get("outline_ids").and_then(Value::as_array).map(|items| {
+        items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    });
 
-    Err((
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({
-            "success": false,
-            "message": "Rust ?????????????????????????????????????",
-            "project_id": project_id,
-            "chapters_per_outline": chapters_per_outline,
-            "expansion_strategy": expansion_strategy,
-            "enable_scene_analysis": enable_scene_analysis,
-            "auto_create_chapters": auto_create_chapters,
-            "total_outlines_expanded": 0,
-            "total_chapters_created": 0,
-            "expansion_results": [],
-            "skipped_outlines": [],
-        })),
-    ))
+    let ai_config = SettingsService::build_ai_config(
+        &db,
+        &claims.sub,
+        provider,
+        model,
+        None,
+    )
+    .await
+    .map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": error})),
+        )
+    })?;
+    let ai_service = AIService::new(ai_config);
+    let service = create_plot_expansion_service(&ai_service);
+
+    service
+        .batch_expand_outlines(
+            &db,
+            &claims.sub,
+            project_id,
+            chapters_per_outline,
+            expansion_strategy,
+            auto_create_chapters,
+            enable_scene_analysis,
+            outline_ids.as_deref(),
+            provider,
+            model,
+        )
+        .await
+        .map(Json)
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": error})),
+            )
+        })
 }
 
 async fn create_outline(

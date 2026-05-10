@@ -139,7 +139,7 @@ impl WritingStyleService {
             .map(|s| style_to_value(s, false))
             .collect();
 
-        Ok(json!({ "styles": items, "total": items.len() }))
+        Ok(json!({ "styles": items, "items": items, "total": items.len() }))
     }
 
     pub async fn list_project_styles(
@@ -166,7 +166,7 @@ impl WritingStyleService {
             .map(|s| style_to_value(s, Some(s.id) == default_style_id))
             .collect();
 
-        Ok(json!({ "styles": items, "total": items.len() }))
+        Ok(json!({ "styles": items, "items": items, "total": items.len() }))
     }
 
     pub async fn create_style(

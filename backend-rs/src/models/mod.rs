@@ -1,3 +1,8 @@
+pub mod chapter_draft_attempt;
+pub mod generation_history;
+pub mod plot_analysis;
+pub mod story_memory;
+pub mod analysis_task;
 pub mod career;
 pub mod chapter;
 pub mod character;

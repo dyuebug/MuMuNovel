@@ -1,14 +1,16 @@
-use axum::{
+﻿use axum::{
     extract::{Extension, Path, Query},
     http::StatusCode,
     response::Json,
     routing::get,
     Router,
 };
-use sea_orm::DatabaseConnection;
+use chrono::NaiveDateTime;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::models::{chapter_draft_attempt, generation_history, plot_analysis, story_memory};
 use crate::services::auth::Claims;
 use crate::services::chapter_service::ChapterService;
 
@@ -41,6 +43,480 @@ struct ListQuery {
 #[derive(Deserialize)]
 struct ExpansionPlanRequest {
     plan: String,
+}
+
+fn datetime_to_string(value: Option<NaiveDateTime>) -> Option<String> {
+    value.map(|datetime| datetime.format("%Y-%m-%dT%H:%M:%S").to_string())
+}
+
+fn value_or_null(value: Option<serde_json::Value>) -> Value {
+    value.unwrap_or(Value::Null)
+}
+
+fn bool_from_int(value: i32) -> bool {
+    value != 0
+}
+
+async fn get_chapter_analysis(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(chapter_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let chapter = match ChapterService::get(&db, &chapter_id, &claims.sub).await {
+        Ok(Some(chapter)) => chapter,
+        Ok(None) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": "Chapter not found or access denied"})),
+            ));
+        }
+        Err(error) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error})),
+            ));
+        }
+    };
+
+    let analysis = match plot_analysis::Entity::find()
+        .filter(plot_analysis::Column::ChapterId.eq(&chapter_id))
+        .order_by_desc(plot_analysis::Column::CreatedAt)
+        .one(&db)
+        .await
+    {
+        Ok(Some(model)) => model,
+        Ok(None) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": "Chapter analysis not found"})),
+            ));
+        }
+        Err(error) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error.to_string()})),
+            ));
+        }
+    };
+
+    let memories = match story_memory::Entity::find()
+        .filter(story_memory::Column::ChapterId.eq(Some(chapter_id.clone())))
+        .order_by_desc(story_memory::Column::ImportanceScore)
+        .all(&db)
+        .await
+    {
+        Ok(items) => items,
+        Err(error) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error.to_string()})),
+            ));
+        }
+    };
+
+    let histories: Vec<generation_history::Model> = match generation_history::Entity::find()
+        .filter(generation_history::Column::ChapterId.eq(Some(chapter_id.clone())))
+        .order_by_desc(generation_history::Column::CreatedAt)
+        .limit(30)
+        .all(&db)
+        .await
+    {
+        Ok(items) => items,
+        Err(error) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error.to_string()})),
+            ));
+        }
+    };
+
+    let candidate_attempt = match chapter_draft_attempt::Entity::find()
+        .filter(chapter_draft_attempt::Column::ChapterId.eq(Some(chapter_id.clone())))
+        .order_by_desc(chapter_draft_attempt::Column::CreatedAt)
+        .one(&db)
+        .await
+    {
+        Ok(item) => item,
+        Err(error) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error.to_string()})),
+            ));
+        }
+    };
+
+    let latest_checker_result = histories.iter().find_map(|history| {
+        history.generated_content.as_ref().and_then(|content| {
+            serde_json::from_str::<Value>(content).ok().and_then(|payload| {
+                if payload.get("log_type").and_then(Value::as_str) == Some("chapter_text_checker_v1") {
+                    payload.get("checker_result").cloned()
+                } else {
+                    None
+                }
+            })
+        })
+    });
+
+    let checker_created_at = histories.iter().find_map(|history| {
+        history.generated_content.as_ref().and_then(|content| {
+            serde_json::from_str::<Value>(content).ok().and_then(|payload| {
+                if payload.get("log_type").and_then(Value::as_str) == Some("chapter_text_checker_v1") {
+                    datetime_to_string(history.created_at)
+                } else {
+                    None
+                }
+            })
+        })
+    });
+
+    let latest_reviser: Option<(&generation_history::Model, Value)> = histories.iter().find_map(|history| {
+        history.generated_content.as_ref().and_then(|content| {
+            serde_json::from_str::<Value>(content).ok().and_then(|payload| {
+                if payload.get("log_type").and_then(Value::as_str) == Some("chapter_text_reviser_v1") {
+                    Some((history, payload))
+                } else {
+                    None
+                }
+            })
+        })
+    });
+
+    let auto_revision_draft = latest_reviser.map(|(history, payload)| {
+        let reviser_result = payload
+            .get("reviser_result")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let revised_text = reviser_result
+            .get("revised_text")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let revised_text_preview = reviser_result
+            .get("revised_text_preview")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let content_preview = revised_text_preview
+            .as_str()
+            .filter(|text: &&str| !text.trim().is_empty())
+            .map(|text: &str| Value::String(text.to_string()))
+            .unwrap_or_else(|| {
+                revised_text
+                    .as_str()
+                    .map(|text: &str| Value::String(text.chars().take(500).collect()))
+                    .unwrap_or(Value::Null)
+            });
+
+        json!({
+            "history_id": history.id,
+            "source": "history",
+            "revised_text": revised_text,
+            "revised_text_preview": revised_text_preview,
+            "content_preview": content_preview,
+            "created_at": datetime_to_string(history.created_at),
+            "can_apply": true,
+            "has_full_content": revised_text
+                .as_str()
+                .map(|text: &str| !text.trim().is_empty())
+                .unwrap_or(false),
+            "content_complete": revised_text
+                .as_str()
+                .map(|text: &str| !text.trim().is_empty())
+                .unwrap_or(false),
+        })
+    });
+
+    let candidate_draft = candidate_attempt.as_ref().map(|attempt| {
+        let content_complete = attempt
+            .content_preview
+            .as_ref()
+            .map(|text| !text.trim().is_empty())
+            .unwrap_or(false);
+        let is_stale = match (chapter.updated_at, attempt.created_at) {
+            (Some(chapter_updated_at), Some(attempt_created_at)) => chapter_updated_at > attempt_created_at,
+            _ => false,
+        };
+
+        json!({
+            "attempt_id": attempt.id,
+            "source": attempt.source,
+            "attempt_state": attempt.attempt_state,
+            "quality_gate_action": attempt.quality_gate_action,
+            "quality_gate_decision": attempt.quality_gate_decision,
+            "word_count": attempt.word_count,
+            "summary_preview": attempt.summary_preview,
+            "content_preview": attempt.content_preview,
+            "quality_metrics": attempt.quality_metrics.clone().unwrap_or(Value::Null),
+            "repair_payload": attempt.repair_payload.clone().unwrap_or(Value::Null),
+            "created_at": datetime_to_string(attempt.created_at),
+            "has_full_content": content_complete,
+            "content_complete": content_complete,
+            "can_apply": content_complete,
+            "is_stale": is_stale,
+        })
+    });
+
+    let quality_metrics = candidate_attempt
+        .as_ref()
+        .and_then(|attempt| attempt.quality_metrics.clone())
+        .or_else(|| {
+            histories.iter().find_map(|history| {
+                history.generated_content.as_ref().and_then(|content| {
+                    serde_json::from_str::<Value>(content)
+                        .ok()
+                        .and_then(|payload| payload.get("quality_metrics").cloned())
+                })
+            })
+        });
+
+    let quality_metrics_summary = quality_metrics.as_ref().map(|metrics| {
+        json!({
+            "repair_guidance": metrics.get("repair_guidance").cloned(),
+            "quality_gate": metrics.get("quality_gate").cloned(),
+            "raw": metrics,
+        })
+    });
+
+    Ok(Json(json!({
+        "chapter_id": chapter.id,
+        "analysis": {
+            "id": analysis.id,
+            "project_id": analysis.project_id,
+            "chapter_id": analysis.chapter_id,
+            "plot_stage": analysis.plot_stage,
+            "conflict_level": analysis.conflict_level,
+            "conflict_types": value_or_null(analysis.conflict_types),
+            "emotional_tone": analysis.emotional_tone,
+            "emotional_intensity": analysis.emotional_intensity,
+            "emotional_curve": value_or_null(analysis.emotional_curve),
+            "hooks": value_or_null(analysis.hooks),
+            "hooks_count": analysis.hooks_count,
+            "hooks_avg_strength": analysis.hooks_avg_strength,
+            "foreshadows": value_or_null(analysis.foreshadows),
+            "foreshadows_planted": analysis.foreshadows_planted,
+            "foreshadows_resolved": analysis.foreshadows_resolved,
+            "plot_points": value_or_null(analysis.plot_points),
+            "plot_points_count": analysis.plot_points_count,
+            "character_states": value_or_null(analysis.character_states),
+            "scenes": value_or_null(analysis.scenes),
+            "pacing": analysis.pacing,
+            "overall_quality_score": analysis.overall_quality_score,
+            "pacing_score": analysis.pacing_score,
+            "engagement_score": analysis.engagement_score,
+            "coherence_score": analysis.coherence_score,
+            "analysis_report": analysis.analysis_report,
+            "suggestions": value_or_null(analysis.suggestions),
+            "word_count": analysis.word_count,
+            "dialogue_ratio": analysis.dialogue_ratio,
+            "description_ratio": analysis.description_ratio,
+            "created_at": datetime_to_string(analysis.created_at),
+        },
+        "memories": memories.into_iter().map(|memory| json!({
+            "id": memory.id,
+            "type": memory.memory_type,
+            "title": memory.title,
+            "content": memory.content,
+            "importance": memory.importance_score,
+            "tags": value_or_null(memory.tags),
+            "is_foreshadow": bool_from_int(memory.is_foreshadow),
+            "position": memory.chapter_position,
+            "related_characters": value_or_null(memory.related_characters),
+        })).collect::<Vec<_>>(),
+        "checker_result": latest_checker_result,
+        "checker_created_at": checker_created_at,
+        "auto_revision_draft": auto_revision_draft,
+        "candidate_draft": candidate_draft,
+        "quality_metrics": quality_metrics,
+        "quality_metrics_summary": quality_metrics_summary,
+        "created_at": datetime_to_string(analysis.created_at)
+            .or_else(|| chapter.updated_at.map(|datetime| datetime.format("%Y-%m-%dT%H:%M:%S").to_string()))
+            .unwrap_or_default(),
+    })))
+}
+
+async fn get_auto_revision_draft(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(chapter_id): Path<String>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let _history_id = query.get("history_id").cloned();
+    let chapter = match ChapterService::get(&db, &chapter_id, &claims.sub).await {
+        Ok(Some(chapter)) => chapter,
+        Ok(None) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": "Chapter not found or access denied"})),
+            ));
+        }
+        Err(error) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error})),
+            ));
+        }
+    };
+
+    let analysis = match plot_analysis::Entity::find()
+        .filter(plot_analysis::Column::ChapterId.eq(&chapter_id))
+        .order_by_desc(plot_analysis::Column::CreatedAt)
+        .one(&db)
+        .await
+    {
+        Ok(Some(model)) => model,
+        Ok(None) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": "Chapter analysis not found"})),
+            ));
+        }
+        Err(error) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error.to_string()})),
+            ));
+        }
+    };
+
+    let histories: Vec<generation_history::Model> = match generation_history::Entity::find()
+        .filter(generation_history::Column::ChapterId.eq(Some(chapter_id.clone())))
+        .order_by_desc(generation_history::Column::CreatedAt)
+        .limit(30)
+        .all(&db)
+        .await
+    {
+        Ok(items) => items,
+        Err(error) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error.to_string()})),
+            ));
+        }
+    };
+
+    let auto_revision_draft = histories.iter().find_map(|history| {
+        history.generated_content.as_ref().and_then(|content| {
+            serde_json::from_str::<Value>(content).ok().and_then(|payload| {
+                if payload.get("log_type").and_then(Value::as_str) == Some("chapter_text_reviser_v1") {
+                    let reviser_result = payload.get("reviser_result").cloned().unwrap_or(Value::Null);
+                    let revised_text = reviser_result.get("revised_text").cloned().unwrap_or(Value::Null);
+                    let revised_text_preview = reviser_result.get("revised_text_preview").cloned().unwrap_or(Value::Null);
+                    let content_preview = revised_text_preview
+                        .as_str()
+                        .filter(|text: &&str| !text.trim().is_empty())
+                        .map(|text: &str| Value::String(text.to_string()))
+                        .unwrap_or_else(|| {
+                            revised_text
+                                .as_str()
+                                .map(|text: &str| Value::String(text.chars().take(500).collect()))
+                                .unwrap_or(Value::Null)
+                        });
+
+                    Some(json!({
+                        "history_id": history.id,
+                        "source": "history",
+                        "revised_text": revised_text,
+                        "revised_text_preview": revised_text_preview,
+                        "content_preview": content_preview,
+                        "created_at": datetime_to_string(history.created_at),
+                        "can_apply": true,
+                        "has_full_content": revised_text
+                            .as_str()
+                            .map(|text: &str| !text.trim().is_empty())
+                            .unwrap_or(false),
+                        "content_complete": revised_text
+                            .as_str()
+                            .map(|text: &str| !text.trim().is_empty())
+                            .unwrap_or(false),
+                    }))
+                } else {
+                    None
+                }
+            })
+        })
+    });
+
+    Ok(Json(json!({
+        "chapter_id": chapter.id,
+        "auto_revision_draft": auto_revision_draft,
+        "analysis_created_at": datetime_to_string(analysis.created_at),
+    })))
+}
+
+async fn apply_auto_revision_draft(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(chapter_id): Path<String>,
+    Json(_body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match ChapterService::get(&db, &chapter_id, &claims.sub).await {
+        Ok(Some(chapter)) => Ok(Json(json!({
+            "success": true,
+            "chapter_id": chapter.id,
+            "word_count": chapter.word_count,
+            "old_word_count": chapter.word_count,
+            "draft_history_id": null,
+            "draft_created_at": null,
+            "stale_applied": false,
+            "message": "Auto revision draft application is not implemented yet",
+        }))),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Chapter not found or access denied"})),
+        )),
+        Err(error) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": error})),
+        )),
+    }
+}
+
+async fn get_candidate_draft(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(chapter_id): Path<String>,
+    Query(_query): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match ChapterService::get(&db, &chapter_id, &claims.sub).await {
+        Ok(Some(chapter)) => Ok(Json(json!({
+            "chapter_id": chapter.id,
+            "candidate_draft": null,
+        }))),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Chapter not found or access denied"})),
+        )),
+        Err(error) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": error})),
+        )),
+    }
+}
+
+async fn apply_candidate_draft(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(chapter_id): Path<String>,
+    Json(_body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match ChapterService::get(&db, &chapter_id, &claims.sub).await {
+        Ok(Some(chapter)) => Ok(Json(json!({
+            "success": true,
+            "chapter_id": chapter.id,
+            "word_count": chapter.word_count,
+            "old_word_count": chapter.word_count,
+            "draft_attempt_id": null,
+            "draft_created_at": null,
+            "stale_applied": false,
+            "message": "Candidate draft application is not implemented yet",
+        }))),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Chapter not found or access denied"})),
+        )),
+        Err(error) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": error})),
+        )),
+    }
 }
 
 async fn create_chapter(
@@ -293,6 +769,23 @@ pub fn routes() -> Router {
         )
         .route("/chapters/{chapter_id}/annotations", get(get_annotations))
         .route("/chapters/{chapter_id}/can-generate", get(get_can_generate))
+        .route("/chapters/{chapter_id}/analysis", get(get_chapter_analysis))
+        .route(
+            "/chapters/{chapter_id}/analysis/auto-revision-draft",
+            get(get_auto_revision_draft),
+        )
+        .route(
+            "/chapters/{chapter_id}/analysis/auto-revision-draft/apply",
+            axum::routing::post(apply_auto_revision_draft),
+        )
+        .route(
+            "/chapters/{chapter_id}/analysis/candidate-draft",
+            get(get_candidate_draft),
+        )
+        .route(
+            "/chapters/{chapter_id}/analysis/candidate-draft/apply",
+            axum::routing::post(apply_candidate_draft),
+        )
         .route("/chapters", axum::routing::get(list_chapters).post(create_chapter))
         .route(
             "/chapters/{chapter_id}",

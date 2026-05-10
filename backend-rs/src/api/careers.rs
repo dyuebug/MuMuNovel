@@ -300,10 +300,11 @@ async fn list_careers(
     match CareerService::list(&db, &query.project_id, &claims.sub).await {
         Ok(Some(careers)) => {
             let total = careers.len();
+            let items: Vec<Value> = careers.iter().map(career_to_legacy_json).collect();
             let mut main_careers = Vec::new();
             let mut sub_careers = Vec::new();
-            for career_model in careers {
-                let career_json = career_to_legacy_json(&career_model);
+            for career_model in &careers {
+                let career_json = career_to_legacy_json(career_model);
                 if career_model.career_type == "main" {
                     main_careers.push(career_json);
                 } else {
@@ -311,7 +312,15 @@ async fn list_careers(
                 }
             }
             Ok(Json(json!({
+                "success": true,
+                "data": {
+                    "main_careers": main_careers,
+                    "sub_careers": sub_careers,
+                    "mainCareers": main_careers,
+                    "subCareers": sub_careers,
+                },
                 "total": total,
+                "items": items,
                 "main_careers": main_careers,
                 "sub_careers": sub_careers,
                 "mainCareers": main_careers,
@@ -406,8 +415,15 @@ async fn get_character_careers(
     }
 
     Ok(Json(json!({
+        "success": true,
+        "data": {
+            "main_career": main_career,
+            "sub_careers": sub_careers,
+        },
         "main_career": main_career,
         "sub_careers": sub_careers,
+        "items": sub_careers,
+        "total": sub_careers.len(),
     })))
 }
 
