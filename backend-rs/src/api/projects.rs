@@ -5,11 +5,16 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use chrono::Utc;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, Set,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use uuid::Uuid;
 
-use crate::models::chapter;
+use crate::models::{chapter, character, organization, organization_member, project};
 use crate::services::auth::Claims;
 use crate::services::project_service::ProjectService;
 
@@ -61,6 +66,23 @@ struct ListQuery {
     user_id: Option<String>,
 }
 
+fn json_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn json_i32(value: &Value, key: &str, default: i32) -> i32 {
+    value
+        .get(key)
+        .and_then(Value::as_i64)
+        .and_then(|value| i32::try_from(value).ok())
+        .unwrap_or(default)
+}
+
 async fn create_project(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
@@ -78,7 +100,10 @@ async fn create_project(
     )
     .await
     {
-        Ok(project) => Ok((StatusCode::CREATED, Json(json!({"success": true, "data": project})))),
+        Ok(project) => Ok((
+            StatusCode::CREATED,
+            Json(json!({"success": true, "data": project})),
+        )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"success": false, "message": e})),
@@ -93,7 +118,9 @@ async fn list_projects(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let uid = query.user_id.as_deref().unwrap_or(&claims.sub);
     match ProjectService::list(&db, uid).await {
-        Ok(projects) => Ok(Json(json!({"success": true, "data": projects, "total": projects.len()}))),
+        Ok(projects) => Ok(Json(
+            json!({"success": true, "data": projects, "total": projects.len()}),
+        )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"success": false, "message": e})),
@@ -164,7 +191,9 @@ async fn delete_project(
     Path(project_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match ProjectService::delete(&db, &project_id, &claims.sub).await {
-        Ok(Some(())) => Ok(Json(json!({"success": true, "message": "Project deleted successfully"}))),
+        Ok(Some(())) => Ok(Json(
+            json!({"success": true, "message": "Project deleted successfully"}),
+        )),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({"success": false, "message": "Project not found"})),
@@ -190,7 +219,10 @@ async fn export_project_data(
                 Json(json!({"detail": format!("{}", e)})),
             )
         })?
-        .ok_or((StatusCode::NOT_FOUND, Json(json!({"detail": "Project not found"}))))?;
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Project not found"})),
+        ))?;
 
     let chapters = chapter::Entity::find()
         .filter(chapter::Column::ProjectId.eq(&project_id))
@@ -265,7 +297,10 @@ async fn export_project_txt(
                 Json(json!({"detail": format!("{}", e)})),
             )
         })?
-        .ok_or((StatusCode::NOT_FOUND, Json(json!({"detail": "Project not found"}))))?;
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Project not found"})),
+        ))?;
 
     let chapters = chapter::Entity::find()
         .filter(chapter::Column::ProjectId.eq(&project_id))
@@ -316,7 +351,13 @@ async fn export_project_txt(
     let safe_title: String = project
         .title
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let filename = format!("{}.txt", safe_title);
     let headers = [
@@ -416,6 +457,399 @@ async fn validate_import(
     })))
 }
 
+async fn import_project(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let mut file_data: Vec<u8> = Vec::new();
+    let mut file_found = false;
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if field.name() == Some("file") {
+            let bytes = field.bytes().await.map_err(|error| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"detail": format!("Failed to read uploaded file: {}", error)})),
+                )
+            })?;
+            file_data = bytes.to_vec();
+            file_found = true;
+            break;
+        }
+    }
+
+    if !file_found {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "Missing file field"})),
+        ));
+    }
+    if file_data.len() > 50 * 1024 * 1024 {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({"detail": "文件大小超过50MB限制"})),
+        ));
+    }
+
+    let data: Value = serde_json::from_slice(&file_data).map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": format!("Invalid JSON: {}", error)})),
+        )
+    })?;
+    let project_data = data.get("project").ok_or((
+        StatusCode::BAD_REQUEST,
+        Json(json!({"detail": "Missing project field"})),
+    ))?;
+
+    let now = Utc::now().naive_utc();
+    let project_id = Uuid::new_v4().to_string();
+    let title = json_string(project_data, "title").unwrap_or_else(|| "导入项目".to_string());
+    let target_words = json_i32(project_data, "target_words", 100_000);
+    let chapters = data
+        .get("chapters")
+        .or_else(|| project_data.get("chapters"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let imported_project =
+        project::ActiveModel {
+            id: Set(project_id.clone()),
+            user_id: Set(claims.sub.clone()),
+            title: Set(title),
+            description: Set(json_string(project_data, "description")),
+            theme: Set(json_string(project_data, "theme")),
+            genre: Set(json_string(project_data, "genre")),
+            target_words: Set(target_words),
+            current_words: Set(0),
+            status: Set(json_string(project_data, "status").unwrap_or_else(|| "draft".to_string())),
+            wizard_status: Set(json_string(project_data, "wizard_status")
+                .unwrap_or_else(|| "completed".to_string())),
+            wizard_step: Set(json_i32(project_data, "wizard_step", 0)),
+            outline_mode: Set(json_string(project_data, "outline_mode")
+                .unwrap_or_else(|| "traditional".to_string())),
+            world_time_period: Set(json_string(project_data, "world_time_period")),
+            world_location: Set(json_string(project_data, "world_location")),
+            world_atmosphere: Set(json_string(project_data, "world_atmosphere")),
+            world_rules: Set(json_string(project_data, "world_rules")),
+            chapter_count: Set(Some(chapters.len() as i32)),
+            narrative_perspective: Set(json_string(project_data, "narrative_perspective")),
+            character_count: Set(0),
+            default_creative_mode: Set(json_string(project_data, "default_creative_mode")),
+            default_story_focus: Set(json_string(project_data, "default_story_focus")),
+            default_plot_stage: Set(json_string(project_data, "default_plot_stage")),
+            default_story_creation_brief: Set(json_string(
+                project_data,
+                "default_story_creation_brief",
+            )),
+            default_quality_preset: Set(json_string(project_data, "default_quality_preset")),
+            default_quality_notes: Set(json_string(project_data, "default_quality_notes")),
+            created_at: Set(now),
+            updated_at: Set(Some(now)),
+        }
+        .insert(&db)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error.to_string()})),
+            )
+        })?;
+
+    let mut current_words = 0i32;
+    for (index, chapter_data) in chapters.iter().enumerate() {
+        let content = json_string(chapter_data, "content");
+        let word_count = chapter_data
+            .get("word_count")
+            .and_then(Value::as_i64)
+            .and_then(|value| i32::try_from(value).ok())
+            .unwrap_or_else(|| {
+                content
+                    .as_ref()
+                    .map(|value| value.chars().count() as i32)
+                    .unwrap_or(0)
+            });
+        current_words += word_count;
+
+        chapter::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            project_id: Set(imported_project.id.clone()),
+            chapter_number: Set(json_i32(chapter_data, "chapter_number", index as i32 + 1)),
+            title: Set(
+                json_string(chapter_data, "title").unwrap_or_else(|| format!("第{}章", index + 1))
+            ),
+            content: Set(content),
+            summary: Set(json_string(chapter_data, "summary")),
+            word_count: Set(word_count),
+            status: Set(json_string(chapter_data, "status").unwrap_or_else(|| "draft".to_string())),
+            outline_id: Set(None),
+            sub_index: Set(json_i32(chapter_data, "sub_index", 0)),
+            expansion_plan: Set(json_string(chapter_data, "expansion_plan")),
+            created_at: Set(now),
+            updated_at: Set(Some(now)),
+        }
+        .insert(&db)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error.to_string()})),
+            )
+        })?;
+    }
+
+    let mut active_project: project::ActiveModel = imported_project.into();
+    active_project.current_words = Set(current_words);
+    active_project.update(&db).await.map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": error.to_string()})),
+        )
+    })?;
+
+    Ok(Json(json!({
+        "success": true,
+        "project_id": project_id,
+        "message": "项目导入成功",
+        "statistics": {
+            "chapters": chapters.len(),
+        },
+        "warnings": [],
+    })))
+}
+
+async fn fix_missing_organization_records(
+    db: &DatabaseConnection,
+    project_id: &str,
+) -> Result<(usize, usize), sea_orm::DbErr> {
+    let org_characters = character::Entity::find()
+        .filter(character::Column::ProjectId.eq(project_id))
+        .filter(character::Column::IsOrganization.eq(true))
+        .all(db)
+        .await?;
+
+    let mut fixed = 0usize;
+    for character_model in &org_characters {
+        let existing = organization::Entity::find()
+            .filter(organization::Column::CharacterId.eq(&character_model.id))
+            .one(db)
+            .await?;
+        if existing.is_some() {
+            continue;
+        }
+
+        let now = Utc::now().naive_utc();
+        organization::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            character_id: Set(character_model.id.clone()),
+            project_id: Set(project_id.to_string()),
+            parent_org_id: Set(None),
+            level: Set(1),
+            power_level: Set(50),
+            member_count: Set(0),
+            location: Set(None),
+            motto: Set(None),
+            color: Set(None),
+            created_at: Set(now),
+            updated_at: Set(Some(now)),
+        }
+        .insert(db)
+        .await?;
+        fixed += 1;
+    }
+
+    Ok((fixed, org_characters.len()))
+}
+
+async fn fix_organization_member_counts(
+    db: &DatabaseConnection,
+    project_id: &str,
+) -> Result<(usize, usize), sea_orm::DbErr> {
+    let organizations = organization::Entity::find()
+        .filter(organization::Column::ProjectId.eq(project_id))
+        .all(db)
+        .await?;
+
+    let mut fixed = 0usize;
+    for org in &organizations {
+        let actual_count = organization_member::Entity::find()
+            .filter(organization_member::Column::OrganizationId.eq(&org.id))
+            .filter(organization_member::Column::Status.eq("active"))
+            .count(db)
+            .await? as i32;
+
+        if org.member_count == actual_count {
+            continue;
+        }
+
+        let mut active: organization::ActiveModel = org.clone().into();
+        active.member_count = Set(actual_count);
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
+        active.update(db).await?;
+        fixed += 1;
+    }
+
+    Ok((fixed, organizations.len()))
+}
+
+async fn fix_project_organizations(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(project_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    ProjectService::get(&db, &project_id, &claims.sub)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error})),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Project not found"})),
+        ))?;
+
+    let (fixed, total) = fix_missing_organization_records(&db, &project_id)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error.to_string()})),
+            )
+        })?;
+
+    Ok(Json(json!({
+        "message": "组织记录修复完成",
+        "fixed": fixed,
+        "total": total,
+    })))
+}
+
+async fn fix_project_member_counts(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(project_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    ProjectService::get(&db, &project_id, &claims.sub)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error})),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Project not found"})),
+        ))?;
+
+    let (fixed, total) = fix_organization_member_counts(&db, &project_id)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error.to_string()})),
+            )
+        })?;
+
+    Ok(Json(json!({
+        "message": "成员计数修复完成",
+        "fixed": fixed,
+        "total": total,
+    })))
+}
+
+async fn check_project_consistency(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(project_id): Path<String>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    ProjectService::get(&db, &project_id, &claims.sub)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error})),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Project not found"})),
+        ))?;
+
+    let auto_fix = query
+        .get("auto_fix")
+        .map(|value| value != "false" && value != "0")
+        .unwrap_or(true);
+
+    let (org_fixed, org_total) = if auto_fix {
+        fix_missing_organization_records(&db, &project_id)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"detail": error.to_string()})),
+                )
+            })?
+    } else {
+        let total = character::Entity::find()
+            .filter(character::Column::ProjectId.eq(&project_id))
+            .filter(character::Column::IsOrganization.eq(true))
+            .count(&db)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"detail": error.to_string()})),
+                )
+            })? as usize;
+        (0, total)
+    };
+
+    let (member_fixed, member_total) = if auto_fix {
+        fix_organization_member_counts(&db, &project_id)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"detail": error.to_string()})),
+                )
+            })?
+    } else {
+        let total = organization::Entity::find()
+            .filter(organization::Column::ProjectId.eq(&project_id))
+            .count(&db)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"detail": error.to_string()})),
+                )
+            })? as usize;
+        (0, total)
+    };
+
+    Ok(Json(json!({
+        "project_id": project_id,
+        "checks": {
+            "organization_records": {
+                "checked": org_total,
+                "fixed": org_fixed,
+                "status": if org_fixed == 0 { "ok" } else { "fixed" },
+            },
+            "member_counts": {
+                "checked": member_total,
+                "fixed": member_fixed,
+                "status": if member_fixed == 0 { "ok" } else { "fixed" },
+            },
+        },
+    })))
+}
+
 pub fn routes() -> Router {
     Router::new()
         .route("/projects", post(create_project).get(list_projects))
@@ -424,6 +858,22 @@ pub fn routes() -> Router {
             get(get_project).put(update_project).delete(delete_project),
         )
         .route("/projects/{project_id}/export", get(export_project_txt))
-        .route("/projects/{project_id}/export-data", post(export_project_data))
+        .route(
+            "/projects/{project_id}/export-data",
+            post(export_project_data),
+        )
+        .route(
+            "/projects/{project_id}/check-consistency",
+            post(check_project_consistency),
+        )
+        .route(
+            "/projects/{project_id}/fix-organizations",
+            post(fix_project_organizations),
+        )
+        .route(
+            "/projects/{project_id}/fix-member-counts",
+            post(fix_project_member_counts),
+        )
         .route("/projects/validate-import", post(validate_import))
+        .route("/projects/import", post(import_project))
 }

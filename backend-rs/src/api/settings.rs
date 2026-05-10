@@ -303,7 +303,9 @@ async fn test_web_research_connection(
     match provider.as_str() {
         "exa" => {
             let api_key = body.exa_api_key.unwrap_or_default();
-            let base_url = normalize_exa_base_url(body.exa_base_url.as_deref().unwrap_or("https://api.exa.ai"));
+            let base_url = normalize_exa_base_url(
+                body.exa_base_url.as_deref().unwrap_or("https://api.exa.ai"),
+            );
             let response = client
                 .post(format!("{}/search", base_url))
                 .header("x-api-key", api_key)
@@ -342,9 +344,13 @@ async fn test_web_research_connection(
         "grok" => {
             let grok_key = body.grok_api_key.unwrap_or_default();
             let grok_base_url = normalize_openai_compatible_base_url(
-                body.grok_base_url.as_deref().unwrap_or("https://api.x.ai/v1"),
+                body.grok_base_url
+                    .as_deref()
+                    .unwrap_or("https://api.x.ai/v1"),
             );
-            let grok_model = body.grok_model.unwrap_or_else(|| "grok-4.1-fast".to_string());
+            let grok_model = body
+                .grok_model
+                .unwrap_or_else(|| "grok-4.1-fast".to_string());
             let service = AIService::new(AIConfig {
                 provider: "openai".to_string(),
                 api_key: grok_key,
@@ -445,7 +451,11 @@ async fn check_function_calling(
         .await
     {
         Ok(response) => {
-            let supported = response.tool_calls.as_ref().map(|calls| !calls.is_empty()).unwrap_or(false);
+            let supported = response
+                .tool_calls
+                .as_ref()
+                .map(|calls| !calls.is_empty())
+                .unwrap_or(false);
             Ok(Json(json!({
                 "success": supported,
                 "supported": supported,
@@ -555,6 +565,74 @@ async fn activate_preset(
     }
 }
 
+async fn test_preset(
+    Extension(claims): Extension<Claims>,
+    Extension(db): Extension<DatabaseConnection>,
+    Path(preset_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let settings = load_settings_model(&db, &claims.sub)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error})),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Settings not found"})),
+        ))?;
+
+    let preferences: Value = settings
+        .preferences
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_else(|| json!({}));
+    let presets = preferences
+        .get("api_presets")
+        .and_then(|value| value.get("presets"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let preset = presets
+        .into_iter()
+        .find(|preset| preset.get("id").and_then(Value::as_str) == Some(preset_id.as_str()))
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Preset not found"})),
+        ))?;
+
+    let config = preset.get("config").cloned().unwrap_or_else(|| json!({}));
+    let request = TestConnectionRequest {
+        api_key: config
+            .get("api_key")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        api_base_url: config
+            .get("api_base_url")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        provider: config
+            .get("api_provider")
+            .or_else(|| config.get("provider"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        llm_model: config
+            .get("llm_model")
+            .or_else(|| config.get("model"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        temperature: config.get("temperature").and_then(Value::as_f64),
+        max_tokens: config
+            .get("max_tokens")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok()),
+    };
+
+    test_api_connection(Extension(claims), Extension(db), Json(request)).await
+}
+
 async fn create_preset_from_current(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
@@ -605,23 +683,38 @@ async fn resolve_effective_settings(
     temperature: Option<f64>,
     max_tokens: Option<u32>,
 ) -> Result<EffectiveSettings, (StatusCode, Json<Value>)> {
-    let stored = load_settings_model(db, user_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e}))))?;
+    let stored = load_settings_model(db, user_id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": e})),
+        )
+    })?;
 
-    let stored_provider = stored.as_ref().map(|s| s.provider_type.clone()).unwrap_or_else(|| "openai".to_string());
+    let stored_provider = stored
+        .as_ref()
+        .map(|s| s.provider_type.clone())
+        .unwrap_or_else(|| "openai".to_string());
     let effective_provider = provider
         .map(|value| value.trim().to_lowercase())
         .filter(|value| !value.is_empty())
         .unwrap_or(stored_provider);
 
-    let stored_key = stored.as_ref().map(|s| s.api_key.clone()).unwrap_or_default();
+    let stored_key = stored
+        .as_ref()
+        .map(|s| s.api_key.clone())
+        .unwrap_or_default();
     let effective_key = api_key.unwrap_or(stored_key).trim().to_string();
     if effective_key.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"detail": "API key is required"}))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "API key is required"})),
+        ));
     }
 
-    let stored_base = stored.as_ref().map(|s| s.api_base_url.clone()).unwrap_or_default();
+    let stored_base = stored
+        .as_ref()
+        .map(|s| s.api_base_url.clone())
+        .unwrap_or_default();
     let raw_base = api_base_url.unwrap_or(stored_base);
     let effective_base = resolve_provider_base_url(&effective_provider, &raw_base);
 
@@ -636,7 +729,12 @@ async fn resolve_effective_settings(
         base_url: effective_base,
         model: model.unwrap_or(stored_model),
         temperature: temperature.unwrap_or(stored.as_ref().map(|s| s.temperature).unwrap_or(0.7)),
-        max_tokens: max_tokens.unwrap_or(stored.as_ref().map(|s| s.max_tokens as u32).unwrap_or(32000)),
+        max_tokens: max_tokens.unwrap_or(
+            stored
+                .as_ref()
+                .map(|s| s.max_tokens as u32)
+                .unwrap_or(32000),
+        ),
     })
 }
 
@@ -706,7 +804,9 @@ async fn fetch_provider_models(
         "gemini" => {
             let url = models_url
                 .map(|value| value.to_string())
-                .unwrap_or_else(|| format!("{}/models?key={}", base_url.trim_end_matches('/'), api_key));
+                .unwrap_or_else(|| {
+                    format!("{}/models?key={}", base_url.trim_end_matches('/'), api_key)
+                });
             let response = client.get(url).send().await.map_err(|e| format!("{}", e))?;
             let status = response.status();
             let value: Value = response.json().await.map_err(|e| format!("{}", e))?;
@@ -806,13 +906,20 @@ fn curated_fetch_models(provider: &str) -> Vec<Value> {
 
 fn classify_error_type(error: &str) -> &'static str {
     let lowered = error.to_lowercase();
-    if lowered.contains("401") || lowered.contains("403") || lowered.contains("unauthorized") || lowered.contains("forbidden") {
+    if lowered.contains("401")
+        || lowered.contains("403")
+        || lowered.contains("unauthorized")
+        || lowered.contains("forbidden")
+    {
         "AuthenticationError"
     } else if lowered.contains("timeout") {
         "TimeoutError"
     } else if lowered.contains("404") {
         "EndpointNotFound"
-    } else if lowered.contains("connection") || lowered.contains("network") || lowered.contains("dns") {
+    } else if lowered.contains("connection")
+        || lowered.contains("network")
+        || lowered.contains("dns")
+    {
         "NetworkError"
     } else {
         "RuntimeError"
@@ -849,8 +956,14 @@ pub fn routes() -> Router {
         .route("/settings/models", get(get_available_models))
         .route("/settings/test", post(test_api_connection))
         .route("/settings/fetch-models", post(fetch_models_endpoint))
-        .route("/settings/test-web-research", post(test_web_research_connection))
-        .route("/settings/check-function-calling", post(check_function_calling))
+        .route(
+            "/settings/test-web-research",
+            post(test_web_research_connection),
+        )
+        .route(
+            "/settings/check-function-calling",
+            post(check_function_calling),
+        )
         .route("/settings/presets", get(get_presets))
         .route("/settings/presets", post(create_preset))
         .route(
@@ -863,4 +976,5 @@ pub fn routes() -> Router {
             "/settings/presets/{preset_id}/activate",
             post(activate_preset),
         )
+        .route("/settings/presets/{preset_id}/test", post(test_preset))
 }

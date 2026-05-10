@@ -1,7 +1,7 @@
 use axum::{
     extract::{Extension, Multipart, Path, Query},
-    http::StatusCode,
-    response::Json,
+    http::{header, StatusCode},
+    response::{Json, Response},
     routing::{get, post},
     Router,
 };
@@ -42,6 +42,25 @@ struct UpdateRequest {
 #[derive(Deserialize)]
 struct ListQuery {
     project_id: String,
+}
+
+#[derive(Deserialize)]
+struct CharactersExportRequest {
+    character_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ImportCharactersQuery {
+    project_id: String,
+}
+
+fn value_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
 }
 
 async fn create_character(
@@ -265,6 +284,190 @@ async fn validate_characters_import(
     })))
 }
 
+async fn export_characters(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Json(body): Json<CharactersExportRequest>,
+) -> Result<Response, (StatusCode, Json<Value>)> {
+    if body.character_ids.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "请至少选择一个角色/组织"})),
+        ));
+    }
+
+    let mut items = Vec::new();
+    for character_id in &body.character_ids {
+        let character = CharacterService::get(&db, character_id, &claims.sub)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"detail": error})),
+                )
+            })?
+            .ok_or((
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": format!("角色不存在: {}", character_id)})),
+            ))?;
+        items.push(serde_json::to_value(character).map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error.to_string()})),
+            )
+        })?);
+    }
+
+    let payload = json!({
+        "version": "rust-strangler-1",
+        "export_type": "characters",
+        "data": items,
+        "statistics": {
+            "total": items.len(),
+            "characters": items.iter().filter(|item| !item.get("is_organization").and_then(Value::as_bool).unwrap_or(false)).count(),
+            "organizations": items.iter().filter(|item| item.get("is_organization").and_then(Value::as_bool).unwrap_or(false)).count(),
+        },
+    });
+    let body = serde_json::to_vec_pretty(&payload).map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": error.to_string()})),
+        )
+    })?;
+    let filename = format!("characters_export_{}.json", items.len());
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename={}", filename),
+        )
+        .body(axum::body::Body::from(body))
+        .unwrap())
+}
+
+async fn import_characters(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Query(query): Query<ImportCharactersQuery>,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let existing = CharacterService::list(&db, &query.project_id, &claims.sub)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error})),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "项目不存在或无权限"})),
+        ))?;
+    let mut existing_names: std::collections::HashSet<String> =
+        existing.into_iter().map(|item| item.name).collect();
+
+    let mut file_data = Vec::new();
+    let mut file_found = false;
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if field.name() == Some("file") {
+            let bytes = field.bytes().await.map_err(|error| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"detail": format!("读取文件失败: {}", error)})),
+                )
+            })?;
+            file_data = bytes.to_vec();
+            file_found = true;
+            break;
+        }
+    }
+    if !file_found {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "请上传JSON文件"})),
+        ));
+    }
+
+    let data: Value = serde_json::from_slice(&file_data).map_err(|error| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": format!("JSON格式错误: {}", error)})),
+        )
+    })?;
+    let items = data.get("data").and_then(Value::as_array).ok_or((
+        StatusCode::BAD_REQUEST,
+        Json(json!({"detail": "缺少data字段或data不是数组"})),
+    ))?;
+
+    let mut imported_characters = Vec::new();
+    let mut imported_organizations = Vec::new();
+    let mut skipped = Vec::new();
+    let mut errors = Vec::new();
+
+    for item in items {
+        let Some(name) = value_string(item, "name") else {
+            errors.push("缺少name字段".to_string());
+            continue;
+        };
+        if existing_names.contains(&name) {
+            skipped.push(format!("名称已存在: {}", name));
+            continue;
+        }
+
+        let is_organization = item
+            .get("is_organization")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        match CharacterService::create(
+            &db,
+            &query.project_id,
+            &claims.sub,
+            &name,
+            is_organization,
+            value_string(item, "role_type").as_deref(),
+            value_string(item, "personality").as_deref(),
+            value_string(item, "background").as_deref(),
+            value_string(item, "appearance").as_deref(),
+            value_string(item, "age").as_deref(),
+            value_string(item, "gender").as_deref(),
+        )
+        .await
+        {
+            Ok(Some(_)) => {
+                existing_names.insert(name.clone());
+                if is_organization {
+                    imported_organizations.push(name);
+                } else {
+                    imported_characters.push(name);
+                }
+            }
+            Ok(None) => errors.push(format!("项目不存在或无权限: {}", name)),
+            Err(error) => errors.push(format!("{}: {}", name, error)),
+        }
+    }
+
+    let imported = imported_characters.len() + imported_organizations.len();
+    Ok(Json(json!({
+        "success": errors.is_empty(),
+        "message": format!("导入完成：成功{}，跳过{}，错误{}", imported, skipped.len(), errors.len()),
+        "statistics": {
+            "total": items.len(),
+            "imported": imported,
+            "skipped": skipped.len(),
+            "errors": errors.len(),
+        },
+        "details": {
+            "imported_characters": imported_characters,
+            "imported_organizations": imported_organizations,
+            "skipped": skipped,
+            "errors": errors,
+        },
+        "warnings": [],
+    })))
+}
+
 async fn list_characters_by_project(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
@@ -302,4 +505,6 @@ pub fn routes() -> Router {
             "/characters/validate-import",
             post(validate_characters_import),
         )
+        .route("/characters/export", post(export_characters))
+        .route("/characters/import", post(import_characters))
 }

@@ -5,11 +5,16 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
-use sea_orm::DatabaseConnection;
+use reqwest::Method;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    Set,
+};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::config::AppConfig;
+use crate::models::writing_style;
 use crate::services::auth::Claims;
 use crate::services::prompt_workshop_service::PromptWorkshopService;
 
@@ -58,6 +63,135 @@ fn normalize_tags_value(tags: Option<&Value>) -> Option<String> {
         }
         _ => None,
     }
+}
+
+fn workshop_cloud_url() -> String {
+    std::env::var("WORKSHOP_CLOUD_URL")
+        .unwrap_or_else(|_| "https://mumuverse.space:1566".to_string())
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn workshop_instance_id() -> String {
+    std::env::var("INSTANCE_ID").unwrap_or_else(|_| "local".to_string())
+}
+
+fn workshop_user_identifier(user_id: &str) -> String {
+    format!("{}:{}", workshop_instance_id(), user_id)
+}
+
+fn cloud_error(message: impl Into<String>) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({"detail": message.into()})),
+    )
+}
+
+async fn proxy_workshop_request(
+    method: Method,
+    path: &str,
+    params: Vec<(&str, String)>,
+    body: Option<Value>,
+    user_identifier: Option<&str>,
+) -> Result<Value, (StatusCode, Json<Value>)> {
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|error| cloud_error(format!("创建云端工坊客户端失败: {}", error)))?;
+
+    let url = format!("{}/api/prompt-workshop{}", workshop_cloud_url(), path);
+    let mut request = client
+        .request(method, url)
+        .query(&params)
+        .header("X-Instance-ID", workshop_instance_id())
+        .header("Content-Type", "application/json");
+
+    if let Ok(secret) = std::env::var("WORKSHOP_PROXY_SHARED_SECRET") {
+        if !secret.trim().is_empty() {
+            request = request.header("X-Workshop-Secret", secret);
+        }
+    }
+    if let Some(user_identifier) = user_identifier {
+        request = request.header("X-User-ID", user_identifier);
+    }
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|error| cloud_error(format!("无法连接到云端工坊服务: {}", error)))?;
+    let status = response.status();
+    if !status.is_success() {
+        let preview = response.text().await.unwrap_or_default();
+        return Err(cloud_error(format!(
+            "云端工坊服务错误: HTTP {}, {}",
+            status.as_u16(),
+            preview.chars().take(200).collect::<String>()
+        )));
+    }
+
+    response
+        .json::<Value>()
+        .await
+        .map_err(|error| cloud_error(format!("云端工坊返回非 JSON 内容: {}", error)))
+}
+
+fn workshop_response_data(response: &Value) -> &Value {
+    response.get("data").unwrap_or(response)
+}
+
+fn required_workshop_text<'a>(item: &'a Value, field: &str) -> Result<&'a str, String> {
+    item.get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("云端提示词缺少必要字段: {}", field))
+}
+
+async fn create_writing_style_from_workshop_item(
+    db: &DatabaseConnection,
+    item: &Value,
+    custom_name: Option<&str>,
+    user_id: &str,
+) -> Result<Value, String> {
+    let name = required_workshop_text(item, "name")?;
+    let prompt_content = required_workshop_text(item, "prompt_content")?;
+    let description = item
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    let count = writing_style::Entity::find()
+        .filter(writing_style::Column::UserId.eq(user_id))
+        .count(db)
+        .await
+        .map_err(|error| format!("{}", error))?;
+
+    let inserted = writing_style::ActiveModel {
+        user_id: Set(Some(user_id.to_string())),
+        name: Set(custom_name.unwrap_or(name).to_string()),
+        style_type: Set("custom".to_string()),
+        description: Set(Some(format!("从提示词工坊导入: {}", description))),
+        prompt_content: Set(prompt_content.to_string()),
+        order_index: Set(count as i32 + 1),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .map_err(|error| format!("{}", error))?;
+
+    Ok(json!({
+        "success": true,
+        "message": "导入成功",
+        "writing_style": {
+            "id": inserted.id,
+            "name": inserted.name,
+            "style_type": inserted.style_type,
+            "prompt_content": inserted.prompt_content,
+        }
+    }))
 }
 
 #[derive(Deserialize)]
@@ -117,7 +251,10 @@ async fn get_status(Extension(cfg): Extension<AppConfig>) -> Json<Value> {
             .get("cloud_url")
             .and_then(|value| value.as_str())
             .map(str::to_owned)
-            .unwrap_or_else(|| std::env::var("WORKSHOP_CLOUD_URL").unwrap_or_else(|_| "https://mumuverse.space:1566".to_string()));
+            .unwrap_or_else(|| {
+                std::env::var("WORKSHOP_CLOUD_URL")
+                    .unwrap_or_else(|_| "https://mumuverse.space:1566".to_string())
+            });
         let cloud_connected = map
             .get("cloud_connected")
             .and_then(|value| value.as_bool())
@@ -160,10 +297,30 @@ fn default_limit() -> u64 {
 async fn get_items(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
+    Extension(cfg): Extension<AppConfig>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let instance_id = std::env::var("INSTANCE_ID").unwrap_or_else(|_| "local".to_string());
-    let user_identifier = format!("{}:{}", instance_id, claims.sub);
+    let user_identifier = workshop_user_identifier(&claims.sub);
+    if !PromptWorkshopService::check_workshop_server(&cfg) {
+        let mut params = vec![
+            ("sort", query.sort.clone()),
+            ("page", query.page.to_string()),
+            ("limit", query.limit.to_string()),
+        ];
+        if let Some(category) = &query.category {
+            params.push(("category", category.clone()));
+        }
+        if let Some(search) = &query.search {
+            params.push(("search", search.clone()));
+        }
+        if let Some(tags) = &query.tags {
+            params.push(("tags", tags.clone()));
+        }
+        return proxy_workshop_request(Method::GET, "/items", params, None, Some(&user_identifier))
+            .await
+            .map(Json);
+    }
+
     match PromptWorkshopService::get_items(
         &db,
         query.category.as_deref(),
@@ -187,10 +344,22 @@ async fn get_items(
 async fn get_item(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
+    Extension(cfg): Extension<AppConfig>,
     Path(item_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let instance_id = std::env::var("INSTANCE_ID").unwrap_or_else(|_| "local".to_string());
-    let user_identifier = format!("{}:{}", instance_id, claims.sub);
+    let user_identifier = workshop_user_identifier(&claims.sub);
+    if !PromptWorkshopService::check_workshop_server(&cfg) {
+        return proxy_workshop_request(
+            Method::GET,
+            &format!("/items/{}", item_id),
+            Vec::new(),
+            None,
+            Some(&user_identifier),
+        )
+        .await
+        .map(Json);
+    }
+
     match PromptWorkshopService::get_item(&db, &item_id, Some(&user_identifier)).await {
         Ok(Some(data)) => Ok(Json(data)),
         Ok(None) => Err((
@@ -207,9 +376,50 @@ async fn get_item(
 async fn import_item(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
+    Extension(cfg): Extension<AppConfig>,
     Path(item_id): Path<String>,
     Json(body): Json<ImportRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if !PromptWorkshopService::check_workshop_server(&cfg) {
+        let user_identifier = workshop_user_identifier(&claims.sub);
+        let item_response = proxy_workshop_request(
+            Method::GET,
+            &format!("/items/{}", item_id),
+            Vec::new(),
+            None,
+            Some(&user_identifier),
+        )
+        .await?;
+        let item = workshop_response_data(&item_response);
+
+        let _ = proxy_workshop_request(
+            Method::POST,
+            &format!("/items/{}/download", item_id),
+            Vec::new(),
+            Some(json!({
+                "instance_id": workshop_instance_id(),
+                "user_identifier": user_identifier,
+            })),
+            Some(&user_identifier),
+        )
+        .await;
+
+        return create_writing_style_from_workshop_item(
+            &db,
+            item,
+            body.custom_name.as_deref(),
+            &claims.sub,
+        )
+        .await
+        .map(Json)
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error})),
+            )
+        });
+    }
+
     match PromptWorkshopService::import_item(
         &db,
         &item_id,
@@ -226,10 +436,22 @@ async fn import_item(
 async fn toggle_like(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
+    Extension(cfg): Extension<AppConfig>,
     Path(item_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let instance_id = std::env::var("INSTANCE_ID").unwrap_or_else(|_| "local".to_string());
-    let user_identifier = format!("{}:{}", instance_id, claims.sub);
+    let user_identifier = workshop_user_identifier(&claims.sub);
+    if !PromptWorkshopService::check_workshop_server(&cfg) {
+        return proxy_workshop_request(
+            Method::POST,
+            &format!("/items/{}/like", item_id),
+            Vec::new(),
+            None,
+            Some(&user_identifier),
+        )
+        .await
+        .map(Json);
+    }
+
     match PromptWorkshopService::toggle_like(&db, &item_id, &user_identifier).await {
         Ok(data) => Ok(Json(data)),
         Err(e) => Err((StatusCode::NOT_FOUND, Json(json!({"detail": e})))),
@@ -238,8 +460,26 @@ async fn toggle_like(
 
 async fn record_download(
     Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Extension(cfg): Extension<AppConfig>,
     Path(item_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if !PromptWorkshopService::check_workshop_server(&cfg) {
+        let user_identifier = workshop_user_identifier(&claims.sub);
+        return proxy_workshop_request(
+            Method::POST,
+            &format!("/items/{}/download", item_id),
+            Vec::new(),
+            Some(json!({
+                "instance_id": workshop_instance_id(),
+                "user_identifier": user_identifier,
+            })),
+            Some(&user_identifier),
+        )
+        .await
+        .map(Json);
+    }
+
     match PromptWorkshopService::record_download(&db, &item_id).await {
         Ok(data) => Ok(Json(data)),
         Err(e) => Err((StatusCode::NOT_FOUND, Json(json!({"detail": e})))),
@@ -249,15 +489,49 @@ async fn record_download(
 async fn submit_prompt(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
+    Extension(cfg): Extension<AppConfig>,
     Json(body): Json<SubmitRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let instance_id = std::env::var("INSTANCE_ID").unwrap_or_else(|_| "local".to_string());
-    let user_identifier = format!("{}:{}", instance_id, claims.sub);
+    let instance_id = workshop_instance_id();
+    let user_identifier = workshop_user_identifier(&claims.sub);
     let submitter_name = body
         .author_display_name
         .clone()
         .unwrap_or_else(|| claims.sub.clone());
     let tags = normalize_tags_value(body.tags.as_ref());
+
+    if !PromptWorkshopService::check_workshop_server(&cfg) {
+        let header_user_identifier = user_identifier.clone();
+        let mut payload = Map::new();
+        payload.insert("instance_id".to_string(), json!(instance_id));
+        payload.insert("submitter_id".to_string(), json!(user_identifier));
+        payload.insert("submitter_name".to_string(), json!(submitter_name));
+        payload.insert("name".to_string(), json!(body.name));
+        payload.insert("description".to_string(), json!(body.description));
+        payload.insert("prompt_content".to_string(), json!(body.prompt_content));
+        payload.insert("category".to_string(), json!(body.category));
+        payload.insert(
+            "author_display_name".to_string(),
+            json!(body.author_display_name),
+        );
+        payload.insert("is_anonymous".to_string(), json!(body.is_anonymous));
+        payload.insert(
+            "tags".to_string(),
+            tags.as_deref()
+                .and_then(|value| serde_json::from_str::<Value>(value).ok())
+                .unwrap_or(Value::Null),
+        );
+        return proxy_workshop_request(
+            Method::POST,
+            "/submit",
+            Vec::new(),
+            Some(Value::Object(payload)),
+            Some(&header_user_identifier),
+        )
+        .await
+        .map(Json);
+    }
+
     match PromptWorkshopService::submit_prompt(
         &db,
         &user_identifier,
@@ -289,10 +563,26 @@ struct MySubmissionsQuery {
 async fn get_my_submissions(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
+    Extension(cfg): Extension<AppConfig>,
     Query(query): Query<MySubmissionsQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let instance_id = std::env::var("INSTANCE_ID").unwrap_or_else(|_| "local".to_string());
-    let user_identifier = format!("{}:{}", instance_id, claims.sub);
+    let user_identifier = workshop_user_identifier(&claims.sub);
+    if !PromptWorkshopService::check_workshop_server(&cfg) {
+        let mut params = Vec::new();
+        if let Some(status) = &query.status {
+            params.push(("status", status.clone()));
+        }
+        return proxy_workshop_request(
+            Method::GET,
+            "/my-submissions",
+            params,
+            None,
+            Some(&user_identifier),
+        )
+        .await
+        .map(Json);
+    }
+
     match PromptWorkshopService::get_my_submissions(&db, &user_identifier, query.status.as_deref())
         .await
     {
@@ -307,11 +597,27 @@ async fn get_my_submissions(
 async fn withdraw_submission(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
+    Extension(cfg): Extension<AppConfig>,
     Path(submission_id): Path<String>,
     Query(query): Query<UpdateQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let instance_id = std::env::var("INSTANCE_ID").unwrap_or_else(|_| "local".to_string());
-    let user_identifier = format!("{}:{}", instance_id, claims.sub);
+    let user_identifier = workshop_user_identifier(&claims.sub);
+    if !PromptWorkshopService::check_workshop_server(&cfg) {
+        let mut params = Vec::new();
+        if query.force.unwrap_or(false) {
+            params.push(("force", "true".to_string()));
+        }
+        return proxy_workshop_request(
+            Method::DELETE,
+            &format!("/submissions/{}", submission_id),
+            params,
+            None,
+            Some(&user_identifier),
+        )
+        .await
+        .map(Json);
+    }
+
     match PromptWorkshopService::withdraw_submission(
         &db,
         &submission_id,
