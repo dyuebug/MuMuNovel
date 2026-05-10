@@ -16,6 +16,10 @@ use uuid::Uuid;
 use crate::models::{chapter, outline, project};
 use crate::services::auth::Claims;
 use crate::services::outline_service::OutlineService;
+use crate::services::wizard_service;
+use crate::utils::sse::SseChannel;
+use std::sync::Arc;
+use tokio::sync::{mpsc, Mutex};
 
 #[derive(Deserialize)]
 struct CreateRequest {
@@ -37,6 +41,289 @@ struct UpdateRequest {
 #[derive(Deserialize)]
 struct ListQuery {
     project_id: String,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct GenerateRequest {
+    project_id: String,
+    #[serde(default = "default_outline_count")]
+    chapter_count: usize,
+    narrative_perspective: Option<String>,
+    #[serde(default = "default_target_words")]
+    target_words: i32,
+    requirements: Option<String>,
+    creative_mode: Option<String>,
+    story_focus: Option<String>,
+    plot_stage: Option<String>,
+    story_creation_brief: Option<String>,
+    quality_preset: Option<String>,
+    quality_notes: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+    theme: Option<String>,
+    genre: Option<String>,
+    mode: Option<String>,
+    story_direction: Option<String>,
+    keep_existing: Option<bool>,
+    world_context: Option<Value>,
+    characters_context: Option<Vec<Value>>,
+}
+
+#[derive(Deserialize)]
+struct OutlineReorderItem {
+    id: String,
+    order_index: i32,
+}
+
+#[derive(Deserialize)]
+struct ReorderRequest {
+    orders: Vec<OutlineReorderItem>,
+}
+
+fn default_outline_count() -> usize {
+    3
+}
+
+fn default_target_words() -> i32 {
+    100000
+}
+
+async fn generate_outlines(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Json(body): Json<GenerateRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let Some(project) = project::Entity::find_by_id(&body.project_id)
+        .one(&db)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": e.to_string()}))))?
+    else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"success": false, "message": "?????"})),
+        ));
+    };
+    if project.user_id != claims.sub {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"success": false, "message": "?????????"})),
+        ));
+    }
+
+    let (tx, mut rx) = mpsc::channel::<Result<axum::response::sse::Event, std::convert::Infallible>>(256);
+    let result_capture: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+    let channel = SseChannel::with_result_capture(tx, result_capture.clone());
+    let db_for_task = db.clone();
+    let user_id = claims.sub.clone();
+    let project_id = body.project_id.clone();
+    let chapter_count = body.chapter_count;
+    let narrative_perspective = body.narrative_perspective.clone();
+    let target_words = body.target_words;
+    let requirements = body.requirements.clone();
+    let creative_mode = body.creative_mode.clone();
+    let story_focus = body.story_focus.clone();
+    let plot_stage = body.plot_stage.clone();
+    let story_creation_brief = body.story_creation_brief.clone();
+    let quality_preset = body.quality_preset.clone();
+    let quality_notes = body.quality_notes.clone();
+    let provider = body.provider.clone();
+    let model = body.model.clone();
+
+    let drain_handle = tokio::spawn(async move {
+        while rx.recv().await.is_some() {}
+    });
+
+    wizard_service::generate_outline(
+        &db_for_task,
+        &channel,
+        &user_id,
+        &project_id,
+        chapter_count,
+        narrative_perspective.as_deref(),
+        target_words,
+        requirements.as_deref(),
+        creative_mode.as_deref(),
+        story_focus.as_deref(),
+        plot_stage.as_deref(),
+        story_creation_brief.as_deref(),
+        quality_preset.as_deref(),
+        quality_notes.as_deref(),
+        provider.as_deref(),
+        model.as_deref(),
+    )
+    .await;
+
+    let _ = drain_handle.await;
+    let result = result_capture.lock().await.clone().ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": "??????"})),
+        )
+    })?;
+
+    let items = result
+        .get("outlines")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let total = items.len();
+    Ok(Json(json!({
+        "success": true,
+        "total": total,
+        "items": items,
+        "outlines": result.get("outlines").cloned().unwrap_or_else(|| json!([])),
+        "chapters": result.get("chapters").cloned().unwrap_or_else(|| json!([])),
+        "outline_count": result.get("outline_count").cloned().unwrap_or_else(|| json!(total)),
+        "chapter_count": result.get("chapter_count").cloned().unwrap_or_else(|| json!(0)),
+        "message": result.get("message").cloned().unwrap_or_else(|| json!("????")),
+        "result": result,
+    })))
+}
+
+
+async fn reorder_outlines(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Json(body): Json<ReorderRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    if body.orders.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"success": false, "message": "????????"})),
+        ));
+    }
+
+    let mut updated_count = 0usize;
+    for order in body.orders {
+        let Some(outline_model) = OutlineService::get(&db, &order.id, &claims.sub)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": e}))))?
+        else {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"success": false, "message": "?????????"})),
+            ));
+        };
+
+        let mut active: outline::ActiveModel = outline_model.into();
+        active.order_index = Set(Some(order.order_index));
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
+        active.update(&db).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": e.to_string()})),
+            )
+        })?;
+        updated_count += 1;
+    }
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "???????",
+        "updated_outlines": updated_count,
+        "updated_chapters": 0,
+    })))
+}
+
+
+async fn expand_outline_compat(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(outline_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let Some(outline_model) = OutlineService::get(&db, &outline_id, &claims.sub)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": e})),
+            )
+        })?
+    else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"success": false, "message": "?????????"})),
+        ));
+    };
+
+    let target_chapter_count = body
+        .get("target_chapter_count")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let expansion_strategy = body
+        .get("expansion_strategy")
+        .and_then(Value::as_str)
+        .unwrap_or("balanced");
+    let auto_create_chapters = body
+        .get("auto_create_chapters")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let enable_scene_analysis = body
+        .get("enable_scene_analysis")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    Err((
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({
+            "success": false,
+            "message": "Rust ???????????????????????????????????",
+            "outline_id": outline_id,
+            "outline_title": outline_model.title,
+            "target_chapter_count": target_chapter_count,
+            "actual_chapter_count": 0,
+            "expansion_strategy": expansion_strategy,
+            "enable_scene_analysis": enable_scene_analysis,
+            "auto_create_chapters": auto_create_chapters,
+            "chapter_plans": [],
+            "created_chapters": Value::Null,
+        })),
+    ))
+}
+
+async fn batch_expand_outlines_compat(
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let project_id = body
+        .get("project_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let chapters_per_outline = body
+        .get("chapters_per_outline")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let expansion_strategy = body
+        .get("expansion_strategy")
+        .and_then(Value::as_str)
+        .unwrap_or("balanced");
+    let auto_create_chapters = body
+        .get("auto_create_chapters")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let enable_scene_analysis = body
+        .get("enable_scene_analysis")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    Err((
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({
+            "success": false,
+            "message": "Rust ?????????????????????????????????????",
+            "project_id": project_id,
+            "chapters_per_outline": chapters_per_outline,
+            "expansion_strategy": expansion_strategy,
+            "enable_scene_analysis": enable_scene_analysis,
+            "auto_create_chapters": auto_create_chapters,
+            "total_outlines_expanded": 0,
+            "total_chapters_created": 0,
+            "expansion_results": [],
+            "skipped_outlines": [],
+        })),
+    ))
 }
 
 async fn create_outline(
@@ -77,7 +364,7 @@ async fn list_outlines(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match OutlineService::list(&db, &query.project_id, &claims.sub).await {
         Ok(Some(outlines)) => Ok(Json(
-            json!({"success": true, "data": outlines, "total": outlines.len()}),
+            json!({"success": true, "data": outlines, "items": outlines, "total": outlines.len()}),
         )),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
@@ -422,9 +709,27 @@ async fn create_chapters_from_plans(
         created.push(inserted);
     }
 
+    let created_chapters: Vec<Value> = created
+        .iter()
+        .map(|chapter| {
+            json!({
+                "id": chapter.id,
+                "chapter_number": chapter.chapter_number,
+                "title": chapter.title,
+                "summary": chapter.summary,
+                "outline_id": chapter.outline_id,
+                "sub_index": chapter.sub_index,
+                "status": chapter.status,
+            })
+        })
+        .collect();
+
     Ok(Json(json!({
-        "message": "章节创建成功",
+        "message": "??????",
+        "outline_id": outline_id,
+        "outline_title": ol.title,
         "chapters_created": created.len(),
+        "created_chapters": created_chapters,
         "start_chapter_number": start_chapter_num,
         "chapters": created,
     })))
@@ -437,7 +742,7 @@ async fn list_outlines_by_project(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match OutlineService::list(&db, &project_id, &claims.sub).await {
         Ok(Some(outlines)) => Ok(Json(
-            json!({"success": true, "data": outlines, "total": outlines.len()}),
+            json!({"success": true, "data": outlines, "items": outlines, "total": outlines.len()}),
         )),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
@@ -456,10 +761,17 @@ pub fn routes() -> Router {
             "/outlines/project/{project_id}",
             get(list_outlines_by_project),
         )
+        .route("/outlines/generate", post(generate_outlines))
+        .route("/outlines/reorder", post(reorder_outlines))
+        .route("/outlines/batch-expand", post(batch_expand_outlines_compat))
         .route("/outlines", post(create_outline).get(list_outlines))
         .route(
             "/outlines/{outline_id}",
             get(get_outline).put(update_outline).delete(delete_outline),
+        )
+        .route(
+            "/outlines/{outline_id}/expand",
+            post(expand_outline_compat),
         )
         .route(
             "/outlines/{outline_id}/create-single-chapter",

@@ -204,11 +204,25 @@ impl SseProgress {
 /// Helper for building SSE streams via mpsc channel
 pub struct SseChannel {
     tx: tokio::sync::mpsc::Sender<Result<Event, std::convert::Infallible>>,
+    result_capture: Option<Arc<Mutex<Option<Value>>>>,
 }
 
 impl SseChannel {
     pub fn new(tx: tokio::sync::mpsc::Sender<Result<Event, std::convert::Infallible>>) -> Self {
-        Self { tx }
+        Self {
+            tx,
+            result_capture: None,
+        }
+    }
+
+    pub fn with_result_capture(
+        tx: tokio::sync::mpsc::Sender<Result<Event, std::convert::Infallible>>,
+        result_capture: Arc<Mutex<Option<Value>>>,
+    ) -> Self {
+        Self {
+            tx,
+            result_capture: Some(result_capture),
+        }
     }
 
     pub async fn send(&self, event: Event) {
@@ -224,6 +238,9 @@ impl SseChannel {
     }
 
     pub async fn result(&self, data: &Value) {
+        if let Some(capture) = &self.result_capture {
+            *capture.lock().await = Some(data.clone());
+        }
         self.send(sse_result(data)).await;
     }
 
