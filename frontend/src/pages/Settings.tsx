@@ -81,6 +81,19 @@ type SettingsFormValues = {
   web_research_grok_search_enabled?: boolean;
 };
 
+type WebResearchFormValues = Pick<
+  SettingsFormValues,
+  | 'web_research_enabled'
+  | 'web_research_exa_enabled'
+  | 'web_research_grok_enabled'
+  | 'web_research_exa_api_key'
+  | 'web_research_exa_base_url'
+  | 'web_research_grok_api_key'
+  | 'web_research_grok_base_url'
+  | 'web_research_grok_model'
+  | 'web_research_grok_search_enabled'
+>;
+
 type PresetFormValues = {
   name: string;
   description?: string;
@@ -123,7 +136,7 @@ const providerPlaceholders: Record<ProviderValue, { baseUrl: string; model: stri
   },
 };
 
-const defaultSettingsValues: SettingsFormValues = {
+const defaultMainSettingsValues: SettingsFormValues = {
   api_provider: 'openai',
   provider_type: 'openai',
   api_key: '',
@@ -135,6 +148,9 @@ const defaultSettingsValues: SettingsFormValues = {
   temperature: 0.7,
   max_tokens: 4096,
   system_prompt: '',
+};
+
+const defaultWebResearchValues: WebResearchFormValues = {
   web_research_enabled: false,
   web_research_exa_enabled: true,
   web_research_grok_enabled: true,
@@ -219,7 +235,7 @@ const buildPresetConfig = (values: PresetFormValues): APIKeyPresetConfig => {
   };
 };
 
-const settingsToFormValues = (settings?: Settings | null): SettingsFormValues => {
+const settingsToMainFormValues = (settings?: Settings | null): SettingsFormValues => {
   const provider = ((settings?.provider_type || settings?.api_provider || 'openai').trim().toLowerCase() || 'openai') as ProviderValue;
   return {
     api_provider: provider,
@@ -233,6 +249,11 @@ const settingsToFormValues = (settings?: Settings | null): SettingsFormValues =>
     temperature: settings?.temperature ?? 0.7,
     max_tokens: settings?.max_tokens ?? 4096,
     system_prompt: settings?.system_prompt || '',
+  };
+};
+
+const settingsToWebResearchFormValues = (settings?: Settings | null): WebResearchFormValues => {
+  return {
     web_research_enabled: settings?.web_research_enabled ?? false,
     web_research_exa_enabled: settings?.web_research_exa_enabled ?? true,
     web_research_grok_enabled: settings?.web_research_grok_enabled ?? true,
@@ -266,6 +287,7 @@ const presetToFormValues = (preset?: APIKeyPreset | null): PresetFormValues => {
 
 export default function SettingsPage() {
   const [settingsForm] = Form.useForm<SettingsFormValues>();
+  const [webResearchForm] = Form.useForm<WebResearchFormValues>();
   const [presetForm] = Form.useForm<PresetFormValues>();
   const [snapshotForm] = Form.useForm<SnapshotFormValues>();
   const { token } = theme.useToken();
@@ -295,9 +317,9 @@ export default function SettingsPage() {
   const [loadingStoredApiKey, setLoadingStoredApiKey] = useState(false);
 
   const providerValue = Form.useWatch('api_provider', settingsForm) || 'openai';
-  const webResearchEnabled = Form.useWatch('web_research_enabled', settingsForm) ?? false;
-  const exaEnabled = Form.useWatch('web_research_exa_enabled', settingsForm) ?? true;
-  const grokEnabled = Form.useWatch('web_research_grok_enabled', settingsForm) ?? true;
+  const webResearchEnabled = Form.useWatch('web_research_enabled', webResearchForm) ?? false;
+  const exaEnabled = Form.useWatch('web_research_exa_enabled', webResearchForm) ?? true;
+  const grokEnabled = Form.useWatch('web_research_grok_enabled', webResearchForm) ?? true;
 
   const hasStoredApiKey = Boolean(settingsRecord?.has_api_key)
   const apiKeyPlaceholder = hasStoredApiKey
@@ -336,7 +358,8 @@ export default function SettingsPage() {
       setSettingsRecord(normalizedResponse);
       setShowStoredApiKey(false);
       setStoredApiKeyPreview('');
-      settingsForm.setFieldsValue(settingsToFormValues(normalizedResponse));
+      settingsForm.setFieldsValue(settingsToMainFormValues(normalizedResponse));
+      webResearchForm.setFieldsValue(settingsToWebResearchFormValues(normalizedResponse));
       setModelOptions((current) => mergeModelOptions(current, [normalizedResponse.llm_model || '']));
       setProbeAlert(null);
       setWebResearchAlert(null);
@@ -347,7 +370,7 @@ export default function SettingsPage() {
     } finally {
       setLoadingSettings(false);
     }
-  }, [settingsForm]);
+  }, [settingsForm, webResearchForm]);
 
   useEffect(() => {
     void loadSettings();
@@ -404,7 +427,12 @@ export default function SettingsPage() {
   const handleSaveSettings = async () => {
     try {
       const values = await settingsForm.validateFields();
-      const payload = buildSettingsPayload(values);
+      const webResearchValues = webResearchForm.getFieldsValue(true);
+      const mergedValues: SettingsFormValues = {
+        ...values,
+        ...webResearchValues,
+      };
+      const payload = buildSettingsPayload(mergedValues);
       if (!String(values.api_key || '').trim() && hasStoredApiKey) {
         delete payload.api_key;
       }
@@ -420,7 +448,8 @@ export default function SettingsPage() {
       setSettingsRecord(normalizedSaved);
       setShowStoredApiKey(false);
       setStoredApiKeyPreview('');
-      settingsForm.setFieldsValue(settingsToFormValues(normalizedSaved));
+      settingsForm.setFieldsValue(settingsToMainFormValues(normalizedSaved));
+      webResearchForm.setFieldsValue(settingsToWebResearchFormValues(normalizedSaved));
       setModelOptions((current) => mergeModelOptions(current, [normalizedSaved.llm_model || String(values.llm_model || ''), providerHint.model]));
       message.success('设置已保存');
     } catch (error) {
@@ -555,7 +584,7 @@ export default function SettingsPage() {
 
   const handleTestWebResearch = async () => {
     try {
-      const values = settingsForm.getFieldsValue(true);
+      const values = webResearchForm.getFieldsValue(true);
       const exaApiKey = String(values.web_research_exa_api_key || '').trim();
       const grokApiKey = String(values.web_research_grok_api_key || '').trim();
       const grokBaseUrl = String(values.web_research_grok_base_url || '').trim();
@@ -789,7 +818,7 @@ export default function SettingsPage() {
                   <Card>
                     <Row gutter={[16, 16]}>
                       <Col xs={24} lg={16}>
-                        <Form form={settingsForm} layout="vertical" initialValues={defaultSettingsValues}>
+                        <Form form={settingsForm} layout="vertical" initialValues={defaultMainSettingsValues}>
                           <Row gutter={[16, 0]}>
                             <Col xs={24} md={12}>
                               <Form.Item label="提供商" name="api_provider" rules={[{ required: true, message: '请选择提供商' }]}>
@@ -936,7 +965,7 @@ export default function SettingsPage() {
                   {renderAlert(functionCallingAlert)}
 
                   <Card title="生成前网络检索（Web Research）">
-                    <Form form={settingsForm} layout="vertical">
+                    <Form form={webResearchForm} layout="vertical" initialValues={defaultWebResearchValues}>
                       <Row gutter={[16, 0]}>
                         <Col xs={24} md={8}>
                           <Form.Item label="启用 Web Research" name="web_research_enabled" valuePropName="checked">
