@@ -102,9 +102,7 @@ async fn list_relationships(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match RelationshipService::list(&db, &query.project_id, &claims.sub).await {
-        Ok(Some(rels)) => Ok(Json(
-            json!({"success": true, "data": rels, "total": rels.len()}),
-        )),
+        Ok(Some(rels)) => Ok(Json(json!(rels))),
         Ok(None) => Err(forbidden_or_missing("项目不存在或无权限")),
         Err(e) => Err(server_error(e)),
     }
@@ -278,6 +276,7 @@ pub fn routes() -> Router {
             "/relationships",
             post(create_relationship).get(list_relationships),
         )
+        .route("/relationships/", post(create_relationship))
         .route("/relationships/types", get(list_types))
         .route(
             "/relationships/project/{project_id}",

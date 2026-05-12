@@ -9,65 +9,66 @@ use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::services::auth::Claims;
+use crate::services::project_service::ProjectService;
 use crate::services::wizard_service;
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
-struct WorldBuildingRequest {
-    title: Option<String>,
-    description: Option<String>,
-    theme: Option<String>,
-    genre: Option<String>,
-    narrative_perspective: Option<String>,
-    target_words: Option<i32>,
-    chapter_count: Option<i32>,
-    character_count: Option<i32>,
-    outline_mode: Option<String>,
-    default_creative_mode: Option<String>,
-    default_story_focus: Option<String>,
-    default_plot_stage: Option<String>,
-    default_story_creation_brief: Option<String>,
-    default_quality_preset: Option<String>,
-    default_quality_notes: Option<String>,
-    provider: Option<String>,
-    model: Option<String>,
-    user_id: Option<String>,
-    enable_mcp: Option<bool>,
-    enable_web_research: Option<bool>,
-    web_research_query: Option<String>,
+pub(crate) struct WorldBuildingRequest {
+    pub(crate) title: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) theme: Option<String>,
+    pub(crate) genre: Option<serde_json::Value>,
+    pub(crate) narrative_perspective: Option<String>,
+    pub(crate) target_words: Option<i32>,
+    pub(crate) chapter_count: Option<i32>,
+    pub(crate) character_count: Option<i32>,
+    pub(crate) outline_mode: Option<String>,
+    pub(crate) default_creative_mode: Option<String>,
+    pub(crate) default_story_focus: Option<String>,
+    pub(crate) default_plot_stage: Option<String>,
+    pub(crate) default_story_creation_brief: Option<String>,
+    pub(crate) default_quality_preset: Option<String>,
+    pub(crate) default_quality_notes: Option<String>,
+    pub(crate) provider: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) user_id: Option<String>,
+    pub(crate) enable_mcp: Option<bool>,
+    pub(crate) enable_web_research: Option<bool>,
+    pub(crate) web_research_query: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
-struct CareerSystemRequest {
-    project_id: String,
-    provider: Option<String>,
-    model: Option<String>,
-    user_id: Option<String>,
-    enable_mcp: Option<bool>,
-    enable_web_research: Option<bool>,
-    web_research_query: Option<String>,
+pub(crate) struct CareerSystemRequest {
+    pub(crate) project_id: String,
+    pub(crate) provider: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) user_id: Option<String>,
+    pub(crate) enable_mcp: Option<bool>,
+    pub(crate) enable_web_research: Option<bool>,
+    pub(crate) web_research_query: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
-struct CharactersRequest {
-    project_id: String,
+pub(crate) struct CharactersRequest {
+    pub(crate) project_id: String,
     #[serde(default = "default_count")]
-    count: usize,
-    world_context: Option<Value>,
-    theme: Option<String>,
-    genre: Option<String>,
-    requirements: Option<String>,
-    provider: Option<String>,
-    model: Option<String>,
-    user_id: Option<String>,
-    enable_mcp: Option<bool>,
-    enable_web_research: Option<bool>,
-    web_research_query: Option<String>,
+    pub(crate) count: usize,
+    pub(crate) world_context: Option<Value>,
+    pub(crate) theme: Option<String>,
+    pub(crate) genre: Option<String>,
+    pub(crate) requirements: Option<String>,
+    pub(crate) provider: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) user_id: Option<String>,
+    pub(crate) enable_mcp: Option<bool>,
+    pub(crate) enable_web_research: Option<bool>,
+    pub(crate) web_research_query: Option<String>,
 }
 
 fn default_count() -> usize {
@@ -76,26 +77,26 @@ fn default_count() -> usize {
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
-struct OutlineRequest {
-    project_id: String,
+pub(crate) struct OutlineRequest {
+    pub(crate) project_id: String,
     #[serde(default = "default_outline_count")]
-    chapter_count: usize,
-    narrative_perspective: Option<String>,
+    pub(crate) chapter_count: usize,
+    pub(crate) narrative_perspective: Option<String>,
     #[serde(default = "default_target_words")]
-    target_words: i32,
-    requirements: Option<String>,
-    creative_mode: Option<String>,
-    story_focus: Option<String>,
-    plot_stage: Option<String>,
-    story_creation_brief: Option<String>,
-    quality_preset: Option<String>,
-    quality_notes: Option<String>,
-    provider: Option<String>,
-    model: Option<String>,
-    user_id: Option<String>,
-    enable_mcp: Option<bool>,
-    enable_web_research: Option<bool>,
-    web_research_query: Option<String>,
+    pub(crate) target_words: i32,
+    pub(crate) requirements: Option<String>,
+    pub(crate) creative_mode: Option<String>,
+    pub(crate) story_focus: Option<String>,
+    pub(crate) plot_stage: Option<String>,
+    pub(crate) story_creation_brief: Option<String>,
+    pub(crate) quality_preset: Option<String>,
+    pub(crate) quality_notes: Option<String>,
+    pub(crate) provider: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) user_id: Option<String>,
+    pub(crate) enable_mcp: Option<bool>,
+    pub(crate) enable_web_research: Option<bool>,
+    pub(crate) web_research_query: Option<String>,
 }
 
 fn default_outline_count() -> usize {
@@ -103,6 +104,23 @@ fn default_outline_count() -> usize {
 }
 fn default_target_words() -> i32 {
     100000
+}
+
+fn normalize_genre_input(value: Option<serde_json::Value>) -> String {
+    match value {
+        Some(serde_json::Value::String(text)) => text,
+        Some(serde_json::Value::Array(items)) => items
+            .into_iter()
+            .filter_map(|item| item.as_str().map(str::trim).map(ToString::to_string))
+            .filter(|item| !item.is_empty())
+            .collect::<Vec<_>>()
+            .join("、"),
+        Some(other) => {
+            let text = other.to_string();
+            if text == "null" { String::new() } else { text }
+        }
+        None => String::new(),
+    }
 }
 
 fn spawn_world_building_stream(
@@ -117,7 +135,7 @@ fn spawn_world_building_stream(
     let title = body.title.unwrap_or_default();
     let description = body.description.unwrap_or_default();
     let theme = body.theme.unwrap_or_default();
-    let genre = body.genre.unwrap_or_default();
+    let genre = normalize_genre_input(body.genre);
 
     tokio::spawn(async move {
         wizard_service::generate_world_building(
@@ -151,13 +169,13 @@ fn spawn_world_building_stream(
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
-struct RegenerateWorldBuildingRequest {
-    provider: Option<String>,
-    model: Option<String>,
-    user_id: Option<String>,
-    enable_mcp: Option<bool>,
-    enable_web_research: Option<bool>,
-    web_research_query: Option<String>,
+pub(crate) struct RegenerateWorldBuildingRequest {
+    pub(crate) provider: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) user_id: Option<String>,
+    pub(crate) enable_mcp: Option<bool>,
+    pub(crate) enable_web_research: Option<bool>,
+    pub(crate) web_research_query: Option<String>,
 }
 
 async fn world_building(
@@ -303,6 +321,47 @@ async fn regenerate_world_building(
     Sse::new(stream)
 }
 
+async fn cleanup_wizard_data(
+    Extension(claims): Extension<Claims>,
+    Extension(db): Extension<DatabaseConnection>,
+    Path(project_id): Path<String>,
+    Json(_body): Json<Value>,
+) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let (tx, rx) = mpsc::channel::<Result<Event, std::convert::Infallible>>(256);
+    let channel = crate::utils::sse::SseChannel::new(tx);
+
+    tokio::spawn(async move {
+        channel
+            .progress("正在清理旧的向导数据...", 0, "processing")
+            .await;
+
+        match ProjectService::cleanup_wizard_data(&db, &project_id, &claims.sub).await {
+            Ok(Some(deleted)) => {
+                let response = json!({
+                    "message": "向导旧数据清理完成",
+                    "deleted": {
+                        "characters": deleted.characters,
+                        "outlines": deleted.outlines,
+                        "chapters": deleted.chapters,
+                    }
+                });
+                channel.progress("清理完成", 100, "success").await;
+                channel.result(&response).await;
+                channel.done().await;
+            }
+            Ok(None) => {
+                channel.error("项目不存在或无权访问", 404).await;
+            }
+            Err(e) => {
+                channel.error(&format!("清理失败: {}", e), 500).await;
+            }
+        }
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    Sse::new(stream)
+}
+
 pub fn routes() -> Router {
     Router::new()
         .route("/wizard-stream/world-building", post(world_building))
@@ -317,4 +376,5 @@ pub fn routes() -> Router {
         .route("/wizard-stream/career-system", post(career_system))
         .route("/wizard-stream/characters", post(characters))
         .route("/wizard-stream/outline", post(outline))
+        .route("/wizard-stream/cleanup/{project_id}", post(cleanup_wizard_data))
 }

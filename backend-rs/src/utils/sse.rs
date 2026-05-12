@@ -205,6 +205,17 @@ impl SseProgress {
 pub struct SseChannel {
     tx: tokio::sync::mpsc::Sender<Result<Event, std::convert::Infallible>>,
     result_capture: Option<Arc<Mutex<Option<Value>>>>,
+    state_capture: Option<Arc<Mutex<SseTaskCapture>>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SseTaskCapture {
+    pub message: Option<String>,
+    pub progress: Option<u32>,
+    pub status: Option<String>,
+    pub result: Option<Value>,
+    pub error: Option<String>,
+    pub done: bool,
 }
 
 impl SseChannel {
@@ -212,6 +223,7 @@ impl SseChannel {
         Self {
             tx,
             result_capture: None,
+            state_capture: None,
         }
     }
 
@@ -222,6 +234,19 @@ impl SseChannel {
         Self {
             tx,
             result_capture: Some(result_capture),
+            state_capture: None,
+        }
+    }
+
+    pub fn with_captures(
+        tx: tokio::sync::mpsc::Sender<Result<Event, std::convert::Infallible>>,
+        result_capture: Arc<Mutex<Option<Value>>>,
+        state_capture: Arc<Mutex<SseTaskCapture>>,
+    ) -> Self {
+        Self {
+            tx,
+            result_capture: Some(result_capture),
+            state_capture: Some(state_capture),
         }
     }
 
@@ -230,6 +255,12 @@ impl SseChannel {
     }
 
     pub async fn progress(&self, message: &str, progress: u32, status: &str) {
+        if let Some(capture) = &self.state_capture {
+            let mut state = capture.lock().await;
+            state.message = Some(message.to_string());
+            state.progress = Some(progress.clamp(0, 100));
+            state.status = Some(status.to_string());
+        }
         self.send(sse_progress(message, progress, status)).await;
     }
 
@@ -241,14 +272,26 @@ impl SseChannel {
         if let Some(capture) = &self.result_capture {
             *capture.lock().await = Some(data.clone());
         }
+        if let Some(capture) = &self.state_capture {
+            let mut state = capture.lock().await;
+            state.result = Some(data.clone());
+        }
         self.send(sse_result(data)).await;
     }
 
     pub async fn error(&self, error: &str, code: u16) {
+        if let Some(capture) = &self.state_capture {
+            let mut state = capture.lock().await;
+            state.error = Some(error.to_string());
+            state.status = Some("error".to_string());
+        }
         self.send(sse_error(error, code)).await;
     }
 
     pub async fn done(&self) {
+        if let Some(capture) = &self.state_capture {
+            capture.lock().await.done = true;
+        }
         self.send(sse_done()).await;
     }
 }

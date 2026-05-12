@@ -2,7 +2,7 @@ use axum::{
     extract::{Extension, Path, Query},
     http::StatusCode,
     response::Json,
-    routing::{get, post, put},
+    routing::{get, post},
     Router,
 };
 use sea_orm::DatabaseConnection;
@@ -57,6 +57,22 @@ async fn list_project_styles(
     Path(project_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     WritingStyleService::list_project_styles(&db, &claims.sub, &project_id)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": format!("{}", e)})),
+            )
+        })
+}
+
+async fn get_style(
+    Extension(claims): Extension<Claims>,
+    Extension(db): Extension<DatabaseConnection>,
+    Path(style_id): Path<i32>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    WritingStyleService::get_style(&db, &claims.sub, style_id)
         .await
         .map(Json)
         .map_err(|e| {
@@ -147,10 +163,11 @@ async fn set_default_style(
 }
 
 async fn initialize_defaults(
+    Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
     Path(project_id): Path<String>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    WritingStyleService::initialize_defaults(&db, &project_id)
+    WritingStyleService::initialize_defaults(&db, &claims.sub, &project_id)
         .await
         .map(|v| (StatusCode::CREATED, Json(v)))
         .map_err(|e| {
@@ -180,7 +197,7 @@ pub fn routes() -> Router {
         .route("/writing-styles", post(create_style))
         .route(
             "/writing-styles/{style_id}",
-            put(update_style).delete(delete_style),
+            get(get_style).put(update_style).delete(delete_style),
         )
         .route(
             "/writing-styles/{style_id}/set-default",

@@ -56,6 +56,12 @@ struct TestWebResearchRequest {
     query: Option<String>,
 }
 
+#[derive(Deserialize, Default)]
+struct CreatePresetFromCurrentQuery {
+    name: Option<String>,
+    description: Option<String>,
+}
+
 async fn get_settings(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
@@ -266,11 +272,14 @@ async fn fetch_models_endpoint(
     )
     .await
     {
-        Ok(models) => Ok(Json(json!({
+        Ok(models) => {
+            let model_count = models.len();
+            Ok(Json(json!({
             "success": true,
-            "models": models,
-            "message": format!("Fetched {} models", models.len())
-        }))),
+            "models": normalize_fetch_models_payload(models),
+            "message": format!("Fetched {} models", model_count)
+        })))
+        }
         Err(error) => {
             let fallback = curated_fetch_models(&effective.provider);
             if !fallback.is_empty() {
@@ -290,6 +299,43 @@ async fn fetch_models_endpoint(
             }
         }
     }
+}
+
+fn normalize_fetch_models_payload(models: Vec<Value>) -> Vec<Value> {
+    models
+        .into_iter()
+        .filter_map(|item| {
+            if let Some(id) = item.get("id").and_then(Value::as_str) {
+                let trimmed = id.trim();
+                if !trimmed.is_empty() {
+                    return Some(json!({
+                        "id": trimmed,
+                        "owned_by": item
+                            .get("owned_by")
+                            .and_then(Value::as_str)
+                            .or_else(|| item.get("description").and_then(Value::as_str))
+                    }));
+                }
+            }
+
+            let value = item
+                .get("value")
+                .and_then(Value::as_str)
+                .or_else(|| item.get("name").and_then(Value::as_str))
+                .or_else(|| item.get("label").and_then(Value::as_str))
+                .map(str::trim)
+                .filter(|text| !text.is_empty())?;
+
+            Some(json!({
+                "id": value,
+                "owned_by": item
+                    .get("owned_by")
+                    .and_then(Value::as_str)
+                    .or_else(|| item.get("description").and_then(Value::as_str))
+                    .or_else(|| item.get("label").and_then(Value::as_str))
+            }))
+        })
+        .collect()
 }
 
 async fn test_web_research_connection(
@@ -636,13 +682,25 @@ async fn test_preset(
 async fn create_preset_from_current(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
-    Json(body): Json<Value>,
+    Query(query): Query<CreatePresetFromCurrentQuery>,
+    body: Option<Json<Value>>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    let name = body
-        .get("name")
-        .and_then(|v| v.as_str())
+    let body = body.map(|Json(value)| value).unwrap_or_else(|| json!({}));
+    let name = query
+        .name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            body.get("name")
+                .and_then(|v| v.as_str())
+                .filter(|value| !value.trim().is_empty())
+        })
         .unwrap_or("My Preset");
-    let description = body.get("description").and_then(|v| v.as_str());
+    let description = query
+        .description
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| body.get("description").and_then(|v| v.as_str()));
     match SettingsService::create_preset_from_current(&db, &claims.sub, name, description).await {
         Ok(result) => Ok((StatusCode::CREATED, Json(result))),
         Err(e) => Err((

@@ -12,6 +12,7 @@ pub mod plot_expansion_service;
 pub mod polish_service;
 pub mod project_service;
 pub mod prompt_template_service;
+pub mod chapter_generation_service;
 pub mod prompt_workshop_service;
 pub mod relationship_service;
 pub mod settings_service;

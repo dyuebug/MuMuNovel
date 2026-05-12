@@ -20,6 +20,10 @@ pub struct AppConfig {
     pub local_auth_display_name: String,
     pub linuxdo_client_id: String,
     pub linuxdo_client_secret: String,
+    pub linuxdo_redirect_uri: String,
+    pub frontend_url: String,
+    pub session_expire_minutes: u32,
+    pub session_refresh_threshold_minutes: u32,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -71,5 +75,9 @@ pub fn load() -> AppConfig {
         local_auth_display_name: env_or("LOCAL_AUTH_DISPLAY_NAME", "本地管理员"),
         linuxdo_client_id: env_or("LINUXDO_CLIENT_ID", ""),
         linuxdo_client_secret: env_or("LINUXDO_CLIENT_SECRET", ""),
+        linuxdo_redirect_uri: env_or("LINUXDO_REDIRECT_URI", ""),
+        frontend_url: env_or("FRONTEND_URL", "http://localhost"),
+        session_expire_minutes: env_or_u32("SESSION_EXPIRE_MINUTES", 120),
+        session_refresh_threshold_minutes: env_or_u32("SESSION_REFRESH_THRESHOLD_MINUTES", 30),
     }
 }

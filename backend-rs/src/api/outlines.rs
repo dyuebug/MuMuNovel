@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::models::{chapter, outline, project};
 use crate::ai::service::AIService;
+use crate::models::{chapter, outline, project};
 use crate::services::auth::Claims;
 use crate::services::outline_service::OutlineService;
 use crate::services::plot_expansion_service::create_plot_expansion_service;
@@ -92,6 +92,21 @@ fn default_target_words() -> i32 {
     100000
 }
 
+fn compatible_outline_payload(outline: outline::Model) -> Value {
+    let outline_value = serde_json::to_value(&outline).unwrap_or_else(|_| json!({}));
+    match outline_value {
+        Value::Object(mut map) => {
+            map.insert("success".to_string(), json!(true));
+            map.insert("data".to_string(), json!(outline));
+            Value::Object(map)
+        }
+        _ => json!({
+            "success": true,
+            "data": outline
+        }),
+    }
+}
+
 async fn generate_outlines(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
@@ -100,7 +115,12 @@ async fn generate_outlines(
     let Some(project) = project::Entity::find_by_id(&body.project_id)
         .one(&db)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": e.to_string()}))))?
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": e.to_string()})),
+            )
+        })?
     else {
         return Err((
             StatusCode::NOT_FOUND,
@@ -114,7 +134,8 @@ async fn generate_outlines(
         ));
     }
 
-    let (tx, mut rx) = mpsc::channel::<Result<axum::response::sse::Event, std::convert::Infallible>>(256);
+    let (tx, mut rx) =
+        mpsc::channel::<Result<axum::response::sse::Event, std::convert::Infallible>>(256);
     let result_capture: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
     let channel = SseChannel::with_result_capture(tx, result_capture.clone());
     let db_for_task = db.clone();
@@ -133,9 +154,7 @@ async fn generate_outlines(
     let provider = body.provider.clone();
     let model = body.model.clone();
 
-    let drain_handle = tokio::spawn(async move {
-        while rx.recv().await.is_some() {}
-    });
+    let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
     wizard_service::generate_outline(
         &db_for_task,
@@ -185,7 +204,6 @@ async fn generate_outlines(
     })))
 }
 
-
 async fn reorder_outlines(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
@@ -202,7 +220,12 @@ async fn reorder_outlines(
     for order in body.orders {
         let Some(outline_model) = OutlineService::get(&db, &order.id, &claims.sub)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"success": false, "message": e}))))?
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"success": false, "message": e})),
+                )
+            })?
         else {
             return Err((
                 StatusCode::NOT_FOUND,
@@ -229,7 +252,6 @@ async fn reorder_outlines(
         "updated_chapters": 0,
     })))
 }
-
 
 async fn expand_outline_compat(
     Extension(db): Extension<DatabaseConnection>,
@@ -276,20 +298,14 @@ async fn expand_outline_compat(
         .filter(|value| *value > 0)
         .unwrap_or(5) as usize;
 
-    let ai_config = SettingsService::build_ai_config(
-        &db,
-        &claims.sub,
-        provider,
-        model,
-        None,
-    )
-    .await
-    .map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": error})),
-        )
-    })?;
+    let ai_config = SettingsService::build_ai_config(&db, &claims.sub, provider, model, None)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": error})),
+            )
+        })?;
     let ai_service = AIService::new(ai_config);
     let service = create_plot_expansion_service(&ai_service);
 
@@ -343,28 +359,25 @@ async fn batch_expand_outlines_compat(
         .unwrap_or(false);
     let provider = body.get("provider").and_then(Value::as_str);
     let model = body.get("model").and_then(Value::as_str);
-    let outline_ids = body.get("outline_ids").and_then(Value::as_array).map(|items| {
-        items
-            .iter()
-            .filter_map(Value::as_str)
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-    });
+    let outline_ids = body
+        .get("outline_ids")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        });
 
-    let ai_config = SettingsService::build_ai_config(
-        &db,
-        &claims.sub,
-        provider,
-        model,
-        None,
-    )
-    .await
-    .map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": error})),
-        )
-    })?;
+    let ai_config = SettingsService::build_ai_config(&db, &claims.sub, provider, model, None)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": error})),
+            )
+        })?;
     let ai_service = AIService::new(ai_config);
     let service = create_plot_expansion_service(&ai_service);
 
@@ -407,10 +420,7 @@ async fn create_outline(
     )
     .await
     {
-        Ok(Some(outline)) => Ok((
-            StatusCode::CREATED,
-            Json(json!({"success": true, "data": outline})),
-        )),
+        Ok(Some(outline)) => Ok((StatusCode::CREATED, Json(compatible_outline_payload(outline)))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({"success": false, "message": "项目不存在或无权限"})),
@@ -448,7 +458,7 @@ async fn get_outline(
     Path(outline_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match OutlineService::get(&db, &outline_id, &claims.sub).await {
-        Ok(Some(outline)) => Ok(Json(json!({"success": true, "data": outline}))),
+        Ok(Some(outline)) => Ok(Json(compatible_outline_payload(outline))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({"success": false, "message": "大纲不存在或无权限"})),
@@ -477,7 +487,7 @@ async fn update_outline(
     )
     .await
     {
-        Ok(Some(outline)) => Ok(Json(json!({"success": true, "data": outline}))),
+        Ok(Some(outline)) => Ok(Json(compatible_outline_payload(outline))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({"success": false, "message": "大纲不存在或无权限"})),
@@ -671,6 +681,7 @@ struct ChapterPlan {
 
 #[derive(Deserialize)]
 struct CreateChaptersFromPlansRequest {
+    #[serde(default, alias = "chapter_plans")]
     plans: Vec<ChapterPlan>,
 }
 
@@ -827,15 +838,18 @@ pub fn routes() -> Router {
             get(list_outlines_by_project),
         )
         .route("/outlines/generate", post(generate_outlines))
+        .route("/outlines/generate-stream", post(generate_outlines))
         .route("/outlines/reorder", post(reorder_outlines))
         .route("/outlines/batch-expand", post(batch_expand_outlines_compat))
+        .route("/outlines/batch-expand-stream", post(batch_expand_outlines_compat))
         .route("/outlines", post(create_outline).get(list_outlines))
         .route(
             "/outlines/{outline_id}",
             get(get_outline).put(update_outline).delete(delete_outline),
         )
+        .route("/outlines/{outline_id}/expand", post(expand_outline_compat))
         .route(
-            "/outlines/{outline_id}/expand",
+            "/outlines/{outline_id}/expand-stream",
             post(expand_outline_compat),
         )
         .route(

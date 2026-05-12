@@ -17,9 +17,10 @@ use crate::tasks::registry::TaskRegistry;
 use crate::tasks::stream::TaskStreamHub;
 
 use super::{
-    admin, ai_test, auth, background_tasks, book_import, careers, changelog, chapters, characters,
-    foreshadows, health, inspiration, mcp_plugins, organizations, outlines, polish, projects,
-    prompt_templates, prompt_workshop, relationships, settings, users, wizard, writing_styles,
+    admin, ai_test, auth, background_tasks, book_import, careers, changelog,
+    chapter_batch_generation, chapters, characters, foreshadows, health, inspiration, mcp_plugins,
+    memories, organizations, outlines, polish, projects, prompt_templates, prompt_workshop,
+    relationships, settings, users, wizard, writing_styles,
 };
 
 pub fn build(
@@ -62,7 +63,9 @@ pub fn build(
         .merge(prompt_templates::routes())
         .merge(prompt_workshop::routes())
         .merge(mcp_plugins::routes())
+        .merge(memories::routes())
         .merge(book_import::routes())
+        .merge(chapter_batch_generation::routes())
         .merge(polish::routes())
         .merge(inspiration::routes())
         .merge(wizard::routes())

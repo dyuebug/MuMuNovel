@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use axum::{
     extract::{Extension, Path, Query},
     http::StatusCode,
-    response::Json,
+    response::{sse::Event, Json, Sse},
     routing::{get, post},
     Router,
 };
@@ -13,11 +13,17 @@ use sea_orm::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
-use crate::models::{character, organization, organization_member, project};
+use crate::ai::service::AIService;
+use crate::models::{character, generation_history, organization, organization_member, project};
 use crate::services::auth::Claims;
 use crate::services::organization_service::OrganizationService;
+use crate::services::prompt_template_service::PromptTemplateService;
+use crate::services::settings_service::SettingsService;
+use crate::services::wizard_service::clean_json_response;
 
 #[derive(Deserialize)]
 struct CreateRequest {
@@ -71,6 +77,328 @@ struct MemberUpdateRequest {
     notes: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct GenerateOrganizationRequest {
+    project_id: String,
+    name: Option<String>,
+    organization_type: Option<String>,
+    background: Option<String>,
+    requirements: Option<String>,
+    provider: Option<String>,
+    model: Option<String>,
+}
+
+fn normalized_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn value_text(value: Option<&Value>) -> Option<String> {
+    match value {
+        Some(Value::String(text)) => normalized_string(Some(text)),
+        Some(Value::Number(number)) => Some(number.to_string()),
+        Some(Value::Array(items)) => {
+            let parts: Vec<String> = items
+                .iter()
+                .filter_map(|item| match item {
+                    Value::String(text) => normalized_string(Some(text)),
+                    Value::Number(number) => Some(number.to_string()),
+                    _ => None,
+                })
+                .collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("、"))
+            }
+        }
+        _ => None,
+    }
+}
+
+async fn load_organization_prompt_template(
+    db: &DatabaseConnection,
+    user_id: &str,
+) -> Result<String, String> {
+    let _ = PromptTemplateService::sync_managed_templates_for_user(db, user_id).await;
+
+    if let Some(template) = PromptTemplateService::find_user_template(
+        db,
+        user_id,
+        "SINGLE_ORGANIZATION_GENERATION",
+    )
+    .await?
+    {
+        if template.is_active {
+            let content = template.template_content.trim();
+            if !content.is_empty() {
+                return Ok(content.to_string());
+            }
+        }
+    }
+
+    PromptTemplateService::system_template_info("SINGLE_ORGANIZATION_GENERATION")
+        .map(|template| template.content.clone())
+        .ok_or_else(|| "缺少组织生成提示词模板".to_string())
+}
+
+async fn load_generate_project(
+    db: &DatabaseConnection,
+    project_id: &str,
+    user_id: &str,
+) -> Result<Option<project::Model>, String> {
+    project::Entity::find()
+        .filter(project::Column::Id.eq(project_id))
+        .filter(project::Column::UserId.eq(user_id))
+        .one(db)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn build_organization_generation_context(
+    db: &DatabaseConnection,
+    project_model: &project::Model,
+) -> Result<String, String> {
+    let existing_characters = character::Entity::find()
+        .filter(character::Column::ProjectId.eq(&project_model.id))
+        .order_by_desc(character::Column::CreatedAt)
+        .all(db)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let mut existing_info = String::new();
+    let mut character_list = Vec::new();
+    let mut organization_list = Vec::new();
+
+    for item in existing_characters.iter().take(10) {
+        if item.is_organization {
+            organization_list.push(format!(
+                "- {} [{}]",
+                item.name,
+                item.organization_type
+                    .clone()
+                    .unwrap_or_else(|| "组织".to_string())
+            ));
+        } else {
+            character_list.push(format!(
+                "- {}（{}）",
+                item.name,
+                item.role_type.clone().unwrap_or_else(|| "未知".to_string())
+            ));
+        }
+    }
+
+    if !character_list.is_empty() {
+        existing_info.push_str("\n已有角色：\n");
+        existing_info.push_str(&character_list.join("\n"));
+    }
+    if !organization_list.is_empty() {
+        existing_info.push_str("\n\n已有组织：\n");
+        existing_info.push_str(&organization_list.join("\n"));
+    }
+
+    Ok(format!(
+        "项目信息：\n- 书名：{}\n- 主题：{}\n- 类型：{}\n- 时间背景：{}\n- 地理位置：{}\n- 氛围基调：{}\n- 世界规则：{}\n{}",
+        project_model.title,
+        project_model.theme.as_deref().unwrap_or("未设定"),
+        project_model.genre.as_deref().unwrap_or("未设定"),
+        project_model.world_time_period.as_deref().unwrap_or("未设定"),
+        project_model.world_location.as_deref().unwrap_or("未设定"),
+        project_model.world_atmosphere.as_deref().unwrap_or("未设定"),
+        project_model.world_rules.as_deref().unwrap_or("未设定"),
+        existing_info
+    ))
+}
+
+fn build_organization_generation_user_input(body: &GenerateOrganizationRequest) -> String {
+    format!(
+        "用户要求：\n- 组织名称：{}\n- 组织类型：{}\n- 背景设定：{}\n- 其他要求：{}",
+        body.name.as_deref().unwrap_or("请AI生成"),
+        body.organization_type
+            .as_deref()
+            .unwrap_or("请AI根据世界观决定"),
+        body.background.as_deref().unwrap_or("无特殊要求"),
+        body.requirements.as_deref().unwrap_or("无"),
+    )
+}
+
+pub(crate) async fn generate_organization_task(
+    db: &DatabaseConnection,
+    user_id: &str,
+    body: GenerateOrganizationRequest,
+) -> Result<Value, String> {
+    let project_model = load_generate_project(db, &body.project_id, user_id)
+        .await?
+        .ok_or_else(|| "项目不存在或无权限".to_string())?;
+
+    let prompt_template = load_organization_prompt_template(db, user_id).await?;
+    let project_context = build_organization_generation_context(db, &project_model).await?;
+    let user_input = build_organization_generation_user_input(&body);
+
+    let mut params = HashMap::new();
+    params.insert("project_context".to_string(), project_context);
+    params.insert("user_input".to_string(), user_input);
+    let prompt = PromptTemplateService::format_prompt(&prompt_template, &params)?;
+
+    let ai_config = SettingsService::build_ai_config(
+        db,
+        user_id,
+        body.provider.as_deref(),
+        body.model.as_deref(),
+        None,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let used_model = ai_config.model.clone();
+    let ai_service = AIService::new(ai_config);
+    let response = ai_service
+        .generate_text(&prompt, None, None)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let cleaned = clean_json_response(&response.content);
+    let ai_payload = serde_json::from_str::<Value>(&cleaned)
+        .map_err(|error| format!("组织生成结果不是有效 JSON: {}", error))?;
+
+    let name = value_text(ai_payload.get("name"))
+        .or_else(|| normalized_string(body.name.as_deref()))
+        .unwrap_or_else(|| "未命名组织".to_string());
+    let organization_type = value_text(ai_payload.get("organization_type"))
+        .or_else(|| normalized_string(body.organization_type.as_deref()))
+        .or_else(|| Some("组织".to_string()));
+    let personality = value_text(ai_payload.get("personality"));
+    let background = value_text(ai_payload.get("background"))
+        .or_else(|| normalized_string(body.background.as_deref()));
+    let appearance = value_text(ai_payload.get("appearance"));
+    let organization_purpose = value_text(ai_payload.get("organization_purpose"));
+    let traits = ai_payload
+        .get("traits")
+        .cloned()
+        .unwrap_or_else(|| json!([]))
+        .to_string();
+    let organization_members = ai_payload
+        .get("organization_members")
+        .cloned()
+        .unwrap_or_else(|| json!([]))
+        .to_string();
+    let power_level = ai_payload
+        .get("power_level")
+        .and_then(Value::as_i64)
+        .and_then(|value| i32::try_from(value).ok())
+        .unwrap_or(50);
+    let location = value_text(ai_payload.get("location"));
+    let motto = value_text(ai_payload.get("motto"));
+    let color = value_text(ai_payload.get("color"));
+
+    let now = Utc::now().naive_utc();
+    let character_id = Uuid::new_v4().to_string();
+    let organization_id = Uuid::new_v4().to_string();
+
+    character::ActiveModel {
+        id: Set(character_id.clone()),
+        project_id: Set(project_model.id.clone()),
+        name: Set(name.clone()),
+        age: Set(None),
+        gender: Set(None),
+        is_organization: Set(true),
+        role_type: Set(Some("supporting".to_string())),
+        personality: Set(personality),
+        background: Set(background),
+        appearance: Set(appearance),
+        relationships: Set(None),
+        organization_type: Set(organization_type.clone()),
+        organization_purpose: Set(organization_purpose),
+        organization_members: Set(Some(organization_members)),
+        status: Set("active".to_string()),
+        status_changed_chapter: Set(None),
+        current_state: Set(None),
+        state_updated_chapter: Set(None),
+        main_career_id: Set(None),
+        main_career_stage: Set(None),
+        sub_careers: Set(None),
+        avatar_url: Set(None),
+        traits: Set(Some(traits)),
+        created_at: Set(now),
+        updated_at: Set(Some(now)),
+    }
+    .insert(db)
+    .await
+    .map_err(|error| error.to_string())?;
+
+    organization::ActiveModel {
+        id: Set(organization_id),
+        character_id: Set(character_id.clone()),
+        project_id: Set(project_model.id.clone()),
+        parent_org_id: Set(None),
+        level: Set(0),
+        power_level: Set(power_level),
+        member_count: Set(0),
+        location: Set(location),
+        motto: Set(motto),
+        color: Set(color),
+        created_at: Set(now),
+        updated_at: Set(Some(now)),
+    }
+    .insert(db)
+    .await
+    .map_err(|error| error.to_string())?;
+
+    generation_history::ActiveModel {
+        id: Set(Uuid::new_v4().to_string()),
+        project_id: Set(project_model.id),
+        chapter_id: Set(None),
+        prompt: Set(Some(prompt)),
+        generated_content: Set(Some(response.content)),
+        model: Set(Some(used_model)),
+        tokens_used: Set(None),
+        generation_time: Set(None),
+        created_at: Set(Some(now)),
+    }
+    .insert(db)
+    .await
+    .map_err(|error| error.to_string())?;
+
+    Ok(json!({
+        "character": {
+            "id": character_id,
+            "name": name,
+            "organization_type": organization_type,
+            "is_organization": true
+        }
+    }))
+}
+
+async fn generate_org_stream_legacy(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Json(body): Json<GenerateOrganizationRequest>,
+) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let (tx, rx) = mpsc::channel::<Result<Event, std::convert::Infallible>>(256);
+    let channel = crate::utils::sse::SseChannel::new(tx);
+    let user_id = claims.sub;
+
+    tokio::spawn(async move {
+        channel.progress("开始生成组织...", 0, "processing").await;
+        channel.progress("生成组织中...", 35, "processing").await;
+        match generate_organization_task(&db, &user_id, body).await {
+            Ok(result) => {
+                channel.progress("保存组织数据...", 90, "processing").await;
+                channel.result(&result).await;
+                channel.progress("组织生成完成!", 100, "success").await;
+                channel.done().await;
+            }
+            Err(error) => {
+                channel.error(&error, 500).await;
+                channel.done().await;
+            }
+        }
+    });
+
+    Sse::new(ReceiverStream::new(rx))
+}
+
 async fn verify_project_access(
     db: &DatabaseConnection,
     project_id: &str,
@@ -115,7 +443,9 @@ fn org_detail_json(org: &organization::Model, char_model: Option<&character::Mod
         "character_id": org.character_id,
         "name": name,
         "type": organization_type,
+        "organization_type": organization_type,
         "purpose": purpose,
+        "organization_purpose": purpose,
         "member_count": org.member_count,
         "power_level": org.power_level,
         "location": org.location,
@@ -130,7 +460,7 @@ fn member_detail_json(
 ) -> Value {
     let character_name = char_model
         .map(|model| model.name.clone())
-        .unwrap_or_else(|| format!("??????? ({})", member.character_id));
+        .unwrap_or_else(|| format!("未关联角色 ({})", member.character_id));
 
     json!({
         "id": member.id,
@@ -144,7 +474,62 @@ fn member_detail_json(
         "joined_at": member.joined_at,
         "left_at": member.left_at,
         "notes": member.notes,
+        "character": char_model.map(|model| json!({
+            "id": model.id,
+            "name": model.name,
+            "organization_type": model.organization_type,
+            "organization_purpose": model.organization_purpose,
+            "is_organization": model.is_organization,
+        })),
     })
+}
+
+async fn ensure_project_organization_rows(
+    db: &DatabaseConnection,
+    project_id: &str,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    let existing_orgs = organization::Entity::find()
+        .filter(organization::Column::ProjectId.eq(project_id))
+        .all(db)
+        .await
+        .map_err(|e| server_error(e.to_string()))?;
+    let existing_character_ids: std::collections::HashSet<String> = existing_orgs
+        .iter()
+        .map(|org| org.character_id.clone())
+        .collect();
+
+    let organization_characters = character::Entity::find()
+        .filter(character::Column::ProjectId.eq(project_id))
+        .filter(character::Column::IsOrganization.eq(true))
+        .all(db)
+        .await
+        .map_err(|e| server_error(e.to_string()))?;
+
+    for char_model in organization_characters {
+        if existing_character_ids.contains(&char_model.id) {
+            continue;
+        }
+
+        organization::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            character_id: Set(char_model.id.clone()),
+            project_id: Set(project_id.to_string()),
+            parent_org_id: Set(None),
+            level: Set(0),
+            power_level: Set(50),
+            member_count: Set(0),
+            location: Set(None),
+            motto: Set(None),
+            color: Set(None),
+            created_at: Set(Utc::now().naive_utc()),
+            updated_at: Set(Some(Utc::now().naive_utc())),
+        }
+        .insert(db)
+        .await
+        .map_err(|e| server_error(e.to_string()))?;
+    }
+
+    Ok(())
 }
 
 async fn create_org(
@@ -177,10 +562,9 @@ async fn list_orgs(
     Extension(claims): Extension<Claims>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    ensure_project_organization_rows(&db, &query.project_id).await?;
     match OrganizationService::list(&db, &query.project_id, &claims.sub).await {
-        Ok(Some(orgs)) => Ok(Json(
-            json!({"success": true, "data": orgs, "total": orgs.len()}),
-        )),
+        Ok(Some(orgs)) => Ok(Json(json!(orgs))),
         Ok(None) => Err(forbidden_or_missing("项目不存在或无权限")),
         Err(e) => Err(server_error(e)),
     }
@@ -197,6 +581,8 @@ async fn list_project_orgs(
     {
         return Err(forbidden_or_missing("项目不存在或无权限"));
     }
+
+    ensure_project_organization_rows(&db, &project_id).await?;
 
     let orgs = organization::Entity::find()
         .filter(organization::Column::ProjectId.eq(&project_id))
@@ -254,7 +640,7 @@ async fn update_org(
     )
     .await
     {
-        Ok(Some(org)) => Ok(Json(json!([org]))),
+        Ok(Some(org)) => Ok(Json(json!(org))),
         Ok(None) => Err(forbidden_or_missing("组织不存在或无权限")),
         Err(e) => Err(server_error(e)),
     }
@@ -509,6 +895,7 @@ async fn delete_member(
 pub fn routes() -> Router {
     Router::new()
         .route("/organizations", post(create_org).get(list_orgs))
+        .route("/organizations/generate-stream", post(generate_org_stream_legacy))
         .route(
             "/organizations/project/{project_id}",
             get(list_project_orgs),

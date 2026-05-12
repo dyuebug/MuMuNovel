@@ -1,14 +1,26 @@
 use chrono::Utc;
+use serde::Serialize;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set,
+    QuerySelect, Set, TransactionTrait,
 };
 use uuid::Uuid;
 
-use crate::models::project;
-use crate::models::{project_default_style, writing_style};
+use crate::models::{
+    analysis_task, batch_generation_snapshot, batch_generation_task, career, chapter,
+    chapter_draft_attempt, character, character_career, foreshadow, generation_history,
+    organization, organization_member, outline, plot_analysis, project, project_default_style,
+    regeneration_task, relationship, story_memory, writing_style,
+};
 
 pub struct ProjectService;
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct WizardCleanupDeletedCounts {
+    pub characters: u64,
+    pub outlines: u64,
+    pub chapters: u64,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub struct CreateProjectParams {
@@ -326,5 +338,177 @@ impl ProjectService {
             .await
             .map_err(|e| format!("{}", e))?;
         Ok(Some(()))
+    }
+
+    pub async fn cleanup_wizard_data(
+        db: &DatabaseConnection,
+        project_id: &str,
+        user_id: &str,
+    ) -> Result<Option<WizardCleanupDeletedCounts>, String> {
+        if Self::get(db, project_id, user_id).await?.is_none() {
+            return Ok(None);
+        }
+
+        let character_ids = character::Entity::find()
+            .filter(character::Column::ProjectId.eq(project_id))
+            .all(db)
+            .await
+            .map_err(|e| format!("{}", e))?
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+
+        let organization_ids = organization::Entity::find()
+            .filter(organization::Column::ProjectId.eq(project_id))
+            .all(db)
+            .await
+            .map_err(|e| format!("{}", e))?
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+
+        let batch_task_ids = batch_generation_task::Entity::find()
+            .filter(batch_generation_task::Column::ProjectId.eq(project_id))
+            .all(db)
+            .await
+            .map_err(|e| format!("{}", e))?
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+
+        let txn = db.begin().await.map_err(|e| format!("{}", e))?;
+
+        if !batch_task_ids.is_empty() {
+            batch_generation_snapshot::Entity::delete_many()
+                .filter(batch_generation_snapshot::Column::BatchTaskId.is_in(batch_task_ids))
+                .exec(&txn)
+                .await
+                .map_err(|e| format!("{}", e))?;
+        }
+
+        chapter_draft_attempt::Entity::delete_many()
+            .filter(chapter_draft_attempt::Column::ProjectId.eq(project_id))
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        regeneration_task::Entity::delete_many()
+            .filter(regeneration_task::Column::ProjectId.eq(project_id))
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        plot_analysis::Entity::delete_many()
+            .filter(plot_analysis::Column::ProjectId.eq(project_id))
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        generation_history::Entity::delete_many()
+            .filter(generation_history::Column::ProjectId.eq(project_id))
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        analysis_task::Entity::delete_many()
+            .filter(analysis_task::Column::ProjectId.eq(project_id))
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        batch_generation_task::Entity::delete_many()
+            .filter(batch_generation_task::Column::ProjectId.eq(project_id))
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        story_memory::Entity::delete_many()
+            .filter(story_memory::Column::ProjectId.eq(project_id))
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        relationship::Entity::delete_many()
+            .filter(relationship::Column::ProjectId.eq(project_id))
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        foreshadow::Entity::delete_many()
+            .filter(foreshadow::Column::ProjectId.eq(project_id))
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        if !organization_ids.is_empty() {
+            organization_member::Entity::delete_many()
+                .filter(organization_member::Column::OrganizationId.is_in(organization_ids))
+                .exec(&txn)
+                .await
+                .map_err(|e| format!("{}", e))?;
+        }
+
+        organization::Entity::delete_many()
+            .filter(organization::Column::ProjectId.eq(project_id))
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        if !character_ids.is_empty() {
+            character_career::Entity::delete_many()
+                .filter(character_career::Column::CharacterId.is_in(character_ids))
+                .exec(&txn)
+                .await
+                .map_err(|e| format!("{}", e))?;
+        }
+
+        career::Entity::delete_many()
+            .filter(career::Column::ProjectId.eq(project_id))
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        let deleted_chapters = chapter::Entity::delete_many()
+            .filter(chapter::Column::ProjectId.eq(project_id))
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        let deleted_outlines = outline::Entity::delete_many()
+            .filter(outline::Column::ProjectId.eq(project_id))
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        let deleted_characters = character::Entity::delete_many()
+            .filter(character::Column::ProjectId.eq(project_id))
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        let project_model = project::Entity::find_by_id(project_id)
+            .one(&txn)
+            .await
+            .map_err(|e| format!("{}", e))?
+            .ok_or_else(|| "项目不存在".to_string())?;
+
+        let mut active: project::ActiveModel = project_model.into();
+        active.status = Set("planning".to_string());
+        active.wizard_status = Set("incomplete".to_string());
+        active.wizard_step = Set(0);
+        active.world_time_period = Set(None);
+        active.world_location = Set(None);
+        active.world_atmosphere = Set(None);
+        active.world_rules = Set(None);
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
+        active.update(&txn).await.map_err(|e| format!("{}", e))?;
+
+        txn.commit().await.map_err(|e| format!("{}", e))?;
+
+        Ok(Some(WizardCleanupDeletedCounts {
+            characters: deleted_characters.rows_affected,
+            outlines: deleted_outlines.rows_affected,
+            chapters: deleted_chapters.rows_affected,
+        }))
     }
 }

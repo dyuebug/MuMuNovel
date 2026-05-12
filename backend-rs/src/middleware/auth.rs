@@ -54,6 +54,10 @@ fn is_public(path: &str) -> bool {
         || path.starts_with("/assets")
         || path == "/api/auth/login"
         || path == "/api/auth/local/login"
+        || path == "/api/auth/bind/login"
+        || path == "/api/auth/linuxdo/url"
+        || path == "/api/auth/linuxdo/callback"
+        || path == "/api/auth/callback"
         || path == "/api/auth/register"
         || path == "/api/auth/logout"
         || path == "/api/auth/config"

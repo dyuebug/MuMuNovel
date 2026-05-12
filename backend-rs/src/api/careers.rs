@@ -1,7 +1,7 @@
 use axum::{
     extract::{Extension, Path, Query},
     http::StatusCode,
-    response::Json,
+    response::{sse::Event, Json, Sse},
     routing::{delete, get, post, put},
     Router,
 };
@@ -12,11 +12,14 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 use crate::models::{career, character, character_career, project};
 use crate::services::auth::Claims;
 use crate::services::career_service::CareerService;
+use crate::services::wizard_service;
 
 type ApiError = (StatusCode, Json<Value>);
 
@@ -53,6 +56,17 @@ struct UpdateRequest {
 #[derive(Deserialize)]
 struct ListQuery {
     project_id: String,
+}
+
+#[derive(Deserialize)]
+struct LegacyCareerSystemQuery {
+    project_id: String,
+    main_career_count: Option<i32>,
+    sub_career_count: Option<i32>,
+    enable_mcp: Option<bool>,
+    provider: Option<String>,
+    model: Option<String>,
+    user_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -625,9 +639,41 @@ async fn remove_sub_career(
     ))
 }
 
+async fn generate_career_system_legacy(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Query(query): Query<LegacyCareerSystemQuery>,
+) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let (tx, rx) = mpsc::channel::<Result<Event, std::convert::Infallible>>(256);
+    let channel = crate::utils::sse::SseChannel::new(tx);
+
+    let user_id = query.user_id.unwrap_or_else(|| claims.sub.clone());
+    let project_id = query.project_id;
+    let provider = query.provider;
+    let model = query.model;
+    let _main_career_count = query.main_career_count;
+    let _sub_career_count = query.sub_career_count;
+    let _enable_mcp = query.enable_mcp;
+
+    tokio::spawn(async move {
+        wizard_service::generate_career_system(
+            &db,
+            &channel,
+            &user_id,
+            &project_id,
+            provider.as_deref(),
+            model.as_deref(),
+        )
+        .await;
+    });
+
+    Sse::new(ReceiverStream::new(rx))
+}
+
 pub fn routes() -> Router {
     Router::new()
         .route("/careers", post(create_career).get(list_careers))
+        .route("/careers/generate-system", get(generate_career_system_legacy))
         .route(
             "/careers/{career_id}",
             get(get_career).put(update_career).delete(delete_career),

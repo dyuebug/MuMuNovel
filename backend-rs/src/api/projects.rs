@@ -100,10 +100,7 @@ async fn create_project(
     )
     .await
     {
-        Ok(project) => Ok((
-            StatusCode::CREATED,
-            Json(json!({"success": true, "data": project})),
-        )),
+        Ok(project) => Ok((StatusCode::CREATED, Json(json!(project)))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"success": false, "message": e})),
@@ -118,9 +115,7 @@ async fn list_projects(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let uid = query.user_id.as_deref().unwrap_or(&claims.sub);
     match ProjectService::list(&db, uid).await {
-        Ok(projects) => Ok(Json(
-            json!({"success": true, "data": projects, "total": projects.len()}),
-        )),
+        Ok(projects) => Ok(Json(json!(projects))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"success": false, "message": e})),
@@ -134,7 +129,7 @@ async fn get_project(
     Path(project_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match ProjectService::get(&db, &project_id, &claims.sub).await {
-        Ok(Some(project)) => Ok(Json(json!({"success": true, "data": project}))),
+        Ok(Some(project)) => Ok(Json(json!(project))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({"success": false, "message": "Project not found"})),
@@ -173,7 +168,7 @@ async fn update_project(
     )
     .await
     {
-        Ok(Some(project)) => Ok(Json(json!({"success": true, "data": project}))),
+        Ok(Some(project)) => Ok(Json(json!(project))),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({"success": false, "message": "Project not found"})),

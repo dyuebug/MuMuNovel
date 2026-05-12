@@ -27,9 +27,27 @@ fn inspiration_error_status(detail: &str) -> StatusCode {
 }
 
 #[derive(Deserialize)]
+#[serde(untagged)]
+enum GenreInput {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl GenreInput {
+    fn as_vec(&self) -> Vec<String> {
+        match self {
+            Self::Single(value) => vec![value.clone()],
+            Self::Multiple(values) => values.clone(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
 struct GenerateOptionsRequest {
     step: String,
     context: Value,
+    enable_web_research: Option<bool>,
+    web_research_query: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -39,6 +57,8 @@ struct RefineOptionsRequest {
     feedback: String,
     #[serde(default)]
     previous_options: Vec<String>,
+    enable_web_research: Option<bool>,
+    web_research_query: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -46,7 +66,7 @@ struct QuickGenerateRequest {
     title: Option<String>,
     description: Option<String>,
     theme: Option<String>,
-    genre: Option<Vec<String>>,
+    genre: Option<GenreInput>,
     narrative_perspective: Option<String>,
 }
 
@@ -55,7 +75,16 @@ async fn generate_options(
     Extension(claims): Extension<Claims>,
     Json(body): Json<GenerateOptionsRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    match InspirationService::generate_options(&db, &claims.sub, &body.step, &body.context).await {
+    match InspirationService::generate_options(
+        &db,
+        &claims.sub,
+        &body.step,
+        &body.context,
+        body.enable_web_research.unwrap_or(false),
+        body.web_research_query.as_deref(),
+    )
+    .await
+    {
         Ok(data) => Ok(Json(data)),
         Err(e) => {
             let detail = format!("生成选项失败: {}", e);
@@ -79,6 +108,8 @@ async fn refine_options(
         &body.context,
         &body.feedback,
         &body.previous_options,
+        body.enable_web_research.unwrap_or(false),
+        body.web_research_query.as_deref(),
     )
     .await
     {
@@ -98,7 +129,8 @@ async fn quick_generate(
     Extension(claims): Extension<Claims>,
     Json(body): Json<QuickGenerateRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let genre_ref: Option<&[String]> = body.genre.as_deref();
+    let normalized_genre = body.genre.as_ref().map(GenreInput::as_vec);
+    let genre_ref: Option<&[String]> = normalized_genre.as_deref();
     match InspirationService::quick_generate(
         &db,
         &claims.sub,

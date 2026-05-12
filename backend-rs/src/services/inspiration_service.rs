@@ -68,6 +68,74 @@ const STEP_EXTRA_GUARD: &[(&str, &str)] = &[
 ];
 
 impl InspirationService {
+    fn normalize_research_text(value: impl AsRef<str>, limit: usize) -> String {
+        let text = value
+            .as_ref()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if text.chars().count() <= limit {
+            return text;
+        }
+        text.chars().take(limit.saturating_sub(3)).collect::<String>() + "..."
+    }
+
+    fn compose_research_query(step: &str, context: &Value, feedback: Option<&str>, custom_query: Option<&str>) -> String {
+        let custom_query = custom_query.unwrap_or("").trim();
+        if !custom_query.is_empty() {
+            return Self::normalize_research_text(custom_query, 320);
+        }
+
+        let step_label = match step {
+            "title" => "小说书名创意",
+            "description" => "小说简介与冲突设计",
+            "theme" => "小说主题与价值冲突",
+            "genre" => "小说类型定位与读者偏好",
+            _ => step,
+        };
+
+        let mut parts = vec![step_label.to_string()];
+        for key in ["initial_idea", "title", "description", "theme"] {
+            if let Some(value) = context.get(key).and_then(|v| v.as_str()) {
+                let text = Self::normalize_research_text(value, 140);
+                if !text.is_empty() {
+                    parts.push(text);
+                }
+            }
+        }
+        if let Some(feedback) = feedback {
+            let text = Self::normalize_research_text(feedback, 100);
+            if !text.is_empty() {
+                parts.push(text);
+            }
+        }
+        Self::normalize_research_text(parts.join(" | "), 320)
+    }
+
+    fn build_research_payload(query: &str, enabled: bool) -> Value {
+        if !enabled || query.trim().is_empty() {
+            return json!({});
+        }
+        json!({
+            "research_query": query,
+            "research_assets": []
+        })
+    }
+
+    fn attach_research_payload(mut result: Value, query: &str, enabled: bool) -> Value {
+        let research_payload = Self::build_research_payload(query, enabled);
+        let Some(map) = result.as_object_mut() else {
+            return result;
+        };
+        if let Some(research_query) = research_payload.get("research_query") {
+            map.insert("research_query".to_string(), research_query.clone());
+        }
+        if let Some(research_assets) = research_payload.get("research_assets") {
+            map.insert("research_assets".to_string(), research_assets.clone());
+        }
+        result
+    }
+
     fn step_temperature(step: &str) -> f64 {
         TEMPERATURES
             .iter()
@@ -267,6 +335,8 @@ impl InspirationService {
         user_id: &str,
         step: &str,
         context: &Value,
+        enable_web_research: bool,
+        web_research_query: Option<&str>,
     ) -> Result<Value, String> {
         let (system_key, user_key) =
             Self::template_keys(step).ok_or(format!("不支持的步骤: {}", step))?;
@@ -277,6 +347,8 @@ impl InspirationService {
             .ok_or(format!("模板 {} 不存在", user_key))?;
 
         let format_params = Self::build_format_params(context);
+        let research_query =
+            Self::compose_research_query(step, context, None, web_research_query);
         let system_prompt = format!(
             "{}\n\n{}",
             system_template.content,
@@ -304,7 +376,13 @@ impl InspirationService {
                 serde_json::from_str(&cleaned).map_err(|e| format!("JSON解析失败: {}", e))?;
 
             match Self::validate_options(step, &result) {
-                Ok(()) => return Ok(result),
+                Ok(()) => {
+                    return Ok(Self::attach_research_payload(
+                        result,
+                        &research_query,
+                        enable_web_research,
+                    ))
+                }
                 Err(e) => {
                     last_error = e;
                     if attempt < MAX_RETRIES - 1 {
@@ -317,7 +395,9 @@ impl InspirationService {
         Ok(json!({
             "prompt": format!("请为【{}】提供内容：", step),
             "options": ["让AI重新生成", "我自己输入"],
-            "error": format!("AI生成格式错误（{}），已自动重试{}次，请手动重试或自己输入", last_error, MAX_RETRIES)
+            "error": format!("AI生成格式错误（{}），已自动重试{}次，请手动重试或自己输入", last_error, MAX_RETRIES),
+            "research_query": if enable_web_research { research_query } else { String::new() },
+            "research_assets": []
         }))
     }
 
@@ -328,6 +408,8 @@ impl InspirationService {
         context: &Value,
         feedback: &str,
         previous_options: &[String],
+        enable_web_research: bool,
+        web_research_query: Option<&str>,
     ) -> Result<Value, String> {
         let (system_key, user_key) =
             Self::template_keys(step).ok_or(format!("不支持的步骤: {}", step))?;
@@ -338,6 +420,8 @@ impl InspirationService {
             .ok_or(format!("模板 {} 不存在", user_key))?;
 
         let format_params = Self::build_format_params(context);
+        let research_query =
+            Self::compose_research_query(step, context, Some(feedback), web_research_query);
         let mut system_prompt = format!(
             "{}\n\n{}",
             system_template.content,
@@ -388,7 +472,13 @@ impl InspirationService {
                 serde_json::from_str(&cleaned).map_err(|e| format!("JSON解析失败: {}", e))?;
 
             match Self::validate_options(step, &result) {
-                Ok(()) => return Ok(result),
+                Ok(()) => {
+                    return Ok(Self::attach_research_payload(
+                        result,
+                        &research_query,
+                        enable_web_research,
+                    ))
+                }
                 Err(e) => {
                     last_error = e;
                     if attempt < MAX_RETRIES - 1 {
@@ -401,7 +491,9 @@ impl InspirationService {
         Ok(json!({
             "prompt": format!("请为【{}】提供内容：", step),
             "options": ["让AI重新生成", "我自己输入"],
-            "error": format!("AI生成格式错误（{}），已自动重试{}次", last_error, MAX_RETRIES)
+            "error": format!("AI生成格式错误（{}），已自动重试{}次", last_error, MAX_RETRIES),
+            "research_query": if enable_web_research { research_query } else { String::new() },
+            "research_assets": []
         }))
     }
 
@@ -488,11 +580,13 @@ impl InspirationService {
         };
 
         Ok(json!({
-            "title": title.unwrap_or(""),
-            "description": description.unwrap_or(""),
-            "theme": theme.unwrap_or(""),
+            "title": title.filter(|value| !value.trim().is_empty()).unwrap_or_else(|| result.get("title").and_then(|v| v.as_str()).unwrap_or("")),
+            "description": description.filter(|value| !value.trim().is_empty()).unwrap_or_else(|| result.get("description").and_then(|v| v.as_str()).unwrap_or("")),
+            "theme": theme.filter(|value| !value.trim().is_empty()).unwrap_or_else(|| result.get("theme").and_then(|v| v.as_str()).unwrap_or("")),
             "genre": final_genre,
-            "narrative_perspective": narrative_perspective.unwrap_or(result_perspective),
+            "narrative_perspective": narrative_perspective
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(result_perspective),
         }))
     }
 
