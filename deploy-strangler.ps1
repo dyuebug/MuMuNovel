@@ -507,15 +507,15 @@ catch {
     Write-LogLine "Rust backend reachability check failed: $($_.Exception.Message)"
 }
 
-Write-Step "Verifying Python backend reachability via Nginx"
+Write-Step "Verifying Python fallback reachability via Nginx"
 try {
     $pythonResponse = Invoke-WebRequest -Uri "http://localhost:8005/memories/" -UseBasicParsing -TimeoutSec 10
-    Write-Host "Python memories endpoint: HTTP $($pythonResponse.StatusCode)" -ForegroundColor DarkCyan
-    Write-LogLine "Python backend reachable via Nginx: HTTP $($pythonResponse.StatusCode)"
+    Write-Host "Python fallback endpoint: HTTP $($pythonResponse.StatusCode)" -ForegroundColor DarkCyan
+    Write-LogLine "Python backend reachable via Nginx fallback probe: HTTP $($pythonResponse.StatusCode)"
 }
 catch {
-    Write-Host "Warning: Python backend reachability check failed: $($_.Exception.Message)" -ForegroundColor Yellow
-    Write-LogLine "Python backend reachability check failed: $($_.Exception.Message)"
+    Write-Host "Warning: Python fallback reachability check failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-LogLine "Python backend reachability check via Nginx fallback probe failed: $($_.Exception.Message)"
 }
 
 Write-Host ""

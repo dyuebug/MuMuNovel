@@ -84,6 +84,7 @@ backend/data/admins.json
 *.bak
 *.swp
 *.tmp
+.tmp_*.txt
 .temp/
 temp/
 tmp/
