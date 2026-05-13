@@ -1,6 +1,6 @@
 use axum::{
     extract::{Extension, Query},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
@@ -8,7 +8,9 @@ use axum::{
 use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
 use crate::config::AppConfig;
@@ -19,6 +21,9 @@ use argon2::{
     Argon2,
 };
 use chrono::Utc;
+
+const OAUTH_STATE_TTL: Duration = Duration::from_secs(300);
+const OAUTH_STATE_COOKIE: &str = "oauth_states";
 
 #[derive(Deserialize)]
 struct LoginRequest {
@@ -60,8 +65,97 @@ fn linuxdo_userinfo_url() -> &'static str {
     "https://connect.linux.do/api/user"
 }
 
-fn generate_state() -> String {
-    uuid::Uuid::new_v4().to_string().replace('-', "")
+fn unix_timestamp_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn sign_oauth_state(secret: &str, nonce: &str, issued_at: u64) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(secret.as_bytes());
+    hasher.update(b":");
+    hasher.update(nonce.as_bytes());
+    hasher.update(b":");
+    hasher.update(issued_at.to_string().as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+fn generate_state(cfg: &AppConfig) -> String {
+    let nonce = uuid::Uuid::new_v4().to_string().replace('-', "");
+    let issued_at = unix_timestamp_secs();
+    let signature = sign_oauth_state(&cfg.jwt_secret, &nonce, issued_at);
+    format!("{nonce}.{issued_at}.{signature}")
+}
+
+fn extract_cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    let cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
+    cookie_header.split(';').find_map(|part| {
+        let mut segments = part.trim().splitn(2, '=');
+        let key = segments.next()?.trim();
+        let value = segments.next()?.trim();
+        (key == name).then(|| value.to_string())
+    })
+}
+
+fn read_oauth_states_from_headers(headers: &HeaderMap) -> Vec<String> {
+    extract_cookie_value(headers, OAUTH_STATE_COOKIE)
+        .map(|value| {
+            value
+                .split(':')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_oauth_state(state: &str) -> Option<(&str, u64, &str)> {
+    let mut parts = state.splitn(3, '.');
+    let nonce = parts.next()?;
+    let issued_at = parts.next()?.parse::<u64>().ok()?;
+    let signature = parts.next()?;
+    if nonce.is_empty() || signature.is_empty() {
+        return None;
+    }
+    Some((nonce, issued_at, signature))
+}
+
+fn is_oauth_state_valid(cfg: &AppConfig, state: &str) -> bool {
+    let Some((nonce, issued_at, signature)) = parse_oauth_state(state) else {
+        return false;
+    };
+    let expected_signature = sign_oauth_state(&cfg.jwt_secret, nonce, issued_at);
+    if expected_signature != signature {
+        return false;
+    }
+    let now = unix_timestamp_secs();
+    let ttl_secs = OAUTH_STATE_TTL.as_secs();
+    now >= issued_at && now.saturating_sub(issued_at) <= ttl_secs
+}
+
+fn retain_valid_oauth_states(cfg: &AppConfig, states: Vec<String>) -> Vec<String> {
+    states
+        .into_iter()
+        .filter(|state| is_oauth_state_valid(cfg, state))
+        .collect()
+}
+
+fn write_oauth_states_cookie(response: &mut Response, states: &[String]) {
+    if states.is_empty() {
+        clear_cookie(response, OAUTH_STATE_COOKIE);
+        return;
+    }
+
+    let value = states.join(":");
+    set_cookie_with_max_age(
+        response,
+        OAUTH_STATE_COOKIE,
+        &value,
+        OAUTH_STATE_TTL.as_secs() as i64,
+    );
 }
 
 async fn create_or_update_linuxdo_user(
@@ -250,7 +344,8 @@ async fn get_auth_config(Extension(cfg): Extension<AppConfig>) -> Json<Value> {
 
 async fn get_linuxdo_auth_url(
     Extension(cfg): Extension<AppConfig>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    headers: HeaderMap,
+) -> Result<Response, (StatusCode, Json<Value>)> {
     if cfg.linuxdo_client_id.is_empty() || cfg.linuxdo_client_secret.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -258,17 +353,30 @@ async fn get_linuxdo_auth_url(
         ));
     }
 
-    let state = generate_state();
-    Ok(Json(json!({
+    let state = generate_state(&cfg);
+    let mut states = retain_valid_oauth_states(&cfg, read_oauth_states_from_headers(&headers));
+    if !states.iter().any(|item| item == &state) {
+        states.push(state.clone());
+    }
+    if states.len() > 8 {
+        let drain_count = states.len() - 8;
+        states.drain(0..drain_count);
+    }
+
+    let mut response = Json(json!({
         "auth_url": linuxdo_authorize_url(&cfg, &state),
         "state": state,
-    })))
+    }))
+    .into_response();
+    write_oauth_states_cookie(&mut response, &states);
+    Ok(response)
 }
 
 async fn get_linuxdo_callback(
     Extension(db): Extension<DatabaseConnection>,
     Extension(cfg): Extension<AppConfig>,
     Query(query): Query<AuthQuery>,
+    headers: HeaderMap,
 ) -> Result<Response, (StatusCode, Json<Value>)> {
     if let Some(error) = query.error {
         return Err((StatusCode::BAD_REQUEST, Json(json!({
@@ -281,6 +389,14 @@ async fn get_linuxdo_callback(
     let Some(state) = query.state else {
         return Err((StatusCode::BAD_REQUEST, Json(json!({"detail": "缺少 state 参数"}))));
     };
+    let mut states = retain_valid_oauth_states(&cfg, read_oauth_states_from_headers(&headers));
+    if !is_oauth_state_valid(&cfg, &state) || !states.iter().any(|item| item == &state) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "无效的 state 参数"})),
+        ));
+    }
+    states.retain(|item| item != &state);
 
     let token_client = reqwest::Client::new();
     let redirect_uri = auth_redirect_uri(&cfg);
@@ -377,18 +493,33 @@ async fn get_linuxdo_callback(
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e}))))?;
+    let is_first_login = user_password::Entity::find_by_id(&user.user_id)
+        .one(&db)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": format!("{}", e)})),
+            )
+        })?
+        .is_none();
 
     let auth = AuthService::new(&cfg.jwt_secret);
     let token = auth
         .create_token(&user)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e.to_string()}))))?;
 
-    let redirect_to = format!("{}/auth/callback?code={}&state={}", cfg.frontend_url.trim_end_matches('/'), code, state);
+    let redirect_to = format!("{}/auth/callback", cfg.frontend_url.trim_end_matches('/'));
     let mut response = axum::response::Redirect::to(&redirect_to).into_response();
+    let max_age = (cfg.session_expire_minutes as i64) * 60;
+    write_oauth_states_cookie(&mut response, &states);
     set_cookie(&mut response, "token", &token);
-    set_cookie_with_max_age(&mut response, "user_id", &user.user_id, 7200);
-    let expire_at = chrono::Utc::now().timestamp() + 7200;
-    set_cookie_non_httponly(&mut response, "session_expire_at", &expire_at.to_string(), 7200);
+    set_cookie_with_max_age(&mut response, "user_id", &user.user_id, max_age);
+    let expire_at = chrono::Utc::now().timestamp() + max_age;
+    set_cookie_non_httponly(&mut response, "session_expire_at", &expire_at.to_string(), max_age);
+    if is_first_login {
+        set_cookie_non_httponly(&mut response, "first_login", "true", 300);
+    }
     Ok(response)
 }
 

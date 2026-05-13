@@ -113,10 +113,10 @@ fn normalize_non_empty_string(value: Option<&str>) -> Option<String> {
         .filter(|item| !item.is_empty())
 }
 
-fn resolve_stored_model(value: &str) -> String {
+fn resolve_stored_model(value: &str, provider: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        default_model()
+        default_model_for_provider(provider)
     } else {
         trimmed.to_string()
     }
@@ -127,7 +127,15 @@ fn default_ai_provider() -> String {
 }
 
 fn default_model() -> String {
-    env_string("DEFAULT_MODEL").unwrap_or_else(|| "gpt-4".to_string())
+    env_string("DEFAULT_MODEL").unwrap_or_else(|| "gpt-4o-mini".to_string())
+}
+
+pub fn default_model_for_provider(provider: &str) -> String {
+    match provider.trim().to_lowercase().as_str() {
+        "anthropic" => "claude-3-5-sonnet-latest".to_string(),
+        "gemini" => "gemini-2.5-pro".to_string(),
+        _ => default_model(),
+    }
 }
 
 fn default_temperature() -> f64 {
@@ -244,10 +252,10 @@ impl SettingsService {
                     api_key: Set(default_key),
                     api_base_url: Set(default_base_url),
                     api_backup_urls: Set(None),
-                    provider_type: Set(default_provider),
+                    provider_type: Set(default_provider.clone()),
                     fallback_strategy: Set("auto".into()),
                     azure_api_version: Set(None),
-                    llm_model: Set(default_model()),
+                    llm_model: Set(default_model_for_provider(&default_provider)),
                     temperature: Set(default_temperature()),
                     max_tokens: Set(default_max_tokens() as i32),
                     system_prompt: Set(None),
@@ -276,6 +284,7 @@ impl SettingsService {
         match existing {
             Some(s) => {
                 let current_prefs = s.preferences.clone().unwrap_or_default();
+                let existing_provider = s.provider_type.trim().to_lowercase();
                 let wr_patch = extract_web_research_patch(body);
                 let new_prefs = if wr_patch.is_object()
                     && wr_patch.as_object().map(|o| o.len()).unwrap_or(0) > 0
@@ -299,6 +308,13 @@ impl SettingsService {
                 if let Some(v) = body.get("api_provider").and_then(|v| v.as_str()) {
                     active.api_provider = Set(v.to_string());
                 }
+                let clear_api_key = body
+                    .get("clear_api_key")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if clear_api_key {
+                    active.api_key = Set(String::new());
+                }
                 if let Some(v) = body.get("api_key").and_then(|v| v.as_str()) {
                     let trimmed = v.trim();
                     if !trimmed.is_empty() && !is_placeholder(trimmed) {
@@ -318,10 +334,25 @@ impl SettingsService {
                 if let Some(v) = body.get("azure_api_version").and_then(|v| v.as_str()) {
                     active.azure_api_version = Set(Some(v.to_string()));
                 }
+                let target_provider = body
+                    .get("provider_type")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| body.get("api_provider").and_then(|v| v.as_str()))
+                    .map(|v| v.trim().to_lowercase())
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or_else(|| {
+                        if existing_provider.is_empty() {
+                            "openai".to_string()
+                        } else {
+                            existing_provider.clone()
+                        }
+                    });
                 if let Some(v) =
                     normalize_non_empty_string(body.get("llm_model").and_then(|v| v.as_str()))
                 {
                     active.llm_model = Set(v);
+                } else if body.get("provider_type").is_some() || body.get("api_provider").is_some() {
+                    active.llm_model = Set(default_model_for_provider(&target_provider));
                 }
                 if let Some(v) = body.get("temperature").and_then(|v| v.as_f64()) {
                     active.temperature = Set(v);
@@ -405,10 +436,17 @@ impl SettingsService {
                         .get("azure_api_version")
                         .and_then(|v| v.as_str())
                         .map(String::from)),
-                    llm_model: Set(normalize_non_empty_string(
-                        body.get("llm_model").and_then(|v| v.as_str()),
-                    )
-                    .unwrap_or_else(default_model)),
+                    llm_model: Set(
+                        normalize_non_empty_string(body.get("llm_model").and_then(|v| v.as_str()))
+                            .unwrap_or_else(|| {
+                                let provider = body
+                                    .get("provider_type")
+                                    .and_then(|v| v.as_str())
+                                    .or_else(|| body.get("api_provider").and_then(|v| v.as_str()))
+                                    .unwrap_or(&default_provider);
+                                default_model_for_provider(provider)
+                            }),
+                    ),
                     temperature: Set(body
                         .get("temperature")
                         .and_then(|v| v.as_f64())
@@ -466,7 +504,7 @@ impl SettingsService {
             .unwrap_or_else(|| {
                 let stored = s.llm_model.trim().to_string();
                 if stored.is_empty() {
-                    default_model()
+                    default_model_for_provider(&provider)
                 } else {
                     stored
                 }
@@ -521,7 +559,7 @@ fn build_response(saved: &settings::Model, web_research: &Value, backup_urls: &[
         "provider_type": saved.provider_type,
         "fallback_strategy": saved.fallback_strategy,
         "azure_api_version": saved.azure_api_version,
-        "llm_model": resolve_stored_model(&saved.llm_model),
+        "llm_model": resolve_stored_model(&saved.llm_model, &saved.provider_type),
         "temperature": saved.temperature,
         "max_tokens": saved.max_tokens,
         "system_prompt": saved.system_prompt,
@@ -802,7 +840,7 @@ impl SettingsService {
             "provider_type": settings.provider_type,
             "fallback_strategy": settings.fallback_strategy,
             "azure_api_version": settings.azure_api_version,
-            "llm_model": resolve_stored_model(&settings.llm_model),
+            "llm_model": resolve_stored_model(&settings.llm_model, &settings.provider_type),
             "temperature": settings.temperature,
             "max_tokens": settings.max_tokens,
             "system_prompt": settings.system_prompt,

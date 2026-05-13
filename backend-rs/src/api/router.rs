@@ -7,7 +7,7 @@ use tower_http::{
     cors::CorsLayer, normalize_path::NormalizePathLayer, request_id::MakeRequestUuid,
     services::ServeDir, trace::TraceLayer, ServiceBuilderExt as _,
 };
-use tracing::info;
+use tracing::{info, Level};
 
 use crate::config::AppConfig;
 use crate::mcp::McpClientManager;
@@ -36,7 +36,28 @@ pub fn build(
 
     let middleware_stack = tower::ServiceBuilder::new()
         .set_x_request_id(MakeRequestUuid)
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &axum::http::Request<_>| {
+                    tracing::span!(
+                        Level::INFO,
+                        "http_request",
+                        method = %request.method(),
+                        uri = %request.uri(),
+                    )
+                })
+                .on_response(
+                    |response: &axum::http::Response<_>,
+                     latency: std::time::Duration,
+                     _span: &tracing::Span| {
+                        tracing::info!(
+                            status = %response.status(),
+                            latency_ms = latency.as_millis(),
+                            "request completed"
+                        );
+                    },
+                ),
+        )
         .layer(cors)
         .layer(AuthLayer::new(&cfg.jwt_secret));
 

@@ -4,6 +4,7 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOr
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
+use tracing::warn;
 
 use crate::ai::service::AIService;
 use crate::models::{career, character, project};
@@ -20,24 +21,118 @@ const MAX_WORLD_RETRIES: u32 = 3;
 
 pub fn clean_json_response(text: &str) -> String {
     let text = text.trim();
-    if let Some(start) = text.find("```json") {
-        let rest = &text[start + 7..];
-        if let Some(end) = rest.rfind("```") {
-            return rest[..end].trim().to_string();
+    if text.is_empty() {
+        return String::new();
+    }
+
+    for fence in ["```json", "```JSON", "```"] {
+        if let Some(start) = text.find(fence) {
+            let rest = &text[start + fence.len()..];
+            if let Some(end) = rest.rfind("```") {
+                let candidate = rest[..end].trim();
+                if let Some(extracted) = extract_first_valid_json(candidate) {
+                    return extracted;
+                }
+                if !candidate.is_empty() {
+                    return candidate.to_string();
+                }
+            }
         }
     }
-    if let Some(start) = text.find("```") {
-        let rest = &text[start + 3..];
-        if let Some(end) = rest.rfind("```") {
-            return rest[..end].trim().to_string();
-        }
+
+    if let Some(extracted) = extract_first_valid_json(text) {
+        return extracted;
     }
-    if let Some(start) = text.find('{') {
-        if let Some(end) = text.rfind('}') {
-            return text[start..=end].to_string();
-        }
-    }
+
     text.to_string()
+}
+
+fn extract_first_valid_json(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+
+    for start in 0..bytes.len() {
+        let opener = bytes[start];
+        if opener != b'{' && opener != b'[' {
+            continue;
+        }
+
+        let closer = if opener == b'{' { b'}' } else { b']' };
+        let mut depth = 0i32;
+        let mut in_string = false;
+        let mut escaped = false;
+
+        for (offset, byte) in bytes[start..].iter().enumerate() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                    continue;
+                }
+                match *byte {
+                    b'\\' => escaped = true,
+                    b'"' => in_string = false,
+                    _ => {}
+                }
+                continue;
+            }
+
+            match *byte {
+                b'"' => in_string = true,
+                b'{' if opener == b'{' => depth += 1,
+                b'[' if opener == b'[' => depth += 1,
+                b'}' if closer == b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let candidate = text[start..start + offset + 1].trim();
+                        if serde_json::from_str::<Value>(candidate).is_ok() {
+                            return Some(candidate.to_string());
+                        }
+                        break;
+                    }
+                }
+                b']' if closer == b']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let candidate = text[start..start + offset + 1].trim();
+                        if serde_json::from_str::<Value>(candidate).is_ok() {
+                            return Some(candidate.to_string());
+                        }
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    None
+}
+
+fn preview_text(text: &str, max_chars: usize) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= max_chars {
+        collapsed
+    } else {
+        format!("{}...", collapsed.chars().take(max_chars).collect::<String>())
+    }
+}
+
+fn parse_character_batch_items(cleaned: &str) -> Result<Vec<Value>, String> {
+    let data = serde_json::from_str::<Value>(cleaned)
+        .map_err(|error| format!("JSON解析失败: {}", error))?;
+
+    if let Some(items) = data.as_array() {
+        return Ok(items.clone());
+    }
+
+    if let Some(object) = data.as_object() {
+        for key in ["characters", "items", "data", "results", "entities"] {
+            if let Some(items) = object.get(key).and_then(Value::as_array) {
+                return Ok(items.clone());
+            }
+        }
+    }
+
+    Ok(vec![data])
 }
 
 fn default_world_data() -> Value {
@@ -47,6 +142,44 @@ fn default_world_data() -> Value {
         "atmosphere": "AI多次返回为空，请稍后重试",
         "rules": "AI多次返回为空，请稍后重试"
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clean_json_response, parse_character_batch_items};
+    use serde_json::json;
+
+    #[test]
+    fn extracts_json_array_from_wrapped_text() {
+        let raw = "好的，下面是结果：\n```json\n[{\"name\":\"甲\"},{\"name\":\"乙\"}]\n```\n请查收";
+        let cleaned = clean_json_response(raw);
+
+        assert_eq!(cleaned, "[{\"name\":\"甲\"},{\"name\":\"乙\"}]");
+    }
+
+    #[test]
+    fn extracts_json_array_without_code_fence() {
+        let raw = "我将严格输出JSON。\n[{\"name\":\"甲\",\"is_organization\":false}]\n以上为结果";
+        let cleaned = clean_json_response(raw);
+
+        assert_eq!(cleaned, "[{\"name\":\"甲\",\"is_organization\":false}]");
+    }
+
+    #[test]
+    fn keeps_plain_text_when_no_json_found() {
+        let raw = "这不是合法json";
+        let cleaned = clean_json_response(raw);
+
+        assert_eq!(cleaned, raw);
+    }
+
+    #[test]
+    fn parses_character_wrapper_object() {
+        let cleaned = r#"{"characters":[{"name":"甲"},{"name":"乙"}]}"#;
+        let parsed = parse_character_batch_items(cleaned).unwrap();
+
+        assert_eq!(parsed, vec![json!({"name":"甲"}), json!({"name":"乙"})]);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1254,15 +1387,17 @@ pub async fn generate_characters(
 
             // Parse JSON
             let cleaned = clean_json_response(&accumulated);
-            match serde_json::from_str::<Value>(&cleaned) {
-                Ok(data) => {
-                    let chars: Vec<Value> = if data.is_array() {
-                        data.as_array().unwrap().clone()
-                    } else {
-                        vec![data]
-                    };
-
+            match parse_character_batch_items(&cleaned) {
+                Ok(chars) => {
                     if chars.len() != current_batch_size {
+                        warn!(
+                            batch_index = batch_idx + 1,
+                            expected_count = current_batch_size,
+                            actual_count = chars.len(),
+                            cleaned_preview = %preview_text(&cleaned, 240),
+                            raw_preview = %preview_text(&accumulated, 240),
+                            "wizard characters batch count mismatch"
+                        );
                         retry_count += 1;
                         if retry_count < MAX_RETRIES {
                             channel
@@ -1313,7 +1448,15 @@ pub async fn generate_characters(
                         .await;
                     *progress.lock().await = batch_progress + 50;
                 }
-                Err(_e) => {
+                Err(parse_error) => {
+                    warn!(
+                        batch_index = batch_idx + 1,
+                        retry_count = retry_count + 1,
+                        error = %parse_error,
+                        cleaned_preview = %preview_text(&cleaned, 240),
+                        raw_preview = %preview_text(&accumulated, 240),
+                        "wizard characters batch json parse failed"
+                    );
                     retry_count += 1;
                     if retry_count < MAX_RETRIES {
                         channel

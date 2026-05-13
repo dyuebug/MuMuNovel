@@ -207,6 +207,7 @@ async fn test_api_connection(
     )
     .await?;
 
+    let probe_max_tokens = effective.max_tokens.clamp(1, 64);
     let started = Instant::now();
     let service = AIService::new(AIConfig {
         provider: effective.provider.clone(),
@@ -214,7 +215,7 @@ async fn test_api_connection(
         base_url: effective.base_url.clone(),
         model: effective.model.clone(),
         temperature: effective.temperature,
-        max_tokens: effective.max_tokens,
+        max_tokens: probe_max_tokens,
         ..Default::default()
     });
 
@@ -232,6 +233,7 @@ async fn test_api_connection(
             "response_time_ms": started.elapsed().as_millis(),
             "provider": effective.provider,
             "model": effective.model,
+            "probe_max_tokens": probe_max_tokens,
             "response_preview": response.content.chars().take(200).collect::<String>()
         }))),
         Err(error) => Ok(Json(json!({
@@ -240,6 +242,7 @@ async fn test_api_connection(
             "response_time_ms": started.elapsed().as_millis(),
             "provider": effective.provider,
             "model": effective.model,
+            "probe_max_tokens": probe_max_tokens,
             "error": error,
             "error_type": classify_error_type(&error),
             "suggestions": generic_suggestions("api_test")
@@ -759,9 +762,12 @@ async fn resolve_effective_settings(
 
     let stored_key = stored
         .as_ref()
-        .map(|s| s.api_key.clone())
+        .map(|s| s.api_key.trim().to_string())
         .unwrap_or_default();
-    let effective_key = api_key.unwrap_or(stored_key).trim().to_string();
+    let incoming_key = api_key
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let effective_key = incoming_key.unwrap_or(stored_key);
     if effective_key.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -771,21 +777,29 @@ async fn resolve_effective_settings(
 
     let stored_base = stored
         .as_ref()
-        .map(|s| s.api_base_url.clone())
+        .map(|s| s.api_base_url.trim().to_string())
         .unwrap_or_default();
-    let raw_base = api_base_url.unwrap_or(stored_base);
+    let raw_base = api_base_url
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(stored_base);
     let effective_base = resolve_provider_base_url(&effective_provider, &raw_base);
 
     let stored_model = stored
         .as_ref()
-        .map(|s| s.llm_model.clone())
+        .map(|s| s.llm_model.trim().to_string())
+        .filter(|value| !value.is_empty())
         .unwrap_or_else(|| default_model_for_provider(&effective_provider));
+    let effective_model = model
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(stored_model);
 
     Ok(EffectiveSettings {
         provider: effective_provider.clone(),
         api_key: effective_key,
         base_url: effective_base,
-        model: model.unwrap_or(stored_model),
+        model: effective_model,
         temperature: temperature.unwrap_or(stored.as_ref().map(|s| s.temperature).unwrap_or(0.7)),
         max_tokens: max_tokens.unwrap_or(
             stored

@@ -32,6 +32,7 @@ async fn test_ai(
     Extension(claims): Extension<Claims>,
     Json(body): Json<TestAIRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let probe_max_tokens = body.max_tokens.unwrap_or(4096).clamp(1, 64);
     let cfg = AIConfig {
         provider: body.provider.unwrap_or_else(|| "openai".into()),
         api_key: body.api_key.unwrap_or_default(),
@@ -40,7 +41,7 @@ async fn test_ai(
             .unwrap_or_else(|| "https://api.openai.com/v1".into()),
         model: body.model.unwrap_or_else(|| "gpt-4".into()),
         temperature: body.temperature.unwrap_or(0.7),
-        max_tokens: body.max_tokens.unwrap_or(4096),
+        max_tokens: probe_max_tokens,
         ..Default::default()
     };
 
@@ -51,10 +52,10 @@ async fn test_ai(
         .generate_text(&body.prompt, body.system_prompt.as_deref(), None)
         .await
     {
-        Ok(resp) => Ok(Json(json!({"success": true, "data": resp}))),
+        Ok(resp) => Ok(Json(json!({"success": true, "probe_max_tokens": probe_max_tokens, "data": resp}))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": e})),
+            Json(json!({"success": false, "probe_max_tokens": probe_max_tokens, "message": e})),
         )),
     }
 }
@@ -63,6 +64,7 @@ async fn test_ai_stream(
     Extension(claims): Extension<Claims>,
     Json(body): Json<TestAIRequest>,
 ) -> impl IntoResponse {
+    let probe_max_tokens = body.max_tokens.unwrap_or(4096).clamp(1, 64);
     let cfg = AIConfig {
         provider: body.provider.unwrap_or_else(|| "openai".into()),
         api_key: body.api_key.unwrap_or_default(),
@@ -71,7 +73,7 @@ async fn test_ai_stream(
             .unwrap_or_else(|| "https://api.openai.com/v1".into()),
         model: body.model.unwrap_or_else(|| "gpt-4".into()),
         temperature: body.temperature.unwrap_or(0.7),
-        max_tokens: body.max_tokens.unwrap_or(4096),
+        max_tokens: probe_max_tokens,
         ..Default::default()
     };
 

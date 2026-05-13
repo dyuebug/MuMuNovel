@@ -338,6 +338,135 @@ fn build_single_task_chapter_payload(chapter_model: &chapter::Model) -> Value {
     }])
 }
 
+fn parse_batch_task_chapter_ids(task: &batch_generation_task::Model) -> Vec<String> {
+    task.chapter_ids
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.as_str()
+                .map(str::to_string)
+                .or_else(|| item.get("id").and_then(Value::as_str).map(str::to_string))
+        })
+        .collect()
+}
+
+fn spawn_batch_generation(
+    db: DatabaseConnection,
+    task_id: String,
+    user_id: String,
+    chapter_ids: Vec<String>,
+    target_word_count: i32,
+    ai_config: AIConfig,
+) {
+    tokio::spawn(async move {
+        let now = Utc::now().naive_utc();
+        if let Ok(Some(task_model)) = batch_generation_task::Entity::find_by_id(&task_id).one(&db).await {
+            let mut active: batch_generation_task::ActiveModel = task_model.into();
+            active.status = Set(Some("running".to_string()));
+            active.started_at = Set(Some(now));
+            active.completed_at = Set(None);
+            active.error_message = Set(None);
+            active.current_retry_count = Set(Some(0));
+            let _ = active.update(&db).await;
+        }
+
+        let ai_service = AIService::new(ai_config);
+        let total = chapter_ids.len() as i32;
+        let mut completed = 0i32;
+
+        for chapter_id in &chapter_ids {
+            let task_model = match batch_generation_task::Entity::find_by_id(&task_id).one(&db).await {
+                Ok(Some(task_model)) => task_model,
+                _ => return,
+            };
+
+            if matches!(task_model.status.as_deref(), Some("cancelled")) {
+                let mut active: batch_generation_task::ActiveModel = task_model.into();
+                active.completed_at = Set(Some(Utc::now().naive_utc()));
+                let _ = active.update(&db).await;
+                return;
+            }
+
+            let chapter_model = match chapter::Entity::find_by_id(chapter_id).one(&db).await {
+                Ok(Some(chapter_model)) => chapter_model,
+                Ok(None) => {
+                    let mut active: batch_generation_task::ActiveModel = task_model.into();
+                    active.status = Set(Some("failed".to_string()));
+                    active.completed_at = Set(Some(Utc::now().naive_utc()));
+                    active.error_message = Set(Some(format!("Chapter not found: {}", chapter_id)));
+                    let _ = active.update(&db).await;
+                    return;
+                }
+                Err(error) => {
+                    let mut active: batch_generation_task::ActiveModel = task_model.into();
+                    active.status = Set(Some("failed".to_string()));
+                    active.completed_at = Set(Some(Utc::now().naive_utc()));
+                    active.error_message = Set(Some(error.to_string()));
+                    let _ = active.update(&db).await;
+                    return;
+                }
+            };
+
+            let mut active: batch_generation_task::ActiveModel = task_model.into();
+            active.status = Set(Some("running".to_string()));
+            active.current_chapter_id = Set(Some(chapter_model.id.clone()));
+            active.current_chapter_number = Set(Some(chapter_model.chapter_number));
+            active.total_chapters = Set(Some(total));
+            active.completed_chapters = Set(Some(completed));
+            active.error_message = Set(None);
+            let _ = active.update(&db).await;
+
+            let generation_result = ChapterGenerationService::generate_and_persist_chapter_content(
+                &db,
+                &ai_service,
+                &user_id,
+                &chapter_model.id,
+                target_word_count,
+            )
+            .await;
+
+            match generation_result {
+                Ok(_) => {
+                    completed += 1;
+                    if let Ok(Some(task_model)) =
+                        batch_generation_task::Entity::find_by_id(&task_id).one(&db).await
+                    {
+                        let mut active: batch_generation_task::ActiveModel = task_model.into();
+                        active.status = Set(Some(if completed >= total {
+                            "completed".to_string()
+                        } else {
+                            "running".to_string()
+                        }));
+                        active.completed_chapters = Set(Some(completed));
+                        active.current_chapter_id = Set(Some(chapter_model.id.clone()));
+                        active.current_chapter_number = Set(Some(chapter_model.chapter_number));
+                        if completed >= total {
+                            active.completed_at = Set(Some(Utc::now().naive_utc()));
+                        }
+                        let _ = active.update(&db).await;
+                    }
+                }
+                Err(error) => {
+                    if let Ok(Some(task_model)) =
+                        batch_generation_task::Entity::find_by_id(&task_id).one(&db).await
+                    {
+                        let mut active: batch_generation_task::ActiveModel = task_model.into();
+                        active.status = Set(Some("failed".to_string()));
+                        active.completed_chapters = Set(Some(completed));
+                        active.current_chapter_id = Set(Some(chapter_model.id.clone()));
+                        active.current_chapter_number = Set(Some(chapter_model.chapter_number));
+                        active.completed_at = Set(Some(Utc::now().naive_utc()));
+                        active.error_message = Set(Some(error));
+                        let _ = active.update(&db).await;
+                    }
+                    return;
+                }
+            }
+        }
+    });
+}
+
 async fn create_batch_generate(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
@@ -375,13 +504,47 @@ async fn create_batch_generate(
         ));
     }
 
-    let chapter_ids: Vec<Value> = (0..body.count.max(0))
-        .map(|offset| {
-            json!({
-                "chapter_number": body.start_chapter_number + offset,
-            })
-        })
+    if body.count <= 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "count must be greater than 0"})),
+        ));
+    }
+
+    let end_chapter_number = body.start_chapter_number + body.count - 1;
+    let chapters_to_generate = chapter::Entity::find()
+        .filter(chapter::Column::ProjectId.eq(&project_id))
+        .filter(chapter::Column::ChapterNumber.gte(body.start_chapter_number))
+        .filter(chapter::Column::ChapterNumber.lte(end_chapter_number))
+        .order_by_asc(chapter::Column::ChapterNumber)
+        .all(&db)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error.to_string()})),
+            )
+        })?;
+    if chapters_to_generate.is_empty() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "未找到指定范围内的章节"})),
+        ));
+    }
+
+    let chapter_id_values: Vec<Value> = chapters_to_generate
+        .iter()
+        .map(|chapter_model| json!(chapter_model.id))
         .collect();
+    let target_word_count = body.target_word_count.unwrap_or(3000).max(1);
+    let ai_config = build_user_ai_config(&db, &claims.sub, body.model.as_deref())
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": error})),
+            )
+        })?;
 
     let now = Utc::now().naive_utc();
     let task = batch_generation_task::ActiveModel {
@@ -389,13 +552,13 @@ async fn create_batch_generate(
         project_id: Set(project_id.clone()),
         user_id: Set(claims.sub.clone()),
         start_chapter_number: Set(body.start_chapter_number),
-        chapter_count: Set(body.count),
-        chapter_ids: Set(Value::Array(chapter_ids.clone())),
+        chapter_count: Set(chapters_to_generate.len() as i32),
+        chapter_ids: Set(Value::Array(chapter_id_values)),
         style_id: Set(body.style_id),
-        target_word_count: Set(body.target_word_count.or(Some(3000))),
+        target_word_count: Set(Some(target_word_count)),
         enable_analysis: Set(body.enable_analysis),
         status: Set(Some("pending".to_string())),
-        total_chapters: Set(Some(body.count)),
+        total_chapters: Set(Some(chapters_to_generate.len() as i32)),
         completed_chapters: Set(Some(0)),
         failed_chapters: Set(Some(json!([]))),
         current_chapter_id: Set(None),
@@ -414,11 +577,24 @@ async fn create_batch_generate(
         )
     })?;
 
+    spawn_batch_generation(
+        db.clone(),
+        saved.id.clone(),
+        claims.sub.clone(),
+        chapters_to_generate.iter().map(|chapter_model| chapter_model.id.clone()).collect(),
+        target_word_count,
+        ai_config,
+    );
+
     Ok(Json(json!({
         "batch_id": saved.id,
         "message": "Batch generation task created",
-        "chapters_to_generate": chapter_ids,
-        "estimated_time_minutes": body.count.max(1) * 2,
+        "chapters_to_generate": chapters_to_generate.iter().map(|chapter_model| json!({
+            "id": chapter_model.id,
+            "chapter_number": chapter_model.chapter_number,
+            "title": chapter_model.title,
+        })).collect::<Vec<_>>(),
+        "estimated_time_minutes": (chapters_to_generate.len() as i32).max(1) * 2,
     })))
 }
 
@@ -855,6 +1031,7 @@ async fn resume_batch_generation(
     active.completed_at = Set(None);
     active.started_at = Set(None);
     active.completed_chapters = Set(Some(0));
+    active.current_retry_count = Set(Some(0));
     let updated = active.update(&db).await.map_err(|error| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -882,6 +1059,31 @@ async fn resume_batch_generation(
                 ai_config,
             );
         }
+    } else {
+        let chapter_ids = parse_batch_task_chapter_ids(&task);
+        if chapter_ids.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "Batch generation task has no chapters to resume"})),
+            ));
+        }
+        let ai_config = match build_user_ai_config(&db, &claims.sub, None).await {
+            Ok(config) => config,
+            Err(error) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"detail": error})),
+                ));
+            }
+        };
+        spawn_batch_generation(
+            db.clone(),
+            batch_id.clone(),
+            claims.sub.clone(),
+            chapter_ids,
+            task.target_word_count.unwrap_or(3000).max(1),
+            ai_config,
+        );
     }
 
     Ok(Json(json!({
