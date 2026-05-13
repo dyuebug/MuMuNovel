@@ -23,6 +23,7 @@ export function startChapterAnalysisPollingTask({
 
 export async function refreshChapterAnalysisTaskStatus({
   chapterId,
+  isPageActiveRef,
   currentProjectIdRef,
   currentProjectId,
   syncAnalysisTasksFromBatch,
@@ -32,6 +33,7 @@ export async function refreshChapterAnalysisTaskStatus({
   isAnalysisTaskInProgress,
 }: {
   chapterId: string;
+  isPageActiveRef?: { current: boolean };
   currentProjectIdRef: { current: string | null };
   currentProjectId?: string | null;
   syncAnalysisTasksFromBatch: (items: Record<string, AnalysisTask>, options?: { notifyOnTerminalTransitions?: boolean; reset?: boolean }) => Record<string, AnalysisTask>;
@@ -45,8 +47,12 @@ export async function refreshChapterAnalysisTaskStatus({
     return;
   }
 
+  if (isPageActiveRef && !isPageActiveRef.current) {
+    return;
+  }
+
   const task = await chapterApi.getChapterAnalysisStatus(chapterId, projectId);
-  if (currentProjectIdRef.current !== projectId) {
+  if ((isPageActiveRef && !isPageActiveRef.current) || currentProjectIdRef.current !== projectId) {
     return;
   }
 

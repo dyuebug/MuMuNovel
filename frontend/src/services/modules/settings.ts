@@ -30,6 +30,9 @@ const sanitizeSettingsUpdate = (data: SettingsUpdate): SettingsUpdate => {
       normalized.api_key = trimmed;
     }
   }
+  if (normalized.clear_api_key !== true) {
+    delete normalized.clear_api_key;
+  }
   return normalized;
 };
 
@@ -66,10 +69,10 @@ export const settingsApi = {
 
   deleteSettings: () => api.delete<unknown, { message: string; user_id: string }>('/settings'),
 
-  getAvailableModels: (params: { api_key: string; api_base_url: string; provider: string }) =>
+  getAvailableModels: (params: { api_key?: string; api_base_url: string; provider: string }) =>
     api.get<unknown, { provider: string; models: Array<{ value: string; label: string; description: string }>; count?: number }>('/settings/models', { params }),
 
-  testApiConnection: (params: { api_key: string; api_base_url: string; provider: string; llm_model: string; temperature?: number; max_tokens?: number; api_backup_urls?: string[]; fallback_strategy?: 'auto' | 'manual' }) =>
+  testApiConnection: (params: { api_key?: string; api_base_url: string; provider: string; llm_model: string; temperature?: number; max_tokens?: number; api_backup_urls?: string[]; fallback_strategy?: 'auto' | 'manual' }) =>
     api.post<unknown, {
       success: boolean;
       message: string;
@@ -108,7 +111,7 @@ export const settingsApi = {
       suggestions?: string[];
     }>('/settings/test-web-research', params),
 
-  checkFunctionCalling: (params: { api_key: string; api_base_url: string; provider: string; llm_model: string; api_backup_urls?: string[]; fallback_strategy?: 'auto' | 'manual' }) =>
+  checkFunctionCalling: (params: { api_key?: string; api_base_url: string; provider: string; llm_model: string; api_backup_urls?: string[]; fallback_strategy?: 'auto' | 'manual' }) =>
     api.post<unknown, {
       success: boolean;
       supported: boolean | null;
@@ -166,7 +169,7 @@ export const settingsApi = {
       params: { name, description }
     }),
 
-  fetchModels: (params: { api_key: string; api_base_url: string; provider: string; models_url?: string }) =>
+  fetchModels: (params: { api_key?: string; api_base_url: string; provider: string; models_url?: string }) =>
     api.post<unknown, {
       success: boolean;
       models: Array<{ id: string; owned_by: string | null }>;

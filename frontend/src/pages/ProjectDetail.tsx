@@ -41,11 +41,17 @@ const isMobile = () => window.innerWidth <= 768;
 const projectLoadPromises = new Map<string, Promise<Project>>();
 const PROJECT_COLLECTION_HYDRATION_DELAY_MS = 1000;
 
+interface NavigationPrefetchOptions {
+  includeData?: boolean;
+}
+
 const shouldHydrateProjectCollectionsForPath = (pathname: string) => {
   return !(
     pathname.includes('/outline')
     || pathname.includes('/characters')
     || pathname.includes('/chapters')
+    || pathname.includes('/chapter-analysis')
+    || pathname.includes('/foreshadows')
     || pathname.includes('/organizations')
     || pathname.includes('/careers')
     || pathname.includes('/relationships')
@@ -115,11 +121,14 @@ export default function ProjectDetail() {
   const prefetchProjectNavigationTarget = useCallback((
     pageKey?: ProjectNavigationPageKey,
     path?: string,
+    options: NavigationPrefetchOptions = {},
   ) => {
     const targetKey = pageKey ?? path;
     if (!targetKey) {
       return;
     }
+
+    const includeData = options.includeData ?? true;
 
     const chunkPrefetchKey = `chunk:${projectId ?? 'unknown-project'}:${targetKey}`;
     const dataPrefetchKey = `data:${projectId ?? 'unknown-project'}:${targetKey}`;
@@ -129,7 +138,7 @@ export default function ProjectDetail() {
       void preloadProjectPage(pageKey);
     }
 
-    if (!projectId || prefetchedNavigationTargetsRef.current.has(dataPrefetchKey)) {
+    if (!includeData || !projectId || prefetchedNavigationTargetsRef.current.has(dataPrefetchKey)) {
       return;
     }
 
@@ -176,23 +185,29 @@ export default function ProjectDetail() {
     label: string,
     pageKey?: ProjectNavigationPageKey,
   ) => {
-    const handleIntentPrefetch = () => {
-      prefetchProjectNavigationTarget(pageKey, path);
+    const handleHoverPrefetch = () => {
+      prefetchProjectNavigationTarget(pageKey, path, { includeData: true });
+    };
+
+    const handlePressPrefetch = () => {
+      prefetchProjectNavigationTarget(pageKey, path, { includeData: false });
     };
 
     const handleNavigate = () => {
       if (!shouldHydrateProjectCollectionsForPath(path)) {
+        shouldHydrateCollectionsRef.current = false;
         cancelScheduledProjectHydration();
+        setIsProjectDataHydrating(false);
       }
     };
 
     return (
       <Link
         to={path}
-        onMouseEnter={handleIntentPrefetch}
-        onFocus={handleIntentPrefetch}
-        onPointerDown={handleIntentPrefetch}
-        onTouchStart={handleIntentPrefetch}
+        onMouseEnter={handleHoverPrefetch}
+        onFocus={handleHoverPrefetch}
+        onPointerDown={handlePressPrefetch}
+        onTouchStart={handlePressPrefetch}
         onClick={handleNavigate}
       >
         {label}
@@ -391,12 +406,12 @@ export default function ProjectDetail() {
         {
           key: 'chapter-analysis',
           icon: <FundOutlined />,
-          label: <Link to={`/project/${projectId}/chapter-analysis`}>剧情分析</Link>,
+          label: createMenuLink(`/project/${projectId}/chapter-analysis`, '剧情分析', 'chapter-analysis'),
         },
         {
           key: 'foreshadows',
           icon: <BulbOutlined />,
-          label: <Link to={`/project/${projectId}/foreshadows`}>伏笔管理</Link>,
+          label: createMenuLink(`/project/${projectId}/foreshadows`, '伏笔管理', 'foreshadows'),
         },
       ],
     },
@@ -462,12 +477,12 @@ export default function ProjectDetail() {
     {
       key: 'chapter-analysis',
       icon: <FundOutlined />,
-      label: <Link to={`/project/${projectId}/chapter-analysis`}>剧情分析</Link>,
+      label: createMenuLink(`/project/${projectId}/chapter-analysis`, '剧情分析', 'chapter-analysis'),
     },
     {
       key: 'foreshadows',
       icon: <BulbOutlined />,
-      label: <Link to={`/project/${projectId}/foreshadows`}>伏笔管理</Link>,
+      label: createMenuLink(`/project/${projectId}/foreshadows`, '伏笔管理', 'foreshadows'),
     },
     {
       key: 'writing-styles',

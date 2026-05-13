@@ -3,7 +3,13 @@ import type { ReactNode } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 
 import ProtectedRoute from '../../components/ProtectedRoute';
-import { loadCharactersPage, loadChaptersPage, loadOutlinePage } from '../../routes/projectPageLoaders';
+import {
+  loadCharactersPage,
+  loadChapterAnalysisPage,
+  loadChaptersPage,
+  loadForeshadowsPage,
+  loadOutlinePage,
+} from '../../routes/projectPageLoaders';
 import AppFooterSlot from '../layout/AppFooterSlot';
 import RouteFallback from './RouteFallback';
 
@@ -20,8 +26,8 @@ const RelationshipGraph = lazy(() => import('../../pages/RelationshipGraph'));
 const Organizations = lazy(() => import('../../pages/Organizations'));
 const Chapters = lazy(loadChaptersPage);
 const ChapterReader = lazy(() => import('../../pages/ChapterReader'));
-const ChapterAnalysis = lazy(() => import('../../pages/ChapterAnalysis'));
-const Foreshadows = lazy(() => import('../../pages/Foreshadows'));
+const ChapterAnalysis = lazy(loadChapterAnalysisPage);
+const Foreshadows = lazy(loadForeshadowsPage);
 const WritingStyles = lazy(() => import('../../pages/WritingStyles'));
 const PromptWorkshop = lazy(() => import('../../pages/PromptWorkshop'));
 const Settings = lazy(() => import('../../pages/Settings'));

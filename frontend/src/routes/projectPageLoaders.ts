@@ -1,4 +1,12 @@
-export type ProjectNavigationPageKey = 'outline' | 'characters' | 'chapters' | 'organizations' | 'careers' | 'relationships';
+export type ProjectNavigationPageKey =
+  | 'outline'
+  | 'characters'
+  | 'chapters'
+  | 'organizations'
+  | 'careers'
+  | 'relationships'
+  | 'chapter-analysis'
+  | 'foreshadows';
 
 const projectPageLoadPromises = new Map<ProjectNavigationPageKey, Promise<unknown>>();
 const PROJECT_NAVIGATION_PRELOAD_ORDER: readonly ProjectNavigationPageKey[] = ['characters', 'chapters', 'careers'];
@@ -20,6 +28,8 @@ export const loadChaptersPage = () => import('../pages/Chapters');
 export const loadOrganizationsPage = () => import('../pages/Organizations');
 export const loadCareersPage = () => import('../pages/Careers');
 export const loadRelationshipsPage = () => import('../pages/Relationships');
+export const loadChapterAnalysisPage = () => import('../pages/ChapterAnalysis');
+export const loadForeshadowsPage = () => import('../pages/Foreshadows');
 
 const projectPageLoaders: Record<ProjectNavigationPageKey, () => Promise<unknown>> = {
   outline: loadOutlinePage,
@@ -28,6 +38,8 @@ const projectPageLoaders: Record<ProjectNavigationPageKey, () => Promise<unknown
   organizations: loadOrganizationsPage,
   careers: loadCareersPage,
   relationships: loadRelationshipsPage,
+  'chapter-analysis': loadChapterAnalysisPage,
+  foreshadows: loadForeshadowsPage,
 };
 
 const waitFor = (delayMs: number) => new Promise<void>((resolve) => {

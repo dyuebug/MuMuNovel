@@ -9,6 +9,7 @@ export async function loadAnalysisTasksWorkflow({
   projectId,
   chapters,
   chaptersToLoad,
+  isPageActiveRef,
   currentProjectIdRef,
   analysisTasksMapRef,
   chapterAnalysisTasksCache,
@@ -20,6 +21,7 @@ export async function loadAnalysisTasksWorkflow({
   projectId?: string | null;
   chapters: Chapter[];
   chaptersToLoad?: Chapter[];
+  isPageActiveRef?: { current: boolean };
   currentProjectIdRef: { current: string | null };
   analysisTasksMapRef: { current: Record<string, AnalysisTask> };
   chapterAnalysisTasksCache: Map<string, Record<string, AnalysisTask>>;
@@ -32,6 +34,7 @@ export async function loadAnalysisTasksWorkflow({
     projectId,
     chapters,
     chaptersToLoad,
+    isPageActiveRef,
     currentProjectIdRef,
     analysisTasksMapRef,
     chapterAnalysisTasksCache,
@@ -65,6 +68,7 @@ export function startAnalysisPollingTaskWorkflow({
 
 export async function refreshAnalysisTaskWorkflow({
   chapterId,
+  isPageActiveRef,
   currentProjectIdRef,
   currentProjectId,
   syncAnalysisTasksFromBatch,
@@ -74,6 +78,7 @@ export async function refreshAnalysisTaskWorkflow({
   isAnalysisTaskInProgress,
 }: {
   chapterId: string;
+  isPageActiveRef?: { current: boolean };
   currentProjectIdRef: { current: string | null };
   currentProjectId?: string | null;
   syncAnalysisTasksFromBatch: (items: Record<string, AnalysisTask>, options?: { notifyOnTerminalTransitions?: boolean; reset?: boolean }) => Record<string, AnalysisTask>;
@@ -84,6 +89,7 @@ export async function refreshAnalysisTaskWorkflow({
 }): Promise<void> {
   await refreshChapterAnalysisTaskStatus({
     chapterId,
+    isPageActiveRef,
     currentProjectIdRef,
     currentProjectId,
     syncAnalysisTasksFromBatch,

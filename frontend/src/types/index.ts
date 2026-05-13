@@ -44,6 +44,7 @@ export interface Settings {
 export interface SettingsUpdate {
   api_provider?: string;
   api_key?: string;
+  clear_api_key?: boolean;
   api_base_url?: string;
   api_backup_urls?: string[];
   provider_type?: string;

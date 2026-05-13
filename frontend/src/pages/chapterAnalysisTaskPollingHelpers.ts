@@ -25,12 +25,14 @@ export function syncChapterAnalysisTasksFromBatch({
   items,
   analysisTasksMapRef,
   updateAnalysisTasksMap,
+  areAnalysisTaskSnapshotsEqual,
   notifyOnTerminalTransitions = false,
   reset = false,
 }: {
   items: Record<string, AnalysisTask>;
   analysisTasksMapRef: { current: Record<string, AnalysisTask> };
   updateAnalysisTasksMap: (next: Record<string, AnalysisTask>) => void;
+  areAnalysisTaskSnapshotsEqual: (leftTask?: AnalysisTask | null, rightTask?: AnalysisTask | null) => boolean;
   notifyOnTerminalTransitions?: boolean;
   reset?: boolean;
 }): Record<string, AnalysisTask> {
@@ -38,9 +40,12 @@ export function syncChapterAnalysisTasksFromBatch({
   const nextTasks = { ...previousTasks };
 
   Object.entries(items).forEach(([chapterId, task]) => {
-    nextTasks[chapterId] = task;
+    const previousTask = previousTasks[chapterId];
+    nextTasks[chapterId] = areAnalysisTaskSnapshotsEqual(previousTask, task)
+      ? previousTask
+      : task;
 
-    if (notifyOnTerminalTransitions && previousTasks[chapterId]?.status !== task.status) {
+    if (notifyOnTerminalTransitions && previousTask?.status !== task.status) {
       if (task.status === 'completed') {
         message.success('Chapter analysis completed.');
       } else if (task.status === 'failed') {
@@ -60,6 +65,7 @@ export async function pollChapterAnalysisTasksBatch({
   analysisTasksMapRef,
   stopAnalysisPolling,
   updateAnalysisTasksMap,
+  areAnalysisTaskSnapshotsEqual,
   isAnalysisTaskInProgress,
 }: {
   projectId: string;
@@ -68,6 +74,7 @@ export async function pollChapterAnalysisTasksBatch({
   analysisTasksMapRef: { current: Record<string, AnalysisTask> };
   stopAnalysisPolling: (clearTrackedChapterIds?: boolean) => void;
   updateAnalysisTasksMap: (next: Record<string, AnalysisTask>) => void;
+  areAnalysisTaskSnapshotsEqual: (leftTask?: AnalysisTask | null, rightTask?: AnalysisTask | null) => boolean;
   isAnalysisTaskInProgress: (task?: AnalysisTask | null) => boolean;
 }): Promise<void> {
   const chapterIds = Array.from(pollingIntervalsRef.current);
@@ -86,6 +93,7 @@ export async function pollChapterAnalysisTasksBatch({
       items: response.items,
       analysisTasksMapRef,
       updateAnalysisTasksMap,
+      areAnalysisTaskSnapshotsEqual,
       notifyOnTerminalTransitions: true,
     });
 

@@ -1,4 +1,5 @@
 import { hasUsableApiCredentials } from '../utils/apiKey';
+import { settingsApi } from '../services/modularApi';
 
 export type ModelOption = {
   value: string;
@@ -71,42 +72,30 @@ export async function loadChapterAvailableModels({
   setSelectedModel: (value: string | undefined | ((previousModel: string | undefined) => string | undefined)) => void;
 }): Promise<string | null> {
   try {
-    const [settingsResponse, apiKeyResponse] = await Promise.all([
-      fetch('/api/settings'),
-      fetch('/api/settings/api-key'),
-    ]);
+    const { settings, storedApiKey } = await settingsApi.getSettingsWithStoredApiKey();
+    const { api_base_url, api_provider, provider_type } = settings;
+    const preferredModel = normalizeOptionalSelectValue(settings.llm_model);
 
-    if (settingsResponse.ok && apiKeyResponse.ok) {
-      const settings = await settingsResponse.json();
-      const apiKeyInfo = await apiKeyResponse.json();
-      const { api_base_url, api_provider, provider_type } = settings;
-      const preferredModel = normalizeOptionalSelectValue(settings.llm_model);
-      const storedApiKey = normalizeOptionalSelectValue(apiKeyInfo.api_key);
+    if (hasUsableApiCredentials(storedApiKey, api_base_url)) {
+      try {
+        const data = await settingsApi.getAvailableModels({
+          api_key: storedApiKey,
+          api_base_url,
+          provider: provider_type || api_provider || 'openai',
+        });
+        const normalizedModels = normalizeModelOptions(data.models);
 
-      if (hasUsableApiCredentials(storedApiKey, api_base_url)) {
-        try {
-          const resolvedApiKey = storedApiKey as string;
-          const modelsResponse = await fetch(
-            `/api/settings/models?api_key=${encodeURIComponent(resolvedApiKey)}&api_base_url=${encodeURIComponent(api_base_url)}&provider=${provider_type || api_provider}`
-          );
+        setAvailableModels((previousModels: ModelOption[]) => (
+          areModelOptionsEqual(previousModels, normalizedModels) ? previousModels : normalizedModels
+        ));
 
-          if (modelsResponse.ok) {
-            const data = await modelsResponse.json();
-            const normalizedModels = normalizeModelOptions(data.models);
+        setSelectedModel((previousModel: string | undefined) => (
+          previousModel === preferredModel ? previousModel : preferredModel
+        ));
 
-            setAvailableModels((previousModels: ModelOption[]) => (
-              areModelOptionsEqual(previousModels, normalizedModels) ? previousModels : normalizedModels
-            ));
-
-            setSelectedModel((previousModel: string | undefined) => (
-              previousModel === preferredModel ? previousModel : preferredModel
-            ));
-
-            return preferredModel ?? null;
-          }
-        } catch (error) {
-          console.error('Failed to load models list.', error);
-        }
+        return preferredModel ?? null;
+      } catch (error) {
+        console.error('Failed to load models list.', error);
       }
     }
   } catch (error) {

@@ -5,6 +5,7 @@ export async function loadChapterAnalysisTasks({
   projectId,
   chapters,
   chaptersToLoad,
+  isPageActiveRef,
   currentProjectIdRef,
   analysisTasksMapRef,
   chapterAnalysisTasksCache,
@@ -16,6 +17,7 @@ export async function loadChapterAnalysisTasks({
   projectId?: string | null;
   chapters: Chapter[];
   chaptersToLoad?: Chapter[];
+  isPageActiveRef?: { current: boolean };
   currentProjectIdRef: { current: string | null };
   analysisTasksMapRef: { current: Record<string, AnalysisTask> };
   chapterAnalysisTasksCache: Map<string, Record<string, AnalysisTask>>;
@@ -29,6 +31,10 @@ export async function loadChapterAnalysisTasks({
 
   if (!targetProjectId) {
     stopAnalysisPolling();
+    return;
+  }
+
+  if (isPageActiveRef && !isPageActiveRef.current) {
     return;
   }
 
@@ -63,7 +69,7 @@ export async function loadChapterAnalysisTasks({
 
   try {
     const response = await chapterApi.getBatchChapterAnalysisStatus(targetChapterIds, targetProjectId);
-    if (currentProjectIdRef.current !== targetProjectId) {
+    if ((isPageActiveRef && !isPageActiveRef.current) || currentProjectIdRef.current !== targetProjectId) {
       return;
     }
 

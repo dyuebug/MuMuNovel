@@ -135,6 +135,7 @@ export function trackSingleChapterGenerationResult({
   progressMessageKey,
   result,
   currentProjectId,
+  isPageActiveRef,
   editorForm,
   isEditorOpenRef,
   editingChapterIdRef,
@@ -147,6 +148,7 @@ export function trackSingleChapterGenerationResult({
   progressMessageKey: string;
   result: GenerateChapterContentStreamResult;
   currentProjectId?: string;
+  isPageActiveRef: MutableRefObject<boolean>;
   editorForm: FormInstance<{ content?: string }>;
   isEditorOpenRef: MutableRefObject<boolean>;
   editingChapterIdRef: MutableRefObject<string | null>;
@@ -173,6 +175,10 @@ export function trackSingleChapterGenerationResult({
 
   result.completion
     .then(async (finalResult) => {
+      if (!isPageActiveRef.current) {
+        return;
+      }
+
       if (isEditorOpenRef.current && editingChapterIdRef.current === chapterId) {
         const hasContentTouched = editorForm.isFieldsTouched(['content']);
 
@@ -208,14 +214,20 @@ export function trackSingleChapterGenerationResult({
         }));
 
         chapterApi.upsertChapterAnalysisTaskToStore(pendingTask, currentProjectId, 'chapter-analysis-task');
-        startPollingTask(chapterId);
+        if (isPageActiveRef.current) {
+          startPollingTask(chapterId);
+        }
       }
 
-      if (isEditorOpenRef.current && editingChapterIdRef.current === chapterId) {
+      if (isPageActiveRef.current && isEditorOpenRef.current && editingChapterIdRef.current === chapterId) {
         setChapterQualityRefreshToken((prev) => prev + 1);
       }
     })
     .catch((error) => {
+      if (!isPageActiveRef.current) {
+        return;
+      }
+
       const completionError = error as ApiError;
       message.open({
         key: progressMessageKey,
@@ -225,6 +237,10 @@ export function trackSingleChapterGenerationResult({
       });
     })
     .finally(() => {
+      if (!isPageActiveRef.current) {
+        return;
+      }
+
       setRunningSingleChapterTasks((prev) => {
         if (!(chapterId in prev)) return prev;
         const next = { ...prev };
@@ -259,6 +275,7 @@ export async function startSingleChapterGenerationWorkflow({
   selectedQualityNotes,
   generateChapterContentStream,
   currentProjectId,
+  isPageActiveRef,
   editorForm,
   isEditorOpenRef,
   editingChapterIdRef,
@@ -300,6 +317,7 @@ export async function startSingleChapterGenerationWorkflow({
   selectedQualityNotes: string;
   generateChapterContentStream: GenerateChapterContentStream;
   currentProjectId?: string;
+  isPageActiveRef: MutableRefObject<boolean>;
   editorForm: FormInstance<{ content?: string }>;
   isEditorOpenRef: MutableRefObject<boolean>;
   editingChapterIdRef: MutableRefObject<string | null>;
@@ -375,6 +393,7 @@ export async function startSingleChapterGenerationWorkflow({
       progressMessageKey,
       result,
       currentProjectId,
+      isPageActiveRef,
       editorForm,
       isEditorOpenRef,
       editingChapterIdRef,

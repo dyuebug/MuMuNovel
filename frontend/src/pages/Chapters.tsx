@@ -441,6 +441,7 @@ export default function Chapters() {
   const editingChapterIdRef = useRef<string | null>(null);
 
   const isEditorOpenRef = useRef(false);
+  const isPageActiveRef = useRef(true);
 
   const [runningSingleChapterTasks, setRunningSingleChapterTasks] = useState<Record<string, string>>({});
 
@@ -1350,6 +1351,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       items,
       analysisTasksMapRef,
       updateAnalysisTasksMap,
+      areAnalysisTaskSnapshotsEqual: (leftTask, rightTask) => areAnalysisTaskSnapshotsEqual(leftTask ?? undefined, rightTask ?? undefined),
       notifyOnTerminalTransitions: options?.notifyOnTerminalTransitions,
       reset: options?.reset,
     });
@@ -1362,6 +1364,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       analysisTasksMapRef,
       stopAnalysisPolling,
       updateAnalysisTasksMap,
+      areAnalysisTaskSnapshotsEqual: (leftTask, rightTask) => areAnalysisTaskSnapshotsEqual(leftTask ?? undefined, rightTask ?? undefined),
       isAnalysisTaskInProgress,
     });
   }, [stopAnalysisPolling, updateAnalysisTasksMap]);
@@ -1384,6 +1387,14 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       collectActiveAnalysisChapterIds,
     });
   }, [ensureAnalysisPolling, stopAnalysisPolling]);
+  useEffect(() => {
+    isPageActiveRef.current = true;
+
+    return () => {
+      isPageActiveRef.current = false;
+    };
+  }, []);
+
   useEffect(() => {
     initializeChapterProjectWorkflow({
       projectId: currentProject?.id ?? null,
@@ -1422,6 +1433,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       projectId: currentProject?.id,
       chapters,
       chaptersToLoad,
+      isPageActiveRef,
       currentProjectIdRef,
       analysisTasksMapRef,
       chapterAnalysisTasksCache,
@@ -1445,6 +1457,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
   const refreshChapterAnalysisTask = useCallback(async (chapterId: string) => {
     await refreshAnalysisTaskWorkflow({
       chapterId,
+      isPageActiveRef,
       currentProjectIdRef,
       currentProjectId: currentProject?.id,
       syncAnalysisTasksFromBatch,
@@ -1922,6 +1935,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       selectedQualityNotes,
       generateChapterContentStream,
       currentProjectId: currentProject?.id,
+      isPageActiveRef,
       editorForm,
       isEditorOpenRef,
       editingChapterIdRef,

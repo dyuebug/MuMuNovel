@@ -315,6 +315,7 @@ export default function SettingsPage() {
   const [showStoredApiKey, setShowStoredApiKey] = useState(false);
   const [storedApiKeyPreview, setStoredApiKeyPreview] = useState('');
   const [loadingStoredApiKey, setLoadingStoredApiKey] = useState(false);
+  const [clearStoredApiKey, setClearStoredApiKey] = useState(false);
 
   const providerValue = Form.useWatch('api_provider', settingsForm) || 'openai';
   const webResearchEnabled = Form.useWatch('web_research_enabled', webResearchForm) ?? false;
@@ -358,6 +359,7 @@ export default function SettingsPage() {
       setSettingsRecord(normalizedResponse);
       setShowStoredApiKey(false);
       setStoredApiKeyPreview('');
+      setClearStoredApiKey(false);
       settingsForm.setFieldsValue(settingsToMainFormValues(normalizedResponse));
       webResearchForm.setFieldsValue(settingsToWebResearchFormValues(normalizedResponse));
       setModelOptions((current) => mergeModelOptions(current, [normalizedResponse.llm_model || '']));
@@ -397,6 +399,7 @@ export default function SettingsPage() {
         return;
       }
       setStoredApiKeyPreview(String(response.api_key || '').trim());
+      setClearStoredApiKey(false);
       setShowStoredApiKey(true);
     } catch (error) {
       console.error('load stored api key failed', error);
@@ -419,11 +422,8 @@ export default function SettingsPage() {
     if (raw) {
       return raw;
     }
-    if (hasStoredApiKey) {
-      return '';
-    }
-    return '';
-  }, [hasStoredApiKey]);
+    return undefined;
+  }, []);
   const handleSaveSettings = async () => {
     try {
       const values = await settingsForm.validateFields();
@@ -433,7 +433,10 @@ export default function SettingsPage() {
         ...webResearchValues,
       };
       const payload = buildSettingsPayload(mergedValues);
-      if (!String(values.api_key || '').trim() && hasStoredApiKey) {
+      const clearApiKey = clearStoredApiKey && !String(values.api_key || '').trim();
+      if (clearApiKey) {
+        payload.clear_api_key = true;
+      } else if (!String(values.api_key || '').trim() && hasStoredApiKey) {
         delete payload.api_key;
       }
       setSavingSettings(true);
@@ -448,6 +451,7 @@ export default function SettingsPage() {
       setSettingsRecord(normalizedSaved);
       setShowStoredApiKey(false);
       setStoredApiKeyPreview('');
+      setClearStoredApiKey(false);
       settingsForm.setFieldsValue(settingsToMainFormValues(normalizedSaved));
       webResearchForm.setFieldsValue(settingsToWebResearchFormValues(normalizedSaved));
       setModelOptions((current) => mergeModelOptions(current, [normalizedSaved.llm_model || String(values.llm_model || ''), providerHint.model]));
@@ -477,7 +481,7 @@ export default function SettingsPage() {
       setFetchingModels(true);
       const result = await settingsApi.fetchModels({
         provider: values.api_provider,
-        api_key: apiKey,
+        ...(apiKey ? { api_key: apiKey } : {}),
         api_base_url: String(values.api_base_url || '').trim(),
       });
 
@@ -516,7 +520,7 @@ export default function SettingsPage() {
       setTestingConnection(true);
       const result = await settingsApi.testApiConnection({
         provider: values.api_provider,
-        api_key: apiKey,
+        ...(apiKey ? { api_key: apiKey } : {}),
         api_base_url: String(values.api_base_url || '').trim(),
         llm_model: String(values.llm_model || '').trim(),
         temperature: Number(allValues.temperature ?? 0.7),
@@ -557,7 +561,7 @@ export default function SettingsPage() {
       setCheckingFunctionCalling(true);
       const result = await settingsApi.checkFunctionCalling({
         provider: values.api_provider,
-        api_key: apiKey,
+        ...(apiKey ? { api_key: apiKey } : {}),
         api_base_url: String(values.api_base_url || '').trim(),
         llm_model: String(values.llm_model || '').trim(),
         api_backup_urls: normalizeMultilineUrls(allValues.api_backup_urls_text),
@@ -840,15 +844,36 @@ export default function SettingsPage() {
                                 <Input.Password
                                   placeholder={apiKeyPlaceholder}
                                   autoComplete="new-password"
+                                  onChange={(event) => {
+                                    if (String(event.target.value || '').trim()) {
+                                      setClearStoredApiKey(false);
+                                    }
+                                  }}
                                   addonAfter={hasStoredApiKey ? (
-                                    <Button
-                                      type="link"
-                                      size="small"
-                                      loading={loadingStoredApiKey}
-                                      onClick={() => void handleToggleStoredApiKey()}
-                                    >
-                                      {showStoredApiKey ? '隐藏已保存密钥' : '显示已保存密钥'}
-                                    </Button>
+                                    <Space size={4}>
+                                      <Button
+                                        type="link"
+                                        size="small"
+                                        loading={loadingStoredApiKey}
+                                        onClick={() => void handleToggleStoredApiKey()}
+                                      >
+                                        {showStoredApiKey ? '隐藏已保存密钥' : '显示已保存密钥'}
+                                      </Button>
+                                      <Button
+                                        type="link"
+                                        size="small"
+                                        danger
+                                        onClick={() => {
+                                          settingsForm.setFieldValue('api_key', '');
+                                          setShowStoredApiKey(false);
+                                          setStoredApiKeyPreview('');
+                                          setClearStoredApiKey(true);
+                                          message.info('已标记清空已保存 API Key，保存设置后生效');
+                                        }}
+                                      >
+                                        清空已保存密钥
+                                      </Button>
+                                    </Space>
                                   ) : undefined}
                                 />
                               </Form.Item>
@@ -857,7 +882,7 @@ export default function SettingsPage() {
                                   type="info"
                                   showIcon
                                   message="已保存 API Key"
-                                  description="当前输入框留空表示保持已保存密钥不变；只有输入新值并保存时才会覆盖。"
+                                  description={clearStoredApiKey ? "当前已标记清空已保存密钥；点击保存后生效。若改为输入新值，则会覆盖而不是清空。" : "当前输入框留空表示保持已保存密钥不变；输入新值并保存会覆盖。如需删除，请点击右侧“清空已保存密钥”。"}
                                   style={{ marginTop: -12, marginBottom: 16 }}
                                 />
                               ) : null}
