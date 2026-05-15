@@ -54,6 +54,7 @@ export const chapterSingleTaskApi = {
       stage_code: '6.writing',
       execution_mode: 'interactive',
       message: created.message || '单章后台任务已创建',
+      checkpoint: { chapter_id: created.chapter_id || chapterId },
       active_story_repair_payload: created.active_story_repair_payload ?? undefined,
     });
     return created;
@@ -75,7 +76,10 @@ export const chapterSingleTaskApi = {
       errorMessage: status.error_message,
       stageCode: status.stage_code ?? '6.writing',
       executionMode: status.execution_mode ?? 'interactive',
-      checkpoint: status.checkpoint ?? undefined,
+      checkpoint: {
+        ...(status.checkpoint ?? {}),
+        chapter_id: status.current_chapter_id ?? status.checkpoint?.chapter_id ?? null,
+      },
       failedChapters: status.failed_chapters ?? undefined,
       activeStoryRepairPayload: status.active_story_repair_payload ?? undefined,
       terminalReason: status.terminal_reason,
@@ -116,7 +120,10 @@ export const chapterSingleTaskApi = {
       projectId: resumed.project_id ?? projectId,
       stageCode: resumed.stage_code ?? '6.writing.loading',
       executionMode: resumed.execution_mode ?? 'interactive',
-      checkpoint: resumed.checkpoint ?? undefined,
+      checkpoint: {
+        ...(resumed.checkpoint ?? {}),
+        chapter_id: resumed.current_chapter_id ?? resumed.checkpoint?.chapter_id ?? null,
+      },
       createdAt: resumed.created_at,
     });
     return resumed;

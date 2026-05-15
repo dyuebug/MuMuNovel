@@ -67,7 +67,9 @@ export async function queueDeferredBatchAnalysis({
     }
 
     try {
-      const remoteTask = await chapterApi.getChapterAnalysisStatus(chapter.id, projectId);
+      const remoteTask = await chapterApi.getChapterAnalysisStatus(chapter.id, projectId, {
+        syncBackgroundTaskStore: false,
+      });
       if (remoteTask.has_task && ['pending', 'running', 'completed'].includes(remoteTask.status)) {
         skippedCount += 1;
         if (remoteTask.status === 'pending' || remoteTask.status === 'running') {

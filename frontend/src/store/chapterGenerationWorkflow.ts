@@ -133,6 +133,17 @@ export async function startChapterGenerationWorkflow({
   storyRepairTargets,
   storyPreserveStrengths,
 }: GenerateChapterContentStreamOptions): Promise<GenerateChapterContentStreamResult> {
+  const resolveTaskProgress = (
+    taskStatus: Awaited<ReturnType<typeof chapterSingleTaskApi.getSingleGenerateTaskStatus>>,
+    fallback: number,
+  ): number => {
+    const checkpointProgress = taskStatus.checkpoint?.progress;
+    if (typeof checkpointProgress === 'number' && Number.isFinite(checkpointProgress)) {
+      return Math.max(0, Math.min(Math.round(checkpointProgress), 100));
+    }
+    return fallback;
+  };
+
   const startResult = await chapterSingleTaskApi.createSingleGenerateTask(
     chapterId,
     {
@@ -288,7 +299,7 @@ export async function startChapterGenerationWorkflow({
         if (taskStatus.status === 'pending') {
           onProgressUpdate?.(
             `Waiting for chapter generation to start...${activeRepairStrategyLabel ? ` | ${activeRepairStrategyLabel}` : ''}`,
-            15,
+            resolveTaskProgress(taskStatus, 15),
           );
           continue;
         }
@@ -301,12 +312,12 @@ export async function startChapterGenerationWorkflow({
           if (qualityMessage) {
             onProgressUpdate?.(
               `${qualityMessage} | Quality review in progress${retrySuffix}${activeRepairStrategyLabel ? ` | ${activeRepairStrategyLabel}` : ''}`,
-              70,
+              resolveTaskProgress(taskStatus, 70),
             );
           } else {
             onProgressUpdate?.(
               `Generating content...${retrySuffix}${activeRepairStrategyLabel ? ` | ${activeRepairStrategyLabel}` : ''}`,
-              65,
+              resolveTaskProgress(taskStatus, 65),
             );
           }
           continue;

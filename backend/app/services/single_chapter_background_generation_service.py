@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional
 
 from sqlalchemy import select
@@ -29,6 +30,28 @@ class SingleChapterBackgroundGenerationPreparation:
     web_research_query: Optional[str]
 
 
+def recover_stale_single_chapter_background_task_if_needed(
+    task: BatchGenerationTask,
+) -> bool:
+    current_time = datetime.now()
+    auto_recovered = False
+
+    if task.status == 'running':
+        if task.started_at and (current_time - task.started_at) > timedelta(minutes=15):
+            task.status = 'failed'
+            task.error_message = '任务超时（超过15分钟未完成，已自动恢复）'
+            task.completed_at = current_time
+            auto_recovered = True
+    elif task.status == 'pending':
+        if task.created_at and (current_time - task.created_at) > timedelta(minutes=3):
+            task.status = 'failed'
+            task.error_message = '任务启动超时（超过3分钟未启动，已自动恢复）'
+            task.completed_at = current_time
+            auto_recovered = True
+
+    return auto_recovered
+
+
 async def load_existing_single_chapter_background_task_payload(
     db_session: AsyncSession,
     *,
@@ -45,7 +68,16 @@ async def load_existing_single_chapter_background_task_payload(
         .order_by(BatchGenerationTask.created_at.desc())
     )
     active_tasks = active_result.scalars().all()
+    changed = False
     for task in active_tasks:
+        if recover_stale_single_chapter_background_task_if_needed(task):
+            changed = True
+    if changed:
+        await db_session.commit()
+
+    for task in active_tasks:
+        if task.status not in {'pending', 'running'}:
+            continue
         chapter_ids = task.chapter_ids or []
         if chapter_id not in chapter_ids:
             continue

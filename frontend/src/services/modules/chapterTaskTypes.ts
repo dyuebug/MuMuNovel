@@ -81,6 +81,7 @@ export interface ChapterBatchResumeResponse {
   status: string;
   stage_code?: string | null;
   execution_mode?: 'interactive' | 'auto' | null;
+  current_chapter_id?: string | null;
   checkpoint?: Record<string, unknown> | null;
   resumed_from_batch_id?: string;
   total_chapters: number;

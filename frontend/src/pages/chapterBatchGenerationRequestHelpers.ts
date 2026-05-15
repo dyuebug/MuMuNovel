@@ -213,6 +213,7 @@ export function createInitialBatchProgressState({
     total,
     completed: 0,
     current_chapter_number: startChapterNumber,
+    progress_percent: 0,
     checkpoint: {
       current_chapter_number: startChapterNumber,
       candidate_index: 1,

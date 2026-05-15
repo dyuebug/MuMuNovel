@@ -39,6 +39,15 @@ export function createRestoredBatchProgressState({
     total: task.total,
     completed: task.completed,
     current_chapter_number: task.current_chapter_number ?? null,
+    progress_percent: typeof task.checkpoint === 'object'
+      && task.checkpoint !== null
+      && typeof (task.checkpoint as { progress?: unknown }).progress === 'number'
+      ? Math.max(0, Math.min(Math.round((task.checkpoint as { progress: number }).progress), 100))
+      : (task.status === 'completed'
+        ? 100
+        : task.total > 0
+          ? Math.max(0, Math.min(Math.round((task.completed / task.total) * 100), 100))
+          : 0),
     checkpoint: normalizeBatchGenerationCheckpoint(task.checkpoint),
     latest_quality_metrics: task.latest_quality_metrics ?? undefined,
     quality_metrics_summary: task.quality_metrics_summary ?? undefined,

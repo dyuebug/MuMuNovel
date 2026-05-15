@@ -130,7 +130,14 @@ export const upsertChapterTaskToStore = (data: {
   completedAt?: string | null;
 }) => {
   const normalizedStatus = normalizeChapterTaskStatus(data.status);
-  const progress = data.total > 0 ? Math.round((data.completed / data.total) * 100) : 0;
+  const checkpointProgressRaw = data.checkpoint && typeof data.checkpoint.progress === 'number'
+    ? data.checkpoint.progress
+    : null;
+  const checkpointProgress = checkpointProgressRaw !== null
+    ? Math.max(0, Math.min(100, Math.round(checkpointProgressRaw)))
+    : null;
+  const derivedProgress = data.total > 0 ? Math.round((data.completed / data.total) * 100) : 0;
+  const progress = checkpointProgress ?? derivedProgress;
   const now = new Date().toISOString();
   useBackgroundTaskStore.getState().upsertTask({
     task_id: data.taskId,

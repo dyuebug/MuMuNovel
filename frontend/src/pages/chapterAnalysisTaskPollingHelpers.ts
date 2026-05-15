@@ -38,12 +38,18 @@ export function syncChapterAnalysisTasksFromBatch({
 }): Record<string, AnalysisTask> {
   const previousTasks = reset ? {} : analysisTasksMapRef.current;
   const nextTasks = { ...previousTasks };
+  let changed = reset;
 
   Object.entries(items).forEach(([chapterId, task]) => {
     const previousTask = previousTasks[chapterId];
-    nextTasks[chapterId] = areAnalysisTaskSnapshotsEqual(previousTask, task)
+    const nextTask = areAnalysisTaskSnapshotsEqual(previousTask, task)
       ? previousTask
       : task;
+    nextTasks[chapterId] = nextTask;
+
+    if (nextTask !== previousTask) {
+      changed = true;
+    }
 
     if (notifyOnTerminalTransitions && previousTask?.status !== task.status) {
       if (task.status === 'completed') {
@@ -53,6 +59,10 @@ export function syncChapterAnalysisTasksFromBatch({
       }
     }
   });
+
+  if (!changed) {
+    return previousTasks;
+  }
 
   updateAnalysisTasksMap(nextTasks);
   return nextTasks;
@@ -84,7 +94,9 @@ export async function pollChapterAnalysisTasksBatch({
   }
 
   try {
-    const response = await chapterApi.getBatchChapterAnalysisStatus(chapterIds, projectId);
+    const response = await chapterApi.getBatchChapterAnalysisStatus(chapterIds, projectId, {
+      syncBackgroundTaskStore: false,
+    });
     if (currentProjectIdRef.current !== projectId) {
       return;
     }

@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::ai::service::AIService;
 use crate::ai::AIConfig;
-use crate::models::{batch_generation_task, chapter, project};
+use crate::models::{batch_generation_snapshot, batch_generation_task, chapter, project};
 use crate::services::auth::Claims;
 use crate::services::chapter_generation_service::ChapterGenerationService;
 use crate::services::settings_service::SettingsService;
@@ -136,6 +136,7 @@ fn task_execution_mode(task: &batch_generation_task::Model) -> &'static str {
 
 fn task_status_payload(
     task: &batch_generation_task::Model,
+    workflow_runtime_state: Option<Value>,
     latest_quality_metrics: Option<Value>,
     quality_metrics_summary: Option<Value>,
     active_story_repair_payload: Option<Value>,
@@ -143,6 +144,11 @@ fn task_status_payload(
     let stage_code = task_stage_code(task);
     let execution_mode = task_execution_mode(task);
     let failed_chapters = task.failed_chapters.clone().unwrap_or_else(|| json!([]));
+    let mut checkpoint = workflow_runtime_state
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    checkpoint.insert("stage_code".to_string(), json!(stage_code));
+    checkpoint.insert("execution_mode".to_string(), json!(execution_mode));
     json!({
         "batch_id": task.id,
         "task_type": task_type(task),
@@ -161,10 +167,7 @@ fn task_status_payload(
         "started_at": to_iso(task.started_at),
         "completed_at": to_iso(task.completed_at),
         "error_message": task.error_message,
-        "checkpoint": {
-            "stage_code": stage_code,
-            "execution_mode": execution_mode,
-        },
+        "checkpoint": checkpoint,
         "latest_quality_metrics": latest_quality_metrics,
         "quality_metrics_summary": quality_metrics_summary,
         "active_story_repair_payload": active_story_repair_payload,
@@ -185,9 +188,20 @@ fn task_status_payload(
     })
 }
 
-fn active_task_payload(task: &batch_generation_task::Model) -> Value {
+fn active_task_payload(
+    task: &batch_generation_task::Model,
+    workflow_runtime_state: Option<Value>,
+    latest_quality_metrics: Option<Value>,
+    quality_metrics_summary: Option<Value>,
+    active_story_repair_payload: Option<Value>,
+) -> Value {
     let stage_code = task_stage_code(task);
     let execution_mode = task_execution_mode(task);
+    let mut checkpoint = workflow_runtime_state
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    checkpoint.insert("stage_code".to_string(), json!(stage_code));
+    checkpoint.insert("execution_mode".to_string(), json!(execution_mode));
     json!({
         "batch_id": task.id,
         "task_type": task_type(task),
@@ -199,18 +213,151 @@ fn active_task_payload(task: &batch_generation_task::Model) -> Value {
         "completed": task.completed_chapters.unwrap_or(0),
         "current_chapter_id": task.current_chapter_id,
         "current_chapter_number": task.current_chapter_number,
-        "checkpoint": {
-            "stage_code": stage_code,
-            "execution_mode": execution_mode,
-        },
-        "latest_quality_metrics": null,
-        "quality_metrics_summary": null,
-        "active_story_repair_payload": null,
+        "checkpoint": checkpoint,
+        "latest_quality_metrics": latest_quality_metrics,
+        "quality_metrics_summary": quality_metrics_summary,
+        "active_story_repair_payload": active_story_repair_payload,
         "created_at": to_iso(task.created_at),
         "started_at": to_iso(task.started_at),
         "completed_at": to_iso(task.completed_at),
         "error_message": task.error_message,
     })
+}
+
+async fn load_batch_generation_snapshot(
+    db: &DatabaseConnection,
+    task_id: &str,
+) -> Result<Option<batch_generation_snapshot::Model>, String> {
+    batch_generation_snapshot::Entity::find()
+        .filter(batch_generation_snapshot::Column::BatchTaskId.eq(task_id))
+        .one(db)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn upsert_batch_generation_runtime_snapshot(
+    db: &DatabaseConnection,
+    task_id: &str,
+    workflow_runtime_state: Value,
+) -> Result<(), String> {
+    let now = Utc::now().naive_utc();
+    let existing = load_batch_generation_snapshot(db, task_id).await?;
+
+    if let Some(snapshot) = existing {
+        let mut active: batch_generation_snapshot::ActiveModel = snapshot.into();
+        let merged_runtime_state = match (active.workflow_runtime_state.clone().take(), workflow_runtime_state) {
+            (Some(Some(Value::Object(mut current))), Value::Object(incoming)) => {
+                for (key, value) in incoming {
+                    current.insert(key, value);
+                }
+                Value::Object(current)
+            }
+            (_, incoming) => incoming,
+        };
+        active.workflow_runtime_state = Set(Some(merged_runtime_state));
+        active.updated_at = Set(Some(now));
+        active.update(db).await.map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    let active = batch_generation_snapshot::ActiveModel {
+        id: Set(Uuid::new_v4().to_string()),
+        batch_task_id: Set(task_id.to_string()),
+        latest_quality_metrics: Set(None),
+        quality_metrics_history: Set(None),
+        quality_metrics_summary: Set(None),
+        workflow_runtime_state: Set(Some(workflow_runtime_state)),
+        created_at: Set(Some(now)),
+        updated_at: Set(Some(now)),
+    };
+    active.insert(db).await.map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn build_runtime_checkpoint(
+    phase: &str,
+    progress: i32,
+    status: &str,
+    last_event: &str,
+    last_message: &str,
+    chapter_id: Option<&str>,
+    current_chapter_number: Option<i32>,
+) -> Value {
+    json!({
+        "phase": phase,
+        "progress": progress.clamp(0, 100),
+        "status": status,
+        "last_event": last_event,
+        "last_message": last_message,
+        "chapter_id": chapter_id,
+        "current_chapter_id": chapter_id,
+        "current_chapter_number": current_chapter_number,
+        "updated_at": Utc::now().to_rfc3339(),
+    })
+}
+
+fn build_single_generation_runtime_checkpoint(
+    phase: &str,
+    progress: i32,
+    status: &str,
+    last_event: &str,
+    last_message: &str,
+    chapter_id: &str,
+    current_chapter_number: Option<i32>,
+    word_count: Option<i32>,
+) -> Value {
+    let mut checkpoint = build_runtime_checkpoint(
+        phase,
+        progress,
+        status,
+        last_event,
+        last_message,
+        Some(chapter_id),
+        current_chapter_number,
+    );
+    if let Some(object) = checkpoint.as_object_mut() {
+        if let Some(value) = word_count {
+            object.insert("word_count".to_string(), json!(value.max(0)));
+        }
+    }
+    checkpoint
+}
+
+fn build_batch_generation_runtime_checkpoint(
+    phase: &str,
+    progress: i32,
+    status: &str,
+    last_event: &str,
+    last_message: &str,
+    chapter_id: Option<&str>,
+    current_chapter_number: Option<i32>,
+    completed_chapters: i32,
+    total_chapters: i32,
+) -> Value {
+    let mut checkpoint = build_runtime_checkpoint(
+        phase,
+        progress,
+        status,
+        last_event,
+        last_message,
+        chapter_id,
+        current_chapter_number,
+    );
+    if let Some(object) = checkpoint.as_object_mut() {
+        object.insert("completed".to_string(), json!(completed_chapters.max(0)));
+        object.insert("total".to_string(), json!(total_chapters.max(0)));
+    }
+    checkpoint
+}
+
+fn active_story_repair_payload_from_runtime_state(
+    workflow_runtime_state: Option<&Value>,
+) -> Option<Value> {
+    workflow_runtime_state
+        .and_then(Value::as_object)
+        .and_then(|state| state.get("active_story_repair_payload"))
+        .filter(|payload| payload.is_object())
+        .cloned()
 }
 
 async fn load_owned_task(
@@ -244,6 +391,36 @@ fn spawn_single_chapter_generation(
             active.current_retry_count = Set(Some(0));
             let _ = active.update(&db).await;
         }
+        let _ = upsert_batch_generation_runtime_snapshot(
+            &db,
+            &task_id,
+            build_single_generation_runtime_checkpoint(
+                "generating",
+                15,
+                "running",
+                "chapter_start",
+                "正在准备章节生成...",
+                &chapter_id,
+                None,
+                None,
+            ),
+        )
+        .await;
+        let _ = upsert_batch_generation_runtime_snapshot(
+            &db,
+            &task_id,
+            build_single_generation_runtime_checkpoint(
+                "generating",
+                65,
+                "running",
+                "progress",
+                "正在生成正文...",
+                &chapter_id,
+                None,
+                None,
+            ),
+        )
+        .await;
 
         let ai_service = AIService::new(ai_config);
         let generation_result = ChapterGenerationService::generate_and_persist_chapter_content(
@@ -257,6 +434,29 @@ fn spawn_single_chapter_generation(
 
         match generation_result {
             Ok(payload) => {
+                let chapter_number = payload
+                    .get("chapter_number")
+                    .and_then(Value::as_i64)
+                    .map(|value| value as i32);
+                let word_count = payload
+                    .get("word_count")
+                    .and_then(Value::as_i64)
+                    .map(|value| value as i32);
+                let _ = upsert_batch_generation_runtime_snapshot(
+                    &db,
+                    &task_id,
+                    build_single_generation_runtime_checkpoint(
+                        "finalizing",
+                        95,
+                        "running",
+                        "progress",
+                        "正在整理生成结果...",
+                        &chapter_id,
+                        chapter_number,
+                        word_count,
+                    ),
+                )
+                .await;
                 if let Ok(Some(task_model)) =
                     batch_generation_task::Entity::find_by_id(&task_id).one(&db).await
                 {
@@ -275,6 +475,21 @@ fn spawn_single_chapter_generation(
                     );
                     let _ = active.update(&db).await;
                 }
+                let _ = upsert_batch_generation_runtime_snapshot(
+                    &db,
+                    &task_id,
+                    build_single_generation_runtime_checkpoint(
+                        "completed",
+                        100,
+                        "completed",
+                        "done",
+                        "章节生成完成",
+                        &chapter_id,
+                        chapter_number,
+                        word_count,
+                    ),
+                )
+                .await;
             }
             Err(error) => {
                 if let Ok(Some(task_model)) =
@@ -286,6 +501,21 @@ fn spawn_single_chapter_generation(
                     active.error_message = Set(Some(error));
                     let _ = active.update(&db).await;
                 }
+                let _ = upsert_batch_generation_runtime_snapshot(
+                    &db,
+                    &task_id,
+                    build_single_generation_runtime_checkpoint(
+                        "failed",
+                        100,
+                        "failed",
+                        "error",
+                        "章节生成失败",
+                        &chapter_id,
+                        None,
+                        None,
+                    ),
+                )
+                .await;
             }
         }
     });
@@ -370,6 +600,22 @@ fn spawn_batch_generation(
             active.current_retry_count = Set(Some(0));
             let _ = active.update(&db).await;
         }
+        let _ = upsert_batch_generation_runtime_snapshot(
+            &db,
+            &task_id,
+            build_batch_generation_runtime_checkpoint(
+                "generating",
+                10,
+                "running",
+                "progress",
+                "正在准备批量生成...",
+                None,
+                None,
+                0,
+                chapter_ids.len() as i32,
+            ),
+        )
+        .await;
 
         let ai_service = AIService::new(ai_config);
         let total = chapter_ids.len() as i32;
@@ -385,6 +631,22 @@ fn spawn_batch_generation(
                 let mut active: batch_generation_task::ActiveModel = task_model.into();
                 active.completed_at = Set(Some(Utc::now().naive_utc()));
                 let _ = active.update(&db).await;
+                let _ = upsert_batch_generation_runtime_snapshot(
+                    &db,
+                    &task_id,
+                    build_batch_generation_runtime_checkpoint(
+                        "cancelled",
+                        100,
+                        "cancelled",
+                        "cancelled",
+                        "批量生成已取消",
+                        None,
+                        None,
+                        completed,
+                        total,
+                    ),
+                )
+                .await;
                 return;
             }
 
@@ -396,6 +658,22 @@ fn spawn_batch_generation(
                     active.completed_at = Set(Some(Utc::now().naive_utc()));
                     active.error_message = Set(Some(format!("Chapter not found: {}", chapter_id)));
                     let _ = active.update(&db).await;
+                    let _ = upsert_batch_generation_runtime_snapshot(
+                        &db,
+                        &task_id,
+                        build_batch_generation_runtime_checkpoint(
+                            "failed",
+                            100,
+                            "failed",
+                            "error",
+                            "批量生成失败：章节不存在",
+                            Some(chapter_id),
+                            None,
+                            completed,
+                            total,
+                        ),
+                    )
+                    .await;
                     return;
                 }
                 Err(error) => {
@@ -404,6 +682,22 @@ fn spawn_batch_generation(
                     active.completed_at = Set(Some(Utc::now().naive_utc()));
                     active.error_message = Set(Some(error.to_string()));
                     let _ = active.update(&db).await;
+                    let _ = upsert_batch_generation_runtime_snapshot(
+                        &db,
+                        &task_id,
+                        build_batch_generation_runtime_checkpoint(
+                            "failed",
+                            100,
+                            "failed",
+                            "error",
+                            "批量生成失败：加载章节异常",
+                            Some(chapter_id),
+                            None,
+                            completed,
+                            total,
+                        ),
+                    )
+                    .await;
                     return;
                 }
             };
@@ -416,6 +710,28 @@ fn spawn_batch_generation(
             active.completed_chapters = Set(Some(completed));
             active.error_message = Set(None);
             let _ = active.update(&db).await;
+            let base_progress = if total <= 0 {
+                15
+            } else {
+                ((completed * 100) / total).clamp(0, 100)
+            };
+            let running_progress = (base_progress + 15).clamp(15, 95);
+            let _ = upsert_batch_generation_runtime_snapshot(
+                &db,
+                &task_id,
+                build_batch_generation_runtime_checkpoint(
+                    "generating",
+                    running_progress,
+                    "running",
+                    "chapter_start",
+                    &format!("正在生成第 {} 章...", chapter_model.chapter_number),
+                    Some(&chapter_model.id),
+                    Some(chapter_model.chapter_number),
+                    completed,
+                    total,
+                ),
+            )
+            .await;
 
             let generation_result = ChapterGenerationService::generate_and_persist_chapter_content(
                 &db,
@@ -429,6 +745,11 @@ fn spawn_batch_generation(
             match generation_result {
                 Ok(_) => {
                     completed += 1;
+                    let completed_progress = if total <= 0 {
+                        100
+                    } else {
+                        ((completed * 100) / total).clamp(0, 100)
+                    };
                     if let Ok(Some(task_model)) =
                         batch_generation_task::Entity::find_by_id(&task_id).one(&db).await
                     {
@@ -446,6 +767,30 @@ fn spawn_batch_generation(
                         }
                         let _ = active.update(&db).await;
                     }
+                    let _ = upsert_batch_generation_runtime_snapshot(
+                        &db,
+                        &task_id,
+                        build_batch_generation_runtime_checkpoint(
+                            if completed >= total {
+                                "completed"
+                            } else {
+                                "generating"
+                            },
+                            if completed >= total { 100 } else { completed_progress },
+                            if completed >= total { "completed" } else { "running" },
+                            if completed >= total { "done" } else { "progress" },
+                            if completed >= total {
+                                "批量生成完成"
+                            } else {
+                                "当前章节生成完成，继续下一章..."
+                            },
+                            Some(&chapter_model.id),
+                            Some(chapter_model.chapter_number),
+                            completed,
+                            total,
+                        ),
+                    )
+                    .await;
                 }
                 Err(error) => {
                     if let Ok(Some(task_model)) =
@@ -460,6 +805,22 @@ fn spawn_batch_generation(
                         active.error_message = Set(Some(error));
                         let _ = active.update(&db).await;
                     }
+                    let _ = upsert_batch_generation_runtime_snapshot(
+                        &db,
+                        &task_id,
+                        build_batch_generation_runtime_checkpoint(
+                            "failed",
+                            100,
+                            "failed",
+                            "error",
+                            "批量生成失败",
+                            Some(&chapter_model.id),
+                            Some(chapter_model.chapter_number),
+                            completed,
+                            total,
+                        ),
+                    )
+                    .await;
                     return;
                 }
             }
@@ -576,6 +937,22 @@ async fn create_batch_generate(
             Json(json!({"detail": error.to_string()})),
         )
     })?;
+    let _ = upsert_batch_generation_runtime_snapshot(
+        &db,
+        &saved.id,
+        build_batch_generation_runtime_checkpoint(
+            "pending",
+            0,
+            "pending",
+            "queued",
+            "批量生成任务已创建，等待开始...",
+            None,
+            None,
+            0,
+            chapters_to_generate.len() as i32,
+        ),
+    )
+    .await;
 
     spawn_batch_generation(
         db.clone(),
@@ -647,6 +1024,21 @@ async fn generate_chapter_content_background(
             Json(json!({"detail": error.to_string()})),
         )
     })?;
+    let _ = upsert_batch_generation_runtime_snapshot(
+        &db,
+        &task_id,
+        build_single_generation_runtime_checkpoint(
+            "pending",
+            0,
+            "pending",
+            "queued",
+            "单章生成任务已创建，等待开始...",
+            &chapter_model.id,
+            Some(chapter_model.chapter_number),
+            None,
+        ),
+    )
+    .await;
 
     spawn_single_chapter_generation(
         db.clone(),
@@ -749,7 +1141,33 @@ async fn get_batch_generation_status(
             Json(json!({"detail": "Batch generation task not found"})),
         ));
     };
-    Ok(Json(task_status_payload(&task, None, None, None)))
+    let snapshot = load_batch_generation_snapshot(&db, &task.id)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error})),
+            )
+        })?;
+    let workflow_runtime_state = snapshot
+        .as_ref()
+        .and_then(|item| item.workflow_runtime_state.clone());
+    let active_story_repair_payload =
+        active_story_repair_payload_from_runtime_state(workflow_runtime_state.as_ref());
+    let latest_quality_metrics = snapshot
+        .as_ref()
+        .and_then(|item| item.latest_quality_metrics.clone());
+    let quality_metrics_summary = snapshot
+        .as_ref()
+        .and_then(|item| item.quality_metrics_summary.clone());
+
+    Ok(Json(task_status_payload(
+        &task,
+        workflow_runtime_state,
+        latest_quality_metrics,
+        quality_metrics_summary,
+        active_story_repair_payload,
+    )))
 }
 
 async fn stream_batch_generation_status(
@@ -784,6 +1202,8 @@ async fn stream_batch_generation_status(
     tokio::spawn(async move {
         let mut last_status = String::new();
         let mut last_completed = -1;
+        let mut last_progress = -1;
+        let mut last_message = String::new();
 
         for _ in 0..300 {
             let task = match load_owned_task(&db_clone, &batch_id_clone, &user_id).await {
@@ -800,24 +1220,40 @@ async fn stream_batch_generation_status(
 
             let status = task.status.clone().unwrap_or_else(|| "pending".to_string());
             let completed = task.completed_chapters.unwrap_or(0);
-
-            if status != last_status || completed != last_completed {
-                let progress = match status.as_str() {
+            let snapshot = load_batch_generation_snapshot(&db_clone, &task.id).await.ok().flatten();
+            let checkpoint = snapshot
+                .as_ref()
+                .and_then(|item| item.workflow_runtime_state.as_ref());
+            let progress = checkpoint
+                .and_then(|item| item.get("progress"))
+                .and_then(Value::as_i64)
+                .map(|value| value.clamp(0, 100) as i32)
+                .unwrap_or_else(|| match status.as_str() {
                     "pending" => 10,
                     "running" => 65,
                     "completed" => 100,
                     "failed" => 100,
                     "cancelled" => 100,
                     _ => 15,
-                };
-                let message = match status.as_str() {
+                });
+            let message = checkpoint
+                .and_then(|item| item.get("last_message"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(match status.as_str() {
                     "pending" => "等待开始生成...",
                     "running" => "正在生成正文...",
                     "completed" => "生成完成",
                     "failed" => "生成失败",
                     "cancelled" => "生成已取消",
                     _ => "任务处理中",
-                };
+                });
+
+            if status != last_status
+                || completed != last_completed
+                || progress != last_progress
+                || message != last_message
+            {
                 let progress_event = json!({
                     "type": "progress",
                     "message": message,
@@ -876,6 +1312,8 @@ async fn stream_batch_generation_status(
 
                 last_status = status;
                 last_completed = completed;
+                last_progress = progress;
+                last_message = message.to_string();
             }
 
             sleep(Duration::from_secs(1)).await;
@@ -929,10 +1367,35 @@ async fn get_active_batch_generation(
     let Some(task) = task else {
         return Ok(Json(json!({"has_active_task": false, "task": null})));
     };
+    let snapshot = load_batch_generation_snapshot(&db, &task.id)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": error})),
+            )
+        })?;
+    let workflow_runtime_state = snapshot
+        .as_ref()
+        .and_then(|item| item.workflow_runtime_state.clone());
+    let active_story_repair_payload =
+        active_story_repair_payload_from_runtime_state(workflow_runtime_state.as_ref());
+    let latest_quality_metrics = snapshot
+        .as_ref()
+        .and_then(|item| item.latest_quality_metrics.clone());
+    let quality_metrics_summary = snapshot
+        .as_ref()
+        .and_then(|item| item.quality_metrics_summary.clone());
 
     Ok(Json(json!({
         "has_active_task": true,
-        "task": active_task_payload(&task),
+        "task": active_task_payload(
+            &task,
+            workflow_runtime_state,
+            latest_quality_metrics,
+            quality_metrics_summary,
+            active_story_repair_payload,
+        ),
     })))
 }
 
@@ -956,7 +1419,36 @@ async fn list_active_batch_generation_tasks(
             )
         })?;
 
-    let items: Vec<Value> = tasks.iter().map(active_task_payload).collect();
+    let mut items = Vec::with_capacity(tasks.len());
+    for task in &tasks {
+        let snapshot = load_batch_generation_snapshot(&db, &task.id)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"detail": error})),
+                )
+            })?;
+        let workflow_runtime_state = snapshot
+            .as_ref()
+            .and_then(|item| item.workflow_runtime_state.clone());
+        let active_story_repair_payload =
+            active_story_repair_payload_from_runtime_state(workflow_runtime_state.as_ref());
+        let latest_quality_metrics = snapshot
+            .as_ref()
+            .and_then(|item| item.latest_quality_metrics.clone());
+        let quality_metrics_summary = snapshot
+            .as_ref()
+            .and_then(|item| item.quality_metrics_summary.clone());
+
+        items.push(active_task_payload(
+            task,
+            workflow_runtime_state,
+            latest_quality_metrics,
+            quality_metrics_summary,
+            active_story_repair_payload,
+        ));
+    }
     Ok(Json(json!({"total": items.len(), "items": items})))
 }
 
@@ -1094,9 +1586,11 @@ async fn resume_batch_generation(
         "status": "pending",
         "stage_code": task_stage_code(&updated),
         "execution_mode": task_execution_mode(&updated),
+        "current_chapter_id": updated.current_chapter_id,
         "checkpoint": {
             "stage_code": task_stage_code(&updated),
             "execution_mode": task_execution_mode(&updated),
+            "chapter_id": updated.current_chapter_id,
         },
         "total_chapters": updated.total_chapters.unwrap_or(updated.chapter_count),
         "completed_chapters": 0,

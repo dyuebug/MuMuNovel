@@ -94,12 +94,16 @@ impl TaskRecord {
 pub struct TaskCreateRequest {
     pub task_type: String,
     #[serde(default)]
+    #[serde(alias = "projectId")]
     pub project_id: String,
     #[serde(default)]
     pub payload: Option<serde_json::Value>,
+    #[serde(alias = "stageCode")]
     pub stage_code: Option<String>,
     #[serde(default = "default_execution_mode")]
+    #[serde(alias = "executionMode")]
     pub execution_mode: String,
+    #[serde(alias = "workflowScope")]
     pub workflow_scope: Option<String>,
     pub checkpoint: Option<serde_json::Value>,
 }
@@ -118,8 +122,11 @@ pub struct TaskListQuery {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskWorkflowUpdate {
+    #[serde(alias = "stageCode")]
     pub stage_code: Option<String>,
+    #[serde(alias = "executionMode")]
     pub execution_mode: Option<String>,
+    #[serde(alias = "workflowScope")]
     pub workflow_scope: Option<String>,
     pub checkpoint: Option<serde_json::Value>,
     pub message: Option<String>,

@@ -13,6 +13,7 @@ export function startBatchPollingWorkflow({
   projectId,
   projectTitle,
   batchPollingIntervalRef,
+  batchCloseTimeoutRef,
   batchTaskMetaRef,
   normalizeBatchGenerationCheckpoint,
   refreshChapters,
@@ -26,11 +27,13 @@ export function startBatchPollingWorkflow({
   showBrowserNotification,
   setBatchGenerateVisible,
   setBatchTaskId,
+  isPollingSessionActive,
 }: {
   taskId: string;
   projectId?: string;
   projectTitle?: string;
   batchPollingIntervalRef: MutableRefObject<number | null>;
+  batchCloseTimeoutRef: MutableRefObject<number | null>;
   batchTaskMetaRef: MutableRefObject<Record<string, BatchTaskMeta>>;
   normalizeBatchGenerationCheckpoint: (value: unknown) => BatchGenerationCheckpointLike | null;
   refreshChapters: () => Promise<Chapter[]>;
@@ -44,14 +47,19 @@ export function startBatchPollingWorkflow({
   showBrowserNotification: (title: string, body: string, type?: 'success' | 'error' | 'info') => void;
   setBatchGenerateVisible: (value: boolean) => void;
   setBatchTaskId: (taskId: string | null) => void;
+  isPollingSessionActive: () => boolean;
 }): number {
   return startBatchGenerationPolling({
     taskId,
     projectId,
     projectTitle,
     existingIntervalId: batchPollingIntervalRef.current,
+    existingCloseTimeoutId: batchCloseTimeoutRef.current,
     setIntervalRef: (intervalId) => {
       batchPollingIntervalRef.current = intervalId;
+    },
+    setCloseTimeoutRef: (timeoutId) => {
+      batchCloseTimeoutRef.current = timeoutId;
     },
     normalizeBatchGenerationCheckpoint,
     refreshChapters,
@@ -73,6 +81,7 @@ export function startBatchPollingWorkflow({
       setBatchTaskId(null);
       setBatchProgress(null);
     },
+    isPollingSessionActive,
   });
 }
 

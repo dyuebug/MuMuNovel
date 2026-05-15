@@ -22,52 +22,78 @@ pub(crate) struct WorldBuildingRequest {
     pub(crate) description: Option<String>,
     pub(crate) theme: Option<String>,
     pub(crate) genre: Option<serde_json::Value>,
+    #[serde(alias = "narrativePerspective")]
     pub(crate) narrative_perspective: Option<String>,
+    #[serde(alias = "targetWords")]
     pub(crate) target_words: Option<i32>,
+    #[serde(alias = "chapterCount")]
     pub(crate) chapter_count: Option<i32>,
+    #[serde(alias = "characterCount")]
     pub(crate) character_count: Option<i32>,
+    #[serde(alias = "outlineMode")]
     pub(crate) outline_mode: Option<String>,
+    #[serde(alias = "defaultCreativeMode")]
     pub(crate) default_creative_mode: Option<String>,
+    #[serde(alias = "defaultStoryFocus")]
     pub(crate) default_story_focus: Option<String>,
+    #[serde(alias = "defaultPlotStage")]
     pub(crate) default_plot_stage: Option<String>,
+    #[serde(alias = "defaultStoryCreationBrief")]
     pub(crate) default_story_creation_brief: Option<String>,
+    #[serde(alias = "defaultQualityPreset")]
     pub(crate) default_quality_preset: Option<String>,
+    #[serde(alias = "defaultQualityNotes")]
     pub(crate) default_quality_notes: Option<String>,
     pub(crate) provider: Option<String>,
     pub(crate) model: Option<String>,
+    #[serde(alias = "userId")]
     pub(crate) user_id: Option<String>,
+    #[serde(alias = "enableMcp")]
     pub(crate) enable_mcp: Option<bool>,
+    #[serde(alias = "enableWebResearch")]
     pub(crate) enable_web_research: Option<bool>,
+    #[serde(alias = "webResearchQuery")]
     pub(crate) web_research_query: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
 pub(crate) struct CareerSystemRequest {
+    #[serde(alias = "projectId")]
     pub(crate) project_id: String,
     pub(crate) provider: Option<String>,
     pub(crate) model: Option<String>,
+    #[serde(alias = "userId")]
     pub(crate) user_id: Option<String>,
+    #[serde(alias = "enableMcp")]
     pub(crate) enable_mcp: Option<bool>,
+    #[serde(alias = "enableWebResearch")]
     pub(crate) enable_web_research: Option<bool>,
+    #[serde(alias = "webResearchQuery")]
     pub(crate) web_research_query: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
 pub(crate) struct CharactersRequest {
+    #[serde(alias = "projectId")]
     pub(crate) project_id: String,
     #[serde(default = "default_count")]
     pub(crate) count: usize,
+    #[serde(alias = "worldContext")]
     pub(crate) world_context: Option<Value>,
     pub(crate) theme: Option<String>,
     pub(crate) genre: Option<String>,
     pub(crate) requirements: Option<String>,
     pub(crate) provider: Option<String>,
     pub(crate) model: Option<String>,
+    #[serde(alias = "userId")]
     pub(crate) user_id: Option<String>,
+    #[serde(alias = "enableMcp")]
     pub(crate) enable_mcp: Option<bool>,
+    #[serde(alias = "enableWebResearch")]
     pub(crate) enable_web_research: Option<bool>,
+    #[serde(alias = "webResearchQuery")]
     pub(crate) web_research_query: Option<String>,
 }
 
@@ -78,24 +104,38 @@ fn default_count() -> usize {
 #[derive(Deserialize)]
 #[allow(dead_code)]
 pub(crate) struct OutlineRequest {
+    #[serde(alias = "projectId")]
     pub(crate) project_id: String,
     #[serde(default = "default_outline_count")]
+    #[serde(alias = "chapterCount")]
     pub(crate) chapter_count: usize,
+    #[serde(alias = "narrativePerspective")]
     pub(crate) narrative_perspective: Option<String>,
     #[serde(default = "default_target_words")]
+    #[serde(alias = "targetWords")]
     pub(crate) target_words: i32,
     pub(crate) requirements: Option<String>,
+    #[serde(alias = "creativeMode")]
     pub(crate) creative_mode: Option<String>,
+    #[serde(alias = "storyFocus")]
     pub(crate) story_focus: Option<String>,
+    #[serde(alias = "plotStage")]
     pub(crate) plot_stage: Option<String>,
+    #[serde(alias = "storyCreationBrief")]
     pub(crate) story_creation_brief: Option<String>,
+    #[serde(alias = "qualityPreset")]
     pub(crate) quality_preset: Option<String>,
+    #[serde(alias = "qualityNotes")]
     pub(crate) quality_notes: Option<String>,
     pub(crate) provider: Option<String>,
     pub(crate) model: Option<String>,
+    #[serde(alias = "userId")]
     pub(crate) user_id: Option<String>,
+    #[serde(alias = "enableMcp")]
     pub(crate) enable_mcp: Option<bool>,
+    #[serde(alias = "enableWebResearch")]
     pub(crate) enable_web_research: Option<bool>,
+    #[serde(alias = "webResearchQuery")]
     pub(crate) web_research_query: Option<String>,
 }
 
@@ -106,7 +146,7 @@ fn default_target_words() -> i32 {
     100000
 }
 
-fn normalize_genre_input(value: Option<serde_json::Value>) -> String {
+pub(crate) fn normalize_genre_input(value: Option<serde_json::Value>) -> String {
     match value {
         Some(serde_json::Value::String(text)) => text,
         Some(serde_json::Value::Array(items)) => items
@@ -172,9 +212,13 @@ fn spawn_world_building_stream(
 pub(crate) struct RegenerateWorldBuildingRequest {
     pub(crate) provider: Option<String>,
     pub(crate) model: Option<String>,
+    #[serde(alias = "userId")]
     pub(crate) user_id: Option<String>,
+    #[serde(alias = "enableMcp")]
     pub(crate) enable_mcp: Option<bool>,
+    #[serde(alias = "enableWebResearch")]
     pub(crate) enable_web_research: Option<bool>,
+    #[serde(alias = "webResearchQuery")]
     pub(crate) web_research_query: Option<String>,
 }
 

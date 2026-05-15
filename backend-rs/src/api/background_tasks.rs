@@ -41,6 +41,23 @@ fn compatible_task_payload(record: &TaskRecord) -> serde_json::Value {
     }
 }
 
+fn enrich_task_payload(record: &TaskRecord, payload: serde_json::Value) -> serde_json::Value {
+    match payload {
+        serde_json::Value::Object(mut map) => {
+            if !record.project_id.trim().is_empty() {
+                map.entry("project_id".to_string())
+                    .or_insert_with(|| json!(record.project_id));
+            }
+            if !record.user_id.trim().is_empty() {
+                map.entry("user_id".to_string())
+                    .or_insert_with(|| json!(record.user_id));
+            }
+            serde_json::Value::Object(map)
+        }
+        other => other,
+    }
+}
+
 /// POST /api/background-tasks
 pub async fn create_task(
     Extension(claims): Extension<Claims>,
@@ -100,12 +117,13 @@ pub async fn create_task(
     }
 
     registry.insert(record.clone()).await;
+    let payload = enrich_task_payload(&record, req.payload.unwrap_or_else(|| json!({})));
     spawn_task_execution(
         db,
         registry.clone(),
         stream_hub.clone(),
         record.clone(),
-        req.payload.unwrap_or_else(|| json!({})),
+        payload,
     );
 
     (
@@ -371,14 +389,7 @@ async fn run_wizard_world_building(
         body.title.as_deref().unwrap_or_default(),
         body.description.as_deref().unwrap_or_default(),
         body.theme.as_deref().unwrap_or_default(),
-        body.genre
-            .as_ref()
-            .map(|value| match value {
-                serde_json::Value::String(text) => text.clone(),
-                other => other.to_string(),
-            })
-            .unwrap_or_default()
-            .as_str(),
+        super::wizard::normalize_genre_input(body.genre.clone()).as_str(),
         body.narrative_perspective.as_deref(),
         body.target_words,
         body.chapter_count,

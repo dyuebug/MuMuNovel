@@ -240,6 +240,8 @@ export async function openBatchGenerationWorkflow({
 export async function cancelBatchGenerationWorkflow({
   batchTaskId,
   projectId,
+  isPageActiveRef,
+  currentProjectIdRef,
   removeTaskMeta,
   refreshChapters,
   loadAnalysisTasks,
@@ -247,6 +249,8 @@ export async function cancelBatchGenerationWorkflow({
 }: {
   batchTaskId: string | null;
   projectId?: string;
+  isPageActiveRef?: { current: boolean };
+  currentProjectIdRef?: { current: string | null };
   removeTaskMeta: (taskId: string) => void;
   refreshChapters: () => Promise<Chapter[]>;
   loadAnalysisTasks: (chaptersToLoad?: Chapter[]) => Promise<void>;
@@ -258,13 +262,38 @@ export async function cancelBatchGenerationWorkflow({
 
   try {
     await chapterBatchTaskApi.cancelBatchGenerateTask(batchTaskId, projectId);
+    if (
+      (isPageActiveRef && !isPageActiveRef.current)
+      || (projectId && currentProjectIdRef && currentProjectIdRef.current !== projectId)
+    ) {
+      return;
+    }
+
     removeTaskMeta(batchTaskId);
     message.success('Batch generation cancelled.');
 
     const latestChapters = await refreshChapters();
+    if (
+      (isPageActiveRef && !isPageActiveRef.current)
+      || (projectId && currentProjectIdRef && currentProjectIdRef.current !== projectId)
+    ) {
+      return;
+    }
     await loadAnalysisTasks(latestChapters);
+    if (
+      (isPageActiveRef && !isPageActiveRef.current)
+      || (projectId && currentProjectIdRef && currentProjectIdRef.current !== projectId)
+    ) {
+      return;
+    }
     await reloadCurrentProject();
   } catch (error: unknown) {
+    if (
+      (isPageActiveRef && !isPageActiveRef.current)
+      || (projectId && currentProjectIdRef && currentProjectIdRef.current !== projectId)
+    ) {
+      return;
+    }
     const err = error as Error;
     message.error('Cancel batch generation failed: ' + (err.message || 'Unknown error'));
   }

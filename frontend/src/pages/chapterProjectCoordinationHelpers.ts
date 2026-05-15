@@ -43,16 +43,29 @@ export function initializeChapterProjectWorkflow({
 
 export async function reloadChapterProjectWorkflow({
   projectId,
+  isPageActiveRef,
+  currentProjectIdRef,
   setCurrentProject,
 }: {
   projectId?: string | null;
+  isPageActiveRef?: { current: boolean };
+  currentProjectIdRef?: { current: string | null };
   setCurrentProject: (project: Project | null) => void;
 }): Promise<void> {
   if (!projectId) {
     return;
   }
 
+  if (isPageActiveRef && !isPageActiveRef.current) {
+    return;
+  }
+
   const updatedProject = await projectApi.getProject(projectId);
+
+  if ((isPageActiveRef && !isPageActiveRef.current) || (currentProjectIdRef && currentProjectIdRef.current !== projectId)) {
+    return;
+  }
+
   setCurrentProject(updatedProject);
 }
 

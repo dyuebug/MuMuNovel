@@ -15,6 +15,10 @@ import type {
   TriggerAnalysisResponse,
 } from '../../types';
 
+type ChapterAnalysisRequestConfig = RequestConfigWithToastControl & {
+  syncBackgroundTaskStore?: boolean;
+};
+
 const formatChapterAnalysisError = (
   errorCode?: AnalysisTask['error_code'],
   errorMessage?: string | null,
@@ -80,18 +84,26 @@ export const chapterAnalysisApi = {
   getChapterAnalysisStatus: async (
     chapterId: string,
     projectId?: string,
-    config?: RequestConfigWithToastControl,
+    config?: ChapterAnalysisRequestConfig,
   ) => {
+    const { syncBackgroundTaskStore = true, ...requestConfig } = config || {};
     const status = await api.get<unknown, AnalysisTask>(
       `/chapters/${chapterId}/analysis/status`,
-      silentRequestConfig(config),
+      silentRequestConfig(requestConfig),
     );
     status.error_message = formatChapterAnalysisError(status.error_code, status.error_message);
-    upsertChapterAnalysisTaskToStore(status, projectId);
+    if (syncBackgroundTaskStore) {
+      upsertChapterAnalysisTaskToStore(status, projectId);
+    }
     return status;
   },
 
-  getBatchChapterAnalysisStatus: async (chapterIds: string[], projectId?: string) => {
+  getBatchChapterAnalysisStatus: async (
+    chapterIds: string[],
+    projectId?: string,
+    options?: { syncBackgroundTaskStore?: boolean },
+  ) => {
+    const syncBackgroundTaskStore = options?.syncBackgroundTaskStore ?? true;
     const response = await api.post<unknown, BatchAnalysisStatusResponse>(
       '/chapters/analysis/status/batch',
       { chapter_ids: chapterIds },
@@ -99,7 +111,9 @@ export const chapterAnalysisApi = {
     );
     Object.values(response.items).forEach((status) => {
       status.error_message = formatChapterAnalysisError(status.error_code, status.error_message);
-      upsertChapterAnalysisTaskToStore(status, projectId);
+      if (syncBackgroundTaskStore) {
+        upsertChapterAnalysisTaskToStore(status, projectId);
+      }
     });
     return response;
   },

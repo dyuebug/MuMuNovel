@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
@@ -9,6 +10,39 @@ from app.models.batch_generation_task import BatchGenerationTask
 from app.services.batch_generation.status_models import BatchGenerationTaskViewContext
 from app.services.task_quality_snapshot_service import get_task_quality_metrics_snapshot
 from app.services.task_workflow_runtime_service import get_task_workflow_runtime_snapshot
+
+
+def recover_stale_batch_generation_task_if_needed(task: BatchGenerationTask) -> bool:
+    current_time = datetime.now()
+    auto_recovered = False
+
+    if task.status == 'running':
+        if task.started_at and (current_time - task.started_at) > timedelta(minutes=15):
+            task.status = 'failed'
+            task.error_message = '任务超时（超过15分钟未完成，已自动恢复）'
+            task.completed_at = current_time
+            auto_recovered = True
+    elif task.status == 'pending':
+        if task.created_at and (current_time - task.created_at) > timedelta(minutes=3):
+            task.status = 'failed'
+            task.error_message = '任务启动超时（超过3分钟未启动，已自动恢复）'
+            task.completed_at = current_time
+            auto_recovered = True
+
+    return auto_recovered
+
+
+async def recover_stale_batch_generation_tasks(
+    db_session: AsyncSession,
+    tasks: List[BatchGenerationTask],
+) -> bool:
+    changed = False
+    for task in tasks:
+        if recover_stale_batch_generation_task_if_needed(task):
+            changed = True
+    if changed:
+        await db_session.commit()
+    return changed
 
 
 def _default_batch_progress_phase(task: BatchGenerationTask) -> str:
@@ -103,6 +137,7 @@ async def load_batch_generation_task_view_context(
     task = result.scalar_one_or_none()
     if task is None:
         return None
+    await recover_stale_batch_generation_tasks(db_session, [task])
     return await build_batch_generation_task_view_context(task, db_session=db_session)
 
 
@@ -116,9 +151,12 @@ async def load_active_project_batch_generation_task_view_context(
         .where(BatchGenerationTask.project_id == project_id)
         .where(BatchGenerationTask.status.in_(['pending', 'running']))
         .order_by(BatchGenerationTask.created_at.desc())
-        .limit(1)
     )
-    task = result.scalar_one_or_none()
+    tasks = result.scalars().all()
+    if not tasks:
+        return None
+    await recover_stale_batch_generation_tasks(db_session, tasks)
+    task = next((item for item in tasks if item.status in {'pending', 'running'}), None)
     if task is None:
         return None
     return await build_batch_generation_task_view_context(task, db_session=db_session)
@@ -138,7 +176,10 @@ async def load_active_user_batch_generation_task_view_contexts(
         .limit(limit)
     )
     tasks = result.scalars().all()
+    await recover_stale_batch_generation_tasks(db_session, tasks)
     contexts: List[BatchGenerationTaskViewContext] = []
     for task in tasks:
+        if task.status not in {'pending', 'running'}:
+            continue
         contexts.append(await build_batch_generation_task_view_context(task, db_session=db_session))
     return contexts
