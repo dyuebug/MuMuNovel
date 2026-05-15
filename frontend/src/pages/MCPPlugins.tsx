@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Card,
   Button,
@@ -250,9 +250,39 @@ export default function MCPPluginsPage() {
   const [viewingTools, setViewingTools] = useState<{ pluginId: string; tools: MCPTool[] } | null>(null);
   const [checkingFunctionCalling, setCheckingFunctionCalling] = useState(false);
   const [modelSupportStatus, setModelSupportStatus] = useState<ModelSupportStatus>('unknown');
+  const mountedRef = useRef(true);
+  const initRequestIdRef = useRef(0);
+  const pluginListRequestIdRef = useRef(0);
+  const testPluginRequestIdRef = useRef(0);
+  const toolsRequestIdRef = useRef(0);
+  const functionCallingRequestIdRef = useRef(0);
+  const submitRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      initRequestIdRef.current += 1;
+      pluginListRequestIdRef.current += 1;
+      testPluginRequestIdRef.current += 1;
+      toolsRequestIdRef.current += 1;
+      functionCallingRequestIdRef.current += 1;
+      submitRequestIdRef.current += 1;
+    };
+  }, []);
+
+  const beginTrackedRequest = useCallback((ref: React.MutableRefObject<number>) => {
+    ref.current += 1;
+    return ref.current;
+  }, []);
+
+  const isTrackedRequestActive = useCallback((ref: React.MutableRefObject<number>, requestId: number) => {
+    return mountedRef.current && ref.current === requestId;
+  }, []);
 
   useEffect(() => {
     const initPage = async () => {
+      const requestId = beginTrackedRequest(initRequestIdRef);
       setLoading(true);
       try {
         // 1. 并行获取插件列表和当前设置
@@ -260,6 +290,9 @@ export default function MCPPluginsPage() {
           mcpPluginApi.getPlugins(),
           settingsApi.getSettings()
         ]);
+        if (!isTrackedRequestActive(initRequestIdRef, requestId)) {
+          return;
+        }
         
         setPlugins(pluginsData);
 
@@ -281,6 +314,9 @@ export default function MCPPluginsPage() {
             const isConfigChanged = JSON.stringify(cachedConfig) !== JSON.stringify(currentConfig);
 
             if (isConfigChanged) {
+              if (!isTrackedRequestActive(initRequestIdRef, requestId)) {
+                return;
+              }
               // 配置已变更
               setModelSupportStatus('unknown');
               
@@ -291,9 +327,15 @@ export default function MCPPluginsPage() {
                 message.loading({ content: '检测到模型配置变更，正在为了安全自动禁用插件...', key: 'auto_disable' });
                 
                 await Promise.all(activePlugins.map(p => mcpPluginApi.togglePlugin(p.id, false)));
+                if (!isTrackedRequestActive(initRequestIdRef, requestId)) {
+                  return;
+                }
                 
                 // 重新加载插件列表状态
                 const updatedPlugins = await mcpPluginApi.getPlugins();
+                if (!isTrackedRequestActive(initRequestIdRef, requestId)) {
+                  return;
+                }
                 setPlugins(updatedPlugins);
                 
                 message.success({ content: '已自动禁用所有插件，请重新检测模型能力', key: 'auto_disable' });
@@ -328,24 +370,38 @@ export default function MCPPluginsPage() {
           }
         }
       } catch (error) {
+        if (!isTrackedRequestActive(initRequestIdRef, requestId)) {
+          return;
+        }
         console.error('Init page failed:', error);
         message.error('页面初始化失败');
       } finally {
-        setLoading(false);
+        if (isTrackedRequestActive(initRequestIdRef, requestId)) {
+          setLoading(false);
+        }
       }
     };
     initPage();
-  }, [modal]);
+  }, [beginTrackedRequest, isTrackedRequestActive, modal]);
 
-  const loadPlugins = async () => {
+  const loadPlugins = useCallback(async () => {
+    const requestId = beginTrackedRequest(pluginListRequestIdRef);
     try {
       const data = await mcpPluginApi.getPlugins();
+      if (!isTrackedRequestActive(pluginListRequestIdRef, requestId)) {
+        return null;
+      }
       setPlugins(data);
+      return data;
     } catch (error) {
+      if (!isTrackedRequestActive(pluginListRequestIdRef, requestId)) {
+        return null;
+      }
       console.error('Load plugins failed:', error);
       message.error('加载插件列表失败');
+      return null;
     }
-  };
+  }, [beginTrackedRequest, isTrackedRequestActive]);
 
   const handleCreate = () => {
     if (modelSupportStatus !== 'supported') {
@@ -419,7 +475,7 @@ export default function MCPPluginsPage() {
         try {
           await mcpPluginApi.deletePlugin(plugin.id);
           message.success('插件已删除');
-          loadPlugins();
+          await loadPlugins();
         } catch (error) {
           console.error('Delete plugin failed:', error);
           message.error('删除插件失败');
@@ -432,7 +488,7 @@ export default function MCPPluginsPage() {
     try {
       await mcpPluginApi.togglePlugin(plugin.id, enabled);
       message.success(enabled ? '插件已启用' : '插件已禁用');
-      loadPlugins();
+      await loadPlugins();
     } catch (error) {
       console.error('Toggle plugin failed:', error);
       message.error('切换插件状态失败');
@@ -440,12 +496,19 @@ export default function MCPPluginsPage() {
   };
 
   const handleTest = async (pluginId: string) => {
+    const requestId = beginTrackedRequest(testPluginRequestIdRef);
     setTestingPluginId(pluginId);
     try {
       const result = await mcpPluginApi.testPlugin(pluginId);
+      if (!isTrackedRequestActive(testPluginRequestIdRef, requestId)) {
+        return;
+      }
 
       // 测试完成后，无论成功失败都刷新插件列表以更新状态
       await loadPlugins();
+      if (!isTrackedRequestActive(testPluginRequestIdRef, requestId)) {
+        return;
+      }
 
       if (result.success) {
         const suggestions = result.suggestions || [];
@@ -564,17 +627,29 @@ export default function MCPPluginsPage() {
         });
       }
     } catch {
+      if (!isTrackedRequestActive(testPluginRequestIdRef, requestId)) {
+        return;
+      }
       message.error('测试插件失败');
     } finally {
-      setTestingPluginId(null);
+      if (isTrackedRequestActive(testPluginRequestIdRef, requestId)) {
+        setTestingPluginId(null);
+      }
     }
   };
 
   const handleViewTools = async (pluginId: string) => {
+    const requestId = beginTrackedRequest(toolsRequestIdRef);
     try {
       const result = await mcpPluginApi.getPluginTools(pluginId);
+      if (!isTrackedRequestActive(toolsRequestIdRef, requestId)) {
+        return;
+      }
       setViewingTools({ pluginId, tools: result.tools });
     } catch (error) {
+      if (!isTrackedRequestActive(toolsRequestIdRef, requestId)) {
+        return;
+      }
       console.error('Get tools failed:', error);
       message.error('获取工具列表失败');
     }
@@ -582,9 +657,13 @@ export default function MCPPluginsPage() {
 
   const handleCheckFunctionCalling = async () => {
     // 从设置中获取当前配置
+    const requestId = beginTrackedRequest(functionCallingRequestIdRef);
     setCheckingFunctionCalling(true);
     try {
       const { settings, storedApiKey } = await settingsApi.getSettingsWithStoredApiKey();
+      if (!isTrackedRequestActive(functionCallingRequestIdRef, requestId)) {
+        return;
+      }
       
       if (!storedApiKey || !settings.llm_model) {
         message.warning('请先在设置页面配置 API Key 和模型');
@@ -599,6 +678,9 @@ export default function MCPPluginsPage() {
         api_backup_urls: normalizeBackupUrls(settings.api_backup_urls),
         fallback_strategy: settings.fallback_strategy || 'auto',
       });
+      if (!isTrackedRequestActive(functionCallingRequestIdRef, requestId)) {
+        return;
+      }
 
       const nextStatus = resolveFunctionCallingStatus(result);
 
@@ -804,22 +886,30 @@ export default function MCPPluginsPage() {
         });
       }
     } catch (error) {
+      if (!isTrackedRequestActive(functionCallingRequestIdRef, requestId)) {
+        return;
+      }
       console.error('Check function calling failed:', error);
       message.error('检测失败，请稍后重试');
     } finally {
-      setCheckingFunctionCalling(false);
+      if (isTrackedRequestActive(functionCallingRequestIdRef, requestId)) {
+        setCheckingFunctionCalling(false);
+      }
     }
   };
 
   const handleSubmit = async (values: { config_json: string; enabled: boolean; category?: string }) => {
+    const requestId = beginTrackedRequest(submitRequestIdRef);
     setLoading(true);
     try {
       // 验证JSON格式
       try {
         JSON.parse(values.config_json);
       } catch {
+        if (!isTrackedRequestActive(submitRequestIdRef, requestId)) {
+          return;
+        }
         message.error('配置JSON格式错误，请检查');
-        setLoading(false);
         return;
       }
 
@@ -831,17 +921,25 @@ export default function MCPPluginsPage() {
 
       // 统一使用简化API，后端会自动判断是创建还是更新
       await mcpPluginApi.createPluginSimple(data);
+      if (!isTrackedRequestActive(submitRequestIdRef, requestId)) {
+        return;
+      }
       message.success(editingPlugin ? '插件已更新' : '插件已创建');
 
       setModalVisible(false);
       form.resetFields();
-      loadPlugins();
+      await loadPlugins();
     } catch (error: unknown) {
+      if (!isTrackedRequestActive(submitRequestIdRef, requestId)) {
+        return;
+      }
       const err = error as { response?: { data?: { detail?: string } } };
       const errorMsg = err?.response?.data?.detail || '操作失败';
       message.error(errorMsg);
     } finally {
-      setLoading(false);
+      if (isTrackedRequestActive(submitRequestIdRef, requestId)) {
+        setLoading(false);
+      }
     }
   };
 

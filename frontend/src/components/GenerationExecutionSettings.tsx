@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Card, Col, Row, Select, Space, Switch } from 'antd';
 
 import { settingsApi } from '../services/modularApi';
@@ -53,11 +53,26 @@ export const useGenerationExecutionSettings = () => {
   const [fetchingModels, setFetchingModels] = useState(false);
   const [runtimeProvider, setRuntimeProvider] = useState<string | undefined>();
   const [currentSettingsModel, setCurrentSettingsModel] = useState<string | undefined>();
+  const mountedRef = useRef(true);
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestIdRef.current += 1;
+    };
+  }, []);
 
   const loadDefaults = useCallback(async () => {
+    requestIdRef.current += 1;
+    const requestId = requestIdRef.current;
     setFetchingModels(true);
     try {
       const { settings, storedApiKey } = await settingsApi.getSettingsWithStoredApiKey();
+      if (!mountedRef.current || requestIdRef.current !== requestId) {
+        return { provider: undefined, model: undefined, webResearchEnabled: false };
+      }
       const provider = (settings.provider_type || settings.api_provider || '').trim() || undefined;
       const model = settings.llm_model?.trim() || undefined;
       const webResearchEnabled = Boolean(settings.web_research_enabled);
@@ -75,14 +90,21 @@ export const useGenerationExecutionSettings = () => {
         api_base_url: settings.api_base_url,
         provider,
       });
+      if (!mountedRef.current || requestIdRef.current !== requestId) {
+        return { provider, model, webResearchEnabled };
+      }
 
       setAvailableModels(normalizeModelOptions(modelsResponse.models));
       return { provider, model, webResearchEnabled };
     } catch (error) {
-      setAvailableModels([]);
+      if (mountedRef.current && requestIdRef.current === requestId) {
+        setAvailableModels([]);
+      }
       throw error;
     } finally {
-      setFetchingModels(false);
+      if (mountedRef.current && requestIdRef.current === requestId) {
+        setFetchingModels(false);
+      }
     }
   }, []);
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Typography, Space, Divider, Badge, Button, Grid, theme } from 'antd';
 import { GithubOutlined, CopyrightOutlined, HeartFilled, ClockCircleOutlined, GiftOutlined } from '@ant-design/icons';
 import { VERSION_INFO, getVersionString } from '../config/version';
@@ -19,12 +19,21 @@ export default function AppFooter({ sidebarWidth = 0 }: AppFooterProps) {
   const [releaseUrl, setReleaseUrl] = useState('');
   const { token } = theme.useToken();
   const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
+  const mountedRef = useRef(true);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
+    mountedRef.current = true;
+
     // 检查版本更新（每次都重新检查）
     const checkVersion = async () => {
+      requestIdRef.current += 1;
+      const requestId = requestIdRef.current;
       try {
         const result = await checkLatestVersion();
+        if (!mountedRef.current || requestIdRef.current !== requestId) {
+          return;
+        }
         setHasUpdate(result.hasUpdate);
         setLatestVersion(result.latestVersion);
         setReleaseUrl(result.releaseUrl);
@@ -35,7 +44,11 @@ export default function AppFooter({ sidebarWidth = 0 }: AppFooterProps) {
 
     // 延迟3秒后检查，避免影响首次加载
     const timer = setTimeout(checkVersion, 3000);
-    return () => clearTimeout(timer);
+    return () => {
+      mountedRef.current = false;
+      requestIdRef.current += 1;
+      clearTimeout(timer);
+    };
   }, []);
 
   // 点击版本号查看更新

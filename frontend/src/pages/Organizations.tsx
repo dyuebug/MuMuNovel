@@ -56,6 +56,9 @@ export default function Organizations() {
   const [modal, contextHolder] = Modal.useModal();
   const [orgListVisible, setOrgListVisible] = useState(false);
   const selectedOrgIdRef = useRef<string | null>(null);
+  const activeProjectIdRef = useRef<string | null>(projectId ?? null);
+  const organizationsRequestIdRef = useRef(0);
+  const membersRequestIdRef = useRef(0);
   const membersTableReady = useDeferredMount(!!selectedOrg);
   const { token } = theme.useToken();
 
@@ -72,12 +75,21 @@ export default function Organizations() {
     selectedOrgIdRef.current = selectedOrg?.id ?? null;
   }, [selectedOrg]);
 
+  useEffect(() => {
+    activeProjectIdRef.current = projectId ?? null;
+  }, [projectId]);
+
   const loadOrganizations = useCallback(async () => {
     if (!projectId) return;
 
+    const requestId = ++organizationsRequestIdRef.current;
+    const targetProjectId = projectId;
     setLoading(true);
     try {
       const res = await axios.get(`/api/organizations/project/${projectId}`);
+      if (activeProjectIdRef.current !== targetProjectId || organizationsRequestIdRef.current !== requestId) {
+        return;
+      }
       const nextOrganizations = res.data as Organization[];
       setOrganizations(nextOrganizations);
 
@@ -100,7 +112,9 @@ export default function Organizations() {
       message.error('加载组织列表失败');
       console.error(error);
     } finally {
-      setLoading(false);
+      if (organizationsRequestIdRef.current === requestId) {
+        setLoading(false);
+      }
     }
   }, [projectId]);
 
@@ -118,8 +132,13 @@ export default function Organizations() {
   }, [projectId, loadOrganizations, refreshCharacters]);
 
   const loadMembers = async (orgId: string) => {
+    const requestId = ++membersRequestIdRef.current;
+    const targetProjectId = activeProjectIdRef.current;
     try {
       const res = await axios.get(`/api/organizations/${orgId}/members`);
+      if (activeProjectIdRef.current !== targetProjectId || membersRequestIdRef.current !== requestId) {
+        return;
+      }
       setMembers(res.data);
     } catch (error) {
       message.error('加载成员列表失败');

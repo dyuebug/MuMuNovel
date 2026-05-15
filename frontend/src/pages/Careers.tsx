@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Button, Modal, Form, Input, Select, message, Row, Col, Empty, Tabs, Card, Tag, Space, Divider, Typography, InputNumber } from 'antd';
 import { ThunderboltOutlined, PlusOutlined, EditOutlined, DeleteOutlined, TrophyOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
@@ -13,6 +13,85 @@ import { isRequestCancelledError } from '../services/core/httpClient';
 
 const { TextArea } = Input;
 const { Title, Text, Paragraph } = Typography;
+const CAREER_TASK_REFRESH_KEY_PREFIX = 'background-task-refresh:careers:';
+const CAREER_TASK_REFRESH_RETRY_DELAY_MS = 2000;
+
+const hasCareerTaskRefreshBeenHandled = (taskId: string): boolean => {
+    try {
+        return sessionStorage.getItem(`${CAREER_TASK_REFRESH_KEY_PREFIX}${taskId}`) === '1';
+    } catch {
+        return false;
+    }
+};
+
+const markCareerTaskRefreshHandled = (taskId: string) => {
+    try {
+        sessionStorage.setItem(`${CAREER_TASK_REFRESH_KEY_PREFIX}${taskId}`, '1');
+    } catch {
+        // ignore sessionStorage failures
+    }
+};
+
+const createCareerRefreshTaskLock = () => {
+    const inFlightTaskIds = new Set<string>();
+
+    return {
+        acquire(taskId: string) {
+            if (!taskId || inFlightTaskIds.has(taskId)) {
+                return false;
+            }
+            inFlightTaskIds.add(taskId);
+            return true;
+        },
+        release(taskId: string) {
+            if (!taskId) {
+                return;
+            }
+            inFlightTaskIds.delete(taskId);
+        },
+    };
+};
+
+const selectActiveCareerTask = (
+    tasks: Record<string, import('../store/backgroundTasks').TrackedBackgroundTask>,
+    projectId?: string,
+) => {
+    if (!projectId) {
+        return null;
+    }
+
+    return Object.values(tasks)
+        .filter(
+            (task) => task.projectId === projectId
+                && (task.taskType === 'careers_generate_system' || task.taskType === 'wizard_career_system')
+                && isActiveBackgroundTask(task)
+        )
+        .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+};
+
+const selectCompletedCareerTaskRefreshSignature = (
+    tasks: Record<string, import('../store/backgroundTasks').TrackedBackgroundTask>,
+    projectId?: string,
+): string => {
+    if (!projectId) {
+        return '';
+    }
+
+    const completedTask = Object.values(tasks)
+        .filter(
+            (task) => task.projectId === projectId
+                && (task.taskType === 'careers_generate_system' || task.taskType === 'wizard_career_system')
+                && task.status === 'completed'
+                && !hasCareerTaskRefreshBeenHandled(task.taskId)
+        )
+        .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
+
+    if (!completedTask) {
+        return '';
+    }
+
+    return `${completedTask.taskId}:${completedTask.completedAt ?? completedTask.updatedAt}`;
+};
 
 interface CareerStage {
     level: number;
@@ -51,36 +130,52 @@ export default function Careers() {
     const [aiGenerating, setAiGenerating] = useState(false);
     const [aiProgress, setAiProgress] = useState(0);
     const [aiMessage, setAiMessage] = useState('');
-    const trackedTasks = useBackgroundTaskStore((state) => state.tasks);
+    const activeProjectIdRef = useRef<string | null>(projectId ?? null);
+    const careerRequestIdRef = useRef(0);
+    const completedCareerRefreshLockRef = useRef(createCareerRefreshTaskLock());
+    const completedCareerRefreshRetryTimerRef = useRef<number | null>(null);
+    const [completedCareerRefreshRetryTick, setCompletedCareerRefreshRetryTick] = useState(0);
+    const activeTrackedCareerTask = useBackgroundTaskStore((state) => selectActiveCareerTask(state.tasks, projectId));
+    const completedCareerTaskRefreshSignature = useBackgroundTaskStore(
+        (state) => selectCompletedCareerTaskRefreshSignature(state.tasks, projectId)
+    );
 
-    const activeTrackedCareerTask = useMemo(() => {
-        if (!projectId) {
-            return null;
+    useEffect(() => {
+        activeProjectIdRef.current = projectId ?? null;
+    }, [projectId]);
+
+    const scheduleCompletedCareerRefreshRetry = useCallback(() => {
+        if (completedCareerRefreshRetryTimerRef.current) {
+            clearTimeout(completedCareerRefreshRetryTimerRef.current);
         }
 
-        return Object.values(trackedTasks)
-            .filter(
-                (task) => task.projectId === projectId
-                    && task.taskType === 'careers_generate_system'
-                    && isActiveBackgroundTask(task)
-            )
-            .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
-    }, [projectId, trackedTasks]);
+        completedCareerRefreshRetryTimerRef.current = window.setTimeout(() => {
+            completedCareerRefreshRetryTimerRef.current = null;
+            setCompletedCareerRefreshRetryTick((value) => value + 1);
+        }, CAREER_TASK_REFRESH_RETRY_DELAY_MS);
+    }, []);
 
     const fetchCareers = useCallback(async () => {
         if (!projectId) {
             return;
         }
 
+        const requestId = ++careerRequestIdRef.current;
+        const targetProjectId = projectId;
         try {
             setLoading(true);
             const response = await loadProjectCareers(projectId) as { mainCareers: Career[]; subCareers: Career[] };
+            if (activeProjectIdRef.current !== targetProjectId || careerRequestIdRef.current !== requestId) {
+                return;
+            }
             setMainCareers(response.mainCareers || []);
             setSubCareers(response.subCareers || []);
         } catch (error: unknown) {
             console.error('获取职业列表失败:', error);
         } finally {
-            setLoading(false);
+            if (careerRequestIdRef.current === requestId) {
+                setLoading(false);
+            }
         }
     }, [projectId]);
 
@@ -94,7 +189,9 @@ export default function Careers() {
     const { currentTaskIdRef: aiTaskIdRef, startTaskPolling: startAiTaskPolling, stopTaskPolling: stopAiTaskPolling } = useRestorableBackgroundTaskPolling({
         projectId,
         activeTrackedTask: activeTrackedCareerTask,
-        isMatchingTask: (task) => task.task_type === 'careers_generate_system' && (task.status === 'pending' || task.status === 'running'),
+        isMatchingTask: (task) =>
+            (task.task_type === 'careers_generate_system' || task.task_type === 'wizard_career_system')
+            && (task.status === 'pending' || task.status === 'running'),
         onRestoreTask: ({ progress, message: taskMessage }) => {
             setAiGenerating(true);
             setAiProgress(progress || 0);
@@ -111,10 +208,6 @@ export default function Careers() {
                 aiTaskIdRef.current = null;
                 setAiGenerating(false);
                 message.success('职业体系生成完成');
-                if (projectId) {
-                    invalidateProjectCareers(projectId);
-                }
-                void fetchCareers();
             },
             onFailed: (task) => {
                 stopAiTaskPolling();
@@ -142,6 +235,54 @@ export default function Careers() {
             },
         }),
     });
+
+    useEffect(() => {
+        if (!projectId || aiTaskIdRef.current || aiGenerating) {
+            return;
+        }
+
+        if (!completedCareerTaskRefreshSignature) {
+            return;
+        }
+
+        const [taskId] = completedCareerTaskRefreshSignature.split(':');
+        if (!taskId) {
+            return;
+        }
+        if (!completedCareerRefreshLockRef.current.acquire(taskId)) {
+            return;
+        }
+
+        invalidateProjectCareers(projectId);
+        void fetchCareers()
+            .then(() => {
+                markCareerTaskRefreshHandled(taskId);
+            })
+            .catch((error) => {
+                console.error('刷新职业体系失败:', error);
+                scheduleCompletedCareerRefreshRetry();
+            })
+            .finally(() => {
+                completedCareerRefreshLockRef.current.release(taskId);
+            });
+    }, [
+        aiGenerating,
+        aiTaskIdRef,
+        completedCareerRefreshRetryTick,
+        completedCareerTaskRefreshSignature,
+        fetchCareers,
+        projectId,
+        scheduleCompletedCareerRefreshRetry,
+    ]);
+
+    useEffect(() => {
+        return () => {
+            if (completedCareerRefreshRetryTimerRef.current) {
+                clearTimeout(completedCareerRefreshRetryTimerRef.current);
+                completedCareerRefreshRetryTimerRef.current = null;
+            }
+        };
+    }, []);
 
     const handleAIGenerateBackground = async (values: { main_career_count: number; sub_career_count: number }) => {
         if (aiGenerating || activeTrackedCareerTask) {

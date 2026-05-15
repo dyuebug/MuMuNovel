@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useBusyNavigationGuard } from '../hooks/useBusyNavigationGuard';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -42,6 +42,35 @@ export default function ProjectWizardNew() {
   const [currentStep, setCurrentStep] = useState<'form' | 'generating'>('form');
   const [generationConfig, setGenerationConfig] = useState<GenerationConfig | null>(null);
   const [resumeProjectId, setResumeProjectId] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+  const runtimeDefaultsRequestIdRef = useRef(0);
+  const resumeRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      runtimeDefaultsRequestIdRef.current += 1;
+      resumeRequestIdRef.current += 1;
+    };
+  }, []);
+
+  const beginRuntimeDefaultsRequest = useCallback(() => {
+    runtimeDefaultsRequestIdRef.current += 1;
+    return runtimeDefaultsRequestIdRef.current;
+  }, []);
+
+  const beginResumeRequest = useCallback(() => {
+    resumeRequestIdRef.current += 1;
+    return resumeRequestIdRef.current;
+  }, []);
+
+  const isRuntimeDefaultsRequestActive = useCallback((requestId: number) => {
+    return mountedRef.current && runtimeDefaultsRequestIdRef.current === requestId;
+  }, []);
+
+  const isResumeRequestActive = useCallback((requestId: number) => {
+    return mountedRef.current && resumeRequestIdRef.current === requestId;
+  }, []);
 
   const clearWizardResumeStorage = () => {
     localStorage.removeItem('wizard_project_id');
@@ -72,11 +101,12 @@ export default function ProjectWizardNew() {
 
   useEffect(() => {
     let cancelled = false;
+    const requestId = beginRuntimeDefaultsRequest();
 
     const loadRuntimeDefaults = async () => {
       try {
         const { model } = await loadDefaults();
-        if (cancelled) {
+        if (cancelled || !isRuntimeDefaultsRequestActive(requestId)) {
           return;
         }
 
@@ -87,7 +117,7 @@ export default function ProjectWizardNew() {
           model: currentModel || model,
         });
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && isRuntimeDefaultsRequestActive(requestId)) {
           console.warn('加载向导执行设置失败:', error);
         }
       }
@@ -98,7 +128,7 @@ export default function ProjectWizardNew() {
     return () => {
       cancelled = true;
     };
-  }, [form, loadDefaults]);
+  }, [beginRuntimeDefaultsRequest, form, isRuntimeDefaultsRequestActive, loadDefaults]);
   // 检查URL参数,如果有project_id则恢复生成
   useEffect(() => {
     const projectId = searchParams.get('project_id');
@@ -118,15 +148,22 @@ export default function ProjectWizardNew() {
 
   // Resume unfinished wizard generation
   const handleResumeGeneration = async (projectId: string, signal?: AbortSignal) => {
+    const requestId = beginResumeRequest();
     try {
       const response = await fetch(`/api/projects/${projectId}`, {
         credentials: 'include',
         signal,
       });
+      if (!isResumeRequestActive(requestId)) {
+        return;
+      }
       if (!response.ok) {
         throw new Error('获取项目信息失败');
       }
       const project = await response.json();
+      if (!isResumeRequestActive(requestId)) {
+        return;
+      }
 
       if (isProjectWizardCompleted(project)) {
         clearWizardResumeStorage();
@@ -184,7 +221,7 @@ export default function ProjectWizardNew() {
       setGenerationConfig(config);
       setCurrentStep('generating');
     } catch (error) {
-      if (isRequestCancelledError(error)) {
+      if (isRequestCancelledError(error) || !isResumeRequestActive(requestId)) {
         return;
       }
       console.error('恢复生成失败:', error);

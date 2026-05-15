@@ -18,6 +18,7 @@ import {
   Empty
 } from 'antd';
 import { useCallback } from 'react';
+import { useRef } from 'react';
 import {
   EditOutlined,
   ReloadOutlined,
@@ -85,15 +86,34 @@ export default function PromptTemplates() {
   const [loading, setLoading] = useState(false);
   const [syncStatusMap, setSyncStatusMap] = useState<Record<string, PromptTemplateSyncStatusItem>>({});
   const [syncStatusEnabled, setSyncStatusEnabled] = useState(true);
+  const mountedRef = useRef(true);
+  const syncStatusRequestIdRef = useRef(0);
+  const templatesRequestIdRef = useRef(0);
+  const mutationRequestIdRef = useRef(0);
 
   const isMobile = window.innerWidth <= 768;
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      syncStatusRequestIdRef.current += 1;
+      templatesRequestIdRef.current += 1;
+      mutationRequestIdRef.current += 1;
+    };
+  }, []);
+
   // 加载模板数据
   const loadSyncStatus = useCallback(async () => {
+    syncStatusRequestIdRef.current += 1;
+    const requestId = syncStatusRequestIdRef.current;
     try {
       const response = await axios.get<PromptTemplateSyncStatusResponse>('/api/prompt-templates/sync-status', {
         params: { managed_only: true }
       });
+      if (!mountedRef.current || syncStatusRequestIdRef.current !== requestId) {
+        return;
+      }
       const nextMap: Record<string, PromptTemplateSyncStatusItem> = {};
       response.data.items.forEach((item) => {
         nextMap[item.template_key] = item;
@@ -101,6 +121,9 @@ export default function PromptTemplates() {
       setSyncStatusMap(nextMap);
       setSyncStatusEnabled(true);
     } catch (error: unknown) {
+      if (!mountedRef.current || syncStatusRequestIdRef.current !== requestId) {
+        return;
+      }
       const err = error as { response?: { status?: number } };
       if (err.response?.status === 404) {
         setSyncStatusEnabled(false);
@@ -114,16 +137,26 @@ export default function PromptTemplates() {
   }, []);
 
   const loadTemplates = useCallback(async () => {
+    templatesRequestIdRef.current += 1;
+    const requestId = templatesRequestIdRef.current;
     try {
       setLoading(true);
       const response = await axios.get<CategoryGroup[]>('/api/prompt-templates/categories');
+      if (!mountedRef.current || templatesRequestIdRef.current !== requestId) {
+        return;
+      }
       setCategories(response.data);
       await loadSyncStatus();
     } catch (error: unknown) {
+      if (!mountedRef.current || templatesRequestIdRef.current !== requestId) {
+        return;
+      }
       const err = error as { response?: { data?: { detail?: string } } };
       message.error(err.response?.data?.detail || '加载失败');
     } finally {
-      setLoading(false);
+      if (mountedRef.current && templatesRequestIdRef.current === requestId) {
+        setLoading(false);
+      }
     }
   }, [loadSyncStatus]);
 
@@ -189,6 +222,8 @@ export default function PromptTemplates() {
   const handleSave = async () => {
     if (!editingTemplate) return;
 
+    mutationRequestIdRef.current += 1;
+    const requestId = mutationRequestIdRef.current;
     try {
       setLoading(true);
       await axios.post('/api/prompt-templates', {
@@ -200,14 +235,22 @@ export default function PromptTemplates() {
         parameters: editingTemplate.parameters,
         is_active: editingTemplate.is_active
       });
+      if (!mountedRef.current || mutationRequestIdRef.current !== requestId) {
+        return;
+      }
       message.success('保存成功');
       setEditorVisible(false);
       await loadTemplates();
     } catch (error: unknown) {
+      if (!mountedRef.current || mutationRequestIdRef.current !== requestId) {
+        return;
+      }
       const err = error as { response?: { data?: { detail?: string } } };
       message.error(err.response?.data?.detail || '保存失败');
     } finally {
-      setLoading(false);
+      if (mountedRef.current && mutationRequestIdRef.current === requestId) {
+        setLoading(false);
+      }
     }
   };
 
@@ -227,10 +270,15 @@ export default function PromptTemplates() {
       cancelText: '取消',
       centered: true,
       onOk: async () => {
+        mutationRequestIdRef.current += 1;
+        const requestId = mutationRequestIdRef.current;
         try {
           setLoading(true);
           try {
             const response = await axios.post(`/api/prompt-templates/${templateKey}/sync-to-default`);
+            if (!mountedRef.current || mutationRequestIdRef.current !== requestId) {
+              return;
+            }
             const latestStatus = response?.data?.status as PromptTemplateSyncStatusItem | undefined;
             if (latestStatus) {
               setSyncStatusMap((prev) => ({
@@ -243,6 +291,9 @@ export default function PromptTemplates() {
             const syncErr = syncError as { response?: { status?: number } };
             if (syncErr.response?.status === 404) {
               await axios.post(`/api/prompt-templates/${templateKey}/reset`);
+              if (!mountedRef.current || mutationRequestIdRef.current !== requestId) {
+                return;
+              }
               message.success('已重置为系统默认模板');
             } else {
               throw syncError;
@@ -250,10 +301,15 @@ export default function PromptTemplates() {
           }
           await loadTemplates();
         } catch (error: unknown) {
+          if (!mountedRef.current || mutationRequestIdRef.current !== requestId) {
+            return;
+          }
           const err = error as { response?: { data?: { detail?: string } } };
           message.error(err.response?.data?.detail || '同步失败');
         } finally {
-          setLoading(false);
+          if (mountedRef.current && mutationRequestIdRef.current === requestId) {
+            setLoading(false);
+          }
         }
       }
     });
@@ -261,12 +317,20 @@ export default function PromptTemplates() {
 
   // 切换启用状态
   const handleToggleActive = async (template: PromptTemplate, checked: boolean) => {
+    mutationRequestIdRef.current += 1;
+    const requestId = mutationRequestIdRef.current;
     try {
       await axios.put(`/api/prompt-templates/${template.template_key}`, {
         is_active: checked
       });
+      if (!mountedRef.current || mutationRequestIdRef.current !== requestId) {
+        return;
+      }
       await loadTemplates();
     } catch (error: unknown) {
+      if (!mountedRef.current || mutationRequestIdRef.current !== requestId) {
+        return;
+      }
       const err = error as { response?: { data?: { detail?: string } } };
       message.error(err.response?.data?.detail || '操作失败');
     }
@@ -302,10 +366,15 @@ export default function PromptTemplates() {
 
   // 导入模板
   const handleImport = async (file: File) => {
+    mutationRequestIdRef.current += 1;
+    const requestId = mutationRequestIdRef.current;
     try {
       const text = await file.text();
       const data = JSON.parse(text);
       const response = await axios.post('/api/prompt-templates/import', data);
+      if (!mountedRef.current || mutationRequestIdRef.current !== requestId) {
+        return false;
+      }
       
       const result = response.data;
       const stats = result.statistics;
@@ -352,6 +421,9 @@ export default function PromptTemplates() {
       
       await loadTemplates();
     } catch (error: unknown) {
+      if (!mountedRef.current || mutationRequestIdRef.current !== requestId) {
+        return false;
+      }
       const err = error as { response?: { data?: { detail?: string } } };
       message.error(err.response?.data?.detail || '导入失败');
     }

@@ -149,19 +149,47 @@ const Inspiration: React.FC = () => {
 
   // Modal hook
   const [modal, contextHolder] = Modal.useModal();
+  const mountedRef = useRef(true);
+  const requestEpochRef = useRef(0);
 
-  const loadExecutionDefaults = useCallback(async (options?: { syncWebResearch?: boolean }) => {
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      requestEpochRef.current += 1;
+    };
+  }, []);
+
+  const startAsyncRequest = useCallback(() => {
+    requestEpochRef.current += 1;
+    return requestEpochRef.current;
+  }, []);
+
+  const invalidateAsyncRequests = useCallback(() => {
+    requestEpochRef.current += 1;
+  }, []);
+
+  const isAsyncRequestActive = useCallback((requestId: number) => {
+    return mountedRef.current && requestEpochRef.current === requestId;
+  }, []);
+
+  const loadExecutionDefaults = useCallback(async (options?: { syncWebResearch?: boolean }, requestId?: number) => {
     try {
       const { model, webResearchEnabled } = await loadDefaults();
+      if ((requestId !== undefined && !isAsyncRequestActive(requestId)) || !mountedRef.current) {
+        return;
+      }
       setExecutionEnableMcp(true);
       setExecutionModel(model);
       if (options?.syncWebResearch) {
         setExecutionEnableWebResearch(webResearchEnabled);
       }
     } catch (error) {
+      if (requestId !== undefined && !isAsyncRequestActive(requestId)) {
+        return;
+      }
       console.warn('Failed to load inspiration execution settings:', error);
     }
-  }, [loadDefaults]);
+  }, [isAsyncRequestActive, loadDefaults]);
 
   const mergeInspirationResearch = useCallback((response?: InspirationOptionResponse) => {
     const query = response?.research_query?.trim() || '';
@@ -326,7 +354,7 @@ const Inspiration: React.FC = () => {
 
 
   // Restore generation state from storage
-  const restoreGenerationFromStorage = useCallback(async (): Promise<boolean> => {
+  const restoreGenerationFromStorage = useCallback(async (requestId?: number): Promise<boolean> => {
     try {
       const storedStep = localStorage.getItem('inspiration_current_step');
       const rawConfig = localStorage.getItem('inspiration_generation_data');
@@ -347,6 +375,9 @@ const Inspiration: React.FC = () => {
       const storedProjectId = localStorage.getItem('inspiration_project_id');
       if (storedTaskId && !storedProjectId?.trim()) {
         const task = await backgroundTaskApi.getTaskStatus(storedTaskId);
+        if (requestId !== undefined && !isAsyncRequestActive(requestId)) {
+          return false;
+        }
         if (task.error === 'task_missing' || task.task_type === 'unknown') {
           clearGenerationResumeStorage();
           message.warning('上一次后台任务已失效，请重新开始生成', 2);
@@ -354,19 +385,25 @@ const Inspiration: React.FC = () => {
         }
       }
 
+      if (requestId !== undefined && !isAsyncRequestActive(requestId)) {
+        return false;
+      }
       setGenerationConfig(parsed);
       setResumeProjectId(storedProjectId?.trim() ? storedProjectId : null);
       setCurrentStep('generating');
       message.success('已恢复上次的生成进度', 2);
       return true;
     } catch (error) {
+      if (requestId !== undefined && !isAsyncRequestActive(requestId)) {
+        return false;
+      }
       console.error('恢复灵感模式生成进度失败:', error);
       clearGenerationResumeStorage();
       return false;
     }
-  }, [clearGenerationResumeStorage]);
+  }, [clearGenerationResumeStorage, isAsyncRequestActive]);
 
-  const restoreFromCache = useCallback((): boolean => {
+  const restoreFromCache = useCallback((requestId?: number): boolean => {
     try {
       const cached = localStorage.getItem(CACHE_KEY);
       if (!cached) {
@@ -388,6 +425,9 @@ const Inspiration: React.FC = () => {
         return false;
       }
 
+      if (requestId !== undefined && !isAsyncRequestActive(requestId)) {
+        return false;
+      }
       // 恢复所有状态
       setMessages(cacheData.messages);
       setCurrentStep(cacheData.currentStep);
@@ -405,26 +445,43 @@ const Inspiration: React.FC = () => {
       message.success('已恢复上次的对话进度', 2);
       return true;
     } catch (error) {
+      if (requestId !== undefined && !isAsyncRequestActive(requestId)) {
+        return false;
+      }
       console.error('恢复缓存失败:', error);
       clearCache();
       return false;
     }
-  }, [clearCache]);
+  }, [clearCache, isAsyncRequestActive]);
 
   // ==================== Restore cache on mount ====================
 
   useEffect(() => {
     if (!cacheLoaded) {
+      const requestId = startAsyncRequest();
       void (async () => {
-        const restoredGenerating = await restoreGenerationFromStorage();
-        const restoredConversation = !restoredGenerating && restoreFromCache();
+        const restoredGenerating = await restoreGenerationFromStorage(requestId);
+        if (!isAsyncRequestActive(requestId)) {
+          return;
+        }
+        const restoredConversation = !restoredGenerating && restoreFromCache(requestId);
         if (!restoredGenerating && !restoredConversation) {
-          await loadExecutionDefaults({ syncWebResearch: true });
+          await loadExecutionDefaults({ syncWebResearch: true }, requestId);
+        }
+        if (!isAsyncRequestActive(requestId)) {
+          return;
         }
         setCacheLoaded(true);
       })();
     }
-  }, [cacheLoaded, loadExecutionDefaults, restoreFromCache, restoreGenerationFromStorage]);
+  }, [
+    cacheLoaded,
+    isAsyncRequestActive,
+    loadExecutionDefaults,
+    restoreFromCache,
+    restoreGenerationFromStorage,
+    startAsyncRequest,
+  ]);
 
   // ==================== 自动保存：状态变化时保存 ====================
 
@@ -523,9 +580,13 @@ const Inspiration: React.FC = () => {
   const handleRetry = async () => {
     if (!lastFailedRequest) return;
 
+    const requestId = startAsyncRequest();
     setLoading(true);
     try {
       const response = await inspirationApi.generateOptions(lastFailedRequest);
+      if (!isAsyncRequestActive(requestId)) {
+        return;
+      }
 
       if (response.error) {
         message.error(response.error);
@@ -553,10 +614,15 @@ const Inspiration: React.FC = () => {
       setMessages(prev => [...prev, aiMessage]);
       setLastFailedRequest(null);
     } catch (error: unknown) {
+      if (!isAsyncRequestActive(requestId)) {
+        return;
+      }
       console.error('重试失败:', error);
       message.error('重试失败，请稍后再试');
     } finally {
-      setLoading(false);
+      if (isAsyncRequestActive(requestId)) {
+        setLoading(false);
+      }
     }
   };
 
@@ -572,6 +638,7 @@ const Inspiration: React.FC = () => {
       return;
     }
 
+    const requestId = startAsyncRequest();
     setRefining(true);
     setShowFeedbackInput(null);
     setFeedbackValue('');
@@ -615,6 +682,9 @@ const Inspiration: React.FC = () => {
         previous_options: targetMessage.options,
         ...buildChatResearchFields(),
       });
+      if (!isAsyncRequestActive(requestId)) {
+        return;
+      }
 
       if (response.error) {
         message.error(response.error);
@@ -636,12 +706,17 @@ const Inspiration: React.FC = () => {
 
       message.success('已根据您的反馈重新生成选项');
     } catch (error: unknown) {
+      if (!isAsyncRequestActive(requestId)) {
+        return;
+      }
       console.error('优化选项失败:', error);
       const errMsg = error instanceof Error ? error.message : '优化失败，请重试';
       const axiosError = error as { response?: { data?: { detail?: string } } };
       message.error(axiosError.response?.data?.detail || errMsg);
     } finally {
-      setRefining(false);
+      if (isAsyncRequestActive(requestId)) {
+        setRefining(false);
+      }
     }
   };
 
@@ -662,10 +737,11 @@ const Inspiration: React.FC = () => {
 
     const userInput = inputValue;
     setInputValue('');
-    setLoading(true);
 
     try {
       if (currentStep === 'idea') {
+        const requestId = startAsyncRequest();
+        setLoading(true);
         setInitialIdea(userInput);
 
         const requestData = buildInspirationRequest('title', {
@@ -674,6 +750,9 @@ const Inspiration: React.FC = () => {
         });
 
         const response = await inspirationApi.generateOptions(requestData);
+        if (!isAsyncRequestActive(requestId)) {
+          return;
+        }
 
         if (response.error || !response.options || response.options.length < 3) {
           const errorMessage: Message = {
@@ -702,6 +781,7 @@ const Inspiration: React.FC = () => {
         setLastFailedRequest(null);
       } else {
         await handleCustomInput(userInput);
+        return;
       }
     } catch (error: unknown) {
       console.error('发送消息失败:', error);
@@ -834,7 +914,11 @@ const Inspiration: React.FC = () => {
         setMessages(prev => [...prev, aiMessage]);
 
         // 先加载执行设置，再进入生成阶段
-        await loadExecutionDefaults();
+        const requestId = startAsyncRequest();
+        await loadExecutionDefaults(undefined, requestId);
+        if (!isAsyncRequestActive(requestId)) {
+          return;
+        }
         setExecutionModalOpen(true);
         return;
         return;
@@ -849,6 +933,7 @@ const Inspiration: React.FC = () => {
       content: option,
     };
     setMessages(prev => [...prev, userMessage]);
+    const requestId = startAsyncRequest();
     setLoading(true);
 
     try {
@@ -862,8 +947,11 @@ const Inspiration: React.FC = () => {
       }
       setWizardData(updatedData);
 
-      await generateNextStep(activeStep, updatedData);
+      await generateNextStep(activeStep, updatedData, requestId);
     } catch (error: unknown) {
+      if (!isAsyncRequestActive(requestId)) {
+        return;
+      }
       console.error('选择选项失败:', error);
       const errMsg = error instanceof Error ? error.message : '生成失败，请重试';
       const axiosError = error as { response?: { data?: { detail?: string } } };
@@ -874,12 +962,15 @@ const Inspiration: React.FC = () => {
         content: `继续生成下一步时出错：${detail}\n\n你可以直接输入，或点击“重新开始”后重试。`
       }]);
     } finally {
-      setLoading(false);
+      if (isAsyncRequestActive(requestId)) {
+        setLoading(false);
+      }
     }
   };
 
   const handleCustomInput = async (input: string) => {
     const activeStep = currentStep;
+    const requestId = startAsyncRequest();
     setLoading(true);
     try {
       const updatedData = { ...wizardData };
@@ -910,18 +1001,25 @@ const Inspiration: React.FC = () => {
         };
         setMessages(prev => [...prev, aiMessage]);
         setCurrentStep('outline_mode');
-        setLoading(false);
+        if (isAsyncRequestActive(requestId)) {
+          setLoading(false);
+        }
         return;
       } else if (activeStep === 'outline_mode') {
         // 大纲模式不支持自定义输入
         message.warning('请从选项中选择一个大纲模式');
-        setLoading(false);
+        if (isAsyncRequestActive(requestId)) {
+          setLoading(false);
+        }
         return;
       }
 
       setWizardData(updatedData);
-      await generateNextStep(activeStep, updatedData);
+      await generateNextStep(activeStep, updatedData, requestId);
     } catch (error: unknown) {
+      if (!isAsyncRequestActive(requestId)) {
+        return;
+      }
       console.error('处理自定义输入失败:', error);
       const errMsg = error instanceof Error ? error.message : '处理失败，请重试';
       const axiosError = error as { response?: { data?: { detail?: string } } };
@@ -932,7 +1030,9 @@ const Inspiration: React.FC = () => {
         content: `继续生成下一步时出错：${detail}\n\n你可以修改输入后再试，或重新开始当前灵感流程。`
       }]);
     } finally {
-      setLoading(false);
+      if (isAsyncRequestActive(requestId)) {
+        setLoading(false);
+      }
     }
   };
 
@@ -979,7 +1079,7 @@ const Inspiration: React.FC = () => {
     }
   };
 
-  const generateNextStep = async (fromStep: Step, data: Partial<WizardData>) => {
+  const generateNextStep = async (fromStep: Step, data: Partial<WizardData>, requestId?: number) => {
     const currentIndex = stepOrder.indexOf(fromStep);
     const nextStep = stepOrder[currentIndex + 1];
 
@@ -993,11 +1093,15 @@ const Inspiration: React.FC = () => {
       setMessages(prev => [...prev, aiMessage]);
       setCurrentStep('perspective');
     } else if (nextStep === 'description') {
+      const activeRequestId = requestId ?? startAsyncRequest();
       const requestData = buildInspirationRequest('description', {
         initial_idea: initialIdea,
         title: data.title,
       });
       const response = await inspirationApi.generateOptions(requestData);
+      if (!isAsyncRequestActive(activeRequestId)) {
+        return;
+      }
 
       if (response.error || !response.options || response.options.length < 3) {
         const errorMessage: Message = {
@@ -1026,12 +1130,16 @@ const Inspiration: React.FC = () => {
       setLastFailedRequest(null);
 
     } else if (nextStep === 'theme') {
+      const activeRequestId = requestId ?? startAsyncRequest();
       const requestData = buildInspirationRequest('theme', {
         initial_idea: initialIdea,
         title: data.title,
         description: data.description,
       });
       const response = await inspirationApi.generateOptions(requestData);
+      if (!isAsyncRequestActive(activeRequestId)) {
+        return;
+      }
 
       if (response.error || !response.options || response.options.length < 3) {
         const errorMessage: Message = {
@@ -1060,6 +1168,7 @@ const Inspiration: React.FC = () => {
       setLastFailedRequest(null);
 
     } else if (nextStep === 'genre') {
+      const activeRequestId = requestId ?? startAsyncRequest();
       const requestData = buildInspirationRequest('genre', {
         initial_idea: initialIdea,
         title: data.title,
@@ -1067,6 +1176,9 @@ const Inspiration: React.FC = () => {
         theme: data.theme,
       });
       const response = await inspirationApi.generateOptions(requestData);
+      if (!isAsyncRequestActive(activeRequestId)) {
+        return;
+      }
 
       if (response.error || !response.options || response.options.length < 3) {
         const errorMessage: Message = {
@@ -1100,6 +1212,7 @@ const Inspiration: React.FC = () => {
 
   const handleRestart = () => {
     // Reset conversation state
+    invalidateAsyncRequests();
     clearCache();
     clearGenerationResumeStorage();
 
@@ -1120,6 +1233,7 @@ const Inspiration: React.FC = () => {
   };
 
   const handleBack = () => {
+    invalidateAsyncRequests();
     navigate('/projects');
   };
 
@@ -1136,6 +1250,7 @@ const Inspiration: React.FC = () => {
 
   const handleComplete = async (projectId: string) => {
     console.log('灵感模式项目创建完成:', projectId);
+    invalidateAsyncRequests();
     clearCache();
     clearGenerationResumeStorage();
     setResumeProjectId(null);
@@ -1146,6 +1261,7 @@ const Inspiration: React.FC = () => {
 
   // Back to chat page
   const handleBackToChat = () => {
+    invalidateAsyncRequests();
     clearCache();
     clearGenerationResumeStorage();
     releaseGenerationBusy();

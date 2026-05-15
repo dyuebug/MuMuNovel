@@ -180,6 +180,41 @@ interface ChapterAnalysisProps {
   onClose: () => void;
 }
 
+const areAnalysisTasksEqual = (left?: AnalysisTask | null, right?: AnalysisTask | null): boolean => {
+  if (!left || !right) {
+    return left === right;
+  }
+
+  return (
+    left.has_task === right.has_task
+    && left.task_id === right.task_id
+    && left.chapter_id === right.chapter_id
+    && left.status === right.status
+    && left.progress === right.progress
+    && left.error_message === right.error_message
+    && left.error_code === right.error_code
+    && left.auto_recovered === right.auto_recovered
+    && left.created_at === right.created_at
+    && left.started_at === right.started_at
+    && left.completed_at === right.completed_at
+  );
+};
+
+const areAnalysisResultsEqual = (
+  left?: ChapterAnalysisResponse | null,
+  right?: ChapterAnalysisResponse | null,
+): boolean => {
+  if (!left || !right) {
+    return left === right;
+  }
+
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
+};
+
 export default function ChapterAnalysis({ chapterId, visible, onClose }: ChapterAnalysisProps) {
   const [task, setTask] = useState<AnalysisTask | null>(null);
   const [analysis, setAnalysis] = useState<ChapterAnalysisResponse | null>(null);
@@ -199,6 +234,11 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
   const pollTimeoutRef = useRef<number | null>(null);
   const pollErrorCountRef = useRef(0);
   const requestAbortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  const draftPreviewRequestIdRef = useRef(0);
+  const draftApplyRequestIdRef = useRef(0);
+  const taskRef = useRef<AnalysisTask | null>(null);
+  const analysisRef = useRef<ChapterAnalysisResponse | null>(null);
 
   const stopPolling = () => {
     if (pollIntervalRef.current) {
@@ -225,6 +265,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
   };
 
   useEffect(() => {
+    mountedRef.current = true;
     if (visible && chapterId) {
       void fetchAnalysisStatus();
     }
@@ -236,6 +277,9 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
     window.addEventListener('resize', handleResize);
 
     return () => {
+      mountedRef.current = false;
+      draftPreviewRequestIdRef.current += 1;
+      draftApplyRequestIdRef.current += 1;
       window.removeEventListener('resize', handleResize);
       abortActiveRequest();
       stopPolling();
@@ -243,9 +287,36 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, chapterId]);
 
+  useEffect(() => {
+    taskRef.current = task;
+  }, [task]);
+
+  useEffect(() => {
+    analysisRef.current = analysis;
+  }, [analysis]);
+
+  const updateTask = (nextTask: AnalysisTask | null) => {
+    if (areAnalysisTasksEqual(taskRef.current, nextTask)) {
+      return;
+    }
+    taskRef.current = nextTask;
+    setTask(nextTask);
+  };
+
+  const updateAnalysis = (nextAnalysis: ChapterAnalysisResponse | null) => {
+    if (areAnalysisResultsEqual(analysisRef.current, nextAnalysis)) {
+      return;
+    }
+    analysisRef.current = nextAnalysis;
+    setAnalysis(nextAnalysis);
+  };
+
   const loadChapterInfo = async (signal?: AbortSignal) => {
     try {
       const chapterData = await chapterApi.getChapter(chapterId, signal ? { signal } : undefined);
+      if ((signal && signal.aborted) || !mountedRef.current) {
+        return null;
+      }
       setChapterInfo({
         title: chapterData.title,
         chapter_number: chapterData.chapter_number,
@@ -272,7 +343,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       setAnalysis(null);
 
       const chapterData = await loadChapterInfo(abortController.signal);
-      if (abortController.signal.aborted || requestAbortRef.current !== abortController) {
+      if (abortController.signal.aborted || requestAbortRef.current !== abortController || !mountedRef.current) {
         return;
       }
 
@@ -282,18 +353,18 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
         { signal: abortController.signal },
       );
 
-      if (abortController.signal.aborted || requestAbortRef.current !== abortController) {
+      if (abortController.signal.aborted || requestAbortRef.current !== abortController || !mountedRef.current) {
         return;
       }
 
       if (taskData.status === 'none' || !taskData.has_task) {
-        setTask(null);
-        setAnalysis(null);
+        updateTask(null);
+        updateAnalysis(null);
         setError(null);
         return;
       }
 
-      setTask(taskData);
+      updateTask(taskData);
 
       if (taskData.status === 'completed') {
         await fetchAnalysisResult();
@@ -306,9 +377,11 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       if (isRequestCancelledError(err) || abortController.signal.aborted) {
         return;
       }
-      setError((err as Error).message);
+      if (mountedRef.current) {
+        setError((err as Error).message);
+      }
     } finally {
-      if (requestAbortRef.current === abortController) {
+      if (mountedRef.current && requestAbortRef.current === abortController) {
         requestAbortRef.current = null;
         setLoading(false);
       }
@@ -324,17 +397,19 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
         false,
         { signal: abortController.signal },
       );
-      if (abortController.signal.aborted || requestAbortRef.current !== abortController) {
+      if (abortController.signal.aborted || requestAbortRef.current !== abortController || !mountedRef.current) {
         return;
       }
-      setAnalysis(data);
+      updateAnalysis(data);
     } catch (err) {
       if (isRequestCancelledError(err) || abortController.signal.aborted) {
         return;
       }
-      setError((err as Error).message);
+      if (mountedRef.current) {
+        setError((err as Error).message);
+      }
     } finally {
-      if (requestAbortRef.current === abortController) {
+      if (mountedRef.current && requestAbortRef.current === abortController) {
         requestAbortRef.current = null;
       }
     }
@@ -353,16 +428,16 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
           chapterInfo?.project_id,
           { signal: abortController.signal },
         );
-        if (abortController.signal.aborted || requestAbortRef.current !== abortController) {
+        if (abortController.signal.aborted || requestAbortRef.current !== abortController || !mountedRef.current) {
           return;
         }
         pollErrorCountRef.current = 0;
         if (taskData.status === 'none' || !taskData.has_task) {
-          setTask(null);
-          setAnalysis(null);
+          updateTask(null);
+          updateAnalysis(null);
           return;
         }
-        setTask(taskData);
+        updateTask(taskData);
 
         if (taskData.status === 'completed') {
           stopPolling();
@@ -388,10 +463,12 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
           return;
         }
         stopPolling();
-        setError('\u7ae0\u8282\u5206\u6790\u72b6\u6001\u540c\u6b65\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u5237\u65b0\u91cd\u8bd5');
-        message.error('\u7ae0\u8282\u5206\u6790\u72b6\u6001\u540c\u6b65\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u5237\u65b0\u91cd\u8bd5');
+        if (mountedRef.current) {
+          setError('\u7ae0\u8282\u5206\u6790\u72b6\u6001\u540c\u6b65\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u5237\u65b0\u91cd\u8bd5');
+          message.error('\u7ae0\u8282\u5206\u6790\u72b6\u6001\u540c\u6b65\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u5237\u65b0\u91cd\u8bd5');
+        }
       } finally {
-        if (requestAbortRef.current === abortController) {
+        if (mountedRef.current && requestAbortRef.current === abortController) {
           requestAbortRef.current = null;
         }
       }
@@ -418,7 +495,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       setAnalysis(null);
 
       const chapterData = await loadChapterInfo(abortController.signal);
-      if (abortController.signal.aborted || requestAbortRef.current !== abortController) {
+      if (abortController.signal.aborted || requestAbortRef.current !== abortController || !mountedRef.current) {
         return;
       }
 
@@ -427,7 +504,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
         chapterData?.project_id || chapterInfo?.project_id,
       );
 
-      if (abortController.signal.aborted || requestAbortRef.current !== abortController) {
+      if (abortController.signal.aborted || requestAbortRef.current !== abortController || !mountedRef.current) {
         return;
       }
 
@@ -436,9 +513,11 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       if (isRequestCancelledError(err) || abortController.signal.aborted) {
         return;
       }
-      setError((err as Error).message);
+      if (mountedRef.current) {
+        setError((err as Error).message);
+      }
     } finally {
-      if (requestAbortRef.current === abortController) {
+      if (mountedRef.current && requestAbortRef.current === abortController) {
         requestAbortRef.current = null;
         setLoading(false);
       }
@@ -647,16 +726,26 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       return;
     }
 
+    draftPreviewRequestIdRef.current += 1;
+    const requestId = draftPreviewRequestIdRef.current;
     try {
       setDraftPreviewLoading(true);
       setDraftPreviewVisible(true);
       const response = await chapterApi.getAutoRevisionDraft(chapterId, draftResult.history_id);
+      if (!mountedRef.current || draftPreviewRequestIdRef.current !== requestId) {
+        return;
+      }
       setDraftContent(response.auto_revision_draft.revised_text || response.auto_revision_draft.revised_text_preview || '');
     } catch (err) {
+      if (!mountedRef.current || draftPreviewRequestIdRef.current !== requestId) {
+        return;
+      }
       message.error((err as Error).message || '加载自动修订草稿失败');
       setDraftPreviewVisible(false);
     } finally {
-      setDraftPreviewLoading(false);
+      if (mountedRef.current && draftPreviewRequestIdRef.current === requestId) {
+        setDraftPreviewLoading(false);
+      }
     }
   };
 
@@ -673,16 +762,24 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       return;
     }
 
+    draftApplyRequestIdRef.current += 1;
+    const requestId = draftApplyRequestIdRef.current;
     try {
       setApplyingDraft(true);
       await chapterApi.applyAutoRevisionDraft(chapterId, {
         history_id: draftResult.history_id,
         allow_stale: allowStale,
       });
+      if (!mountedRef.current || draftApplyRequestIdRef.current !== requestId) {
+        return;
+      }
       message.success('自动修订草稿已应用到章节正文');
       resetDraftPreviewState();
       await refreshAfterDraftApplied();
     } catch (err) {
+      if (!mountedRef.current || draftApplyRequestIdRef.current !== requestId) {
+        return;
+      }
       const error = err as Error & { response?: { status?: number; data?: { detail?: string } } };
       const status = error.response?.status;
       const detail = error.response?.data?.detail || error.message;
@@ -703,7 +800,9 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
 
       message.error(detail || '应用自动修订草稿失败');
     } finally {
-      setApplyingDraft(false);
+      if (mountedRef.current && draftApplyRequestIdRef.current === requestId) {
+        setApplyingDraft(false);
+      }
     }
   };
 

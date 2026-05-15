@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Card, Form, Input, InputNumber, Select, Space, Tag } from 'antd';
 import { chapterApi } from '../services/modularApi';
 import type { ChapterQualityMetrics, ChapterQualityProfileSummary, CreativeMode, PlotStage, StoryFocus } from '../types';
@@ -212,27 +212,46 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
     const [chapterQualityMetrics, setChapterQualityMetrics] = useState<ChapterQualityMetrics | null>(null);
     const [chapterQualityProfileSummary, setChapterQualityProfileSummary] = useState<ChapterQualityProfileSummary | null>(null);
     const [chapterQualityGeneratedAt, setChapterQualityGeneratedAt] = useState<string | null>(null);
+    const mountedRef = useRef(false);
+    const chapterQualityRequestIdRef = useRef(0);
+
+    const beginChapterQualityRequest = () => {
+      const nextRequestId = chapterQualityRequestIdRef.current + 1;
+      chapterQualityRequestIdRef.current = nextRequestId;
+      return nextRequestId;
+    };
+
+    const isChapterQualityRequestActive = (requestId: number) => (
+      mountedRef.current && chapterQualityRequestIdRef.current === requestId
+    );
 
     useEffect(() => {
-      let cancelled = false;
+      mountedRef.current = true;
 
+      return () => {
+        mountedRef.current = false;
+        chapterQualityRequestIdRef.current += 1;
+      };
+    }, []);
+
+    useEffect(() => {
       if (!currentEditingChapterId) {
+        chapterQualityRequestIdRef.current += 1;
         setChapterQualityLoading(false);
         setChapterQualityMetrics(null);
         setChapterQualityProfileSummary(null);
         setChapterQualityGeneratedAt(null);
         onChapterQualityMetricsChange(null);
-        return () => {
-          cancelled = true;
-        };
+        return undefined;
       }
 
       const loadChapterQualityMetrics = async () => {
+        const requestId = beginChapterQualityRequest();
         setChapterQualityLoading(true);
 
         try {
           const result = await chapterApi.getChapterQualityMetrics(currentEditingChapterId);
-          if (cancelled) {
+          if (!isChapterQualityRequestActive(requestId)) {
             return;
           }
 
@@ -242,7 +261,7 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
           setChapterQualityGeneratedAt(nextMetrics ? result.generated_at : null);
           onChapterQualityMetricsChange(nextMetrics);
         } catch (error) {
-          if (cancelled) {
+          if (!isChapterQualityRequestActive(requestId)) {
             return;
           }
 
@@ -252,7 +271,7 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
           setChapterQualityGeneratedAt(null);
           onChapterQualityMetricsChange(null);
         } finally {
-          if (!cancelled) {
+          if (isChapterQualityRequestActive(requestId)) {
             setChapterQualityLoading(false);
           }
         }
@@ -261,7 +280,7 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
       void loadChapterQualityMetrics();
 
       return () => {
-        cancelled = true;
+        chapterQualityRequestIdRef.current += 1;
       };
     }, [currentEditingChapterId, chapterQualityRefreshToken, onChapterQualityMetricsChange]);
 

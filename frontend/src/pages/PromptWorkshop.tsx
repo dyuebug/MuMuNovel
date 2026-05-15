@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Card,
   Row,
@@ -54,6 +54,13 @@ const { TextArea } = Input;
 const { Text, Paragraph } = Typography;
 
 export default function PromptWorkshop() {
+  const mountedRef = useRef(true);
+  const initRequestIdRef = useRef(0);
+  const itemRequestIdRef = useRef(0);
+  const submissionRequestIdRef = useRef(0);
+  const adminSubmissionRequestIdRef = useRef(0);
+  const publishedRequestIdRef = useRef(0);
+  const detailRequestIdRef = useRef(0);
   const [items, setItems] = useState<PromptWorkshopItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [total, setTotal] = useState(0);
@@ -137,14 +144,25 @@ export default function PromptWorkshop() {
     xl: 6,
   };
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   // 加载服务状态和用户信息
   useEffect(() => {
     const init = async () => {
+      const requestId = ++initRequestIdRef.current;
       try {
         const [status, user] = await Promise.all([
           promptWorkshopApi.getStatus(),
           authApi.getCurrentUser().catch(() => null),
         ]);
+        if (!mountedRef.current || initRequestIdRef.current !== requestId) {
+          return;
+        }
         setServiceStatus(status);
         setCurrentUser(user);
       } catch (error) {
@@ -156,6 +174,7 @@ export default function PromptWorkshop() {
 
   // 加载工坊列表
   const loadItems = useCallback(async () => {
+    const requestId = ++itemRequestIdRef.current;
     setLoading(true);
     try {
       const response = await promptWorkshopApi.getItems({
@@ -165,13 +184,18 @@ export default function PromptWorkshop() {
         page: currentPage,
         limit: pageSize,
       });
+      if (!mountedRef.current || itemRequestIdRef.current !== requestId) {
+        return;
+      }
       setItems(response.data?.items || []);
       setTotal(response.data?.total || 0);
     } catch (error) {
       console.error('Failed to load workshop items:', error);
       message.error('加载提示词工坊失败');
     } finally {
-      setLoading(false);
+      if (mountedRef.current && itemRequestIdRef.current === requestId) {
+        setLoading(false);
+      }
     }
   }, [category, searchKeyword, sortBy, currentPage, pageSize]);
 
@@ -181,14 +205,20 @@ export default function PromptWorkshop() {
 
   // 加载我的提交
   const loadMySubmissions = async () => {
+    const requestId = ++submissionRequestIdRef.current;
     setSubmissionsLoading(true);
     try {
       const response = await promptWorkshopApi.getMySubmissions();
+      if (!mountedRef.current || submissionRequestIdRef.current !== requestId) {
+        return;
+      }
       setMySubmissions(response.data?.items || []);
     } catch (error) {
       console.error('Failed to load submissions:', error);
     } finally {
-      setSubmissionsLoading(false);
+      if (mountedRef.current && submissionRequestIdRef.current === requestId) {
+        setSubmissionsLoading(false);
+      }
     }
   };
 
@@ -197,6 +227,9 @@ export default function PromptWorkshop() {
     setImportingId(item.id);
     try {
       await promptWorkshopApi.importItem(item.id);
+      if (!mountedRef.current) {
+        return;
+      }
       message.success(`已导入「${item.name}」到本地写作风格`);
       // 刷新列表更新下载计数
       loadItems();
@@ -204,7 +237,9 @@ export default function PromptWorkshop() {
       console.error('Failed to import item:', error);
       message.error('导入失败');
     } finally {
-      setImportingId(null);
+      if (mountedRef.current) {
+        setImportingId(null);
+      }
     }
   };
 
@@ -292,8 +327,12 @@ export default function PromptWorkshop() {
 
   // 查看详情
   const handleViewDetail = async (item: PromptWorkshopItem) => {
+    const requestId = ++detailRequestIdRef.current;
     try {
       const response = await promptWorkshopApi.getItem(item.id);
+      if (!mountedRef.current || detailRequestIdRef.current !== requestId) {
+        return;
+      }
       setDetailItem(response.data);
       setIsDetailModalOpen(true);
     } catch (error) {
@@ -643,35 +682,47 @@ export default function PromptWorkshop() {
   // 加载管理员待审核列表
   const loadAdminSubmissions = async () => {
     if (!isServerAdmin) return;
-    
+
+    const requestId = ++adminSubmissionRequestIdRef.current;
     setAdminSubmissionsLoading(true);
     try {
       const [subsResponse, statsResponse] = await Promise.all([
         promptWorkshopApi.adminGetSubmissions({ status: 'pending', limit: 50 }),
         promptWorkshopApi.adminGetStats(),
       ]);
+      if (!mountedRef.current || adminSubmissionRequestIdRef.current !== requestId) {
+        return;
+      }
       setAdminSubmissions(subsResponse.data?.items || []);
       setAdminPendingCount(subsResponse.data?.pending_count || 0);
       setAdminStats(statsResponse.data || null);
     } catch (error) {
       console.error('Failed to load admin submissions:', error);
     } finally {
-      setAdminSubmissionsLoading(false);
+      if (mountedRef.current && adminSubmissionRequestIdRef.current === requestId) {
+        setAdminSubmissionsLoading(false);
+      }
     }
   };
 
   // 加载已发布的提示词列表（管理员用）
   const loadPublishedItems = async () => {
     if (!isServerAdmin) return;
-    
+
+    const requestId = ++publishedRequestIdRef.current;
     setPublishedLoading(true);
     try {
       const response = await promptWorkshopApi.getItems({ limit: 100 });
+      if (!mountedRef.current || publishedRequestIdRef.current !== requestId) {
+        return;
+      }
       setPublishedItems(response.data?.items || []);
     } catch (error) {
       console.error('Failed to load published items:', error);
     } finally {
-      setPublishedLoading(false);
+      if (mountedRef.current && publishedRequestIdRef.current === requestId) {
+        setPublishedLoading(false);
+      }
     }
   };
 

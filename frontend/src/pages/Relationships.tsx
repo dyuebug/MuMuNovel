@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState, useEffect, useMemo, useCallback } from 'react';
+import { Suspense, lazy, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, Tag, Button, Space, message, Modal, Form, Select, Slider, Input, Tabs, AutoComplete, theme } from 'antd';
 import { PlusOutlined, ApartmentOutlined, UserOutlined, EditOutlined } from '@ant-design/icons';
@@ -56,6 +56,8 @@ export default function Relationships() {
   const [pageSize, setPageSize] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [activeTabKey, setActiveTabKey] = useState('list');
+  const activeProjectIdRef = useRef<string | null>(projectId ?? null);
+  const relationshipRequestIdRef = useRef(0);
   const relationshipListReady = useDeferredMount(activeTabKey === 'list');
 
   useEffect(() => {
@@ -67,32 +69,47 @@ export default function Relationships() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  useEffect(() => {
+    activeProjectIdRef.current = projectId ?? null;
+  }, [projectId]);
+
   const loadData = useCallback(async () => {
     if (!projectId) {
       return;
     }
 
+    const requestId = ++relationshipRequestIdRef.current;
+    const targetProjectId = projectId;
     setLoading(true);
     try {
       const { currentProject: cachedProject, characters: cachedCharacters } = useStore.getState();
       const shouldRefreshCharacters = cachedProject?.id !== projectId || cachedCharacters.length === 0;
       const charactersPromise = shouldRefreshCharacters
-        ? refreshCharacters(projectId)
+        ? refreshCharacters(projectId).catch((error) => {
+          console.error('刷新角色缓存失败:', error);
+          return cachedCharacters;
+        })
         : Promise.resolve(cachedCharacters);
 
       const [relsRes, typesRes] = await Promise.all([
         axios.get(`/api/relationships/project/${projectId}`),
         axios.get('/api/relationships/types'),
       ]);
-      await charactersPromise;
+
+      if (activeProjectIdRef.current !== targetProjectId || relationshipRequestIdRef.current !== requestId) {
+        return;
+      }
 
       setRelationships(relsRes.data);
       setRelationshipTypes(typesRes.data);
+      void charactersPromise;
     } catch (error) {
       message.error('加载数据失败');
       console.error(error);
     } finally {
-      setLoading(false);
+      if (relationshipRequestIdRef.current === requestId) {
+        setLoading(false);
+      }
     }
   }, [projectId, refreshCharacters]);
 

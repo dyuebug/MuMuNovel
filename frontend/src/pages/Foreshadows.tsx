@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState, useEffect, useCallback, useRef } from 'react';
+import { Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   Card, Button, Tag, Space, Modal, Form, Input, Select,
@@ -12,13 +12,14 @@ import {
   BulbOutlined, EyeOutlined, FlagOutlined, WarningOutlined,
   ClockCircleOutlined, MoreOutlined, ReloadOutlined, InfoCircleOutlined
 } from '@ant-design/icons';
-import { foreshadowApi, chapterApi } from '../services/modularApi';
-import { characterApi } from '../services/modularApi';
+import { foreshadowApi } from '../services/modularApi';
 import type {
   Foreshadow, ForeshadowCreate, ForeshadowUpdate, ForeshadowStats,
   ForeshadowStatus, ForeshadowCategory, Chapter, Character
 } from '../types';
 import { useDeferredMount } from '../hooks/useDeferredMount';
+import { useStore } from '../store';
+import { isProjectCollectionFresh, loadProjectCharacters, loadProjectChapters } from '../store/hooks';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -47,6 +48,8 @@ const CATEGORY_CONFIG: Record<string, { label: string; color: string }> = {
 
 export default function Foreshadows() {
   const { projectId } = useParams<{ projectId: string }>();
+  const storeChapters = useStore((state) => state.chapters);
+  const storeCharacters = useStore((state) => state.characters);
   const [loading, setLoading] = useState(false);
   const [foreshadows, setForeshadows] = useState<Foreshadow[]>([]);
   const [stats, setStats] = useState<ForeshadowStats | null>(null);
@@ -76,14 +79,40 @@ export default function Foreshadows() {
   
   // 表格容器引用，用于计算滚动高度
   const tableContainerRef = useRef<HTMLDivElement>(null);
+  const loadedStatsContextRef = useRef<string | null>(null);
+  const projectIdRef = useRef<string | null>(projectId ?? null);
+  const foreshadowRequestIdRef = useRef(0);
+  const chaptersRequestIdRef = useRef(0);
+  const charactersRequestIdRef = useRef(0);
+  const statsRequestIdRef = useRef(0);
   const [tableScrollY, setTableScrollY] = useState<number>(400);
   const { token } = theme.useToken();
   const foreshadowsTableReady = useDeferredMount();
+  const chaptersWithContent = useMemo(
+    () => chapters.filter((chapter) => chapter.content && chapter.content.trim() !== ''),
+    [chapters],
+  );
+  const currentMaxChapter = useMemo(
+    () => (chaptersWithContent.length > 0
+      ? Math.max(...chaptersWithContent.map((chapter) => chapter.chapter_number))
+      : undefined),
+    [chaptersWithContent],
+  );
+  const statsContextKey = useMemo(
+    () => `${projectId ?? ''}:${currentMaxChapter ?? 'none'}`,
+    [currentMaxChapter, projectId],
+  );
+
+  useEffect(() => {
+    projectIdRef.current = projectId ?? null;
+  }, [projectId]);
 
   // 加载伏笔列表
   const loadForeshadows = useCallback(async () => {
     if (!projectId) return;
-    
+
+    const requestId = ++foreshadowRequestIdRef.current;
+    const targetProjectId = projectId;
     setLoading(true);
     try {
       const response = await foreshadowApi.getProjectForeshadows(projectId, {
@@ -93,24 +122,33 @@ export default function Foreshadows() {
         page: currentPage,
         limit: pageSize,
       });
-      
+
+      if (projectIdRef.current !== targetProjectId || foreshadowRequestIdRef.current !== requestId) {
+        return;
+      }
+
       setForeshadows(response.items);
       setTotal(response.total);
-      if (response.stats) {
-        setStats(response.stats);
-      }
     } catch (error) {
       console.error('加载伏笔列表失败:', error);
     } finally {
-      setLoading(false);
+      if (foreshadowRequestIdRef.current === requestId) {
+        setLoading(false);
+      }
     }
   }, [projectId, statusFilter, categoryFilter, sourceFilter, currentPage, pageSize]);
 
   // 加载章节列表（用于选择）
   const loadChapters = useCallback(async () => {
     if (!projectId) return;
+
+    const requestId = ++chaptersRequestIdRef.current;
+    const targetProjectId = projectId;
     try {
-      const chaptersData = await chapterApi.getChapters(projectId);
+      const chaptersData = await loadProjectChapters(projectId, { silent: true });
+      if (projectIdRef.current !== targetProjectId || chaptersRequestIdRef.current !== requestId) {
+        return;
+      }
       setChapters(chaptersData);
     } catch (error) {
       console.error('加载章节列表失败:', error);
@@ -120,8 +158,14 @@ export default function Foreshadows() {
   // 加载角色列表（用于关联角色）
   const loadCharacters = useCallback(async () => {
     if (!projectId) return;
+
+    const requestId = ++charactersRequestIdRef.current;
+    const targetProjectId = projectId;
     try {
-      const charactersData = await characterApi.getCharacters(projectId);
+      const charactersData = await loadProjectCharacters(projectId, { silent: true });
+      if (projectIdRef.current !== targetProjectId || charactersRequestIdRef.current !== requestId) {
+        return;
+      }
       setCharacters(charactersData);
     } catch (error) {
       console.error('加载角色列表失败:', error);
@@ -131,24 +175,54 @@ export default function Foreshadows() {
   // 加载统计
   const loadStats = useCallback(async () => {
     if (!projectId) return;
+
+    const requestId = ++statsRequestIdRef.current;
+    const targetProjectId = projectId;
+    const targetStatsContextKey = statsContextKey;
     try {
-      // 获取当前最大章节号（只计算有内容的章节，与表格显示逻辑保持一致）
-      const chaptersWithContent = chapters.filter(c => c.content);
-      const maxChapter = chaptersWithContent.length > 0
-        ? Math.max(...chaptersWithContent.map(c => c.chapter_number))
-        : undefined;
-      const statsData = await foreshadowApi.getForeshadowStats(projectId, maxChapter);
+      const statsData = await foreshadowApi.getForeshadowStats(projectId, currentMaxChapter);
+      if (projectIdRef.current !== targetProjectId || statsRequestIdRef.current !== requestId) {
+        return;
+      }
       setStats(statsData);
+      loadedStatsContextRef.current = targetStatsContextKey;
     } catch (error) {
       console.error('加载统计失败:', error);
     }
-  }, [projectId, chapters]);
+  }, [currentMaxChapter, projectId, statsContextKey]);
 
   useEffect(() => {
-    loadForeshadows();
-    loadChapters();
-    loadCharacters();
-  }, [loadForeshadows, loadChapters, loadCharacters]);
+    if (!projectId) {
+      return;
+    }
+
+    loadedStatsContextRef.current = null;
+    setStats(null);
+    setForeshadows([]);
+    setTotal(0);
+
+    const cachedProjectChapters = storeChapters.filter((chapter) => chapter.project_id === projectId);
+    setChapters(cachedProjectChapters);
+
+    const cachedProjectCharacters = storeCharacters.filter((character) => character.project_id === projectId);
+    setCharacters(cachedProjectCharacters);
+  }, [projectId, storeChapters, storeCharacters]);
+
+  useEffect(() => {
+    void loadForeshadows();
+
+    if (!projectId) {
+      return;
+    }
+
+    if (!isProjectCollectionFresh('chapters', projectId) || chapters.length === 0) {
+      void loadChapters();
+    }
+
+    if (!isProjectCollectionFresh('characters', projectId) || characters.length === 0) {
+      void loadCharacters();
+    }
+  }, [chapters.length, characters.length, loadCharacters, loadChapters, loadForeshadows, projectId]);
 
   // 计算表格滚动高度
   useEffect(() => {
@@ -173,10 +247,14 @@ export default function Foreshadows() {
   }, [stats]); // stats 变化时重新计算（因为统计卡片高度可能变化）
 
   useEffect(() => {
-    if (chapters.length > 0) {
-      loadStats();
+    if (!projectId) {
+      return;
     }
-  }, [chapters, loadStats]);
+
+    if (loadedStatsContextRef.current !== statsContextKey) {
+      void loadStats();
+    }
+  }, [loadStats, projectId, statsContextKey]);
 
   // 创建/编辑伏笔
   const handleSave = async (values: ForeshadowCreate | ForeshadowUpdate) => {
@@ -194,7 +272,8 @@ export default function Foreshadows() {
       setEditModalVisible(false);
       form.resetFields();
       setCurrentForeshadow(null);
-      loadForeshadows();
+      void loadForeshadows();
+      void loadStats();
     } catch (error) {
       console.error('保存伏笔失败:', error);
     }
@@ -205,7 +284,8 @@ export default function Foreshadows() {
     try {
       await foreshadowApi.deleteForeshadow(id);
       message.success('伏笔删除成功');
-      loadForeshadows();
+      void loadForeshadows();
+      void loadStats();
     } catch (error) {
       console.error('删除伏笔失败:', error);
     }
@@ -228,7 +308,8 @@ export default function Foreshadows() {
       setPlantModalVisible(false);
       plantForm.resetFields();
       setCurrentForeshadow(null);
-      loadForeshadows();
+      void loadForeshadows();
+      void loadStats();
     } catch (error) {
       console.error('标记埋入失败:', error);
     }
@@ -252,7 +333,8 @@ export default function Foreshadows() {
       setResolveModalVisible(false);
       resolveForm.resetFields();
       setCurrentForeshadow(null);
-      loadForeshadows();
+      void loadForeshadows();
+      void loadStats();
     } catch (error) {
       console.error('标记回收失败:', error);
     }
@@ -263,7 +345,8 @@ export default function Foreshadows() {
     try {
       await foreshadowApi.abandonForeshadow(id);
       message.success('伏笔已标记为废弃');
-      loadForeshadows();
+      void loadForeshadows();
+      void loadStats();
     } catch (error) {
       console.error('标记废弃失败:', error);
     }
@@ -280,7 +363,8 @@ export default function Foreshadows() {
       });
       message.success(`同步完成: 新增${result.synced_count}个伏笔, 跳过${result.skipped_count}个`);
       setSyncModalVisible(false);
-      loadForeshadows();
+      void loadForeshadows();
+      void loadStats();
     } catch (error) {
       console.error('同步失败:', error);
     } finally {
@@ -610,7 +694,10 @@ export default function Foreshadows() {
           <Tooltip title="刷新列表">
             <Button
               icon={<ReloadOutlined spin={loading} />}
-              onClick={loadForeshadows}
+              onClick={() => {
+                void loadForeshadows();
+                void loadStats();
+              }}
             />
           </Tooltip>
           <Dropdown

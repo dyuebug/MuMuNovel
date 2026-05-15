@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -291,6 +291,19 @@ export default function SettingsPage() {
   const [presetForm] = Form.useForm<PresetFormValues>();
   const [snapshotForm] = Form.useForm<SnapshotFormValues>();
   const { token } = theme.useToken();
+  const mountedRef = useRef(true);
+  const settingsRequestIdRef = useRef(0);
+  const presetRequestIdRef = useRef(0);
+  const storedApiKeyRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      settingsRequestIdRef.current += 1;
+      presetRequestIdRef.current += 1;
+      storedApiKeyRequestIdRef.current += 1;
+    };
+  }, []);
   const isMobile = window.innerWidth <= 768;
 
   const [loadingSettings, setLoadingSettings] = useState(true);
@@ -335,22 +348,35 @@ export default function SettingsPage() {
   );
 
   const loadPresets = useCallback(async () => {
+    const requestId = ++presetRequestIdRef.current;
     try {
       setLoadingPresets(true);
       const response = await settingsApi.getPresets();
+      if (!mountedRef.current || presetRequestIdRef.current !== requestId) {
+        return;
+      }
       setPresets(response.presets || []);
     } catch (error) {
+      if (!mountedRef.current || presetRequestIdRef.current !== requestId) {
+        return;
+      }
       console.error('load presets failed', error);
       message.error('加载预设失败');
     } finally {
-      setLoadingPresets(false);
+      if (mountedRef.current && presetRequestIdRef.current === requestId) {
+        setLoadingPresets(false);
+      }
     }
   }, []);
 
   const loadSettings = useCallback(async () => {
+    const requestId = ++settingsRequestIdRef.current;
     try {
       setLoadingSettings(true);
       const response = await settingsApi.getSettings();
+      if (!mountedRef.current || settingsRequestIdRef.current !== requestId) {
+        return;
+      }
       const normalizedResponse = {
         ...response,
         llm_model: String(response.llm_model || '').trim(),
@@ -367,10 +393,15 @@ export default function SettingsPage() {
       setWebResearchAlert(null);
       setFunctionCallingAlert(null);
     } catch (error) {
+      if (!mountedRef.current || settingsRequestIdRef.current !== requestId) {
+        return;
+      }
       console.error('load settings failed', error);
       message.error('加载设置失败');
     } finally {
-      setLoadingSettings(false);
+      if (mountedRef.current && settingsRequestIdRef.current === requestId) {
+        setLoadingSettings(false);
+      }
     }
   }, [settingsForm, webResearchForm]);
 
@@ -391,9 +422,13 @@ export default function SettingsPage() {
       return;
     }
 
+    const requestId = ++storedApiKeyRequestIdRef.current;
     try {
       setLoadingStoredApiKey(true);
       const response = await settingsApi.getStoredApiKey();
+      if (!mountedRef.current || storedApiKeyRequestIdRef.current !== requestId) {
+        return;
+      }
       if (!response.has_api_key || !String(response.api_key || '').trim()) {
         message.warning('没有读取到已保存的 API Key');
         return;
@@ -402,10 +437,15 @@ export default function SettingsPage() {
       setClearStoredApiKey(false);
       setShowStoredApiKey(true);
     } catch (error) {
+      if (!mountedRef.current || storedApiKeyRequestIdRef.current !== requestId) {
+        return;
+      }
       console.error('load stored api key failed', error);
       message.error('读取已保存 API Key 失败');
     } finally {
-      setLoadingStoredApiKey(false);
+      if (mountedRef.current && storedApiKeyRequestIdRef.current === requestId) {
+        setLoadingStoredApiKey(false);
+      }
     }
   }, [hasStoredApiKey, showStoredApiKey]);
 

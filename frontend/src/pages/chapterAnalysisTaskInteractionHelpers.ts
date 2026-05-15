@@ -51,7 +51,9 @@ export async function refreshChapterAnalysisTaskStatus({
     return;
   }
 
-  const task = await chapterApi.getChapterAnalysisStatus(chapterId, projectId);
+  const task = await chapterApi.getChapterAnalysisStatus(chapterId, projectId, {
+    syncBackgroundTaskStore: false,
+  });
   if ((isPageActiveRef && !isPageActiveRef.current) || currentProjectIdRef.current !== projectId) {
     return;
   }

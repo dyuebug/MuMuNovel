@@ -173,6 +173,8 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
   } = contentProps;
 
   const contentTextAreaRef = useRef<TextAreaRef>(null);
+  const mountedRef = useRef(false);
+  const selectionTimerRef = useRef<number | null>(null);
   const currentEditingChapterId = currentEditingChapter?.id ?? null;
   const [partialRegenerateToolbarVisible, setPartialRegenerateToolbarVisible] = useState(false);
   const [partialRegenerateToolbarPosition, setPartialRegenerateToolbarPosition] = useState<ToolbarPosition>({ top: 0, left: 0 });
@@ -180,6 +182,22 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
   const [selectionStartPosition, setSelectionStartPosition] = useState(0);
   const [selectionEndPosition, setSelectionEndPosition] = useState(0);
   const [partialRegenerateModalVisible, setPartialRegenerateModalVisible] = useState(false);
+
+  const clearSelectionTimer = useCallback(() => {
+    if (selectionTimerRef.current !== null) {
+      window.clearTimeout(selectionTimerRef.current);
+      selectionTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+      clearSelectionTimer();
+    };
+  }, [clearSelectionTimer]);
 
   useLocalRenderDiagnostics('ChapterEditorModalContent', () => ({
     chapterId: currentEditingChapterId,
@@ -247,8 +265,19 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
     setPartialRegenerateToolbarVisible(true);
   }, []);
 
+  const scheduleHandleTextSelection = useCallback(() => {
+    clearSelectionTimer();
+    selectionTimerRef.current = window.setTimeout(() => {
+      selectionTimerRef.current = null;
+      if (!mountedRef.current) {
+        return;
+      }
+      handleTextSelection();
+    }, 50);
+  }, [clearSelectionTimer, handleTextSelection]);
+
   const updateToolbarPosition = useCallback(() => {
-    if (!partialRegenerateToolbarVisible || !selectedTextForRegenerate) {
+    if (!mountedRef.current || !partialRegenerateToolbarVisible || !selectedTextForRegenerate) {
       return;
     }
 
@@ -267,10 +296,10 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
     }
 
     const handleMouseUp = () => {
-      window.setTimeout(handleTextSelection, 50);
+      scheduleHandleTextSelection();
     };
     const handleKeyUp = () => {
-      window.setTimeout(handleTextSelection, 50);
+      scheduleHandleTextSelection();
     };
     const handleScroll = () => {
       updateToolbarPosition();
@@ -286,6 +315,7 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
     window.addEventListener('resize', handleScroll);
 
     return () => {
+      clearSelectionTimer();
       textArea.removeEventListener('mouseup', handleMouseUp);
       textArea.removeEventListener('keyup', handleKeyUp);
       textArea.removeEventListener('scroll', handleScroll);
@@ -294,7 +324,7 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
       }
       window.removeEventListener('resize', handleScroll);
     };
-  }, [handleTextSelection, updateToolbarPosition]);
+  }, [clearSelectionTimer, scheduleHandleTextSelection, updateToolbarPosition]);
 
   useEffect(() => {
     if (!partialRegenerateToolbarVisible) {
@@ -324,12 +354,13 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
   }, [partialRegenerateToolbarVisible]);
 
   useEffect(() => {
+    clearSelectionTimer();
     setPartialRegenerateToolbarVisible(false);
     setPartialRegenerateModalVisible(false);
     setSelectedTextForRegenerate('');
     setSelectionStartPosition(0);
     setSelectionEndPosition(0);
-  }, [currentEditingChapterId]);
+  }, [clearSelectionTimer, currentEditingChapterId]);
 
   const selectedRegenerateCount = selectedTextForRegenerate.trim().length;
   const hasPartialSelection = selectedRegenerateCount > 0;

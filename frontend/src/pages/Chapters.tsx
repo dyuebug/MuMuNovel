@@ -1,10 +1,12 @@
 import { Suspense, lazy, useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 
 import { Button, Modal, Form, message, Space, Tag } from 'antd';
 
 import { DownloadOutlined, RocketOutlined, BookOutlined, PlusOutlined } from '@ant-design/icons';
 
 import { useStore } from '../store';
+import { useBackgroundTaskStore } from '../store/backgroundTasks';
 import { useChapterSync } from '../store/hooks';
 import type { Chapter, ChapterUpdate, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterLatestQualityMetrics, ChapterQualityMetrics, ChapterQualityMetricsSummary, ChapterQualityProfileSummary, ActiveStoryRepairPayload, CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
 import type { ChapterBatchGenerateModalProps } from '../components/ChapterBatchGenerateModal';
@@ -408,9 +410,130 @@ const buildBatchStoryCreationDraftStorageKey = (projectId: string): string => (
   `${projectId}::batch`
 );
 
+const CHAPTER_BATCH_TASK_REFRESH_KEY_PREFIX = 'background-task-refresh:chapters-batch:';
+const CHAPTER_SINGLE_TASK_REFRESH_KEY_PREFIX = 'background-task-refresh:chapters-single:';
+const COMPLETED_TASK_REFRESH_RETRY_DELAY_MS = 2000;
+
+const hasChapterBatchTaskRefreshBeenHandled = (taskId: string): boolean => {
+  try {
+    return sessionStorage.getItem(`${CHAPTER_BATCH_TASK_REFRESH_KEY_PREFIX}${taskId}`) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const markChapterBatchTaskRefreshHandled = (taskId: string) => {
+  try {
+    sessionStorage.setItem(`${CHAPTER_BATCH_TASK_REFRESH_KEY_PREFIX}${taskId}`, '1');
+  } catch {
+    // ignore sessionStorage failures
+  }
+};
+
+const hasChapterSingleTaskRefreshBeenHandled = (taskId: string): boolean => {
+  try {
+    return sessionStorage.getItem(`${CHAPTER_SINGLE_TASK_REFRESH_KEY_PREFIX}${taskId}`) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const markChapterSingleTaskRefreshHandled = (taskId: string) => {
+  try {
+    sessionStorage.setItem(`${CHAPTER_SINGLE_TASK_REFRESH_KEY_PREFIX}${taskId}`, '1');
+  } catch {
+    // ignore sessionStorage failures
+  }
+};
+
+const createRefreshTaskLock = () => {
+  const inFlightTaskIds = new Set<string>();
+
+  return {
+    acquire(taskId: string) {
+      if (!taskId || inFlightTaskIds.has(taskId)) {
+        return false;
+      }
+      inFlightTaskIds.add(taskId);
+      return true;
+    },
+    release(taskId: string) {
+      if (!taskId) return;
+      inFlightTaskIds.delete(taskId);
+    },
+  };
+};
+
+const selectLatestCompletedBatchRefreshTaskSignature = (
+  tasks: Record<string, ReturnType<typeof useBackgroundTaskStore.getState>['tasks'][string]>,
+  projectId?: string | null,
+): string => {
+  if (!projectId) {
+    return '';
+  }
+
+  const latestTask = Object.values(tasks)
+    .filter(
+      (task) => task.projectId === projectId
+        && task.taskType === 'chapters_batch_generate'
+        && task.status === 'completed'
+        && !hasChapterBatchTaskRefreshBeenHandled(task.taskId),
+    )
+    .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
+
+  if (!latestTask) {
+    return '';
+  }
+
+  return `${latestTask.taskId}:${latestTask.completedAt ?? latestTask.updatedAt}`;
+};
+
+const selectLatestCompletedSingleRefreshTaskSignature = (
+  tasks: Record<string, ReturnType<typeof useBackgroundTaskStore.getState>['tasks'][string]>,
+  projectId?: string | null,
+): string => {
+  if (!projectId) {
+    return '';
+  }
+
+  const latestTask = Object.values(tasks)
+    .filter(
+      (task) => task.projectId === projectId
+        && task.taskType === 'chapter_single_generate'
+        && task.status === 'completed'
+        && !hasChapterSingleTaskRefreshBeenHandled(task.taskId),
+    )
+    .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
+
+  if (!latestTask) {
+    return '';
+  }
+
+  const chapterId = typeof latestTask.checkpoint?.chapter_id === 'string'
+    ? latestTask.checkpoint.chapter_id
+    : '';
+
+  return `${latestTask.taskId}:${chapterId}:${latestTask.completedAt ?? latestTask.updatedAt}`;
+};
+
 export default function Chapters() {
+  const location = useLocation();
 
   const currentProject = useStore((state) => state.currentProject);
+  const completedBatchRefreshLockRef = useRef(createRefreshTaskLock());
+  const completedSingleRefreshLockRef = useRef(createRefreshTaskLock());
+  const latestCompletedBatchRefreshTaskSignature = useBackgroundTaskStore(
+    useCallback(
+      (state) => selectLatestCompletedBatchRefreshTaskSignature(state.tasks, currentProject?.id),
+      [currentProject?.id],
+    ),
+  );
+  const latestCompletedSingleRefreshTaskSignature = useBackgroundTaskStore(
+    useCallback(
+      (state) => selectLatestCompletedSingleRefreshTaskSignature(state.tasks, currentProject?.id),
+      [currentProject?.id],
+    ),
+  );
   const projectDefaultCreativeMode = currentProject?.default_creative_mode;
   const projectDefaultStoryFocus = currentProject?.default_story_focus;
   const projectDefaultPlotStage = currentProject?.default_plot_stage;
@@ -610,6 +733,7 @@ export default function Chapters() {
   const [batchGenerateVisible, setBatchGenerateVisible] = useState(false);
   const [batchGenerating, setBatchGenerating] = useState(false);
   const [batchTaskId, setBatchTaskId] = useState<string | null>(null);
+  const batchTaskIdRef = useRef<string | null>(null);
   const [batchForm] = Form.useForm();
   const [manualCreateForm] = Form.useForm();
   const batchStartChapterNumber = Form.useWatch('startChapterNumber', batchForm) as number | undefined;
@@ -622,6 +746,8 @@ export default function Chapters() {
     completed: number;
 
     current_chapter_number: number | null;
+
+    progress_percent?: number;
 
     checkpoint?: BatchGenerationCheckpoint | null;
 
@@ -776,35 +902,37 @@ export default function Chapters() {
   ]);
 
   useEffect(() => {
-  let cancelled = false;
+    singleStoryPresetRequestIdRef.current += 1;
+    const requestId = singleStoryPresetRequestIdRef.current;
 
-  if (!isEditorOpen) {
+    if (!isEditorOpen) {
+      return () => {
+        singleStoryPresetRequestIdRef.current += 1;
+      };
+    }
+
+    void loadSingleStoryPresetState()
+      .then((nextState) => {
+        if (!isPageActiveRef.current || singleStoryPresetRequestIdRef.current !== requestId || !isEditorOpenRef.current) {
+          return;
+        }
+
+        setSingleStoryPresetState(nextState);
+      })
+      .catch((error) => {
+        if (isPageActiveRef.current && singleStoryPresetRequestIdRef.current === requestId) {
+          console.error('Failed to load single-story preset state.', error);
+        }
+      });
+
     return () => {
-      cancelled = true;
+      singleStoryPresetRequestIdRef.current += 1;
     };
-  }
-
-  void loadSingleStoryPresetState()
-    .then((nextState) => {
-      if (cancelled) {
-        return;
-      }
-
-      setSingleStoryPresetState(nextState);
-    })
-    .catch((error) => {
-      if (!cancelled) {
-        console.error('Failed to load single-story preset state.', error);
-      }
-    });
-
-  return () => {
-    cancelled = true;
-  };
-}, [isEditorOpen, loadSingleStoryPresetState]);
+  }, [isEditorOpen, loadSingleStoryPresetState]);
 
 useEffect(() => {
-  let cancelled = false;
+  batchStoryPresetRequestIdRef.current += 1;
+  const requestId = batchStoryPresetRequestIdRef.current;
 
   void Promise.all([
     import('../utils/creationPresetsBatch'),
@@ -814,7 +942,7 @@ useEffect(() => {
     buildBatchSystemStoryBeatPlanner,
     buildBatchSystemStoryCreationBriefFromSummary,
   }, activeBatchCreationPreset]) => {
-    if (cancelled) {
+    if (!isPageActiveRef.current || batchStoryPresetRequestIdRef.current !== requestId) {
       return;
     }
 
@@ -854,10 +982,14 @@ useEffect(() => {
         ? previousOutline
         : nextBatchSuggestedStorySceneOutline
     ));
+  }).catch((error) => {
+    if (isPageActiveRef.current && batchStoryPresetRequestIdRef.current === requestId) {
+      console.error('Failed to load batch-story preset state.', error);
+    }
   });
 
   return () => {
-    cancelled = true;
+    batchStoryPresetRequestIdRef.current += 1;
   };
 }, [
   batchProgress?.quality_metrics_summary,
@@ -982,7 +1114,8 @@ const {
 } = batchStoryCreationDerivedState;
 
 useEffect(() => {
-    let cancelled = false;
+    singleStoryRestoreRequestIdRef.current += 1;
+    const requestId = singleStoryRestoreRequestIdRef.current;
 
     void restoreSingleStoryCreationPersistenceWorkflow({
       currentChapterId: currentEditingChapter?.id,
@@ -1000,7 +1133,11 @@ useEffect(() => {
       projectDefaultQualityNotes,
       totalChapters: knownStructureChapterCount,
       inferPlotStage,
-      isCancelled: () => cancelled,
+      isCancelled: () => (
+        !isPageActiveRef.current
+        || singleStoryRestoreRequestIdRef.current !== requestId
+        || editingChapterIdRef.current !== (currentEditingChapter?.id ?? null)
+      ),
       setAutoBriefRef: (value) => { singleStoryCreationAutoBriefRef.current = value; },
       setBeatPlannerAutoRef: (value) => { singleStoryBeatPlannerAutoRef.current = value; },
       setSceneOutlineAutoRef: (value) => { singleStorySceneOutlineAutoRef.current = value; },
@@ -1017,7 +1154,7 @@ useEffect(() => {
     });
 
     return () => {
-      cancelled = true;
+      singleStoryRestoreRequestIdRef.current += 1;
     };
   }, [
     currentEditingChapter?.chapter_number,
@@ -1036,7 +1173,8 @@ useEffect(() => {
   ]);
 
   useEffect(() => {
-    let cancelled = false;
+    batchStoryRestoreRequestIdRef.current += 1;
+    const requestId = batchStoryRestoreRequestIdRef.current;
 
     void restoreBatchStoryCreationPersistenceWorkflow({
       storageKey: batchStoryCreationDraftStorageKey,
@@ -1050,7 +1188,10 @@ useEffect(() => {
       projectDefaultPlotStage,
       projectDefaultQualityPreset,
       projectDefaultQualityNotes,
-      isCancelled: () => cancelled,
+      isCancelled: () => (
+        !isPageActiveRef.current
+        || batchStoryRestoreRequestIdRef.current !== requestId
+      ),
       setAutoBriefRef: (value) => { batchStoryCreationAutoBriefRef.current = value; },
       setBeatPlannerAutoRef: (value) => { batchStoryBeatPlannerAutoRef.current = value; },
       setSceneOutlineAutoRef: (value) => { batchStorySceneOutlineAutoRef.current = value; },
@@ -1066,7 +1207,7 @@ useEffect(() => {
     });
 
     return () => {
-      cancelled = true;
+      batchStoryRestoreRequestIdRef.current += 1;
     };
   }, [
     batchDefaultStoryCreationBrief,
@@ -1280,8 +1421,17 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
   }, [batchDefaultStoryCreationBrief, batchSuggestedStorySceneOutline, batchSystemStoryBeatPlanner]);
 
   const batchPollingIntervalRef = useRef<number | null>(null);
+  const batchCloseTimeoutRef = useRef<number | null>(null);
 
   const batchTaskMetaRef = useRef<Record<string, BatchTaskMeta>>({});
+  const singleStoryPresetRequestIdRef = useRef(0);
+  const batchStoryPresetRequestIdRef = useRef(0);
+  const singleStoryRestoreRequestIdRef = useRef(0);
+  const batchStoryRestoreRequestIdRef = useRef(0);
+  const completedBatchRefreshRetryTimerRef = useRef<number | null>(null);
+  const completedSingleRefreshRetryTimerRef = useRef<number | null>(null);
+  const [completedBatchRefreshRetryTick, setCompletedBatchRefreshRetryTick] = useState(0);
+  const [completedSingleRefreshRetryTick, setCompletedSingleRefreshRetryTick] = useState(0);
 
 
 
@@ -1316,6 +1466,32 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
     isEditorOpenRef.current = isEditorOpen;
 
   }, [isEditorOpen]);
+
+  useEffect(() => {
+    batchTaskIdRef.current = batchTaskId;
+  }, [batchTaskId]);
+
+  const scheduleCompletedBatchRefreshRetry = useCallback(() => {
+    if (completedBatchRefreshRetryTimerRef.current) {
+      clearTimeout(completedBatchRefreshRetryTimerRef.current);
+    }
+
+    completedBatchRefreshRetryTimerRef.current = window.setTimeout(() => {
+      completedBatchRefreshRetryTimerRef.current = null;
+      setCompletedBatchRefreshRetryTick((value) => value + 1);
+    }, COMPLETED_TASK_REFRESH_RETRY_DELAY_MS);
+  }, []);
+
+  const scheduleCompletedSingleRefreshRetry = useCallback(() => {
+    if (completedSingleRefreshRetryTimerRef.current) {
+      clearTimeout(completedSingleRefreshRetryTimerRef.current);
+    }
+
+    completedSingleRefreshRetryTimerRef.current = window.setTimeout(() => {
+      completedSingleRefreshRetryTimerRef.current = null;
+      setCompletedSingleRefreshRetryTick((value) => value + 1);
+    }, COMPLETED_TASK_REFRESH_RETRY_DELAY_MS);
+  }, []);
 
 
 
@@ -1392,6 +1568,18 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
     return () => {
       isPageActiveRef.current = false;
+      if (batchCloseTimeoutRef.current) {
+        clearTimeout(batchCloseTimeoutRef.current);
+        batchCloseTimeoutRef.current = null;
+      }
+      if (completedBatchRefreshRetryTimerRef.current) {
+        clearTimeout(completedBatchRefreshRetryTimerRef.current);
+        completedBatchRefreshRetryTimerRef.current = null;
+      }
+      if (completedSingleRefreshRetryTimerRef.current) {
+        clearTimeout(completedSingleRefreshRetryTimerRef.current);
+        completedSingleRefreshRetryTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -1418,12 +1606,16 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
   useEffect(() => {
     const currentBatchPollingIntervalId = batchPollingIntervalRef.current;
+    const currentBatchCloseTimeoutId = batchCloseTimeoutRef.current;
 
     return () => {
       stopAnalysisPolling();
 
       if (currentBatchPollingIntervalId) {
         clearInterval(currentBatchPollingIntervalId);
+      }
+      if (currentBatchCloseTimeoutId) {
+        clearTimeout(currentBatchCloseTimeoutId);
       }
     };
   }, [stopAnalysisPolling]);
@@ -1470,6 +1662,8 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
   const reloadCurrentProject = useCallback(async () => {
     await reloadChapterProjectWorkflow({
       projectId: currentProject?.id,
+      isPageActiveRef,
+      currentProjectIdRef,
       setCurrentProject,
     });
   }, [currentProject?.id, setCurrentProject]);
@@ -1477,6 +1671,8 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
     closeAnalysisWorkflow({
       analysisChapterId,
       projectId: currentProject?.id,
+      isPageActiveRef,
+      currentProjectIdRef,
       setAnalysisVisible,
       refreshChapters,
       reloadCurrentProject,
@@ -1490,6 +1686,15 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
     refreshChapters,
     reloadCurrentProject,
   ]);
+
+  useEffect(() => {
+    if (!analysisVisible && !analysisChapterId) {
+      return;
+    }
+
+    setAnalysisVisible(false);
+    setAnalysisChapterId(null);
+  }, [location.pathname]);
   const triggerDeferredBatchAnalysis = async (
 
     startChapterNumber: number,
@@ -1560,6 +1765,148 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       normalizeBatchGenerationCheckpoint,
     });
   };
+
+  useEffect(() => {
+    if (!currentProject?.id || batchGenerating || batchTaskId) {
+      return;
+    }
+
+    if (!latestCompletedBatchRefreshTaskSignature) {
+      return;
+    }
+
+    const [taskId] = latestCompletedBatchRefreshTaskSignature.split(':');
+    if (!taskId) {
+      return;
+    }
+    if (!completedBatchRefreshLockRef.current.acquire(taskId)) {
+      return;
+    }
+
+    void refreshChapters(currentProject.id)
+      .then((latestChapters) => {
+        if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+          return;
+        }
+        void loadAnalysisTasks(latestChapters).catch((error) => {
+          if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+            return;
+          }
+          console.error('批量生成完成后刷新分析任务失败，已降级后台重试:', error);
+        });
+        void reloadCurrentProject().catch((error) => {
+          if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+            return;
+          }
+          console.error('批量生成完成后刷新项目信息失败，已降级后台重试:', error);
+        });
+      })
+      .then(() => {
+        if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+          return;
+        }
+        markChapterBatchTaskRefreshHandled(taskId);
+      })
+      .catch((error) => {
+        if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+          return;
+        }
+        console.error('刷新批量生成后的章节数据失败:', error);
+        scheduleCompletedBatchRefreshRetry();
+      })
+      .finally(() => {
+        completedBatchRefreshLockRef.current.release(taskId);
+      });
+  }, [
+    batchGenerating,
+    batchTaskId,
+    completedBatchRefreshRetryTick,
+    currentProject?.id,
+    latestCompletedBatchRefreshTaskSignature,
+    loadAnalysisTasks,
+    refreshChapters,
+    reloadCurrentProject,
+    scheduleCompletedBatchRefreshRetry,
+  ]);
+
+  useEffect(() => {
+    if (!currentProject?.id || isGenerating) {
+      return;
+    }
+
+    if (!latestCompletedSingleRefreshTaskSignature) {
+      return;
+    }
+
+    const [taskId, chapterId = ''] = latestCompletedSingleRefreshTaskSignature.split(':');
+    if (!taskId) {
+      return;
+    }
+    if (!completedSingleRefreshLockRef.current.acquire(taskId)) {
+      return;
+    }
+
+    void refreshChapters(currentProject.id)
+      .then((latestChapters) => {
+        if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+          return;
+        }
+        const analysisLoadPromise = loadAnalysisTasks(latestChapters).catch((error) => {
+          if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+            return;
+          }
+          console.error('单章生成完成后刷新分析任务失败，已降级后台重试:', error);
+        });
+        if (chapterId) {
+          return analysisLoadPromise.then(() => (
+            refreshChapterAnalysisTask(chapterId).catch((error) => {
+              if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+                return;
+              }
+              console.error('单章生成完成后刷新章节分析状态失败，已降级后台重试:', error);
+            })
+          ));
+        }
+        return analysisLoadPromise;
+      })
+      .then(() => {
+        if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+          return;
+        }
+        void reloadCurrentProject().catch((error) => {
+          if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+            return;
+          }
+          console.error('单章生成完成后刷新项目信息失败，已降级后台重试:', error);
+        });
+      })
+      .then(() => {
+        if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+          return;
+        }
+        markChapterSingleTaskRefreshHandled(taskId);
+      })
+      .catch((error) => {
+        if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+          return;
+        }
+        console.error('刷新单章生成后的章节数据失败:', error);
+        scheduleCompletedSingleRefreshRetry();
+      })
+      .finally(() => {
+        completedSingleRefreshLockRef.current.release(taskId);
+      });
+  }, [
+    completedSingleRefreshRetryTick,
+    currentProject?.id,
+    isGenerating,
+    latestCompletedSingleRefreshTaskSignature,
+    loadAnalysisTasks,
+    refreshChapterAnalysisTask,
+    refreshChapters,
+    reloadCurrentProject,
+    scheduleCompletedSingleRefreshRetry,
+  ]);
 
 
 
@@ -2007,6 +2354,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       projectId: currentProject?.id,
       projectTitle: currentProject?.title,
       batchPollingIntervalRef,
+      batchCloseTimeoutRef,
       batchTaskMetaRef,
       normalizeBatchGenerationCheckpoint,
       refreshChapters,
@@ -2020,12 +2368,19 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       showBrowserNotification,
       setBatchGenerateVisible,
       setBatchTaskId,
+      isPollingSessionActive: () => (
+        isPageActiveRef.current
+        && currentProjectIdRef.current === (currentProject?.id ?? null)
+        && batchTaskIdRef.current === taskId
+      ),
     });
   };
   const handleCancelBatchGenerate = async () => {
     await cancelBatchGenerationWorkflow({
       batchTaskId,
       projectId: currentProject?.id,
+      isPageActiveRef,
+      currentProjectIdRef,
       removeTaskMeta: (taskId) => {
         delete batchTaskMetaRef.current[taskId];
         removePersistedChapterBatchTaskMeta(taskId);
@@ -2657,7 +3012,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       />
       <ChapterBatchProgressEntry
         visible={batchGenerating}
-        progress={batchProgress ? Math.round((batchProgress.completed / batchProgress.total) * 100) : 0}
+        progress={batchProgress?.progress_percent ?? 0}
         message={
           batchProgress?.current_chapter_number
             ? [

@@ -133,6 +133,9 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
   const abortControllerRef = useRef<AbortController | null>(null);
   const generatedTextScrollRef = useRef<HTMLDivElement>(null);
   const generatedTextValueRef = useRef('');
+  const mountedRef = useRef(true);
+  const generateRequestIdRef = useRef(0);
+  const applyRequestIdRef = useRef(0);
 
   useLocalRenderDiagnostics('PartialRegenerateModal', () => ({
     visible,
@@ -148,6 +151,7 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
   }));
 
   useEffect(() => {
+    mountedRef.current = true;
     if (!visible) {
       return;
     }
@@ -173,6 +177,9 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
   }, [generatedText, isGenerating]);
 
   useEffect(() => () => {
+    mountedRef.current = false;
+    generateRequestIdRef.current += 1;
+    applyRequestIdRef.current += 1;
     abortControllerRef.current?.abort();
   }, []);
 
@@ -182,6 +189,8 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
       return;
     }
 
+    generateRequestIdRef.current += 1;
+    const requestId = generateRequestIdRef.current;
     setIsGenerating(true);
     setGeneratedText('');
     generatedTextValueRef.current = '';
@@ -211,13 +220,22 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
           inactivityTimeoutMs: PARTIAL_REGENERATE_STREAM_INACTIVITY_TIMEOUT_MS,
           signal: abortControllerRef.current.signal,
           onProgress: (nextMessage, nextProgress) => {
+            if (!mountedRef.current || generateRequestIdRef.current !== requestId) {
+              return;
+            }
             setProgress(nextProgress);
             setProgressMessage(nextMessage);
           },
           onHeartbeat: () => {
+            if (!mountedRef.current || generateRequestIdRef.current !== requestId) {
+              return;
+            }
             setProgressMessage((previous) => appendPartialRegenerateHeartbeatHint(previous || '正在持续生成...'));
           },
           onChunk: (content) => {
+            if (!mountedRef.current || generateRequestIdRef.current !== requestId) {
+              return;
+            }
             setGeneratedText((previous) => {
               const next = previous + content;
               generatedTextValueRef.current = next;
@@ -225,17 +243,26 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
             });
           },
           onResult: () => {
+            if (!mountedRef.current || generateRequestIdRef.current !== requestId) {
+              return;
+            }
             setProgress(100);
             setProgressMessage('生成完成');
             setHasGenerated(true);
           },
           onError: (error) => {
+            if (!mountedRef.current || generateRequestIdRef.current !== requestId) {
+              return;
+            }
             console.error('局部重写 SSE 错误:', error);
             message.error(error || '生成过程中发生错误');
             setIsGenerating(false);
             setHasGenerated(generatedTextValueRef.current.trim().length > 0);
           },
           onComplete: () => {
+            if (!mountedRef.current || generateRequestIdRef.current !== requestId) {
+              return;
+            }
             setIsGenerating(false);
             setHasGenerated((current) => current || generatedTextValueRef.current.trim().length > 0);
             abortControllerRef.current = null;
@@ -243,6 +270,9 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
         }
       );
     } catch (error) {
+      if (!mountedRef.current || generateRequestIdRef.current !== requestId) {
+        return;
+      }
       console.error('局部重写生成失败:', error);
       if ((error as Error).name !== 'AbortError') {
         message.error('生成失败，请重试');
@@ -269,17 +299,25 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
       return;
     }
 
+    applyRequestIdRef.current += 1;
+    const requestId = applyRequestIdRef.current;
     try {
       await chapterApi.applyPartialRegenerate(chapterId, {
         new_text: generatedText,
         start_position: startPosition,
         end_position: endPosition,
       });
+      if (!mountedRef.current || applyRequestIdRef.current !== requestId) {
+        return;
+      }
 
       message.success('已应用重写内容');
       onApply(generatedText, startPosition, endPosition);
       onClose();
     } catch (error) {
+      if (!mountedRef.current || applyRequestIdRef.current !== requestId) {
+        return;
+      }
       console.error('应用局部重写失败:', error);
       message.error('应用失败，请重试');
     }

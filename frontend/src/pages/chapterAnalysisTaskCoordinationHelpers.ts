@@ -103,6 +103,8 @@ export async function refreshAnalysisTaskWorkflow({
 export function closeAnalysisWorkflow({
   analysisChapterId,
   projectId,
+  isPageActiveRef,
+  currentProjectIdRef,
   setAnalysisVisible,
   refreshChapters,
   reloadCurrentProject,
@@ -111,6 +113,8 @@ export function closeAnalysisWorkflow({
 }: {
   analysisChapterId?: string | null;
   projectId?: string;
+  isPageActiveRef?: { current: boolean };
+  currentProjectIdRef?: { current: string | null };
   setAnalysisVisible: (value: boolean) => void;
   refreshChapters: () => Promise<Chapter[]> | void;
   reloadCurrentProject: () => Promise<void>;
@@ -118,28 +122,44 @@ export function closeAnalysisWorkflow({
   setAnalysisChapterId: (value: string | null) => void;
 }): void {
   setAnalysisVisible(false);
-  void refreshChapters();
+  if (isPageActiveRef && !isPageActiveRef.current) {
+    setAnalysisChapterId(null);
+    return;
+  }
 
-  if (projectId) {
+  const activeProjectId = currentProjectIdRef?.current ?? projectId ?? null;
+  void Promise.resolve(refreshChapters())
+    .catch((error) => {
+      if (isPageActiveRef && !isPageActiveRef.current) {
+        return;
+      }
+      console.error('Failed to refresh chapters after closing analysis modal.', error);
+    });
+
+  if (projectId && (!activeProjectId || activeProjectId === projectId)) {
     void reloadCurrentProject().catch((error) => {
+      if (
+        (isPageActiveRef && !isPageActiveRef.current)
+        || (currentProjectIdRef && currentProjectIdRef.current !== projectId)
+      ) {
+        return;
+      }
       console.error('Failed to refresh chapter analysis after closing modal.', error);
     });
   }
 
-  if (analysisChapterId) {
+  if (analysisChapterId && (!activeProjectId || activeProjectId === projectId)) {
     const chapterIdToRefresh = analysisChapterId;
-
-    window.setTimeout(() => {
-      void refreshChapterAnalysisTask(chapterIdToRefresh)
-        .catch((error) => {
-          console.error('Failed to refresh chapter analysis after delayed retry.', error);
-
-          window.setTimeout(() => {
-            void refreshChapterAnalysisTask(chapterIdToRefresh)
-              .catch((err) => console.error('Failed to refresh chapter analysis after second retry.', err));
-          }, 1000);
-        });
-    }, 500);
+    void refreshChapterAnalysisTask(chapterIdToRefresh)
+      .catch((error) => {
+        if (
+          (isPageActiveRef && !isPageActiveRef.current)
+          || (projectId && currentProjectIdRef && currentProjectIdRef.current !== projectId)
+        ) {
+          return;
+        }
+        console.error('Failed to refresh chapter analysis after closing modal.', error);
+      });
   }
 
   setAnalysisChapterId(null);

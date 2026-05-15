@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Col, Divider, Form, Input, Layout, Row, Space, Spin, Tag, Typography, message, theme } from 'antd';
 import { BookOutlined, LockOutlined, RobotOutlined, SafetyCertificateOutlined, TeamOutlined, ThunderboltOutlined, UserOutlined } from '@ant-design/icons';
 import { authApi } from '../services/modularApi';
@@ -29,6 +29,25 @@ export default function Login() {
   const [showAnnouncement, setShowAnnouncement] = useState(false);
   const [serviceUnavailableMessage, setServiceUnavailableMessage] = useState('');
   const [loginErrorMessage, setLoginErrorMessage] = useState('');
+  const mountedRef = useRef(true);
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestIdRef.current += 1;
+    };
+  }, []);
+
+  const beginRequest = useCallback(() => {
+    requestIdRef.current += 1;
+    return requestIdRef.current;
+  }, []);
+
+  const isRequestActive = useCallback((requestId: number) => {
+    return mountedRef.current && requestIdRef.current === requestId;
+  }, []);
 
   const resolveServiceUnavailableMessage = (error: unknown): string =>
     getHttpStatus(error) === 503
@@ -46,20 +65,33 @@ export default function Login() {
   // 检查是否已登录，并获取认证配置
   useEffect(() => {
     const checkAuth = async () => {
+      const requestId = beginRequest();
       try {
         await authApi.getCurrentUser();
+        if (!isRequestActive(requestId)) {
+          return;
+        }
         setServiceUnavailableMessage('');
         const redirect = getRedirectFromSearchParams(searchParams);
         navigate(redirect);
       } catch (error) {
+        if (!isRequestActive(requestId)) {
+          return;
+        }
         const currentUserServiceMessage = resolveServiceUnavailableMessage(error);
         setServiceUnavailableMessage(currentUserServiceMessage);
 
         try {
           const config = await authApi.getAuthConfig();
+          if (!isRequestActive(requestId)) {
+            return;
+          }
           setLocalAuthEnabled(config.local_auth_enabled);
           setLinuxdoEnabled(config.linuxdo_enabled);
         } catch (configError) {
+          if (!isRequestActive(requestId)) {
+            return;
+          }
           console.error('获取认证配置失败:', configError);
           // Fallback: enable both login methods when config fetch fails
           setLocalAuthEnabled(true);
@@ -71,19 +103,25 @@ export default function Login() {
           }
         }
 
-        setChecking(false);
+        if (isRequestActive(requestId)) {
+          setChecking(false);
+        }
       }
     };
 
     void checkAuth();
-  }, [navigate, searchParams]);
+  }, [beginRequest, isRequestActive, navigate, searchParams]);
 
   const handleLocalLogin = async (values: { username: string; password: string }) => {
+    const requestId = beginRequest();
     try {
       setServiceUnavailableMessage('');
       setLoginErrorMessage('');
       setLoading(true);
       const response = await authApi.localLogin(values.username, values.password);
+      if (!isRequestActive(requestId)) {
+        return;
+      }
 
       if (response.success) {
         message.success('登录成功！');
@@ -101,30 +139,46 @@ export default function Login() {
         }
       }
     } catch (error) {
+      if (!isRequestActive(requestId)) {
+        return;
+      }
       console.error('本地登录失败:', error);
       const serviceMessage = resolveServiceUnavailableMessage(error);
       setServiceUnavailableMessage(serviceMessage);
       setLoginErrorMessage(serviceMessage ? '' : resolveLoginErrorMessage(error));
-      setLoading(false);
+    } finally {
+      if (isRequestActive(requestId)) {
+        setLoading(false);
+      }
     }
   };
 
   const handleLinuxDOLogin = async () => {
+    const requestId = beginRequest();
     try {
       setServiceUnavailableMessage('');
       setLoginErrorMessage('');
       setLoading(true);
       const response = await authApi.getLinuxDOAuthUrl();
+      if (!isRequestActive(requestId)) {
+        return;
+      }
 
       const redirect = getRedirectFromSearchParams(searchParams, '');
       saveLoginRedirect(redirect);
 
       window.location.href = response.auth_url;
     } catch (error) {
+      if (!isRequestActive(requestId)) {
+        return;
+      }
       console.error('获取授权地址失败:', error);
       setServiceUnavailableMessage(resolveServiceUnavailableMessage(error));
       message.error('获取授权地址失败，请稍后重试');
-      setLoading(false);
+    } finally {
+      if (isRequestActive(requestId)) {
+        setLoading(false);
+      }
     }
   };
 

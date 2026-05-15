@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState, useEffect, useMemo } from 'react';
+import { Suspense, lazy, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Button,
@@ -78,6 +78,36 @@ export default function UserManagement() {
   const { token } = theme.useToken();
   const userTableReady = useDeferredMount();
   const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
+  const mountedRef = useRef(true);
+  const userListRequestIdRef = useRef(0);
+  const userActionRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      userListRequestIdRef.current += 1;
+      userActionRequestIdRef.current += 1;
+    };
+  }, []);
+
+  const beginUserListRequest = useCallback(() => {
+    userListRequestIdRef.current += 1;
+    return userListRequestIdRef.current;
+  }, []);
+
+  const isUserListRequestActive = useCallback((requestId: number) => {
+    return mountedRef.current && userListRequestIdRef.current === requestId;
+  }, []);
+
+  const beginUserActionRequest = useCallback(() => {
+    userActionRequestIdRef.current += 1;
+    return userActionRequestIdRef.current;
+  }, []);
+
+  const isUserActionRequestActive = useCallback((requestId: number) => {
+    return mountedRef.current && userActionRequestIdRef.current === requestId;
+  }, []);
 
   // 过滤用户列表
   const filteredUsers = users.filter(user => {
@@ -146,22 +176,31 @@ export default function UserManagement() {
   }, [filteredUsers, sortField, sortOrder]);
 
   // 加载用户列表
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
+    const requestId = beginUserListRequest();
     setLoading(true);
     try {
       const res = await adminApi.getUsers();
+      if (!isUserListRequestActive(requestId)) {
+        return;
+      }
       setUsers(res.users);
     } catch (error) {
+      if (!isUserListRequestActive(requestId)) {
+        return;
+      }
       console.error('加载用户列表失败:', error);
       message.error('加载用户列表失败');
     } finally {
-      setLoading(false);
+      if (isUserListRequestActive(requestId)) {
+        setLoading(false);
+      }
     }
-  };
+  }, [beginUserListRequest, isUserListRequestActive]);
 
   useEffect(() => {
-    loadUsers();
-  }, []);
+    void loadUsers();
+  }, [loadUsers]);
 
   // 添加用户
   interface CreateUserValues {
@@ -174,8 +213,12 @@ export default function UserManagement() {
   }
 
   const handleCreate = async (values: CreateUserValues) => {
+    const requestId = beginUserActionRequest();
     try {
       const res = await adminApi.createUser(values);
+      if (!isUserActionRequestActive(requestId)) {
+        return;
+      }
       message.success('用户创建成功');
 
       // 如果有默认密码，显示给管理员
@@ -198,8 +241,11 @@ export default function UserManagement() {
 
       setModalVisible(false);
       form.resetFields();
-      loadUsers();
+      await loadUsers();
     } catch (error) {
+      if (!isUserActionRequestActive(requestId)) {
+        return;
+      }
       console.error('创建用户失败:', error);
       message.error('创建用户失败');
     }
@@ -227,13 +273,20 @@ export default function UserManagement() {
   const handleUpdate = async (values: UpdateUserValues) => {
     if (!currentUser) return;
 
+    const requestId = beginUserActionRequest();
     try {
       await adminApi.updateUser(currentUser.user_id, values);
+      if (!isUserActionRequestActive(requestId)) {
+        return;
+      }
       message.success('用户信息更新成功');
       setEditModalVisible(false);
       editForm.resetFields();
-      loadUsers();
+      await loadUsers();
     } catch (error) {
+      if (!isUserActionRequestActive(requestId)) {
+        return;
+      }
       console.error('更新用户失败:', error);
       message.error('更新用户失败');
     }
@@ -244,11 +297,18 @@ export default function UserManagement() {
     const isActive = user.is_active !== false;
     const action = isActive ? '禁用' : '启用';
 
+    const requestId = beginUserActionRequest();
     try {
       await adminApi.toggleUserStatus(user.user_id, !isActive);
+      if (!isUserActionRequestActive(requestId)) {
+        return;
+      }
       message.success(`用户已${action}`);
-      loadUsers();
+      await loadUsers();
     } catch (error) {
+      if (!isUserActionRequestActive(requestId)) {
+        return;
+      }
       console.error(`${action}用户失败:`, error);
       message.error(`${action}用户失败`);
     }
@@ -264,11 +324,15 @@ export default function UserManagement() {
   const handleResetPasswordConfirm = async () => {
     if (!currentUser) return;
 
+    const requestId = beginUserActionRequest();
     try {
       const res = await adminApi.resetPassword(
         currentUser.user_id,
         newPassword || undefined
       );
+      if (!isUserActionRequestActive(requestId)) {
+        return;
+      }
 
       modal.info({
         title: '密码重置成功',
@@ -288,6 +352,9 @@ export default function UserManagement() {
       setResetPasswordModalVisible(false);
       setNewPassword('');
     } catch (error) {
+      if (!isUserActionRequestActive(requestId)) {
+        return;
+      }
       console.error('重置密码失败:', error);
       message.error('重置密码失败');
     }
@@ -295,11 +362,18 @@ export default function UserManagement() {
 
   // 删除用户
   const handleDelete = async (user: UserWithStatus) => {
+    const requestId = beginUserActionRequest();
     try {
       await adminApi.deleteUser(user.user_id);
+      if (!isUserActionRequestActive(requestId)) {
+        return;
+      }
       message.success('用户已删除');
-      loadUsers();
+      await loadUsers();
     } catch (error) {
+      if (!isUserActionRequestActive(requestId)) {
+        return;
+      }
       console.error('删除用户失败:', error);
       message.error('删除用户失败');
     }

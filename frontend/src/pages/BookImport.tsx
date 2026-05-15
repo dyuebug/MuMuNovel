@@ -149,6 +149,58 @@ export default function BookImport() {
   const [retryMessage, setRetryMessage] = useState('');
   const importedProjectId = useRef<string | null>(null);
   const taskPollErrorCountRef = useRef(0);
+  const mountedRef = useRef(true);
+  const pageSessionRef = useRef(0);
+  const applyRunRef = useRef(0);
+  const retryRunRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      pageSessionRef.current += 1;
+      applyRunRef.current += 1;
+      retryRunRef.current += 1;
+    };
+  }, []);
+
+  const beginPageSession = useCallback(() => {
+    pageSessionRef.current += 1;
+    return pageSessionRef.current;
+  }, []);
+
+  const invalidatePageSession = useCallback(() => {
+    pageSessionRef.current += 1;
+  }, []);
+
+  const isPageSessionActive = useCallback((sessionId: number) => {
+    return mountedRef.current && pageSessionRef.current === sessionId;
+  }, []);
+
+  const beginApplyRun = useCallback(() => {
+    applyRunRef.current += 1;
+    return applyRunRef.current;
+  }, []);
+
+  const invalidateApplyRun = useCallback(() => {
+    applyRunRef.current += 1;
+  }, []);
+
+  const isApplyRunActive = useCallback((runId: number) => {
+    return mountedRef.current && applyRunRef.current === runId;
+  }, []);
+
+  const beginRetryRun = useCallback(() => {
+    retryRunRef.current += 1;
+    return retryRunRef.current;
+  }, []);
+
+  const invalidateRetryRun = useCallback(() => {
+    retryRunRef.current += 1;
+  }, []);
+
+  const isRetryRunActive = useCallback((runId: number) => {
+    return mountedRef.current && retryRunRef.current === runId;
+  }, []);
 
   const isTaskTerminal = useMemo(() => {
     return !!taskStatus && ['completed', 'failed', 'cancelled'].includes(taskStatus.status);
@@ -197,7 +249,11 @@ export default function BookImport() {
   const currentStepText = stepItems[currentStep]?.title || '上传文件';
 
   useEffect(() => {
+    const sessionId = beginPageSession();
     const cache = loadBookImportCache();
+    if (!isPageSessionActive(sessionId)) {
+      return;
+    }
     if (cache) {
       const cacheAgeMs = typeof cache.cachedAt === 'number'
         ? Date.now() - cache.cachedAt
@@ -230,8 +286,10 @@ export default function BookImport() {
         message.info('已恢复上次的导入进度');
       }
     }
-    setCacheReady(true);
-  }, []);
+    if (isPageSessionActive(sessionId)) {
+      setCacheReady(true);
+    }
+  }, [beginPageSession, isPageSessionActive]);
 
   useEffect(() => {
     if (!cacheReady) return;
@@ -298,18 +356,19 @@ export default function BookImport() {
     if (isTaskTerminal) return;
 
     let disposed = false;
+    const sessionId = beginPageSession();
     taskPollErrorCountRef.current = 0;
 
     const timer = setInterval(async () => {
       try {
         const status = await bookImportApi.getTaskStatus(taskId);
-        if (disposed) {
+        if (disposed || !isPageSessionActive(sessionId)) {
           return;
         }
         taskPollErrorCountRef.current = 0;
         setTaskStatus(status);
       } catch (error) {
-        if (disposed || isRequestCancelledError(error)) {
+        if (disposed || isRequestCancelledError(error) || !isPageSessionActive(sessionId)) {
           return;
         }
         console.error('轮询任务状态失败:', error);
@@ -339,9 +398,10 @@ export default function BookImport() {
       disposed = true;
       clearInterval(timer);
     };
-  }, [taskId, isTaskTerminal]);
+  }, [beginPageSession, isPageSessionActive, taskId, isTaskTerminal]);
 
   useEffect(() => {
+    const sessionId = beginPageSession();
     const fetchPreview = async () => {
       if (!taskId || !taskStatus) return;
       if (taskStatus.status !== 'completed' || preview) return;
@@ -349,8 +409,14 @@ export default function BookImport() {
       try {
         setLoadingPreview(true);
         const data = await bookImportApi.getPreview(taskId);
+        if (!isPageSessionActive(sessionId)) {
+          return;
+        }
         setPreview(data);
       } catch (error) {
+        if (!isPageSessionActive(sessionId)) {
+          return;
+        }
         console.error('获取预览失败:', error);
         if (isNotFoundError(error)) {
           clearBookImportCache();
@@ -366,12 +432,14 @@ export default function BookImport() {
           message.error('获取预览失败');
         }
       } finally {
-        setLoadingPreview(false);
+        if (isPageSessionActive(sessionId)) {
+          setLoadingPreview(false);
+        }
       }
     };
 
     fetchPreview();
-  }, [taskId, taskStatus, preview]);
+  }, [beginPageSession, isPageSessionActive, preview, taskId, taskStatus]);
 
   const startTask = async () => {
     if (!file) {
@@ -379,6 +447,9 @@ export default function BookImport() {
       return;
     }
 
+    const sessionId = beginPageSession();
+    invalidateApplyRun();
+    invalidateRetryRun();
     try {
       setCreatingTask(true);
       setPreview(null);
@@ -388,23 +459,35 @@ export default function BookImport() {
         file,
       });
 
+      if (!isPageSessionActive(sessionId)) {
+        return;
+      }
       setTaskId(response.task_id);
       message.success('拆书任务已创建');
     } catch (error) {
+      if (!isPageSessionActive(sessionId)) {
+        return;
+      }
       console.error('创建任务失败:', error);
       message.error('创建拆书任务失败');
     } finally {
-      setCreatingTask(false);
+      if (isPageSessionActive(sessionId)) {
+        setCreatingTask(false);
+      }
     }
   };
 
   const refreshStatus = async () => {
     if (!taskId) return;
+    const sessionId = beginPageSession();
     try {
       const status = await bookImportApi.getTaskStatus(taskId);
+      if (!isPageSessionActive(sessionId)) {
+        return;
+      }
       setTaskStatus(status);
     } catch (error) {
-      if (isRequestCancelledError(error)) {
+      if (isRequestCancelledError(error) || !isPageSessionActive(sessionId)) {
         return;
       }
       console.error('刷新状态失败:', error);
@@ -424,11 +507,18 @@ export default function BookImport() {
 
   const cancelTask = async () => {
     if (!taskId) return;
+    const sessionId = beginPageSession();
     try {
       await bookImportApi.cancelTask(taskId);
+      if (!isPageSessionActive(sessionId)) {
+        return;
+      }
       message.success('任务已取消');
       await refreshStatus();
     } catch (error) {
+      if (!isPageSessionActive(sessionId)) {
+        return;
+      }
       console.error('取消任务失败:', error);
       message.error('取消任务失败');
     }
@@ -444,6 +534,7 @@ export default function BookImport() {
       import_mode: 'append',
     };
 
+    const runId = beginApplyRun();
     try {
       setApplying(true);
       setApplyProgress(0);
@@ -457,6 +548,9 @@ export default function BookImport() {
         payload,
         {
           onProgress: (msg: string, prog: number, status?: string) => {
+            if (!isApplyRunActive(runId)) {
+              return;
+            }
             // 检查是否是步骤失败的特殊消息
             if (status === 'step_failures') {
               try {
@@ -473,6 +567,9 @@ export default function BookImport() {
             setApplyMessage(msg);
           },
           onResult: (result: BookImportResult) => {
+            if (!isApplyRunActive(runId)) {
+              return;
+            }
             importedProjectId.current = result.project_id;
             const generatedCareers = result.statistics?.generated_careers ?? 0;
             const generatedEntities = result.statistics?.generated_entities ?? 0;
@@ -483,13 +580,18 @@ export default function BookImport() {
             // 如果没有失败步骤才自动跳转
             // 注意：这里需要延迟一帧来等待 failedSteps 的更新
             setTimeout(() => {
+              if (!isApplyRunActive(runId)) {
+                return;
+              }
               setFailedSteps(prev => {
                 if (prev.length === 0) {
                   message.success(`导入成功：已生成职业${generatedCareers}个，角色/组织${generatedEntities}个`);
                   clearBookImportCache();
                   void syncCompletedProjectToStore(result.project_id);
                   setTimeout(() => {
-                    navigate(`/project/${result.project_id}/chapters`);
+                    if (isApplyRunActive(runId)) {
+                      navigate(`/project/${result.project_id}/chapters`);
+                    }
                   }, 1000);
                 } else {
                   message.warning(`导入完成，但有 ${prev.length} 个生成步骤失败，可点击重试`);
@@ -499,18 +601,27 @@ export default function BookImport() {
             }, 100);
           },
           onError: (error: string) => {
+            if (!isApplyRunActive(runId)) {
+              return;
+            }
             console.error('导入过程发生错误:', error);
             setApplyError(`导入失败: ${error}`);
             message.error(`导入失败: ${error}`);
             setApplying(false);
           },
           onComplete: () => {
+            if (!isApplyRunActive(runId)) {
+              return;
+            }
             setApplyProgress(100);
             setApplyMessage('导入完成！');
           }
         }
       );
     } catch (error) {
+      if (!isApplyRunActive(runId)) {
+        return;
+      }
       console.error('确认导入失败:', error);
       setApplyError('确认导入失败，无法连接到服务器');
       message.error('确认导入失败');
@@ -522,6 +633,7 @@ export default function BookImport() {
     if (!taskId || failedSteps.length === 0) return;
 
     const stepsToRetry = failedSteps.map(f => f.step_name);
+    const runId = beginRetryRun();
 
     try {
       setRetrying(true);
@@ -533,6 +645,9 @@ export default function BookImport() {
         stepsToRetry,
         {
           onProgress: (msg: string, prog: number, status?: string) => {
+            if (!isRetryRunActive(runId)) {
+              return;
+            }
             if (status === 'step_failures') {
               try {
                 const parsed = JSON.parse(msg);
@@ -548,6 +663,9 @@ export default function BookImport() {
             setRetryMessage(msg);
           },
           onResult: (result: BookImportRetryResult) => {
+            if (!isRetryRunActive(runId)) {
+              return;
+            }
             if (result.still_failed && result.still_failed.length > 0) {
               setFailedSteps(result.still_failed);
               message.warning(`重试完成，仍有 ${result.still_failed.length} 个步骤失败`);
@@ -559,16 +677,24 @@ export default function BookImport() {
               if (projectId) {
                 void syncCompletedProjectToStore(projectId);
                 setTimeout(() => {
-                  navigate(`/project/${projectId}/chapters`);
+                  if (isRetryRunActive(runId)) {
+                    navigate(`/project/${projectId}/chapters`);
+                  }
                 }, 1000);
               }
             }
           },
           onError: (error: string) => {
+            if (!isRetryRunActive(runId)) {
+              return;
+            }
             console.error('重试失败:', error);
             message.error(`重试失败: ${error}`);
           },
           onComplete: () => {
+            if (!isRetryRunActive(runId)) {
+              return;
+            }
             setRetrying(false);
             setRetryProgress(100);
             setRetryMessage('重试完成');
@@ -576,13 +702,18 @@ export default function BookImport() {
         }
       );
     } catch (error) {
+      if (!isRetryRunActive(runId)) {
+        return;
+      }
       console.error('重试请求失败:', error);
       message.error('重试请求失败，无法连接到服务器');
       setRetrying(false);
     }
-  }, [taskId, failedSteps, navigate]);
+  }, [beginRetryRun, failedSteps, isRetryRunActive, navigate, taskId]);
 
   const skipFailedSteps = useCallback(() => {
+    invalidateApplyRun();
+    invalidateRetryRun();
     setFailedSteps([]);
     clearBookImportCache();
     const projectId = importedProjectId.current;
@@ -590,9 +721,12 @@ export default function BookImport() {
       message.info('已跳过失败步骤，正在跳转到项目...');
       navigate(`/project/${projectId}/chapters`);
     }
-  }, [navigate]);
+  }, [invalidateApplyRun, invalidateRetryRun, navigate]);
 
   const restartImport = useCallback(() => {
+    invalidatePageSession();
+    invalidateApplyRun();
+    invalidateRetryRun();
     clearBookImportCache();
     importedProjectId.current = null;
 
@@ -615,7 +749,7 @@ export default function BookImport() {
     setRetryMessage('');
 
     message.success('已重新开始，请重新上传 TXT 并解析');
-  }, []);
+  }, [invalidateApplyRun, invalidatePageSession, invalidateRetryRun]);
 
   const updateChapter = (index: number, patch: Partial<BookImportPreview['chapters'][number]>) => {
     setPreview(prev => {

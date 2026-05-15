@@ -182,8 +182,10 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
   const [selectedSuggestions, setSelectedSuggestions] = useState<number[]>([]);
   const [modificationSource, setModificationSource] = useState<ModificationSource>('custom');
   const regenerationEnableWebResearch = Form.useWatch('enable_web_research', form) as boolean | undefined;
+  const mountedRef = useRef(false);
   const requestAbortRef = useRef<AbortController | null>(null);
   const requestCancelledRef = useRef(false);
+  const requestIdRef = useRef(0);
   const successTimeoutRef = useRef<number | null>(null);
 
   const repairGuidanceDisplay = getRepairGuidanceDisplay(repairGuidance);
@@ -224,21 +226,51 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
       || trendLabel,
   );
 
+  const clearSuccessTimeout = () => {
+    if (successTimeoutRef.current !== null) {
+      window.clearTimeout(successTimeoutRef.current);
+      successTimeoutRef.current = null;
+    }
+  };
+
+  const cancelActiveRequest = () => {
+    requestCancelledRef.current = true;
+    requestIdRef.current += 1;
+    requestAbortRef.current?.abort();
+    requestAbortRef.current = null;
+    clearSuccessTimeout();
+  };
+
+  const beginRequest = () => {
+    requestCancelledRef.current = false;
+    const nextRequestId = requestIdRef.current + 1;
+    requestIdRef.current = nextRequestId;
+    return nextRequestId;
+  };
+
+  const isRequestActive = (requestId: number) => (
+    mountedRef.current
+    && !requestCancelledRef.current
+    && requestIdRef.current === requestId
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   useEffect(() => {
     if (!visible) {
-      requestCancelledRef.current = true;
-      requestAbortRef.current?.abort();
-      requestAbortRef.current = null;
-      if (successTimeoutRef.current !== null) {
-        window.clearTimeout(successTimeoutRef.current);
-        successTimeoutRef.current = null;
-      }
+      cancelActiveRequest();
       return;
     }
 
     const defaultSource: ModificationSource = hasAnalysis && suggestions.length > 0 ? 'mixed' : 'custom';
 
-    requestCancelledRef.current = false;
+    beginRequest();
     setLoading(false);
     setStatus('idle');
     setProgress(0);
@@ -271,13 +303,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
 
   useEffect(() => {
     return () => {
-      requestCancelledRef.current = true;
-      requestAbortRef.current?.abort();
-      requestAbortRef.current = null;
-      if (successTimeoutRef.current !== null) {
-        window.clearTimeout(successTimeoutRef.current);
-        successTimeoutRef.current = null;
-      }
+      cancelActiveRequest();
     };
   }, []);
 
@@ -310,13 +336,10 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
         return;
       }
 
+      cancelActiveRequest();
+      const requestId = beginRequest();
       abortController = new AbortController();
-      requestCancelledRef.current = false;
       requestAbortRef.current = abortController;
-      if (successTimeoutRef.current !== null) {
-        window.clearTimeout(successTimeoutRef.current);
-        successTimeoutRef.current = null;
-      }
 
       setLoading(true);
       setStatus('generating');
@@ -364,7 +387,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
         signal: abortController.signal,
         inactivityTimeoutMs: REGENERATION_STREAM_INACTIVITY_TIMEOUT_MS,
         onProgress: (msg: string, nextProgress: number, _status: string, nextWordCount?: number) => {
-          if (requestCancelledRef.current) {
+          if (!isRequestActive(requestId)) {
             return;
           }
           setProgress(nextProgress);
@@ -375,20 +398,20 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
           }
         },
         onHeartbeat: () => {
-          if (requestCancelledRef.current) {
+          if (!isRequestActive(requestId)) {
             return;
           }
           setProgressMessage((prev) => appendRegenerationHeartbeatHint(prev || '正在重新生成...'));
         },
         onChunk: (content: string) => {
-          if (requestCancelledRef.current) {
+          if (!isRequestActive(requestId)) {
             return;
           }
           accumulatedContent += content;
           currentWordCount = accumulatedContent.length;
         },
         onResult: (data: { word_count?: number }) => {
-          if (requestCancelledRef.current) {
+          if (!isRequestActive(requestId)) {
             return;
           }
           setProgress(100);
@@ -399,7 +422,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
           message.success('重新生成完成。');
 
           successTimeoutRef.current = window.setTimeout(() => {
-            if (requestCancelledRef.current) {
+            if (!isRequestActive(requestId)) {
               return;
             }
             onSuccess(accumulatedContent, finalWordCount);
@@ -407,7 +430,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
         },
         onComplete: () => undefined,
         onError: (error: string, code?: number) => {
-          if (requestCancelledRef.current) {
+          if (!isRequestActive(requestId)) {
             return;
           }
           console.error('SSE Error:', error, code);
@@ -421,6 +444,9 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
       if (requestCancelledRef.current || err.name === 'AbortError') {
         return;
       }
+      if (!mountedRef.current) {
+        return;
+      }
       console.error('生成失败:', error);
       setStatus('error');
       setErrorMessage(err.message || '生成失败');
@@ -429,7 +455,9 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
       if (abortController && requestAbortRef.current === abortController) {
         requestAbortRef.current = null;
       }
-      setLoading(false);
+      if (mountedRef.current && !requestCancelledRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -452,13 +480,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
       content: '生成正在进行中，确定要取消吗？',
       centered: true,
       onOk: () => {
-        requestCancelledRef.current = true;
-        requestAbortRef.current?.abort();
-        requestAbortRef.current = null;
-        if (successTimeoutRef.current !== null) {
-          window.clearTimeout(successTimeoutRef.current);
-          successTimeoutRef.current = null;
-        }
+        cancelActiveRequest();
         setLoading(false);
         setStatus('idle');
         onCancel();

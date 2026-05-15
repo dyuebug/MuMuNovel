@@ -36,6 +36,34 @@ type ChapterListSectionProps = {
   onOpenPlanEditor: (chapter: Chapter) => void;
 };
 
+const areStringArraysEqual = (left: string[], right: string[]) => (
+  left.length === right.length && left.every((value, index) => value === right[index])
+);
+
+const areVisibleAnalysisTasksEqual = (
+  leftMap: Record<string, AnalysisTask>,
+  rightMap: Record<string, AnalysisTask>,
+  chapterIds: string[],
+) => chapterIds.every((chapterId) => leftMap[chapterId] === rightMap[chapterId]);
+
+const areVisibleGenerationStatesEqual = (
+  leftMap: ChapterGenerationStateMap,
+  rightMap: ChapterGenerationStateMap,
+  chapterIds: string[],
+) => chapterIds.every((chapterId) => leftMap[chapterId] === rightMap[chapterId]);
+
+const collectVisibleChapterIds = (
+  outlineMode: string | null | undefined,
+  sortedChapters: Chapter[],
+  groupedChapters: GroupedChapterViewModel[],
+) => {
+  if (outlineMode === 'one-to-one') {
+    return sortedChapters.map((chapter) => chapter.id);
+  }
+
+  return groupedChapters.flatMap((group) => group.chapters.map((chapter) => chapter.id));
+};
+
 function ChapterListSection({
   chapters,
   sortedChapters,
@@ -154,4 +182,34 @@ function ChapterListSection({
   );
 }
 
-export default memo(ChapterListSection);
+export default memo(ChapterListSection, (prevProps, nextProps) => {
+  if (prevProps.chapters !== nextProps.chapters) return false;
+  if (prevProps.sortedChapters !== nextProps.sortedChapters) return false;
+  if (prevProps.outlineMode !== nextProps.outlineMode) return false;
+  if (prevProps.groupedChapters !== nextProps.groupedChapters) return false;
+  if (!areStringArraysEqual(prevProps.expandedChapterGroupKeys, nextProps.expandedChapterGroupKeys)) return false;
+  if (prevProps.isMobile !== nextProps.isMobile) return false;
+  if (prevProps.onOpenReader !== nextProps.onOpenReader) return false;
+  if (prevProps.onOpenEditor !== nextProps.onOpenEditor) return false;
+  if (prevProps.onShowAnalysis !== nextProps.onShowAnalysis) return false;
+  if (prevProps.onOpenSettings !== nextProps.onOpenSettings) return false;
+  if (prevProps.onDeleteChapter !== nextProps.onDeleteChapter) return false;
+  if (prevProps.onShowExpansionPlan !== nextProps.onShowExpansionPlan) return false;
+  if (prevProps.onOpenPlanEditor !== nextProps.onOpenPlanEditor) return false;
+
+  const visibleChapterIds = collectVisibleChapterIds(
+    nextProps.outlineMode,
+    nextProps.sortedChapters,
+    nextProps.groupedChapters,
+  );
+
+  if (!areVisibleAnalysisTasksEqual(prevProps.analysisTasksMap, nextProps.analysisTasksMap, visibleChapterIds)) {
+    return false;
+  }
+
+  if (!areVisibleGenerationStatesEqual(prevProps.chapterGenerationStateById, nextProps.chapterGenerationStateById, visibleChapterIds)) {
+    return false;
+  }
+
+  return true;
+});

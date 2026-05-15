@@ -26,7 +26,9 @@ import InlineErrorBoundary from '../components/InlineErrorBoundary';
 import type { OutlineExpansionResponse, BatchOutlineExpansionResponse, ChapterPlanItem, ApiError, Character, CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
 
 const OUTLINE_TASK_REPLAY_KEY_PREFIX = 'background-task-replay:outline:';
+const OUTLINE_GENERATE_REFRESH_KEY_PREFIX = 'background-task-refresh:outline-generate:';
 const OUTLINE_TASK_OPEN_REQUEST_KEY_PREFIX = 'background-task-open:outline:';
+const OUTLINE_GENERATE_REFRESH_RETRY_DELAY_MS = 2000;
 
 const hasOutlineTaskReplayBeenHandled = (taskId: string): boolean => {
   try {
@@ -44,6 +46,42 @@ const markOutlineTaskReplayHandled = (taskId: string) => {
   }
 };
 
+const hasOutlineGenerateRefreshBeenHandled = (taskId: string): boolean => {
+  try {
+    return sessionStorage.getItem(`${OUTLINE_GENERATE_REFRESH_KEY_PREFIX}${taskId}`) === '1';
+  } catch {
+    return false;
+  }
+};
+
+const markOutlineGenerateRefreshHandled = (taskId: string) => {
+  try {
+    sessionStorage.setItem(`${OUTLINE_GENERATE_REFRESH_KEY_PREFIX}${taskId}`, '1');
+  } catch {
+    // ignore sessionStorage failures
+  }
+};
+
+const createOutlineRefreshTaskLock = () => {
+  const inFlightTaskIds = new Set<string>();
+
+  return {
+    acquire(taskId: string) {
+      if (!taskId || inFlightTaskIds.has(taskId)) {
+        return false;
+      }
+      inFlightTaskIds.add(taskId);
+      return true;
+    },
+    release(taskId: string) {
+      if (!taskId) {
+        return;
+      }
+      inFlightTaskIds.delete(taskId);
+    },
+  };
+};
+
 const getRequestedOutlineTaskId = (projectId: string): string | null => {
   try {
     return sessionStorage.getItem(`${OUTLINE_TASK_OPEN_REQUEST_KEY_PREFIX}${projectId}`);
@@ -58,6 +96,92 @@ const clearRequestedOutlineTaskId = (projectId: string) => {
   } catch {
     // ignore sessionStorage failures
   }
+};
+
+const selectActiveOutlineGenerateTask = (
+  tasks: Record<string, import('../store/backgroundTasks').TrackedBackgroundTask>,
+  projectId?: string | null,
+) => {
+  if (!projectId) {
+    return null;
+  }
+
+  return Object.values(tasks)
+    .filter(
+      (task) => task.projectId === projectId
+        && task.taskType === 'outline_generate'
+        && isActiveBackgroundTask(task)
+    )
+    .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+};
+
+const selectActiveOutlineExpandTask = (
+  tasks: Record<string, import('../store/backgroundTasks').TrackedBackgroundTask>,
+  projectId?: string | null,
+) => {
+  if (!projectId) {
+    return null;
+  }
+
+  return Object.values(tasks)
+    .filter(
+      (task) => task.projectId === projectId
+        && (task.taskType === 'outline_expand' || task.taskType === 'outline_batch_expand')
+        && isActiveBackgroundTask(task)
+    )
+    .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+};
+
+const selectOutlineReplayTaskSignature = (
+  tasks: Record<string, import('../store/backgroundTasks').TrackedBackgroundTask>,
+  projectId?: string | null,
+): string => {
+  if (!projectId) {
+    return '';
+  }
+
+  const requestedTaskId = getRequestedOutlineTaskId(projectId);
+  const completedTasks = Object.values(tasks).filter(
+    (task) => task.projectId === projectId
+      && (task.taskType === 'outline_expand' || task.taskType === 'outline_batch_expand')
+      && task.status === 'completed'
+      && task.result
+  );
+  const completedTask = requestedTaskId
+    ? completedTasks.find((task) => task.taskId === requestedTaskId)
+    : completedTasks
+      .filter((task) => !hasOutlineTaskReplayBeenHandled(task.taskId))
+      .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
+
+  if (!completedTask) {
+    return '';
+  }
+
+  return `${completedTask.taskId}:${requestedTaskId ? 'requested' : 'latest'}:${completedTask.taskType}:${completedTask.completedAt ?? completedTask.updatedAt}`;
+};
+
+const selectOutlineGenerateRefreshTaskSignature = (
+  tasks: Record<string, import('../store/backgroundTasks').TrackedBackgroundTask>,
+  projectId?: string | null,
+): string => {
+  if (!projectId) {
+    return '';
+  }
+
+  const completedTask = Object.values(tasks)
+    .filter(
+      (task) => task.projectId === projectId
+        && task.taskType === 'outline_generate'
+        && task.status === 'completed'
+        && !hasOutlineGenerateRefreshBeenHandled(task.taskId)
+    )
+    .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
+
+  if (!completedTask) {
+    return '';
+  }
+
+  return `${completedTask.taskId}:${completedTask.completedAt ?? completedTask.updatedAt}`;
 };
 
 
@@ -513,7 +637,21 @@ export default function Outline() {
 
 
   const [sseModalVisible, setSSEModalVisible] = useState(false);
-  const trackedTasks = useBackgroundTaskStore((state) => state.tasks);
+  const activeTrackedOutlineGenerateTask = useBackgroundTaskStore(
+    (state) => selectActiveOutlineGenerateTask(state.tasks, currentProject?.id)
+  );
+  const activeTrackedOutlineExpandTask = useBackgroundTaskStore(
+    (state) => selectActiveOutlineExpandTask(state.tasks, currentProject?.id)
+  );
+  const outlineReplayTaskSignature = useBackgroundTaskStore(
+    (state) => selectOutlineReplayTaskSignature(state.tasks, currentProject?.id)
+  );
+  const outlineGenerateRefreshTaskSignature = useBackgroundTaskStore(
+    (state) => selectOutlineGenerateRefreshTaskSignature(state.tasks, currentProject?.id)
+  );
+  const completedOutlineRefreshLockRef = useRef(createOutlineRefreshTaskLock());
+  const completedOutlineRefreshRetryTimerRef = useRef<number | null>(null);
+  const [completedOutlineRefreshRetryTick, setCompletedOutlineRefreshRetryTick] = useState(0);
 
   useEffect(() => {
     const handleResize = () => {
@@ -524,34 +662,16 @@ export default function Outline() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const activeTrackedOutlineGenerateTask = useMemo(() => {
-    if (!currentProject?.id) {
-      return null;
+  const scheduleCompletedOutlineRefreshRetry = useCallback(() => {
+    if (completedOutlineRefreshRetryTimerRef.current) {
+      clearTimeout(completedOutlineRefreshRetryTimerRef.current);
     }
 
-    return Object.values(trackedTasks)
-      .filter(
-        (task) => task.projectId === currentProject.id
-          && task.taskType === 'outline_generate'
-          && isActiveBackgroundTask(task)
-      )
-      .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
-  }, [currentProject?.id, trackedTasks]);
-
-  const activeTrackedOutlineExpandTask = useMemo(() => {
-    if (!currentProject?.id) {
-      return null;
-    }
-
-    return Object.values(trackedTasks)
-      .filter(
-        (task) => task.projectId === currentProject.id
-          && (task.taskType === 'outline_expand' || task.taskType === 'outline_batch_expand')
-          && isActiveBackgroundTask(task)
-      )
-      .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
-  }, [currentProject?.id, trackedTasks]);
-
+    completedOutlineRefreshRetryTimerRef.current = window.setTimeout(() => {
+      completedOutlineRefreshRetryTimerRef.current = null;
+      setCompletedOutlineRefreshRetryTick((value) => value + 1);
+    }, OUTLINE_GENERATE_REFRESH_RETRY_DELAY_MS);
+  }, []);
 
   const expandTaskIdRef = useRef<string | null>(null);
 
@@ -579,7 +699,6 @@ export default function Outline() {
         setSSEModalVisible(false);
         setIsGenerating(false);
         message.success('大纲生成成功');
-        void refreshOutlines();
       },
       onFailed: (task) => {
         stopGenerateTaskPolling();
@@ -645,6 +764,9 @@ export default function Outline() {
 
     if (taskType === 'outline_batch_expand') {
       const data = result as unknown as BatchOutlineExpansionResponse;
+      if (expandTaskIdRef.current) {
+        markOutlineTaskReplayHandled(expandTaskIdRef.current);
+      }
       setCachedBatchExpansionResponse(data);
       setBatchPreviewData(data);
       setBatchPreviewVisible(true);
@@ -658,6 +780,9 @@ export default function Outline() {
       return;
     }
 
+    if (expandTaskIdRef.current) {
+      markOutlineTaskReplayHandled(expandTaskIdRef.current);
+    }
     openSingleExpansionPreview(outlineId, response);
   }, [openSingleExpansionPreview]);
 
@@ -740,24 +865,22 @@ export default function Outline() {
       return;
     }
 
-    const requestedTaskId = getRequestedOutlineTaskId(currentProject.id);
-    const completedTasks = Object.values(trackedTasks).filter(
-      (task) => task.projectId === currentProject.id
-        && (task.taskType === 'outline_expand' || task.taskType === 'outline_batch_expand')
-        && task.status === 'completed'
-        && task.result
-    );
-    const completedTask = requestedTaskId
-      ? completedTasks.find((task) => task.taskId === requestedTaskId)
-      : completedTasks
-        .filter((task) => !hasOutlineTaskReplayBeenHandled(task.taskId))
-        .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
-
-    if (!completedTask || !completedTask.result) {
+    if (!outlineReplayTaskSignature) {
       return;
     }
 
-    if (requestedTaskId) {
+    const [taskId, replayMode] = outlineReplayTaskSignature.split(':');
+    if (!taskId) {
+      return;
+    }
+
+    const completedTask = useBackgroundTaskStore.getState().tasks[taskId];
+
+    if (!completedTask?.result) {
+      return;
+    }
+
+    if (replayMode === 'requested') {
       clearRequestedOutlineTaskId(currentProject.id);
     }
 
@@ -777,7 +900,7 @@ export default function Outline() {
 
     markOutlineTaskReplayHandled(completedTask.taskId);
     openSingleExpansionPreview(response.outline_id, response);
-  }, [batchPreviewVisible, currentProject?.id, generateTaskIdRef, openSingleExpansionPreview, sseModalVisible, trackedTasks]);
+  }, [batchPreviewVisible, currentProject?.id, generateTaskIdRef, openSingleExpansionPreview, outlineReplayTaskSignature, sseModalVisible]);
 
 
   const handleCancelGenerateTask = async () => {
@@ -889,6 +1012,59 @@ export default function Outline() {
 
 
   const { refreshCharacters } = useCharacterSync();
+
+
+  useEffect(() => {
+    if (!currentProject?.id || generateTaskIdRef.current || isGenerating || isExpanding) {
+      return;
+    }
+
+    if (!outlineGenerateRefreshTaskSignature) {
+      return;
+    }
+
+    const [taskId] = outlineGenerateRefreshTaskSignature.split(':');
+    if (!taskId) {
+      return;
+    }
+    if (!completedOutlineRefreshLockRef.current.acquire(taskId)) {
+      return;
+    }
+
+    void Promise.all([
+      refreshOutlines(currentProject.id),
+      projectApi.getProject(currentProject.id).then(setCurrentProject),
+    ])
+      .then(() => {
+        markOutlineGenerateRefreshHandled(taskId);
+      })
+      .catch((error) => {
+        console.error('刷新大纲数据失败:', error);
+        scheduleCompletedOutlineRefreshRetry();
+      })
+      .finally(() => {
+        completedOutlineRefreshLockRef.current.release(taskId);
+      });
+  }, [
+    completedOutlineRefreshRetryTick,
+    currentProject?.id,
+    generateTaskIdRef,
+    isExpanding,
+    isGenerating,
+    outlineGenerateRefreshTaskSignature,
+    refreshOutlines,
+    scheduleCompletedOutlineRefreshRetry,
+    setCurrentProject,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (completedOutlineRefreshRetryTimerRef.current) {
+        clearTimeout(completedOutlineRefreshRetryTimerRef.current);
+        completedOutlineRefreshRetryTimerRef.current = null;
+      }
+    };
+  }, []);
 
 
   // 确保项目大纲已加载

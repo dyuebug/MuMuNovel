@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Button,
   Modal,
@@ -38,6 +38,8 @@ export default function WritingStyles() {
   const [editingStyle, setEditingStyle] = useState<WritingStyle | null>(null);
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
+  const activeProjectIdRef = useRef<string | null>(currentProject?.id ?? null);
+  const styleRequestIdRef = useRef(0);
 
   const { token } = theme.useToken();
 
@@ -53,6 +55,10 @@ export default function WritingStyles() {
     xl: 6,
   };
 
+  useEffect(() => {
+    activeProjectIdRef.current = currentProject?.id ?? null;
+  }, [currentProject?.id]);
+
   // 加载风格列表 - 如果有项目则加载项目风格（包含默认标记），否则加载用户风格
   useEffect(() => {
     loadStyles();
@@ -60,6 +66,8 @@ export default function WritingStyles() {
   }, [currentProject?.id]);
 
   const loadStyles = useCallback(async () => {
+    const requestId = ++styleRequestIdRef.current;
+    const targetProjectId = currentProject?.id ?? null;
     try {
       setLoading(true);
       // 如果有当前项目，使用项目API获取（包含is_default标记）
@@ -76,12 +84,18 @@ export default function WritingStyles() {
         // 其他按原有顺序（order_index）
         return 0;
       });
-      
+
+      if (activeProjectIdRef.current !== targetProjectId || styleRequestIdRef.current !== requestId) {
+        return;
+      }
+
       setStyles(sortedStyles);
     } catch {
       message.error('加载风格列表失败');
     } finally {
-      setLoading(false);
+      if (styleRequestIdRef.current === requestId) {
+        setLoading(false);
+      }
     }
   }, [currentProject?.id]);
 

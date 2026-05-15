@@ -171,6 +171,7 @@ interface CharacterUpdateData {
 
 const INITIAL_CHARACTER_RENDER_COUNT = 8;
 const CHARACTER_TASK_REFRESH_KEY_PREFIX = 'background-task-refresh:characters:';
+const CHARACTER_TASK_REFRESH_RETRY_DELAY_MS = 2000;
 
 const hasCharacterTaskRefreshBeenHandled = (taskId: string): boolean => {
   try {
@@ -188,8 +189,69 @@ const markCharacterTaskRefreshHandled = (taskId: string) => {
   }
 };
 
+const createCharacterRefreshTaskLock = () => {
+  const inFlightTaskIds = new Set<string>();
+
+  return {
+    acquire(taskId: string) {
+      if (!taskId || inFlightTaskIds.has(taskId)) {
+        return false;
+      }
+      inFlightTaskIds.add(taskId);
+      return true;
+    },
+    release(taskId: string) {
+      if (!taskId) {
+        return;
+      }
+      inFlightTaskIds.delete(taskId);
+    },
+  };
+};
+
 const isCharacterGenerationTaskType = (taskType?: string | null): taskType is 'character_generate' | 'organization_generate' =>
   taskType === 'character_generate' || taskType === 'organization_generate';
+
+const selectActiveCharacterGenerationTask = (
+  tasks: Record<string, import('../store/backgroundTasks').TrackedBackgroundTask>,
+  projectId?: string | null,
+) => {
+  if (!projectId) {
+    return null;
+  }
+
+  return Object.values(tasks)
+    .filter(
+      (task) => task.projectId === projectId
+        && isCharacterGenerationTaskType(task.taskType)
+        && isActiveBackgroundTask(task)
+    )
+    .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+};
+
+const selectCompletedCharacterRefreshTaskSignature = (
+  tasks: Record<string, import('../store/backgroundTasks').TrackedBackgroundTask>,
+  projectId?: string | null,
+): string => {
+  if (!projectId) {
+    return '';
+  }
+
+  const completedTask = Object.values(tasks)
+    .filter(
+      (task) => task.projectId === projectId
+        && (task.taskType === 'character_generate' || task.taskType === 'organization_generate')
+        && task.status === 'completed'
+        && !hasCharacterTaskRefreshBeenHandled(task.taskId)
+    )
+    .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
+
+  if (!completedTask) {
+    return '';
+  }
+
+  return `${completedTask.taskId}:${completedTask.completedAt ?? completedTask.updatedAt}`;
+};
 
 const getCharacterGenerationSuccessMessage = (taskType: 'character_generate' | 'organization_generate') =>
   taskType === 'organization_generate' ? '智能生成组织成功' : '智能生成角色成功';
@@ -198,7 +260,12 @@ export default function Characters() {
   const { token } = theme.useToken();
   const currentProject = useStore((state) => state.currentProject);
   const storeCharacters = useStore((state) => state.characters);
-  const trackedTasks = useBackgroundTaskStore((state) => state.tasks);
+  const activeTrackedGenerationTask = useBackgroundTaskStore(
+    (state) => selectActiveCharacterGenerationTask(state.tasks, currentProject?.id)
+  );
+  const completedCharacterRefreshTaskSignature = useBackgroundTaskStore(
+    (state) => selectCompletedCharacterRefreshTaskSignature(state.tasks, currentProject?.id)
+  );
   const [isGenerating, setIsGenerating] = useState(false);
   const [isCancellingTask, setIsCancellingTask] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -218,22 +285,9 @@ export default function Characters() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const taskCreationInFlightRef = useRef(false);
-
-  const activeTrackedGenerationTask = useMemo(() => {
-    if (!currentProject?.id) {
-      return null;
-    }
-
-    return Object.values(trackedTasks)
-      .filter(
-        (task) => task.projectId === currentProject.id
-          && isCharacterGenerationTaskType(task.taskType)
-          && isActiveBackgroundTask(task)
-      )
-      .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
-  }, [currentProject?.id, trackedTasks]);
-
-
+  const completedCharacterRefreshLockRef = useRef(createCharacterRefreshTaskLock());
+  const completedCharacterRefreshRetryTimerRef = useRef<number | null>(null);
+  const [completedCharacterRefreshRetryTick, setCompletedCharacterRefreshRetryTick] = useState(0);
 
   const {
     refreshCharacters,
@@ -241,6 +295,17 @@ export default function Characters() {
     updateCharacter,
     deleteCharacter
   } = useCharacterSync();
+
+  const scheduleCompletedCharacterRefreshRetry = useCallback(() => {
+    if (completedCharacterRefreshRetryTimerRef.current) {
+      clearTimeout(completedCharacterRefreshRetryTimerRef.current);
+    }
+
+    completedCharacterRefreshRetryTimerRef.current = window.setTimeout(() => {
+      completedCharacterRefreshRetryTimerRef.current = null;
+      setCompletedCharacterRefreshRetryTick((value) => value + 1);
+    }, CHARACTER_TASK_REFRESH_RETRY_DELAY_MS);
+  }, []);
 
 
 
@@ -344,13 +409,11 @@ export default function Characters() {
         currentTaskIdRef.current = null;
         setIsCancellingTask(false);
         setIsGenerating(false);
-        markCharacterTaskRefreshHandled(task.task_id);
         message.success(
           isCharacterGenerationTaskType(task.task_type)
             ? getCharacterGenerationSuccessMessage(task.task_type)
             : '智能生成成功',
         );
-        void refreshCharacters();
       },
       onFailed: (task) => {
         stopTaskPolling();
@@ -396,22 +459,47 @@ export default function Characters() {
       return;
     }
 
-    const completedTask = Object.values(trackedTasks)
-      .filter(
-        (task) => task.projectId === currentProject.id
-          && (task.taskType === 'character_generate' || task.taskType === 'organization_generate')
-          && task.status === 'completed'
-          && !hasCharacterTaskRefreshBeenHandled(task.taskId)
-      )
-      .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
-
-    if (!completedTask) {
+    if (!completedCharacterRefreshTaskSignature) {
       return;
     }
 
-    markCharacterTaskRefreshHandled(completedTask.taskId);
-    void refreshCharacters(currentProject.id);
-  }, [currentProject?.id, currentTaskIdRef, isGenerating, refreshCharacters, trackedTasks]);
+    const [taskId] = completedCharacterRefreshTaskSignature.split(':');
+    if (!taskId) {
+      return;
+    }
+    if (!completedCharacterRefreshLockRef.current.acquire(taskId)) {
+      return;
+    }
+
+    void refreshCharacters(currentProject.id)
+      .then(() => {
+        markCharacterTaskRefreshHandled(taskId);
+      })
+      .catch((error) => {
+        console.error('刷新角色列表失败:', error);
+        scheduleCompletedCharacterRefreshRetry();
+      })
+      .finally(() => {
+        completedCharacterRefreshLockRef.current.release(taskId);
+      });
+  }, [
+    completedCharacterRefreshRetryTick,
+    completedCharacterRefreshTaskSignature,
+    currentProject?.id,
+    currentTaskIdRef,
+    isGenerating,
+    refreshCharacters,
+    scheduleCompletedCharacterRefreshRetry,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (completedCharacterRefreshRetryTimerRef.current) {
+        clearTimeout(completedCharacterRefreshRetryTimerRef.current);
+        completedCharacterRefreshRetryTimerRef.current = null;
+      }
+    };
+  }, []);
 
 
 

@@ -1,5 +1,5 @@
 import { Modal, Timeline, Tag, Avatar, Empty, Spin, Button, Space } from 'antd';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   BugOutlined,
   StarOutlined,
@@ -47,16 +47,31 @@ export default function ChangelogModal({ visible, onClose }: ChangelogModalProps
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
+  const mountedRef = useRef(true);
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestIdRef.current += 1;
+    };
+  }, []);
 
   // 加载更新日志
   // 每次用户打开窗口时才同步获取最新数据，不自动刷新
-  const loadChangelog = async (pageNum: number = 1, append: boolean = false) => {
+  const loadChangelog = useCallback(async (pageNum: number = 1, append: boolean = false) => {
+    requestIdRef.current += 1;
+    const requestId = requestIdRef.current;
     setLoading(true);
     setError(null);
 
     try {
       // 每次打开都从网络获取最新数据
       const entries = await fetchChangelog(pageNum, 30);
+      if (!mountedRef.current || requestIdRef.current !== requestId) {
+        return;
+      }
 
       if (entries.length === 0) {
         setHasMore(false);
@@ -72,26 +87,32 @@ export default function ChangelogModal({ visible, onClose }: ChangelogModalProps
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : '获取更新日志失败');
+      if (mountedRef.current && requestIdRef.current === requestId) {
+        setError(err instanceof Error ? err.message : '获取更新日志失败');
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && requestIdRef.current === requestId) {
+        setLoading(false);
+      }
     }
-  };
+  }, []);
 
   // 初始加载
   useEffect(() => {
     if (visible) {
-      loadChangelog(1, false);
       setPage(1);
       setHasMore(true);
+      void loadChangelog(1, false);
+    } else {
+      requestIdRef.current += 1;
     }
-  }, [visible]);
+  }, [loadChangelog, visible]);
 
   // 加载更多
   const handleLoadMore = () => {
     const nextPage = page + 1;
     setPage(nextPage);
-    loadChangelog(nextPage, true);
+    void loadChangelog(nextPage, true);
   };
 
   // 刷新（清除缓存并重新加载）
@@ -99,7 +120,7 @@ export default function ChangelogModal({ visible, onClose }: ChangelogModalProps
     clearChangelogCache();
     setPage(1);
     setHasMore(true);
-    loadChangelog(1, false);
+    void loadChangelog(1, false);
   };
 
   // 按日期分组

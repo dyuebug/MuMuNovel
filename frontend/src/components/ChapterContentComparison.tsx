@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Button, Card, Statistic, Row, Col, message, theme, Tag, Space, Typography } from 'antd';
 import { CheckOutlined, CloseOutlined, SwapOutlined } from '@ant-design/icons';
 import ReactDiffViewer from 'react-diff-viewer-continued';
@@ -125,6 +125,21 @@ const ChapterContentComparison: React.FC<ChapterContentComparisonProps> = ({
   const [applying, setApplying] = useState(false);
   const [viewMode, setViewMode] = useState<'split' | 'unified'>('split');
   const [modal, contextHolder] = Modal.useModal();
+  const mountedRef = useRef(true);
+  const applyRequestIdRef = useRef(0);
+  const triggerAnalysisTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      applyRequestIdRef.current += 1;
+      if (triggerAnalysisTimerRef.current) {
+        window.clearTimeout(triggerAnalysisTimerRef.current);
+        triggerAnalysisTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const visibleQualityFacets = useMemo(
     () => QUALITY_FACET_META
@@ -147,10 +162,15 @@ const ChapterContentComparison: React.FC<ChapterContentComparisonProps> = ({
   const diffMaxHeight = hasQualityHighlights ? 'calc(90vh - 560px)' : 'calc(90vh - 300px)';
 
   const handleApply = async () => {
+    applyRequestIdRef.current += 1;
+    const requestId = applyRequestIdRef.current;
     setApplying(true);
     try {
       if (onApplyAction) {
         const result = await onApplyAction();
+        if (!mountedRef.current || applyRequestIdRef.current !== requestId) {
+          return;
+        }
         if (result === false) {
           return;
         }
@@ -172,14 +192,32 @@ const ChapterContentComparison: React.FC<ChapterContentComparisonProps> = ({
         throw new Error('应用新内容失败');
       }
 
+      if (!mountedRef.current || applyRequestIdRef.current !== requestId) {
+        return;
+      }
       message.success('新内容已应用！');
       await Promise.resolve(onApply?.());
+      if (!mountedRef.current || applyRequestIdRef.current !== requestId) {
+        return;
+      }
 
-      setTimeout(async () => {
+      if (triggerAnalysisTimerRef.current) {
+        window.clearTimeout(triggerAnalysisTimerRef.current);
+      }
+      triggerAnalysisTimerRef.current = window.setTimeout(async () => {
         try {
+          if (!mountedRef.current || applyRequestIdRef.current !== requestId) {
+            return;
+          }
           await chapterApi.triggerChapterAnalysis(chapterId, projectId);
+          if (!mountedRef.current || applyRequestIdRef.current !== requestId) {
+            return;
+          }
           message.success('章节分析已开始，请稍后查看结果');
         } catch (analysisError) {
+          if (!mountedRef.current || applyRequestIdRef.current !== requestId) {
+            return;
+          }
           console.error('Failed to trigger chapter analysis:', analysisError);
           message.warning('章节分析触发失败，您可以手动触发分析');
         }
@@ -187,10 +225,15 @@ const ChapterContentComparison: React.FC<ChapterContentComparisonProps> = ({
 
       onClose();
     } catch (error: unknown) {
+      if (!mountedRef.current || applyRequestIdRef.current !== requestId) {
+        return;
+      }
       const err = error as Error;
       message.error(err.message || '应用失败');
     } finally {
-      setApplying(false);
+      if (mountedRef.current && applyRequestIdRef.current === requestId) {
+        setApplying(false);
+      }
     }
   };
 

@@ -1,6 +1,6 @@
 import { Card, Descriptions, Empty, Typography, Button, Modal, Form, Input, message, Flex, InputNumber, Select } from 'antd';
 import { GlobalOutlined, EditOutlined, SyncOutlined, FormOutlined } from '@ant-design/icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgroundTasks';
 import { cardStyles } from '../components/CardStyles';
@@ -56,8 +56,54 @@ const clearRequestedWorldTaskId = (projectId: string) => {
   }
 };
 
+const selectActiveWorldTask = (
+  tasks: Record<string, import('../store/backgroundTasks').TrackedBackgroundTask>,
+  projectId?: string | null,
+) => {
+  if (!projectId) {
+    return null;
+  }
+
+  return Object.values(tasks)
+    .filter(
+      (task) => task.projectId === projectId
+        && task.taskType === 'world_regenerate'
+        && isActiveBackgroundTask(task)
+    )
+    .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
+};
+
+const selectWorldReplayTaskSignature = (
+  tasks: Record<string, import('../store/backgroundTasks').TrackedBackgroundTask>,
+  projectId?: string | null,
+): string => {
+  if (!projectId) {
+    return '';
+  }
+
+  const requestedTaskId = getRequestedWorldTaskId(projectId);
+  const completedTasks = Object.values(tasks).filter(
+    (task) => task.projectId === projectId
+      && task.taskType === 'world_regenerate'
+      && task.status === 'completed'
+      && task.result
+  );
+  const completedTask = requestedTaskId
+    ? completedTasks.find((task) => task.taskId === requestedTaskId)
+    : completedTasks
+      .filter((task) => !hasWorldTaskReplayBeenHandled(task.taskId))
+      .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
+
+  if (!completedTask) {
+    return '';
+  }
+
+  return `${completedTask.taskId}:${requestedTaskId ? 'requested' : 'latest'}:${completedTask.completedAt ?? completedTask.updatedAt}`;
+};
+
 export default function WorldSetting() {
   const { currentProject, setCurrentProject } = useStore();
+  const activeProjectIdRef = useRef<string | null>(currentProject?.id ?? null);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [editForm] = Form.useForm();
   const [isSaving, setIsSaving] = useState(false);
@@ -81,25 +127,25 @@ export default function WorldSetting() {
   } | null>(null);
   const [isSavingPreview, setIsSavingPreview] = useState(false);
   const [modal, contextHolder] = Modal.useModal();
-  const trackedTasks = useBackgroundTaskStore((state) => state.tasks);
-  const activeTrackedWorldTask = useMemo(() => {
-    if (!currentProject?.id) {
-      return null;
-    }
+  const activeTrackedWorldTask = useBackgroundTaskStore(
+    (state) => selectActiveWorldTask(state.tasks, currentProject?.id)
+  );
+  const worldReplayTaskSignature = useBackgroundTaskStore(
+    (state) => selectWorldReplayTaskSignature(state.tasks, currentProject?.id)
+  );
 
-    return Object.values(trackedTasks)
-      .filter(
-        (task) => task.projectId === currentProject.id
-          && task.taskType === 'world_regenerate'
-          && isActiveBackgroundTask(task)
-      )
-      .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
-  }, [currentProject?.id, trackedTasks]);
+  useEffect(() => {
+    activeProjectIdRef.current = currentProject?.id ?? null;
+  }, [currentProject?.id]);
+
   const { currentTaskIdRef, startTaskPolling, stopTaskPolling } = useRestorableBackgroundTaskPolling({
     projectId: currentProject?.id,
     activeTrackedTask: activeTrackedWorldTask,
     isMatchingTask: (task) => task.task_type === 'world_regenerate' && (task.status === 'pending' || task.status === 'running'),
     onRestoreTask: ({ progress, message: taskMessage }) => {
+      if (!activeProjectIdRef.current) {
+        return;
+      }
       setIsRegenerating(true);
       setIsCancellingTask(false);
       setRegenerateProgress(progress || 0);
@@ -108,10 +154,18 @@ export default function WorldSetting() {
     createPollingOptions: () => ({
       pollTask: (currentPollingTaskId) => backgroundTaskApi.getTaskStatus(currentPollingTaskId),
       onTask: (task) => {
+        if (!activeProjectIdRef.current || task.project_id !== activeProjectIdRef.current) {
+          return;
+        }
         setRegenerateProgress(task.progress || 0);
         setRegenerateMessage(task.message || '');
       },
       onCompleted: (task) => {
+        if (!activeProjectIdRef.current || task.project_id !== activeProjectIdRef.current) {
+          stopTaskPolling();
+          currentTaskIdRef.current = null;
+          return;
+        }
         stopTaskPolling();
         currentTaskIdRef.current = null;
         setIsCancellingTask(false);
@@ -121,6 +175,7 @@ export default function WorldSetting() {
 
         const result = task.result as Record<string, unknown> | null;
         if (result) {
+          markWorldTaskReplayHandled(task.task_id);
           setNewWorldData({
             time_period: String(result.time_period || ''),
             location: String(result.location || ''),
@@ -131,6 +186,11 @@ export default function WorldSetting() {
         setIsPreviewModalVisible(true);
       },
       onFailed: (task) => {
+        if (!activeProjectIdRef.current || task.project_id !== activeProjectIdRef.current) {
+          stopTaskPolling();
+          currentTaskIdRef.current = null;
+          return;
+        }
         stopTaskPolling();
         currentTaskIdRef.current = null;
         setIsCancellingTask(false);
@@ -140,6 +200,11 @@ export default function WorldSetting() {
         message.error(formatBackgroundTaskError(task.error, task.message, '世界设定重生失败'));
       },
       onCancelled: (task) => {
+        if (!activeProjectIdRef.current || task.project_id !== activeProjectIdRef.current) {
+          stopTaskPolling();
+          currentTaskIdRef.current = null;
+          return;
+        }
         stopTaskPolling();
         currentTaskIdRef.current = null;
         setIsCancellingTask(false);
@@ -160,7 +225,12 @@ export default function WorldSetting() {
         setRegenerateProgress(0);
         setRegenerateMessage('世界设定重生状态轮询失败，请稍后刷新重试');
         if (currentProject?.id) {
-          void projectApi.getProject(currentProject.id).then(setCurrentProject).catch(() => undefined);
+          const targetProjectId = currentProject.id;
+          void projectApi.getProject(targetProjectId).then((project) => {
+            if (activeProjectIdRef.current === targetProjectId) {
+              setCurrentProject(project);
+            }
+          }).catch(() => undefined);
         }
         message.error('世界设定重生状态轮询失败，请稍后重试');
       },
@@ -174,24 +244,27 @@ export default function WorldSetting() {
       return;
     }
 
-    const requestedTaskId = getRequestedWorldTaskId(currentProject.id);
-    const completedTasks = Object.values(trackedTasks).filter(
-      (task) => task.projectId === currentProject.id
-        && task.taskType === 'world_regenerate'
-        && task.status === 'completed'
-        && task.result
-    );
-    const completedTask = requestedTaskId
-      ? completedTasks.find((task) => task.taskId === requestedTaskId)
-      : completedTasks
-        .filter((task) => !hasWorldTaskReplayBeenHandled(task.taskId))
-        .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
-
-    if (!completedTask || !completedTask.result) {
+    if (!worldReplayTaskSignature) {
       return;
     }
 
-    if (requestedTaskId) {
+    const [taskId, replayMode] = worldReplayTaskSignature.split(':');
+    if (!taskId) {
+      return;
+    }
+
+    const tasks = useBackgroundTaskStore.getState().tasks;
+    const completedTask = tasks[taskId];
+
+    if (!completedTask?.result) {
+      return;
+    }
+
+    if (completedTask.projectId && completedTask.projectId !== currentProject.id) {
+      return;
+    }
+
+    if (replayMode === 'requested') {
       clearRequestedWorldTaskId(currentProject.id);
     }
     markWorldTaskReplayHandled(completedTask.taskId);
@@ -202,7 +275,7 @@ export default function WorldSetting() {
       rules: String(completedTask.result.rules || ''),
     });
     setIsPreviewModalVisible(true);
-  }, [currentProject?.id, currentTaskIdRef, isPreviewModalVisible, newWorldData, trackedTasks]);
+  }, [currentProject?.id, currentTaskIdRef, isPreviewModalVisible, newWorldData, worldReplayTaskSignature]);
 
   const handleRegenerateBackground = async () => {
     if (!currentProject) return;

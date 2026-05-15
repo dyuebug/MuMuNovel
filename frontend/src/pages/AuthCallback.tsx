@@ -28,6 +28,22 @@ export default function AuthCallback() {
   const [settingPassword, setSettingPassword] = useState(false);
   const redirectRef = useRef('/');
   const redirectResolvedRef = useRef(false);
+  const mountedRef = useRef(true);
+  const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      requestIdRef.current += 1;
+    };
+  }, []);
+
+  const beginRequest = () => {
+    requestIdRef.current += 1;
+    return requestIdRef.current;
+  };
+
+  const isRequestActive = (requestId: number) => mountedRef.current && requestIdRef.current === requestId;
 
   const resolveRedirect = (): string => {
     if (!redirectResolvedRef.current) {
@@ -40,10 +56,14 @@ export default function AuthCallback() {
 
   useEffect(() => {
     const handleCallback = async () => {
+      const requestId = beginRequest();
       try {
         // 后端会通过 Cookie 自动设置认证信息
         // 这里只需要验证登录状态
         const currentUser = await authApi.getCurrentUser();
+        if (!isRequestActive(requestId)) {
+          return;
+        }
 
         // 检查是否是首次登录（优先 Cookie，兼容查询参数兜底）
         const callbackSearchParams = new URLSearchParams(window.location.search);
@@ -69,7 +89,9 @@ export default function AuthCallback() {
 
           // 显示密码初始化弹窗
           setTimeout(() => {
-            setShowPasswordModal(true);
+            if (isRequestActive(requestId)) {
+              setShowPasswordModal(true);
+            }
           }, 1000);
           return;
         }
@@ -86,16 +108,23 @@ export default function AuthCallback() {
         if (hideForever === 'true' || hideToday === today) {
           // 延迟一下再跳转，让用户看到成功提示
           setTimeout(() => {
-            clearAuthStatusCache();
-            navigate(redirect);
+            if (isRequestActive(requestId)) {
+              clearAuthStatusCache();
+              navigate(redirect);
+            }
           }, 1000);
         } else {
           // 延迟一下再显示公告，让用户看到成功提示
           setTimeout(() => {
-            setShowAnnouncement(true);
+            if (isRequestActive(requestId)) {
+              setShowAnnouncement(true);
+            }
           }, 1000);
         }
       } catch (error) {
+        if (!isRequestActive(requestId)) {
+          return;
+        }
         console.error('登录失败:', error);
         setStatus('error');
         setErrorMessage('登录失败，请重试');
@@ -172,6 +201,7 @@ export default function AuthCallback() {
     }
 
     setSettingPassword(true);
+    const requestId = beginRequest();
     try {
       // 首次登录使用初始化接口，后续使用修改接口
       const isFirstLogin = !passwordStatus?.has_password;
@@ -183,6 +213,9 @@ export default function AuthCallback() {
         message.success('密码设置成功');
       }
       setShowPasswordModal(false);
+      if (!isRequestActive(requestId)) {
+        return;
+      }
 
       // 继续后续流程
       const redirect = resolveRedirect();
@@ -193,22 +226,32 @@ export default function AuthCallback() {
 
       if (hideForever === 'true' || hideToday === today) {
         setTimeout(() => {
-          clearAuthStatusCache();
-          navigate(redirect);
+          if (isRequestActive(requestId)) {
+            clearAuthStatusCache();
+            navigate(redirect);
+          }
         }, 500);
       } else {
         setTimeout(() => {
-          setShowAnnouncement(true);
+          if (isRequestActive(requestId)) {
+            setShowAnnouncement(true);
+          }
         }, 500);
       }
     } catch {
+      if (!isRequestActive(requestId)) {
+        return;
+      }
       message.error('密码设置失败，请重试');
     } finally {
-      setSettingPassword(false);
+      if (isRequestActive(requestId)) {
+        setSettingPassword(false);
+      }
     }
   };
 
   const handleSkipPasswordSetting = async () => {
+    const requestId = beginRequest();
     // 首次登录时，如果跳过设置，使用默认密码初始化
     const isFirstLogin = !passwordStatus?.has_password;
     if (isFirstLogin && passwordStatus?.default_password) {
@@ -220,6 +263,9 @@ export default function AuthCallback() {
     }
 
     setShowPasswordModal(false);
+    if (!isRequestActive(requestId)) {
+      return;
+    }
 
     // 继续后续流程
     const redirect = resolveRedirect();
@@ -230,12 +276,16 @@ export default function AuthCallback() {
 
     if (hideForever === 'true' || hideToday === today) {
       setTimeout(() => {
-        clearAuthStatusCache();
-        navigate(redirect);
+        if (isRequestActive(requestId)) {
+          clearAuthStatusCache();
+          navigate(redirect);
+        }
       }, 500);
     } else {
       setTimeout(() => {
-        setShowAnnouncement(true);
+        if (isRequestActive(requestId)) {
+          setShowAnnouncement(true);
+        }
       }, 500);
     }
   };

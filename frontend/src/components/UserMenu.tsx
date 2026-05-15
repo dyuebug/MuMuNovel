@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Dropdown, Avatar, Space, Typography, message, Modal, Form, Input, Button, theme } from 'antd';
 import { UserOutlined, LogoutOutlined, TeamOutlined, CrownOutlined, LockOutlined } from '@ant-design/icons';
 import { authApi } from '../services/modularApi';
@@ -24,27 +24,64 @@ export default function UserMenu({ showFullInfo = false, compact = false }: User
   const [changingPassword, setChangingPassword] = useState(false);
   const { token } = theme.useToken();
   const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
+  const mountedRef = useRef(true);
+  const userRequestIdRef = useRef(0);
+  const passwordRequestIdRef = useRef(0);
+  const logoutRequestIdRef = useRef(0);
 
   useEffect(() => {
-    loadCurrentUser();
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      userRequestIdRef.current += 1;
+      passwordRequestIdRef.current += 1;
+      logoutRequestIdRef.current += 1;
+    };
+  }, []);
+
+  const beginRequest = useCallback((ref: React.MutableRefObject<number>) => {
+    ref.current += 1;
+    return ref.current;
+  }, []);
+
+  const isRequestActive = useCallback((ref: React.MutableRefObject<number>, requestId: number) => {
+    return mountedRef.current && ref.current === requestId;
+  }, []);
+
+  useEffect(() => {
+    void loadCurrentUser();
   }, []);
 
   const loadCurrentUser = async () => {
+    const requestId = beginRequest(userRequestIdRef);
     try {
       const user = await authApi.getCurrentUser();
+      if (!isRequestActive(userRequestIdRef, requestId)) {
+        return;
+      }
       setCurrentUser(user);
     } catch (error) {
+      if (!isRequestActive(userRequestIdRef, requestId)) {
+        return;
+      }
       console.error('获取用户信息失败:', error);
     }
   };
 
   const handleLogout = async () => {
+    const requestId = beginRequest(logoutRequestIdRef);
     try {
       await authApi.logout();
+      if (!isRequestActive(logoutRequestIdRef, requestId)) {
+        return;
+      }
       clearAuthStatusCache();
       message.success('已退出登录');
       window.location.href = '/login';
     } catch (error) {
+      if (!isRequestActive(logoutRequestIdRef, requestId)) {
+        return;
+      }
       console.error('退出登录失败:', error);
       message.error('退出登录失败');
     }
@@ -59,18 +96,27 @@ export default function UserMenu({ showFullInfo = false, compact = false }: User
   };
 
   const handleChangePassword = async (values: { oldPassword: string; newPassword: string }) => {
+    const requestId = beginRequest(passwordRequestIdRef);
     try {
       setChangingPassword(true);
       await authApi.setPassword(values.newPassword);
+      if (!isRequestActive(passwordRequestIdRef, requestId)) {
+        return;
+      }
       message.success('密码修改成功');
       setShowChangePassword(false);
       changePasswordForm.resetFields();
     } catch (error: unknown) {
+      if (!isRequestActive(passwordRequestIdRef, requestId)) {
+        return;
+      }
       console.error('修改密码失败:', error);
       const err = error as { response?: { data?: { detail?: string } } };
       message.error(err.response?.data?.detail || '修改密码失败');
     } finally {
-      setChangingPassword(false);
+      if (isRequestActive(passwordRequestIdRef, requestId)) {
+        setChangingPassword(false);
+      }
     }
   };
 

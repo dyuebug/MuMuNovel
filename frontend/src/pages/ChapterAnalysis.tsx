@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { Card, List, Button, Space, Empty, Tag, Spin, Alert, Switch, Drawer, message, theme } from 'antd';
 import {
   EyeOutlined,
@@ -10,7 +10,9 @@ import {
   FundOutlined,
 } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
+import { useStore } from '../store';
 import { api, chapterApi } from '../services/modularApi';
+import { isRequestCancelledError } from '../services/core/httpClient';
 import type { MemoryAnnotation } from '../components/AnnotatedText';
 import type { ChapterAnalysisResponse, ChapterCandidateDraftQualityHighlights, ChapterQualityMetrics, ProjectChapterQualityTrendResponse } from '../types';
 import {
@@ -34,6 +36,22 @@ const LazyProjectQualityTrendPanel = lazy(() => import('../components/ProjectQua
 const LazyChapterContentComparison = lazy(() => import('../components/ChapterContentComparison'));
 const LazyAnnotatedText = lazy(() => import('../components/AnnotatedText'));
 const LazyMemorySidebar = lazy(() => import('../components/MemorySidebar'));
+
+const toChapterItem = (chapter: {
+  id: string;
+  chapter_number: number;
+  title: string;
+  content?: string | null;
+  word_count?: number | null;
+  status?: string | null;
+}): ChapterItem => ({
+  id: chapter.id,
+  chapter_number: chapter.chapter_number,
+  title: chapter.title,
+  content: chapter.content ?? '',
+  word_count: chapter.word_count ?? 0,
+  status: chapter.status ?? 'draft',
+});
 
 interface ChapterItem {
   id: string;
@@ -110,6 +128,7 @@ const getCandidateAttemptKindLabel = (value?: string | null): string => {
  */
 const ChapterAnalysis: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
+  const storeChapters = useStore((state) => state.chapters);
   
   const [chapters, setChapters] = useState<ChapterItem[]>([]);
   const [selectedChapter, setSelectedChapter] = useState<ChapterItem | null>(null);
@@ -118,7 +137,9 @@ const ChapterAnalysis: React.FC = () => {
   const [projectQualityTrend, setProjectQualityTrend] = useState<ProjectChapterQualityTrendResponse | null>(null);
   const [navigation, setNavigation] = useState<NavigationData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [trendLoading, setTrendLoading] = useState(false);
   const [contentLoading, setContentLoading] = useState(false);
+  const [contentMetaLoading, setContentMetaLoading] = useState(false);
   const [applyingCandidateDraft, setApplyingCandidateDraft] = useState(false);
   const [candidateComparisonVisible, setCandidateComparisonVisible] = useState(false);
   const [candidateComparisonLoading, setCandidateComparisonLoading] = useState(false);
@@ -133,6 +154,34 @@ const ChapterAnalysis: React.FC = () => {
   const [scrollToSidebarAnnotation, setScrollToSidebarAnnotation] = useState<string | undefined>();
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const { token } = theme.useToken();
+  const initialChapterRequestRef = useRef<string | null>(null);
+  const selectedChapterIdRef = useRef<string | null>(null);
+  const chapterLoadAbortRef = useRef<AbortController | null>(null);
+  const chapterListAbortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  const contentScrollResetTimerRef = useRef<number | null>(null);
+  const sidebarScrollResetTimerRef = useRef<number | null>(null);
+
+  const clearScrollResetTimers = useCallback(() => {
+    if (contentScrollResetTimerRef.current !== null) {
+      window.clearTimeout(contentScrollResetTimerRef.current);
+      contentScrollResetTimerRef.current = null;
+    }
+    if (sidebarScrollResetTimerRef.current !== null) {
+      window.clearTimeout(sidebarScrollResetTimerRef.current);
+      sidebarScrollResetTimerRef.current = null;
+    }
+  }, []);
+
+  const abortPendingChapterLoad = useCallback(() => {
+    chapterLoadAbortRef.current?.abort();
+    chapterLoadAbortRef.current = null;
+  }, []);
+
+  const abortPendingChapterListLoad = useCallback(() => {
+    chapterListAbortRef.current?.abort();
+    chapterListAbortRef.current = null;
+  }, []);
 
   // 监听窗口大小变化
   useEffect(() => {
@@ -144,63 +193,55 @@ const ChapterAnalysis: React.FC = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // 加载章节列表
   useEffect(() => {
-    const loadChapters = async () => {
-      if (!projectId) return;
-      
-      try {
-        setLoading(true);
-        const [response, trendResponse] = await Promise.all([
-          api.get(`/chapters/project/${projectId}`),
-          chapterApi.getProjectChapterQualityTrend(projectId, 12).catch((trendError) => {
-            console.error('加载项目质量趋势失败:', trendError);
-            return null;
-          }),
-        ]);
-        // API 拦截器已经解析了 response.data，所以直接使用
-        const data = response.data || response;
-        const chapterList = data.items || [];
-        setChapters(chapterList);
-        setProjectQualityTrend(trendResponse);
-        
-        // 自动选择第一个有内容的章节
-        const firstChapterWithContent = chapterList.find((ch: ChapterItem) => ch.content && ch.content.trim() !== '');
-        if (firstChapterWithContent) {
-          loadChapterContent(firstChapterWithContent.id);
-        }
-      } catch (error) {
-        setProjectQualityTrend(null);
-        console.error('加载章节列表失败:', error);
-        message.error('加载章节列表失败');
-      } finally {
-        setLoading(false);
-      }
-    };
+    mountedRef.current = true;
 
-    loadChapters();
-  }, [projectId]);
+    return () => {
+      mountedRef.current = false;
+      clearScrollResetTimers();
+    };
+  }, [clearScrollResetTimers]);
+
+  useEffect(() => {
+    selectedChapterIdRef.current = selectedChapter?.id ?? null;
+  }, [selectedChapter?.id]);
 
   // 加载章节内容和标注
-  const loadChapterContent = async (chapterId: string) => {
+  const loadChapterContent = useCallback(async (chapterId: string) => {
+    if (!chapterId) {
+      return;
+    }
+    if (initialChapterRequestRef.current === chapterId && contentLoading) {
+      return;
+    }
+
+    abortPendingChapterLoad();
+    const abortController = new AbortController();
+    chapterLoadAbortRef.current = abortController;
+    initialChapterRequestRef.current = chapterId;
+
     try {
       setContentLoading(true);
+      setContentMetaLoading(true);
+      setAnnotationsData(null);
       setAnalysisDetail(null);
+      setNavigation(null);
       setCandidateComparisonVisible(false);
       setCandidateComparisonContent('');
       setCandidateComparisonWordCount(0);
-      
-      const [chapterResponse, annotationsResponse, analysisResponse, navigationResponse] = await Promise.all([
-        api.get(`/chapters/${chapterId}`),
-        api.get(`/chapters/${chapterId}/annotations`).catch(() => null),
-        chapterApi.getChapterAnalysis(chapterId).catch(() => null),
-        api.get(`/chapters/${chapterId}/navigation`).catch(() => null),
+      const requestConfig = { signal: abortController.signal };
+      const auxiliaryDataPromise = Promise.allSettled([
+        api.get(`/chapters/${chapterId}/annotations`, requestConfig),
+        chapterApi.getChapterAnalysis(chapterId, false, requestConfig),
+        api.get(`/chapters/${chapterId}/navigation`, requestConfig),
       ]);
 
-      // Compatible with axios interceptors returning data directly.
-      const normalizedAnalysisResponse = analysisResponse && typeof analysisResponse === 'object' && 'data' in analysisResponse
-        ? (analysisResponse as { data?: ChapterAnalysisResponse }).data ?? analysisResponse
-        : analysisResponse;
+      const chapterResponse = await api.get(`/chapters/${chapterId}`, requestConfig);
+
+      if (abortController.signal.aborted || chapterLoadAbortRef.current !== abortController) {
+        return;
+      }
+
       const normalizedChapterResponse = chapterResponse.data || chapterResponse;
       setSelectedChapter(normalizedChapterResponse);
       setChapters((prev) => prev.map((item) => (
@@ -208,17 +249,148 @@ const ChapterAnalysis: React.FC = () => {
           ? { ...item, ...normalizedChapterResponse }
           : item
       )));
-      setAnnotationsData(annotationsResponse ? (annotationsResponse.data || annotationsResponse) : null);
-      setAnalysisDetail(normalizedAnalysisResponse ?? null);
-      setNavigation(navigationResponse ? (navigationResponse.data || navigationResponse) : null);
+      setContentLoading(false);
+
+      const [annotationsResult, analysisResult, navigationResult] = await auxiliaryDataPromise;
+      if (abortController.signal.aborted || chapterLoadAbortRef.current !== abortController) {
+        return;
+      }
+
+      if (annotationsResult.status === 'fulfilled') {
+        const annotationsResponse = annotationsResult.value;
+        setAnnotationsData((annotationsResponse.data || annotationsResponse) as AnnotationsData);
+      } else if (!isRequestCancelledError(annotationsResult.reason)) {
+        console.error('加载章节标注失败，已降级为空数据:', annotationsResult.reason);
+      }
+
+      if (analysisResult.status === 'fulfilled') {
+        const analysisResponse = analysisResult.value;
+        const normalizedAnalysisResponse = analysisResponse && typeof analysisResponse === 'object' && 'data' in analysisResponse
+          ? (analysisResponse as { data?: ChapterAnalysisResponse }).data ?? analysisResponse
+          : analysisResponse;
+        setAnalysisDetail((normalizedAnalysisResponse ?? null) as ChapterAnalysisResponse | null);
+      } else if (!isRequestCancelledError(analysisResult.reason)) {
+        console.error('加载章节分析失败，已降级为空数据:', analysisResult.reason);
+      }
+
+      if (navigationResult.status === 'fulfilled') {
+        const navigationResponse = navigationResult.value;
+        setNavigation((navigationResponse.data || navigationResponse) as NavigationData);
+      } else if (!isRequestCancelledError(navigationResult.reason)) {
+        console.error('加载章节导航失败，已降级为空数据:', navigationResult.reason);
+      }
     } catch (error) {
+      if (isRequestCancelledError(error) || abortController.signal.aborted) {
+        return;
+      }
+      setAnnotationsData(null);
       setAnalysisDetail(null);
+      setNavigation(null);
       console.error('加载章节内容失败:', error);
       message.error('加载章节内容失败');
     } finally {
-      setContentLoading(false);
+      if (chapterLoadAbortRef.current === abortController) {
+        chapterLoadAbortRef.current = null;
+        initialChapterRequestRef.current = null;
+        setContentLoading(false);
+        setContentMetaLoading(false);
+      }
     }
-  };
+  }, [abortPendingChapterLoad, contentLoading]);
+
+  useEffect(() => {
+    if (!projectId) {
+      return;
+    }
+
+    const cachedProjectChapters = storeChapters
+      .filter((chapter) => chapter.project_id === projectId)
+      .map(toChapterItem);
+
+    if (cachedProjectChapters.length === 0) {
+      return;
+    }
+
+    setChapters((prev) => (prev.length > 0 ? prev : cachedProjectChapters));
+    setLoading(false);
+  }, [projectId, storeChapters]);
+
+  // 加载章节列表
+  useEffect(() => {
+    const loadChapters = async () => {
+      if (!projectId) return;
+
+      abortPendingChapterListLoad();
+      const abortController = new AbortController();
+      chapterListAbortRef.current = abortController;
+
+      try {
+        setLoading((prev) => prev && chapters.length === 0);
+        setTrendLoading(true);
+        const trendPromise = chapterApi.getProjectChapterQualityTrend(projectId, 12).catch((trendError) => {
+          if (isRequestCancelledError(trendError)) {
+            throw trendError;
+          }
+          console.error('加载项目质量趋势失败:', trendError);
+          return null;
+        });
+        const response = await api.get(`/chapters/project/${projectId}`, { signal: abortController.signal });
+
+        if (abortController.signal.aborted || chapterListAbortRef.current !== abortController) {
+          return;
+        }
+        // API 拦截器已经解析了 response.data，所以直接使用
+        const data = response.data || response;
+        const chapterList = (data.items || []) as ChapterItem[];
+        setChapters(chapterList);
+
+        const currentSelectedChapterId = selectedChapterIdRef.current;
+        const hasSelectedChapterInList = currentSelectedChapterId
+          ? chapterList.some((chapter) => chapter.id === currentSelectedChapterId)
+          : false;
+        const firstChapterWithContent = chapterList.find((ch: ChapterItem) => ch.content && ch.content.trim() !== '');
+        if (
+          firstChapterWithContent
+          && (!currentSelectedChapterId || !hasSelectedChapterInList)
+          && initialChapterRequestRef.current !== firstChapterWithContent.id
+        ) {
+          void loadChapterContent(firstChapterWithContent.id);
+        }
+
+        const trendResponse = await trendPromise;
+        if (abortController.signal.aborted || chapterListAbortRef.current !== abortController) {
+          return;
+        }
+        setProjectQualityTrend(trendResponse);
+      } catch (error) {
+        if (isRequestCancelledError(error) || abortController.signal.aborted) {
+          return;
+        }
+        setProjectQualityTrend(null);
+        console.error('加载章节列表失败:', error);
+        message.error('加载章节列表失败');
+      } finally {
+        if (chapterListAbortRef.current === abortController) {
+          chapterListAbortRef.current = null;
+          setLoading(false);
+          setTrendLoading(false);
+        }
+      }
+    };
+
+    void loadChapters();
+    return () => {
+      abortPendingChapterListLoad();
+    };
+  }, [abortPendingChapterListLoad, chapters.length, loadChapterContent, projectId]);
+
+  useEffect(() => {
+    return () => {
+      abortPendingChapterLoad();
+      abortPendingChapterListLoad();
+      clearScrollResetTimers();
+    };
+  }, [abortPendingChapterListLoad, abortPendingChapterLoad, clearScrollResetTimers]);
 
   const applyCandidateDraft = async (): Promise<boolean> => {
     if (!selectedChapter || !analysisDetail?.candidate_draft) {
@@ -315,7 +487,13 @@ const ChapterAnalysis: React.FC = () => {
   };
 
   const handleChapterSelect = (chapterId: string) => {
-    loadChapterContent(chapterId);
+    if (chapterId === selectedChapterIdRef.current || chapterId === initialChapterRequestRef.current) {
+      if (isMobile) {
+        setChapterListVisible(false);
+      }
+      return;
+    }
+    void loadChapterContent(chapterId);
     if (isMobile) {
       setChapterListVisible(false);
     }
@@ -323,13 +501,13 @@ const ChapterAnalysis: React.FC = () => {
 
   const handlePreviousChapter = () => {
     if (navigation?.previous) {
-      loadChapterContent(navigation.previous.id);
+      void loadChapterContent(navigation.previous.id);
     }
   };
 
   const handleNextChapter = () => {
     if (navigation?.next) {
-      loadChapterContent(navigation.next.id);
+      void loadChapterContent(navigation.next.id);
     }
   };
 
@@ -339,8 +517,16 @@ const ChapterAnalysis: React.FC = () => {
     if (source === 'content') {
       // 从内容区点击，滚动到侧边栏
       setScrollToSidebarAnnotation(annotation.id);
-      // 清除滚动状态
-      setTimeout(() => setScrollToSidebarAnnotation(undefined), 100);
+      if (sidebarScrollResetTimerRef.current !== null) {
+        window.clearTimeout(sidebarScrollResetTimerRef.current);
+      }
+      sidebarScrollResetTimerRef.current = window.setTimeout(() => {
+        sidebarScrollResetTimerRef.current = null;
+        if (!mountedRef.current) {
+          return;
+        }
+        setScrollToSidebarAnnotation(undefined);
+      }, 100);
       
       if (isMobile) {
         setSidebarVisible(true);
@@ -348,8 +534,16 @@ const ChapterAnalysis: React.FC = () => {
     } else {
       // 从侧边栏点击，滚动到内容区
       setScrollToContentAnnotation(annotation.id);
-      // 清除滚动状态
-      setTimeout(() => setScrollToContentAnnotation(undefined), 100);
+      if (contentScrollResetTimerRef.current !== null) {
+        window.clearTimeout(contentScrollResetTimerRef.current);
+      }
+      contentScrollResetTimerRef.current = window.setTimeout(() => {
+        contentScrollResetTimerRef.current = null;
+        if (!mountedRef.current) {
+          return;
+        }
+        setScrollToContentAnnotation(undefined);
+      }, 100);
     }
   };
 
@@ -746,7 +940,7 @@ const ChapterAnalysis: React.FC = () => {
             >
               <LazyProjectQualityTrendPanel
                 trendData={projectQualityTrend}
-                loading={loading}
+                loading={loading || trendLoading}
                 compact={isMobile}
               />
             </Suspense>
@@ -754,7 +948,7 @@ const ChapterAnalysis: React.FC = () => {
             <Card
               title="质量验收"
               size={isMobile ? 'small' : 'default'}
-              loading={contentLoading}
+              loading={contentMetaLoading}
               style={{ marginBottom: 16 }}
             >
               {!hasQualityAcceptanceData ? (
@@ -1026,7 +1220,7 @@ const ChapterAnalysis: React.FC = () => {
               >
                 {!contentLoading && (
                   <>
-                    {!hasAnnotations && (
+                    {!contentMetaLoading && !hasAnnotations && (
                       <Alert
                         message="暂无分析数据"
                         description="该章节尚未进行章节分析，无法显示记忆标注。"

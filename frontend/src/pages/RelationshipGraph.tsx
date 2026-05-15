@@ -1,4 +1,5 @@
-import { Suspense, lazy, useState, useEffect, useCallback, useMemo } from 'react';
+import { Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import type { MutableRefObject } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Card, Tag, Button, Space, message, Typography, theme } from 'antd';
 import { ArrowLeftOutlined } from '@ant-design/icons';
@@ -74,6 +75,10 @@ export default function RelationshipGraph() {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [edgeVisibilityMap, setEdgeVisibilityMap] = useState<Record<string, boolean>>({});
+  const mountedRef = useRef(false);
+  const relationshipTypesRequestIdRef = useRef(0);
+  const graphRequestIdRef = useRef(0);
+  const detailRequestIdRef = useRef(0);
 
   const careerNameMap = useMemo(
     () => buildCareerNameMap(mainCareers, subCareers),
@@ -111,6 +116,43 @@ export default function RelationshipGraph() {
     }));
   };
 
+  const applyGraphBuildResult = useCallback((buildResult: {
+    mainCareers: CareerItem[];
+    subCareers: CareerItem[];
+    characterDetailMap: Record<string, CharacterDetail>;
+    nodes: Node[];
+    edges: Edge[];
+    graphData: GraphData;
+  }) => {
+    setMainCareers(buildResult.mainCareers);
+    setSubCareers(buildResult.subCareers);
+    setCharacterDetailMap(buildResult.characterDetailMap);
+    setNodes(buildResult.nodes);
+    setEdges(buildResult.edges);
+    setGraphData(buildResult.graphData);
+  }, []);
+
+  const beginRequest = (requestRef: MutableRefObject<number>) => {
+    const nextRequestId = requestRef.current + 1;
+    requestRef.current = nextRequestId;
+    return nextRequestId;
+  };
+
+  const isRequestActive = (requestRef: MutableRefObject<number>, requestId: number) => (
+    mountedRef.current && requestRef.current === requestId
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+      relationshipTypesRequestIdRef.current += 1;
+      graphRequestIdRef.current += 1;
+      detailRequestIdRef.current += 1;
+    };
+  }, []);
+
   useEffect(() => {
     if (projectId) {
       void loadRelationshipTypes();
@@ -118,10 +160,18 @@ export default function RelationshipGraph() {
   }, [projectId]);
 
   const loadRelationshipTypes = async () => {
+    const requestId = beginRequest(relationshipTypesRequestIdRef);
+
     try {
       const res = await axios.get('/api/relationships/types');
+      if (!isRequestActive(relationshipTypesRequestIdRef, requestId)) {
+        return;
+      }
       setRelationshipTypes(res.data || []);
     } catch (error) {
+      if (!isRequestActive(relationshipTypesRequestIdRef, requestId)) {
+        return;
+      }
       console.error('加载关系类型失败', error);
     }
   };
@@ -129,20 +179,58 @@ export default function RelationshipGraph() {
   const loadGraphData = useCallback(async () => {
     if (!projectId || relationshipTypes.length === 0) return;
 
+    const requestId = beginRequest(graphRequestIdRef);
     setLoading(true);
     try {
-      const [graphRes, charactersRes, careersRes, layoutModule, graphBuilderModule] = await Promise.all([
-        axios.get(`/api/relationships/graph/${projectId}`),
+      const auxiliaryDataPromise = Promise.allSettled([
         axios.get('/api/characters', { params: { project_id: projectId } }),
         axios.get('/api/careers', { params: { project_id: projectId } }),
+      ]);
+
+      const [graphRes, layoutModule, graphBuilderModule] = await Promise.all([
+        axios.get(`/api/relationships/graph/${projectId}`),
         import('../components/relationship-graph/layout'),
         import('../components/relationship-graph/buildGraph'),
       ]);
 
+      if (!isRequestActive(graphRequestIdRef, requestId)) {
+        return;
+      }
+
       const data = graphRes.data as GraphData;
-      const characters = (charactersRes.data as CharacterListResponse)?.items || [];
-      const careersData = (careersRes.data as CareerListResponse) || {};
-      const buildResult = graphBuilderModule.buildRelationshipGraph({
+      const buildGraph = graphBuilderModule.buildRelationshipGraph;
+      applyGraphBuildResult(buildGraph({
+        projectId,
+        graphData: data,
+        characters: [],
+        careersData: {},
+        relationshipTypes,
+        token: graphTheme,
+        getLayoutedElements: layoutModule.getLayoutedElements,
+      }));
+
+      const [charactersResult, careersResult] = await auxiliaryDataPromise;
+
+      if (!isRequestActive(graphRequestIdRef, requestId)) {
+        return;
+      }
+
+      const characters = charactersResult.status === 'fulfilled'
+        ? ((charactersResult.value.data as CharacterListResponse)?.items || [])
+        : [];
+      const careersData = careersResult.status === 'fulfilled'
+        ? ((careersResult.value.data as CareerListResponse) || {})
+        : {};
+
+      if (charactersResult.status === 'rejected') {
+        console.error('加载关系图谱角色详情失败，已降级为空数据:', charactersResult.reason);
+      }
+
+      if (careersResult.status === 'rejected') {
+        console.error('加载关系图谱职业数据失败，已降级为空数据:', careersResult.reason);
+      }
+
+      applyGraphBuildResult(buildGraph({
         projectId,
         graphData: data,
         characters,
@@ -150,21 +238,19 @@ export default function RelationshipGraph() {
         relationshipTypes,
         token: graphTheme,
         getLayoutedElements: layoutModule.getLayoutedElements,
-      });
-
-      setMainCareers(buildResult.mainCareers);
-      setSubCareers(buildResult.subCareers);
-      setCharacterDetailMap(buildResult.characterDetailMap);
-      setNodes(buildResult.nodes);
-      setEdges(buildResult.edges);
-      setGraphData(buildResult.graphData);
+      }));
     } catch (error) {
+      if (!isRequestActive(graphRequestIdRef, requestId)) {
+        return;
+      }
       message.error('加载关系图谱失败');
       console.error(error);
     } finally {
-      setLoading(false);
+      if (isRequestActive(graphRequestIdRef, requestId)) {
+        setLoading(false);
+      }
     }
-  }, [projectId, relationshipTypes, graphTheme]);
+  }, [applyGraphBuildResult, projectId, relationshipTypes, graphTheme]);
 
   // 当 relationshipTypes 变化时重新加载图谱数据
   useEffect(() => {
@@ -186,23 +272,34 @@ export default function RelationshipGraph() {
 
     const cached = characterDetailMap[nodeId];
     if (cached) {
+      detailRequestIdRef.current += 1;
       setNodeDetail(cached);
       return;
     }
 
+    const requestId = beginRequest(detailRequestIdRef);
     setDetailLoading(true);
     try {
       const res = await axios.get(`/api/characters/${nodeId}`);
+      if (!isRequestActive(detailRequestIdRef, requestId)) {
+        return;
+      }
       setNodeDetail(res.data as CharacterDetail);
     } catch (error) {
+      if (!isRequestActive(detailRequestIdRef, requestId)) {
+        return;
+      }
       message.error('加载详情失败');
       console.error(error);
     } finally {
-      setDetailLoading(false);
+      if (isRequestActive(detailRequestIdRef, requestId)) {
+        setDetailLoading(false);
+      }
     }
   };
 
   const handleNodeClick = (_: unknown, node: { id: string }) => {
+    detailRequestIdRef.current += 1;
     setSelectedNodeId(node.id);
 
     const shouldShowDetail =
@@ -219,6 +316,7 @@ export default function RelationshipGraph() {
   };
 
   const handleCloseDetail = () => {
+    detailRequestIdRef.current += 1;
     setSelectedNodeId(null);
     setNodeDetail(null);
   };

@@ -1,6 +1,6 @@
 import { Modal, Form, Input, InputNumber, Select, Tag, Space, Button, message, Divider } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ExpansionPlanData, Character } from '../types';
 import { characterApi } from '../services/modularApi';
 
@@ -34,13 +34,30 @@ export default function ExpansionPlanEditor({
   const [availableCharacters, setAvailableCharacters] = useState<Character[]>([]);
   const [characters, setCharacters] = useState<string[]>([]);
   const [loadingCharacters, setLoadingCharacters] = useState(false);
+  const mountedRef = useRef(true);
+  const loadCharactersRequestIdRef = useRef(0);
+  const submitRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      loadCharactersRequestIdRef.current += 1;
+      submitRequestIdRef.current += 1;
+    };
+  }, []);
 
   // 加载项目角色列表
   const loadCharacters = useCallback(async () => {
+    loadCharactersRequestIdRef.current += 1;
+    const requestId = loadCharactersRequestIdRef.current;
     try {
       setLoadingCharacters(true);
       setAvailableCharacters([]); // 重置为空数组
       const response = await characterApi.getCharacters(projectId);
+      if (!mountedRef.current || loadCharactersRequestIdRef.current !== requestId) {
+        return;
+      }
       console.log('加载到的角色数据:', response);
       
       // API返回的是 {total, items} 格式,需要提取items
@@ -60,12 +77,17 @@ export default function ExpansionPlanEditor({
       setAvailableCharacters(chars);
       console.log('设置的角色列表:', chars);
     } catch (error: unknown) {
+      if (!mountedRef.current || loadCharactersRequestIdRef.current !== requestId) {
+        return;
+      }
       console.error('加载角色列表失败:', error);
       setAvailableCharacters([]);
       const err = error as Error;
       message.error('加载角色列表失败: ' + (err?.message || '未知错误'));
     } finally {
-      setLoadingCharacters(false);
+      if (mountedRef.current && loadCharactersRequestIdRef.current === requestId) {
+        setLoadingCharacters(false);
+      }
     }
   }, [projectId]);
 
@@ -113,21 +135,27 @@ export default function ExpansionPlanEditor({
   };
 
   const handleSubmit = async () => {
+    submitRequestIdRef.current += 1;
+    const requestId = submitRequestIdRef.current;
     try {
       setLoading(true);
       const values = await form.validateFields();
       
       // 验证至少有一个关键事件
       if (keyEvents.length === 0) {
+        if (!mountedRef.current || submitRequestIdRef.current !== requestId) {
+          return;
+        }
         message.warning('请至少添加一个关键事件');
-        setLoading(false);
         return;
       }
       
       // 验证至少有一个角色
       if (characters.length === 0) {
+        if (!mountedRef.current || submitRequestIdRef.current !== requestId) {
+          return;
+        }
         message.warning('请至少添加一个涉及角色');
-        setLoading(false);
         return;
       }
       
@@ -143,12 +171,20 @@ export default function ExpansionPlanEditor({
       };
       
       await onSave(updatedPlan);
+      if (!mountedRef.current || submitRequestIdRef.current !== requestId) {
+        return;
+      }
       // message.success('规划信息保存成功');
     } catch (error) {
+      if (!mountedRef.current || submitRequestIdRef.current !== requestId) {
+        return;
+      }
       console.error('保存失败:', error);
       message.error('保存失败，请重试');
     } finally {
-      setLoading(false);
+      if (mountedRef.current && submitRequestIdRef.current === requestId) {
+        setLoading(false);
+      }
     }
   };
 

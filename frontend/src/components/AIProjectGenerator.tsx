@@ -178,6 +178,28 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   // 【修复】操作锁，防止并发调用
   const operationLockRef = useRef(false);
   const autoStartSignatureRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
+  const generationRunRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      generationRunRef.current += 1;
+    };
+  }, []);
+
+  const beginGenerationRun = () => {
+    generationRunRef.current += 1;
+    return generationRunRef.current;
+  };
+
+  const invalidateGenerationRun = () => {
+    generationRunRef.current += 1;
+  };
+
+  const isGenerationRunActive = (runId: number) => (
+    mountedRef.current && generationRunRef.current === runId
+  );
 
   // LocalStorage 键名
   const storageKeys = {
@@ -329,14 +351,23 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     onBusyChange?.(loading || isCancelling);
   }, [isCancelling, loading, onBusyChange]);
 
-  const buildTaskOptions = <TResult extends WizardResearchPayload | WorldBuildingResult>(options: SSEClientOptions<TResult>): SSEClientOptions<TResult> => ({
+  const buildTaskOptions = <TResult extends WizardResearchPayload | WorldBuildingResult>(
+    runId: number,
+    options: SSEClientOptions<TResult>,
+  ): SSEClientOptions<TResult> => ({
     ...options,
     inactivityTimeoutMs: options.inactivityTimeoutMs ?? WIZARD_STREAM_INACTIVITY_TIMEOUT_MS,
     onHeartbeat: () => {
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
       setProgressMessage((prev) => appendWizardHeartbeatHint(prev || 'AI 正在处理中'));
       options.onHeartbeat?.();
     },
     onTaskCreated: (taskId: string) => {
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
       cancelledByUserRef.current = false;
       setIsCancelled(false);
       setCurrentTaskId(taskId);
@@ -344,6 +375,9 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       options.onTaskCreated?.(taskId);
     },
     onCancelled: (cancelMsg: string) => {
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
       cancelledByUserRef.current = true;
       setIsCancelled(true);
       setCurrentTaskId(null);
@@ -360,6 +394,9 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       options.onCancelled?.(cancelMsg);
     },
     onComplete: () => {
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
       setCurrentTaskId(null);
       setStoredTaskId(null);
       setIsCancelling(false);
@@ -369,18 +406,24 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     },
   });
 
-  const completeWizardGeneration = async (pid: string) => {
+  const completeWizardGeneration = async (pid: string, runId: number) => {
+    if (!isGenerationRunActive(runId)) {
+      return;
+    }
     setProgress(100);
     setProgressMessage('生成已完成，正在跳转...');
     message.success('项目创建完成，正在跳转...');
     clearStorage();
 
     await Promise.resolve(onComplete(pid));
+    if (!isGenerationRunActive(runId)) {
+      return;
+    }
     setLoading(false);
     navigate(`/project/${pid}`, { replace: true });
   };
 
-  const buildCareerTaskOptions = (): SSEClientOptions<CareerSystemResult> => buildTaskOptions<CareerSystemResult>({
+  const buildCareerTaskOptions = (runId: number): SSEClientOptions<CareerSystemResult> => buildTaskOptions<CareerSystemResult>(runId, {
     onProgress: (msg, prog) => {
       setProgress(prog);
       setProgressMessage(msg);
@@ -402,7 +445,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     },
   });
 
-  const buildCharactersTaskOptions = (): SSEClientOptions<CharactersGenerationResult> => buildTaskOptions<CharactersGenerationResult>({
+  const buildCharactersTaskOptions = (runId: number): SSEClientOptions<CharactersGenerationResult> => buildTaskOptions<CharactersGenerationResult>(runId, {
     onProgress: (msg, prog) => {
       setProgress(prog);
       setProgressMessage(msg);
@@ -424,7 +467,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     },
   });
 
-  const buildOutlineTaskOptions = (): SSEClientOptions<OutlineGenerationResult> => buildTaskOptions<OutlineGenerationResult>({
+  const buildOutlineTaskOptions = (runId: number): SSEClientOptions<OutlineGenerationResult> => buildTaskOptions<OutlineGenerationResult>(runId, {
     onProgress: (msg, prog) => {
       setProgress(prog);
       setProgressMessage(msg);
@@ -552,6 +595,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
     try {
       await backgroundTaskApi.cancelTask(currentTaskId);
+      invalidateGenerationRun();
       message.info('后台任务已取消');
 
       // 【修复】立即清理状态，移除硬编码延迟
@@ -598,22 +642,26 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     }
 
     autoStartSignatureRef.current = autoStartSignature;
+    const runId = beginGenerationRun();
 
     if (resumeProjectId) {
       // Resume existing generation
-      handleResumeGenerate(config, resumeProjectId);
+      void handleResumeGenerate(config, resumeProjectId, runId);
     } else if (resumableStoredTaskId) {
       // Resume world-building task before projectId is available
-      handleResumeWorldBuildingTask(config, resumableStoredTaskId);
+      void handleResumeWorldBuildingTask(config, resumableStoredTaskId, runId);
     } else {
       // Resume existing generation
-      handleAutoGenerate(config);
+      void handleAutoGenerate(config, runId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config, resumeProjectId]);
 
-  const handleResumeWorldBuildingTask = async (data: GenerationConfig, taskId: string) => {
+  const handleResumeWorldBuildingTask = async (data: GenerationConfig, taskId: string, runId: number) => {
     try {
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
       cancelledByUserRef.current = false;
       setIsCancelled(false);
       setCurrentTaskId(null);
@@ -628,20 +676,23 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       setGenerationSteps({ worldBuilding: 'processing', careers: 'pending', characters: 'pending', outline: 'pending' });
 
       const task = await backgroundTaskApi.getTaskStatus(taskId);
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
       if (isMissingBackgroundTask(task)) {
         cancelledByUserRef.current = false;
         setIsCancelled(false);
         setCurrentTaskId(null);
         setStoredTaskId(null);
         setProgressMessage('上一次后台任务已过期，正在重新生成世界观...');
-        await handleAutoGenerate(data);
+        await handleAutoGenerate(data, runId);
         return;
       }
 
       if (task.task_type !== 'wizard_world_building') {
         setCurrentTaskId(null);
         setStoredTaskId(null);
-        await handleAutoGenerate(data);
+        await handleAutoGenerate(data, runId);
         return;
       }
 
@@ -657,7 +708,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         updateStepResearch('worldBuilding', result);
         setGenerationSteps({ worldBuilding: 'completed', careers: 'pending', characters: 'pending', outline: 'pending' });
         saveProgress(result.project_id, data, 'generating');
-        await continueFromCareers(result);
+        await continueFromCareers(result, runId);
         return;
       }
 
@@ -685,7 +736,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       setCurrentTaskId(taskId);
       setProgress(task.progress || 0);
       setProgressMessage(task.message || '正在恢复世界观生成任务...');
-      const worldResult = await waitForExistingBackgroundTask<WorldBuildingResult>(task, buildTaskOptions<WorldBuildingResult>({
+      const worldResult = await waitForExistingBackgroundTask<WorldBuildingResult>(task, buildTaskOptions<WorldBuildingResult>(runId, {
         onProgress: (msg, prog) => {
           setProgress(prog);
           setProgressMessage(msg);
@@ -713,8 +764,11 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       }
 
       saveProgress(worldResult.project_id, data, 'generating');
-      await continueFromCareers(worldResult);
+      await continueFromCareers(worldResult, runId);
     } catch (error) {
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
       if (isTaskCancelledError(error)) {
         message.info('后台任务已取消');
         setLoading(false);
@@ -734,8 +788,11 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     }
   };
 
-  const handleResumeGenerate = async (data: GenerationConfig, projectIdParam: string) => {
+  const handleResumeGenerate = async (data: GenerationConfig, projectIdParam: string, runId: number) => {
     try {
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
       cancelledByUserRef.current = false;
       setIsCancelled(false);
       setCurrentTaskId(null);
@@ -751,6 +808,9 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       const response = await fetch(`/api/projects/${projectIdParam}`, {
         credentials: 'include'
       });
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
       if (!response.ok) {
         throw new Error('获取项目信息失败');
       }
@@ -772,13 +832,13 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
       if (activeWizardTasks.wizard_outline) {
         const outlineTask = activeWizardTasks.wizard_outline;
-        message.info('检测到已存在的角色生成任务，正在接回...');
+        message.info('检测到已存在的大纲生成任务，正在接回...');
         setGenerationSteps({ worldBuilding: 'completed', careers: 'completed', characters: 'completed', outline: 'processing' });
         setWorldBuildingResult(worldResult);
         setProgress(outlineTask.progress || 70);
         setProgressMessage(outlineTask.message || '正在继续生成大纲...');
-        await waitForExistingBackgroundTask(outlineTask, buildOutlineTaskOptions());
-        await completeWizardGeneration(projectIdParam);
+        await waitForExistingBackgroundTask(outlineTask, buildOutlineTaskOptions(runId));
+        await completeWizardGeneration(projectIdParam, runId);
       } else if (activeWizardTasks.wizard_characters) {
         const charactersTask = activeWizardTasks.wizard_characters;
         message.info('检测到已存在的角色生成任务，正在接回...');
@@ -786,8 +846,8 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         setWorldBuildingResult(worldResult);
         setProgress(charactersTask.progress || 40);
         setProgressMessage(charactersTask.message || '正在继续生成角色...');
-        await waitForExistingBackgroundTask(charactersTask, buildCharactersTaskOptions());
-        await resumeFromOutline(data, projectIdParam);
+        await waitForExistingBackgroundTask(charactersTask, buildCharactersTaskOptions(runId));
+        await resumeFromOutline(data, projectIdParam, runId);
       } else if (activeWizardTasks.wizard_career_system) {
         const careersTask = activeWizardTasks.wizard_career_system;
         message.info('检测到已存在的职业体系任务，正在接回...');
@@ -795,45 +855,53 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         setWorldBuildingResult(worldResult);
         setProgress(careersTask.progress || 20);
         setProgressMessage(careersTask.message || '正在继续生成职业体系...');
-        await waitForExistingBackgroundTask(careersTask, buildCareerTaskOptions());
-        await resumeFromCharacters(data, worldResult);
+        await waitForExistingBackgroundTask(careersTask, buildCareerTaskOptions(runId));
+        await resumeFromCharacters(data, worldResult, runId);
       } else if (wizardStep === 0) {
         // 从世界观阶段恢复
         message.info('正在从世界观阶段继续生成...');
         setGenerationSteps({ worldBuilding: 'processing', careers: 'pending', characters: 'pending', outline: 'pending' });
-        await resumeFromWorldBuilding(data);
+        await resumeFromWorldBuilding(data, runId);
       } else if (wizardStep === 1) {
         // 从职业体系阶段恢复
         message.info('正在从职业体系阶段继续生成...');
         setGenerationSteps({ worldBuilding: 'completed', careers: 'processing', characters: 'pending', outline: 'pending' });
         setWorldBuildingResult(worldResult);
         setProgress(20);
-        await resumeFromCareers(data, worldResult);
+        await resumeFromCareers(data, worldResult, runId);
       } else if (wizardStep === 2) {
         // 从角色阶段恢复
         message.info('正在从角色阶段继续生成...');
         setGenerationSteps({ worldBuilding: 'completed', careers: 'completed', characters: 'processing', outline: 'pending' });
         setWorldBuildingResult(worldResult);
         setProgress(40);
-        await resumeFromCharacters(data, worldResult);
+        await resumeFromCharacters(data, worldResult, runId);
       } else if (wizardStep === 3) {
         // 从大纲阶段恢复
         message.info('正在从大纲阶段继续生成...');
         setGenerationSteps({ worldBuilding: 'completed', careers: 'completed', characters: 'completed', outline: 'processing' });
         setProgress(70);
-        await resumeFromOutline(data, projectIdParam);
+        await resumeFromOutline(data, projectIdParam, runId);
       } else if (isProjectWizardCompleted(project)) {
         // 已全部完成
         message.success('项目已完成,正在跳转...');
         setProgress(100);
         clearStorage();
         setLoading(false);
-        onComplete(projectIdParam);
+        await Promise.resolve(onComplete(projectIdParam));
+        if (!isGenerationRunActive(runId)) {
+          return;
+        }
         setTimeout(() => {
-          navigate(`/project/${projectIdParam}`);
+          if (isGenerationRunActive(runId)) {
+            navigate(`/project/${projectIdParam}`);
+          }
         }, 1000);
       }
     } catch (error) {
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
       if (isTaskCancelledError(error)) {
         message.info('后台任务已取消');
         setLoading(false);
@@ -855,10 +923,10 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   };
 
   // 恢复:从世界观步骤开始
-  const resumeFromWorldBuilding = async (data: GenerationConfig) => {
+  const resumeFromWorldBuilding = async (data: GenerationConfig, runId: number) => {
     const worldResult = await wizardStreamApi.generateWorldBuildingStream(
       buildWorldBuildingPayload(data),
-      buildTaskOptions({
+      buildTaskOptions(runId, {
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
           setProgress(prog);
@@ -882,11 +950,11 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       })
     );
 
-    await resumeFromCareers(data, worldResult);
+    await resumeFromCareers(data, worldResult, runId);
   };
 
   // 恢复:从职业体系步骤继续
-  const resumeFromCareers = async (data: GenerationConfig, worldResult: WorldBuildingResult) => {
+  const resumeFromCareers = async (data: GenerationConfig, worldResult: WorldBuildingResult, runId: number) => {
     const pid = projectId || worldResult.project_id;
 
     setGenerationSteps(prev => ({ ...prev, careers: 'processing' }));
@@ -894,40 +962,43 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
     await wizardStreamApi.generateCareerSystemStream(
       buildCareerPayload(pid, data),
-      buildCareerTaskOptions()
+      buildCareerTaskOptions(runId)
     );
 
-    await resumeFromCharacters(data, worldResult);
+    await resumeFromCharacters(data, worldResult, runId);
   };
 
-  const resumeFromCharacters = async (data: GenerationConfig, worldResult: WorldBuildingResult) => {
+  const resumeFromCharacters = async (data: GenerationConfig, worldResult: WorldBuildingResult, runId: number) => {
     const pid = projectId || worldResult.project_id;
 
     setGenerationSteps(prev => ({ ...prev, characters: 'processing' }));
-    setProgressMessage('正在生成大纲...');
+    setProgressMessage('正在生成角色...');
 
     await wizardStreamApi.generateCharactersStream(
       buildCharactersPayload(pid, data, worldResult),
-      buildCharactersTaskOptions()
+      buildCharactersTaskOptions(runId)
     );
 
-    await resumeFromOutline(data, pid);
+    await resumeFromOutline(data, pid, runId);
   };
 
-  const resumeFromOutline = async (data: GenerationConfig, pid: string) => {
+  const resumeFromOutline = async (data: GenerationConfig, pid: string, runId: number) => {
     setGenerationSteps(prev => ({ ...prev, outline: 'processing' }));
     setProgressMessage('正在生成大纲...');
 
     await wizardStreamApi.generateCompleteOutlineStream(
       buildOutlinePayload(pid, data),
-      buildOutlineTaskOptions()
+      buildOutlineTaskOptions(runId)
     );
 
-    await completeWizardGeneration(pid);
+    await completeWizardGeneration(pid, runId);
   };
 
-  const handleAutoGenerate = async (data: GenerationConfig) => {
+  const handleAutoGenerate = async (data: GenerationConfig, runId: number) => {
     try {
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
       cancelledByUserRef.current = false;
       setIsCancelled(false);
       setCurrentTaskId(null);
@@ -945,7 +1016,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
       const worldResult = await wizardStreamApi.generateWorldBuildingStream(
         buildWorldBuildingPayload(data),
-        buildTaskOptions<WorldBuildingResult>({
+        buildTaskOptions<WorldBuildingResult>(runId, {
           onProgress: (msg, prog) => {
             // 直接使用后端返回的进度值
             setProgress(prog);
@@ -985,7 +1056,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
       await wizardStreamApi.generateCareerSystemStream(
         buildCareerPayload(createdProjectId, data),
-        buildTaskOptions({
+        buildTaskOptions(runId, {
           onProgress: (msg, prog) => {
             setProgress(prog);
             setProgressMessage(msg);
@@ -1014,7 +1085,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
       await wizardStreamApi.generateCharactersStream(
         buildCharactersPayload(createdProjectId, data, worldResult),
-        buildTaskOptions({
+        buildTaskOptions(runId, {
           onProgress: (msg, prog) => {
             // 直接使用后端返回的进度值
             setProgress(prog);
@@ -1044,7 +1115,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
       await wizardStreamApi.generateCompleteOutlineStream(
         buildOutlinePayload(createdProjectId, data),
-        buildTaskOptions({
+        buildTaskOptions(runId, {
           onProgress: (msg, prog) => {
             // 直接使用后端返回的进度值
             setProgress(prog);
@@ -1068,9 +1139,12 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
         })
       );
 
-      await completeWizardGeneration(createdProjectId);
+      await completeWizardGeneration(createdProjectId, runId);
 
     } catch (error) {
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
       if (isTaskCancelledError(error)) {
         message.info('后台任务已取消');
         setLoading(false);
@@ -1124,6 +1198,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
     // 【修复】加锁防止重入
     operationLockRef.current = true;
+    const runId = beginGenerationRun();
 
     // 重置所有状态
     cancelledByUserRef.current = false;
@@ -1135,18 +1210,21 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     try {
       if (generationSteps.worldBuilding === 'error') {
         message.info('从世界观步骤开始重新生成...');
-        await retryFromWorldBuilding();
+        await retryFromWorldBuilding(runId);
       } else if (generationSteps.careers === 'error') {
         message.info('从职业体系步骤继续生成...');
-        await retryFromCareers();
+        await retryFromCareers(runId);
       } else if (generationSteps.characters === 'error') {
         message.info('从角色步骤继续生成...');
-        await retryFromCharacters();
+        await retryFromCharacters(runId);
       } else if (generationSteps.outline === 'error') {
         message.info('从大纲步骤继续生成...');
-        await retryFromOutline();
+        await retryFromOutline(runId);
       }
     } catch (error) {
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
       if (isTaskCancelledError(error)) {
         message.info('后台任务已取消');
         setLoading(false);
@@ -1167,7 +1245,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   };
 
   // 从世界观步骤重新开始
-  const retryFromWorldBuilding = async () => {
+  const retryFromWorldBuilding = async (runId: number) => {
     if (!generationData) return;
 
     setGenerationSteps(prev => ({ ...prev, worldBuilding: 'processing' }));
@@ -1175,7 +1253,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
     const worldResult = await wizardStreamApi.generateWorldBuildingStream(
       buildWorldBuildingPayload(generationData),
-      buildTaskOptions({
+      buildTaskOptions(runId, {
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
           setProgress(prog);
@@ -1204,11 +1282,11 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       throw new Error('项目创建失败：未获取到项目ID');
     }
 
-    await continueFromCareers(worldResult);
+    await continueFromCareers(worldResult, runId);
   };
 
   // 从职业体系步骤继续
-  const retryFromCareers = async () => {
+  const retryFromCareers = async (runId: number) => {
     if (!generationData || !worldBuildingResult) {
       message.warning('缺少必要数据，无法从职业体系步骤继续');
       setLoading(false);
@@ -1227,7 +1305,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
     await wizardStreamApi.generateCareerSystemStream(
       buildCareerPayload(pid, generationData),
-      buildTaskOptions({
+      buildTaskOptions(runId, {
         onProgress: (msg, prog) => {
           setProgress(prog);
           setProgressMessage(msg);
@@ -1250,11 +1328,11 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       })
     );
 
-    await continueFromCharacters(worldBuildingResult);
+    await continueFromCharacters(worldBuildingResult, runId);
   };
 
   // 从角色步骤继续
-  const retryFromCharacters = async () => {
+  const retryFromCharacters = async (runId: number) => {
     if (!generationData || !worldBuildingResult) {
       message.warning('缺少必要数据，无法从角色步骤继续');
       setLoading(false);
@@ -1274,7 +1352,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
     await wizardStreamApi.generateCharactersStream(
       buildCharactersPayload(pid, generationData, worldBuildingResult),
-      buildTaskOptions({
+      buildTaskOptions(runId, {
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
           setProgress(prog);
@@ -1298,11 +1376,11 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       })
     );
 
-    await continueFromOutline(pid);
+    await continueFromOutline(pid, runId);
   };
 
   // 从大纲步骤继续
-  const retryFromOutline = async () => {
+  const retryFromOutline = async (runId: number) => {
     if (!generationData) {
       message.warning('缺少必要数据，无法从大纲步骤继续');
       setLoading(false);
@@ -1322,7 +1400,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
     await wizardStreamApi.generateCompleteOutlineStream(
       buildOutlinePayload(pid, generationData),
-      buildTaskOptions({
+      buildTaskOptions(runId, {
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
           setProgress(prog);
@@ -1346,11 +1424,11 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       })
     );
 
-    await completeWizardGeneration(pid);
+    await completeWizardGeneration(pid, runId);
   };
 
   // 从职业体系步骤开始的完整流程
-  const continueFromCareers = async (worldResult: WorldBuildingResult) => {
+  const continueFromCareers = async (worldResult: WorldBuildingResult, runId: number) => {
     if (!generationData || !worldResult?.project_id) return;
 
     const pid = worldResult.project_id;
@@ -1360,7 +1438,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
     await wizardStreamApi.generateCareerSystemStream(
       buildCareerPayload(pid, generationData),
-      buildTaskOptions({
+      buildTaskOptions(runId, {
         onProgress: (msg, prog) => {
           setProgress(prog);
           setProgressMessage(msg);
@@ -1383,11 +1461,11 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       })
     );
 
-    await continueFromCharacters(worldResult);
+    await continueFromCharacters(worldResult, runId);
   };
 
   // 从角色步骤开始的完整流程
-  const continueFromCharacters = async (worldResult: WorldBuildingResult) => {
+  const continueFromCharacters = async (worldResult: WorldBuildingResult, runId: number) => {
     if (!generationData || !worldResult?.project_id) return;
 
     const pid = worldResult.project_id;
@@ -1397,7 +1475,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
     await wizardStreamApi.generateCharactersStream(
       buildCharactersPayload(pid, generationData, worldResult),
-      buildTaskOptions({
+      buildTaskOptions(runId, {
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
           setProgress(prog);
@@ -1421,11 +1499,11 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       })
     );
 
-    await continueFromOutline(pid);
+    await continueFromOutline(pid, runId);
   };
 
   // 从大纲步骤开始的完整流程
-  const continueFromOutline = async (pid: string) => {
+  const continueFromOutline = async (pid: string, runId: number) => {
     if (!generationData || !pid) return;
 
     setGenerationSteps(prev => ({ ...prev, outline: 'processing' }));
@@ -1433,7 +1511,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
     await wizardStreamApi.generateCompleteOutlineStream(
       buildOutlinePayload(pid, generationData),
-      buildTaskOptions({
+      buildTaskOptions(runId, {
         onProgress: (msg, prog) => {
           // 直接使用后端返回的进度值
           setProgress(prog);
@@ -1457,7 +1535,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       })
     );
 
-    await completeWizardGeneration(pid);
+    await completeWizardGeneration(pid, runId);
   };
 
 
@@ -1476,6 +1554,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   const showTerminalActions = hasError || isCancelled;
 
   const handleExitGeneration = (target: 'back' | 'home') => {
+    invalidateGenerationRun();
     clearStorage();
     setCurrentTaskId(null);
     setLoading(false);

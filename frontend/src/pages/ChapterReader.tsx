@@ -86,11 +86,153 @@ const ChapterReader: React.FC = () => {
   const analysisPollErrorCountRef = useRef(0);
   const analyzingRef = useRef(false);
   const loadAbortRef = useRef<AbortController | null>(null);
+  const chapterIdRef = useRef<string | undefined>(chapterId);
+
+  const sanitizeAnnotationsData = useCallback(
+    (loadedAnnotationsData: AnnotationsData | null, chapterContent: string) => {
+      if (!loadedAnnotationsData) {
+        return null;
+      }
+
+      const validAnnotations = loadedAnnotationsData.annotations.filter(
+        (annotation: MemoryAnnotation) =>
+          annotation.position >= 0 && annotation.position < chapterContent.length,
+      );
+      const invalidCount = loadedAnnotationsData.annotations.length - validAnnotations.length;
+
+      if (invalidCount > 0) {
+        console.warn(
+          `${invalidCount} annotation positions are invalid; rendering ${validAnnotations.length} valid annotations only.`,
+        );
+      }
+
+      return {
+        ...loadedAnnotationsData,
+        annotations: validAnnotations,
+      };
+    },
+    [],
+  );
 
   const abortPendingLoad = useCallback(() => {
     loadAbortRef.current?.abort();
     loadAbortRef.current = null;
   }, []);
+
+  const stopAnalysisPolling = () => {
+    if (analysisPollIntervalRef.current) {
+      window.clearInterval(analysisPollIntervalRef.current);
+      analysisPollIntervalRef.current = null;
+    }
+    if (analysisPollTimeoutRef.current) {
+      window.clearTimeout(analysisPollTimeoutRef.current);
+      analysisPollTimeoutRef.current = null;
+    }
+    analysisPollErrorCountRef.current = 0;
+  };
+
+  useEffect(() => {
+    chapterIdRef.current = chapterId;
+  }, [chapterId]);
+
+  const startAnalysisPolling = useCallback(
+    (resolvedProjectId?: string, chapterContent?: string) => {
+      if (!chapterId) {
+        return;
+      }
+
+      stopAnalysisPolling();
+      analysisPollErrorCountRef.current = 0;
+
+      const poll = async () => {
+        try {
+          if (chapterIdRef.current !== chapterId) {
+            stopAnalysisPolling();
+            return;
+          }
+          const statusRes = await chapterApi.getChapterAnalysisStatus(chapterId, resolvedProjectId);
+          analysisPollErrorCountRef.current = 0;
+          const { status, progress, error_message, auto_recovered } = statusRes;
+
+          setAnalysisProgress(progress || 0);
+
+          if (status === 'completed') {
+            stopAnalysisPolling();
+            setAnalyzing(false);
+            message.success({ content: '分析完成！', key: 'analyze' });
+
+            const annotationsRes = await api.get<unknown, AnnotationsData>(
+              `/chapters/${chapterId}/annotations`,
+            );
+            if (chapterIdRef.current !== chapterId) {
+              return;
+            }
+            const nextChapterContent = chapterContent ?? chapter?.content ?? '';
+            setAnnotationsData(sanitizeAnnotationsData(annotationsRes, nextChapterContent));
+            return;
+          }
+
+          if (status === 'failed') {
+            if (isAnalysisTaskRetrying(statusRes)) {
+              message.loading({
+                content: error_message || '章节分析正在自动重试，请稍候...',
+                key: 'analyze',
+                duration: 0,
+              });
+              return;
+            }
+
+            stopAnalysisPolling();
+            setAnalyzing(false);
+
+            if (auto_recovered) {
+              message.warning({
+                content: `分析任务已自动恢复：${error_message || '请稍后重试'}`,
+                key: 'analyze',
+              });
+              return;
+            }
+
+            message.error({
+              content: `分析失败：${error_message || '未知错误'}`,
+              key: 'analyze',
+            });
+          }
+        } catch (err) {
+          if (isRequestCancelledError(err)) {
+            return;
+          }
+
+          analysisPollErrorCountRef.current += 1;
+          console.error('轮询分析状态失败:', err);
+          if (analysisPollErrorCountRef.current < MAX_CONSECUTIVE_TASK_POLL_ERRORS) {
+            return;
+          }
+
+          stopAnalysisPolling();
+          setAnalyzing(false);
+          message.error({
+            content: '章节分析状态同步失败，请刷新页面确认最新结果',
+            key: 'analyze',
+          });
+        }
+      };
+
+      void poll();
+      analysisPollIntervalRef.current = window.setInterval(() => {
+        void poll();
+      }, 2000);
+
+      analysisPollTimeoutRef.current = window.setTimeout(() => {
+        stopAnalysisPolling();
+        if (analyzingRef.current) {
+          setAnalyzing(false);
+          message.warning({ content: '分析超时，请稍后刷新查看结果', key: 'analyze' });
+        }
+      }, 30000);
+    },
+    [chapter?.content, chapterId, sanitizeAnnotationsData],
+  );
 
   const loadChapterData = useCallback(async () => {
     if (!chapterId) {
@@ -104,12 +246,15 @@ const ChapterReader: React.FC = () => {
     try {
       setLoading(true);
       setError(null);
+      setAnalyzing(false);
+      setAnalysisProgress(0);
+      message.destroy('analyze');
 
       const requestConfig = { signal: abortController.signal };
 
-      // Load chapter content, annotations, and navigation in parallel
+      // Load chapter content, annotations, navigation, and analysis status in parallel
       // The API interceptor already unwraps response.data
-      const [chapterData, loadedAnnotationsData, navigationData] = await Promise.all([
+      const [chapterData, loadedAnnotationsData, navigationData, analysisStatus] = await Promise.all([
         api.get<unknown, ChapterData>(`/chapters/${chapterId}`, requestConfig).catch(err => {
           console.error('Failed to load chapter:', err);
           throw err;
@@ -128,6 +273,13 @@ const ChapterReader: React.FC = () => {
           console.warn('Failed to load chapter navigation:', err);
           return null;
         }),
+        chapterApi.getChapterAnalysisStatus(chapterId, undefined, requestConfig).catch(err => {
+          if (isRequestCancelledError(err)) {
+            throw err;
+          }
+          console.warn('Failed to load chapter analysis status:', err);
+          return null;
+        }),
       ]);
 
       if (abortController.signal.aborted || loadAbortRef.current !== abortController) {
@@ -137,6 +289,7 @@ const ChapterReader: React.FC = () => {
       console.log('Chapter payload:', chapterData);
       console.log('Annotations payload:', loadedAnnotationsData);
       console.log('Navigation payload:', navigationData);
+      console.log('Chapter analysis status payload:', analysisStatus);
 
       // Validate chapter payload
       if (!chapterData || !chapterData.content) {
@@ -145,24 +298,21 @@ const ChapterReader: React.FC = () => {
 
       setChapter(chapterData);
       setNavigation(navigationData);
+      setAnnotationsData(sanitizeAnnotationsData(loadedAnnotationsData, chapterData.content));
 
-      // Validate annotations before rendering
-      if (loadedAnnotationsData) {
-        const validAnnotations = loadedAnnotationsData.annotations.filter(
-          (a: MemoryAnnotation) => a.position >= 0 && a.position < chapterData.content.length,
-        );
-        const invalidCount = loadedAnnotationsData.annotations.length - validAnnotations.length;
-
-        if (invalidCount > 0) {
-          console.warn(`${invalidCount} annotation positions are invalid; rendering ${validAnnotations.length} valid annotations only.`);
-        }
-
-        setAnnotationsData({
-          ...loadedAnnotationsData,
-          annotations: validAnnotations,
-        });
+      if (
+        analysisStatus &&
+        (analysisStatus.status === 'pending' ||
+          analysisStatus.status === 'running' ||
+          isAnalysisTaskRetrying(analysisStatus))
+      ) {
+        setAnalyzing(true);
+        setAnalysisProgress(analysisStatus.progress || 0);
+        message.loading({ content: '正在恢复章节分析状态...', key: 'analyze', duration: 0 });
+        startAnalysisPolling(chapterData.project_id, chapterData.content);
       } else {
-        setAnnotationsData(null);
+        setAnalyzing(false);
+        setAnalysisProgress(0);
       }
     } catch (err: unknown) {
       if (isRequestCancelledError(err) || abortController.signal.aborted) {
@@ -177,19 +327,7 @@ const ChapterReader: React.FC = () => {
         setLoading(false);
       }
     }
-  }, [abortPendingLoad, chapterId]);
-
-  const stopAnalysisPolling = () => {
-    if (analysisPollIntervalRef.current) {
-      window.clearInterval(analysisPollIntervalRef.current);
-      analysisPollIntervalRef.current = null;
-    }
-    if (analysisPollTimeoutRef.current) {
-      window.clearTimeout(analysisPollTimeoutRef.current);
-      analysisPollTimeoutRef.current = null;
-    }
-    analysisPollErrorCountRef.current = 0;
-  };
+  }, [abortPendingLoad, chapterId, sanitizeAnnotationsData, startAnalysisPolling]);
 
   useEffect(() => {
     analyzingRef.current = analyzing;
@@ -251,84 +389,7 @@ const ChapterReader: React.FC = () => {
       message.loading({ content: '开始分析章节...', key: 'analyze', duration: 0 });
 
       await chapterApi.triggerChapterAnalysis(chapterId, chapter?.project_id);
-
-      analysisPollErrorCountRef.current = 0;
-
-      const poll = async () => {
-        try {
-          const statusRes = await chapterApi.getChapterAnalysisStatus(chapterId, chapter?.project_id);
-          analysisPollErrorCountRef.current = 0;
-          const { status, progress, error_message, auto_recovered } = statusRes;
-
-          setAnalysisProgress(progress || 0);
-
-          if (status === 'completed') {
-            stopAnalysisPolling();
-            setAnalyzing(false);
-            message.success({ content: '分析完成！', key: 'analyze' });
-
-            const annotationsRes = await api.get<unknown, AnnotationsData>(`/chapters/${chapterId}/annotations`);
-            setAnnotationsData(annotationsRes);
-            return;
-          }
-
-          if (status === 'failed') {
-            if (isAnalysisTaskRetrying(statusRes)) {
-              message.loading({
-                content: error_message || '章节分析正在自动重试，请稍候...',
-                key: 'analyze',
-                duration: 0,
-              });
-              return;
-            }
-
-            stopAnalysisPolling();
-            setAnalyzing(false);
-
-            if (auto_recovered) {
-              message.warning({
-                content: `分析任务已自动恢复：${error_message || '请稍后重试'}`,
-                key: 'analyze'
-              });
-              return;
-            }
-
-            message.error({
-              content: `分析失败：${error_message || '未知错误'}`,
-              key: 'analyze'
-            });
-          }
-        } catch (err) {
-          if (isRequestCancelledError(err)) {
-            return;
-          }
-          analysisPollErrorCountRef.current += 1;
-          console.error('轮询分析状态失败:', err);
-          if (analysisPollErrorCountRef.current < MAX_CONSECUTIVE_TASK_POLL_ERRORS) {
-            return;
-          }
-          stopAnalysisPolling();
-          setAnalyzing(false);
-          message.error({
-            content: '章节分析状态同步失败，请刷新页面确认最新结果',
-            key: 'analyze'
-          });
-        }
-      };
-
-      void poll();
-      analysisPollIntervalRef.current = window.setInterval(() => {
-        void poll();
-      }, 2000);
-
-      analysisPollTimeoutRef.current = window.setTimeout(() => {
-        stopAnalysisPolling();
-        if (analyzingRef.current) {
-          setAnalyzing(false);
-          message.warning({ content: '分析超时，请稍后刷新查看结果', key: 'analyze' });
-        }
-      }, 30000);
-
+      startAnalysisPolling(chapter?.project_id, chapter?.content);
     } catch (err: unknown) {
       stopAnalysisPolling();
       setAnalyzing(false);

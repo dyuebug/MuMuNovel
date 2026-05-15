@@ -68,12 +68,15 @@ export async function loadChapterAnalysisTasks({
   }
 
   try {
-    const response = await chapterApi.getBatchChapterAnalysisStatus(targetChapterIds, targetProjectId);
+    const response = await chapterApi.getBatchChapterAnalysisStatus(targetChapterIds, targetProjectId, {
+      syncBackgroundTaskStore: false,
+    });
     if ((isPageActiveRef && !isPageActiveRef.current) || currentProjectIdRef.current !== targetProjectId) {
       return;
     }
 
     const tasksMap = chaptersToLoad ? { ...analysisTasksMapRef.current } : {};
+    let changed = !chaptersToLoad;
     targetChapterIds.forEach((chapterId) => {
       const task = response.items[chapterId];
       if (!task) {
@@ -81,8 +84,17 @@ export async function loadChapterAnalysisTasks({
       }
 
       const previousTask = analysisTasksMapRef.current[chapterId];
-      tasksMap[chapterId] = areAnalysisTaskSnapshotsEqual(previousTask, task) ? previousTask : task;
+      const nextTask = areAnalysisTaskSnapshotsEqual(previousTask, task) ? previousTask : task;
+      tasksMap[chapterId] = nextTask;
+      if (nextTask !== previousTask) {
+        changed = true;
+      }
     });
+
+    if (!changed) {
+      applyAnalysisPollingState(targetProjectId, analysisTasksMapRef.current);
+      return;
+    }
 
     applyAnalysisPollingState(targetProjectId, tasksMap);
     updateAnalysisTasksMap(tasksMap);
