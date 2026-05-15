@@ -22,11 +22,12 @@ import {
 } from '@ant-design/icons';
 import { useStore } from '../store';
 import type { Project } from '../types';
-import { useCharacterSync, useOutlineSync, useChapterSync, loadProjectCharacters, loadProjectOutlines, loadProjectChapters, isProjectCollectionFresh } from '../store/hooks';
+import { invalidateAllProjectCollectionFreshness } from '../store/projectCollectionRefresh';
 import { preloadProjectPage } from '../routes/projectPageLoaders';
+import { preloadProjectNavigationPages, shouldSkipProjectNavigationPreload } from '../routes/projectPageLoaders';
 import type { ProjectNavigationPageKey } from '../routes/projectPageLoaders';
 import { projectApi } from '../services/modularApi';
-import { preloadProjectCareers } from '../services/projectCareers';
+import { isRequestCancelledError } from '../services/core/httpClient';
 import ThemeSwitch from '../components/ThemeSwitch';
 import { useThemeMode } from '../theme/useThemeMode';
 import { getStoredSidebarCollapsed, setStoredSidebarCollapsed } from '../utils/sidebarState';
@@ -39,24 +40,6 @@ const { Title, Text } = Typography;
 const isMobile = () => window.innerWidth <= 768;
 
 const projectLoadPromises = new Map<string, Promise<Project>>();
-const PROJECT_COLLECTION_HYDRATION_DELAY_MS = 1000;
-
-interface NavigationPrefetchOptions {
-  includeData?: boolean;
-}
-
-const shouldHydrateProjectCollectionsForPath = (pathname: string) => {
-  return !(
-    pathname.includes('/outline')
-    || pathname.includes('/characters')
-    || pathname.includes('/chapters')
-    || pathname.includes('/chapter-analysis')
-    || pathname.includes('/foreshadows')
-    || pathname.includes('/organizations')
-    || pathname.includes('/careers')
-    || pathname.includes('/relationships')
-  );
-};
 
 export default function ProjectDetail() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -65,12 +48,10 @@ export default function ProjectDetail() {
   const [collapsed, setCollapsed] = useState<boolean>(() => getStoredSidebarCollapsed());
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [mobile, setMobile] = useState(isMobile());
-  const [isProjectDataHydrating, setIsProjectDataHydrating] = useState(false);
   const [projectLoadError, setProjectLoadError] = useState<string | null>(null);
-  const shouldHydrateCollectionsRef = useRef(shouldHydrateProjectCollectionsForPath(location.pathname));
-  const hydrateTimerRef = useRef<number | null>(null);
-  const idleHydrationHandleRef = useRef<number | null>(null);
   const prefetchedNavigationTargetsRef = useRef<Set<string>>(new Set());
+  const projectLoadAbortRef = useRef<AbortController | null>(null);
+  const activeProjectIdRef = useRef<string | null>(projectId ?? null);
   const { token } = theme.useToken();
   const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
   const { mode, resolvedMode, setMode } = useThemeMode();
@@ -79,23 +60,12 @@ export default function ProjectDetail() {
     setMode(nextMode);
   };
   const collapsedThemeIcon = mode === 'light' ? <BulbOutlined /> : mode === 'dark' ? <MoonOutlined /> : <CloudOutlined />;
-  const cancelScheduledProjectHydration = useCallback(() => {
-    const windowWithIdleCallback = window as Window & typeof globalThis & {
-      cancelIdleCallback?: (handle: number) => void;
-    };
-
-    if (idleHydrationHandleRef.current !== null && typeof windowWithIdleCallback.cancelIdleCallback === 'function') {
-      windowWithIdleCallback.cancelIdleCallback(idleHydrationHandleRef.current);
-    }
-    idleHydrationHandleRef.current = null;
-
-    if (hydrateTimerRef.current !== null) {
-      window.clearTimeout(hydrateTimerRef.current);
-    }
-    hydrateTimerRef.current = null;
-  }, []);
 
   // 监听窗口大小变化
+  useEffect(() => {
+    activeProjectIdRef.current = projectId ?? null;
+  }, [projectId]);
+
   useEffect(() => {
     const handleResize = () => {
       setMobile(isMobile());
@@ -110,66 +80,63 @@ export default function ProjectDetail() {
   useEffect(() => {
     setStoredSidebarCollapsed(collapsed);
   }, [collapsed]);
+
   useEffect(() => {
-    shouldHydrateCollectionsRef.current = shouldHydrateProjectCollectionsForPath(location.pathname);
-    if (!shouldHydrateCollectionsRef.current) {
-      cancelScheduledProjectHydration();
-      setIsProjectDataHydrating(false);
+    if (!projectId || shouldSkipProjectNavigationPreload()) {
+      return;
     }
-  }, [location.pathname, cancelScheduledProjectHydration]);
+
+    const windowWithIdleCallback = window as Window & typeof globalThis & {
+      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    let cancelled = false;
+    let timeoutId: number | null = null;
+    let idleHandle: number | null = null;
+
+    const runPreload = () => {
+      if (cancelled) {
+        return;
+      }
+
+      void preloadProjectNavigationPages({
+        delayMs: 120,
+        pages: ['characters', 'chapters', 'careers', 'chapter-analysis', 'foreshadows'],
+      });
+    };
+
+    if (typeof windowWithIdleCallback.requestIdleCallback === 'function') {
+      idleHandle = windowWithIdleCallback.requestIdleCallback(runPreload, { timeout: 1800 });
+    } else {
+      timeoutId = window.setTimeout(runPreload, 600);
+    }
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+      if (idleHandle !== null && typeof windowWithIdleCallback.cancelIdleCallback === 'function') {
+        windowWithIdleCallback.cancelIdleCallback(idleHandle);
+      }
+    };
+  }, [projectId]);
 
   const prefetchProjectNavigationTarget = useCallback((
     pageKey?: ProjectNavigationPageKey,
     path?: string,
-    options: NavigationPrefetchOptions = {},
   ) => {
     const targetKey = pageKey ?? path;
     if (!targetKey) {
       return;
     }
 
-    const includeData = options.includeData ?? true;
-
     const chunkPrefetchKey = `chunk:${projectId ?? 'unknown-project'}:${targetKey}`;
-    const dataPrefetchKey = `data:${projectId ?? 'unknown-project'}:${targetKey}`;
 
     if (pageKey && !prefetchedNavigationTargetsRef.current.has(chunkPrefetchKey)) {
       prefetchedNavigationTargetsRef.current.add(chunkPrefetchKey);
       void preloadProjectPage(pageKey);
-    }
-
-    if (!includeData || !projectId || prefetchedNavigationTargetsRef.current.has(dataPrefetchKey)) {
-      return;
-    }
-
-    if (pageKey === 'outline') {
-      if (!isProjectCollectionFresh('outlines', projectId)) {
-        prefetchedNavigationTargetsRef.current.add(dataPrefetchKey);
-        void loadProjectOutlines(projectId, { silent: true });
-      }
-      return;
-    }
-
-    if (pageKey === 'characters' || pageKey === 'organizations' || pageKey === 'relationships') {
-      if (!isProjectCollectionFresh('characters', projectId)) {
-        prefetchedNavigationTargetsRef.current.add(dataPrefetchKey);
-        void loadProjectCharacters(projectId, { silent: true });
-      }
-      return;
-    }
-
-    if (pageKey === 'chapters') {
-      if (!isProjectCollectionFresh('chapters', projectId)) {
-        prefetchedNavigationTargetsRef.current.add(dataPrefetchKey);
-        void loadProjectChapters(projectId, { silent: true });
-      }
-      return;
-    }
-
-    prefetchedNavigationTargetsRef.current.add(dataPrefetchKey);
-
-    if (pageKey === 'careers') {
-      void preloadProjectCareers(projectId);
     }
   }, [projectId]);
 
@@ -186,19 +153,11 @@ export default function ProjectDetail() {
     pageKey?: ProjectNavigationPageKey,
   ) => {
     const handleHoverPrefetch = () => {
-      prefetchProjectNavigationTarget(pageKey, path, { includeData: true });
+      prefetchProjectNavigationTarget(pageKey, path);
     };
 
     const handlePressPrefetch = () => {
-      prefetchProjectNavigationTarget(pageKey, path, { includeData: false });
-    };
-
-    const handleNavigate = () => {
-      if (!shouldHydrateProjectCollectionsForPath(path)) {
-        shouldHydrateCollectionsRef.current = false;
-        cancelScheduledProjectHydration();
-        setIsProjectDataHydrating(false);
-      }
+      prefetchProjectNavigationTarget(pageKey, path);
     };
 
     return (
@@ -208,90 +167,28 @@ export default function ProjectDetail() {
         onFocus={handleHoverPrefetch}
         onPointerDown={handlePressPrefetch}
         onTouchStart={handlePressPrefetch}
-        onClick={handleNavigate}
       >
         {label}
       </Link>
     );
-  }, [cancelScheduledProjectHydration, prefetchProjectNavigationTarget]);
-
-  // 使用同步 hooks
-  const { refreshCharacters } = useCharacterSync();
-  const { refreshOutlines } = useOutlineSync();
-  const { refreshChapters } = useChapterSync();
+  }, [prefetchProjectNavigationTarget]);
 
   useEffect(() => {
     let cancelled = false;
-    const windowWithIdleCallback = window as Window & typeof globalThis & {
-      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
-    };
-
-    const hydrateProjectCollections = async (id: string) => {
-      if (cancelled || !shouldHydrateCollectionsRef.current) {
-        return;
-      }
-
-      const pendingLoads: Promise<unknown>[] = [];
-      if (!isProjectCollectionFresh('outlines', id)) {
-        pendingLoads.push(refreshOutlines(id));
-      }
-      if (!isProjectCollectionFresh('characters', id)) {
-        pendingLoads.push(refreshCharacters(id));
-      }
-      if (!isProjectCollectionFresh('chapters', id)) {
-        pendingLoads.push(refreshChapters(id));
-      }
-
-      if (pendingLoads.length === 0) {
-        return;
-      }
-
-      setIsProjectDataHydrating(true);
-      try {
-        await Promise.all(pendingLoads);
-      } catch (error) {
-        console.error('Background project detail hydration failed:', error);
-      } finally {
-        if (!cancelled) {
-          setIsProjectDataHydrating(false);
-        }
-      }
-    };
-
-    const scheduleProjectCollectionHydration = (id: string) => {
-      cancelScheduledProjectHydration();
-      hydrateTimerRef.current = window.setTimeout(() => {
-        hydrateTimerRef.current = null;
-
-        if (!shouldHydrateCollectionsRef.current) {
-          return;
-        }
-
-        if (typeof windowWithIdleCallback.requestIdleCallback === 'function') {
-          idleHydrationHandleRef.current = windowWithIdleCallback.requestIdleCallback(() => {
-            idleHydrationHandleRef.current = null;
-            if (!shouldHydrateCollectionsRef.current) {
-              return;
-            }
-            void hydrateProjectCollections(id);
-          }, { timeout: 1500 });
-          return;
-        }
-
-        void hydrateProjectCollections(id);
-      }, PROJECT_COLLECTION_HYDRATION_DELAY_MS);
-    };
+    const effectProjectId = projectId ?? null;
 
     const loadProjectData = async (id: string) => {
-      cancelScheduledProjectHydration();
       setProjectLoadError(null);
-      setIsProjectDataHydrating(false);
+
+      projectLoadAbortRef.current?.abort();
+      const abortController = new AbortController();
+      projectLoadAbortRef.current = abortController;
 
       let loadPromise = projectLoadPromises.get(id);
       if (!loadPromise) {
         loadPromise = (async () => {
           try {
-            return await projectApi.getProject(id);
+            return await projectApi.getProject(id, { signal: abortController.signal });
           } finally {
             projectLoadPromises.delete(id);
           }
@@ -302,15 +199,25 @@ export default function ProjectDetail() {
 
       try {
         const project = await loadPromise;
-        if (cancelled) {
+        if (
+          cancelled
+          || abortController.signal.aborted
+          || activeProjectIdRef.current !== id
+        ) {
           return;
         }
 
         setCurrentProject(project);
-        scheduleProjectCollectionHydration(id);
       } catch (error) {
+        if (isRequestCancelledError(error) || abortController.signal.aborted) {
+          return;
+        }
         console.error('加载项目数据失败:', error);
         setProjectLoadError(error instanceof Error ? error.message : '加载项目数据失败，请稍后重试');
+      } finally {
+        if (projectLoadAbortRef.current === abortController) {
+          projectLoadAbortRef.current = null;
+        }
       }
     };
 
@@ -320,11 +227,13 @@ export default function ProjectDetail() {
 
     return () => {
       cancelled = true;
-      cancelScheduledProjectHydration();
-      setIsProjectDataHydrating(false);
-      clearProjectData();
+      projectLoadAbortRef.current?.abort();
+      if (effectProjectId && activeProjectIdRef.current === effectProjectId) {
+        invalidateAllProjectCollectionFreshness(effectProjectId);
+        clearProjectData();
+      }
     };
-  }, [projectId, clearProjectData, setCurrentProject, refreshOutlines, refreshCharacters, refreshChapters, cancelScheduledProjectHydration]);
+  }, [projectId, clearProjectData, setCurrentProject]);
 
   // 移除事件监听，避免无限循环
   // Hook 内部已经更新了 store，不需要再次刷新
@@ -337,17 +246,17 @@ export default function ProjectDetail() {
     return [
       {
         label: '大纲',
-        value: isProjectDataHydrating && outlineCount === 0 ? '—' : outlineCount,
+        value: outlineCount,
         unit: '条',
       },
       {
         label: '角色',
-        value: characterCount > 0 ? characterCount : (currentProject.character_count ?? (isProjectDataHydrating ? '—' : 0)),
+        value: characterCount > 0 ? characterCount : (currentProject.character_count ?? 0),
         unit: '个',
       },
       {
         label: '章节',
-        value: chapterCount > 0 ? chapterCount : (currentProject.chapter_count ?? (isProjectDataHydrating ? '—' : 0)),
+        value: chapterCount > 0 ? chapterCount : (currentProject.chapter_count ?? 0),
         unit: '章',
       },
       {
@@ -356,7 +265,7 @@ export default function ProjectDetail() {
         unit: '字',
       },
     ];
-  }, [currentProject, isProjectDataHydrating, outlineCount, characterCount, chapterCount]);
+  }, [currentProject, outlineCount, characterCount, chapterCount]);
 
   const menuItems = useMemo(() => [
     {

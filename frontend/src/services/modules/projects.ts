@@ -6,11 +6,13 @@ import type {
   ProjectUpdate,
 } from '../../types';
 import { api } from '../core/httpClient';
+import type { RequestConfigWithToastControl } from '../core/httpClient';
 
 export const projectApi = {
   getProjects: () => api.get<unknown, Project[]>('/projects'),
 
-  getProject: (id: string) => api.get<unknown, Project>(`/projects/${id}`),
+  getProject: (id: string, config?: RequestConfigWithToastControl) =>
+    api.get<unknown, Project>(`/projects/${id}`, config),
 
   createProject: (data: ProjectCreate) => api.post<unknown, Project>('/projects', data),
 

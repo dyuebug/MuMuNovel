@@ -22,6 +22,9 @@ const markCollectionLoaded = (collection: ProjectCollectionKey, projectId: strin
   collectionLoadedAt[collection].set(projectId, Date.now());
 };
 
+const shouldApplyCollectionToCurrentProject = (projectId: string) =>
+  useStore.getState().currentProject?.id === projectId;
+
 const normalizeCollectionItems = <T>(data: T[] | PaginationResponse<T>): T[] =>
   Array.isArray(data) ? data : data.items || [];
 
@@ -86,8 +89,13 @@ export async function loadProjectCollection<T>({
     try {
       const data = await request(id);
       const items = normalizeCollectionItems(data);
-      updateStore(items);
-      markCollectionLoaded(collection, id);
+      const appliedToCurrentProject = shouldApplyCollectionToCurrentProject(id);
+      if (appliedToCurrentProject) {
+        updateStore(items);
+      }
+      if (appliedToCurrentProject) {
+        markCollectionLoaded(collection, id);
+      }
       return items;
     } catch (error) {
       console.error(errorLogLabel, error);

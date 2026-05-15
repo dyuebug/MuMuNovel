@@ -1,3 +1,5 @@
+import { withChunkLoadRecovery } from '../utils/chunkLoadRecovery';
+
 export type ProjectNavigationPageKey =
   | 'outline'
   | 'characters'
@@ -9,7 +11,13 @@ export type ProjectNavigationPageKey =
   | 'foreshadows';
 
 const projectPageLoadPromises = new Map<ProjectNavigationPageKey, Promise<unknown>>();
-const PROJECT_NAVIGATION_PRELOAD_ORDER: readonly ProjectNavigationPageKey[] = ['characters', 'chapters', 'careers'];
+const PROJECT_NAVIGATION_PRELOAD_ORDER: readonly ProjectNavigationPageKey[] = [
+  'characters',
+  'chapters',
+  'careers',
+  'chapter-analysis',
+  'foreshadows',
+];
 const SLOW_CONNECTION_TYPES = new Set(['slow-2g', '2g', '3g']);
 
 interface ProjectNavigationPreloadOptions {
@@ -22,14 +30,14 @@ interface NetworkInformationLike {
   saveData?: boolean;
 }
 
-export const loadOutlinePage = () => import('../pages/Outline');
-export const loadCharactersPage = () => import('../pages/Characters');
-export const loadChaptersPage = () => import('../pages/Chapters');
-export const loadOrganizationsPage = () => import('../pages/Organizations');
-export const loadCareersPage = () => import('../pages/Careers');
-export const loadRelationshipsPage = () => import('../pages/Relationships');
-export const loadChapterAnalysisPage = () => import('../pages/ChapterAnalysis');
-export const loadForeshadowsPage = () => import('../pages/Foreshadows');
+export const loadOutlinePage = withChunkLoadRecovery(() => import('../pages/Outline'));
+export const loadCharactersPage = withChunkLoadRecovery(() => import('../pages/Characters'));
+export const loadChaptersPage = withChunkLoadRecovery(() => import('../pages/Chapters'));
+export const loadOrganizationsPage = withChunkLoadRecovery(() => import('../pages/Organizations'));
+export const loadCareersPage = withChunkLoadRecovery(() => import('../pages/Careers'));
+export const loadRelationshipsPage = withChunkLoadRecovery(() => import('../pages/Relationships'));
+export const loadChapterAnalysisPage = withChunkLoadRecovery(() => import('../pages/ChapterAnalysis'));
+export const loadForeshadowsPage = withChunkLoadRecovery(() => import('../pages/Foreshadows'));
 
 const projectPageLoaders: Record<ProjectNavigationPageKey, () => Promise<unknown>> = {
   outline: loadOutlinePage,

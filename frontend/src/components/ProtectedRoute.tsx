@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, Result } from 'antd';
 import { Navigate, useLocation } from 'react-router-dom';
@@ -14,13 +14,17 @@ interface ProtectedRouteProps {
 export default function ProtectedRoute({ children }: ProtectedRouteProps) {
   const [authState, setAuthState] = useState<AuthResolution | null>(null);
   const location = useLocation();
+  const mountedRef = useRef(true);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
-    let cancelled = false;
+    mountedRef.current = true;
 
     const checkAuth = async () => {
+      requestIdRef.current += 1;
+      const requestId = requestIdRef.current;
       const resolvedState = await resolveAuthStatus();
-      if (!cancelled) {
+      if (mountedRef.current && requestIdRef.current === requestId) {
         setAuthState(resolvedState);
       }
     };
@@ -28,7 +32,8 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
     void checkAuth();
 
     return () => {
-      cancelled = true;
+      mountedRef.current = false;
+      requestIdRef.current += 1;
     };
   }, []);
 

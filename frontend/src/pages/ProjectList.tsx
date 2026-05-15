@@ -110,6 +110,55 @@ export default function ProjectList() {
   }, [location.pathname, location.search, navigate]);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(true);
+  const importRequestIdRef = useRef(0);
+  const enterProjectRequestIdRef = useRef(0);
+  const exportRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      importRequestIdRef.current += 1;
+      enterProjectRequestIdRef.current += 1;
+      exportRequestIdRef.current += 1;
+    };
+  }, []);
+
+  const beginImportRequest = useCallback(() => {
+    importRequestIdRef.current += 1;
+    return importRequestIdRef.current;
+  }, []);
+
+  const invalidateImportRequest = useCallback(() => {
+    importRequestIdRef.current += 1;
+  }, []);
+
+  const isImportRequestActive = useCallback((requestId: number) => {
+    return mountedRef.current && importRequestIdRef.current === requestId;
+  }, []);
+
+  const beginEnterProjectRequest = useCallback(() => {
+    enterProjectRequestIdRef.current += 1;
+    return enterProjectRequestIdRef.current;
+  }, []);
+
+  const isEnterProjectRequestActive = useCallback((requestId: number) => {
+    return mountedRef.current && enterProjectRequestIdRef.current === requestId;
+  }, []);
+
+  const beginExportRequest = useCallback(() => {
+    exportRequestIdRef.current += 1;
+    return exportRequestIdRef.current;
+  }, []);
+
+  const invalidateExportRequest = useCallback(() => {
+    exportRequestIdRef.current += 1;
+  }, []);
+
+  const isExportRequestActive = useCallback((requestId: number) => {
+    return mountedRef.current && exportRequestIdRef.current === requestId;
+  }, []);
 
   // 处理切换到 MCP 视图的事件
   const handleSwitchToMcp = useCallback(() => {
@@ -176,8 +225,13 @@ export default function ProjectList() {
       return;
     }
 
+    const requestId = beginEnterProjectRequest();
+
     try {
       const latestProject = await projectApi.getProject(project.id);
+      if (!isEnterProjectRequestActive(requestId)) {
+        return;
+      }
       updateProjectInStore(project.id, latestProject);
 
       const latestWizardIncomplete = isProjectWizardIncomplete(latestProject);
@@ -189,6 +243,9 @@ export default function ProjectList() {
       console.error('检查项目向导状态失败:', error);
     }
 
+    if (!isEnterProjectRequestActive(requestId)) {
+      return;
+    }
     navigate(`/project/${project.id}`);
   };
 
@@ -248,20 +305,29 @@ export default function ProjectList() {
   }).length;
 
   const handleFileSelect = async (file: File) => {
+    const requestId = beginImportRequest();
     setSelectedFile(file);
     setValidationResult(null);
     try {
       setValidating(true);
       const result = await projectApi.validateImportFile(file);
+      if (!isImportRequestActive(requestId)) {
+        return false;
+      }
       setValidationResult(result);
       if (!result.valid) {
         message.error('文件验证失败');
       }
     } catch (error) {
+      if (!isImportRequestActive(requestId)) {
+        return false;
+      }
       console.error('验证失败:', error);
       message.error('文件验证失败');
     } finally {
-      setValidating(false);
+      if (isImportRequestActive(requestId)) {
+        setValidating(false);
+      }
     }
     return false;
   };
@@ -271,15 +337,22 @@ export default function ProjectList() {
       message.warning('请选择有效的导入文件');
       return;
     }
+    const requestId = beginImportRequest();
     try {
       setImporting(true);
       const result = await projectApi.importProject(selectedFile);
+      if (!isImportRequestActive(requestId)) {
+        return;
+      }
       if (result.success) {
         message.success(`项目导入成功！${result.message}`);
         setImportModalVisible(false);
         setSelectedFile(null);
         setValidationResult(null);
         await refreshProjects();
+        if (!isImportRequestActive(requestId)) {
+          return;
+        }
         if (result.project_id) {
           navigate(`/project/${result.project_id}`);
         }
@@ -287,20 +360,29 @@ export default function ProjectList() {
         message.error(result.message || '导入失败');
       }
     } catch (error) {
+      if (!isImportRequestActive(requestId)) {
+        return;
+      }
       console.error('导入失败:', error);
       message.error('导入失败，请重试');
     } finally {
-      setImporting(false);
+      if (isImportRequestActive(requestId)) {
+        setImporting(false);
+      }
     }
   };
 
   const handleCloseImportModal = () => {
+    invalidateImportRequest();
     setImportModalVisible(false);
     setSelectedFile(null);
     setValidationResult(null);
+    setValidating(false);
+    setImporting(false);
   };
 
   const handleOpenExportModal = () => {
+    invalidateExportRequest();
     setExportModalVisible(true);
     setSelectedProjectIds([]);
   };
@@ -308,8 +390,10 @@ export default function ProjectList() {
   const exportableProjects = projects;
 
   const handleCloseExportModal = () => {
+    invalidateExportRequest();
     setExportModalVisible(false);
     setSelectedProjectIds([]);
+    setExporting(false);
   };
 
   const handleToggleProject = (projectId: string) => {
@@ -333,6 +417,7 @@ export default function ProjectList() {
       message.warning('请至少选择一个项目');
       return;
     }
+    const requestId = beginExportRequest();
     try {
       setExporting(true);
       if (selectedProjectIds.length === 1) {
@@ -345,11 +430,17 @@ export default function ProjectList() {
           include_memories: exportOptions.includeMemories,
           include_plot_analysis: exportOptions.includePlotAnalysis
         });
+        if (!isExportRequestActive(requestId)) {
+          return;
+        }
         message.success(`项目 "${project?.title}" 导出成功`);
       } else {
         let successCount = 0;
         let failCount = 0;
         for (const projectId of selectedProjectIds) {
+          if (!isExportRequestActive(requestId)) {
+            return;
+          }
           try {
             await projectApi.exportProjectData(projectId, {
               include_generation_history: exportOptions.includeGenerationHistory,
@@ -358,12 +449,24 @@ export default function ProjectList() {
               include_memories: exportOptions.includeMemories,
               include_plot_analysis: exportOptions.includePlotAnalysis
             });
+            if (!isExportRequestActive(requestId)) {
+              return;
+            }
             successCount++;
             await new Promise(resolve => setTimeout(resolve, 500));
+            if (!isExportRequestActive(requestId)) {
+              return;
+            }
           } catch (error) {
+            if (!isExportRequestActive(requestId)) {
+              return;
+            }
             console.error(`导出项目 ${projectId} 失败:`, error);
             failCount++;
           }
+        }
+        if (!isExportRequestActive(requestId)) {
+          return;
         }
         if (failCount === 0) {
           message.success(`成功导出 ${successCount} 个项目`);
@@ -371,12 +474,20 @@ export default function ProjectList() {
           message.warning(`导出完成：成功 ${successCount} 个，失败 ${failCount} 个`);
         }
       }
+      if (!isExportRequestActive(requestId)) {
+        return;
+      }
       handleCloseExportModal();
     } catch (error) {
+      if (!isExportRequestActive(requestId)) {
+        return;
+      }
       console.error('导出失败:', error);
       message.error('导出失败，请重试');
     } finally {
-      setExporting(false);
+      if (isExportRequestActive(requestId)) {
+        setExporting(false);
+      }
     }
   };
 
@@ -885,8 +996,10 @@ export default function ProjectList() {
             onCancel={handleCloseImportModal}
             onFileSelect={handleFileSelect}
             onRemoveFile={() => {
+              invalidateImportRequest();
               setSelectedFile(null);
               setValidationResult(null);
+              setValidating(false);
             }}
           />
         </Suspense>
