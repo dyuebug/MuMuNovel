@@ -6,6 +6,15 @@ export type BackgroundTaskStatusPriority = Record<BackgroundTaskRuntimeStatus, n
 export const selectBackgroundTaskList = (tasksMap: Record<string, TrackedBackgroundTask>): TrackedBackgroundTask[] =>
   Object.values(tasksMap);
 
+const filterVisibleBackgroundTasks = (
+  tasks: TrackedBackgroundTask[],
+  knownProjectIds: Set<string>,
+): TrackedBackgroundTask[] => (
+  knownProjectIds.size > 0
+    ? tasks.filter((task) => !task.projectId || knownProjectIds.has(task.projectId))
+    : tasks
+);
+
 export const selectActiveBackgroundTasks = (tasks: TrackedBackgroundTask[]): TrackedBackgroundTask[] =>
   tasks.filter(isActiveBackgroundTask);
 
@@ -14,10 +23,7 @@ export const selectVisibleBackgroundTasks = (
   knownProjectIds: Set<string>,
   statusPriority: BackgroundTaskStatusPriority,
 ): TrackedBackgroundTask[] => {
-  const allTasks = selectBackgroundTaskList(tasksMap);
-  const filtered = knownProjectIds.size > 0
-    ? allTasks.filter((task) => !task.projectId || knownProjectIds.has(task.projectId))
-    : allTasks;
+  const filtered = filterVisibleBackgroundTasks(selectBackgroundTaskList(tasksMap), knownProjectIds);
 
   return [...filtered].sort((a, b) => {
     const statusDelta = statusPriority[a.status] - statusPriority[b.status];
@@ -25,6 +31,78 @@ export const selectVisibleBackgroundTasks = (
     return b.updatedAt - a.updatedAt;
   });
 };
+
+export const selectVisibleBackgroundTaskCount = (
+  tasksMap: Record<string, TrackedBackgroundTask>,
+  knownProjectIds: Set<string>,
+): number => filterVisibleBackgroundTasks(selectBackgroundTaskList(tasksMap), knownProjectIds).length;
+
+export const selectClosedBackgroundTaskSummarySnapshot = (
+  tasksMap: Record<string, TrackedBackgroundTask>,
+  knownProjectIds: Set<string>,
+  focusProjectId: string | null,
+  isTaskResumable: (task: TrackedBackgroundTask) => boolean,
+) => {
+  const visibleTasks = filterVisibleBackgroundTasks(selectBackgroundTaskList(tasksMap), knownProjectIds);
+  let activeTaskCount = 0;
+  let currentProjectActiveCount = 0;
+  let failedTaskCount = 0;
+  let terminalTaskCount = 0;
+  let recoverableTaskCount = 0;
+
+  visibleTasks.forEach((task) => {
+    const active = isActiveBackgroundTask(task);
+
+    if (active) {
+      activeTaskCount += 1;
+      if (!focusProjectId || task.projectId === focusProjectId) {
+        currentProjectActiveCount += 1;
+      }
+    }
+
+    if (task.status === 'failed') {
+      failedTaskCount += 1;
+    }
+
+    if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+      terminalTaskCount += 1;
+    }
+
+    if (isTaskResumable(task)) {
+      recoverableTaskCount += 1;
+    }
+  });
+
+  return {
+    visibleTaskCount: visibleTasks.length,
+    activeTaskCount,
+    currentProjectActiveCount,
+    failedTaskCount,
+    terminalTaskCount,
+    recoverableTaskCount,
+    otherActiveCount: Math.max(0, activeTaskCount - currentProjectActiveCount),
+  };
+};
+
+export const selectActiveBackgroundTaskPollKeys = (
+  tasksMap: Record<string, TrackedBackgroundTask>,
+  knownProjectIds: Set<string>,
+): string[] => filterVisibleBackgroundTasks(selectBackgroundTaskList(tasksMap), knownProjectIds)
+  .filter(isActiveBackgroundTask)
+  .map((task) => {
+    const chapterId = typeof task.checkpoint?.chapter_id === 'string'
+      ? task.checkpoint.chapter_id
+      : '';
+    return [task.taskType, task.taskId, task.projectId ?? '', chapterId].join('|');
+  })
+  .sort();
+
+export const selectVisibleBackgroundTaskStatusSignatures = (
+  tasksMap: Record<string, TrackedBackgroundTask>,
+  knownProjectIds: Set<string>,
+): string[] => filterVisibleBackgroundTasks(selectBackgroundTaskList(tasksMap), knownProjectIds)
+  .map((task) => `${task.taskId}|${task.status}`)
+  .sort();
 
 export const selectCurrentProjectActiveTaskCount = (
   tasks: TrackedBackgroundTask[],

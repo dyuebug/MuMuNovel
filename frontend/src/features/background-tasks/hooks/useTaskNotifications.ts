@@ -1,6 +1,12 @@
-import { createElement, useEffect, useRef } from 'react';
+import { createElement, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Button, notification } from 'antd';
+import { useShallow } from 'zustand/react/shallow';
 import type { TrackedBackgroundTask } from '../../../store/backgroundTasks';
+import { useBackgroundTaskStore } from '../../../store/backgroundTasks';
+import {
+  selectVisibleBackgroundTaskStatusSignatures,
+  selectVisibleBackgroundTasks,
+} from '../model/selectors';
 import {
   getCompletionNotice,
   getTaskDestination,
@@ -8,14 +14,37 @@ import {
 } from '../../../components/backgroundTaskPresentation';
 
 export const useTaskNotifications = (params: {
-  tasks: TrackedBackgroundTask[];
+  knownProjectIds: Set<string>;
   onNavigate: (to: string) => void;
 }) => {
-  const { tasks, onNavigate } = params;
+  const { knownProjectIds, onNavigate } = params;
   const statusSnapshotRef = useRef<Record<string, TrackedBackgroundTask['status']>>({});
   const statusSnapshotReadyRef = useRef(false);
+  const statusPriority = useMemo(
+    () => ({
+      running: 0,
+      pending: 1,
+      failed: 2,
+      cancelled: 3,
+      completed: 4,
+    } as const),
+    [],
+  );
+  const visibleTaskStatusSignatures = useBackgroundTaskStore(
+    useShallow(
+      useCallback(
+        (state) => selectVisibleBackgroundTaskStatusSignatures(state.tasks, knownProjectIds),
+        [knownProjectIds, statusPriority],
+      ),
+    ),
+  );
 
   useEffect(() => {
+    const tasks = selectVisibleBackgroundTasks(
+      useBackgroundTaskStore.getState().tasks,
+      knownProjectIds,
+      statusPriority,
+    );
     const currentSnapshot = Object.fromEntries(tasks.map((task) => [task.taskId, task.status]));
 
     if (!statusSnapshotReadyRef.current) {
@@ -57,5 +86,5 @@ export const useTaskNotifications = (params: {
     }
 
     statusSnapshotRef.current = currentSnapshot;
-  }, [tasks, onNavigate]);
+  }, [knownProjectIds, onNavigate, statusPriority, visibleTaskStatusSignatures]);
 };

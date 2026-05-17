@@ -2,6 +2,7 @@ import { Suspense, lazy, useState, useEffect, useMemo, useCallback, useRef } fro
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, Tag, Button, Space, message, Modal, Form, Select, Slider, Input, Tabs, AutoComplete, theme } from 'antd';
 import { PlusOutlined, ApartmentOutlined, UserOutlined, EditOutlined } from '@ant-design/icons';
+import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../store';
 import { useCharacterSync } from '../store/hooks';
 import axios from 'axios';
@@ -40,7 +41,9 @@ const categoryLabels: Record<string, string> = {
 export default function Relationships() {
   const { projectId } = useParams<{ projectId: string }>();
   const currentProject = useStore((state) => state.currentProject);
-  const storeCharacters = useStore((state) => state.characters);
+  const projectCharacters = useStore(
+    useShallow((state) => state.characters.filter((character) => character.project_id === projectId)),
+  );
   const { refreshCharacters } = useCharacterSync();
   const navigate = useNavigate();
   const [relationships, setRelationships] = useState<Relationship[]>([]);
@@ -204,11 +207,11 @@ export default function Relationships() {
     });
   }, [loadData, modal]);
 
-  const characterNameMap = useMemo(() => new Map(storeCharacters.map((character) => [character.id, character.name])), [storeCharacters]);
+  const characterNameMap = useMemo(() => new Map(projectCharacters.map((character) => [character.id, character.name])), [projectCharacters]);
 
-  const selectableCharacterOptions = useMemo(() => storeCharacters
+  const selectableCharacterOptions = useMemo(() => projectCharacters
     .filter((character) => !character.is_organization)
-    .map((character) => ({ label: character.name, value: character.id })), [storeCharacters]);
+    .map((character) => ({ label: character.name, value: character.id })), [projectCharacters]);
 
   const relationshipTypeOptions = useMemo(() => relationshipTypes.map((type) => ({
     label: `${type.icon || ''} ${type.name} (${categoryLabels[type.category]})`,

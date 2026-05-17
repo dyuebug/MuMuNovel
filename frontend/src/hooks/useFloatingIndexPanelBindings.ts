@@ -22,7 +22,7 @@ export const useFloatingIndexPanelBindings = ({
   } = useFloatingIndexPanelLifecycle();
 
   const floatingIndexPanelState = useFloatingIndexPanelState({
-    groupedChapters,
+    groupedChapters: isIndexPanelVisible ? groupedChapters : [],
     isIndexPanelVisible,
   });
 

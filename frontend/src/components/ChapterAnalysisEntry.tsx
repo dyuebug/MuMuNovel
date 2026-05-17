@@ -13,7 +13,7 @@ function ChapterAnalysisEntry({
   visible,
   onClose,
 }: ChapterAnalysisEntryProps) {
-  if (!chapterId) {
+  if (!visible || !chapterId) {
     return null;
   }
 

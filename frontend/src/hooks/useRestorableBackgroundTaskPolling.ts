@@ -17,6 +17,7 @@ type RestoreTaskPayload = {
 type UseRestorableBackgroundTaskPollingOptions<TTask extends PollableBackgroundTask = BackgroundTaskStatus> = {
   projectId?: string | null;
   activeTrackedTask?: TrackedBackgroundTask | null;
+  getActiveTrackedTask?: () => TrackedBackgroundTask | null;
   canRestore?: boolean;
   restoreListLimit?: number;
   isMatchingTask: (task: BackgroundTaskStatus) => boolean;
@@ -34,6 +35,7 @@ type UseRestorableBackgroundTaskPollingOptions<TTask extends PollableBackgroundT
 export const useRestorableBackgroundTaskPolling = <TTask extends PollableBackgroundTask = BackgroundTaskStatus>({
   projectId,
   activeTrackedTask = null,
+  getActiveTrackedTask,
   canRestore = true,
   restoreListLimit = 20,
   isMatchingTask,
@@ -78,11 +80,12 @@ export const useRestorableBackgroundTaskPolling = <TTask extends PollableBackgro
     };
 
     const removeStaleTrackedTask = () => {
-      if (!activeTrackedTask?.taskId) {
+      const resolvedTrackedTask = getActiveTrackedTask?.() ?? activeTrackedTask;
+      if (!resolvedTrackedTask?.taskId) {
         return;
       }
 
-      useBackgroundTaskStore.getState().removeTask(activeTrackedTask.taskId);
+      useBackgroundTaskStore.getState().removeTask(resolvedTrackedTask.taskId);
     };
 
     const restoreTaskPolling = async () => {
@@ -125,11 +128,13 @@ export const useRestorableBackgroundTaskPolling = <TTask extends PollableBackgro
         console.error('恢复后台任务失败:', error);
       }
 
-      if (!disposed && !remoteActiveTasksLoaded && activeTrackedTask) {
+      const resolvedTrackedTask = getActiveTrackedTask?.() ?? activeTrackedTask;
+
+      if (!disposed && !remoteActiveTasksLoaded && resolvedTrackedTask) {
         restoreLocalTask({
-          taskId: activeTrackedTask.taskId,
-          progress: activeTrackedTask.progress,
-          message: activeTrackedTask.message,
+          taskId: resolvedTrackedTask.taskId,
+          progress: resolvedTrackedTask.progress,
+          message: resolvedTrackedTask.message,
         });
       }
     };
@@ -142,6 +147,7 @@ export const useRestorableBackgroundTaskPolling = <TTask extends PollableBackgro
   }, [
     activeTrackedTask,
     canRestore,
+    getActiveTrackedTask,
     isMatchingTask,
     onRestoreTask,
     projectId,

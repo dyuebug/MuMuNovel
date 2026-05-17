@@ -2,6 +2,7 @@ import { Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef } fro
 import { useParams } from 'react-router-dom';
 import { Card, Tag, Button, Space, message, Modal, Form, Select, InputNumber, Input, Descriptions, Drawer, theme } from 'antd';
 import { PlusOutlined, UserOutlined, EditOutlined, DeleteOutlined, UnorderedListOutlined, BankOutlined } from '@ant-design/icons';
+import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../store';
 import { useCharacterSync } from '../store/hooks';
 import axios from 'axios';
@@ -39,7 +40,9 @@ interface OrganizationMember {
 export default function Organizations() {
   const { projectId } = useParams<{ projectId: string }>();
   const currentProject = useStore((state) => state.currentProject);
-  const storeCharacters = useStore((state) => state.characters);
+  const projectCharacters = useStore(
+    useShallow((state) => state.characters.filter((character) => character.project_id === projectId)),
+  );
   const { refreshCharacters } = useCharacterSync();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
@@ -333,8 +336,8 @@ export default function Organizations() {
   // 过滤掉已是成员的角色
   const availableCharacters = useMemo(() => {
     const memberCharacterIds = new Set(members.map((member) => member.character_id));
-    return storeCharacters.filter((character) => !character.is_organization && !memberCharacterIds.has(character.id));
-  }, [members, storeCharacters]);
+    return projectCharacters.filter((character) => !character.is_organization && !memberCharacterIds.has(character.id));
+  }, [members, projectCharacters]);
 
   const availableCharacterOptions = useMemo(() => availableCharacters.map((character) => ({
     label: character.name,

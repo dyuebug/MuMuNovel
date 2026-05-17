@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { message } from 'antd';
 import type { NavigateFunction } from 'react-router-dom';
+import { useShallow } from 'zustand/react/shallow';
 import { noAuthRedirectConfig } from '../../../services/core/httpClient';
 import {
   backgroundTaskApi,
@@ -12,7 +13,15 @@ import { OPEN_BACKGROUND_TASK_CENTER_EVENT } from '../../../constants/background
 import { useStore } from '../../../store';
 import { useBackgroundTaskStore, type TrackedBackgroundTask } from '../../../store/backgroundTasks';
 import { isTaskResumable } from '../../../components/backgroundTaskPresentation';
-import { selectActiveBackgroundTasks, selectBackgroundTaskSections, selectVisibleBackgroundTasks, type TaskFilter } from '../model/selectors';
+import {
+  selectActiveBackgroundTaskPollKeys,
+  selectActiveBackgroundTasks,
+  selectBackgroundTaskSections,
+  selectClosedBackgroundTaskSummarySnapshot,
+  selectVisibleBackgroundTaskCount,
+  selectVisibleBackgroundTasks,
+  type TaskFilter,
+} from '../model/selectors';
 import { buildBackgroundTaskCenterSummary } from '../model/summary';
 import { useRecoverableTaskSync } from './useRecoverableTaskSync';
 import { useTaskNotifications } from './useTaskNotifications';
@@ -45,6 +54,8 @@ export type BackgroundTaskCenterController = {
   open: boolean;
   setOpen: (next: boolean) => void;
   isMobile: boolean;
+  visibleTaskCount: number;
+  activeTaskCount: number;
   tasks: TrackedBackgroundTask[];
   activeTasks: TrackedBackgroundTask[];
   taskFilter: TaskFilter;
@@ -76,33 +87,109 @@ export const useBackgroundTaskCenterController = (params: {
   const [cancellingTaskIds, setCancellingTaskIds] = useState<Record<string, boolean>>({});
   const [resumingTaskIds, setResumingTaskIds] = useState<Record<string, boolean>>({});
 
-  const currentProject = useStore((state) => state.currentProject);
-  const projects = useStore((state) => state.projects);
+  const currentProjectId = useStore((state) => state.currentProject?.id ?? null);
+  const knownProjectIdList = useStore(
+    useShallow((state) => state.projects.map((project) => project.id)),
+  );
   const hiddenByRoute = pathname === '/login' || pathname.startsWith('/auth/callback');
-  const knownProjectIds = useMemo(() => new Set(projects.map((project) => project.id)), [projects]);
+  const knownProjectIds = useMemo(() => new Set(knownProjectIdList), [knownProjectIdList]);
   const routeProjectId = useMemo(() => {
     const matched = pathname.match(/^\/project\/([^/]+)/);
     return matched?.[1] ?? null;
   }, [pathname]);
-  const rawFocusProjectId = routeProjectId ?? currentProject?.id ?? null;
+  const rawFocusProjectId = routeProjectId ?? currentProjectId;
   const focusProjectId =
     rawFocusProjectId && (knownProjectIds.size === 0 || knownProjectIds.has(rawFocusProjectId))
       ? rawFocusProjectId
       : null;
 
-  const tasksMap = useBackgroundTaskStore((state) => state.tasks);
+  const openedTasksMap = useBackgroundTaskStore(
+    useShallow(
+      useCallback(
+        (state) => (open ? state.tasks : {}),
+        [open],
+      ),
+    ),
+  );
+  const closedSummarySnapshot = useBackgroundTaskStore(
+    useShallow(
+      useCallback(
+        (state) => (
+          open
+            ? {
+                visibleTaskCount: 0,
+                activeTaskCount: 0,
+                currentProjectActiveCount: 0,
+                failedTaskCount: 0,
+                terminalTaskCount: 0,
+                recoverableTaskCount: 0,
+                otherActiveCount: 0,
+              }
+            : selectClosedBackgroundTaskSummarySnapshot(state.tasks, knownProjectIds, focusProjectId, isTaskResumable)
+        ),
+        [focusProjectId, knownProjectIds, open],
+      ),
+    ),
+  );
+  const closedActiveTaskPollKeys = useBackgroundTaskStore(
+    useShallow(
+      useCallback(
+        (state) => (open ? [] : selectActiveBackgroundTaskPollKeys(state.tasks, knownProjectIds)),
+        [knownProjectIds, open],
+      ),
+    ),
+  );
   const removeTask = useBackgroundTaskStore((state) => state.removeTask);
   const clearTerminalTasks = useBackgroundTaskStore((state) => state.clearTerminalTasks);
 
+  const visibleTaskCount = open
+    ? selectVisibleBackgroundTaskCount(openedTasksMap, knownProjectIds)
+    : closedSummarySnapshot.visibleTaskCount;
+
   const tasks = useMemo(
-    () => selectVisibleBackgroundTasks(tasksMap, knownProjectIds, statusPriority),
-    [tasksMap, knownProjectIds],
+    () => (
+      open
+        ? selectVisibleBackgroundTasks(openedTasksMap, knownProjectIds, statusPriority)
+        : []
+    ),
+    [open, openedTasksMap, knownProjectIds],
   );
 
-  const activeTasks = useMemo(() => selectActiveBackgroundTasks(tasks), [tasks]);
+  const activeTasks = useMemo(
+    () => {
+      if (open) {
+        return selectActiveBackgroundTasks(tasks);
+      }
+      return [];
+    },
+    [open, tasks],
+  );
+  const activeTaskCount = open
+    ? activeTasks.length
+    : closedSummarySnapshot.activeTaskCount;
+  const pollingActiveTasks = useMemo(
+    () => (
+      open
+        ? activeTasks
+        : closedActiveTaskPollKeys.map((entry) => {
+          const [taskType, taskId, projectId = '', chapterId = ''] = entry.split('|');
+          return {
+            taskId,
+            taskType,
+            projectId: projectId || undefined,
+            checkpoint: chapterId ? { chapter_id: chapterId } : null,
+          } as Pick<TrackedBackgroundTask, 'taskId' | 'taskType' | 'projectId' | 'checkpoint'>;
+        })
+    ),
+    [activeTasks, closedActiveTaskPollKeys, open],
+  );
   const activeTaskPollKey = useMemo(
-    () => activeTasks.map((task) => `${task.taskType}:${task.taskId}`).join('|'),
-    [activeTasks],
+    () => (
+      open
+        ? activeTasks.map((task) => `${task.taskType}:${task.taskId}`).join('|')
+        : closedActiveTaskPollKeys.join('::')
+    ),
+    [activeTasks, closedActiveTaskPollKeys, open],
   );
 
   const filterOptions = useMemo(
@@ -122,18 +209,28 @@ export const useBackgroundTaskCenterController = (params: {
   }, [focusProjectId, taskFilter]);
 
   const taskSections = useMemo(
-    () => selectBackgroundTaskSections(tasks, focusProjectId, taskFilter),
-    [tasks, focusProjectId, taskFilter],
+    () => (open ? selectBackgroundTaskSections(tasks, focusProjectId, taskFilter) : []),
+    [open, tasks, focusProjectId, taskFilter],
   );
 
   const summary = useMemo(
-    () => buildBackgroundTaskCenterSummary({
-      tasks,
-      activeTasks,
-      focusProjectId,
-      isTaskResumable,
-    }),
-    [tasks, activeTasks, focusProjectId],
+    () => (
+      open
+        ? buildBackgroundTaskCenterSummary({
+            tasks,
+            activeTasks,
+            focusProjectId,
+            isTaskResumable,
+          })
+        : {
+            currentProjectActiveCount: closedSummarySnapshot.currentProjectActiveCount,
+            terminalTaskCount: closedSummarySnapshot.terminalTaskCount,
+            failedTaskCount: closedSummarySnapshot.failedTaskCount,
+            recoverableTaskCount: closedSummarySnapshot.recoverableTaskCount,
+            otherActiveCount: closedSummarySnapshot.otherActiveCount,
+          }
+    ),
+    [activeTasks, closedSummarySnapshot, focusProjectId, open, tasks],
   );
 
   useEffect(() => {
@@ -148,12 +245,12 @@ export const useBackgroundTaskCenterController = (params: {
   useRecoverableTaskSync({
     hiddenByRoute,
     open,
-    activeTasksCount: activeTasks.length,
+    activeTasksCount: open ? activeTasks.length : closedSummarySnapshot.activeTaskCount,
   });
 
   useEffect(() => {
     if (hiddenByRoute) return;
-    if (activeTasks.length === 0) return;
+    if (pollingActiveTasks.length === 0) return;
 
     let stopped = false;
     const handleMissingTask = (taskId: string, error: unknown) => {
@@ -164,7 +261,7 @@ export const useBackgroundTaskCenterController = (params: {
     const poll = async () => {
       if (stopped) return;
       await Promise.allSettled(
-        activeTasks.map((task) => {
+        pollingActiveTasks.map((task) => {
           if (task.taskType === 'chapters_batch_generate') {
             return chapterBatchTaskApi
               .getBatchGenerateStatus(task.taskId, task.projectId)
@@ -200,10 +297,10 @@ export const useBackgroundTaskCenterController = (params: {
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [activeTaskPollKey, activeTasks, hiddenByRoute, removeTask]);
+  }, [activeTaskPollKey, hiddenByRoute, pollingActiveTasks, removeTask]);
 
   useTaskNotifications({
-    tasks,
+    knownProjectIds,
     onNavigate: (to) => navigate(to),
   });
 
@@ -311,6 +408,8 @@ export const useBackgroundTaskCenterController = (params: {
     open,
     setOpen,
     isMobile,
+    visibleTaskCount,
+    activeTaskCount,
     tasks,
     activeTasks,
     taskFilter,

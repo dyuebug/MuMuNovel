@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, Outlet, Link, useLocation } from 'react-router-dom';
 import { Layout, Menu, Spin, Button, Drawer, Typography, theme } from 'antd';
 import {
@@ -32,6 +32,7 @@ import ThemeSwitch from '../components/ThemeSwitch';
 import { useThemeMode } from '../theme/useThemeMode';
 import { getStoredSidebarCollapsed, setStoredSidebarCollapsed } from '../utils/sidebarState';
 import { VERSION_INFO } from '../config/version';
+import { useShallow } from 'zustand/react/shallow';
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
@@ -40,6 +41,95 @@ const { Title, Text } = Typography;
 const isMobile = () => window.innerWidth <= 768;
 
 const projectLoadPromises = new Map<string, Promise<Project>>();
+
+type ProjectStatsItem = {
+  label: string;
+  value: number;
+  unit: string;
+};
+
+const OUTLET_CONTAINER_STYLE = {
+  height: '100%',
+  overflow: 'hidden',
+  display: 'flex',
+  flexDirection: 'column',
+} as const;
+
+const ProjectStatsBar = memo(function ProjectStatsBar({
+  projectStats,
+  token,
+  alphaColor,
+}: {
+  projectStats: ProjectStatsItem[];
+  token: ReturnType<typeof theme.useToken>['token'];
+  alphaColor: (color: string, alpha: number) => string;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', zIndex: 1 }}>
+      <div style={{ display: 'flex', gap: '16px' }}>
+        {projectStats.map((item) => (
+          <div
+            key={item.label}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backdropFilter: 'blur(4px)',
+              borderRadius: '28px',
+              minWidth: '56px',
+              height: '56px',
+              padding: '0 12px',
+              boxShadow: `inset 0 0 15px ${alphaColor(token.colorWhite, 0.15)}, 0 4px 10px ${alphaColor(token.colorText, 0.1)}`,
+              cursor: 'default',
+              transition: 'all 0.3s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'translateY(-3px) scale(1.02)';
+              e.currentTarget.style.boxShadow = `inset 0 0 20px ${alphaColor(token.colorWhite, 0.25)}, 0 8px 16px ${alphaColor(token.colorText, 0.15)}`;
+              e.currentTarget.style.border = `1px solid ${alphaColor(token.colorWhite, 0.1)}`;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'translateY(0) scale(1)';
+              e.currentTarget.style.boxShadow = `inset 0 0 15px ${alphaColor(token.colorWhite, 0.15)}, 0 4px 10px ${alphaColor(token.colorText, 0.1)}`;
+            }}
+          >
+            <span
+              style={{
+                fontSize: '11px',
+                color: alphaColor(token.colorWhite, 0.9),
+                marginBottom: '2px',
+                lineHeight: 1,
+              }}
+            >
+              {item.label}
+            </span>
+            <span
+              style={{
+                fontSize: '15px',
+                fontWeight: '600',
+                color: token.colorWhite,
+                lineHeight: 1,
+                fontFamily: 'Monaco, monospace',
+              }}
+            >
+              {item.value > 10000 ? `${(item.value / 10000).toFixed(1)}w` : item.value}
+              <span style={{ fontSize: '10px', marginLeft: '2px', opacity: 0.8 }}>{item.unit}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+});
+
+const ProjectPageOutletContainer = memo(function ProjectPageOutletContainer() {
+  return (
+    <div style={OUTLET_CONTAINER_STYLE}>
+      <Outlet />
+    </div>
+  );
+});
 
 export default function ProjectDetail() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -60,6 +150,9 @@ export default function ProjectDetail() {
     setMode(nextMode);
   };
   const collapsedThemeIcon = mode === 'light' ? <BulbOutlined /> : mode === 'dark' ? <MoonOutlined /> : <CloudOutlined />;
+  const navigateHome = useCallback(() => {
+    navigate('/');
+  }, [navigate]);
 
   // 监听窗口大小变化
   useEffect(() => {
@@ -140,13 +233,25 @@ export default function ProjectDetail() {
     }
   }, [projectId]);
 
-  const currentProject = useStore((state) => state.currentProject);
-  const setCurrentProject = useStore((state) => state.setCurrentProject);
-  const clearProjectData = useStore((state) => state.clearProjectData);
-  const outlineCount = useStore((state) => state.outlines.length);
-  const characterCount = useStore((state) => state.characters.length);
-  const chapterCount = useStore((state) => state.chapters.length);
-
+  const {
+    currentProjectId,
+    currentProjectTitle,
+    currentProjectCharacterCount,
+    currentProjectChapterCount,
+    currentProjectCurrentWords,
+    setCurrentProject,
+    clearProjectData,
+    outlineCount,
+  } = useStore(useShallow((state) => ({
+    currentProjectId: state.currentProject?.id ?? null,
+    currentProjectTitle: state.currentProject?.title ?? '',
+    currentProjectCharacterCount: state.currentProject?.character_count ?? 0,
+    currentProjectChapterCount: state.currentProject?.chapter_count ?? 0,
+    currentProjectCurrentWords: state.currentProject?.current_words ?? 0,
+    setCurrentProject: state.setCurrentProject,
+    clearProjectData: state.clearProjectData,
+    outlineCount: state.outlines.length,
+  })));
   const createMenuLink = useCallback((
     path: string,
     label: string,
@@ -239,7 +344,7 @@ export default function ProjectDetail() {
   // Hook 内部已经更新了 store，不需要再次刷新
 
   const projectStats = useMemo(() => {
-    if (!currentProject) {
+    if (!currentProjectId) {
       return [];
     }
 
@@ -251,27 +356,59 @@ export default function ProjectDetail() {
       },
       {
         label: '角色',
-        value: characterCount > 0 ? characterCount : (currentProject.character_count ?? 0),
+        value: currentProjectCharacterCount,
         unit: '个',
       },
       {
         label: '章节',
-        value: chapterCount > 0 ? chapterCount : (currentProject.chapter_count ?? 0),
+        value: currentProjectChapterCount,
         unit: '章',
       },
       {
         label: '已写',
-        value: currentProject.current_words,
+        value: currentProjectCurrentWords,
         unit: '字',
       },
     ];
-  }, [currentProject, outlineCount, characterCount, chapterCount]);
+  }, [
+    currentProjectChapterCount,
+    currentProjectCharacterCount,
+    currentProjectCurrentWords,
+    currentProjectId,
+    outlineCount,
+  ]);
+
+  const sponsorPath = `/project/${projectId}/sponsor`;
+  const worldSettingPath = `/project/${projectId}/world-setting`;
+  const charactersPath = `/project/${projectId}/characters`;
+  const organizationsPath = `/project/${projectId}/organizations`;
+  const careersPath = `/project/${projectId}/careers`;
+  const relationshipsPath = `/project/${projectId}/relationships`;
+  const outlinePath = `/project/${projectId}/outline`;
+  const chaptersPath = `/project/${projectId}/chapters`;
+  const chapterAnalysisPath = `/project/${projectId}/chapter-analysis`;
+  const foreshadowsPath = `/project/${projectId}/foreshadows`;
+  const writingStylesPath = `/project/${projectId}/writing-styles`;
+  const promptWorkshopPath = `/project/${projectId}/prompt-workshop`;
+
+  const sponsorLink = useMemo(() => <Link to={sponsorPath}>赞助支持</Link>, [sponsorPath]);
+  const worldSettingLink = useMemo(() => <Link to={worldSettingPath}>世界设定</Link>, [worldSettingPath]);
+  const writingStylesLink = useMemo(() => <Link to={writingStylesPath}>写作风格</Link>, [writingStylesPath]);
+  const promptWorkshopLink = useMemo(() => <Link to={promptWorkshopPath}>提示词工坊</Link>, [promptWorkshopPath]);
+  const charactersLink = useMemo(() => createMenuLink(charactersPath, '角色管理', 'characters'), [charactersPath, createMenuLink]);
+  const organizationsLink = useMemo(() => createMenuLink(organizationsPath, '组织管理', 'organizations'), [organizationsPath, createMenuLink]);
+  const careersLink = useMemo(() => createMenuLink(careersPath, '职业管理', 'careers'), [careersPath, createMenuLink]);
+  const relationshipsLink = useMemo(() => createMenuLink(relationshipsPath, '关系管理', 'relationships'), [relationshipsPath, createMenuLink]);
+  const outlineLink = useMemo(() => createMenuLink(outlinePath, '大纲管理', 'outline'), [outlinePath, createMenuLink]);
+  const chaptersLink = useMemo(() => createMenuLink(chaptersPath, '章节管理', 'chapters'), [chaptersPath, createMenuLink]);
+  const chapterAnalysisLink = useMemo(() => createMenuLink(chapterAnalysisPath, '剧情分析', 'chapter-analysis'), [chapterAnalysisPath, createMenuLink]);
+  const foreshadowsLink = useMemo(() => createMenuLink(foreshadowsPath, '伏笔管理', 'foreshadows'), [foreshadowsPath, createMenuLink]);
 
   const menuItems = useMemo(() => [
     {
       key: 'sponsor',
       icon: <HeartOutlined />,
-      label: <Link to={`/project/${projectId}/sponsor`}>赞助支持</Link>,
+      label: sponsorLink,
     },
     {
       type: 'group' as const,
@@ -280,47 +417,47 @@ export default function ProjectDetail() {
         {
           key: 'world-setting',
           icon: <GlobalOutlined />,
-          label: <Link to={`/project/${projectId}/world-setting`}>世界设定</Link>,
+          label: worldSettingLink,
         },
         {
           key: 'characters',
           icon: <TeamOutlined />,
-          label: createMenuLink(`/project/${projectId}/characters`, '角色管理', 'characters'),
+          label: charactersLink,
         },
         {
           key: 'organizations',
           icon: <BankOutlined />,
-          label: createMenuLink(`/project/${projectId}/organizations`, '组织管理', 'organizations'),
+          label: organizationsLink,
         },
         {
           key: 'careers',
           icon: <TrophyOutlined />,
-          label: createMenuLink(`/project/${projectId}/careers`, '职业管理', 'careers'),
+          label: careersLink,
         },
         {
           key: 'relationships',
           icon: <ApartmentOutlined />,
-          label: createMenuLink(`/project/${projectId}/relationships`, '关系管理', 'relationships'),
+          label: relationshipsLink,
         },
         {
           key: 'outline',
           icon: <FileTextOutlined />,
-          label: createMenuLink(`/project/${projectId}/outline`, '大纲管理', 'outline'),
+          label: outlineLink,
         },
         {
           key: 'chapters',
           icon: <BookOutlined />,
-          label: createMenuLink(`/project/${projectId}/chapters`, '章节管理', 'chapters'),
+          label: chaptersLink,
         },
         {
           key: 'chapter-analysis',
           icon: <FundOutlined />,
-          label: createMenuLink(`/project/${projectId}/chapter-analysis`, '剧情分析', 'chapter-analysis'),
+          label: chapterAnalysisLink,
         },
         {
           key: 'foreshadows',
           icon: <BulbOutlined />,
-          label: createMenuLink(`/project/${projectId}/foreshadows`, '伏笔管理', 'foreshadows'),
+          label: foreshadowsLink,
         },
       ],
     },
@@ -331,79 +468,105 @@ export default function ProjectDetail() {
         {
           key: 'writing-styles',
           icon: <EditOutlined />,
-          label: <Link to={`/project/${projectId}/writing-styles`}>写作风格</Link>,
+          label: writingStylesLink,
         },
         {
           key: 'prompt-workshop',
           icon: <CloudOutlined />,
-          label: <Link to={`/project/${projectId}/prompt-workshop`}>提示词工坊</Link>,
+          label: promptWorkshopLink,
         },
       ],
     },
-  ], [projectId, createMenuLink]);
+  ], [
+    careersLink,
+    chapterAnalysisLink,
+    chaptersLink,
+    charactersLink,
+    foreshadowsLink,
+    organizationsLink,
+    outlineLink,
+    promptWorkshopLink,
+    relationshipsLink,
+    sponsorLink,
+    worldSettingLink,
+    writingStylesLink,
+  ]);
 
   const menuItemsCollapsed = useMemo(() => [
     {
       key: 'sponsor',
       icon: <HeartOutlined />,
-      label: <Link to={`/project/${projectId}/sponsor`}>赞助支持</Link>,
+      label: sponsorLink,
     },
     {
       key: 'world-setting',
       icon: <GlobalOutlined />,
-      label: <Link to={`/project/${projectId}/world-setting`}>世界设定</Link>,
+      label: worldSettingLink,
     },
     {
       key: 'careers',
       icon: <TrophyOutlined />,
-      label: createMenuLink(`/project/${projectId}/careers`, '职业管理', 'careers'),
+      label: careersLink,
     },
     {
       key: 'characters',
       icon: <TeamOutlined />,
-      label: createMenuLink(`/project/${projectId}/characters`, '角色管理', 'characters'),
+      label: charactersLink,
     },
     {
       key: 'relationships',
       icon: <ApartmentOutlined />,
-      label: createMenuLink(`/project/${projectId}/relationships`, '关系管理', 'relationships'),
+      label: relationshipsLink,
     },
     {
       key: 'organizations',
       icon: <BankOutlined />,
-      label: createMenuLink(`/project/${projectId}/organizations`, '组织管理', 'organizations'),
+      label: organizationsLink,
     },
     {
       key: 'outline',
       icon: <FileTextOutlined />,
-      label: createMenuLink(`/project/${projectId}/outline`, '大纲管理', 'outline'),
+      label: outlineLink,
     },
     {
       key: 'chapters',
       icon: <BookOutlined />,
-      label: createMenuLink(`/project/${projectId}/chapters`, '章节管理', 'chapters'),
+      label: chaptersLink,
     },
     {
       key: 'chapter-analysis',
       icon: <FundOutlined />,
-      label: createMenuLink(`/project/${projectId}/chapter-analysis`, '剧情分析', 'chapter-analysis'),
+      label: chapterAnalysisLink,
     },
     {
       key: 'foreshadows',
       icon: <BulbOutlined />,
-      label: createMenuLink(`/project/${projectId}/foreshadows`, '伏笔管理', 'foreshadows'),
+      label: foreshadowsLink,
     },
     {
       key: 'writing-styles',
       icon: <EditOutlined />,
-      label: <Link to={`/project/${projectId}/writing-styles`}>写作风格</Link>,
+      label: writingStylesLink,
     },
     {
       key: 'prompt-workshop',
       icon: <CloudOutlined />,
-      label: <Link to={`/project/${projectId}/prompt-workshop`}>提示词工坊</Link>,
+      label: promptWorkshopLink,
     },
-  ], [projectId, createMenuLink]);
+  ], [
+    careersLink,
+    chapterAnalysisLink,
+    chaptersLink,
+    charactersLink,
+    foreshadowsLink,
+    organizationsLink,
+    outlineLink,
+    promptWorkshopLink,
+    relationshipsLink,
+    sponsorLink,
+    worldSettingLink,
+    writingStylesLink,
+  ]);
 
   // 根据当前路径动态确定选中的菜单项
   const selectedKey = useMemo(() => {
@@ -424,7 +587,27 @@ export default function ProjectDetail() {
     return 'sponsor'; // 默认选中赞助支持
   }, [location.pathname]);
 
-  if (!currentProject || currentProject.id !== projectId) {
+  const menuNode = useMemo(() => (
+    <div style={{
+      flex: 1,
+      overflowY: 'auto',
+      overflowX: 'hidden'
+    }}>
+      <Menu
+        mode="inline"
+        inlineCollapsed={collapsed}
+        selectedKeys={[selectedKey]}
+        style={{
+          borderRight: 0,
+          paddingTop: '12px'
+        }}
+        items={collapsed ? menuItemsCollapsed : menuItems}
+        onClick={() => mobile && setDrawerVisible(false)}
+      />
+    </div>
+  ), [collapsed, menuItems, menuItemsCollapsed, mobile, selectedKey]);
+
+  if (!currentProjectId || currentProjectId !== projectId) {
     if (projectLoadError) {
       return (
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', padding: 24 }}>
@@ -447,27 +630,6 @@ export default function ProjectDetail() {
       </div>
     );
   }
-
-  // 渲染菜单内容
-  const renderMenu = () => (
-    <div style={{
-      flex: 1,
-      overflowY: 'auto',
-      overflowX: 'hidden'
-    }}>
-      <Menu
-        mode="inline"
-        inlineCollapsed={collapsed}
-        selectedKeys={[selectedKey]}
-        style={{
-          borderRight: 0,
-          paddingTop: '12px'
-        }}
-        items={collapsed ? menuItemsCollapsed : menuItems}
-        onClick={() => mobile && setDrawerVisible(false)}
-      />
-    </div>
-  );
 
   return (
     <Layout style={{ minHeight: '100vh', height: '100vh', overflow: 'hidden' }}>
@@ -520,14 +682,14 @@ export default function ProjectDetail() {
           paddingLeft: mobile ? '8px' : '0',
           paddingRight: mobile ? '8px' : '0'
         }}>
-          {currentProject.title}
+          {currentProjectTitle}
         </h2>
 
         {mobile && (
           <Button
             type="text"
             icon={<ArrowLeftOutlined />}
-            onClick={() => navigate('/')}
+            onClick={navigateHome}
             style={{
               fontSize: '14px',
               color: token.colorWhite,
@@ -541,57 +703,11 @@ export default function ProjectDetail() {
         )}
 
         {!mobile && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', zIndex: 1 }}>
-            <div style={{ display: 'flex', gap: '16px' }}>
-              {projectStats.map((item, index) => (
-                <div
-                  key={index}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backdropFilter: 'blur(4px)',
-                    borderRadius: '28px',
-                    minWidth: '56px',
-                    height: '56px',
-                    padding: '0 12px',
-                    boxShadow: `inset 0 0 15px ${alphaColor(token.colorWhite, 0.15)}, 0 4px 10px ${alphaColor(token.colorText, 0.1)}`,
-                    cursor: 'default',
-                    transition: 'all 0.3s ease',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-3px) scale(1.02)';
-                    e.currentTarget.style.boxShadow = `inset 0 0 20px ${alphaColor(token.colorWhite, 0.25)}, 0 8px 16px ${alphaColor(token.colorText, 0.15)}`;
-                    e.currentTarget.style.border = `1px solid ${alphaColor(token.colorWhite, 0.1)}`;
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0) scale(1)';
-                    e.currentTarget.style.boxShadow = `inset 0 0 15px ${alphaColor(token.colorWhite, 0.15)}, 0 4px 10px ${alphaColor(token.colorText, 0.1)}`;
-                  }}
-                >
-                  <span style={{
-                    fontSize: '11px',
-                    color: alphaColor(token.colorWhite, 0.9),
-                    marginBottom: '2px',
-                    lineHeight: 1
-                  }}>
-                    {item.label}
-                  </span>
-                  <span style={{
-                    fontSize: '15px',
-                    fontWeight: '600',
-                    color: token.colorWhite,
-                    lineHeight: 1,
-                    fontFamily: 'Monaco, monospace'
-                  }}>
-                    {typeof item.value === 'number' && item.value > 10000 ? (item.value / 10000).toFixed(1) + 'w' : item.value}
-                    <span style={{ fontSize: '10px', marginLeft: '2px', opacity: 0.8 }}>{item.unit}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <ProjectStatsBar
+            projectStats={projectStats}
+            token={token}
+            alphaColor={alphaColor}
+          />
         )}
       </Header>
 
@@ -622,7 +738,7 @@ export default function ProjectDetail() {
             width={280}
             styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column' } }}
           >
-            {renderMenu()}
+            {menuNode}
             <div style={{ padding: 16, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: token.colorTextTertiary, marginBottom: 8 }}>
                 <span>主题模式</span>
@@ -727,7 +843,7 @@ export default function ProjectDetail() {
                   </>
                 )}
               </div>
-              {renderMenu()}
+              {menuNode}
               <div style={{
                 padding: collapsed ? '12px 8px' : '12px',
                 borderTop: `1px solid ${token.colorBorderSecondary}`,
@@ -753,7 +869,7 @@ export default function ProjectDetail() {
                     <Button
                       type="text"
                       icon={<ArrowLeftOutlined />}
-                      onClick={() => navigate('/')}
+                      onClick={navigateHome}
                       style={{
                         width: 40,
                         height: 40,
@@ -775,7 +891,7 @@ export default function ProjectDetail() {
                     <Button
                       type="text"
                       icon={<ArrowLeftOutlined />}
-                      onClick={() => navigate('/')}
+                      onClick={navigateHome}
                       block
                       style={{
                         color: token.colorText,
@@ -817,7 +933,7 @@ export default function ProjectDetail() {
               display: 'flex',
               flexDirection: 'column'
             }}>
-              <Outlet />
+              <ProjectPageOutletContainer />
             </div>
           </Content>
         </Layout>

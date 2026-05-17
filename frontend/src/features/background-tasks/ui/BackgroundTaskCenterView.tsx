@@ -15,15 +15,15 @@ export const BackgroundTaskCenterView = (props: {
 
   return (
     <>
-      <Badge count={controller.activeTasks.length} size="small" offset={[-2, 8]}>
+      <Badge count={controller.activeTaskCount} size="small" offset={[-2, 8]}>
         <FloatButton
           icon={<UnorderedListOutlined />}
-          type={controller.summary.currentProjectActiveCount > 0 ? 'primary' : controller.activeTasks.length > 0 ? 'default' : 'default'}
+          type={controller.summary.currentProjectActiveCount > 0 ? 'primary' : controller.activeTaskCount > 0 ? 'default' : 'default'}
           tooltip={
             controller.summary.currentProjectActiveCount > 0
               ? `当前项目后台任务 (${controller.summary.currentProjectActiveCount})`
-              : controller.activeTasks.length > 0
-                ? `后台任务进行中 (${controller.activeTasks.length})`
+              : controller.activeTaskCount > 0
+                ? `后台任务进行中 (${controller.activeTaskCount})`
                 : '后台任务'
           }
           onClick={() => controller.setOpen(true)}
@@ -67,7 +67,7 @@ export const BackgroundTaskCenterView = (props: {
           filterOptions={controller.filterOptions}
           onChangeFilter={controller.setTaskFilter}
           summary={controller.summary}
-          activeCount={controller.activeTasks.length}
+          activeCount={controller.activeTaskCount}
         />
 
         <TaskSectionList

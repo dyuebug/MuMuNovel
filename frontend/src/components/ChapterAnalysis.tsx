@@ -174,6 +174,19 @@ const localizeConflictType = (value?: string | null): string => {
   return ANALYSIS_CONFLICT_TYPE_LABELS[value] || value;
 };
 
+const formatAnalysisScore = (value: unknown, digits = 1): string => {
+  const normalized = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  return normalized.toFixed(digits);
+};
+
+const formatAnalysisInteger = (value: unknown): number => (
+  typeof value === 'number' && Number.isFinite(value) ? value : 0
+);
+
+const formatAnalysisTextList = (value: unknown): string[] => (
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
+);
+
 interface ChapterAnalysisProps {
   chapterId: string;
   visible: boolean;
@@ -398,6 +411,11 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
         { signal: abortController.signal },
       );
       if (abortController.signal.aborted || requestAbortRef.current !== abortController || !mountedRef.current) {
+        return;
+      }
+      if (!data?.analysis) {
+        updateAnalysis(null);
+        setError('分析任务已完成，但返回结果不完整，请稍后重试或重新分析');
         return;
       }
       updateAnalysis(data);
@@ -810,7 +828,17 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
     if (!analysis) return null;
 
     const { analysis: analysis_data, memories } = analysis;
-    const hasSuggestions = !!(analysis_data.suggestions && analysis_data.suggestions.length > 0);
+    if (!analysis_data) {
+      return (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="分析任务已完成，但返回结果不完整，请稍后重试或重新分析"
+          style={{ padding: isMobile ? '32px 0' : '48px 0' }}
+        />
+      );
+    }
+    const suggestions = formatAnalysisTextList(analysis_data.suggestions);
+    const hasSuggestions = suggestions.length > 0;
     const hasCheckerResult = !!checkerResult;
     const hasDraftResult = !!draftResult;
     const qualityMetricsSummary = analysis.quality_metrics_summary;
@@ -852,7 +880,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                     message="发现改进建议"
                     description={
                       <div>
-                        <p style={{ marginBottom: 12 }}>已分析出 {analysis_data.suggestions.length} 条改进建议，您可以根据这些建议重新生成章节内容。</p>
+                        <p style={{ marginBottom: 12 }}>已分析出 {suggestions.length} 条改进建议，您可以根据这些建议重新生成章节内容。</p>
                         <Button
                           type="primary"
                           icon={<EditOutlined />}
@@ -1065,7 +1093,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                     <Col span={isMobile ? 12 : 6}>
                       <Statistic
                         title="整体质量"
-                        value={analysis_data.overall_quality_score || 0}
+                        value={formatAnalysisInteger(analysis_data.overall_quality_score)}
                         suffix="/ 10"
                         valueStyle={{ color: 'var(--color-success)' }}
                       />
@@ -1073,21 +1101,21 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                     <Col span={isMobile ? 12 : 6}>
                       <Statistic
                         title="节奏把控"
-                        value={analysis_data.pacing_score || 0}
+                        value={formatAnalysisInteger(analysis_data.pacing_score)}
                         suffix="/ 10"
                       />
                     </Col>
                     <Col span={isMobile ? 12 : 6}>
                       <Statistic
                         title="吸引力"
-                        value={analysis_data.engagement_score || 0}
+                        value={formatAnalysisInteger(analysis_data.engagement_score)}
                         suffix="/ 10"
                       />
                     </Col>
                     <Col span={isMobile ? 12 : 6}>
                       <Statistic
                         title="连贯性"
-                        value={analysis_data.coherence_score || 0}
+                        value={formatAnalysisInteger(analysis_data.coherence_score)}
                         suffix="/ 10"
                       />
                     </Col>
@@ -1105,7 +1133,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                 {hasSuggestions && (
                   <Card title={<><BulbOutlined /> 改进建议</>} size={isMobile ? 'small' : 'default'}>
                     <List
-                      dataSource={analysis_data.suggestions}
+                      dataSource={suggestions}
                       renderItem={(item, index) => (
                         <List.Item>
                           <span style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{index + 1}. {item}</span>
@@ -1124,7 +1152,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
             children: (
               <div style={{ height: isMobile ? 'calc(80vh - 180px)' : 'calc(90vh - 220px)', overflowY: 'auto', paddingRight: '8px' }}>
                 <Card size={isMobile ? 'small' : 'default'}>
-                  {analysis_data.hooks && analysis_data.hooks.length > 0 ? (
+                  {Array.isArray(analysis_data.hooks) && analysis_data.hooks.length > 0 ? (
                     <List
                       dataSource={analysis_data.hooks}
                       renderItem={(hook) => (
@@ -1134,10 +1162,10 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                               <div style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                                 <Tag color="blue">{localizeHookType(hook.type)}</Tag>
                                 <Tag color="orange">{localizeHookPosition(hook.position)}</Tag>
-                                <Tag color="red">强度: {hook.strength}/10</Tag>
+                                <Tag color="red">强度: {formatAnalysisInteger(hook.strength)}/10</Tag>
                               </div>
                             }
-                            description={<div style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{hook.content}</div>}
+                            description={<div style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{hook.content || ''}</div>}
                           />
                         </List.Item>
                       )}
@@ -1156,7 +1184,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
             children: (
               <div style={{ height: isMobile ? 'calc(80vh - 180px)' : 'calc(90vh - 220px)', overflowY: 'auto', paddingRight: '8px' }}>
                 <Card size={isMobile ? 'small' : 'default'}>
-                  {analysis_data.foreshadows && analysis_data.foreshadows.length > 0 ? (
+                  {Array.isArray(analysis_data.foreshadows) && analysis_data.foreshadows.length > 0 ? (
                     <List
                       dataSource={analysis_data.foreshadows}
                       renderItem={(foreshadow) => (
@@ -1167,14 +1195,14 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                                 <Tag color={foreshadow.type === 'planted' ? 'green' : 'purple'}>
                                   {foreshadow.type === 'planted' ? '已埋下' : '已回收'}
                                 </Tag>
-                                <Tag>强度: {foreshadow.strength}/10</Tag>
-                                <Tag>隐藏度: {foreshadow.subtlety}/10</Tag>
+                                <Tag>强度: {formatAnalysisInteger(foreshadow.strength)}/10</Tag>
+                                <Tag>隐藏度: {formatAnalysisInteger(foreshadow.subtlety)}/10</Tag>
                                 {foreshadow.reference_chapter && (
                                   <Tag color="cyan">呼应第{foreshadow.reference_chapter}章</Tag>
                                 )}
                               </div>
                             }
-                            description={<div style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{foreshadow.content}</div>}
+                            description={<div style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{foreshadow.content || ''}</div>}
                           />
                         </List.Item>
                       )}
@@ -1205,15 +1233,15 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                         <Col span={isMobile ? 24 : 12}>
                           <Statistic
                             title="情感强度"
-                            value={(analysis_data.emotional_intensity * 10).toFixed(1)}
+                            value={formatAnalysisScore((typeof analysis_data.emotional_intensity === 'number' ? analysis_data.emotional_intensity : 0) * 10)}
                             suffix="/ 10"
                           />
                         </Col>
                       </Row>
                       <Card type="inner" title="剧情阶段" size="small">
                         <p><strong>阶段：</strong>{localizeAnalysisPlotStage(analysis_data.plot_stage)}</p>
-                        <p><strong>冲突等级：</strong>{analysis_data.conflict_level} / 10</p>
-                        {analysis_data.conflict_types && analysis_data.conflict_types.length > 0 && (
+                        <p><strong>冲突等级：</strong>{formatAnalysisInteger(analysis_data.conflict_level)} / 10</p>
+                        {Array.isArray(analysis_data.conflict_types) && analysis_data.conflict_types.length > 0 && (
                           <div style={{ marginTop: 8 }}>
                             <strong>冲突类型：</strong>
                             {analysis_data.conflict_types.map((type, idx) => (
@@ -1239,21 +1267,21 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
             children: (
               <div style={{ height: isMobile ? 'calc(80vh - 180px)' : 'calc(90vh - 220px)', overflowY: 'auto', paddingRight: '8px' }}>
                 <Card size={isMobile ? 'small' : 'default'}>
-                  {analysis_data.character_states && analysis_data.character_states.length > 0 ? (
+                  {Array.isArray(analysis_data.character_states) && analysis_data.character_states.length > 0 ? (
                     <List
                       dataSource={analysis_data.character_states}
                       renderItem={(char) => (
                         <List.Item>
                           <Card
                             type="inner"
-                            title={char.character_name}
+                            title={char.character_name || '未命名角色'}
                             size="small"
                             style={{ width: '100%' }}
                           >
-                            <p><strong>状态变化：</strong>{char.state_before} → {char.state_after}</p>
-                            <p><strong>心理变化：</strong>{char.psychological_change}</p>
-                            <p><strong>关键事件：</strong>{char.key_event}</p>
-                            {char.relationship_changes && Object.keys(char.relationship_changes).length > 0 && (
+                            <p><strong>状态变化：</strong>{char.state_before || '未知'} → {char.state_after || '未知'}</p>
+                            <p><strong>心理变化：</strong>{char.psychological_change || '暂无'}</p>
+                            <p><strong>关键事件：</strong>{char.key_event || '暂无'}</p>
+                            {char.relationship_changes && typeof char.relationship_changes === 'object' && Object.keys(char.relationship_changes).length > 0 && (
                               <div>
                                 <strong>关系变化：</strong>
                                 {Object.entries(char.relationship_changes).map(([name, change]) => (
@@ -1281,7 +1309,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
             children: (
               <div style={{ height: isMobile ? 'calc(80vh - 180px)' : 'calc(90vh - 220px)', overflowY: 'auto', paddingRight: '8px' }}>
                 <Card size={isMobile ? 'small' : 'default'}>
-                  {memories && memories.length > 0 ? (
+                  {Array.isArray(memories) && memories.length > 0 ? (
                     <List
                       dataSource={memories}
                       renderItem={(memory) => (
@@ -1290,17 +1318,17 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
                             title={
                               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
                                 <Tag color="blue">{localizeAnalysisMemoryType(memory.type)}</Tag>
-                                <Tag color="orange">重要性: {memory.importance.toFixed(1)}</Tag>
+                                <Tag color="orange">重要性: {formatAnalysisScore(memory.importance)}</Tag>
                                 {memory.is_foreshadow === 1 && <Tag color="green">已埋下伏笔</Tag>}
                                 {memory.is_foreshadow === 2 && <Tag color="purple">已回收伏笔</Tag>}
-                                <span style={{ minWidth: 0, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{localizeAnalysisMemoryText(memory.title)}</span>
+                                <span style={{ minWidth: 0, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{localizeAnalysisMemoryText(memory.title || '')}</span>
                               </div>
                             }
                             description={
                               <div style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                                <p>{memory.content}</p>
+                                <p>{memory.content || ''}</p>
                                 <div>
-                                  {memory.tags.map((tag, idx) => (
+                                  {formatAnalysisTextList(memory.tags).map((tag, idx) => (
                                     <Tag key={idx} style={{ margin: 2 }}>{localizeAnalysisMemoryText(tag)}</Tag>
                                   ))}
                                 </div>

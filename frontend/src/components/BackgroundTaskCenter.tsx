@@ -12,7 +12,7 @@ export default function BackgroundTaskCenter() {
     isMobile: false,
   });
 
-  if (controller.hiddenByRoute || controller.tasks.length === 0) {
+  if (controller.hiddenByRoute || controller.visibleTaskCount === 0) {
     return null;
   }
 

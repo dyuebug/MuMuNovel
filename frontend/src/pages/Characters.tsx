@@ -1,6 +1,7 @@
 import { Suspense, lazy, memo, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Button, Modal, Form, Input, Select, message, Row, Col, Empty, Tabs, Divider, Typography, Space, Checkbox, theme } from 'antd';
 import { ThunderboltOutlined, UserOutlined, TeamOutlined, PlusOutlined, ExportOutlined, ImportOutlined, DownloadOutlined } from '@ant-design/icons';
+import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../store';
 import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgroundTasks';
 import { useCharacterSync } from '../store/hooks';
@@ -259,7 +260,9 @@ const getCharacterGenerationSuccessMessage = (taskType: 'character_generate' | '
 export default function Characters() {
   const { token } = theme.useToken();
   const currentProject = useStore((state) => state.currentProject);
-  const storeCharacters = useStore((state) => state.characters);
+  const projectCharacters = useStore(
+    useShallow((state) => state.characters.filter((character) => character.project_id === currentProject?.id)),
+  );
   const activeTrackedGenerationTask = useBackgroundTaskStore(
     (state) => selectActiveCharacterGenerationTask(state.tasks, currentProject?.id)
   );
@@ -314,10 +317,8 @@ export default function Characters() {
       return [];
     }
 
-
-
-    return storeCharacters.filter((character) => character.project_id === currentProject.id);
-  }, [currentProject?.id, storeCharacters]);
+    return projectCharacters;
+  }, [currentProject?.id, projectCharacters]);
 
 
 

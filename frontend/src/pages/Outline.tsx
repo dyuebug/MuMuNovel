@@ -1,4 +1,5 @@
 import { Suspense, lazy, useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 
 import { Button, List, Modal, Form, Input, message, Empty, Space, Popconfirm, Card, Select, Radio, Tag, InputNumber } from 'antd';
@@ -131,6 +132,16 @@ const selectActiveOutlineExpandTask = (
     )
     .sort((left, right) => right.updatedAt - left.updatedAt)[0] ?? null;
 };
+
+const selectHasActiveOutlineGenerateTask = (
+  tasks: Record<string, import('../store/backgroundTasks').TrackedBackgroundTask>,
+  projectId?: string | null,
+): boolean => Boolean(selectActiveOutlineGenerateTask(tasks, projectId));
+
+const selectHasActiveOutlineExpandTask = (
+  tasks: Record<string, import('../store/backgroundTasks').TrackedBackgroundTask>,
+  projectId?: string | null,
+): boolean => Boolean(selectActiveOutlineExpandTask(tasks, projectId));
 
 const selectOutlineReplayTaskSignature = (
   tasks: Record<string, import('../store/backgroundTasks').TrackedBackgroundTask>,
@@ -532,10 +543,14 @@ export default function Outline() {
   const currentProject = useStore((state) => state.currentProject);
 
 
-  const outlines = useStore((state) => state.outlines);
+  const outlines = useStore(
+    useShallow((state) => state.outlines.filter((outline) => outline.project_id === currentProject?.id)),
+  );
 
 
-  const storeCharacters = useStore((state) => state.characters);
+  const storeCharacters = useStore(
+    useShallow((state) => state.characters.filter((character) => character.project_id === currentProject?.id)),
+  );
 
 
   const setCurrentProject = useStore((state) => state.setCurrentProject);
@@ -566,8 +581,8 @@ export default function Outline() {
     outlineCount: outlines.length,
     isGenerating,
     isExpanding,
-    hasActiveGenerateTask: Boolean(activeTrackedOutlineGenerateTask),
-    hasActiveExpandTask: Boolean(activeTrackedOutlineExpandTask),
+    hasActiveGenerateTask: hasActiveTrackedOutlineGenerateTask,
+    hasActiveExpandTask: hasActiveTrackedOutlineExpandTask,
     ...extra,
   });
   const projectDefaultCreativeMode = currentProject?.default_creative_mode as CreativeMode | undefined;
@@ -637,11 +652,11 @@ export default function Outline() {
 
 
   const [sseModalVisible, setSSEModalVisible] = useState(false);
-  const activeTrackedOutlineGenerateTask = useBackgroundTaskStore(
-    (state) => selectActiveOutlineGenerateTask(state.tasks, currentProject?.id)
+  const hasActiveTrackedOutlineGenerateTask = useBackgroundTaskStore(
+    (state) => selectHasActiveOutlineGenerateTask(state.tasks, currentProject?.id)
   );
-  const activeTrackedOutlineExpandTask = useBackgroundTaskStore(
-    (state) => selectActiveOutlineExpandTask(state.tasks, currentProject?.id)
+  const hasActiveTrackedOutlineExpandTask = useBackgroundTaskStore(
+    (state) => selectHasActiveOutlineExpandTask(state.tasks, currentProject?.id)
   );
   const outlineReplayTaskSignature = useBackgroundTaskStore(
     (state) => selectOutlineReplayTaskSignature(state.tasks, currentProject?.id)
@@ -678,7 +693,10 @@ export default function Outline() {
 
   const { currentTaskIdRef: generateTaskIdRef, startTaskPolling: startGenerateTaskPolling, stopTaskPolling: stopGenerateTaskPolling } = useRestorableBackgroundTaskPolling({
     projectId: currentProject?.id,
-    activeTrackedTask: activeTrackedOutlineGenerateTask,
+    getActiveTrackedTask: () => selectActiveOutlineGenerateTask(
+      useBackgroundTaskStore.getState().tasks,
+      currentProject?.id,
+    ),
     canRestore: !isExpanding && !expandTaskIdRef.current,
     isMatchingTask: (task) => task.task_type === 'outline_generate' && (task.status === 'pending' || task.status === 'running'),
     onRestoreTask: ({ progress, message: taskMessage }) => {
@@ -789,7 +807,10 @@ export default function Outline() {
 
   const { currentTaskIdRef: expandPollingTaskIdRef, startTaskPolling: startExpandTaskPolling, stopTaskPolling: stopExpandTaskPolling } = useRestorableBackgroundTaskPolling({
     projectId: currentProject?.id,
-    activeTrackedTask: activeTrackedOutlineExpandTask,
+    getActiveTrackedTask: () => selectActiveOutlineExpandTask(
+      useBackgroundTaskStore.getState().tasks,
+      currentProject?.id,
+    ),
     canRestore: !isGenerating && !generateTaskIdRef.current,
     isMatchingTask: (task) => (task.task_type === 'outline_expand' || task.task_type === 'outline_batch_expand') && (task.status === 'pending' || task.status === 'running'),
     onRestoreTask: ({ progress, message: taskMessage }) => {
@@ -2672,7 +2693,7 @@ export default function Outline() {
 
   const showGenerateModal = async () => {
 
-    if (isGenerating || activeTrackedOutlineGenerateTask) {
+    if (isGenerating || hasActiveTrackedOutlineGenerateTask) {
       message.info('当前已有任务执行中，请稍候');
       return;
     }
@@ -3090,7 +3111,7 @@ export default function Outline() {
 
   const handleExpandOutline = async (outlineId: string, outlineTitle: string) => {
 
-    if (isExpanding || activeTrackedOutlineExpandTask) {
+    if (isExpanding || hasActiveTrackedOutlineExpandTask) {
       message.info('当前已有任务执行中，请稍候');
       return;
     }
@@ -4022,7 +4043,7 @@ export default function Outline() {
 
   const handleBatchExpandOutlines = () => {
 
-    if (isExpanding || activeTrackedOutlineExpandTask) {
+    if (isExpanding || hasActiveTrackedOutlineExpandTask) {
       message.info('当前已有任务执行中，请稍候');
       return;
     }
@@ -6564,7 +6585,7 @@ export default function Outline() {
                   onClick={() => expandOutlineFromList(item.id, item.title)}
 
 
-                  loading={Boolean(isExpanding || activeTrackedOutlineExpandTask)}
+                  loading={Boolean(isExpanding || hasActiveTrackedOutlineExpandTask)}
 
 
                   size={isMobile ? 'middle' : 'small'}
@@ -6687,7 +6708,7 @@ export default function Outline() {
     isExpanding,
 
 
-    activeTrackedOutlineExpandTask,
+    hasActiveTrackedOutlineExpandTask,
 
 
     openEditModalFromList,
@@ -6927,7 +6948,7 @@ export default function Outline() {
               onClick={showGenerateModal}
 
 
-              loading={Boolean(isGenerating || activeTrackedOutlineGenerateTask)}
+              loading={Boolean(isGenerating || hasActiveTrackedOutlineGenerateTask)}
 
 
               block={isMobile}
@@ -6954,7 +6975,7 @@ export default function Outline() {
                 onClick={handleBatchExpandOutlines}
 
 
-                loading={Boolean(isExpanding || activeTrackedOutlineExpandTask)}
+                loading={Boolean(isExpanding || hasActiveTrackedOutlineExpandTask)}
 
 
                 title="将所有大纲展开为多章，实现从大纲到章节的一对多关系"

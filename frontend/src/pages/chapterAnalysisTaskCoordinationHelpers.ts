@@ -106,8 +106,6 @@ export function closeAnalysisWorkflow({
   isPageActiveRef,
   currentProjectIdRef,
   setAnalysisVisible,
-  refreshChapters,
-  reloadCurrentProject,
   refreshChapterAnalysisTask,
   setAnalysisChapterId,
 }: {
@@ -116,40 +114,19 @@ export function closeAnalysisWorkflow({
   isPageActiveRef?: { current: boolean };
   currentProjectIdRef?: { current: string | null };
   setAnalysisVisible: (value: boolean) => void;
-  refreshChapters: () => Promise<Chapter[]> | void;
-  reloadCurrentProject: () => Promise<void>;
   refreshChapterAnalysisTask: (chapterId: string) => Promise<void>;
   setAnalysisChapterId: (value: string | null) => void;
 }): void {
   setAnalysisVisible(false);
+  const chapterIdToRefresh = analysisChapterId;
+  setAnalysisChapterId(null);
+
   if (isPageActiveRef && !isPageActiveRef.current) {
-    setAnalysisChapterId(null);
     return;
   }
 
   const activeProjectId = currentProjectIdRef?.current ?? projectId ?? null;
-  void Promise.resolve(refreshChapters())
-    .catch((error) => {
-      if (isPageActiveRef && !isPageActiveRef.current) {
-        return;
-      }
-      console.error('Failed to refresh chapters after closing analysis modal.', error);
-    });
-
-  if (projectId && (!activeProjectId || activeProjectId === projectId)) {
-    void reloadCurrentProject().catch((error) => {
-      if (
-        (isPageActiveRef && !isPageActiveRef.current)
-        || (currentProjectIdRef && currentProjectIdRef.current !== projectId)
-      ) {
-        return;
-      }
-      console.error('Failed to refresh chapter analysis after closing modal.', error);
-    });
-  }
-
-  if (analysisChapterId && (!activeProjectId || activeProjectId === projectId)) {
-    const chapterIdToRefresh = analysisChapterId;
+  if (chapterIdToRefresh && (!activeProjectId || activeProjectId === projectId)) {
     void refreshChapterAnalysisTask(chapterIdToRefresh)
       .catch((error) => {
         if (
@@ -161,6 +138,4 @@ export function closeAnalysisWorkflow({
         console.error('Failed to refresh chapter analysis after closing modal.', error);
       });
   }
-
-  setAnalysisChapterId(null);
 }

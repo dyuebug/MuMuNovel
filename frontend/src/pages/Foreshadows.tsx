@@ -48,8 +48,6 @@ const CATEGORY_CONFIG: Record<string, { label: string; color: string }> = {
 
 export default function Foreshadows() {
   const { projectId } = useParams<{ projectId: string }>();
-  const storeChapters = useStore((state) => state.chapters);
-  const storeCharacters = useStore((state) => state.characters);
   const [loading, setLoading] = useState(false);
   const [foreshadows, setForeshadows] = useState<Foreshadow[]>([]);
   const [stats, setStats] = useState<ForeshadowStats | null>(null);
@@ -102,6 +100,20 @@ export default function Foreshadows() {
     () => `${projectId ?? ''}:${currentMaxChapter ?? 'none'}`,
     [currentMaxChapter, projectId],
   );
+  const getCachedProjectCollections = useCallback(() => {
+    if (!projectId) {
+      return {
+        chapters: [] as Chapter[],
+        characters: [] as Character[],
+      };
+    }
+
+    const { chapters: cachedChapters, characters: cachedCharacters } = useStore.getState();
+    return {
+      chapters: cachedChapters.filter((chapter) => chapter.project_id === projectId),
+      characters: cachedCharacters.filter((character) => character.project_id === projectId),
+    };
+  }, [projectId]);
 
   useEffect(() => {
     projectIdRef.current = projectId ?? null;
@@ -200,13 +212,22 @@ export default function Foreshadows() {
     setStats(null);
     setForeshadows([]);
     setTotal(0);
+    const { chapters: cachedProjectChapters, characters: cachedProjectCharacters } = getCachedProjectCollections();
 
-    const cachedProjectChapters = storeChapters.filter((chapter) => chapter.project_id === projectId);
-    setChapters(cachedProjectChapters);
+    setChapters((prev) => {
+      if (prev === cachedProjectChapters) {
+        return prev;
+      }
+      return cachedProjectChapters;
+    });
 
-    const cachedProjectCharacters = storeCharacters.filter((character) => character.project_id === projectId);
-    setCharacters(cachedProjectCharacters);
-  }, [projectId, storeChapters, storeCharacters]);
+    setCharacters((prev) => {
+      if (prev === cachedProjectCharacters) {
+        return prev;
+      }
+      return cachedProjectCharacters;
+    });
+  }, [getCachedProjectCollections, projectId]);
 
   useEffect(() => {
     void loadForeshadows();
@@ -214,15 +235,16 @@ export default function Foreshadows() {
     if (!projectId) {
       return;
     }
+    const { chapters: cachedProjectChapters, characters: cachedProjectCharacters } = getCachedProjectCollections();
 
-    if (!isProjectCollectionFresh('chapters', projectId) || chapters.length === 0) {
+    if (!isProjectCollectionFresh('chapters', projectId) || cachedProjectChapters.length === 0) {
       void loadChapters();
     }
 
-    if (!isProjectCollectionFresh('characters', projectId) || characters.length === 0) {
+    if (!isProjectCollectionFresh('characters', projectId) || cachedProjectCharacters.length === 0) {
       void loadCharacters();
     }
-  }, [chapters.length, characters.length, loadCharacters, loadChapters, loadForeshadows, projectId]);
+  }, [getCachedProjectCollections, loadCharacters, loadChapters, loadForeshadows, projectId]);
 
   // 计算表格滚动高度
   useEffect(() => {

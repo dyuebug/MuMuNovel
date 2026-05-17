@@ -5,12 +5,18 @@ import type { ChapterQualityMetrics, ChapterUpdate, Project } from '../types';
 export function closeChapterEditor({
   setChapterQualityMetrics,
   setIsEditorOpen,
+  setEditingId,
+  setCurrentChapter,
 }: {
   setChapterQualityMetrics: (metrics: ChapterQualityMetrics | null) => void;
   setIsEditorOpen: (open: boolean) => void;
+  setEditingId?: (id: string | null) => void;
+  setCurrentChapter?: (chapter: null) => void;
 }): void {
   setChapterQualityMetrics(null);
   setIsEditorOpen(false);
+  setEditingId?.(null);
+  setCurrentChapter?.(null);
 }
 
 export async function submitChapterEditorUpdate({
@@ -47,6 +53,8 @@ export async function submitChapterEditorWorkflow({
   setCurrentProject,
   setChapterQualityMetrics,
   setIsEditorOpen,
+  setEditingId,
+  setCurrentChapter,
 }: {
   editingId: string | null;
   currentProjectId?: string;
@@ -55,6 +63,8 @@ export async function submitChapterEditorWorkflow({
   setCurrentProject: (project: Project | null) => void;
   setChapterQualityMetrics: (metrics: ChapterQualityMetrics | null) => void;
   setIsEditorOpen: (open: boolean) => void;
+  setEditingId?: (id: string | null) => void;
+  setCurrentChapter?: (chapter: null) => void;
 }): Promise<void> {
   if (!editingId || !currentProjectId) {
     return;
@@ -69,6 +79,8 @@ export async function submitChapterEditorWorkflow({
     closeEditor: () => closeChapterEditor({
       setChapterQualityMetrics,
       setIsEditorOpen,
+      setEditingId,
+      setCurrentChapter,
     }),
   });
 }

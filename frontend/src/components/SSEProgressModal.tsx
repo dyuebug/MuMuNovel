@@ -33,7 +33,10 @@ export const SSEProgressModal: React.FC<SSEProgressModalProps> = ({
     active: visible,
     blocking,
   });
-  const activeTaskCount = useBackgroundTaskStore((state) => selectActiveBackgroundTaskCount(state.tasks));
+  const shouldTrackActiveTaskCount = visible && !blocking;
+  const activeTaskCount = useBackgroundTaskStore((state) => (
+    shouldTrackActiveTaskCount ? selectActiveBackgroundTaskCount(state.tasks) : 0
+  ));
   const queueSummary = !blocking && activeTaskCount > 1
     ? `当前共 ${activeTaskCount} 个后台任务正在运行`
     : null;

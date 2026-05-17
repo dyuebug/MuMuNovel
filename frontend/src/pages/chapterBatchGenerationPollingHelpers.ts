@@ -114,10 +114,26 @@ export function startBatchGenerationPolling({
     return Math.max(0, Math.min(Math.round((completed / total) * 100), 100));
   };
 
+  type IdleCallbackWindow = Window & typeof globalThis & {
+    requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+  };
+
+  const scheduleNonUrgentRefresh = (callback: () => void) => {
+    const windowWithIdleCallback = window as IdleCallbackWindow;
+    if (typeof windowWithIdleCallback.requestIdleCallback === 'function') {
+      windowWithIdleCallback.requestIdleCallback(() => {
+        callback();
+      }, { timeout: 400 });
+      return;
+    }
+
+    window.setTimeout(callback, 96);
+  };
+
   let activeIntervalId = existingIntervalId ?? null;
   let activeCloseTimeoutId = existingCloseTimeoutId ?? null;
   let lastSyncedCompleted = -1;
-
+  let progressRefreshInFlight = false;
   if (activeIntervalId) {
     window.clearInterval(activeIntervalId);
   }
@@ -148,7 +164,7 @@ export function startBatchGenerationPolling({
         return;
       }
 
-      setBatchProgress({
+      const nextProgressState: BatchProgressState = {
         status: status.status,
         total: status.total,
         completed: status.completed,
@@ -160,21 +176,38 @@ export function startBatchGenerationPolling({
         quality_profile_summary: status.quality_profile_summary ?? null,
         failed_chapters: status.failed_chapters ?? [],
         active_story_repair_payload: status.active_story_repair_payload ?? null,
-      });
+      };
+
+      setBatchProgress(nextProgressState);
 
       if (status.completed > 0 && status.completed !== lastSyncedCompleted) {
         lastSyncedCompleted = status.completed;
-        const latestChapters = await refreshChapters();
-        if (!isPollingSessionActive()) {
-          return;
-        }
-        await loadAnalysisTasks(latestChapters);
-        if (!isPollingSessionActive()) {
-          return;
-        }
-        await reloadCurrentProject();
-        if (!isPollingSessionActive()) {
-          return;
+        if (!progressRefreshInFlight) {
+          progressRefreshInFlight = true;
+          scheduleNonUrgentRefresh(() => {
+            void refreshChapters()
+              .then((latestChapters) => {
+                if (!isPollingSessionActive()) {
+                  return;
+                }
+                return loadAnalysisTasks(latestChapters);
+              })
+              .then(() => {
+                if (!isPollingSessionActive()) {
+                  return;
+                }
+                return reloadCurrentProject();
+              })
+              .catch((refreshError) => {
+                if (!isPollingSessionActive()) {
+                  return;
+                }
+                console.error('Failed to refresh chapter data during batch generation polling.', refreshError);
+              })
+              .finally(() => {
+                progressRefreshInFlight = false;
+              });
+          });
         }
       }
 
