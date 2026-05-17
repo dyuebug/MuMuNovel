@@ -4,9 +4,12 @@ import { useLocation } from 'react-router-dom';
 import { Button, Modal, Form, message, Space, Tag } from 'antd';
 
 import { DownloadOutlined, RocketOutlined, BookOutlined, PlusOutlined } from '@ant-design/icons';
+import { useShallow } from 'zustand/react/shallow';
 
 import { useStore } from '../store';
 import { useBackgroundTaskStore } from '../store/backgroundTasks';
+import { useChapterAnalysisUiStore } from '../store/chapterAnalysisUi';
+import { useChapterGenerationUiStore } from '../store/chapterGenerationUi';
 import { useChapterSync } from '../store/hooks';
 import type { Chapter, ChapterUpdate, WritingStyle, AnalysisTask, ExpansionPlanData, ChapterLatestQualityMetrics, ChapterQualityMetrics, ChapterQualityMetricsSummary, ChapterQualityProfileSummary, ActiveStoryRepairPayload, CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
 import type { ChapterBatchGenerateModalProps } from '../components/ChapterBatchGenerateModal';
@@ -53,7 +56,6 @@ import {
   type StoryCreationSnapshotReason,
   type StorySceneOutlineDraft,
 } from '../utils/storyCreationDraft';
-import { formatActiveStoryRepairLabel } from '../utils/activeStoryRepair';
 import {
   startSingleChapterGenerationWorkflow,
 } from './chapterSingleGenerationHelpers';
@@ -172,6 +174,58 @@ type GroupedChapterViewModel = {
   outlineOrder: number;
   chapters: Chapter[];
   totalWordCount: number;
+};
+
+const areChapterReferenceArraysEqual = (left: Chapter[], right: Chapter[]) => (
+  left.length === right.length
+  && left.every((chapter, index) => chapter === right[index])
+);
+
+const mergeChapterArrayPreservingReference = (
+  previousChapters: Chapter[],
+  nextChapters: Chapter[],
+): Chapter[] => (
+  areChapterReferenceArraysEqual(previousChapters, nextChapters)
+    ? previousChapters
+    : nextChapters
+);
+
+const mergeGroupedChaptersPreservingReferences = (
+  previousGroups: GroupedChapterViewModel[],
+  nextGroups: GroupedChapterViewModel[],
+): GroupedChapterViewModel[] => {
+  if (nextGroups.length === 0) {
+    return previousGroups.length === 0 ? previousGroups : nextGroups;
+  }
+
+  const previousGroupMap = new Map(previousGroups.map((group) => [group.key, group]));
+  const mergedGroups = nextGroups.map((group) => {
+    const previousGroup = previousGroupMap.get(group.key);
+    if (!previousGroup) {
+      return group;
+    }
+
+    if (
+      previousGroup.outlineId === group.outlineId
+      && previousGroup.outlineTitle === group.outlineTitle
+      && previousGroup.outlineOrder === group.outlineOrder
+      && previousGroup.totalWordCount === group.totalWordCount
+      && areChapterReferenceArraysEqual(previousGroup.chapters, group.chapters)
+    ) {
+      return previousGroup;
+    }
+
+    return group;
+  });
+
+  if (
+    previousGroups.length === mergedGroups.length
+    && previousGroups.every((group, index) => group === mergedGroups[index])
+  ) {
+    return previousGroups;
+  }
+
+  return mergedGroups;
 };
 
 const LazyChapterEditorModalContent = lazy(() => import('../components/ChapterEditorModalContent'));
@@ -413,6 +467,12 @@ const buildBatchStoryCreationDraftStorageKey = (projectId: string): string => (
 const CHAPTER_BATCH_TASK_REFRESH_KEY_PREFIX = 'background-task-refresh:chapters-batch:';
 const CHAPTER_SINGLE_TASK_REFRESH_KEY_PREFIX = 'background-task-refresh:chapters-single:';
 const COMPLETED_TASK_REFRESH_RETRY_DELAY_MS = 2000;
+const NON_URGENT_REFRESH_DELAY_MS = 96;
+
+type IdleCallbackWindow = Window & typeof globalThis & {
+  requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
 
 const hasChapterBatchTaskRefreshBeenHandled = (taskId: string): boolean => {
   try {
@@ -464,6 +524,29 @@ const createRefreshTaskLock = () => {
   };
 };
 
+const scheduleNonUrgentRefreshTask = (
+  callback: () => void,
+): (() => void) => {
+  const windowWithIdleCallback = window as IdleCallbackWindow;
+
+  if (typeof windowWithIdleCallback.requestIdleCallback === 'function') {
+    const idleHandle = windowWithIdleCallback.requestIdleCallback(() => {
+      callback();
+    }, { timeout: 400 });
+
+    return () => {
+      if (typeof windowWithIdleCallback.cancelIdleCallback === 'function') {
+        windowWithIdleCallback.cancelIdleCallback(idleHandle);
+      }
+    };
+  }
+
+  const timerId = window.setTimeout(callback, NON_URGENT_REFRESH_DELAY_MS);
+  return () => {
+    window.clearTimeout(timerId);
+  };
+};
+
 const selectLatestCompletedBatchRefreshTaskSignature = (
   tasks: Record<string, ReturnType<typeof useBackgroundTaskStore.getState>['tasks'][string]>,
   projectId?: string | null,
@@ -472,14 +555,25 @@ const selectLatestCompletedBatchRefreshTaskSignature = (
     return '';
   }
 
-  const latestTask = Object.values(tasks)
-    .filter(
-      (task) => task.projectId === projectId
-        && task.taskType === 'chapters_batch_generate'
-        && task.status === 'completed'
-        && !hasChapterBatchTaskRefreshBeenHandled(task.taskId),
-    )
-    .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
+  let latestTask: ReturnType<typeof useBackgroundTaskStore.getState>['tasks'][string] | undefined;
+  let latestTimestamp = -1;
+
+  Object.values(tasks).forEach((task) => {
+    if (
+      task.projectId !== projectId
+      || task.taskType !== 'chapters_batch_generate'
+      || task.status !== 'completed'
+      || hasChapterBatchTaskRefreshBeenHandled(task.taskId)
+    ) {
+      return;
+    }
+
+    const timestamp = task.completedAt ?? task.updatedAt;
+    if (timestamp > latestTimestamp) {
+      latestTask = task;
+      latestTimestamp = timestamp;
+    }
+  });
 
   if (!latestTask) {
     return '';
@@ -496,14 +590,25 @@ const selectLatestCompletedSingleRefreshTaskSignature = (
     return '';
   }
 
-  const latestTask = Object.values(tasks)
-    .filter(
-      (task) => task.projectId === projectId
-        && task.taskType === 'chapter_single_generate'
-        && task.status === 'completed'
-        && !hasChapterSingleTaskRefreshBeenHandled(task.taskId),
-    )
-    .sort((left, right) => (right.completedAt ?? right.updatedAt) - (left.completedAt ?? left.updatedAt))[0];
+  let latestTask: ReturnType<typeof useBackgroundTaskStore.getState>['tasks'][string] | undefined;
+  let latestTimestamp = -1;
+
+  Object.values(tasks).forEach((task) => {
+    if (
+      task.projectId !== projectId
+      || task.taskType !== 'chapter_single_generate'
+      || task.status !== 'completed'
+      || hasChapterSingleTaskRefreshBeenHandled(task.taskId)
+    ) {
+      return;
+    }
+
+    const timestamp = task.completedAt ?? task.updatedAt;
+    if (timestamp > latestTimestamp) {
+      latestTask = task;
+      latestTimestamp = timestamp;
+    }
+  });
 
   if (!latestTask) {
     return '';
@@ -519,27 +624,47 @@ const selectLatestCompletedSingleRefreshTaskSignature = (
 export default function Chapters() {
   const location = useLocation();
 
-  const currentProject = useStore((state) => state.currentProject);
+  const {
+    currentProjectId,
+    currentProjectTitle,
+    currentProjectOutlineMode,
+    currentProjectNarrativePerspective,
+    projectDefaultCreativeMode,
+    projectDefaultStoryFocus,
+    projectDefaultPlotStage,
+    projectDefaultStoryCreationBriefRaw,
+    projectDefaultQualityPreset,
+    projectDefaultQualityNotesRaw,
+  } = useStore(useShallow((state) => ({
+    currentProjectId: state.currentProject?.id ?? null,
+    currentProjectTitle: state.currentProject?.title ?? '',
+    currentProjectOutlineMode: state.currentProject?.outline_mode ?? null,
+    currentProjectNarrativePerspective: state.currentProject?.narrative_perspective ?? '',
+    projectDefaultCreativeMode: state.currentProject?.default_creative_mode,
+    projectDefaultStoryFocus: state.currentProject?.default_story_focus,
+    projectDefaultPlotStage: state.currentProject?.default_plot_stage,
+    projectDefaultStoryCreationBriefRaw: state.currentProject?.default_story_creation_brief ?? '',
+    projectDefaultQualityPreset: state.currentProject?.default_quality_preset,
+    projectDefaultQualityNotesRaw: state.currentProject?.default_quality_notes ?? '',
+  })));
   const completedBatchRefreshLockRef = useRef(createRefreshTaskLock());
   const completedSingleRefreshLockRef = useRef(createRefreshTaskLock());
+  const sortedChaptersCacheRef = useRef<Chapter[]>([]);
+  const groupedChaptersCacheRef = useRef<GroupedChapterViewModel[]>([]);
   const latestCompletedBatchRefreshTaskSignature = useBackgroundTaskStore(
     useCallback(
-      (state) => selectLatestCompletedBatchRefreshTaskSignature(state.tasks, currentProject?.id),
-      [currentProject?.id],
+      (state) => selectLatestCompletedBatchRefreshTaskSignature(state.tasks, currentProjectId),
+      [currentProjectId],
     ),
   );
   const latestCompletedSingleRefreshTaskSignature = useBackgroundTaskStore(
     useCallback(
-      (state) => selectLatestCompletedSingleRefreshTaskSignature(state.tasks, currentProject?.id),
-      [currentProject?.id],
+      (state) => selectLatestCompletedSingleRefreshTaskSignature(state.tasks, currentProjectId),
+      [currentProjectId],
     ),
   );
-  const projectDefaultCreativeMode = currentProject?.default_creative_mode;
-  const projectDefaultStoryFocus = currentProject?.default_story_focus;
-  const projectDefaultPlotStage = currentProject?.default_plot_stage;
-  const projectDefaultStoryCreationBrief = currentProject?.default_story_creation_brief?.trim() ?? '';
-  const projectDefaultQualityPreset = currentProject?.default_quality_preset;
-  const projectDefaultQualityNotes = currentProject?.default_quality_notes?.trim() ?? '';
+  const projectDefaultStoryCreationBrief = projectDefaultStoryCreationBriefRaw.trim();
+  const projectDefaultQualityNotes = projectDefaultQualityNotesRaw.trim();
 
   const chapters = useStore((state) => state.chapters);
 
@@ -557,8 +682,6 @@ export default function Chapters() {
 
   const [isContinuing, setIsContinuing] = useState(false);
 
-  const [isGenerating, setIsGenerating] = useState(false);
-
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const editingChapterIdRef = useRef<string | null>(null);
@@ -567,6 +690,10 @@ export default function Chapters() {
   const isPageActiveRef = useRef(true);
 
   const [runningSingleChapterTasks, setRunningSingleChapterTasks] = useState<Record<string, string>>({});
+  const batchRefreshCancelRef = useRef<(() => void) | null>(null);
+  const singleRefreshCancelRef = useRef<(() => void) | null>(null);
+  const batchFollowUpRefreshCancelRef = useRef<(() => void) | null>(null);
+  const singleFollowUpRefreshCancelRef = useRef<(() => void) | null>(null);
 
   const [form] = Form.useForm();
 
@@ -612,6 +739,7 @@ export default function Chapters() {
   const batchStoryBeatPlannerAutoRef = useRef<StoryBeatPlannerDraft>(EMPTY_STORY_BEAT_PLANNER_DRAFT);
   const singleStorySceneOutlineAutoRef = useRef<StorySceneOutlineDraft>(EMPTY_STORY_SCENE_OUTLINE_DRAFT);
   const batchStorySceneOutlineAutoRef = useRef<StorySceneOutlineDraft>(EMPTY_STORY_SCENE_OUTLINE_DRAFT);
+  const chaptersByIdRef = useRef<Record<string, Chapter>>({});
 
   const [singleStoryPresetState, setSingleStoryPresetState] = useState<SingleStoryPresetState>(EMPTY_SINGLE_STORY_PRESET_STATE);
   const {
@@ -665,7 +793,6 @@ export default function Chapters() {
   const [analysisChapterId, setAnalysisChapterId] = useState<string | null>(null);
 
 
-  const [analysisTasksMap, setAnalysisTasksMap] = useState<Record<string, AnalysisTask>>({});
   const analysisTasksMapRef = useRef<Record<string, AnalysisTask>>({});
   const currentProjectIdRef = useRef<string | null>(null);
   const pollingIntervalsRef = useRef<Set<string>>(new Set());
@@ -688,7 +815,8 @@ export default function Chapters() {
   const updateAnalysisTasksMap = useCallback((
     updater: Record<string, AnalysisTask> | ((prev: Record<string, AnalysisTask>) => Record<string, AnalysisTask>)
   ) => {
-    setAnalysisTasksMap((prev) => {
+    const setTasksMap = useChapterAnalysisUiStore.getState().setTasksMap;
+    setTasksMap((prev: Record<string, AnalysisTask>) => {
       const next = typeof updater === 'function'
         ? (updater as (prev: Record<string, AnalysisTask>) => Record<string, AnalysisTask>)(prev)
         : updater;
@@ -725,8 +853,6 @@ export default function Chapters() {
 
 
 
-  const [singleChapterProgress, setSingleChapterProgress] = useState(0);
-  const [singleChapterProgressMessage, setSingleChapterProgressMessage] = useState('');
   const [chapterQualityMetrics, setChapterQualityMetrics] = useState<ChapterQualityMetrics | null>(null);
   const [chapterQualityRefreshToken, setChapterQualityRefreshToken] = useState(0);
 
@@ -738,34 +864,34 @@ export default function Chapters() {
   const [manualCreateForm] = Form.useForm();
   const batchStartChapterNumber = Form.useWatch('startChapterNumber', batchForm) as number | undefined;
   const batchEnableAnalysis = Form.useWatch('enableAnalysis', batchForm) as boolean | undefined;
-  const [batchProgress, setBatchProgress] = useState<{
-    status: string;
-
-    total: number;
-
-    completed: number;
-
-    current_chapter_number: number | null;
-
-    progress_percent?: number;
-
-    checkpoint?: BatchGenerationCheckpoint | null;
-
-    estimated_time_minutes?: number;
-
-    latest_quality_metrics?: ChapterLatestQualityMetrics | null;
-    quality_metrics_summary?: ChapterQualityMetricsSummary | null;
-    quality_profile_summary?: ChapterQualityProfileSummary | null;
-    failed_chapters?: Array<Record<string, unknown>>;
-    active_story_repair_payload?: ActiveStoryRepairPayload | null;
-  } | null>(null);
-  const batchProgressRepairLabel = useMemo(
-    () => formatActiveStoryRepairLabel(batchProgress?.active_story_repair_payload),
-    [batchProgress?.active_story_repair_payload],
-  );
-  const batchProgressCheckpointLabel = useMemo(
-    () => buildBatchGenerationCheckpointHint(batchProgress?.checkpoint),
-    [batchProgress?.checkpoint],
+  const singleGenerationOverlayLoading = useChapterGenerationUiStore((state) => state.singleOverlay.loading);
+  const shouldTrackBatchQualityMetricsSummary = batchGenerateVisible && !batchGenerating;
+  const batchQualityMetricsSummary = useChapterGenerationUiStore(useCallback(
+    (state) => (
+      shouldTrackBatchQualityMetricsSummary
+        ? state.batchProgress?.quality_metrics_summary ?? null
+        : null
+    ),
+    [shouldTrackBatchQualityMetricsSummary],
+  ));
+  const setBatchProgress = useCallback(
+    (progress: {
+      status: string;
+      total: number;
+      completed: number;
+      current_chapter_number: number | null;
+      progress_percent?: number;
+      checkpoint?: BatchGenerationCheckpoint | null;
+      estimated_time_minutes?: number;
+      latest_quality_metrics?: ChapterLatestQualityMetrics | null;
+      quality_metrics_summary?: ChapterQualityMetricsSummary | null;
+      quality_profile_summary?: ChapterQualityProfileSummary | null;
+      failed_chapters?: Array<Record<string, unknown>>;
+      active_story_repair_payload?: ActiveStoryRepairPayload | null;
+    } | null) => {
+      useChapterGenerationUiStore.getState().setBatchProgress(progress);
+    },
+    [],
   );
 
   const maxKnownChapterNumber = useMemo(
@@ -785,15 +911,15 @@ export default function Chapters() {
 
 
   const singleStoryCreationDraftStorageKey = useMemo(
-    () => (currentProject?.id && currentEditingChapter?.id
-      ? buildSingleStoryCreationDraftStorageKey(currentProject.id, currentEditingChapter.id)
+    () => (currentProjectId && currentEditingChapter?.id
+      ? buildSingleStoryCreationDraftStorageKey(currentProjectId, currentEditingChapter.id)
       : null),
-    [currentProject?.id, currentEditingChapter?.id],
+    [currentProjectId, currentEditingChapter?.id],
   );
 
   const batchStoryCreationDraftStorageKey = useMemo(
-    () => (currentProject?.id ? buildBatchStoryCreationDraftStorageKey(currentProject.id) : null),
-    [currentProject?.id],
+    () => (currentProjectId ? buildBatchStoryCreationDraftStorageKey(currentProjectId) : null),
+    [currentProjectId],
   );
 
   const resetSingleStoryCreationCockpit = useCallback((chapterNumber?: number | null) => {
@@ -947,7 +1073,7 @@ useEffect(() => {
     }
 
     const nextBatchSystemStoryCreationBrief = buildBatchSystemStoryCreationBriefFromSummary(
-      batchProgress?.quality_metrics_summary ?? null,
+      batchQualityMetricsSummary,
       batchSelectedCreativeMode,
       batchSelectedStoryFocus,
       {
@@ -992,7 +1118,7 @@ useEffect(() => {
     batchStoryPresetRequestIdRef.current += 1;
   };
 }, [
-  batchProgress?.quality_metrics_summary,
+  batchQualityMetricsSummary,
   batchSelectedCreativeMode,
   batchSelectedPlotStage,
   batchSelectedStoryFocus,
@@ -1020,26 +1146,48 @@ const singleSuggestedStorySceneOutline = useMemo<StorySceneOutlineDraft>(() => b
 const singleSystemStoryCreationBrief = singleStoryCreationControlCard?.promptBrief ?? '';
 
 const singleStoryCreationDerivedState = useMemo(
-  () => buildStoryCreationDerivedState({
-    scope: 'single',
-    creativeMode: selectedCreativeMode,
-    storyFocus: selectedStoryFocus,
-    plotStage: selectedPlotStage,
-    narrativePerspective: temporaryNarrativePerspective,
-    storyCreationBriefDraft: singleStoryCreationBriefDraft,
-    systemStoryCreationBrief: singleSystemStoryCreationBrief,
-    projectDefaultStoryCreationBrief,
-    beatPlannerDraft: singleStoryBeatPlannerDraft,
-    systemBeatPlannerDraft: singleSystemStoryBeatPlanner,
-    sceneOutlineDraft: singleStorySceneOutlineDraft,
-    suggestedSceneOutlineDraft: singleSuggestedStorySceneOutline,
-    storageKey: singleStoryCreationDraftStorageKey,
-    hasChapterContext: Boolean(currentEditingChapter),
-    resolveStoryCreationPromptState,
-  }),
+  () => (
+    isEditorOpen
+      ? buildStoryCreationDerivedState({
+        scope: 'single',
+        creativeMode: selectedCreativeMode,
+        storyFocus: selectedStoryFocus,
+        plotStage: selectedPlotStage,
+        narrativePerspective: temporaryNarrativePerspective,
+        storyCreationBriefDraft: singleStoryCreationBriefDraft,
+        systemStoryCreationBrief: singleSystemStoryCreationBrief,
+        projectDefaultStoryCreationBrief,
+        beatPlannerDraft: singleStoryBeatPlannerDraft,
+        systemBeatPlannerDraft: singleSystemStoryBeatPlanner,
+        sceneOutlineDraft: singleStorySceneOutlineDraft,
+        suggestedSceneOutlineDraft: singleSuggestedStorySceneOutline,
+        storageKey: singleStoryCreationDraftStorageKey,
+        hasChapterContext: Boolean(currentEditingChapter),
+        resolveStoryCreationPromptState,
+      })
+      : buildStoryCreationDerivedState({
+        scope: 'single',
+        creativeMode: undefined,
+        storyFocus: undefined,
+        plotStage: undefined,
+        narrativePerspective: undefined,
+        storyCreationBriefDraft: '',
+        systemStoryCreationBrief: '',
+        projectDefaultStoryCreationBrief: '',
+        beatPlannerDraft: EMPTY_STORY_BEAT_PLANNER_DRAFT,
+        systemBeatPlannerDraft: EMPTY_STORY_BEAT_PLANNER_DRAFT,
+        sceneOutlineDraft: EMPTY_STORY_SCENE_OUTLINE_DRAFT,
+        suggestedSceneOutlineDraft: EMPTY_STORY_SCENE_OUTLINE_DRAFT,
+        storageKey: null,
+        hasChapterContext: false,
+        resolveStoryCreationPromptState,
+      })
+  ),
   [
     currentEditingChapter,
+    isEditorOpen,
     projectDefaultStoryCreationBrief,
+    resolveStoryCreationPromptState,
     selectedCreativeMode,
     selectedPlotStage,
     selectedStoryFocus,
@@ -1069,22 +1217,42 @@ const {
 } = singleStoryCreationDerivedState;
 
 const batchStoryCreationDerivedState = useMemo(
-  () => buildStoryCreationDerivedState({
-    scope: 'batch',
-    creativeMode: batchSelectedCreativeMode,
-    storyFocus: batchSelectedStoryFocus,
-    plotStage: batchSelectedPlotStage,
-    storyCreationBriefDraft: batchStoryCreationBriefDraft,
-    systemStoryCreationBrief: batchSystemStoryCreationBrief,
-    projectDefaultStoryCreationBrief,
-    beatPlannerDraft: batchStoryBeatPlannerDraft,
-    systemBeatPlannerDraft: batchSystemStoryBeatPlanner,
-    sceneOutlineDraft: batchStorySceneOutlineDraft,
-    suggestedSceneOutlineDraft: batchSuggestedStorySceneOutline,
-    storageKey: batchStoryCreationDraftStorageKey,
-    resolveStoryCreationPromptState,
-  }),
+  () => (
+    batchGenerateVisible || batchGenerating
+      ? buildStoryCreationDerivedState({
+        scope: 'batch',
+        creativeMode: batchSelectedCreativeMode,
+        storyFocus: batchSelectedStoryFocus,
+        plotStage: batchSelectedPlotStage,
+        storyCreationBriefDraft: batchStoryCreationBriefDraft,
+        systemStoryCreationBrief: batchSystemStoryCreationBrief,
+        projectDefaultStoryCreationBrief,
+        beatPlannerDraft: batchStoryBeatPlannerDraft,
+        systemBeatPlannerDraft: batchSystemStoryBeatPlanner,
+        sceneOutlineDraft: batchStorySceneOutlineDraft,
+        suggestedSceneOutlineDraft: batchSuggestedStorySceneOutline,
+        storageKey: batchStoryCreationDraftStorageKey,
+        resolveStoryCreationPromptState,
+      })
+      : buildStoryCreationDerivedState({
+        scope: 'batch',
+        creativeMode: undefined,
+        storyFocus: undefined,
+        plotStage: undefined,
+        storyCreationBriefDraft: '',
+        systemStoryCreationBrief: '',
+        projectDefaultStoryCreationBrief: '',
+        beatPlannerDraft: EMPTY_STORY_BEAT_PLANNER_DRAFT,
+        systemBeatPlannerDraft: EMPTY_STORY_BEAT_PLANNER_DRAFT,
+        sceneOutlineDraft: EMPTY_STORY_SCENE_OUTLINE_DRAFT,
+        suggestedSceneOutlineDraft: EMPTY_STORY_SCENE_OUTLINE_DRAFT,
+        storageKey: null,
+        resolveStoryCreationPromptState,
+      })
+  ),
   [
+    batchGenerateVisible,
+    batchGenerating,
     batchSelectedCreativeMode,
     batchSelectedPlotStage,
     batchSelectedStoryFocus,
@@ -1096,6 +1264,7 @@ const batchStoryCreationDerivedState = useMemo(
     batchSystemStoryBeatPlanner,
     batchSystemStoryCreationBrief,
     projectDefaultStoryCreationBrief,
+    resolveStoryCreationPromptState,
   ],
 );
 
@@ -1116,6 +1285,13 @@ const {
 useEffect(() => {
     singleStoryRestoreRequestIdRef.current += 1;
     const requestId = singleStoryRestoreRequestIdRef.current;
+
+    if (!isEditorOpen) {
+      setSingleStoryCreationSnapshots([]);
+      return () => {
+        singleStoryRestoreRequestIdRef.current += 1;
+      };
+    }
 
     void restoreSingleStoryCreationPersistenceWorkflow({
       currentChapterId: currentEditingChapter?.id,
@@ -1160,6 +1336,7 @@ useEffect(() => {
     currentEditingChapter?.chapter_number,
     currentEditingChapter?.id,
     inferPlotStage,
+    isEditorOpen,
     knownStructureChapterCount,
     projectDefaultCreativeMode,
     projectDefaultPlotStage,
@@ -1175,6 +1352,13 @@ useEffect(() => {
   useEffect(() => {
     batchStoryRestoreRequestIdRef.current += 1;
     const requestId = batchStoryRestoreRequestIdRef.current;
+
+    if (!batchGenerateVisible && !batchGenerating) {
+      setBatchStoryCreationSnapshots([]);
+      return () => {
+        batchStoryRestoreRequestIdRef.current += 1;
+      };
+    }
 
     void restoreBatchStoryCreationPersistenceWorkflow({
       storageKey: batchStoryCreationDraftStorageKey,
@@ -1212,6 +1396,8 @@ useEffect(() => {
   }, [
     batchDefaultStoryCreationBrief,
     batchStoryCreationDraftStorageKey,
+    batchGenerateVisible,
+    batchGenerating,
     projectDefaultCreativeMode,
     projectDefaultPlotStage,
     projectDefaultQualityNotes,
@@ -1222,6 +1408,10 @@ useEffect(() => {
   ]);
 
   useEffect(() => {
+    if (!isEditorOpen) {
+      return;
+    }
+
     persistSingleStoryCreationDraftWorkflow({
       currentChapterId: currentEditingChapter?.id,
       storageKey: singleStoryCreationDraftStorageKey,
@@ -1239,6 +1429,7 @@ useEffect(() => {
     });
   }, [
     currentEditingChapter?.id,
+    isEditorOpen,
     isSingleStoryBeatPlannerCustomized,
     isSingleStoryCreationBriefCustomized,
     isSingleStorySceneOutlineCustomized,
@@ -1253,6 +1444,10 @@ useEffect(() => {
   ]);
 
   useEffect(() => {
+    if (!batchGenerateVisible && !batchGenerating) {
+      return;
+    }
+
     persistBatchStoryCreationDraftWorkflow({
       storageKey: batchStoryCreationDraftStorageKey,
       loadStoryCreationPersistence,
@@ -1267,6 +1462,8 @@ useEffect(() => {
       isSceneOutlineCustomized: isBatchStorySceneOutlineCustomized,
     });
   }, [
+    batchGenerateVisible,
+    batchGenerating,
     batchSelectedCreativeMode,
     batchSelectedPlotStage,
     batchSelectedStoryFocus,
@@ -1568,6 +1765,14 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
     return () => {
       isPageActiveRef.current = false;
+      batchRefreshCancelRef.current?.();
+      batchRefreshCancelRef.current = null;
+      singleRefreshCancelRef.current?.();
+      singleRefreshCancelRef.current = null;
+      batchFollowUpRefreshCancelRef.current?.();
+      batchFollowUpRefreshCancelRef.current = null;
+      singleFollowUpRefreshCancelRef.current?.();
+      singleFollowUpRefreshCancelRef.current = null;
       if (batchCloseTimeoutRef.current) {
         clearTimeout(batchCloseTimeoutRef.current);
         batchCloseTimeoutRef.current = null;
@@ -1585,7 +1790,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
   useEffect(() => {
     initializeChapterProjectWorkflow({
-      projectId: currentProject?.id ?? null,
+      projectId: currentProjectId,
       currentProjectIdRef,
       stopAnalysisPolling,
       updateAnalysisTasksMap,
@@ -1602,7 +1807,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
     };
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProject?.id, setCurrentProject]);
+  }, [currentProjectId, setCurrentProject]);
 
   useEffect(() => {
     const currentBatchPollingIntervalId = batchPollingIntervalRef.current;
@@ -1622,7 +1827,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
   const loadAnalysisTasks = async (chaptersToLoad?: typeof chapters) => {
     await loadAnalysisTasksWorkflow({
-      projectId: currentProject?.id,
+      projectId: currentProjectId ?? undefined,
       chapters,
       chaptersToLoad,
       isPageActiveRef,
@@ -1641,50 +1846,46 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       chapterId,
       pollingIntervalsRef,
       currentProjectIdRef,
-      currentProjectId: currentProject?.id,
+      currentProjectId: currentProjectId ?? undefined,
       ensureAnalysisPolling,
     });
-  }, [currentProject?.id, ensureAnalysisPolling]);
+  }, [currentProjectId, ensureAnalysisPolling]);
 
   const refreshChapterAnalysisTask = useCallback(async (chapterId: string) => {
     await refreshAnalysisTaskWorkflow({
       chapterId,
       isPageActiveRef,
       currentProjectIdRef,
-      currentProjectId: currentProject?.id,
+      currentProjectId: currentProjectId ?? undefined,
       syncAnalysisTasksFromBatch,
       startPollingTask,
       pollingIntervalsRef,
       stopAnalysisPolling,
       isAnalysisTaskInProgress,
     });
-  }, [currentProject?.id, startPollingTask, stopAnalysisPolling, syncAnalysisTasksFromBatch]);
+  }, [currentProjectId, startPollingTask, stopAnalysisPolling, syncAnalysisTasksFromBatch]);
   const reloadCurrentProject = useCallback(async () => {
     await reloadChapterProjectWorkflow({
-      projectId: currentProject?.id,
+      projectId: currentProjectId ?? undefined,
       isPageActiveRef,
       currentProjectIdRef,
       setCurrentProject,
     });
-  }, [currentProject?.id, setCurrentProject]);
+  }, [currentProjectId, setCurrentProject]);
   const handleCloseAnalysis = useCallback(() => {
     closeAnalysisWorkflow({
       analysisChapterId,
-      projectId: currentProject?.id,
+      projectId: currentProjectId ?? undefined,
       isPageActiveRef,
       currentProjectIdRef,
       setAnalysisVisible,
-      refreshChapters,
-      reloadCurrentProject,
       refreshChapterAnalysisTask,
       setAnalysisChapterId,
     });
   }, [
     analysisChapterId,
-    currentProject?.id,
+    currentProjectId,
     refreshChapterAnalysisTask,
-    refreshChapters,
-    reloadCurrentProject,
   ]);
 
   useEffect(() => {
@@ -1705,14 +1906,14 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
   ) => {
 
-    if (!currentProject?.id || count <= 0) return;
+    if (!currentProjectId || count <= 0) return;
 
     await queueDeferredBatchAnalysis({
-      projectId: currentProject.id,
+      projectId: currentProjectId,
       startChapterNumber,
       count,
       latestChapters,
-      analysisTasksMap,
+      analysisTasksMap: analysisTasksMapRef.current,
       startPollingTask,
       loadAnalysisTasks,
     });
@@ -1723,10 +1924,10 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
   const loadWritingStyles = async () => {
 
-    if (!currentProject?.id) return;
+    if (!currentProjectId) return;
 
     await loadChapterWritingStyles({
-      projectId: currentProject.id,
+      projectId: currentProjectId,
       writingStylesLoadPromises,
       writingStylesCache,
       setWritingStyles,
@@ -1754,7 +1955,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
   const checkAndRestoreBatchTask = async () => {
     await restoreBatchGenerationWorkflow({
-      projectId: currentProject?.id,
+      projectId: currentProjectId ?? undefined,
       batchTaskMetaRef,
       getPersistedTaskMeta: getPersistedChapterBatchTaskMeta,
       setBatchTaskId,
@@ -1767,7 +1968,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
   };
 
   useEffect(() => {
-    if (!currentProject?.id || batchGenerating || batchTaskId) {
+    if (!currentProjectId || batchGenerating || batchTaskId) {
       return;
     }
 
@@ -1783,45 +1984,76 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       return;
     }
 
-    void refreshChapters(currentProject.id)
-      .then((latestChapters) => {
-        if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
-          return;
-        }
-        void loadAnalysisTasks(latestChapters).catch((error) => {
-          if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+    let started = false;
+    batchRefreshCancelRef.current?.();
+    batchFollowUpRefreshCancelRef.current?.();
+    batchFollowUpRefreshCancelRef.current = null;
+    batchRefreshCancelRef.current = scheduleNonUrgentRefreshTask(() => {
+      started = true;
+      batchRefreshCancelRef.current = null;
+
+      void refreshChapters(currentProjectId)
+        .then((latestChapters) => {
+          if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProjectId) {
             return;
           }
-          console.error('批量生成完成后刷新分析任务失败，已降级后台重试:', error);
-        });
-        void reloadCurrentProject().catch((error) => {
-          if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+          batchFollowUpRefreshCancelRef.current?.();
+          batchFollowUpRefreshCancelRef.current = scheduleNonUrgentRefreshTask(() => {
+            batchFollowUpRefreshCancelRef.current = null;
+
+            if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProjectId) {
+              return;
+            }
+
+            const followUpTasks: Array<Promise<unknown>> = [
+              loadAnalysisTasks(latestChapters).catch((error) => {
+                if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProjectId) {
+                  return;
+                }
+                console.error('批量生成完成后刷新分析任务失败，已降级后台重试:', error);
+              }),
+              reloadCurrentProject().catch((error) => {
+                if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProjectId) {
+                  return;
+                }
+                console.error('批量生成完成后刷新项目信息失败，已降级后台重试:', error);
+              }),
+            ];
+
+            void Promise.allSettled(followUpTasks).finally(() => {
+              if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProjectId) {
+                return;
+              }
+              markChapterBatchTaskRefreshHandled(taskId);
+            });
+          });
+        })
+        .catch((error) => {
+          if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProjectId) {
             return;
           }
-          console.error('批量生成完成后刷新项目信息失败，已降级后台重试:', error);
+          console.error('刷新批量生成后的章节数据失败:', error);
+          scheduleCompletedBatchRefreshRetry();
+        })
+        .finally(() => {
+          completedBatchRefreshLockRef.current.release(taskId);
         });
-      })
-      .then(() => {
-        if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
-          return;
-        }
-        markChapterBatchTaskRefreshHandled(taskId);
-      })
-      .catch((error) => {
-        if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
-          return;
-        }
-        console.error('刷新批量生成后的章节数据失败:', error);
-        scheduleCompletedBatchRefreshRetry();
-      })
-      .finally(() => {
+    });
+
+    return () => {
+      if (!started) {
+        batchRefreshCancelRef.current?.();
+        batchRefreshCancelRef.current = null;
+        batchFollowUpRefreshCancelRef.current?.();
+        batchFollowUpRefreshCancelRef.current = null;
         completedBatchRefreshLockRef.current.release(taskId);
-      });
+      }
+    };
   }, [
     batchGenerating,
     batchTaskId,
     completedBatchRefreshRetryTick,
-    currentProject?.id,
+    currentProjectId,
     latestCompletedBatchRefreshTaskSignature,
     loadAnalysisTasks,
     refreshChapters,
@@ -1830,7 +2062,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
   ]);
 
   useEffect(() => {
-    if (!currentProject?.id || isGenerating) {
+    if (!currentProjectId || singleGenerationOverlayLoading) {
       return;
     }
 
@@ -1846,60 +2078,83 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       return;
     }
 
-    void refreshChapters(currentProject.id)
-      .then((latestChapters) => {
-        if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
-          return;
-        }
-        const analysisLoadPromise = loadAnalysisTasks(latestChapters).catch((error) => {
-          if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+    let started = false;
+    singleRefreshCancelRef.current?.();
+    singleFollowUpRefreshCancelRef.current?.();
+    singleFollowUpRefreshCancelRef.current = null;
+    singleRefreshCancelRef.current = scheduleNonUrgentRefreshTask(() => {
+      started = true;
+      singleRefreshCancelRef.current = null;
+
+      void refreshChapters(currentProjectId)
+        .then((latestChapters) => {
+          if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProjectId) {
             return;
           }
-          console.error('单章生成完成后刷新分析任务失败，已降级后台重试:', error);
-        });
-        if (chapterId) {
-          return analysisLoadPromise.then(() => (
-            refreshChapterAnalysisTask(chapterId).catch((error) => {
-              if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+          singleFollowUpRefreshCancelRef.current?.();
+          singleFollowUpRefreshCancelRef.current = scheduleNonUrgentRefreshTask(() => {
+            singleFollowUpRefreshCancelRef.current = null;
+
+            if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProjectId) {
+              return;
+            }
+
+            const followUpTasks: Array<Promise<unknown>> = [];
+            if (chapterId) {
+              followUpTasks.push(refreshChapterAnalysisTask(chapterId).catch((error) => {
+                if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProjectId) {
+                  return;
+                }
+                console.error('单章生成完成后刷新章节分析状态失败，已降级后台重试:', error);
+              }));
+            } else {
+              followUpTasks.push(loadAnalysisTasks(latestChapters).catch((error) => {
+                if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProjectId) {
+                  return;
+                }
+                console.error('单章生成完成后刷新分析任务失败，已降级后台重试:', error);
+              }));
+            }
+            followUpTasks.push(reloadCurrentProject().catch((error) => {
+              if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProjectId) {
                 return;
               }
-              console.error('单章生成完成后刷新章节分析状态失败，已降级后台重试:', error);
-            })
-          ));
-        }
-        return analysisLoadPromise;
-      })
-      .then(() => {
-        if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
-          return;
-        }
-        void reloadCurrentProject().catch((error) => {
-          if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
+              console.error('单章生成完成后刷新项目信息失败，已降级后台重试:', error);
+            }));
+
+            void Promise.allSettled(followUpTasks).finally(() => {
+              if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProjectId) {
+                return;
+              }
+              markChapterSingleTaskRefreshHandled(taskId);
+            });
+          });
+        })
+        .catch((error) => {
+          if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProjectId) {
             return;
           }
-          console.error('单章生成完成后刷新项目信息失败，已降级后台重试:', error);
+          console.error('刷新单章生成后的章节数据失败:', error);
+          scheduleCompletedSingleRefreshRetry();
+        })
+        .finally(() => {
+          completedSingleRefreshLockRef.current.release(taskId);
         });
-      })
-      .then(() => {
-        if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
-          return;
-        }
-        markChapterSingleTaskRefreshHandled(taskId);
-      })
-      .catch((error) => {
-        if (!isPageActiveRef.current || currentProjectIdRef.current !== currentProject.id) {
-          return;
-        }
-        console.error('刷新单章生成后的章节数据失败:', error);
-        scheduleCompletedSingleRefreshRetry();
-      })
-      .finally(() => {
+    });
+
+    return () => {
+      if (!started) {
+        singleRefreshCancelRef.current?.();
+        singleRefreshCancelRef.current = null;
+        singleFollowUpRefreshCancelRef.current?.();
+        singleFollowUpRefreshCancelRef.current = null;
         completedSingleRefreshLockRef.current.release(taskId);
-      });
+      }
+    };
   }, [
     completedSingleRefreshRetryTick,
-    currentProject?.id,
-    isGenerating,
+    currentProjectId,
+    singleGenerationOverlayLoading,
     latestCompletedSingleRefreshTaskSignature,
     loadAnalysisTasks,
     refreshChapterAnalysisTask,
@@ -1986,161 +2241,114 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
   // Precompute chapter ordering, grouping and generation availability before early return.
 
-  const {
+  const sortedChapters = useMemo(() => {
+    const nextSortedChapters = [...chapters].sort((a, b) => a.chapter_number - b.chapter_number);
+    const mergedSortedChapters = mergeChapterArrayPreservingReference(
+      sortedChaptersCacheRef.current,
+      nextSortedChapters,
+    );
+    sortedChaptersCacheRef.current = mergedSortedChapters;
+    return mergedSortedChapters;
+  }, [chapters]);
 
-    sortedChapters,
-
-    groupedChapters,
-
-    chapterGenerationStateById,
-
-    batchStartChapterOptions,
-
-    firstIncompleteChapter,
-
-    expandedChapterGroupKeys,
-
-  } = useMemo(() => {
-
-    const sorted = [...chapters].sort((a, b) => a.chapter_number - b.chapter_number);
-
+  const groupedChapters = useMemo(() => {
     const groups: Record<string, GroupedChapterViewModel> = {};
 
-    const generationStateById: Record<string, { canGenerate: boolean; disabledReason: string }> = {};
-
-    const batchStartOptions: Chapter[] = [];
-
-    let incompletePreviousChapterLabel = '';
-
-    let currentChapterNumber: number | null = null;
-
-    let currentChapterGroup: Array<{ chapter: Chapter; hasContent: boolean }> = [];
-
-    let firstIncompleteChapter: Chapter | undefined;
-
-
-
-    const appendIncompleteChapterNumber = (chapterNumber: number) => {
-
-      incompletePreviousChapterLabel = incompletePreviousChapterLabel
-
-        ? `${incompletePreviousChapterLabel}, ${chapterNumber}`
-
-        : `${chapterNumber}`;
-
-    };
-
-
-
-    const flushChapterGroup = () => {
-
-      currentChapterGroup.forEach(({ chapter: groupChapter, hasContent }) => {
-
-        if (!hasContent) {
-
-          appendIncompleteChapterNumber(groupChapter.chapter_number);
-
-        }
-
-      });
-
-      currentChapterGroup = [];
-
-    };
-
-
-
-    sorted.forEach(chapter => {
-
-      if (currentChapterNumber !== null && chapter.chapter_number !== currentChapterNumber) {
-
-        flushChapterGroup();
-
-      }
-
-      currentChapterNumber = chapter.chapter_number;
-
+    sortedChapters.forEach((chapter) => {
       const key = chapter.outline_id || 'uncategorized';
 
-      const hasContent = Boolean(chapter.content?.trim());
-
       if (!groups[key]) {
-
         groups[key] = {
-
           key,
-
           outlineId: chapter.outline_id || null,
-
-          outlineTitle: chapter.outline_title || "未命名大纲",
-
+          outlineTitle: chapter.outline_title || '未命名大纲',
           outlineOrder: chapter.outline_order ?? 999,
-
           chapters: [],
-
           totalWordCount: 0,
-
         };
-
       }
 
       groups[key].chapters.push(chapter);
-
       groups[key].totalWordCount += chapter.word_count || 0;
+    });
 
-      if (!firstIncompleteChapter && !hasContent) {
+    const nextGroups = Object.values(groups).sort((a, b) => a.outlineOrder - b.outlineOrder);
+    const mergedGroups = mergeGroupedChaptersPreservingReferences(
+      groupedChaptersCacheRef.current,
+      nextGroups,
+    );
+    groupedChaptersCacheRef.current = mergedGroups;
+    return mergedGroups;
+  }, [sortedChapters]);
 
-        firstIncompleteChapter = chapter;
+  const expandedChapterGroupKeys = useMemo(
+    () => groupedChapters.map((group) => group.key),
+    [groupedChapters],
+  );
 
+  const {
+    chapterGenerationStateById,
+    batchStartChapterOptions,
+    firstIncompleteChapter,
+  } = useMemo(() => {
+    const generationStateById: Record<string, { canGenerate: boolean; disabledReason: string }> = {};
+    const batchStartOptions: Chapter[] = [];
+
+    let incompletePreviousChapterLabel = '';
+    let currentChapterNumber: number | null = null;
+    let currentChapterGroup: Array<{ chapter: Chapter; hasContent: boolean }> = [];
+    let firstIncompleteChapterValue: Chapter | undefined;
+
+    const appendIncompleteChapterNumber = (chapterNumber: number) => {
+      incompletePreviousChapterLabel = incompletePreviousChapterLabel
+        ? `${incompletePreviousChapterLabel}, ${chapterNumber}`
+        : `${chapterNumber}`;
+    };
+
+    const flushChapterGroup = () => {
+      currentChapterGroup.forEach(({ chapter: groupChapter, hasContent }) => {
+        if (!hasContent) {
+          appendIncompleteChapterNumber(groupChapter.chapter_number);
+        }
+      });
+
+      currentChapterGroup = [];
+    };
+
+    sortedChapters.forEach((chapter) => {
+      if (currentChapterNumber !== null && chapter.chapter_number !== currentChapterNumber) {
+        flushChapterGroup();
+      }
+
+      currentChapterNumber = chapter.chapter_number;
+      const hasContent = Boolean(chapter.content?.trim());
+
+      if (!firstIncompleteChapterValue && !hasContent) {
+        firstIncompleteChapterValue = chapter;
       }
 
       const disabledReason = incompletePreviousChapterLabel
-
         ? `请先完成前序章节：${incompletePreviousChapterLabel}`
-
         : '';
 
       generationStateById[chapter.id] = {
-
         canGenerate: disabledReason === '',
-
         disabledReason,
-
       };
 
       if (!hasContent && disabledReason === '') {
-
         batchStartOptions.push(chapter);
-
       }
 
       currentChapterGroup.push({ chapter, hasContent });
-
     });
 
-
-
-    const grouped = Object.values(groups).sort((a, b) => a.outlineOrder - b.outlineOrder);
-
-    const expandedChapterGroupKeys = grouped.map((group) => group.key);
-
     return {
-
-      sortedChapters: sorted,
-
-      groupedChapters: grouped,
-
-      expandedChapterGroupKeys,
-
       chapterGenerationStateById: generationStateById,
-
       batchStartChapterOptions: batchStartOptions,
-
-      firstIncompleteChapter,
-
+      firstIncompleteChapter: firstIncompleteChapterValue,
     };
-
-  }, [chapters]);
+  }, [sortedChapters]);
 
 
 
@@ -2148,6 +2356,12 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
     () => [...outlines].sort((a, b) => a.order_index - b.order_index),
     [outlines]
   );
+
+  useEffect(() => {
+    chaptersByIdRef.current = Object.fromEntries(
+      chapters.map((chapter) => [chapter.id, chapter]),
+    );
+  }, [chapters]);
 
 
 
@@ -2187,23 +2401,27 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       planEditorVisible,
       editingPlanChapter,
       editingPlanEditorData,
-      currentProjectId: currentProject?.id,
+      currentProjectId: currentProjectId ?? undefined,
     }),
-    [currentProject?.id, editingPlanChapter, editingPlanEditorData, planEditorVisible],
+    [currentProjectId, editingPlanChapter, editingPlanEditorData, planEditorVisible],
   );
 
 
   const handleOpenModal = useCallback((id: string) => {
+    const chapter = chaptersByIdRef.current[id];
+    if (!chapter) {
+      return;
+    }
 
     openChapterModalWorkflow({
-      chapterId: id,
-      chapters,
+      chapterId: chapter.id,
+      chapters: [chapter],
       form,
       setEditingId,
       setIsModalOpen,
     });
 
-  }, [chapters, form]);
+  }, [form]);
 
 
 
@@ -2223,10 +2441,14 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
 
   const handleOpenEditor = useCallback((id: string) => {
+    const chapter = chaptersByIdRef.current[id];
+    if (!chapter) {
+      return;
+    }
 
     openChapterEditorWorkflow({
-      chapterId: id,
-      chapters,
+      chapterId: chapter.id,
+      chapters: [chapter],
       editorForm,
       setCurrentChapter,
       resetSingleStoryCreationCockpit,
@@ -2236,7 +2458,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       loadAvailableModels,
     });
 
-  }, [chapters, editorForm, loadAvailableModels, resetSingleStoryCreationCockpit, setCurrentChapter]);
+  }, [editorForm, loadAvailableModels, resetSingleStoryCreationCockpit, setCurrentChapter]);
 
 
 
@@ -2244,12 +2466,14 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
     await submitChapterEditorWorkflow({
       editingId,
-      currentProjectId: currentProject?.id,
+      currentProjectId: currentProjectId ?? undefined,
       values,
       updateChapter,
       setCurrentProject,
       setChapterQualityMetrics,
       setIsEditorOpen,
+      setEditingId,
+      setCurrentChapter,
     });
 
   };
@@ -2262,9 +2486,6 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       runningSingleChapterTasks,
       saveSingleStoryCreationSnapshot,
       setIsContinuing,
-      setIsGenerating,
-      setSingleChapterProgress,
-      setSingleChapterProgressMessage,
       loadSingleStoryPresetState,
       resolveStoryCreationPromptState,
       singleStoryCreationBriefDraft,
@@ -2281,7 +2502,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       selectedQualityPreset,
       selectedQualityNotes,
       generateChapterContentStream,
-      currentProjectId: currentProject?.id,
+      currentProjectId: currentProjectId ?? undefined,
       isPageActiveRef,
       editorForm,
       isEditorOpenRef,
@@ -2308,11 +2529,11 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
     });
   };
   const handleBatchGenerate = async (values: BatchGenerateFormValues) => {
-    if (!currentProject?.id) return;
+    if (!currentProjectId) return;
 
     await startBatchGenerationWorkflow({
       values,
-      projectId: currentProject.id,
+      projectId: currentProjectId,
       selectedStyleId,
       targetWordCount,
       model: batchSelectedModel,
@@ -2321,7 +2542,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       plotStage: batchSelectedPlotStage,
       qualityPreset: batchSelectedQualityPreset,
       qualityNotes: batchSelectedQualityNotes,
-      qualityMetricsSummary: batchProgress?.quality_metrics_summary ?? null,
+      qualityMetricsSummary: batchQualityMetricsSummary,
       batchStoryCreationBriefDraft,
       batchDefaultStoryCreationBrief,
       batchStoryBeatPlannerDraft,
@@ -2351,8 +2572,8 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
   const startBatchPolling = (taskId: string) => {
     startBatchPollingWorkflow({
       taskId,
-      projectId: currentProject?.id,
-      projectTitle: currentProject?.title,
+      projectId: currentProjectId ?? undefined,
+      projectTitle: currentProjectTitle || undefined,
       batchPollingIntervalRef,
       batchCloseTimeoutRef,
       batchTaskMetaRef,
@@ -2370,7 +2591,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       setBatchTaskId,
       isPollingSessionActive: () => (
         isPageActiveRef.current
-        && currentProjectIdRef.current === (currentProject?.id ?? null)
+        && currentProjectIdRef.current === currentProjectId
         && batchTaskIdRef.current === taskId
       ),
     });
@@ -2378,7 +2599,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
   const handleCancelBatchGenerate = async () => {
     await cancelBatchGenerationWorkflow({
       batchTaskId,
-      projectId: currentProject?.id,
+      projectId: currentProjectId ?? undefined,
       isPageActiveRef,
       currentProjectIdRef,
       removeTaskMeta: (taskId) => {
@@ -2428,7 +2649,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
   const handleExport = () => {
     confirmChapterExportWorkflow({
-      currentProject,
+      currentProject: useStore.getState().currentProject,
       chapterCount: chapters.length,
       modal,
       message,
@@ -2446,7 +2667,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       chapters,
       manualCreateForm,
       sortedOutlines,
-      currentProject,
+      currentProject: useStore.getState().currentProject,
       refreshChapters,
       setCurrentProject,
       message,
@@ -2509,11 +2730,9 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
 
 
-  const handleChapterSelect = (chapterId: string) => {
-
+  const handleChapterSelect = useCallback((chapterId: string) => {
     selectChapterListItem({ chapterId });
-
-  };
+  }, []);
 
 
 
@@ -2566,72 +2785,80 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
     closeChapterEditor({
       setChapterQualityMetrics,
       setIsEditorOpen,
+      setEditingId,
+      setCurrentChapter,
     });
-  }, []);
+  }, [setCurrentChapter]);
 
-  const editorAiSectionProps = useMemo(() => ({
-    currentEditingChapterNumber: currentEditingChapter?.chapter_number,
-    applySingleCreationPreset,
-    projectDefaultCreativeMode,
-    setSelectedCreativeMode,
-    projectDefaultStoryFocus,
-    setSelectedStoryFocus,
-    projectDefaultPlotStage,
-    selectedPlotStage,
-    setSelectedPlotStage,
-    projectDefaultQualityPreset,
-    projectDefaultQualityNotes,
-    selectedQualityPreset,
-    setSelectedQualityPreset,
-    selectedQualityNotes,
-    setSelectedQualityNotes,
-    singleStoryCreationControlCard,
-    isSingleStoryCreationControlCustomized,
-    setSingleStoryCreationBriefDraft,
-    singleSystemStoryCreationBrief,
-    singleStoryCreationBriefDraft,
-    isSingleStoryCreationBriefCustomized,
-    singleStoryBeatPlannerDraft,
-    setSingleStoryBeatPlannerDraft,
-    singleSystemStoryBeatPlanner,
-    isSingleStoryBeatPlannerCustomized,
-    isSingleStorySceneOutlineCustomized,
-    setSingleStorySceneOutlineDraft,
-    singleSuggestedStorySceneOutline,
-    singleStorySceneOutlineDraft,
-    resolvedSingleStoryCreationBrief,
-    singleStoryCreationPromptLayerLabels,
-    singleStoryCreationPromptCharCount,
-    isSingleStoryCreationPromptVerbose,
-    copyStoryCreationPrompt,
-    singleStoryCreationSnapshots,
-    singleStoryCreationCurrentDraft,
-    canSaveSingleStoryCreationSnapshot,
-    saveSingleStoryCreationSnapshot,
-    applySingleStoryCreationSnapshot,
-    deleteSingleStoryCreationSnapshot,
-    singleStoryAcceptanceCard,
-    singleStoryCharacterArcCard,
-    singleStoryExecutionChecklist,
-    singleStoryObjectiveCard,
-    singleStoryRepairTargetCard,
-    singleStoryRepetitionRiskCard,
-    singleStoryResultCard,
-    isMobile,
-    targetWordCount,
-    CREATIVE_MODE_OPTIONS,
-    selectedCreativeMode,
-    STORY_FOCUS_OPTIONS,
-    selectedStoryFocus,
-    availableModels,
-    selectedModel,
-    setSelectedModel,
-    setTargetWordCount,
-    currentEditingChapterId: currentEditingChapter?.id,
-    chapterQualityRefreshToken,
-    onChapterQualityMetricsChange: setChapterQualityMetrics,
-    knownStructureChapterCount,
-  }), [
+  const editorAiSectionProps = useMemo(() => {
+    if (!isEditorOpen) {
+      return null;
+    }
+
+    return {
+      currentEditingChapterNumber: currentEditingChapter?.chapter_number,
+      applySingleCreationPreset,
+      projectDefaultCreativeMode,
+      setSelectedCreativeMode,
+      projectDefaultStoryFocus,
+      setSelectedStoryFocus,
+      projectDefaultPlotStage,
+      selectedPlotStage,
+      setSelectedPlotStage,
+      projectDefaultQualityPreset,
+      projectDefaultQualityNotes,
+      selectedQualityPreset,
+      setSelectedQualityPreset,
+      selectedQualityNotes,
+      setSelectedQualityNotes,
+      singleStoryCreationControlCard,
+      isSingleStoryCreationControlCustomized,
+      setSingleStoryCreationBriefDraft,
+      singleSystemStoryCreationBrief,
+      singleStoryCreationBriefDraft,
+      isSingleStoryCreationBriefCustomized,
+      singleStoryBeatPlannerDraft,
+      setSingleStoryBeatPlannerDraft,
+      singleSystemStoryBeatPlanner,
+      isSingleStoryBeatPlannerCustomized,
+      isSingleStorySceneOutlineCustomized,
+      setSingleStorySceneOutlineDraft,
+      singleSuggestedStorySceneOutline,
+      singleStorySceneOutlineDraft,
+      resolvedSingleStoryCreationBrief,
+      singleStoryCreationPromptLayerLabels,
+      singleStoryCreationPromptCharCount,
+      isSingleStoryCreationPromptVerbose,
+      copyStoryCreationPrompt,
+      singleStoryCreationSnapshots,
+      singleStoryCreationCurrentDraft,
+      canSaveSingleStoryCreationSnapshot,
+      saveSingleStoryCreationSnapshot,
+      applySingleStoryCreationSnapshot,
+      deleteSingleStoryCreationSnapshot,
+      singleStoryAcceptanceCard,
+      singleStoryCharacterArcCard,
+      singleStoryExecutionChecklist,
+      singleStoryObjectiveCard,
+      singleStoryRepairTargetCard,
+      singleStoryRepetitionRiskCard,
+      singleStoryResultCard,
+      isMobile,
+      targetWordCount,
+      CREATIVE_MODE_OPTIONS,
+      selectedCreativeMode,
+      STORY_FOCUS_OPTIONS,
+      selectedStoryFocus,
+      availableModels,
+      selectedModel,
+      setSelectedModel,
+      setTargetWordCount,
+      currentEditingChapterId: currentEditingChapter?.id,
+      chapterQualityRefreshToken,
+      onChapterQualityMetricsChange: setChapterQualityMetrics,
+      knownStructureChapterCount,
+    };
+  }, [
     applySingleCreationPreset,
     applySingleStoryCreationSnapshot,
     availableModels,
@@ -2640,6 +2867,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
     currentEditingChapter?.chapter_number,
     currentEditingChapter?.id,
     deleteSingleStoryCreationSnapshot,
+    isEditorOpen,
     isMobile,
     isSingleStoryBeatPlannerCustomized,
     isSingleStoryCreationBriefCustomized,
@@ -2691,31 +2919,125 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
     targetWordCount,
   ]);
 
-  const editorModalContentProps = {
-    editorForm,
-    handleEditorSubmit,
-    isMobile,
-    currentEditingChapter,
-    currentEditingCanGenerate,
-    currentEditingGenerateDisabledReason,
-    showGenerateModal,
-    isContinuing,
-    canAnalyzeCurrentChapter,
-    handleShowAnalysis,
-    selectedStyleId,
-    setSelectedStyleId,
-    writingStyles,
-    currentProjectNarrativePerspective: currentProject?.narrative_perspective,
-    temporaryNarrativePerspective,
-    setTemporaryNarrativePerspective,
-    selectedPlotStage,
-    setSelectedPlotStage,
-    applyInferredSinglePlotStage,
-    aiSectionProps: editorAiSectionProps,
-    onCloseEditor: handleCloseEditor,
-  };
+  const editorModalContentProps = useMemo(() => {
+    if (!isEditorOpen || !editorAiSectionProps) {
+      return null;
+    }
 
-  const batchGenerateModalProps: ChapterBatchGenerateModalProps = {
+    return {
+      editorForm,
+      handleEditorSubmit,
+      isMobile,
+      currentEditingChapter,
+      currentEditingCanGenerate,
+      currentEditingGenerateDisabledReason,
+      showGenerateModal,
+      isContinuing,
+      canAnalyzeCurrentChapter,
+      handleShowAnalysis,
+      selectedStyleId,
+      setSelectedStyleId,
+      writingStyles,
+      currentProjectNarrativePerspective: currentProjectNarrativePerspective || undefined,
+      temporaryNarrativePerspective,
+      setTemporaryNarrativePerspective,
+      selectedPlotStage,
+      setSelectedPlotStage,
+      applyInferredSinglePlotStage,
+      aiSectionProps: editorAiSectionProps,
+      onCloseEditor: handleCloseEditor,
+    };
+  }, [
+    applyInferredSinglePlotStage,
+    canAnalyzeCurrentChapter,
+    currentEditingCanGenerate,
+    currentEditingChapter,
+    currentEditingGenerateDisabledReason,
+    currentProjectNarrativePerspective,
+    editorAiSectionProps,
+    editorForm,
+    handleCloseEditor,
+    handleEditorSubmit,
+    handleShowAnalysis,
+    isContinuing,
+    isEditorOpen,
+    isMobile,
+    selectedPlotStage,
+    selectedStyleId,
+    showGenerateModal,
+    temporaryNarrativePerspective,
+    writingStyles,
+  ]);
+
+  const batchGenerateModalProps: ChapterBatchGenerateModalProps | null = useMemo(() => {
+    if (!batchGenerateVisible && !batchGenerating) {
+      return null;
+    }
+
+    return {
+      applyBatchCreationPreset,
+      applyBatchStoryCreationSnapshot,
+      applyInferredBatchPlotStage,
+      availableModels,
+      batchEnableAnalysis,
+      batchForm,
+      batchGenerateVisible,
+      batchGenerating,
+      batchSelectedCreativeMode,
+      batchSelectedModel,
+      batchSelectedPlotStage,
+      batchSelectedQualityNotes,
+      batchSelectedQualityPreset,
+      batchSelectedStoryFocus,
+      batchStartChapterOptions,
+      batchStoryBeatPlannerDraft,
+      batchStoryCreationBriefDraft,
+      batchStoryCreationCurrentDraft,
+      batchStoryCreationSnapshots,
+      batchStorySceneOutlineDraft,
+      batchSuggestedStorySceneOutline,
+      batchSystemStoryBeatPlanner,
+      canSaveBatchStoryCreationSnapshot,
+      copyStoryCreationPrompt,
+      CREATIVE_MODE_OPTIONS,
+      deleteBatchStoryCreationSnapshot,
+      handleBatchGenerate,
+      handleCancelBatchGenerate,
+      isBatchStoryBeatPlannerCustomized,
+      isBatchStoryCreationBriefCustomized,
+      isBatchStoryCreationControlCustomized,
+      isBatchStorySceneOutlineCustomized,
+      isMobile,
+      modal,
+      knownStructureChapterCount,
+      projectDefaultCreativeMode,
+      projectDefaultPlotStage,
+      projectDefaultQualityNotes,
+      projectDefaultQualityPreset,
+      projectDefaultStoryFocus,
+      resolvedBatchStoryCreationBrief,
+      batchStoryCreationPromptLayerLabels,
+      batchStoryCreationPromptCharCount,
+      isBatchStoryCreationPromptVerbose,
+      STORY_CREATION_PROMPT_WARN_THRESHOLD,
+      saveBatchStoryCreationSnapshot,
+      selectedModel,
+      selectedStyleId,
+      setBatchGenerateVisible,
+      setBatchSelectedCreativeMode,
+      setBatchSelectedModel,
+      setBatchSelectedPlotStage,
+      setBatchSelectedQualityNotes,
+      setBatchSelectedQualityPreset,
+      setBatchSelectedStoryFocus,
+      setBatchStoryBeatPlannerDraft,
+      setBatchStoryCreationBriefDraft,
+      setBatchStorySceneOutlineDraft,
+      sortedChapters,
+      STORY_FOCUS_OPTIONS,
+      writingStyles,
+    };
+  }, [
     applyBatchCreationPreset,
     applyBatchStoryCreationSnapshot,
     applyInferredBatchPlotStage,
@@ -2724,7 +3046,6 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
     batchForm,
     batchGenerateVisible,
     batchGenerating,
-    batchProgress,
     batchSelectedCreativeMode,
     batchSelectedModel,
     batchSelectedPlotStage,
@@ -2735,51 +3056,38 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
     batchStoryBeatPlannerDraft,
     batchStoryCreationBriefDraft,
     batchStoryCreationCurrentDraft,
+    batchStoryCreationPromptCharCount,
+    batchStoryCreationPromptLayerLabels,
     batchStoryCreationSnapshots,
     batchStorySceneOutlineDraft,
     batchSuggestedStorySceneOutline,
     batchSystemStoryBeatPlanner,
     canSaveBatchStoryCreationSnapshot,
     copyStoryCreationPrompt,
-    CREATIVE_MODE_OPTIONS,
     deleteBatchStoryCreationSnapshot,
     handleBatchGenerate,
     handleCancelBatchGenerate,
     isBatchStoryBeatPlannerCustomized,
     isBatchStoryCreationBriefCustomized,
     isBatchStoryCreationControlCustomized,
+    isBatchStoryCreationPromptVerbose,
     isBatchStorySceneOutlineCustomized,
     isMobile,
-    modal,
     knownStructureChapterCount,
+    modal,
     projectDefaultCreativeMode,
     projectDefaultPlotStage,
     projectDefaultQualityNotes,
     projectDefaultQualityPreset,
     projectDefaultStoryFocus,
     resolvedBatchStoryCreationBrief,
-    batchStoryCreationPromptLayerLabels,
-    batchStoryCreationPromptCharCount,
-    isBatchStoryCreationPromptVerbose,
-    STORY_CREATION_PROMPT_WARN_THRESHOLD,
     saveBatchStoryCreationSnapshot,
     selectedModel,
     selectedStyleId,
-    setBatchGenerateVisible,
-    setBatchSelectedCreativeMode,
-    setBatchSelectedModel,
-    setBatchSelectedPlotStage,
-    setBatchSelectedQualityNotes,
-    setBatchSelectedQualityPreset,
-    setBatchSelectedStoryFocus,
-    setBatchStoryBeatPlannerDraft,
-    setBatchStoryCreationBriefDraft,
-    setBatchStorySceneOutlineDraft,
     sortedChapters,
-    STORY_FOCUS_OPTIONS,
     writingStyles,
-  };
-  if (!currentProject) return null;
+  ]);
+  if (!currentProjectId || !currentProjectOutlineMode) return null;
 
 
 
@@ -2827,7 +3135,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
         <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : 'auto' }}>
 
-          {currentProject.outline_mode === 'one-to-many' && (
+          {currentProjectOutlineMode === 'one-to-many' && (
 
             <Button
 
@@ -2893,7 +3201,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
             <Tag color="blue">
 
-              {currentProject.outline_mode === 'one-to-one'
+              {currentProjectOutlineMode === 'one-to-one'
 
                 ? "One outline per chapter"
 
@@ -2908,13 +3216,11 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       </div>
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
         <ChapterListSection
-          chapters={chapters}
           sortedChapters={sortedChapters}
-          outlineMode={currentProject.outline_mode}
+          outlineMode={currentProjectOutlineMode}
           groupedChapters={groupedChapters}
           expandedChapterGroupKeys={expandedChapterGroupKeys}
           isMobile={isMobile}
-          analysisTasksMap={analysisTasksMap}
           chapterGenerationStateById={chapterGenerationStateById}
           onOpenReader={handleOpenReader}
           onOpenEditor={handleOpenEditor}
@@ -2930,7 +3236,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
         open={isModalOpen}
         title={editingId ? "编辑章节" : "新建章节"}
         isMobile={isMobile}
-        outlineMode={currentProject.outline_mode}
+        outlineMode={currentProjectOutlineMode}
         submitText={editingId ? "保存修改" : "创建章节"}
         form={form}
         onCancel={() => setIsModalOpen(false)}
@@ -3001,37 +3307,16 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
         visible={analysisVisible}
         onClose={handleCloseAnalysis}
       />
-      <ChapterBatchGenerateModalEntry
-        visible={batchGenerateVisible || batchGenerating}
-        modalProps={batchGenerateModalProps}
-      />
-      <SingleChapterGenerationOverlayEntry
-        loading={isGenerating}
-        progress={singleChapterProgress}
-        message={singleChapterProgressMessage}
-      />
+      {batchGenerateModalProps ? (
+        <ChapterBatchGenerateModalEntry
+          visible={batchGenerateVisible || batchGenerating}
+          modalProps={batchGenerateModalProps}
+        />
+      ) : null}
+      <SingleChapterGenerationOverlayEntry />
       <ChapterBatchProgressEntry
         visible={batchGenerating}
-        progress={batchProgress?.progress_percent ?? 0}
-        message={
-          batchProgress?.current_chapter_number
-            ? [
-                `正在生成第 ${batchProgress.current_chapter_number} / ${batchProgress.total} 章`,
-                batchProgress.latest_quality_metrics?.overall_score !== undefined
-                  ? `评分 ${batchProgress.latest_quality_metrics.overall_score}`
-                  : null,
-                batchProgressCheckpointLabel,
-                batchProgressRepairLabel,
-              ].filter(Boolean).join(' | ')
-            : [
-                '正在准备批量生成',
-                batchProgress?.latest_quality_metrics?.overall_score !== undefined
-                  ? `评分 ${batchProgress.latest_quality_metrics.overall_score}`
-                  : null,
-                batchProgressCheckpointLabel,
-                batchProgressRepairLabel,
-              ].filter(Boolean).join(' | ')
-        }
+        buildCheckpointHint={buildBatchGenerationCheckpointHint}
         onCancel={() => {
           modal.confirm({
             title: '取消批量生成',
@@ -3055,20 +3340,24 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
 
 
-      <ChapterReaderEntry
-        chapterReaderModalState={chapterReaderModalState}
-        onClose={handleCloseReader}
-        onChapterChange={handleReaderChapterChange}
-      />
+      {chapterReaderModalState ? (
+        <ChapterReaderEntry
+          chapterReaderModalState={chapterReaderModalState}
+          onClose={handleCloseReader}
+          onChapterChange={handleReaderChapterChange}
+        />
+      ) : null}
 
 
 
 
-      <ChapterPlanEditorEntry
-        planEditorModalState={planEditorModalState}
-        onSave={handleSavePlan}
-        onCancel={handleClosePlanEditor}
-      />
+      {planEditorModalState ? (
+        <ChapterPlanEditorEntry
+          planEditorModalState={planEditorModalState}
+          onSave={handleSavePlan}
+          onCancel={handleClosePlanEditor}
+        />
+      ) : null}
 
     </div>
     </>

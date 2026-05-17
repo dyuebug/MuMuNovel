@@ -17,6 +17,7 @@ import type {
 import type {
   GenerateChapterContentStreamResult,
 } from '../store/chapterGenerationWorkflow';
+import { useChapterGenerationUiStore } from '../store/chapterGenerationUi';
 
 export type GenerateChapterContentStream = (
   chapterId: string,
@@ -255,9 +256,6 @@ export async function startSingleChapterGenerationWorkflow({
   runningSingleChapterTasks,
   saveSingleStoryCreationSnapshot,
   setIsContinuing,
-  setIsGenerating,
-  setSingleChapterProgress,
-  setSingleChapterProgressMessage,
   loadSingleStoryPresetState,
   resolveStoryCreationPromptState,
   singleStoryCreationBriefDraft,
@@ -291,9 +289,6 @@ export async function startSingleChapterGenerationWorkflow({
     options?: { silent?: boolean; label?: string },
   ) => Promise<unknown> | void;
   setIsContinuing: Dispatch<SetStateAction<boolean>>;
-  setIsGenerating: Dispatch<SetStateAction<boolean>>;
-  setSingleChapterProgress: Dispatch<SetStateAction<number>>;
-  setSingleChapterProgressMessage: Dispatch<SetStateAction<string>>;
   loadSingleStoryPresetState: () => Promise<SingleStoryPresetStateLike>;
   resolveStoryCreationPromptState: (options: {
     scope: 'single';
@@ -344,9 +339,11 @@ export async function startSingleChapterGenerationWorkflow({
   try {
     void saveSingleStoryCreationSnapshot('generate', { silent: true });
     setIsContinuing(true);
-    setIsGenerating(true);
-    setSingleChapterProgress(0);
-    setSingleChapterProgressMessage('Generating chapter...');
+    useChapterGenerationUiStore.getState().setSingleOverlay({
+      loading: true,
+      progress: 0,
+      message: 'Generating chapter...',
+    });
 
     const generationRequest = await prepareSingleChapterGenerationRequest({
       loadSingleStoryPresetState,
@@ -372,8 +369,10 @@ export async function startSingleChapterGenerationWorkflow({
       generationRequest.styleId,
       generationRequest.targetWordCount,
       (progressMsg, progressValue) => {
-        setSingleChapterProgress(progressValue);
-        setSingleChapterProgressMessage(progressMsg);
+        useChapterGenerationUiStore.getState().setSingleOverlay({
+          progress: progressValue,
+          message: progressMsg,
+        });
       },
       generationRequest.model,
       generationRequest.narrativePerspective,
@@ -409,6 +408,6 @@ export async function startSingleChapterGenerationWorkflow({
     message.error('Chapter generation failed: ' + (apiError.response?.data?.detail || apiError.message || 'Unknown error'));
   } finally {
     setIsContinuing(false);
-    setIsGenerating(false);
+    useChapterGenerationUiStore.getState().resetSingleOverlay();
   }
 }

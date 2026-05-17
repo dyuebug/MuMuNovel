@@ -1,21 +1,14 @@
 import { Suspense, lazy, memo } from 'react';
+import { useChapterGenerationUiStore } from '../store/chapterGenerationUi';
 
 const LazySSELoadingOverlay = lazy(async () => {
   const module = await import('./SSELoadingOverlay');
   return { default: module.SSELoadingOverlay };
 });
 
-type SingleChapterGenerationOverlayEntryProps = {
-  loading: boolean;
-  progress: number;
-  message: string;
-};
+function SingleChapterGenerationOverlayEntry() {
+  const { loading, progress, message } = useChapterGenerationUiStore((state) => state.singleOverlay);
 
-function SingleChapterGenerationOverlayEntry({
-  loading,
-  progress,
-  message,
-}: SingleChapterGenerationOverlayEntryProps) {
   if (!loading) {
     return null;
   }

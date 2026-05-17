@@ -16,6 +16,7 @@ import {
   SyncOutlined,
 } from '@ant-design/icons';
 import type { Chapter, AnalysisTask } from '../types';
+import { useChapterAnalysisUiStore } from '../store/chapterAnalysisUi';
 
 type ChapterListItemVariant = 'flat' | 'grouped';
 
@@ -24,7 +25,6 @@ type ChapterListItemProps = {
   variant: ChapterListItemVariant;
   isMobile: boolean;
   showOutlineActions: boolean;
-  analysisTask?: AnalysisTask;
   canGenerate: boolean;
   generateDisabledReason: string;
   onOpenReader: (chapter: Chapter) => void;
@@ -107,12 +107,24 @@ const renderAnalysisStatus = (task?: AnalysisTask) => {
   }
 };
 
+const areChapterPropsEqual = (left: Chapter, right: Chapter): boolean => (
+  left.id === right.id
+  && left.chapter_number === right.chapter_number
+  && left.title === right.title
+  && (left.content ?? '') === (right.content ?? '')
+  && (left.word_count ?? 0) === (right.word_count ?? 0)
+  && (left.status ?? '') === (right.status ?? '')
+  && (left.outline_id ?? null) === (right.outline_id ?? null)
+  && (left.outline_order ?? null) === (right.outline_order ?? null)
+  && (left.outline_title ?? '') === (right.outline_title ?? '')
+  && (left.expansion_plan ?? '') === (right.expansion_plan ?? '')
+);
+
 function ChapterListItem({
   chapter,
   variant,
   isMobile,
   showOutlineActions,
-  analysisTask,
   canGenerate,
   generateDisabledReason,
   onOpenReader,
@@ -123,6 +135,7 @@ function ChapterListItem({
   onShowExpansionPlan,
   onOpenPlanEditor,
 }: ChapterListItemProps) {
+  const analysisTask = useChapterAnalysisUiStore((state) => state.tasksMap[chapter.id]);
   const hasContent = Boolean(chapter.content?.trim());
   const isAnalyzing = isAnalysisTaskInProgress(analysisTask);
   const previewLimit = isMobile ? 80 : 150;
@@ -357,4 +370,18 @@ function ChapterListItem({
   );
 }
 
-export default memo(ChapterListItem);
+export default memo(ChapterListItem, (prevProps, nextProps) => (
+  areChapterPropsEqual(prevProps.chapter, nextProps.chapter)
+  && prevProps.variant === nextProps.variant
+  && prevProps.isMobile === nextProps.isMobile
+  && prevProps.showOutlineActions === nextProps.showOutlineActions
+  && prevProps.canGenerate === nextProps.canGenerate
+  && prevProps.generateDisabledReason === nextProps.generateDisabledReason
+  && prevProps.onOpenReader === nextProps.onOpenReader
+  && prevProps.onOpenEditor === nextProps.onOpenEditor
+  && prevProps.onShowAnalysis === nextProps.onShowAnalysis
+  && prevProps.onOpenSettings === nextProps.onOpenSettings
+  && prevProps.onDeleteChapter === nextProps.onDeleteChapter
+  && prevProps.onShowExpansionPlan === nextProps.onShowExpansionPlan
+  && prevProps.onOpenPlanEditor === nextProps.onOpenPlanEditor
+));

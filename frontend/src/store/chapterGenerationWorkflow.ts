@@ -43,6 +43,24 @@ export interface GenerateChapterContentStreamResult {
   completion: Promise<GenerateChapterContentCompletionResult>;
 }
 
+type IdleCallbackWindow = Window & typeof globalThis & {
+  requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+};
+
+const NON_URGENT_CHAPTER_REFRESH_DELAY_MS = 96;
+
+const scheduleNonUrgentChapterRefresh = (callback: () => void) => {
+  const windowWithIdleCallback = window as IdleCallbackWindow;
+  if (typeof windowWithIdleCallback.requestIdleCallback === 'function') {
+    windowWithIdleCallback.requestIdleCallback(() => {
+      callback();
+    }, { timeout: 400 });
+    return;
+  }
+
+  window.setTimeout(callback, NON_URGENT_CHAPTER_REFRESH_DELAY_MS);
+};
+
 const formatQualityMessage = (metrics: {
   overall_score?: unknown;
   conflict_chain_hit_rate?: unknown;
@@ -332,12 +350,16 @@ export async function startChapterGenerationWorkflow({
         }
 
         if (taskStatus.status === 'completed') {
-          onProgressUpdate?.('Refreshing chapter content...', 95);
+          onProgressUpdate?.('Finalizing chapter content...', 95);
 
           streamAbortController.abort();
           await streamPromise;
 
-          await refreshChapters();
+          scheduleNonUrgentChapterRefresh(() => {
+            void refreshChapters().catch((refreshError) => {
+              console.error('Failed to refresh chapters after single chapter generation.', refreshError);
+            });
+          });
           const { content: finalContent, source: contentSource } = await resolveCandidateDraftContent(
             chapterId,
             latestCandidateDraftSummary,

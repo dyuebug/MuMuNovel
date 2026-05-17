@@ -56,6 +56,7 @@ import {
   getActiveStoryRepairScopeLabel,
   getActiveStoryRepairSourceLabel,
 } from '../utils/activeStoryRepair';
+import { useChapterGenerationUiStore } from '../store/chapterGenerationUi';
 
 const { TextArea } = Input;
 
@@ -187,7 +188,6 @@ function ChapterBatchGenerateModal(props: ChapterBatchGenerateModalProps) {
     batchForm,
     batchGenerateVisible,
     batchGenerating,
-    batchProgress,
     batchSelectedCreativeMode,
     batchSelectedModel,
     batchSelectedPlotStage,
@@ -246,6 +246,7 @@ function ChapterBatchGenerateModal(props: ChapterBatchGenerateModalProps) {
 
 const batchStartChapterNumber = Form.useWatch('startChapterNumber', batchForm) as number | undefined;
 const batchEnableWebResearch = Form.useWatch('enableWebResearch', batchForm) as boolean | undefined;
+const batchProgress = useChapterGenerationUiStore((state) => state.batchProgress);
 useLocalRenderDiagnostics('ChapterBatchGenerateModal', () => ({
   visible: batchGenerateVisible,
   generating: batchGenerating,
