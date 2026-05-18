@@ -237,38 +237,6 @@ impl ChapterService {
             .map(Some)
     }
 
-    pub async fn quality_trend(
-        db: &DatabaseConnection,
-        project_id: &str,
-        user_id: &str,
-    ) -> Result<Option<Vec<serde_json::Value>>, String> {
-        if !Self::verify_project_access(db, project_id, user_id).await? {
-            return Ok(None);
-        }
-        let chapters = chapter::Entity::find()
-            .filter(chapter::Column::ProjectId.eq(project_id))
-            .order_by_asc(chapter::Column::ChapterNumber)
-            .all(db)
-            .await
-            .map_err(|e| format!("{}", e))?;
-
-        let trend: Vec<serde_json::Value> = chapters
-            .iter()
-            .map(|c| {
-                serde_json::json!({
-                    "chapter_id": c.id,
-                    "chapter_number": c.chapter_number,
-                    "title": c.title,
-                    "word_count": c.word_count,
-                    "status": c.status,
-                    "created_at": c.created_at.and_utc().to_rfc3339(),
-                })
-            })
-            .collect();
-
-        Ok(Some(trend))
-    }
-
     pub async fn can_generate(
         db: &DatabaseConnection,
         chapter_id: &str,
@@ -298,21 +266,4 @@ impl ChapterService {
         }
     }
 
-    pub async fn get_annotations(
-        db: &DatabaseConnection,
-        chapter_id: &str,
-        user_id: &str,
-    ) -> Result<Option<serde_json::Value>, String> {
-        let ch = Self::get(db, chapter_id, user_id).await?;
-        let Some(_ch) = ch else {
-            return Ok(None);
-        };
-        // Annotations are stored in expansion_plan or analysis tables
-        // Return basic chapter metadata for now
-        Ok(Some(serde_json::json!({
-            "chapter_id": chapter_id,
-            "annotations": [],
-            "memory_mapping": [],
-        })))
-    }
 }
