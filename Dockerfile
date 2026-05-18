@@ -180,10 +180,11 @@ COPY --from=frontend-builder /frontend/dist ./static
 COPY backend/alembic-postgres.ini ./alembic.ini
 COPY backend/alembic/postgres ./alembic
 COPY backend/scripts/entrypoint.sh /app/entrypoint.sh
+COPY backend/scripts/run_migrations.sh /app/run_migrations.sh
 COPY backend/scripts/migrate.py ./scripts/migrate.py
 
 # 赋予执行权限
-RUN chmod +x /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh /app/run_migrations.sh
 
 # 创建必要的目录
 RUN mkdir -p /app/data /app/logs

@@ -1,0 +1,45 @@
+{
+  "manifest_version": 1,
+  "description": "Gateway smoke probes for the strangler migration control plane.",
+  "probes": [
+    {
+      "name": "rust-health",
+      "owner": "rust",
+      "method": "GET",
+      "path": "/health",
+      "expected_status": 200,
+      "expected_json": {
+        "status": "ok"
+      }
+    },
+    {
+      "name": "rust-readiness",
+      "owner": "rust",
+      "method": "GET",
+      "path": "/readyz",
+      "expected_status": 200,
+      "expected_json": {
+        "status": "ready",
+        "checks": {
+          "startup": {
+            "ready": true
+          },
+          "database": {
+            "healthy": true
+          }
+        }
+      }
+    },
+    {
+      "name": "python-fallback-root",
+      "owner": "python-fallback",
+      "method": "GET",
+      "path": "/",
+      "expected_status": 200,
+      "expected_content_type_contains": [
+        "text/html",
+        "application/json"
+      ]
+    }
+  ]
+}

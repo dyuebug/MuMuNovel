@@ -43,6 +43,9 @@ $ShouldPauseOnExit = Test-InteractiveConsole
 $ComposeFile = "docker-compose.strangler.yml"
 $DbService = "postgres"
 $DbContainer = "mumunovel-postgres-new"
+$DbMigratorService = "db-migrator"
+$DbMigratorContainer = "mumunovel-db-migrator"
+$DbMigratorRunContainer = "mumunovel-db-migrator-once"
 $PythonService = "python-backend"
 $PythonContainer = "mumunovel-python"
 $RustService = "rust-backend"
@@ -51,6 +54,9 @@ $NginxService = "nginx"
 $NginxContainer = "mumunovel-nginx"
 $LogDirectory = Join-Path $PSScriptRoot "logs\ops"
 $LogFilePath = Join-Path $LogDirectory "deploy-strangler.log"
+$GatewaySmokeScript = Join-Path $PSScriptRoot "backend\tools\run_strangler_gateway_smoke.py"
+$GatewaySmokeOutputPath = Join-Path $PSScriptRoot "tmp\smoke\tmp_strangler_gateway_smoke_latest.json"
+$GatewaySmokeManifestPath = Join-Path $PSScriptRoot "deploy\strangler-gateway-probes.json"
 $Utf8NoBomEncoding = [System.Text.UTF8Encoding]::new($false)
 
 # =============================================================================
@@ -307,6 +313,52 @@ function Show-ContainerDiagnostics {
     Invoke-LoggedCommand -Command (@('docker','compose') + (Get-DockerComposeArgs) + @('logs',"--tail=$Tail",$ServiceName)) -Label "diag logs $ServiceName" -IgnoreExitCode | Out-Null
 }
 
+function Invoke-GatewaySmoke {
+    if (-not (Test-Path -Path $GatewaySmokeScript)) {
+        throw "Gateway smoke script not found: $GatewaySmokeScript"
+    }
+    if (-not (Test-Path -Path $GatewaySmokeManifestPath)) {
+        throw "Gateway smoke manifest not found: $GatewaySmokeManifestPath"
+    }
+
+    $pythonLauncher = if (Get-Command python -ErrorAction SilentlyContinue) {
+        'python'
+    }
+    elseif (Get-Command py -ErrorAction SilentlyContinue) {
+        'py'
+    }
+    else {
+        throw 'Neither python nor py launcher was found on PATH.'
+    }
+
+    $command = @(
+        $pythonLauncher,
+        '-X', 'utf8',
+        $GatewaySmokeScript,
+        '--base-url', 'http://localhost:8005',
+        '--manifest', $GatewaySmokeManifestPath,
+        '--http-timeout', '10',
+        '--output', $GatewaySmokeOutputPath
+    )
+    return Invoke-LoggedCommand -Command $command -Label 'gateway smoke probes'
+}
+
+function Invoke-DatabaseMigrator {
+    Invoke-LoggedCommand -Command @('docker', 'rm', '-f', $DbMigratorRunContainer) -Label 'cleanup previous db migrator run' -IgnoreExitCode | Out-Null
+
+    $command = @('docker', 'compose') + (Get-DockerComposeArgs) + @(
+        'run',
+        '--name', $DbMigratorRunContainer,
+        '--no-deps',
+        '-T',
+        '--entrypoint', '/app/run_migrations.sh',
+        $DbMigratorService
+    )
+    $result = Invoke-LoggedCommand -Command $command -Label 'docker compose run db-migrator'
+    Invoke-LoggedCommand -Command @('docker', 'rm', '-f', $DbMigratorRunContainer) -Label 'cleanup db migrator run' -IgnoreExitCode | Out-Null
+    return $result
+}
+
 function Wait-ContainerHealthy {
     param(
         [string]$ContainerName,
@@ -439,6 +491,18 @@ Wait-ContainerHealthy -ContainerName $DbContainer -Label "PostgreSQL" -TimeoutSe
 Write-Step "Verifying PostgreSQL network credentials"
 Test-PostgresNetworkCredentials
 
+Write-Step "Running explicit database migration step"
+try {
+    Invoke-DatabaseMigrator | Out-Null
+}
+catch {
+    Write-Host "Database migration step failed. Dumping diagnostics..." -ForegroundColor Yellow
+    Write-LogLine "Database migration step failed: $($_.Exception.Message)"
+    Show-ContainerDiagnostics -ContainerName $DbMigratorRunContainer -ServiceName $DbMigratorService -Label "Database migrator" -Tail 120
+    Show-ContainerDiagnostics -ContainerName $DbContainer -ServiceName $DbService -Label "PostgreSQL" -Tail 120
+    throw
+}
+
 # ---- Start backends ----
 Write-Step "Starting Python backend"
 Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('up', '-d', '--force-recreate', $PythonService)) -Label "docker compose up python-backend" | Out-Null
@@ -495,27 +559,30 @@ if (-not $isHealthy) {
     throw "Strangler deploy finished but health check failed: http://localhost:8005/health"
 }
 
-# ---- Verify both backends through Nginx ----
-Write-Step "Verifying Rust backend reachability via Nginx"
+# ---- Gateway smoke via manifest ----
+Write-Step "Running gateway smoke probes"
 try {
-    $rustResponse = Invoke-WebRequest -Uri "http://localhost:8005/readyz" -UseBasicParsing -TimeoutSec 10
-    Write-Host "Rust readiness endpoint: $($rustResponse.Content)" -ForegroundColor DarkCyan
-    Write-LogLine "Rust backend reachable via Nginx: $($rustResponse.Content)"
+    $smokeResult = Invoke-GatewaySmoke
+    Write-Host "Gateway smoke OK. Summary: $GatewaySmokeOutputPath" -ForegroundColor Green
+    Write-LogLine "Gateway smoke OK. Summary: $GatewaySmokeOutputPath"
 }
 catch {
-    Write-Host "Warning: Rust backend reachability check failed: $($_.Exception.Message)" -ForegroundColor Yellow
-    Write-LogLine "Rust backend reachability check failed: $($_.Exception.Message)"
-}
-
-Write-Step "Verifying Python fallback reachability via Nginx"
-try {
-    $pythonResponse = Invoke-WebRequest -Uri "http://localhost:8005/memories/" -UseBasicParsing -TimeoutSec 10
-    Write-Host "Python fallback endpoint: HTTP $($pythonResponse.StatusCode)" -ForegroundColor DarkCyan
-    Write-LogLine "Python backend reachable via Nginx fallback probe: HTTP $($pythonResponse.StatusCode)"
-}
-catch {
-    Write-Host "Warning: Python fallback reachability check failed: $($_.Exception.Message)" -ForegroundColor Yellow
-    Write-LogLine "Python backend reachability check via Nginx fallback probe failed: $($_.Exception.Message)"
+    Write-Host "Gateway smoke failed. Dumping diagnostics..." -ForegroundColor Yellow
+    Write-LogLine "Gateway smoke failed: $($_.Exception.Message)"
+    if (Test-Path -Path $GatewaySmokeOutputPath) {
+        try {
+            $smokeSummary = [System.IO.File]::ReadAllText($GatewaySmokeOutputPath)
+            Write-LogBlock "Gateway smoke summary:`n$smokeSummary"
+        }
+        catch {
+            Write-LogLine "Failed to read gateway smoke summary: $($_.Exception.Message)"
+        }
+    }
+    Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('ps')) -Label "diag ps after smoke" -IgnoreExitCode | Out-Null
+    Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('logs', '--tail=80', $NginxService)) -Label "diag nginx logs after smoke" -IgnoreExitCode | Out-Null
+    Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('logs', '--tail=40', $RustService)) -Label "diag rust logs after smoke" -IgnoreExitCode | Out-Null
+    Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('logs', '--tail=40', $PythonService)) -Label "diag python logs after smoke" -IgnoreExitCode | Out-Null
+    throw
 }
 
 Write-Host ""

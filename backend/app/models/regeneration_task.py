@@ -1,5 +1,5 @@
 """章节重新生成任务模型"""
-from sqlalchemy import Column, String, Text, Integer, DateTime, ForeignKey, JSON, Boolean
+from sqlalchemy import Column, String, Text, Integer, DateTime, ForeignKey, JSON, Boolean, text
 from sqlalchemy.sql import func
 from app.database import Base
 import uuid
@@ -24,13 +24,31 @@ class RegenerationTask(Base):
     
     # 生成参数
     style_id = Column(Integer, nullable=True, comment="写作风格ID")
-    target_word_count = Column(Integer, default=3000, comment="目标字数")
+    target_word_count = Column(
+        Integer,
+        nullable=False,
+        default=3000,
+        server_default=text("3000"),
+        comment="目标字数",
+    )
     focus_areas = Column(JSON, comment="重点优化方向")
     preserve_elements = Column(JSON, comment="需要保留的元素配置")
     
     # 状态跟踪
-    status = Column(String(20), default='pending', comment="pending/running/completed/failed")
-    progress = Column(Integer, default=0, comment="进度 0-100")
+    status = Column(
+        String(20),
+        nullable=False,
+        default='pending',
+        server_default=text("'pending'"),
+        comment="pending/running/completed/failed",
+    )
+    progress = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+        comment="进度 0-100",
+    )
     error_message = Column(Text, nullable=True)
     
     # 内容版本
@@ -38,7 +56,13 @@ class RegenerationTask(Base):
     original_word_count = Column(Integer, comment="原始字数")
     regenerated_content = Column(Text, comment="重新生成的内容")
     regenerated_word_count = Column(Integer, comment="新内容字数")
-    version_number = Column(Integer, default=1, comment="版本号")
+    version_number = Column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+        comment="版本号",
+    )
     version_note = Column(String(500), comment="版本说明")
     
     # 时间戳
@@ -48,4 +72,3 @@ class RegenerationTask(Base):
     
     def __repr__(self):
         return f"<RegenerationTask(id={self.id[:8]}..., chapter_id={self.chapter_id[:8]}..., status={self.status})>"
-

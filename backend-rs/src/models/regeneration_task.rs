@@ -19,11 +19,11 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub custom_instructions: Option<String>,
     pub style_id: Option<i32>,
-    pub target_word_count: Option<i32>,
+    pub target_word_count: i32,
     pub focus_areas: Option<Value>,
     pub preserve_elements: Option<Value>,
-    pub status: Option<String>,
-    pub progress: Option<i32>,
+    pub status: String,
+    pub progress: i32,
     #[sea_orm(column_type = "Text", nullable)]
     pub error_message: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]
@@ -32,7 +32,7 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub regenerated_content: Option<String>,
     pub regenerated_word_count: Option<i32>,
-    pub version_number: Option<i32>,
+    pub version_number: i32,
     pub version_note: Option<String>,
     pub created_at: Option<NaiveDateTime>,
     pub started_at: Option<NaiveDateTime>,

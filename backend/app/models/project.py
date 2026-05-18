@@ -1,5 +1,5 @@
 """项目数据模型"""
-from sqlalchemy import Column, String, Text, DateTime, Integer, CheckConstraint
+from sqlalchemy import Column, String, Text, DateTime, Integer, CheckConstraint, text
 from sqlalchemy.sql import func
 from app.database import Base
 import uuid
@@ -15,12 +15,48 @@ class Project(Base):
     description = Column(Text, comment="项目简介")
     theme = Column(Text, comment="主题")
     genre = Column(String(50), comment="小说类型")
-    target_words = Column(Integer, default=0, comment="目标字数")
-    current_words = Column(Integer, default=0, comment="当前字数")
-    status = Column(String(20), default="planning", comment="创作状态")
-    wizard_status = Column(String(20), default="incomplete", comment="向导完成状态: incomplete/completed")
-    wizard_step = Column(Integer, default=0, comment="向导当前步骤: 0-4")
-    outline_mode = Column(String(20), nullable=False, default="one-to-many", comment="大纲章节模式: one-to-one(传统模式) 或 one-to-many(细化模式)")
+    target_words = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+        comment="目标字数",
+    )
+    current_words = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+        comment="当前字数",
+    )
+    status = Column(
+        String(20),
+        nullable=False,
+        default="planning",
+        server_default=text("'planning'"),
+        comment="创作状态",
+    )
+    wizard_status = Column(
+        String(20),
+        nullable=False,
+        default="incomplete",
+        server_default=text("'incomplete'"),
+        comment="向导完成状态: incomplete/completed",
+    )
+    wizard_step = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+        comment="向导当前步骤: 0-4",
+    )
+    outline_mode = Column(
+        String(20),
+        nullable=False,
+        default="one-to-many",
+        server_default=text("'one-to-many'"),
+        comment="大纲章节模式: one-to-one(传统模式) 或 one-to-many(细化模式)",
+    )
     
     # 世界构建字段
     world_time_period = Column(Text, comment="时间背景")
@@ -31,7 +67,13 @@ class Project(Base):
     # 项目配置
     chapter_count = Column(Integer, comment="章节数量")
     narrative_perspective = Column(String(50), comment="叙事视角：first_person/third_person/omniscient")
-    character_count = Column(Integer, default=5, comment="角色数量")
+    character_count = Column(
+        Integer,
+        nullable=False,
+        default=5,
+        server_default=text("5"),
+        comment="角色数量",
+    )
     default_creative_mode = Column(String(50), comment="默认创作模式")
     default_story_focus = Column(String(50), comment="默认结构侧重点")
     default_plot_stage = Column(String(20), comment="默认剧情阶段")

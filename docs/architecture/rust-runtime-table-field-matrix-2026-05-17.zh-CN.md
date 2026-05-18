@@ -1,0 +1,1365 @@
+ # Rust 运行时热点表字段级差异矩阵（2026-05-17）
+
+
+
+
+
+
+
+ ## 1. 目标
+
+
+
+
+
+
+
+ 本文档承接：
+
+
+
+
+
+
+
+ - `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`
+
+
+
+ - `docs/architecture/rust-schema-ownership-audit-2026-05-17.zh-CN.md`
+
+
+
+
+
+
+
+ 聚焦第一批最值得做字段级一致性审计的运行时热点表：
+
+
+
+
+
+
+
+ 1. `batch_generation_tasks`
+
+
+
+ 2. `batch_generation_snapshots`
+
+
+
+ 3. `chapter_draft_attempts`
+
+
+
+ 4. `analysis_tasks`
+
+
+
+ 5. `regeneration_tasks`
+
+
+
+
+
+
+
+ 本文档的目的不是判断业务逻辑是否完整，而是回答：
+
+
+
+
+
+
+
+ - Alembic 当前 head 的表字段定义是什么
+
+
+
+ - Python ORM 的字段语义是什么
+
+
+
+ - Rust SeaORM model 当前如何理解这些字段
+
+
+
+ - 哪些差异会对 shared-DB strangler 造成真实风险
+
+
+
+
+
+
+
+ ---
+
+
+
+
+
+
+
+ ## 2. 方法与证据来源
+
+
+
+
+
+
+
+### 2.1 Alembic 迁移
+
+
+
+
+
+
+
+主要来源：
+
+
+
+
+
+
+
+- `backend/alembic/postgres/versions/20251226_1008_ee0a189f1532_初始数据库结构.py`
+
+
+
+- `backend/alembic/postgres/versions/20260325_0900_batch_runtime_store.py`
+
+
+
+- `backend/alembic/postgres/versions/20260325_2210_batch_workflow_runtime_state.py`
+
+
+
+- `backend/alembic/postgres/versions/20260517_1200_analysis_task_progress_hardening.py`
+
+
+
+- `backend/alembic/postgres/versions/20260517_1300_batch_generation_task_defaults_hardening.py`
+
+
+
+
+
+
+
+ ### 2.2 Python ORM
+
+
+
+
+
+
+
+ 主要来源：
+
+
+
+
+
+
+
+ - `backend/app/models/batch_generation_task.py`
+
+
+
+ - `backend/app/models/batch_generation_snapshot.py`
+
+
+
+ - `backend/app/models/chapter_draft_attempt.py`
+
+
+
+ - `backend/app/models/analysis_task.py`
+
+
+
+ - `backend/app/models/regeneration_task.py`
+
+
+
+
+
+
+
+ ### 2.3 Rust SeaORM
+
+
+
+
+
+
+
+ 主要来源：
+
+
+
+
+
+
+
+ - `backend-rs/src/models/batch_generation_task.rs`
+
+
+
+ - `backend-rs/src/models/batch_generation_snapshot.rs`
+
+
+
+ - `backend-rs/src/models/chapter_draft_attempt.rs`
+
+
+
+ - `backend-rs/src/models/analysis_task.rs`
+
+
+
+ - `backend-rs/src/models/regeneration_task.rs`
+
+
+
+
+
+
+
+ ---
+
+
+
+
+
+
+
+ ## 3. 总体结论
+
+
+
+
+
+
+
+这一批运行时热点表的总体情况可以概括为：
+
+
+
+
+
+
+
+1. **Rust 对表级字段集的覆盖总体是成立的。**
+
+
+
+2. **当前主要风险不是缺字段，而是“默认值语义”和“可空语义”漂移。**
+
+
+
+3. **Python ORM 在多处通过应用层 default 表达业务语义，但 Alembic/数据库层并没有等价的 server default。**
+
+
+
+4. **Rust model 在多数表上更接近 Alembic 的“数据库真实形状”，但这也意味着它不会自动继承 Python 代码里的默认值语义。**
+
+
+
+5. **`analysis_tasks.progress/status`、`batch_generation_tasks` 关键默认值字段，以及 `regeneration_tasks` 第一批默认值字段已经在仓库中开始收口，但仍需依赖显式 migrator 把迁移真正落到数据库。**
+
+
+
+
+
+
+
+ ---
+
+
+
+
+
+
+
+ ## 4. 字段级差异矩阵
+
+
+
+
+
+
+
+ 说明：
+
+
+
+
+
+
+
+ - “Alembic”列反映数据库层当前真实约束/可空/默认值证据。
+
+
+
+ - “Python ORM”列反映 SQLAlchemy 模型表达的默认值和使用语义。
+
+
+
+ - “Rust model”列反映 SeaORM 当前对字段的类型/可空理解。
+
+
+
+ - “风险等级”分为：高 / 中 / 低。
+
+
+
+
+
+
+
+ ---
+
+
+
+
+
+
+
+ ## 4.1 `batch_generation_tasks`
+
+
+
+
+
+
+
+### 当前判断
+
+
+
+
+
+
+
+- Rust 字段集与 Alembic 基本一致。
+
+
+
+- 当前仓库已经通过 `20260517_batch_task_defaults` 迁移和 Python ORM 收紧了第一批默认值字段。
+
+
+
+- 剩余风险主要集中在 `failed_chapters` 的默认值语义，以及 Rust model 仍保留 `Option<T>` 的宽松表达。
+
+
+
+
+
+
+
+| 字段 | Alembic | Python ORM | Rust model | 差异类型 | 风险 |
+
+
+
+|---|---|---|---|---|---|
+
+
+
+ | `id` | `String(36)`, not null, PK | `String(36)`, PK | `String` | 一致 | 低 |
+
+
+
+ | `project_id` | not null | not null | `String` | 一致 | 低 |
+
+
+
+ | `user_id` | not null | not null | `String` | 一致 | 低 |
+
+
+
+ | `start_chapter_number` | not null | not null | `i32` | 一致 | 低 |
+
+
+
+ | `chapter_count` | not null | not null | `i32` | 一致 | 低 |
+
+
+
+ | `chapter_ids` | JSON, not null | JSON, not null | `Value` | 一致 | 低 |
+
+
+
+ | `style_id` | nullable | nullable | `Option<i32>` | 一致 | 低 |
+
+
+
+| `target_word_count` | **20260517 迁移后为 not null + server default 3000** | `default=3000`, `server_default=3000`, `nullable=False` | `Option<i32>` | Rust 类型仍偏宽松 | 低 |
+
+
+
+| `enable_analysis` | **20260517 迁移后为 not null + server default false** | `default=False`, `server_default=false`, `nullable=False` | `Option<bool>` | Rust 类型仍偏宽松 | 低 |
+
+
+
+| `status` | **20260517 迁移后为 not null + server default 'pending'** | `default="pending"`, `server_default='pending'`, `nullable=False` | `Option<String>` | Rust 类型仍偏宽松 | 低 |
+
+
+
+| `total_chapters` | **20260517 迁移后为 not null + server default 0** | `default=0`, `server_default=0`, `nullable=False` | `Option<i32>` | Rust 类型仍偏宽松 | 低 |
+
+
+
+| `completed_chapters` | **20260517 迁移后为 not null + server default 0** | `default=0`, `server_default=0`, `nullable=False` | `Option<i32>` | Rust 类型仍偏宽松 | 低 |
+
+
+
+| `failed_chapters` | JSON, nullable, **仍无 DB server default** | `default=list` | `Option<Value>` | 默认值语义仍漂移 | 中 |
+
+
+
+ | `current_chapter_id` | nullable | nullable | `Option<String>` | 一致 | 低 |
+
+
+
+ | `current_chapter_number` | nullable | nullable | `Option<i32>` | 一致 | 低 |
+
+
+
+| `current_retry_count` | **20260517 迁移后为 not null + server default 0** | `default=0`, `server_default=0`, `nullable=False` | `Option<i32>` | Rust 类型仍偏宽松 | 低 |
+
+
+
+| `max_retries` | **20260517 迁移后为 not null + server default 3** | `default=3`, `server_default=3`, `nullable=False` | `Option<i32>` | Rust 类型仍偏宽松 | 低 |
+
+
+
+ | `created_at` | nullable, server default `now()` | `server_default=func.now()` | `Option<NaiveDateTime>` | 一致 | 低 |
+
+
+
+ | `started_at` | nullable | nullable | `Option<NaiveDateTime>` | 一致 | 低 |
+
+
+
+ | `completed_at` | nullable | nullable | `Option<NaiveDateTime>` | 一致 | 低 |
+
+
+
+ | `error_message` | `String(500)`, nullable | `String(500)` | `Option<String>` | 长度约束未在 Rust 类型层体现 | 低 |
+
+
+
+
+
+
+
+ ### 结论
+
+
+
+
+
+
+
+`batch_generation_tasks` 已经完成了第一轮默认值硬化，当前更准确的结论是：
+
+
+
+
+
+
+
+> 关键默认值现在已经由数据库层承担，Rust model 对核心安全字段也已同步收紧；这张表的第一轮默认值语义收口基本完成。
+
+
+
+
+
+
+
+此外，Rust 当前批量任务创建入口已经开始显式补值，例如在 `backend-rs/src/api/chapter_batch_generation.rs` 中：
+
+
+
+
+
+
+
+- `enable_analysis` 已在创建时回落到 `false`
+
+
+
+- `max_retries` 已在创建时回落到 `3`
+
+
+
+
+
+
+
+这意味着该表已经从“高风险默认值漂移簇”下降为“部分收口，但仍需继续紧缩 Rust model 与 `failed_chapters` 语义”的阶段。
+
+
+
+
+
+
+
+ ---
+
+
+
+
+
+
+
+ ## 4.2 `batch_generation_snapshots`
+
+
+
+
+
+
+
+ ### 当前判断
+
+
+
+
+
+
+
+ - Rust 与 Alembic 字段集一致。
+
+
+
+ - `workflow_runtime_state` 已与 2026-03-25 的后续迁移对齐。
+
+
+
+ - 当前风险更多在唯一约束、外键和更新时间语义，而不是字段本身。
+
+
+
+
+
+
+
+ | 字段 | Alembic | Python ORM | Rust model | 差异类型 | 风险 |
+
+
+
+ |---|---|---|---|---|---|
+
+
+
+ | `id` | `String(36)`, not null, PK | `String(36)`, PK | `String` | 一致 | 低 |
+
+
+
+ | `batch_task_id` | not null, unique, FK cascade | not null, unique, FK | `String` | 字段一致；Rust 类型层不表达 unique/FK | 中 |
+
+
+
+ | `latest_quality_metrics` | JSON, nullable | JSON, nullable | `Option<Value>` | 一致 | 低 |
+
+
+
+ | `quality_metrics_history` | JSON, nullable | JSON, nullable | `Option<Value>` | 一致 | 低 |
+
+
+
+ | `quality_metrics_summary` | JSON, nullable | JSON, nullable | `Option<Value>` | 一致 | 低 |
+
+
+
+ | `workflow_runtime_state` | JSON, nullable（后续迁移新增） | JSON, nullable | `Option<Value>` | 一致 | 低 |
+
+
+
+ | `created_at` | nullable, server default `CURRENT_TIMESTAMP` | `server_default=func.now()` | `Option<NaiveDateTime>` | 一致 | 低 |
+
+
+
+ | `updated_at` | nullable, server default `CURRENT_TIMESTAMP` | `server_default=func.now(), onupdate=func.now()` | `Option<NaiveDateTime>` | 更新时间语义部分依赖应用层 | 中 |
+
+
+
+
+
+
+
+ ### 结论
+
+
+
+
+
+
+
+ `batch_generation_snapshots` 是当前最适合未来做 Rust migration ownership 试点的表之一，因为：
+
+
+
+
+
+
+
+ - 结构相对集中
+
+
+
+ - Rust 已完整消费主要字段
+
+
+
+ - 后续热点变化已经明确聚焦在这张表
+
+
+
+
+
+
+
+ 但在此之前，仍应明确：
+
+
+
+
+
+
+
+ - `updated_at` 是不是必须由 DB/trigger/server default 统一保证
+
+
+
+ - Rust 写路径是否会稳定维护 `batch_task_id` 的唯一语义
+
+
+
+
+
+
+
+ ---
+
+
+
+
+
+
+
+ ## 4.3 `chapter_draft_attempts`
+
+
+
+
+
+
+
+ ### 当前判断
+
+
+
+
+
+
+
+ - Rust 与 Alembic/ Python ORM 的字段集高度一致。
+
+
+
+ - 风险依然主要来自 `source` / `attempt_state` / `word_count` 的默认值来源。
+
+
+
+
+
+
+
+ | 字段 | Alembic | Python ORM | Rust model | 差异类型 | 风险 |
+
+
+
+ |---|---|---|---|---|---|
+
+
+
+ | `id` | `String(36)`, not null, PK | `String(36)`, PK | `String` | 一致 | 低 |
+
+
+
+ | `project_id` | not null, FK cascade | not null, FK | `String` | 一致 | 低 |
+
+
+
+ | `chapter_id` | nullable, FK set null | nullable | `Option<String>` | 一致 | 低 |
+
+
+
+ | `batch_task_id` | nullable, FK set null | nullable | `Option<String>` | 一致 | 低 |
+
+
+
+ | `source` | not null, server default `'chapter'` | not null, `default="chapter"` | `String` | 一致，但 Rust 不显式表达默认值 | 低 |
+
+
+
+ | `attempt_state` | not null, server default `'candidate'` | not null, `default="candidate"` | `String` | 一致，但 Rust 不显式表达默认值 | 低 |
+
+
+
+ | `quality_gate_action` | nullable | nullable | `Option<String>` | 一致 | 低 |
+
+
+
+ | `quality_gate_decision` | nullable | nullable | `Option<String>` | 一致 | 低 |
+
+
+
+ | `word_count` | not null, server default `0` | not null, `default=0` | `i32` | 一致 | 低 |
+
+
+
+ | `summary_preview` | `Text`, nullable | `Text`, nullable | `Option<String>` | 一致 | 低 |
+
+
+
+ | `content_preview` | `Text`, nullable | `Text`, nullable | `Option<String>` | 一致 | 低 |
+
+
+
+ | `quality_metrics` | JSON, nullable | JSON, nullable | `Option<Value>` | 一致 | 低 |
+
+
+
+ | `repair_payload` | JSON, nullable | JSON, nullable | `Option<Value>` | 一致 | 低 |
+
+
+
+ | `created_at` | nullable, server default `CURRENT_TIMESTAMP` | `server_default=func.now()` | `Option<NaiveDateTime>` | 一致 | 低 |
+
+
+
+
+
+
+
+ ### 结论
+
+
+
+
+
+
+
+ `chapter_draft_attempts` 是这一批里对齐度最高的表之一。它适合成为：
+
+
+
+
+
+
+
+ - 字段级审计的低风险基准表
+
+
+
+ - 未来 Rust migration ownership 的候选试点表
+
+
+
+
+
+
+
+ ---
+
+
+
+
+
+
+
+ ## 4.4 `analysis_tasks`
+
+
+
+
+
+
+
+### 当前判断
+
+
+
+
+
+
+
+- 该表的首个高风险不一致点已经在仓库中开始修复：
+
+
+
+  - Python ORM 已将 `status/progress` 收紧为 `nullable=False + server_default`
+
+
+
+  - 新增了 Postgres/SQLite 双迁移回填 `NULL` 并收紧约束
+
+
+
+- Rust model 维持 `status: String` / `progress: i32`，与目标语义一致。
+
+
+
+
+
+
+
+| 字段 | Alembic | Python ORM | Rust model | 差异类型 | 风险 |
+
+
+
+|---|---|---|---|---|---|
+
+
+
+ | `id` | `String(36)`, not null, PK | `String(36)`, PK | `String` | 一致 | 低 |
+
+
+
+ | `chapter_id` | not null, FK cascade | not null, FK | `String` | 一致 | 低 |
+
+
+
+ | `user_id` | not null | not null | `String` | 一致 | 低 |
+
+
+
+ | `project_id` | not null | not null | `String` | 一致 | 低 |
+
+
+
+| `status` | **20260517 迁移后为 not null + server default 'pending'** | `default='pending'`, `server_default='pending'`, `nullable=False` | `String` | 已收口 | 低 |
+
+
+
+| `progress` | **20260517 迁移后为 not null + server default 0** | `default=0`, `server_default=0`, `nullable=False` | `i32` | 已收口 | 低 |
+
+
+
+ | `error_message` | `Text`, nullable | `Text`, nullable | `Option<String>` | 一致 | 低 |
+
+
+
+ | `created_at` | nullable, server default `now()` | `server_default=func.now()` | `Option<NaiveDateTime>` | 一致 | 低 |
+
+
+
+ | `started_at` | nullable | nullable | `Option<NaiveDateTime>` | 一致 | 低 |
+
+
+
+ | `completed_at` | nullable | nullable | `Option<NaiveDateTime>` | 一致 | 低 |
+
+
+
+
+
+
+
+ ### 结论
+
+
+
+
+
+
+
+`analysis_tasks.progress/status` 当前更准确的状态是：
+
+
+
+
+
+
+
+> **已在仓库层完成第一轮修复，但仍需通过显式 migrator 真正应用到现网/现库。**
+
+
+
+
+
+
+
+剩余注意点不是模型定义本身，而是部署执行层面：
+
+
+
+
+
+
+
+- 历史数据中的 `NULL progress/status` 需要迁移回填
+
+
+
+- 若某环境没有跑到最新 Alembic head，Rust 仍可能读到旧形状数据
+
+
+
+
+
+
+
+ ---
+
+
+
+
+
+
+
+ ## 4.5 `regeneration_tasks`
+
+
+
+
+
+
+
+ ### 当前判断
+
+
+
+
+
+
+
+ - Rust 对 Alembic 的字段集覆盖基本完整。
+
+
+
+ - 与 `batch_generation_tasks` 类似，主要问题仍然是 Python 依赖 ORM default，而 Rust 把这些字段理解为可空 Option。
+
+
+
+
+
+
+
+ | 字段 | Alembic | Python ORM | Rust model | 差异类型 | 风险 |
+
+
+
+ |---|---|---|---|---|---|
+
+
+
+ | `id` | `String(36)`, not null, PK | `String(36)`, PK | `String` | 一致 | 低 |
+
+
+
+ | `chapter_id` | not null, FK cascade | not null, FK | `String` | 一致 | 低 |
+
+
+
+ | `analysis_id` | nullable | nullable | `Option<String>` | 一致 | 低 |
+
+
+
+ | `user_id` | not null | not null | `String` | 一致 | 低 |
+
+
+
+ | `project_id` | not null | not null | `String` | 一致 | 低 |
+
+
+
+ | `modification_instructions` | `Text`, not null | `Text`, not null | `String` | 一致 | 低 |
+
+
+
+ | `original_suggestions` | JSON, nullable | JSON, nullable | `Option<Value>` | 一致 | 低 |
+
+
+
+ | `selected_suggestion_indices` | JSON, nullable | JSON, nullable | `Option<Value>` | 一致 | 低 |
+
+
+
+ | `custom_instructions` | `Text`, nullable | `Text`, nullable | `Option<String>` | 一致 | 低 |
+
+
+
+ | `style_id` | nullable | nullable | `Option<i32>` | 一致 | 低 |
+
+
+
+ | `target_word_count` | nullable, **no DB default evidence** | `default=3000` | `Option<i32>` | 默认值语义漂移 | 中 |
+
+
+
+ | `focus_areas` | JSON, nullable | JSON, nullable | `Option<Value>` | 一致 | 低 |
+
+
+
+ | `preserve_elements` | JSON, nullable | JSON, nullable | `Option<Value>` | 一致 | 低 |
+
+
+
+ | `status` | nullable, **no DB default evidence** | `default='pending'` | `Option<String>` | 默认值语义漂移 | 中 |
+
+
+
+ | `progress` | nullable, **no DB default evidence** | `default=0` | `Option<i32>` | 默认值语义漂移 | 中 |
+
+
+
+ | `error_message` | `Text`, nullable | `Text`, nullable | `Option<String>` | 一致 | 低 |
+
+
+
+ | `original_content` | `Text`, nullable | `Text`, nullable | `Option<String>` | 一致 | 低 |
+
+
+
+ | `original_word_count` | nullable | nullable | `Option<i32>` | 一致 | 低 |
+
+
+
+ | `regenerated_content` | `Text`, nullable | `Text`, nullable | `Option<String>` | 一致 | 低 |
+
+
+
+ | `regenerated_word_count` | nullable | nullable | `Option<i32>` | 一致 | 低 |
+
+
+
+ | `version_number` | nullable, **no DB default evidence** | `default=1` | `Option<i32>` | 默认值语义漂移 | 中 |
+
+
+
+ | `version_note` | `String(500)`, nullable | `String(500)`, nullable | `Option<String>` | 长度约束未在 Rust 类型层体现 | 低 |
+
+
+
+ | `created_at` | nullable, server default `now()` | `server_default=func.now()` | `Option<NaiveDateTime>` | 一致 | 低 |
+
+
+
+ | `started_at` | nullable | nullable | `Option<NaiveDateTime>` | 一致 | 低 |
+
+
+
+ | `completed_at` | nullable | nullable | `Option<NaiveDateTime>` | 一致 | 低 |
+
+
+
+
+
+
+
+ ### 结论
+
+
+
+
+
+
+
+ `regeneration_tasks` 当前最值得警惕的是：
+
+
+
+
+
+
+
+ - `target_word_count`
+
+
+
+ - `status`
+
+
+
+ - `progress`
+
+
+
+ - `version_number`
+
+
+
+
+
+
+
+ 这些字段在 Python 语义上往往“应该有默认值”，但在数据库形状上并不一定有等价 server default。
+
+
+
+
+
+
+
+ ---
+
+
+
+
+
+
+
+ ## 5. 当前优先级排序
+
+
+
+
+
+
+
+ 基于本轮字段级比对，建议把后续处理优先级排成：
+
+
+
+
+
+
+
+### P0：立即关注
+
+
+
+
+
+
+
+1. 确保 `20260517_analysis_task_hardening` 与 `20260517_batch_task_defaults` 迁移在目标环境真实执行。
+
+
+
+
+
+
+
+### P1：应继续收紧
+
+
+
+
+
+
+
+2. `batch_generation_tasks.failed_chapters`
+
+
+
+3. `regeneration_tasks` 默认值相关字段
+
+
+
+
+
+
+
+ 这些字段不是结构上缺失，而是需要明确：
+
+
+
+
+
+
+
+ - 由数据库层保证默认值
+
+
+
+ - 还是由 Python / Rust 写路径统一补值
+
+
+
+
+
+
+
+ ### P2：适合做试点 ownership 的低风险表
+
+
+
+
+
+
+
+ 4. `chapter_draft_attempts`
+
+
+
+ 5. `batch_generation_snapshots`
+
+
+
+
+
+
+
+ ---
+
+
+
+
+
+
+
+ ## 6. 建议动作
+
+
+
+
+
+
+
+ ## 6.1 不要先改所有表，先做最小治理闭环
+
+
+
+
+
+
+
+ 建议顺序：
+
+
+
+
+
+
+
+1. 先确保 `analysis_tasks` 与 `batch_generation_tasks` 的硬化迁移真实落库。
+
+
+
+2. 再决定 `batch_generation_tasks.failed_chapters` 与 `regeneration_tasks` 的默认值策略：
+
+
+
+    - DB server default
+
+
+
+    - 统一服务层补值
+
+
+
+3. 之后再选择一张运行时表作为 Rust migration ownership 试点。
+
+
+
+
+
+
+
+ ## 6.2 试点建议
+
+
+
+
+
+
+
+ 如果要选第一张更适合 Rust 逐步接管 schema 演进的表，建议顺序：
+
+
+
+
+
+
+
+ 1. `chapter_draft_attempts`
+
+
+
+ 2. `batch_generation_snapshots`
+
+
+
+
+
+
+
+ 它们的优点：
+
+
+
+
+
+
+
+ - 字段集集中
+
+
+
+ - 对齐度高
+
+
+
+ - 与 Rust 工作流域强绑定
+
+
+
+ - 对共享前台 CRUD 的影响相对小
+
+
+
+
+
+
+
+ ---
+
+
+
+
+
+
+
+ ## 7. 结论
+
+
+
+
+
+
+
+ 这一批运行时热点表的字段级审计可以得出：
+
+
+
+
+
+
+
+ 1. Rust 对字段集覆盖总体没有明显缺失。
+
+
+
+ 2. 当前最真实的风险是 **默认值语义漂移** 与 **可空语义漂移**。
+
+
+
+ 3. `analysis_tasks.progress` 是第一批中最明确的字段级不一致点。
+
+
+
+ 4. `chapter_draft_attempts` 与 `batch_generation_snapshots` 是最适合继续推进 Rust schema ownership 试点的两张表。
+
+
+
+ 5. 后续不应立刻全量迁移 schema ownership，而应先按运行时热点表做小步试点。

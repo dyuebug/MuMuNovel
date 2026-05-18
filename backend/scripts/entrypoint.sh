@@ -73,27 +73,31 @@ fi
 
 echo "Database is ready"
 
-# 运行数据库迁移
-echo "================================================"
-echo "🔄 执行数据库迁移..."
-echo "================================================"
+RUN_DB_MIGRATIONS_ON_STARTUP="${RUN_DB_MIGRATIONS_ON_STARTUP:-true}"
+if [ "$RUN_DB_MIGRATIONS_ON_STARTUP" = "true" ] || [ "$RUN_DB_MIGRATIONS_ON_STARTUP" = "1" ]; then
+    echo "================================================"
+    echo "🔄 执行数据库迁移..."
+    echo "================================================"
 
-cd /app
+    cd /app
 
-echo "Checking Alembic revision health..."
-python tools/check_alembic_revision_health.py
+    echo "Checking Alembic revision health..."
+    python tools/check_alembic_revision_health.py
 
-echo "Ensuring Alembic version table capacity..."
-python tools/ensure_alembic_version_table_capacity.py
+    echo "Ensuring Alembic version table capacity..."
+    python tools/ensure_alembic_version_table_capacity.py
 
-# Use alembic upgrade head for both bootstrap and incremental migrations
-# Alembic handles initial deployment and incremental upgrades automatically
-echo "Upgrading database to latest revision..."
-if python scripts/migrate.py upgrade head; then
-    echo "Database migration completed successfully"
+    # Use alembic upgrade head for both bootstrap and incremental migrations
+    # Alembic handles initial deployment and incremental upgrades automatically
+    echo "Upgrading database to latest revision..."
+    if python scripts/migrate.py upgrade head; then
+        echo "Database migration completed successfully"
+    else
+        echo "Database migration failed"
+        exit 1
+    fi
 else
-    echo "Database migration failed"
-    exit 1
+    echo "Skipping implicit database migration on startup; expecting an explicit migration step."
 fi
 
 echo "================================================"

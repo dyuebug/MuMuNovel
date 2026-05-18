@@ -1,5 +1,5 @@
 """分析任务模型 - 追踪异步章节分析任务状态"""
-from sqlalchemy import Column, String, Integer, Text, DateTime, ForeignKey, Index
+from sqlalchemy import Column, String, Integer, Text, DateTime, ForeignKey, Index, text
 from sqlalchemy.sql import func
 from app.database import Base
 import uuid
@@ -19,8 +19,20 @@ class AnalysisTask(Base):
     project_id = Column(String(36), nullable=False, comment="项目ID")
     
     # 任务状态
-    status = Column(String(20), nullable=False, default='pending', comment="任务状态: pending/running/completed/failed")
-    progress = Column(Integer, default=0, comment="进度 0-100")
+    status = Column(
+        String(20),
+        nullable=False,
+        default='pending',
+        server_default=text("'pending'"),
+        comment="任务状态: pending/running/completed/failed",
+    )
+    progress = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+        comment="进度 0-100",
+    )
     error_message = Column(Text, nullable=True, comment="错误信息")
     
     # 时间戳
