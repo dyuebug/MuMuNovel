@@ -214,37 +214,64 @@
  3. 稳定切流后再移除 Python fallback。
  4. 最后做 schema contract 清理和 Python 退场。
 
+ ### 2026-05-20 阶段补充
+
+ 当前 Phase 5 已不再停留在“只做规划”的状态，而是进入了
+ “治理资产 + 窄切片 Rust 开发并行推进”的阶段：
+
+ 1. `deploy/strangler-gateway-probes.json`、P0/P1 ownership checklist、
+    parity matrix、rollback runbook 已形成第一版可执行治理资产。
+ 2. `phase5-p0` / `phase5-p0-fallback` / `phase5-p0-asymmetric`
+    已经可以独立验证，不再只依赖口头 owner 判断。
+ 3. 对 `chapters` 来说，当前更合理的推进方式不是立即移除 Python fallback，
+    而是在治理资产足够的前提下，继续做小范围、可验证、行为保持的 Rust
+    seam 收口。
+ 4. 因此本阶段允许进入 `backend-rs` 的低风险开发切片，但约束仍然不变：
+    - 只做小步行为保持重构
+    - 优先 `chapter_batch_generation` / `chapter_generation` 邻近 seam
+    - 每次切片都要配 `cargo check` 与 focused tests
+    - 不把 Phase 5 治理工作和新的业务扩张绑在一起
+
  ---
 
- ## 6. 本轮执行策略
+ ## 6. 执行策略
 
- 本轮只实施 **Phase 1：迁移控制面硬化**。
+ 执行顺序已从最初的 “先只做 Phase 1” 演进为：
 
- 原因：
+ 1. 先完成 Phase 1 / 2 / 4 的基础收口，确保 deploy、schema owner、
+    startup/runtime guardrails 不再漂移。
+ 2. 以 Phase 5 的 route-group 治理资产作为切流判断基础。
+ 3. 在不破坏外部契约的前提下，持续推进 Phase 3 风格的
+    `backend-rs` 窄切片重构，优先服务于 `chapters` 域的 cutover 信心。
 
- - 它是后续继续迁移更多域之前的最低成本高收益步骤。
- - 它不需要马上重写高风险业务域。
- - 它能显著提升部署可验证性与回滚信心。
+ 这意味着当前轮次不再限制为“只增强迁移控制面”，而是允许：
+
+ - 继续补 owner / fallback / asymmetric 证据
+ - 同时进入低风险 Rust seam 收口开发
+ - 但仍禁止扩大业务面或提前移除 Python fallback
 
  ---
 
- ## 7. 本轮交付物
+ ## 7. 当前交付物
 
- 计划交付以下内容：
+ 当前已形成或正在持续扩充的交付物：
 
  1. 本规划文档
  2. strangler 路由/探针 manifest
  3. `deploy-strangler.ps1` 中的 gateway smoke 集成
  4. 输出到 `tmp/smoke/` 的结构化 smoke 结果
+ 5. Phase 5 P0/P1 ownership checklist / parity matrix / rollback runbook
+ 6. 基于上述治理资产推进的 `backend-rs` 小步 seam 收口切片
 
  ---
 
- ## 8. 成功标准
+ ## 8. 当前成功标准
 
- 满足以下条件视为本轮完成：
+ 当前阶段满足以下条件，才可视为进入“可持续推进 Rust 迁移”的状态：
 
  - 部署脚本具备结构化 gateway smoke 步骤
  - Rust 与 Python fallback 至少各有一个 through-gateway 探针
  - smoke 结果落盘到 `tmp/smoke/`
  - 探针失败时部署脚本会终止并保留诊断
- - 本次变更不扩大 Rust 业务面，只增强迁移控制面
+ - 关键 route group 已具备 owner / fallback / asymmetric 的最小治理资产
+ - `backend-rs` 的新切片可以在不改变外部行为的前提下持续落地并验证
