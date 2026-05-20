@@ -351,7 +351,8 @@ impl SettingsService {
                     normalize_non_empty_string(body.get("llm_model").and_then(|v| v.as_str()))
                 {
                     active.llm_model = Set(v);
-                } else if body.get("provider_type").is_some() || body.get("api_provider").is_some() {
+                } else if body.get("provider_type").is_some() || body.get("api_provider").is_some()
+                {
                     active.llm_model = Set(default_model_for_provider(&target_provider));
                 }
                 if let Some(v) = body.get("temperature").and_then(|v| v.as_f64()) {
@@ -436,17 +437,17 @@ impl SettingsService {
                         .get("azure_api_version")
                         .and_then(|v| v.as_str())
                         .map(String::from)),
-                    llm_model: Set(
-                        normalize_non_empty_string(body.get("llm_model").and_then(|v| v.as_str()))
-                            .unwrap_or_else(|| {
-                                let provider = body
-                                    .get("provider_type")
-                                    .and_then(|v| v.as_str())
-                                    .or_else(|| body.get("api_provider").and_then(|v| v.as_str()))
-                                    .unwrap_or(&default_provider);
-                                default_model_for_provider(provider)
-                            }),
-                    ),
+                    llm_model: Set(normalize_non_empty_string(
+                        body.get("llm_model").and_then(|v| v.as_str()),
+                    )
+                    .unwrap_or_else(|| {
+                        let provider = body
+                            .get("provider_type")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| body.get("api_provider").and_then(|v| v.as_str()))
+                            .unwrap_or(&default_provider);
+                        default_model_for_provider(provider)
+                    })),
                     temperature: Set(body
                         .get("temperature")
                         .and_then(|v| v.as_f64())

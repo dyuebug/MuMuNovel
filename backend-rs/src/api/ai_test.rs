@@ -52,7 +52,9 @@ async fn test_ai(
         .generate_text(&body.prompt, body.system_prompt.as_deref(), None)
         .await
     {
-        Ok(resp) => Ok(Json(json!({"success": true, "probe_max_tokens": probe_max_tokens, "data": resp}))),
+        Ok(resp) => Ok(Json(
+            json!({"success": true, "probe_max_tokens": probe_max_tokens, "data": resp}),
+        )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"success": false, "probe_max_tokens": probe_max_tokens, "message": e})),

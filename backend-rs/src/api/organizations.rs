@@ -124,12 +124,9 @@ async fn load_organization_prompt_template(
 ) -> Result<String, String> {
     let _ = PromptTemplateService::sync_managed_templates_for_user(db, user_id).await;
 
-    if let Some(template) = PromptTemplateService::find_user_template(
-        db,
-        user_id,
-        "SINGLE_ORGANIZATION_GENERATION",
-    )
-    .await?
+    if let Some(template) =
+        PromptTemplateService::find_user_template(db, user_id, "SINGLE_ORGANIZATION_GENERATION")
+            .await?
     {
         if template.is_active {
             let content = template.template_content.trim();
@@ -895,7 +892,10 @@ async fn delete_member(
 pub fn routes() -> Router {
     Router::new()
         .route("/organizations", post(create_org).get(list_orgs))
-        .route("/organizations/generate-stream", post(generate_org_stream_legacy))
+        .route(
+            "/organizations/generate-stream",
+            post(generate_org_stream_legacy),
+        )
         .route(
             "/organizations/project/{project_id}",
             get(list_project_orgs),

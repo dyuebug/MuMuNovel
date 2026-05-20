@@ -6,12 +6,8 @@ use crate::ai::service::AIService;
 use crate::ai::types::AIResponse;
 use crate::models::chapter;
 use crate::services::chapter_generation_context_service::load_generation_context;
-use crate::services::chapter_generation_prompt_context_provider_service::{
-    resolve_default_prompt_context_provider_payload, PromptContextProviderPayload,
-};
-use crate::services::chapter_generation_prompt_service::{
-    build_prompt_with_provider_payload,
-};
+use crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload;
+use crate::services::chapter_generation_prompt_service::build_prompt_with_provider_payload;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GeneratedChapterPersistencePlan {
@@ -56,10 +52,7 @@ async fn persist_generated_chapter_content(
     active.word_count = Set(plan.word_count);
     active.status = Set(plan.next_status);
     active.updated_at = Set(Some(Utc::now().naive_utc()));
-    active
-        .update(db)
-        .await
-        .map_err(|error| error.to_string())?;
+    active.update(db).await.map_err(|error| error.to_string())?;
 
     Ok(plan.response_payload)
 }
@@ -89,32 +82,11 @@ pub async fn generate_and_persist_chapter_content_with_provider_payload(
     persist_generated_chapter_content(db, chapter_model, response).await
 }
 
-pub async fn generate_and_persist_chapter_content(
-    db: &DatabaseConnection,
-    user_ai_service: &AIService,
-    user_id: &str,
-    chapter_id: &str,
-    target_word_count: i32,
-) -> Result<Value, String> {
-    generate_and_persist_chapter_content_with_provider_payload(
-        db,
-        user_ai_service,
-        user_id,
-        chapter_id,
-        target_word_count,
-        resolve_default_prompt_context_provider_payload(),
-    )
-    .await
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        prepare_generated_chapter_persistence_plan,
-    };
+    use super::prepare_generated_chapter_persistence_plan;
     use crate::ai::types::AIResponse;
     use crate::models::chapter;
-    use crate::services::chapter_generation_prompt_context_provider_service::resolve_default_prompt_context_provider_payload;
     use chrono::Utc;
 
     fn build_chapter() -> chapter::Model {
@@ -133,15 +105,6 @@ mod tests {
             created_at: Utc::now().naive_utc(),
             updated_at: None,
         }
-    }
-
-    #[test]
-    fn should_resolve_default_prompt_context_provider_payload() {
-        let payload = resolve_default_prompt_context_provider_payload();
-
-        assert_eq!(payload.characters_info, "[]");
-        assert_eq!(payload.foreshadow_reminders, "[]");
-        assert_eq!(payload.relevant_memories, "[]");
     }
 
     #[test]

@@ -1,9 +1,9 @@
 use chrono::Utc;
-use serde::Serialize;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect, Set, TransactionTrait,
 };
+use serde::Serialize;
 use uuid::Uuid;
 
 use crate::models::{

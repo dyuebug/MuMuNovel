@@ -14,8 +14,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::ai::service::AIService;
-use crate::services::plot_expansion_service::create_plot_expansion_service;
 use crate::services::auth::Claims;
+use crate::services::plot_expansion_service::create_plot_expansion_service;
 use crate::services::settings_service::SettingsService;
 use crate::services::wizard_service;
 use crate::tasks::checkpoint::touch_checkpoint;
@@ -126,11 +126,7 @@ pub async fn create_task(
         payload,
     );
 
-    (
-        StatusCode::CREATED,
-        Json(compatible_task_payload(&record)),
-    )
-        .into_response()
+    (StatusCode::CREATED, Json(compatible_task_payload(&record))).into_response()
 }
 
 fn spawn_task_execution(
@@ -142,23 +138,10 @@ fn spawn_task_execution(
 ) {
     tokio::spawn(async move {
         mark_task_running(&registry, &stream_hub, &record.task_id, "任务已开始执行").await;
-        let result = execute_task(
-            &db,
-            &registry,
-            &stream_hub,
-            &record,
-            payload,
-        )
-        .await;
+        let result = execute_task(&db, &registry, &stream_hub, &record, payload).await;
 
         if let Err(error) = result {
-            fail_task(
-                &registry,
-                &stream_hub,
-                &record.task_id,
-                &error,
-            )
-            .await;
+            fail_task(&registry, &stream_hub, &record.task_id, &error).await;
         }
     });
 }
@@ -182,15 +165,18 @@ async fn mark_task_running(
         .await;
 
     if let Some(record) = updated {
-        stream_hub.fanout(task_id, &TaskEvent {
-            event_type: "progress".into(),
-            task_id: Some(task_id.to_string()),
-            message: Some(record.message),
-            progress: Some(record.progress),
-            status: Some(record.status.to_string()),
-            data: None,
-            error: None,
-        });
+        stream_hub.fanout(
+            task_id,
+            &TaskEvent {
+                event_type: "progress".into(),
+                task_id: Some(task_id.to_string()),
+                message: Some(record.message),
+                progress: Some(record.progress),
+                status: Some(record.status.to_string()),
+                data: None,
+                error: None,
+            },
+        );
     }
 }
 
@@ -214,24 +200,30 @@ async fn complete_task(
         .await;
 
     if let Some(record) = updated {
-        stream_hub.fanout(task_id, &TaskEvent {
-            event_type: "result".into(),
-            task_id: Some(task_id.to_string()),
-            message: Some(record.message.clone()),
-            progress: Some(record.progress),
-            status: Some(record.status.to_string()),
-            data: record.result.clone(),
-            error: None,
-        });
-        stream_hub.fanout(task_id, &TaskEvent {
-            event_type: "done".into(),
-            task_id: Some(task_id.to_string()),
-            message: Some(record.message),
-            progress: Some(100),
-            status: Some("completed".into()),
-            data: record.result,
-            error: None,
-        });
+        stream_hub.fanout(
+            task_id,
+            &TaskEvent {
+                event_type: "result".into(),
+                task_id: Some(task_id.to_string()),
+                message: Some(record.message.clone()),
+                progress: Some(record.progress),
+                status: Some(record.status.to_string()),
+                data: record.result.clone(),
+                error: None,
+            },
+        );
+        stream_hub.fanout(
+            task_id,
+            &TaskEvent {
+                event_type: "done".into(),
+                task_id: Some(task_id.to_string()),
+                message: Some(record.message),
+                progress: Some(100),
+                status: Some("completed".into()),
+                data: record.result,
+                error: None,
+            },
+        );
     }
 }
 
@@ -252,15 +244,18 @@ async fn fail_task(
         .await;
 
     if let Some(record) = updated {
-        stream_hub.fanout(task_id, &TaskEvent {
-            event_type: "error".into(),
-            task_id: Some(task_id.to_string()),
-            message: Some(record.message.clone()),
-            progress: Some(record.progress),
-            status: Some(record.status.to_string()),
-            data: None,
-            error: record.error,
-        });
+        stream_hub.fanout(
+            task_id,
+            &TaskEvent {
+                event_type: "error".into(),
+                task_id: Some(task_id.to_string()),
+                message: Some(record.message.clone()),
+                progress: Some(record.progress),
+                status: Some(record.status.to_string()),
+                data: None,
+                error: record.error,
+            },
+        );
     }
 }
 
@@ -272,11 +267,7 @@ async fn sync_channel_state_to_task(
     result_capture: Arc<Mutex<Option<serde_json::Value>>>,
 ) -> Result<serde_json::Value, String> {
     let state = state_capture.lock().await.clone();
-    let result = result_capture
-        .lock()
-        .await
-        .clone()
-        .or(state.result.clone());
+    let result = result_capture.lock().await.clone().or(state.result.clone());
 
     if let Some(error) = state.error {
         return Err(error);
@@ -300,15 +291,18 @@ async fn sync_channel_state_to_task(
         .await;
 
     if let Some(record) = updated {
-        stream_hub.fanout(task_id, &TaskEvent {
-            event_type: "progress".into(),
-            task_id: Some(task_id.to_string()),
-            message: Some(record.message),
-            progress: Some(record.progress),
-            status: Some(record.status.to_string()),
-            data: None,
-            error: None,
-        });
+        stream_hub.fanout(
+            task_id,
+            &TaskEvent {
+                event_type: "progress".into(),
+                task_id: Some(task_id.to_string()),
+                message: Some(record.message),
+                progress: Some(record.progress),
+                status: Some(record.status.to_string()),
+                data: None,
+                error: None,
+            },
+        );
     }
 
     result.ok_or_else(|| "后台任务未返回结果".to_string())
@@ -323,40 +317,105 @@ async fn execute_task(
 ) -> Result<(), String> {
     match record.task_type.as_str() {
         "wizard_world_building" => {
-            let result = run_wizard_world_building(db, registry, stream_hub, record, payload).await?;
-            complete_task(registry, stream_hub, &record.task_id, result, Some("世界观生成完成".to_string())).await;
+            let result =
+                run_wizard_world_building(db, registry, stream_hub, record, payload).await?;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("世界观生成完成".to_string()),
+            )
+            .await;
         }
         "wizard_career_system" | "careers_generate_system" => {
-            let result = run_wizard_career_system(db, registry, stream_hub, record, payload).await?;
-            complete_task(registry, stream_hub, &record.task_id, result, Some("职业体系生成完成".to_string())).await;
+            let result =
+                run_wizard_career_system(db, registry, stream_hub, record, payload).await?;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("职业体系生成完成".to_string()),
+            )
+            .await;
         }
         "wizard_characters" => {
             let result = run_wizard_characters(db, registry, stream_hub, record, payload).await?;
-            complete_task(registry, stream_hub, &record.task_id, result, Some("角色生成完成".to_string())).await;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("角色生成完成".to_string()),
+            )
+            .await;
         }
         "wizard_outline" | "outline_generate" => {
             let result = run_wizard_outline(db, registry, stream_hub, record, payload).await?;
-            complete_task(registry, stream_hub, &record.task_id, result, Some("大纲生成完成".to_string())).await;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("大纲生成完成".to_string()),
+            )
+            .await;
         }
         "world_regenerate" => {
             let result = run_world_regenerate(db, registry, stream_hub, record, payload).await?;
-            complete_task(registry, stream_hub, &record.task_id, result, Some("世界观重生成完成".to_string())).await;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("世界观重生成完成".to_string()),
+            )
+            .await;
         }
         "outline_expand" => {
             let result = run_outline_expand(db, record, payload).await?;
-            complete_task(registry, stream_hub, &record.task_id, result, Some("大纲展开完成".to_string())).await;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("大纲展开完成".to_string()),
+            )
+            .await;
         }
         "outline_batch_expand" => {
             let result = run_outline_batch_expand(db, record, payload).await?;
-            complete_task(registry, stream_hub, &record.task_id, result, Some("批量展开完成".to_string())).await;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("批量展开完成".to_string()),
+            )
+            .await;
         }
         "character_generate" => {
             let result = run_character_generate(db, record, payload).await?;
-            complete_task(registry, stream_hub, &record.task_id, result, Some("角色生成完成".to_string())).await;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("角色生成完成".to_string()),
+            )
+            .await;
         }
         "organization_generate" => {
             let result = run_organization_generate(db, record, payload).await?;
-            complete_task(registry, stream_hub, &record.task_id, result, Some("组织生成完成".to_string())).await;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("组织生成完成".to_string()),
+            )
+            .await;
         }
         other => {
             return Err(format!("unsupported task type: {}", other));
@@ -408,7 +467,14 @@ async fn run_wizard_world_building(
 
     drop(channel);
     let _ = drain_handle.await;
-    sync_channel_state_to_task(registry, stream_hub, &record.task_id, state_capture, result_capture).await
+    sync_channel_state_to_task(
+        registry,
+        stream_hub,
+        &record.task_id,
+        state_capture,
+        result_capture,
+    )
+    .await
 }
 
 async fn run_wizard_career_system(
@@ -438,7 +504,14 @@ async fn run_wizard_career_system(
 
     drop(channel);
     let _ = drain_handle.await;
-    sync_channel_state_to_task(registry, stream_hub, &record.task_id, state_capture, result_capture).await
+    sync_channel_state_to_task(
+        registry,
+        stream_hub,
+        &record.task_id,
+        state_capture,
+        result_capture,
+    )
+    .await
 }
 
 async fn run_wizard_characters(
@@ -473,7 +546,14 @@ async fn run_wizard_characters(
 
     drop(channel);
     let _ = drain_handle.await;
-    sync_channel_state_to_task(registry, stream_hub, &record.task_id, state_capture, result_capture).await
+    sync_channel_state_to_task(
+        registry,
+        stream_hub,
+        &record.task_id,
+        state_capture,
+        result_capture,
+    )
+    .await
 }
 
 async fn run_wizard_outline(
@@ -513,7 +593,14 @@ async fn run_wizard_outline(
 
     drop(channel);
     let _ = drain_handle.await;
-    sync_channel_state_to_task(registry, stream_hub, &record.task_id, state_capture, result_capture).await
+    sync_channel_state_to_task(
+        registry,
+        stream_hub,
+        &record.task_id,
+        state_capture,
+        result_capture,
+    )
+    .await
 }
 
 async fn run_world_regenerate(
@@ -550,7 +637,14 @@ async fn run_world_regenerate(
 
     drop(channel);
     let _ = drain_handle.await;
-    sync_channel_state_to_task(registry, stream_hub, &record.task_id, state_capture, result_capture).await
+    sync_channel_state_to_task(
+        registry,
+        stream_hub,
+        &record.task_id,
+        state_capture,
+        result_capture,
+    )
+    .await
 }
 
 async fn run_outline_expand(
@@ -589,7 +683,8 @@ async fn run_outline_expand(
         .filter(|value| *value > 0)
         .unwrap_or(5) as usize;
 
-    let ai_config = SettingsService::build_ai_config(db, &record.user_id, provider, model, None).await?;
+    let ai_config =
+        SettingsService::build_ai_config(db, &record.user_id, provider, model, None).await?;
     let ai_service = AIService::new(ai_config);
     let service = create_plot_expansion_service(&ai_service);
     service
@@ -631,14 +726,18 @@ async fn run_outline_batch_expand(
         .unwrap_or(false);
     let provider = payload.get("provider").and_then(|value| value.as_str());
     let model = payload.get("model").and_then(|value| value.as_str());
-    let outline_ids = payload.get("outline_ids").and_then(|value| value.as_array()).map(|items| {
-        items
-            .iter()
-            .filter_map(|item| item.as_str().map(ToString::to_string))
-            .collect::<Vec<_>>()
-    });
+    let outline_ids = payload
+        .get("outline_ids")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(ToString::to_string))
+                .collect::<Vec<_>>()
+        });
 
-    let ai_config = SettingsService::build_ai_config(db, &record.user_id, provider, model, None).await?;
+    let ai_config =
+        SettingsService::build_ai_config(db, &record.user_id, provider, model, None).await?;
     let ai_service = AIService::new(ai_config);
     let service = create_plot_expansion_service(&ai_service);
     service
@@ -751,11 +850,7 @@ pub async fn get_task(
                 )
                     .into_response();
             }
-            (
-                StatusCode::OK,
-                Json(compatible_task_payload(&record)),
-            )
-                .into_response()
+            (StatusCode::OK, Json(compatible_task_payload(&record))).into_response()
         }
         None => (
             StatusCode::OK,

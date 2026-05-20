@@ -2,9 +2,7 @@ use std::collections::HashMap;
 
 use crate::models::{chapter, project};
 use crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload;
-use crate::services::chapter_generation_prompt_context_service::{
-    build_prompt_context_params_with_provider_payload,
-};
+use crate::services::chapter_generation_prompt_context_service::build_prompt_context_params_with_provider_payload;
 
 pub fn build_prompt_params_with_provider_payload(
     chapter_model: &chapter::Model,

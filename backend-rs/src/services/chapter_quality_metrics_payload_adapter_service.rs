@@ -22,3 +22,54 @@ pub fn build_chapter_quality_metrics_payload(
         "quality_profile_summary": Value::Null,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{build_chapter_quality_metrics_payload, ChapterQualityMetricsFragments};
+
+    #[test]
+    fn should_build_chapter_quality_metrics_payload_with_metrics() {
+        let payload = build_chapter_quality_metrics_payload(
+            "chapter-1",
+            ChapterQualityMetricsFragments {
+                latest_quality_metrics: Some(json!({"score": 91})),
+                history_id: Some("history-1".to_string()),
+                generated_at: Some("2026-05-17T12:30:45".to_string()),
+                quality_metrics_summary: Some(json!({"summary": "ok"})),
+            },
+        );
+
+        assert_eq!(payload["chapter_id"], "chapter-1");
+        assert_eq!(payload["has_metrics"], true);
+        assert_eq!(payload["latest_metrics"], json!({"score": 91}));
+        assert_eq!(payload["latest_quality_metrics"], json!({"score": 91}));
+        assert_eq!(payload["history_id"], "history-1");
+        assert_eq!(payload["generated_at"], "2026-05-17T12:30:45");
+        assert_eq!(payload["quality_metrics_summary"], json!({"summary": "ok"}));
+        assert!(payload["quality_profile_summary"].is_null());
+    }
+
+    #[test]
+    fn should_build_chapter_quality_metrics_payload_without_metrics() {
+        let payload = build_chapter_quality_metrics_payload(
+            "chapter-1",
+            ChapterQualityMetricsFragments {
+                latest_quality_metrics: None,
+                history_id: None,
+                generated_at: None,
+                quality_metrics_summary: None,
+            },
+        );
+
+        assert_eq!(payload["chapter_id"], "chapter-1");
+        assert_eq!(payload["has_metrics"], false);
+        assert!(payload["latest_metrics"].is_null());
+        assert!(payload["latest_quality_metrics"].is_null());
+        assert!(payload["history_id"].is_null());
+        assert!(payload["generated_at"].is_null());
+        assert!(payload["quality_metrics_summary"].is_null());
+        assert!(payload["quality_profile_summary"].is_null());
+    }
+}

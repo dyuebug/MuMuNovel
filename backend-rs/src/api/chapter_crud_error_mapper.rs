@@ -1,18 +1,15 @@
 use axum::{http::StatusCode, Json};
 use serde_json::{json, Value};
 
-use crate::services::chapter_crud_service::{
+use crate::services::chapter_crud_workflow_service::{
     CreateChapterPayloadError, DeleteChapterPayloadError, GetChapterPayloadError,
-    ListChaptersByProjectPathPayloadError, ListChaptersPayloadError,
-    UpdateChapterPayloadError, UpdateExpansionPlanPayloadError,
+    ListChaptersByProjectPathPayloadError, ListChaptersPayloadError, UpdateChapterPayloadError,
+    UpdateExpansionPlanPayloadError,
 };
 
 pub type ChapterCrudRouteError = (StatusCode, Json<Value>);
 
-fn success_message_error(
-    status: StatusCode,
-    message: impl Into<String>,
-) -> ChapterCrudRouteError {
+fn success_message_error(status: StatusCode, message: impl Into<String>) -> ChapterCrudRouteError {
     (
         status,
         Json(json!({
@@ -26,31 +23,33 @@ fn detail_error(status: StatusCode, detail: impl Into<String>) -> ChapterCrudRou
     (status, Json(json!({ "detail": detail.into() })))
 }
 
-pub fn map_create_chapter_payload_error(
-    error: CreateChapterPayloadError,
-) -> ChapterCrudRouteError {
+fn internal_success_message_error(detail: impl Into<String>) -> ChapterCrudRouteError {
+    success_message_error(StatusCode::INTERNAL_SERVER_ERROR, detail)
+}
+
+fn project_not_found_or_access_denied_message_error() -> ChapterCrudRouteError {
+    success_message_error(StatusCode::NOT_FOUND, "Project not found or access denied")
+}
+
+fn chapter_not_found_or_access_denied_message_error() -> ChapterCrudRouteError {
+    success_message_error(StatusCode::NOT_FOUND, "Chapter not found or access denied")
+}
+
+pub fn map_create_chapter_payload_error(error: CreateChapterPayloadError) -> ChapterCrudRouteError {
     match error {
-        CreateChapterPayloadError::ProjectNotFound => success_message_error(
-            StatusCode::NOT_FOUND,
-            "Project not found or access denied",
-        ),
-        CreateChapterPayloadError::Internal(detail) => {
-            success_message_error(StatusCode::INTERNAL_SERVER_ERROR, detail)
+        CreateChapterPayloadError::ProjectNotFound => {
+            project_not_found_or_access_denied_message_error()
         }
+        CreateChapterPayloadError::Internal(detail) => internal_success_message_error(detail),
     }
 }
 
-pub fn map_list_chapters_payload_error(
-    error: ListChaptersPayloadError,
-) -> ChapterCrudRouteError {
+pub fn map_list_chapters_payload_error(error: ListChaptersPayloadError) -> ChapterCrudRouteError {
     match error {
-        ListChaptersPayloadError::ProjectNotFound => success_message_error(
-            StatusCode::NOT_FOUND,
-            "Project not found or access denied",
-        ),
-        ListChaptersPayloadError::Internal(detail) => {
-            success_message_error(StatusCode::INTERNAL_SERVER_ERROR, detail)
+        ListChaptersPayloadError::ProjectNotFound => {
+            project_not_found_or_access_denied_message_error()
         }
+        ListChaptersPayloadError::Internal(detail) => internal_success_message_error(detail),
     }
 }
 
@@ -69,41 +68,28 @@ pub fn map_list_chapters_by_project_path_payload_error(
 
 pub fn map_get_chapter_payload_error(error: GetChapterPayloadError) -> ChapterCrudRouteError {
     match error {
-        GetChapterPayloadError::ChapterNotFound => success_message_error(
-            StatusCode::NOT_FOUND,
-            "Chapter not found or access denied",
-        ),
-        GetChapterPayloadError::Internal(detail) => {
-            success_message_error(StatusCode::INTERNAL_SERVER_ERROR, detail)
+        GetChapterPayloadError::ChapterNotFound => {
+            chapter_not_found_or_access_denied_message_error()
         }
+        GetChapterPayloadError::Internal(detail) => internal_success_message_error(detail),
     }
 }
 
-pub fn map_update_chapter_payload_error(
-    error: UpdateChapterPayloadError,
-) -> ChapterCrudRouteError {
+pub fn map_update_chapter_payload_error(error: UpdateChapterPayloadError) -> ChapterCrudRouteError {
     match error {
-        UpdateChapterPayloadError::ChapterNotFound => success_message_error(
-            StatusCode::NOT_FOUND,
-            "Chapter not found or access denied",
-        ),
-        UpdateChapterPayloadError::Internal(detail) => {
-            success_message_error(StatusCode::INTERNAL_SERVER_ERROR, detail)
+        UpdateChapterPayloadError::ChapterNotFound => {
+            chapter_not_found_or_access_denied_message_error()
         }
+        UpdateChapterPayloadError::Internal(detail) => internal_success_message_error(detail),
     }
 }
 
-pub fn map_delete_chapter_payload_error(
-    error: DeleteChapterPayloadError,
-) -> ChapterCrudRouteError {
+pub fn map_delete_chapter_payload_error(error: DeleteChapterPayloadError) -> ChapterCrudRouteError {
     match error {
-        DeleteChapterPayloadError::ChapterNotFound => success_message_error(
-            StatusCode::NOT_FOUND,
-            "Chapter not found or access denied",
-        ),
-        DeleteChapterPayloadError::Internal(detail) => {
-            success_message_error(StatusCode::INTERNAL_SERVER_ERROR, detail)
+        DeleteChapterPayloadError::ChapterNotFound => {
+            chapter_not_found_or_access_denied_message_error()
         }
+        DeleteChapterPayloadError::Internal(detail) => internal_success_message_error(detail),
     }
 }
 
@@ -111,12 +97,9 @@ pub fn map_update_expansion_plan_payload_error(
     error: UpdateExpansionPlanPayloadError,
 ) -> ChapterCrudRouteError {
     match error {
-        UpdateExpansionPlanPayloadError::ChapterNotFound => success_message_error(
-            StatusCode::NOT_FOUND,
-            "Chapter not found or access denied",
-        ),
-        UpdateExpansionPlanPayloadError::Internal(detail) => {
-            success_message_error(StatusCode::INTERNAL_SERVER_ERROR, detail)
+        UpdateExpansionPlanPayloadError::ChapterNotFound => {
+            chapter_not_found_or_access_denied_message_error()
         }
+        UpdateExpansionPlanPayloadError::Internal(detail) => internal_success_message_error(detail),
     }
 }

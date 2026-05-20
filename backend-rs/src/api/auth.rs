@@ -24,6 +24,9 @@ use chrono::Utc;
 
 const OAUTH_STATE_TTL: Duration = Duration::from_secs(300);
 const OAUTH_STATE_COOKIE: &str = "oauth_states";
+const DEFAULT_COOKIE_MAX_AGE: i64 = 604800;
+const COOKIE_PATH: &str = "/";
+const COOKIE_SAME_SITE: &str = "Lax";
 
 #[derive(Deserialize)]
 struct LoginRequest {
@@ -38,9 +41,19 @@ struct AuthQuery {
     error: Option<String>,
 }
 
+struct CookieSpec<'a> {
+    name: &'a str,
+    value: &'a str,
+    max_age: i64,
+    http_only: bool,
+}
+
 fn auth_redirect_uri(cfg: &AppConfig) -> String {
     if cfg.linuxdo_redirect_uri.trim().is_empty() {
-        format!("{}/api/auth/callback", cfg.frontend_url.trim_end_matches('/'))
+        format!(
+            "{}/api/auth/callback",
+            cfg.frontend_url.trim_end_matches('/')
+        )
     } else {
         cfg.linuxdo_redirect_uri.trim().to_string()
     }
@@ -203,34 +216,62 @@ async fn create_or_update_linuxdo_user(
 }
 
 fn set_cookie(response: &mut Response, name: &str, value: &str) {
-    set_cookie_with_max_age(response, name, value, 604800);
+    set_cookie_with_max_age(response, name, value, DEFAULT_COOKIE_MAX_AGE);
+}
+
+fn render_cookie(spec: &CookieSpec<'_>) -> String {
+    let mut parts = vec![
+        format!("{}={}", spec.name, spec.value),
+        format!("Path={}", COOKIE_PATH),
+    ];
+    if spec.http_only {
+        parts.push("HttpOnly".to_string());
+    }
+    parts.push(format!("SameSite={}", COOKIE_SAME_SITE));
+    parts.push(format!("Max-Age={}", spec.max_age));
+    parts.join("; ")
+}
+
+fn append_cookie(response: &mut Response, spec: CookieSpec<'_>) {
+    response
+        .headers_mut()
+        .append(header::SET_COOKIE, render_cookie(&spec).parse().unwrap());
 }
 
 fn set_cookie_with_max_age(response: &mut Response, name: &str, value: &str, max_age: i64) {
-    let cookie = format!(
-        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
-        name, value, max_age
+    append_cookie(
+        response,
+        CookieSpec {
+            name,
+            value,
+            max_age,
+            http_only: true,
+        },
     );
-    response
-        .headers_mut()
-        .append(header::SET_COOKIE, cookie.parse().unwrap());
 }
 
 fn set_cookie_non_httponly(response: &mut Response, name: &str, value: &str, max_age: i64) {
-    let cookie = format!(
-        "{}={}; Path=/; SameSite=Lax; Max-Age={}",
-        name, value, max_age
+    append_cookie(
+        response,
+        CookieSpec {
+            name,
+            value,
+            max_age,
+            http_only: false,
+        },
     );
-    response
-        .headers_mut()
-        .append(header::SET_COOKIE, cookie.parse().unwrap());
 }
 
 fn clear_cookie(response: &mut Response, name: &str) {
-    let cookie = format!("{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0", name);
-    response
-        .headers_mut()
-        .append(header::SET_COOKIE, cookie.parse().unwrap());
+    append_cookie(
+        response,
+        CookieSpec {
+            name,
+            value: "",
+            max_age: 0,
+            http_only: true,
+        },
+    );
 }
 
 async fn login(
@@ -379,15 +420,24 @@ async fn get_linuxdo_callback(
     headers: HeaderMap,
 ) -> Result<Response, (StatusCode, Json<Value>)> {
     if let Some(error) = query.error {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({
-            "detail": format!("授权失败: {}", error)
-        }))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "detail": format!("授权失败: {}", error)
+            })),
+        ));
     }
     let Some(code) = query.code else {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"detail": "缺少 code 参数"}))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "缺少 code 参数"})),
+        ));
     };
     let Some(state) = query.state else {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"detail": "缺少 state 参数"}))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "缺少 state 参数"})),
+        ));
     };
     let mut states = retain_valid_oauth_states(&cfg, read_oauth_states_from_headers(&headers));
     if !is_oauth_state_valid(&cfg, &state) || !states.iter().any(|item| item == &state) {
@@ -404,14 +454,22 @@ async fn get_linuxdo_callback(
         .post(linuxdo_token_url())
         .form(&HashMap::from([
             ("client_id".to_string(), cfg.linuxdo_client_id.clone()),
-            ("client_secret".to_string(), cfg.linuxdo_client_secret.clone()),
+            (
+                "client_secret".to_string(),
+                cfg.linuxdo_client_secret.clone(),
+            ),
             ("code".to_string(), code.clone()),
             ("grant_type".to_string(), "authorization_code".to_string()),
             ("redirect_uri".to_string(), redirect_uri),
         ]))
         .send()
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(json!({"detail": e.to_string()}))))?;
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"detail": e.to_string()})),
+            )
+        })?;
     if !token_resp.status().is_success() {
         return Err((
             StatusCode::BAD_GATEWAY,
@@ -465,7 +523,13 @@ async fn get_linuxdo_callback(
         .get("id")
         .and_then(Value::as_i64)
         .map(|v| v.to_string())
-        .unwrap_or_else(|| user_json.get("id").and_then(Value::as_str).unwrap_or_default().to_string());
+        .unwrap_or_else(|| {
+            user_json
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        });
     let username = user_json
         .get("username")
         .and_then(Value::as_str)
@@ -477,7 +541,10 @@ async fn get_linuxdo_callback(
         .filter(|v| !v.is_empty())
         .unwrap_or(&username)
         .to_string();
-    let avatar_url = user_json.get("avatar_url").and_then(Value::as_str).map(str::to_string);
+    let avatar_url = user_json
+        .get("avatar_url")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let trust_level = user_json
         .get("trust_level")
         .and_then(Value::as_i64)
@@ -492,7 +559,12 @@ async fn get_linuxdo_callback(
         trust_level,
     )
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e}))))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": e})),
+        )
+    })?;
     let is_first_login = user_password::Entity::find_by_id(&user.user_id)
         .one(&db)
         .await
@@ -505,9 +577,12 @@ async fn get_linuxdo_callback(
         .is_none();
 
     let auth = AuthService::new(&cfg.jwt_secret);
-    let token = auth
-        .create_token(&user)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e.to_string()}))))?;
+    let token = auth.create_token(&user).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"detail": e.to_string()})),
+        )
+    })?;
 
     let redirect_to = format!("{}/auth/callback", cfg.frontend_url.trim_end_matches('/'));
     let mut response = axum::response::Redirect::to(&redirect_to).into_response();
@@ -516,7 +591,12 @@ async fn get_linuxdo_callback(
     set_cookie(&mut response, "token", &token);
     set_cookie_with_max_age(&mut response, "user_id", &user.user_id, max_age);
     let expire_at = chrono::Utc::now().timestamp() + max_age;
-    set_cookie_non_httponly(&mut response, "session_expire_at", &expire_at.to_string(), max_age);
+    set_cookie_non_httponly(
+        &mut response,
+        "session_expire_at",
+        &expire_at.to_string(),
+        max_age,
+    );
     if is_first_login {
         set_cookie_non_httponly(&mut response, "first_login", "true", 300);
     }
@@ -819,4 +899,63 @@ pub fn routes() -> Router {
         .route("/auth/password/status", get(get_password_status))
         .route("/auth/password/set", post(set_password))
         .route("/auth/password/initialize", post(initialize_password))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render_cookie, CookieSpec, COOKIE_PATH, COOKIE_SAME_SITE};
+
+    #[test]
+    fn render_cookie_includes_shared_attributes_for_http_only_cookie() {
+        let rendered = render_cookie(&CookieSpec {
+            name: "token",
+            value: "abc",
+            max_age: 7200,
+            http_only: true,
+        });
+
+        assert_eq!(
+            rendered,
+            format!(
+                "token=abc; Path={}; HttpOnly; SameSite={}; Max-Age=7200",
+                COOKIE_PATH, COOKIE_SAME_SITE
+            )
+        );
+    }
+
+    #[test]
+    fn render_cookie_omits_http_only_for_frontend_visible_cookie() {
+        let rendered = render_cookie(&CookieSpec {
+            name: "session_expire_at",
+            value: "123",
+            max_age: 7200,
+            http_only: false,
+        });
+
+        assert_eq!(
+            rendered,
+            format!(
+                "session_expire_at=123; Path={}; SameSite={}; Max-Age=7200",
+                COOKIE_PATH, COOKIE_SAME_SITE
+            )
+        );
+    }
+
+    #[test]
+    fn render_cookie_preserves_clear_cookie_shape() {
+        let rendered = render_cookie(&CookieSpec {
+            name: "token",
+            value: "",
+            max_age: 0,
+            http_only: true,
+        });
+
+        assert_eq!(
+            rendered,
+            format!(
+                "token=; Path={}; HttpOnly; SameSite={}; Max-Age=0",
+                COOKIE_PATH, COOKIE_SAME_SITE
+            )
+        );
+    }
 }

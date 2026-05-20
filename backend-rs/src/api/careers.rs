@@ -673,7 +673,10 @@ async fn generate_career_system_legacy(
 pub fn routes() -> Router {
     Router::new()
         .route("/careers", post(create_career).get(list_careers))
-        .route("/careers/generate-system", get(generate_career_system_legacy))
+        .route(
+            "/careers/generate-system",
+            get(generate_career_system_legacy),
+        )
         .route(
             "/careers/{career_id}",
             get(get_career).put(update_career).delete(delete_career),

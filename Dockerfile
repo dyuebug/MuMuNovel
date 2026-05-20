@@ -183,8 +183,9 @@ COPY backend/scripts/entrypoint.sh /app/entrypoint.sh
 COPY backend/scripts/run_migrations.sh /app/run_migrations.sh
 COPY backend/scripts/migrate.py ./scripts/migrate.py
 
-# 赋予执行权限
-RUN chmod +x /app/entrypoint.sh /app/run_migrations.sh
+# Normalize Windows CRLF checkouts before Linux exec reads script shebangs.
+RUN sed -i 's/\r$//' /app/entrypoint.sh /app/run_migrations.sh && \
+    chmod +x /app/entrypoint.sh /app/run_migrations.sh
 
 # 创建必要的目录
 RUN mkdir -p /app/data /app/logs

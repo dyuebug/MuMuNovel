@@ -1,10 +1,6 @@
 use crate::models::{chapter, project};
-use crate::services::chapter_generation_prompt_context_provider_service::{
-    build_placeholder_prompt_context_provider_payload, PromptContextProviderPayload,
-};
-use crate::services::chapter_generation_prompt_params_service::{
-    build_prompt_params_with_provider_payload,
-};
+use crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload;
+use crate::services::chapter_generation_prompt_params_service::build_prompt_params_with_provider_payload;
 use crate::services::prompt_template_service::PromptTemplateService;
 
 pub fn chapter_template_key(outline_mode: &str, has_previous: bool) -> &'static str {
@@ -38,28 +34,15 @@ pub fn build_prompt_with_provider_payload(
     PromptTemplateService::format_prompt(&template.content, &params)
 }
 
-pub fn build_prompt(
-    chapter_model: &chapter::Model,
-    project_model: &project::Model,
-    previous_chapter: Option<&chapter::Model>,
-    target_word_count: i32,
-) -> Result<String, String> {
-    build_prompt_with_provider_payload(
-        chapter_model,
-        project_model,
-        previous_chapter,
-        target_word_count,
-        build_placeholder_prompt_context_provider_payload(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
 
-    use super::{build_prompt, build_prompt_with_provider_payload, chapter_template_key};
+    use super::{build_prompt_with_provider_payload, chapter_template_key};
     use crate::models::{chapter, project};
-    use crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload;
+    use crate::services::chapter_generation_prompt_context_provider_service::{
+        build_placeholder_prompt_context_provider_payload, PromptContextProviderPayload,
+    };
 
     fn build_project(outline_mode: &str) -> project::Model {
         project::Model {
@@ -142,8 +125,14 @@ mod tests {
         let project_model = build_project("one-to-one");
         let chapter_model = build_chapter(3, "第三章", None, None, None);
 
-        let prompt = build_prompt(&chapter_model, &project_model, None, 3200)
-            .expect("prompt should build");
+        let prompt = build_prompt_with_provider_payload(
+            &chapter_model,
+            &project_model,
+            None,
+            3200,
+            build_placeholder_prompt_context_provider_payload(),
+        )
+        .expect("prompt should build");
 
         assert!(prompt.contains("项目标题"));
         assert!(prompt.contains("第三章"));
@@ -166,11 +155,12 @@ mod tests {
             Some(previous_summary),
         );
 
-        let prompt = build_prompt(
+        let prompt = build_prompt_with_provider_payload(
             &chapter_model,
             &project_model,
             Some(&previous_chapter),
             3600,
+            build_placeholder_prompt_context_provider_payload(),
         )
         .expect("prompt should build");
 

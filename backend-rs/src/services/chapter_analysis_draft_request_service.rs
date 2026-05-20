@@ -51,9 +51,7 @@ pub fn parse_auto_revision_draft_apply_request(body: &Value) -> DraftApplyReques
     }
 }
 
-pub fn parse_candidate_draft_lookup_request(
-    query: &HashMap<String, String>,
-) -> DraftLookupRequest {
+pub fn parse_candidate_draft_lookup_request(query: &HashMap<String, String>) -> DraftLookupRequest {
     DraftLookupRequest {
         history_id: None,
         attempt_id: query.get("attempt_id").cloned(),
@@ -80,4 +78,65 @@ fn parse_allow_stale(body: &Value) -> bool {
     body.get("allow_stale")
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use serde_json::json;
+
+    use super::{
+        parse_auto_revision_draft_apply_request, parse_auto_revision_draft_lookup_request,
+        parse_candidate_draft_apply_request, parse_candidate_draft_lookup_request,
+    };
+
+    #[test]
+    fn should_parse_auto_revision_draft_lookup_request() {
+        let mut query = HashMap::new();
+        query.insert("history_id".to_string(), "history-1".to_string());
+        query.insert("attempt_id".to_string(), "ignored".to_string());
+
+        let request = parse_auto_revision_draft_lookup_request(&query);
+
+        assert_eq!(request.history_id(), Some("history-1"));
+        assert_eq!(request.attempt_id(), None);
+    }
+
+    #[test]
+    fn should_parse_auto_revision_draft_apply_request() {
+        let request = parse_auto_revision_draft_apply_request(&json!({
+            "history_id": " history-1 ",
+            "attempt_id": "ignored",
+            "allow_stale": true,
+        }));
+
+        assert_eq!(request.history_id(), Some("history-1"));
+        assert_eq!(request.attempt_id(), None);
+        assert!(request.allow_stale);
+    }
+
+    #[test]
+    fn should_parse_candidate_draft_lookup_request() {
+        let mut query = HashMap::new();
+        query.insert("history_id".to_string(), "ignored".to_string());
+        query.insert("attempt_id".to_string(), "attempt-1".to_string());
+
+        let request = parse_candidate_draft_lookup_request(&query);
+
+        assert_eq!(request.history_id(), None);
+        assert_eq!(request.attempt_id(), Some("attempt-1"));
+    }
+
+    #[test]
+    fn should_parse_candidate_draft_apply_request_defaults_and_empty_ids() {
+        let request = parse_candidate_draft_apply_request(&json!({
+            "history_id": "ignored",
+            "attempt_id": "   ",
+        }));
+
+        assert_eq!(request.history_id(), None);
+        assert_eq!(request.attempt_id(), None);
+        assert!(!request.allow_stale);
+    }
 }

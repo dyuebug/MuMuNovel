@@ -1,31 +1,21 @@
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 
 use crate::models::chapter;
 
 #[derive(Debug)]
-pub enum PrepareBatchGenerationCreateRequestError {
+pub(crate) enum PrepareBatchGenerationCreateRequestError {
     InvalidCount,
     ChaptersNotFound,
     Internal(String),
 }
 
-#[derive(Debug, Clone)]
-pub struct BatchGenerationCreateRequest {
-    pub start_chapter_number: i32,
-    pub count: i32,
-    pub target_word_count: Option<i32>,
-}
-
 #[derive(Debug)]
-pub struct PreparedBatchGenerationCreateRequest {
-    pub end_chapter_number: i32,
-    pub normalized_target_word_count: i32,
-    pub chapters_to_generate: Vec<chapter::Model>,
+pub(crate) struct PreparedBatchGenerationCreateRequest {
+    pub(crate) normalized_target_word_count: i32,
+    pub(crate) chapters_to_generate: Vec<chapter::Model>,
 }
 
-pub fn validate_batch_generation_count(
+fn validate_batch_generation_count(
     count: i32,
 ) -> Result<(), PrepareBatchGenerationCreateRequestError> {
     if count > 0 {
@@ -35,11 +25,11 @@ pub fn validate_batch_generation_count(
     }
 }
 
-pub fn normalize_batch_generation_target_word_count(target_word_count: Option<i32>) -> i32 {
+fn normalize_batch_generation_target_word_count(target_word_count: Option<i32>) -> i32 {
     target_word_count.unwrap_or(3000).max(1)
 }
 
-pub async fn load_chapters_for_batch_generation_range(
+async fn load_chapters_for_batch_generation_range(
     db: &DatabaseConnection,
     project_id: &str,
     start_chapter_number: i32,
@@ -64,27 +54,51 @@ pub async fn load_chapters_for_batch_generation_range(
     Ok(chapters_to_generate)
 }
 
-pub async fn prepare_batch_generation_create_request(
+pub(crate) async fn prepare_batch_generation_create_request(
     db: &DatabaseConnection,
     project_id: &str,
-    request: &BatchGenerationCreateRequest,
+    start_chapter_number: i32,
+    count: i32,
+    target_word_count: Option<i32>,
 ) -> Result<PreparedBatchGenerationCreateRequest, PrepareBatchGenerationCreateRequestError> {
-    validate_batch_generation_count(request.count)?;
-
-    let end_chapter_number = request.start_chapter_number + request.count - 1;
     let chapters_to_generate = load_chapters_for_batch_generation_range(
         db,
         project_id,
-        request.start_chapter_number,
-        request.count,
+        start_chapter_number,
+        count,
     )
     .await?;
 
     Ok(PreparedBatchGenerationCreateRequest {
-        end_chapter_number,
-        normalized_target_word_count: normalize_batch_generation_target_word_count(
-            request.target_word_count,
-        ),
+        normalized_target_word_count: normalize_batch_generation_target_word_count(target_word_count),
         chapters_to_generate,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        normalize_batch_generation_target_word_count, validate_batch_generation_count,
+        PrepareBatchGenerationCreateRequestError,
+    };
+
+    #[test]
+    fn should_normalize_batch_generation_target_word_count() {
+        assert_eq!(normalize_batch_generation_target_word_count(None), 3000);
+        assert_eq!(normalize_batch_generation_target_word_count(Some(-100)), 1);
+        assert_eq!(normalize_batch_generation_target_word_count(Some(0)), 1);
+        assert_eq!(
+            normalize_batch_generation_target_word_count(Some(2500)),
+            2500
+        );
+    }
+
+    #[test]
+    fn should_validate_batch_generation_count() {
+        assert!(validate_batch_generation_count(1).is_ok());
+        assert!(matches!(
+            validate_batch_generation_count(0),
+            Err(PrepareBatchGenerationCreateRequestError::InvalidCount)
+        ));
+    }
 }

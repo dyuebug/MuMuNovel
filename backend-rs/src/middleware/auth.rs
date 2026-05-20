@@ -43,26 +43,34 @@ pub struct AuthMiddleware<S> {
     jwt_secret: String,
 }
 
+const EXACT_PUBLIC_PATHS: &[&str] = &[
+    "/health",
+    "/livez",
+    "/readyz",
+    "/health/db-sessions",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/api/auth/login",
+    "/api/auth/local/login",
+    "/api/auth/bind/login",
+    "/api/auth/linuxdo/url",
+    "/api/auth/linuxdo/callback",
+    "/api/auth/callback",
+    "/api/auth/register",
+    "/api/auth/logout",
+    "/api/auth/config",
+    "/api/changelog",
+    "/api/changelog/refresh",
+];
+
+const PUBLIC_PATH_PREFIXES: &[&str] = &["/assets"];
+
 fn is_public(path: &str) -> bool {
-    path == "/health"
-        || path == "/livez"
-        || path == "/readyz"
-        || path == "/health/db-sessions"
-        || path == "/docs"
-        || path == "/redoc"
-        || path == "/openapi.json"
-        || path.starts_with("/assets")
-        || path == "/api/auth/login"
-        || path == "/api/auth/local/login"
-        || path == "/api/auth/bind/login"
-        || path == "/api/auth/linuxdo/url"
-        || path == "/api/auth/linuxdo/callback"
-        || path == "/api/auth/callback"
-        || path == "/api/auth/register"
-        || path == "/api/auth/logout"
-        || path == "/api/auth/config"
-        || path == "/api/changelog"
-        || path == "/api/changelog/refresh"
+    EXACT_PUBLIC_PATHS.contains(&path)
+        || PUBLIC_PATH_PREFIXES
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
 }
 
 impl<S, ReqBody> Service<Request<ReqBody>> for AuthMiddleware<S>
@@ -135,5 +143,36 @@ where
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_public;
+
+    #[test]
+    fn exact_public_paths_remain_public() {
+        for path in [
+            "/health",
+            "/readyz",
+            "/api/auth/login",
+            "/api/auth/callback",
+            "/api/changelog/refresh",
+        ] {
+            assert!(is_public(path), "expected public path: {}", path);
+        }
+    }
+
+    #[test]
+    fn asset_prefix_remains_public() {
+        assert!(is_public("/assets/app.js"));
+        assert!(is_public("/assets/nested/chunk.css"));
+    }
+
+    #[test]
+    fn protected_paths_remain_protected() {
+        for path in ["/api/projects", "/api/settings", "/api/auth/user", "/"] {
+            assert!(!is_public(path), "expected protected path: {}", path);
+        }
     }
 }

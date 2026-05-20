@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-pub use crate::services::chapter_narrative_cleaner_service::{
+use crate::services::chapter_narrative_cleaner_service::{
     contains_chapter_workflow_meta_text, sanitize_generated_narrative_text,
 };
 
@@ -110,4 +110,120 @@ pub fn finalize_chapter_regeneration_result(
         cleaned_text,
         payload,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        finalize_chapter_regeneration_result, finalize_partial_regeneration_result,
+        normalize_partial_regeneration_output, FinalizePartialRegenerationError,
+    };
+
+    #[test]
+    fn should_normalize_partial_regeneration_output_prefixes_and_quotes() {
+        assert_eq!(
+            normalize_partial_regeneration_output("\r\n重写后： \"新的正文\" \r\n"),
+            "新的正文"
+        );
+        assert_eq!(
+            normalize_partial_regeneration_output("以下是重写后的内容：『新的正文』"),
+            "新的正文"
+        );
+        assert_eq!(
+            normalize_partial_regeneration_output("改写后:'新的正文'"),
+            "新的正文"
+        );
+    }
+
+    #[test]
+    fn should_finalize_partial_regeneration_result_payload() {
+        let result = finalize_partial_regeneration_result("重写后：新的正文", 12, 3, 8);
+        let result = match result {
+            Ok(result) => result,
+            Err(_) => panic!("partial regeneration result should be valid"),
+        };
+
+        assert_eq!(result.cleaned_text, "新的正文");
+        assert_eq!(result.payload["new_text"], "新的正文");
+        assert_eq!(result.payload["word_count"], 4);
+        assert_eq!(result.payload["original_word_count"], 12);
+        assert_eq!(result.payload["start_position"], 3);
+        assert_eq!(result.payload["end_position"], 8);
+    }
+
+    #[test]
+    fn should_finalize_chapter_regeneration_result_payload() {
+        let result = finalize_chapter_regeneration_result("新的章节正文", "chapter-1");
+        let result = match result {
+            Ok(result) => result,
+            Err(_) => panic!("chapter regeneration result should be valid"),
+        };
+
+        assert_eq!(result.cleaned_text, "新的章节正文");
+        assert_eq!(result.payload["content"], "新的章节正文");
+        assert_eq!(result.payload["word_count"], 6);
+        assert_eq!(result.payload["generation_task_id"], "chapter-1");
+        assert!(result.payload["analysis_task_id"].is_null());
+    }
+
+    #[test]
+    fn should_reject_meta_only_regeneration_result_as_empty() {
+        let result = finalize_partial_regeneration_result(
+            "```markdown\n作为AI：我将开始执行\n流程说明",
+            12,
+            3,
+            8,
+        );
+        let error = match result {
+            Ok(_) => panic!("meta-only partial regeneration result should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            FinalizePartialRegenerationError::EmptyContent
+        ));
+    }
+
+    #[test]
+    fn should_reject_meta_only_chapter_regeneration_result_as_empty() {
+        let result = finalize_chapter_regeneration_result(
+            "```markdown\n作为AI：我将开始执行\n流程说明",
+            "chapter-1",
+        );
+        let error = match result {
+            Ok(_) => panic!("meta-only chapter regeneration result should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            FinalizePartialRegenerationError::EmptyContent
+        ));
+    }
+
+    #[test]
+    fn should_preserve_partial_and_chapter_payload_shape_differences() {
+        let partial = match finalize_partial_regeneration_result("重写后：新的片段", 20, 5, 11)
+        {
+            Ok(result) => result,
+            Err(_) => panic!("partial regeneration result should be valid"),
+        };
+        let chapter = match finalize_chapter_regeneration_result("新的章节正文", "chapter-2")
+        {
+            Ok(result) => result,
+            Err(_) => panic!("chapter regeneration result should be valid"),
+        };
+
+        assert_eq!(partial.payload["new_text"], "新的片段");
+        assert!(partial.payload.get("content").is_none());
+        assert_eq!(partial.payload["original_word_count"], 20);
+        assert_eq!(partial.payload["start_position"], 5);
+        assert_eq!(partial.payload["end_position"], 11);
+
+        assert_eq!(chapter.payload["content"], "新的章节正文");
+        assert!(chapter.payload.get("new_text").is_none());
+        assert_eq!(chapter.payload["generation_task_id"], "chapter-2");
+        assert!(chapter.payload["analysis_task_id"].is_null());
+    }
 }

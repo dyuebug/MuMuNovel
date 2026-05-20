@@ -20,16 +20,14 @@ use crate::api::chapters_error_mapper::{
     map_load_navigation_payload_error, map_load_quality_trend_payload_error,
 };
 use crate::services::auth::Claims;
-use crate::services::chapter_crud_service::{
+use crate::services::chapter_annotation_query_service::load_annotations_payload;
+use crate::services::chapter_crud_workflow_service::{
     create_chapter_payload, delete_chapter_payload, get_chapter_payload,
     list_chapters_by_project_path_payload, list_chapters_payload, update_chapter_payload,
     update_expansion_plan_payload,
 };
-use crate::services::chapter_annotation_query_service::load_annotations_payload;
-use crate::services::chapter_query_service::{
-    load_can_generate_payload, load_navigation_payload,
-};
 use crate::services::chapter_quality_query_service::load_quality_trend_payload;
+use crate::services::chapter_query_service::{load_can_generate_payload, load_navigation_payload};
 
 #[derive(Deserialize)]
 struct CreateRequest {
@@ -205,7 +203,7 @@ async fn get_can_generate(
     Ok(Json(payload))
 }
 
-pub fn routes() -> Router {
+pub(crate) fn routes() -> Router {
     Router::new()
         .route(
             "/chapters/project/{project_id}",

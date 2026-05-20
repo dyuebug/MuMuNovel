@@ -77,10 +77,18 @@ impl InspirationService {
         if text.chars().count() <= limit {
             return text;
         }
-        text.chars().take(limit.saturating_sub(3)).collect::<String>() + "..."
+        text.chars()
+            .take(limit.saturating_sub(3))
+            .collect::<String>()
+            + "..."
     }
 
-    fn compose_research_query(step: &str, context: &Value, feedback: Option<&str>, custom_query: Option<&str>) -> String {
+    fn compose_research_query(
+        step: &str,
+        context: &Value,
+        feedback: Option<&str>,
+        custom_query: Option<&str>,
+    ) -> String {
         let custom_query = custom_query.unwrap_or("").trim();
         if !custom_query.is_empty() {
             return Self::normalize_research_text(custom_query, 320);
@@ -347,8 +355,7 @@ impl InspirationService {
             .ok_or(format!("模板 {} 不存在", user_key))?;
 
         let format_params = Self::build_format_params(context);
-        let research_query =
-            Self::compose_research_query(step, context, None, web_research_query);
+        let research_query = Self::compose_research_query(step, context, None, web_research_query);
         let system_prompt = format!(
             "{}\n\n{}",
             system_template.content,

@@ -420,7 +420,10 @@ async fn create_outline(
     )
     .await
     {
-        Ok(Some(outline)) => Ok((StatusCode::CREATED, Json(compatible_outline_payload(outline)))),
+        Ok(Some(outline)) => Ok((
+            StatusCode::CREATED,
+            Json(compatible_outline_payload(outline)),
+        )),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             Json(json!({"success": false, "message": "项目不存在或无权限"})),
@@ -841,7 +844,10 @@ pub fn routes() -> Router {
         .route("/outlines/generate-stream", post(generate_outlines))
         .route("/outlines/reorder", post(reorder_outlines))
         .route("/outlines/batch-expand", post(batch_expand_outlines_compat))
-        .route("/outlines/batch-expand-stream", post(batch_expand_outlines_compat))
+        .route(
+            "/outlines/batch-expand-stream",
+            post(batch_expand_outlines_compat),
+        )
         .route("/outlines", post(create_outline).get(list_outlines))
         .route(
             "/outlines/{outline_id}",

@@ -1,5 +1,61 @@
 use std::env;
+use std::error::Error;
+use std::fmt;
 use uuid::Uuid;
+
+use tracing::{info, warn};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AppRuntimeMode {
+    Development,
+    NonDevelopment,
+}
+
+impl AppRuntimeMode {
+    fn from_debug(debug: bool) -> Self {
+        if debug {
+            Self::Development
+        } else {
+            Self::NonDevelopment
+        }
+    }
+
+    pub fn is_development(self) -> bool {
+        matches!(self, Self::Development)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Development => "development",
+            Self::NonDevelopment => "non-development",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ConfigError {
+    MissingJwtSecret { mode: AppRuntimeMode },
+    MissingDatabaseUrl { mode: AppRuntimeMode },
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingJwtSecret { mode } => write!(
+                f,
+                "JWT_SECRET is required when runtime mode is {}",
+                mode.as_str()
+            ),
+            Self::MissingDatabaseUrl { mode } => write!(
+                f,
+                "DATABASE_URL is required when runtime mode is {}",
+                mode.as_str()
+            ),
+        }
+    }
+}
+
+impl Error for ConfigError {}
 
 #[derive(Clone)]
 pub struct AppConfig {
@@ -12,6 +68,7 @@ pub struct AppConfig {
     pub enable_startup_schema_sync: bool,
     pub log_level: String,
     pub debug: bool,
+    pub runtime_mode: AppRuntimeMode,
     pub cors_origins: String,
     pub jwt_secret: String,
     pub static_dir: String,
@@ -44,32 +101,68 @@ fn env_or_u32(key: &str, default: u32) -> u32 {
         .unwrap_or(default)
 }
 
-pub fn load() -> AppConfig {
+fn resolve_jwt_secret(mode: AppRuntimeMode, secret: String) -> Result<String, ConfigError> {
+    let secret = secret.trim().to_string();
+    if !secret.is_empty() {
+        return Ok(secret);
+    }
+
+    if mode.is_development() {
+        let generated = Uuid::new_v4().to_string().replace('-', "");
+        warn!(
+            "JWT_SECRET not set in development mode; generated an ephemeral secret for local use"
+        );
+        Ok(generated)
+    } else {
+        Err(ConfigError::MissingJwtSecret { mode })
+    }
+}
+
+fn resolve_database_url(mode: AppRuntimeMode, database_url: String) -> Result<String, ConfigError> {
+    let database_url = database_url.trim().to_string();
+    if !database_url.is_empty() {
+        return Ok(database_url);
+    }
+
+    if mode.is_development() {
+        warn!(
+            "DATABASE_URL not set in development mode; falling back to sqlite::memory: for local bootstrap"
+        );
+        Ok("sqlite::memory:".to_string())
+    } else {
+        Err(ConfigError::MissingDatabaseUrl { mode })
+    }
+}
+
+pub fn load() -> Result<AppConfig, ConfigError> {
     let _ = dotenvy::from_filename("../backend/.env").ok();
     let _ = dotenvy::from_filename(".env").ok();
     let _ = dotenvy::dotenv().ok();
 
-    AppConfig {
+    let debug_enabled = env_or_bool("DEBUG", false);
+    let runtime_mode = AppRuntimeMode::from_debug(debug_enabled);
+    info!(
+        "Config bootstrap mode selected: {} (DEBUG={})",
+        runtime_mode.as_str(),
+        debug_enabled
+    );
+
+    let database_url = resolve_database_url(runtime_mode, env_or("DATABASE_URL", ""))?;
+    let jwt_secret = resolve_jwt_secret(runtime_mode, env_or("JWT_SECRET", ""))?;
+
+    Ok(AppConfig {
         app_host: env_or("APP_HOST", "127.0.0.1"),
         app_port: env_or("APP_PORT", "8001").parse().unwrap_or(8001),
         app_name: env_or("APP_NAME", "MuMuNovel"),
         app_version: env_or("APP_VERSION", "0.1.0-rs"),
-        database_url: env_or("DATABASE_URL", ""),
+        database_url,
         database_pool_size: env_or_u32("DATABASE_POOL_SIZE", 50),
         enable_startup_schema_sync: env_or_bool("ENABLE_STARTUP_SCHEMA_SYNC", false),
         log_level: env_or("LOG_LEVEL", "info"),
-        debug: env_or_bool("DEBUG", false),
+        debug: debug_enabled,
+        runtime_mode,
         cors_origins: env_or("CORS_ORIGINS", "*"),
-        jwt_secret: {
-            let secret = env_or("JWT_SECRET", "");
-            if secret.is_empty() {
-                let generated = Uuid::new_v4().to_string().replace('-', "");
-                tracing::warn!("JWT_SECRET not set, generated random secret (set JWT_SECRET in .env for persistence)");
-                generated
-            } else {
-                secret
-            }
-        },
+        jwt_secret,
         static_dir: env_or("STATIC_DIR", "../backend/static"),
         local_auth_enabled: env_or_bool("LOCAL_AUTH_ENABLED", true),
         local_auth_username: env_or("LOCAL_AUTH_USERNAME", ""),
@@ -81,5 +174,42 @@ pub fn load() -> AppConfig {
         frontend_url: env_or("FRONTEND_URL", "http://localhost"),
         session_expire_minutes: env_or_u32("SESSION_EXPIRE_MINUTES", 120),
         session_refresh_threshold_minutes: env_or_u32("SESSION_REFRESH_THRESHOLD_MINUTES", 30),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_database_url, resolve_jwt_secret, AppRuntimeMode, ConfigError};
+
+    #[test]
+    fn development_mode_allows_generated_jwt_secret() {
+        let secret = resolve_jwt_secret(AppRuntimeMode::Development, String::new())
+            .expect("development mode should allow generated secret");
+
+        assert!(!secret.is_empty());
+    }
+
+    #[test]
+    fn non_development_requires_jwt_secret() {
+        let err = resolve_jwt_secret(AppRuntimeMode::NonDevelopment, " ".to_string())
+            .expect_err("non-development mode should reject empty jwt secret");
+
+        assert!(matches!(err, ConfigError::MissingJwtSecret { .. }));
+    }
+
+    #[test]
+    fn development_mode_allows_in_memory_database_fallback() {
+        let database_url = resolve_database_url(AppRuntimeMode::Development, String::new())
+            .expect("development mode should allow sqlite fallback");
+
+        assert_eq!(database_url, "sqlite::memory:");
+    }
+
+    #[test]
+    fn non_development_requires_database_url() {
+        let err = resolve_database_url(AppRuntimeMode::NonDevelopment, "\n".to_string())
+            .expect_err("non-development mode should reject empty database url");
+
+        assert!(matches!(err, ConfigError::MissingDatabaseUrl { .. }));
     }
 }

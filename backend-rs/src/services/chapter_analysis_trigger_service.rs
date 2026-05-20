@@ -4,7 +4,9 @@ use serde_json::{json, Value};
 use crate::models::chapter;
 
 use super::chapter_access_service::{load_accessible_chapter, LoadAccessibleChapterError};
-use super::chapter_analysis_runtime_service::create_chapter_analysis_task;
+use super::chapter_analysis_runtime_service::{
+    create_chapter_analysis_task, execute_chapter_analysis_background,
+};
 use super::chapter_analysis_service::CreateChapterAnalysisTaskError;
 
 #[derive(Debug)]
@@ -39,6 +41,18 @@ pub async fn prepare_chapter_analysis_trigger(
         })?;
 
     build_prepared_chapter_analysis_trigger(db, chapter_id, user_id, chapter).await
+}
+
+pub fn dispatch_prepared_chapter_analysis_trigger(
+    db: DatabaseConnection,
+    user_id: String,
+    prepared: &PreparedChapterAnalysisTrigger,
+) {
+    let chapter_id = prepared.chapter_id.clone();
+    let task_id = prepared.task_id.clone();
+    tokio::spawn(async move {
+        execute_chapter_analysis_background(db, user_id, chapter_id, task_id).await;
+    });
 }
 
 async fn build_prepared_chapter_analysis_trigger(

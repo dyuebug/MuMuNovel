@@ -58,7 +58,10 @@ impl OpenAIClient {
     pub fn is_official_openai_base_url(base_url: &str) -> bool {
         reqwest::Url::parse(base_url)
             .ok()
-            .and_then(|url| url.host_str().map(|host| host.eq_ignore_ascii_case("api.openai.com")))
+            .and_then(|url| {
+                url.host_str()
+                    .map(|host| host.eq_ignore_ascii_case("api.openai.com"))
+            })
             .unwrap_or(false)
     }
 
@@ -157,28 +160,9 @@ impl OpenAIClient {
         }
 
         let included = [
-            "gpt",
-            "chat",
-            "claude",
-            "gemini",
-            "deepseek",
-            "qwen",
-            "llama",
-            "mistral",
-            "glm",
-            "doubao",
-            "hunyuan",
-            "baichuan",
-            "yi-",
-            "command",
-            "sonnet",
-            "haiku",
-            "opus",
-            "reasoner",
-            "instruct",
-            "o1",
-            "o3",
-            "o4",
+            "gpt", "chat", "claude", "gemini", "deepseek", "qwen", "llama", "mistral", "glm",
+            "doubao", "hunyuan", "baichuan", "yi-", "command", "sonnet", "haiku", "opus",
+            "reasoner", "instruct", "o1", "o3", "o4",
         ];
 
         included.iter().any(|needle| model.contains(needle))
@@ -280,8 +264,9 @@ impl OpenAIClient {
 
         let text = resp.text().await.unwrap_or_default();
         if !content_type.contains("text/event-stream") {
-            let json: Value = serde_json::from_str(&text)
-                .map_err(|_| Self::invalid_content_error("OpenAI stream fallback", status, &text))?;
+            let json: Value = serde_json::from_str(&text).map_err(|_| {
+                Self::invalid_content_error("OpenAI stream fallback", status, &text)
+            })?;
             return Self::parse_response(&json);
         }
 
@@ -583,10 +568,8 @@ impl OpenAIClient {
                     }
                     if let Some(tc_deltas) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                         for tc_delta in tc_deltas {
-                            let idx = tc_delta
-                                .get("index")
-                                .and_then(|i| i.as_i64())
-                                .unwrap_or(0) as usize;
+                            let idx = tc_delta.get("index").and_then(|i| i.as_i64()).unwrap_or(0)
+                                as usize;
                             while tool_calls_buffer.len() <= idx {
                                 tool_calls_buffer.push(ToolCall {
                                     id: String::new(),
@@ -617,7 +600,8 @@ impl OpenAIClient {
                         content.push_str(message_content);
                     }
                     if tool_calls_buffer.is_empty() {
-                        if let Some(tool_calls) = message.get("tool_calls")
+                        if let Some(tool_calls) = message
+                            .get("tool_calls")
                             .and_then(|tc| serde_json::from_value::<Vec<ToolCall>>(tc.clone()).ok())
                         {
                             tool_calls_buffer = tool_calls;

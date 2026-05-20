@@ -21,17 +21,3 @@ pub async fn load_accessible_chapter(
         Err(error) => Err(LoadAccessibleChapterError::Internal(error)),
     }
 }
-
-pub async fn check_accessible_chapter_exists(
-    db: &DatabaseConnection,
-    chapter_id: &str,
-    user_id: &str,
-) -> Result<bool, LoadAccessibleChapterError> {
-    match load_accessible_chapter(db, chapter_id, user_id).await {
-        Ok(_) => Ok(true),
-        Err(LoadAccessibleChapterError::NotFoundOrAccessDenied) => Ok(false),
-        Err(LoadAccessibleChapterError::Internal(error)) => {
-            Err(LoadAccessibleChapterError::Internal(error))
-        }
-    }
-}

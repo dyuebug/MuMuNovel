@@ -67,7 +67,7 @@ pub fn resolve_quality_metrics_source(
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use super::{resolve_quality_metrics_source, QualityMetricsSourceKind};
     use crate::models::{chapter_draft_attempt, generation_history};
@@ -111,8 +111,10 @@ mod tests {
         let history_metrics = json!({ "score": 80 });
         let histories = vec![build_history("history-1", Some(history_metrics.clone()))];
 
-        let resolved =
-            resolve_quality_metrics_source(&histories, Some(&build_attempt(Some(attempt_metrics.clone()))));
+        let resolved = resolve_quality_metrics_source(
+            &histories,
+            Some(&build_attempt(Some(attempt_metrics.clone()))),
+        );
 
         assert_eq!(resolved.source_kind, QualityMetricsSourceKind::Candidate);
         assert_eq!(resolved.metrics, Some(attempt_metrics));

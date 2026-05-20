@@ -184,7 +184,8 @@ async fn load_character_prompt_template(
     let _ = PromptTemplateService::sync_managed_templates_for_user(db, user_id).await;
 
     if let Some(template) =
-        PromptTemplateService::find_user_template(db, user_id, "SINGLE_CHARACTER_GENERATION").await?
+        PromptTemplateService::find_user_template(db, user_id, "SINGLE_CHARACTER_GENERATION")
+            .await?
     {
         if template.is_active {
             let content = template.template_content.trim();
@@ -264,10 +265,14 @@ async fn build_character_generation_context(
 
     let mut careers_info = String::new();
     if !careers.is_empty() {
-        let main_careers: Vec<&career::Model> =
-            careers.iter().filter(|item| item.career_type == "main").collect();
-        let sub_careers: Vec<&career::Model> =
-            careers.iter().filter(|item| item.career_type == "sub").collect();
+        let main_careers: Vec<&career::Model> = careers
+            .iter()
+            .filter(|item| item.career_type == "main")
+            .collect();
+        let sub_careers: Vec<&career::Model> = careers
+            .iter()
+            .filter(|item| item.career_type == "sub")
+            .collect();
 
         if !main_careers.is_empty() {
             careers_info.push_str(
@@ -662,7 +667,9 @@ async fn validate_main_career(
         if stage > career_model.max_stage {
             return Err((
                 StatusCode::BAD_REQUEST,
-                Json(json!({"success": false, "message": format!("阶段超出范围，该职业最大阶段为{}", career_model.max_stage)})),
+                Json(
+                    json!({"success": false, "message": format!("阶段超出范围，该职业最大阶段为{}", career_model.max_stage)}),
+                ),
             ));
         }
     }
@@ -1243,12 +1250,13 @@ async fn generate_character(
     let mut params = HashMap::new();
     params.insert("project_context".to_string(), project_context);
     params.insert("user_input".to_string(), user_input);
-    let prompt = PromptTemplateService::format_prompt(&prompt_template, &params).map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": error})),
-        )
-    })?;
+    let prompt =
+        PromptTemplateService::format_prompt(&prompt_template, &params).map_err(|error| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "message": error})),
+            )
+        })?;
 
     let ai_config = SettingsService::build_ai_config(
         &db,

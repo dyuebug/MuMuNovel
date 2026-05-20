@@ -82,10 +82,7 @@ mod tests {
     #[test]
     fn should_truncate_continuation_point_to_three_hundred_chars() {
         let previous_content = "甲".repeat(320);
-        let previous_chapter = build_chapter(
-            Some(previous_content.as_str()),
-            Some("上一章总结"),
-        );
+        let previous_chapter = build_chapter(Some(previous_content.as_str()), Some("上一章总结"));
 
         let params = build_prompt_context_params_with_provider_payload(
             Some(&previous_chapter),

@@ -278,10 +278,10 @@ async fn fetch_models_endpoint(
         Ok(models) => {
             let model_count = models.len();
             Ok(Json(json!({
-            "success": true,
-            "models": normalize_fetch_models_payload(models),
-            "message": format!("Fetched {} models", model_count)
-        })))
+                "success": true,
+                "models": normalize_fetch_models_payload(models),
+                "message": format!("Fetched {} models", model_count)
+            })))
         }
         Err(error) => {
             let fallback = curated_fetch_models(&effective.provider);

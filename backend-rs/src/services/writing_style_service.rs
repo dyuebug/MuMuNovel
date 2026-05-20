@@ -88,7 +88,8 @@ const LOW_AI_PRESET_DEFINITIONS: &[PresetDefinition] = &[
     PresetDefinition {
         preset_id: "low_ai_life",
         name: "低AI生活化",
-        description: "低AI感的生活化网文叙事，强调日常现场里的眼前麻烦、真人对白、动作反馈与带余波的柔和章尾",
+        description:
+            "低AI感的生活化网文叙事，强调日常现场里的眼前麻烦、真人对白、动作反馈与带余波的柔和章尾",
         prompt_content: r#"写作风格建议：
 1. 开场可以更贴近日常现场，但前段必须让读者看见眼前麻烦、情绪摩擦、秘密失衡或局面变化，少用背景概述起手
 2. 叙述像真人在讲亲历故事，优先写正在发生的动作、人物反应和场面变化，再补必要解释，不要写成说明文
@@ -249,10 +250,16 @@ async fn sync_low_ai_presets(
         .order_by_desc(writing_style::Column::OrderIndex)
         .one(db)
         .await?;
-    let mut max_order = existing_global_styles.map(|style| style.order_index).unwrap_or(0);
+    let mut max_order = existing_global_styles
+        .map(|style| style.order_index)
+        .unwrap_or(0);
 
     for definition in LOW_AI_PRESET_DEFINITIONS {
-        if has_global.get(definition.preset_id).copied().unwrap_or(false) {
+        if has_global
+            .get(definition.preset_id)
+            .copied()
+            .unwrap_or(false)
+        {
             continue;
         }
 
@@ -329,20 +336,18 @@ impl WritingStyleService {
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let styles = ensure_preset_styles(db).await?;
 
-        Ok(json!(
-            styles
-                .iter()
-                .map(|style| json!({
-                    "id": style.id,
-                    "preset_id": style.preset_id,
-                    "name": style.name,
-                    "description": style.description,
-                    "prompt_content": style.prompt_content,
-                    "style_type": style.style_type,
-                    "order_index": style.order_index,
-                }))
-                .collect::<Vec<_>>()
-        ))
+        Ok(json!(styles
+            .iter()
+            .map(|style| json!({
+                "id": style.id,
+                "preset_id": style.preset_id,
+                "name": style.name,
+                "description": style.description,
+                "prompt_content": style.prompt_content,
+                "style_type": style.style_type,
+                "order_index": style.order_index,
+            }))
+            .collect::<Vec<_>>()))
     }
 
     pub async fn list_user_styles(
@@ -451,9 +456,8 @@ impl WritingStyleService {
                 .one(db)
                 .await?;
 
-            let preset_style = preset_style.ok_or_else(|| {
-                format!("预设风格 '{}' 不存在", preset_id)
-            })?;
+            let preset_style =
+                preset_style.ok_or_else(|| format!("预设风格 '{}' 不存在", preset_id))?;
 
             if name.is_none() {
                 name = Some(preset_style.name);
@@ -480,18 +484,17 @@ impl WritingStyleService {
         let model = writing_style::ActiveModel {
             user_id: Set(Some(user_id.to_string())),
             name: Set(name.unwrap_or_default()),
-            style_type: Set(
-                body.get("style_type")
-                    .and_then(|value| value.as_str())
-                    .map(str::to_string)
-                    .unwrap_or_else(|| {
-                        if preset_id.is_some() {
-                            "preset".to_string()
-                        } else {
-                            "custom".to_string()
-                        }
-                    }),
-            ),
+            style_type: Set(body
+                .get("style_type")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    if preset_id.is_some() {
+                        "preset".to_string()
+                    } else {
+                        "custom".to_string()
+                    }
+                })),
             preset_id: Set(preset_id),
             description: Set(description),
             prompt_content: Set(prompt_content.unwrap_or_default()),
@@ -582,7 +585,9 @@ impl WritingStyleService {
             return Err("不能删除默认风格，请先设置其他风格为默认".into());
         }
 
-        writing_style::Entity::delete_by_id(style_id).exec(db).await?;
+        writing_style::Entity::delete_by_id(style_id)
+            .exec(db)
+            .await?;
         Ok(json!({"message": "风格已删除"}))
     }
 

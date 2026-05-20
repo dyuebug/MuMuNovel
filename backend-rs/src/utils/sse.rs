@@ -1,7 +1,8 @@
-use axum::response::sse::Event;
+use axum::response::sse::{Event, KeepAlive};
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 /// Structured SSE event builder — replicates Python SSEResponse + WizardProgressTracker
@@ -99,6 +100,14 @@ pub fn sse_done() -> Event {
         event_type: "done".into(),
     };
     Event::default().data(serde_json::to_string(&payload).unwrap_or_default())
+}
+
+pub fn default_sse_keep_alive() -> KeepAlive {
+    KeepAlive::new().interval(Duration::from_secs(10))
+}
+
+pub fn named_sse_keep_alive(text: &'static str) -> KeepAlive {
+    default_sse_keep_alive().text(text)
 }
 
 impl SseProgress {
@@ -359,10 +368,10 @@ mod tests {
 
     #[test]
     fn test_sse_event_functions_dont_panic() {
-        sse_progress("test", 0, "processing");
-        sse_chunk("hello");
-        sse_result(&serde_json::json!({"key": "value"}));
-        sse_error("error", 500);
-        sse_done();
+        let _ = sse_progress("test", 0, "processing");
+        let _ = sse_chunk("hello");
+        let _ = sse_result(&serde_json::json!({"key": "value"}));
+        let _ = sse_error("error", 500);
+        let _ = sse_done();
     }
 }

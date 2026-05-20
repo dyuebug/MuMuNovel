@@ -201,7 +201,9 @@ pub fn build_partial_length_requirement(
         }
         "custom" => target_word_count
             .map(|count| format!("目标长度约 {} 字，允许上下浮动 20%", count))
-            .unwrap_or_else(|| format!("默认按接近原文长度处理，原文约 {} 字", original_word_count)),
+            .unwrap_or_else(|| {
+                format!("默认按接近原文长度处理，原文约 {} 字", original_word_count)
+            }),
         _ => {
             let min_words = (original_word_count as f64 * 0.8) as usize;
             let max_words = (original_word_count as f64 * 1.2) as usize;
@@ -285,9 +287,8 @@ pub fn prepare_partial_regeneration_input(
         return Err(PreparePartialRegenerationError::InvalidRange);
     }
 
-    let selected_text_from_content: String = content_chars[start_position..end_position]
-        .iter()
-        .collect();
+    let selected_text_from_content: String =
+        content_chars[start_position..end_position].iter().collect();
     let selected_text = {
         let provided = selected_text_override.trim();
         if provided.is_empty() {
@@ -304,15 +305,16 @@ pub fn prepare_partial_regeneration_input(
     let context_before: String = content_chars[context_before_start..start_position]
         .iter()
         .collect();
-    let context_after_end = end_position.saturating_add(context_chars).min(content_length);
-    let context_after: String = content_chars[end_position..context_after_end].iter().collect();
+    let context_after_end = end_position
+        .saturating_add(context_chars)
+        .min(content_length);
+    let context_after: String = content_chars[end_position..context_after_end]
+        .iter()
+        .collect();
 
     let original_word_count = selected_text.chars().count();
-    let length_requirement = build_partial_length_requirement(
-        length_mode,
-        target_word_count,
-        original_word_count,
-    );
+    let length_requirement =
+        build_partial_length_requirement(length_mode, target_word_count, original_word_count);
     let target_words =
         calculate_partial_target_words(length_mode, target_word_count, original_word_count);
     let max_tokens = max(500, min(target_words.saturating_mul(3), 8000)) as u32;
@@ -451,4 +453,246 @@ pub async fn prepare_partial_regeneration_stream(
         prepared,
         ai_service,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::NaiveDateTime;
+
+    use serde_json::json;
+
+    use crate::models::chapter;
+
+    use super::{
+        build_partial_length_requirement, build_regeneration_prompt,
+        calculate_partial_target_words, prepare_partial_regeneration_input,
+        PreparePartialRegenerationError, PreparedPartialRegenerationInput,
+    };
+
+    fn chapter_with_content(content: &str) -> chapter::Model {
+        chapter::Model {
+            id: "chapter-1".to_string(),
+            project_id: "project-1".to_string(),
+            title: "测试章节".to_string(),
+            chapter_number: 1,
+            content: Some(content.to_string()),
+            summary: None,
+            word_count: content.chars().count() as i32,
+            status: "draft".to_string(),
+            outline_id: None,
+            sub_index: 0,
+            expansion_plan: None,
+            created_at: NaiveDateTime::default(),
+            updated_at: Some(NaiveDateTime::default()),
+        }
+    }
+
+    fn valid_prepared_partial_input(
+        result: Result<PreparedPartialRegenerationInput, PreparePartialRegenerationError>,
+    ) -> PreparedPartialRegenerationInput {
+        match result {
+            Ok(prepared) => prepared,
+            Err(_) => panic!("partial input should be valid"),
+        }
+    }
+
+    #[test]
+    fn should_build_regeneration_prompt_with_default_fields() {
+        let chapter = chapter_with_content("原始正文");
+        let prompt = build_regeneration_prompt(&chapter, &json!({}));
+
+        assert!(prompt.contains("章节标题：测试章节"));
+        assert!(prompt.contains("章节编号：1"));
+        assert!(prompt.contains("目标字数：3000"));
+        assert!(prompt.contains("原章节内容：\n原始正文"));
+        assert!(prompt.contains("保留结构：false"));
+        assert!(prompt.contains("保留人物特征：true"));
+    }
+
+    #[test]
+    fn should_build_regeneration_prompt_with_explicit_fields() {
+        let chapter = chapter_with_content("原始正文");
+        let prompt = build_regeneration_prompt(
+            &chapter,
+            &json!({
+                "target_word_count": 1800,
+                "custom_instructions": "强化冲突",
+                "selected_suggestion_indices": [1, "skip", 3],
+                "focus_areas": ["节奏", 7, "人物"],
+                "creative_mode": "dramatic",
+                "story_focus": "主线推进",
+                "quality_preset": "balanced",
+                "preserve_elements": {
+                    "preserve_structure": true,
+                    "preserve_dialogues": ["对白A", "对白B"],
+                    "preserve_plot_points": ["转折A"],
+                    "preserve_character_traits": false
+                },
+                "story_creation_brief": "总控说明",
+                "quality_notes": "质量偏好",
+                "story_repair_summary": "修复摘要",
+                "story_repair_targets": ["目标A", "目标B"],
+                "story_preserve_strengths": ["优势A"]
+            }),
+        );
+
+        assert!(prompt.contains("目标字数：1800"));
+        assert!(prompt.contains("用户修改要求：\n强化冲突"));
+        assert!(prompt.contains("选中建议索引：1, 3"));
+        assert!(prompt.contains("重点优化方向：节奏、人物"));
+        assert!(prompt.contains("创作模式：dramatic"));
+        assert!(prompt.contains("保留结构：true"));
+        assert!(prompt.contains("保留对话：对白A、对白B"));
+        assert!(prompt.contains("保留剧情点：转折A"));
+        assert!(prompt.contains("保留人物特征：false"));
+        assert!(prompt.contains("修复目标：目标A、目标B"));
+        assert!(prompt.contains("保留优势：优势A"));
+    }
+
+    #[test]
+    fn should_build_partial_length_requirement_for_modes() {
+        assert_eq!(
+            build_partial_length_requirement(None, None, 100),
+            "尽量保持与原文接近，原文约 100 字，目标 80-120 字"
+        );
+        assert_eq!(
+            build_partial_length_requirement(Some("expand"), None, 100),
+            "建议扩写至 120-200 字"
+        );
+        assert_eq!(
+            build_partial_length_requirement(Some("custom"), Some(300), 100),
+            "目标长度约 300 字，允许上下浮动 20%"
+        );
+    }
+
+    #[test]
+    fn should_calculate_partial_target_words_for_modes() {
+        assert_eq!(calculate_partial_target_words(None, None, 100), 150);
+        assert_eq!(
+            calculate_partial_target_words(Some("expand"), None, 100),
+            200
+        );
+        assert_eq!(
+            calculate_partial_target_words(Some("custom"), Some(260), 100),
+            260
+        );
+        assert_eq!(
+            calculate_partial_target_words(Some("custom"), None, 100),
+            150
+        );
+    }
+
+    #[test]
+    fn should_prepare_partial_regeneration_input_with_override_and_context() {
+        let chapter = chapter_with_content("一二三四五六七八九十");
+
+        let result = prepare_partial_regeneration_input(
+            &chapter,
+            "替换文本",
+            2,
+            5,
+            2,
+            "增强张力",
+            Some("custom"),
+            Some(120),
+            Some("风格说明"),
+            Some("联网说明"),
+        );
+        let prepared = valid_prepared_partial_input(result);
+
+        assert_eq!(prepared.selected_text, "替换文本");
+        assert_eq!(prepared.context_before, "一二");
+        assert_eq!(prepared.context_after, "六七");
+        assert_eq!(prepared.original_word_count, 4);
+        assert_eq!(prepared.target_words, 120);
+        assert!(prepared.prompt.contains("风格说明"));
+        assert!(prepared.prompt.contains("联网说明"));
+    }
+
+    #[test]
+    fn should_prepare_partial_regeneration_input_with_content_fallback_and_edge_context() {
+        let chapter = chapter_with_content("一二三四五六七八九十");
+
+        let result =
+            prepare_partial_regeneration_input(&chapter, "  ", 0, 2, 3, "", None, None, None, None);
+        let prepared = valid_prepared_partial_input(result);
+
+        assert_eq!(prepared.selected_text, "一二");
+        assert_eq!(prepared.context_before, "");
+        assert_eq!(prepared.context_after, "三四五");
+        assert!(prepared.prompt.contains("（无前文上下文）"));
+        assert!(prepared.prompt.contains("（无额外要求）"));
+    }
+
+    #[test]
+    fn should_clamp_partial_regeneration_max_tokens() {
+        let chapter = chapter_with_content("一二三四五");
+
+        let floor_result = prepare_partial_regeneration_input(
+            &chapter,
+            "",
+            1,
+            2,
+            1,
+            "",
+            Some("custom"),
+            Some(1),
+            None,
+            None,
+        );
+        let floor_prepared = valid_prepared_partial_input(floor_result);
+
+        let cap_result = prepare_partial_regeneration_input(
+            &chapter,
+            "",
+            1,
+            2,
+            1,
+            "",
+            Some("custom"),
+            Some(10_000),
+            None,
+            None,
+        );
+        let cap_prepared = valid_prepared_partial_input(cap_result);
+
+        assert_eq!(floor_prepared.target_words, 1);
+        assert_eq!(floor_prepared.max_tokens, 500);
+        assert_eq!(cap_prepared.target_words, 10_000);
+        assert_eq!(cap_prepared.max_tokens, 8000);
+    }
+
+    #[test]
+    fn should_reject_invalid_partial_regeneration_range() {
+        let chapter = chapter_with_content("一二三");
+
+        let result =
+            prepare_partial_regeneration_input(&chapter, "", 2, 2, 1, "", None, None, None, None);
+        let error = match result {
+            Ok(_) => panic!("empty range should be invalid"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            PreparePartialRegenerationError::InvalidRange
+        ));
+    }
+
+    #[test]
+    fn should_reject_empty_partial_regeneration_selection() {
+        let chapter = chapter_with_content("   ");
+
+        let result =
+            prepare_partial_regeneration_input(&chapter, "", 0, 1, 1, "", None, None, None, None);
+        let error = match result {
+            Ok(_) => panic!("blank selected text should be invalid"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            PreparePartialRegenerationError::EmptySelectedText
+        ));
+    }
 }

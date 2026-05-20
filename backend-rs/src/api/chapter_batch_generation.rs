@@ -1,52 +1,37 @@
 use axum::{
     extract::{Extension, Path, Query},
     http::StatusCode,
-    response::{sse::KeepAlive, Json, Sse},
+    response::{Json, Sse},
     routing::{get, post},
     Router,
 };
 use sea_orm::DatabaseConnection;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::api::chapter_batch_generation_error_mapper::{
-    map_active_batch_generation_query_error, map_batch_generation_status_query_error,
-    map_active_batch_generation_task_list_query_error,
-    map_batch_generation_status_stream_access_error,
-    map_cancel_batch_generation_workflow_error,
-    map_create_batch_generation_workflow_error,
-    map_prepare_batch_generation_resume_request_error,
-    map_single_chapter_generation_request_error,
+    map_active_batch_generation_query_error, map_active_batch_generation_task_list_query_error,
+    map_batch_generation_status_query_error, map_batch_generation_status_stream_access_error,
+    map_cancel_batch_generation_workflow_error, map_create_batch_generation_workflow_error,
+    map_create_single_generation_background_workflow_error,
+    map_prepare_batch_generation_resume_request_error, map_single_chapter_generation_request_error,
 };
 use crate::services::auth::Claims;
-use crate::services::chapter_batch_generation_active_list_query_service::{
-    load_active_batch_generation_task_list_query,
-};
+use crate::services::chapter_batch_generation_active_list_query_service::load_owned_active_batch_generation_task_list_query;
 use crate::services::chapter_batch_generation_active_query_service::load_active_batch_generation_query;
-use crate::services::chapter_batch_generation_request_compat_service::{
-    consume_batch_generation_request_compat_fields, BatchGenerationRequestCompatFields,
-};
 use crate::services::chapter_batch_generation_cancel_service::cancel_owned_batch_generation_task;
-use crate::services::chapter_batch_generation_create_workflow_service::{
-    create_batch_generation_workflow, BatchGenerationCreateWorkflowRequest,
-};
-use crate::services::chapter_batch_generation_dispatch_service::{
-    dispatch_batch_generation_runtime, dispatch_single_chapter_generation_runtime,
-};
-use crate::services::chapter_batch_generation_resume_service::{
-    prepare_batch_generation_resume_request,
-};
-use crate::services::chapter_batch_generation_task_command_service::{
-    create_single_generation_background_task_plan,
-    ResumeExecutionPlan,
-};
+use crate::services::chapter_batch_generation_create_workflow_service::start_owned_batch_generation_workflow;
+use crate::services::chapter_batch_generation_request_compat_service::BatchGenerationRequestCompatFields;
+use crate::services::chapter_batch_generation_resume_service::resume_owned_batch_generation_task;
 use crate::services::chapter_batch_generation_status_query_service::load_batch_generation_status_query;
-use crate::services::chapter_batch_generation_status_stream_service::build_batch_generation_status_stream;
-use crate::services::chapter_batch_generation_stream_access_service::ensure_batch_generation_status_stream_access;
+use crate::services::chapter_batch_generation_status_stream_service::create_owned_batch_generation_status_stream;
+use crate::services::chapter_single_generation_background_workflow_service::start_owned_single_generation_background_workflow;
 use crate::services::chapter_single_generation_request_service::{
-    prepare_single_chapter_generation_request, SingleChapterGenerationRequest,
+    build_single_chapter_generation_request, consume_single_chapter_generation_request_compat_fields,
+    SingleChapterGenerationRequest, SingleChapterGenerationRequestCompatFields,
 };
-use crate::services::chapter_single_generation_stream_service::build_single_chapter_generation_stream;
+use crate::services::chapter_single_generation_stream_workflow_service::create_single_generation_stream_workflow;
+use crate::utils::sse::{default_sse_keep_alive, named_sse_keep_alive};
 
 #[derive(Deserialize)]
 struct BatchGenerateRequest {
@@ -84,13 +69,10 @@ struct ChapterGenerateRequest {
     enable_analysis: Option<bool>,
 }
 
-async fn create_batch_generate(
-    Extension(db): Extension<DatabaseConnection>,
-    Extension(claims): Extension<Claims>,
-    Path(project_id): Path<String>,
-    Json(body): Json<BatchGenerateRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    consume_batch_generation_request_compat_fields(&BatchGenerationRequestCompatFields {
+fn build_batch_generation_request_compat_fields(
+    body: &BatchGenerateRequest,
+) -> BatchGenerationRequestCompatFields {
+    BatchGenerationRequestCompatFields {
         enable_mcp: body.enable_mcp,
         enable_web_research: body.enable_web_research,
         web_research_query: body.web_research_query.clone(),
@@ -103,36 +85,32 @@ async fn create_batch_generate(
         story_repair_summary: body.story_repair_summary.clone(),
         story_repair_targets: body.story_repair_targets.clone(),
         story_preserve_strengths: body.story_preserve_strengths.clone(),
-    });
+    }
+}
 
-    let workflow = create_batch_generation_workflow(
+async fn create_batch_generate(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(project_id): Path<String>,
+    Json(body): Json<BatchGenerateRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let result = start_owned_batch_generation_workflow(
         &db,
         &project_id,
         &claims.sub,
-        &BatchGenerationCreateWorkflowRequest {
-            start_chapter_number: body.start_chapter_number,
-            count: body.count,
-            style_id: body.style_id,
-            target_word_count: body.target_word_count,
-            enable_analysis: body.enable_analysis,
-            max_retries: body.max_retries,
-            model_override: body.model.clone(),
-        },
+        body.start_chapter_number,
+        body.count,
+        body.style_id,
+        body.target_word_count,
+        body.enable_analysis,
+        body.max_retries,
+        body.model.clone(),
+        build_batch_generation_request_compat_fields(&body),
     )
     .await
     .map_err(map_create_batch_generation_workflow_error)?;
 
-    dispatch_batch_generation_runtime(
-        db.clone(),
-        workflow.created_task_id.clone(),
-        claims.sub.clone(),
-        workflow.chapter_ids,
-        workflow.target_word_count,
-        workflow.ai_config,
-        workflow.provider_payload,
-    );
-
-    Ok(Json(workflow.response_payload))
+    Ok(Json(result))
 }
 
 async fn generate_chapter_content_background(
@@ -141,45 +119,22 @@ async fn generate_chapter_content_background(
     Path(chapter_id): Path<String>,
     Json(body): Json<ChapterGenerateRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let _ = body.enable_analysis;
-
-    let prepared = prepare_single_chapter_generation_request(
+    consume_single_chapter_generation_request_compat_fields(
+        &SingleChapterGenerationRequestCompatFields {
+            enable_analysis: body.enable_analysis,
+        },
+    );
+    let request = build_single_chapter_generation_request(body.target_word_count, body.model.clone());
+    let result = start_owned_single_generation_background_workflow(
         &db,
         &chapter_id,
         &claims.sub,
-        &SingleChapterGenerationRequest {
-            target_word_count: body.target_word_count,
-            model: body.model.clone(),
-        },
+        request,
     )
     .await
-        .map_err(map_single_chapter_generation_request_error)?;
+    .map_err(map_create_single_generation_background_workflow_error)?;
 
-    let plan = create_single_generation_background_task_plan(
-        &db,
-        &claims.sub,
-        &prepared.chapter_model,
-        prepared.target_word_count,
-    )
-    .await
-    .map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail": error})),
-        )
-    })?;
-
-    dispatch_single_chapter_generation_runtime(
-        db.clone(),
-        plan.created_task.id.clone(),
-        claims.sub.clone(),
-        prepared.chapter_model.id.clone(),
-        plan.target_word_count,
-        prepared.ai_config,
-        prepared.provider_payload,
-    );
-
-    Ok(Json(plan.response_payload))
+    Ok(Json(result))
 }
 
 async fn generate_chapter_content_stream(
@@ -191,29 +146,25 @@ async fn generate_chapter_content_stream(
     Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>>,
     (StatusCode, Json<Value>),
 > {
-    let prepared = prepare_single_chapter_generation_request(
-        &db,
-        &chapter_id,
-        &claims.sub,
-        &SingleChapterGenerationRequest {
-            target_word_count: body.target_word_count,
-            model: body.model.clone(),
+    consume_single_chapter_generation_request_compat_fields(
+        &SingleChapterGenerationRequestCompatFields {
+            enable_analysis: body.enable_analysis,
         },
+    );
+    let request: SingleChapterGenerationRequest = build_single_chapter_generation_request(
+        body.target_word_count,
+        body.model.clone(),
+    );
+    let stream = create_single_generation_stream_workflow(
+        db.clone(),
+        claims.sub.clone(),
+        chapter_id.clone(),
+        request,
     )
     .await
     .map_err(map_single_chapter_generation_request_error)?;
-    let stream = build_single_chapter_generation_stream(
-        db.clone(),
-        claims.sub.clone(),
-        prepared.chapter_model.id.clone(),
-        prepared.target_word_count,
-        prepared.ai_config,
-        prepared.provider_payload,
-    );
 
-    Ok(Sse::new(stream).keep_alive(
-        KeepAlive::new().interval(std::time::Duration::from_secs(10)),
-    ))
+    Ok(Sse::new(stream).keep_alive(default_sse_keep_alive()))
 }
 
 async fn get_batch_generation_status(
@@ -225,7 +176,7 @@ async fn get_batch_generation_status(
         .await
         .map_err(map_batch_generation_status_query_error)?;
 
-    Ok(Json(result.response_payload))
+    Ok(Json(result))
 }
 
 async fn stream_batch_generation_status(
@@ -236,18 +187,15 @@ async fn stream_batch_generation_status(
     Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>>,
     (StatusCode, Json<Value>),
 > {
-    ensure_batch_generation_status_stream_access(&db, &batch_id, &claims.sub)
-        .await
-        .map_err(map_batch_generation_status_stream_access_error)?;
+    let stream = create_owned_batch_generation_status_stream(
+        db.clone(),
+        batch_id.clone(),
+        claims.sub.clone(),
+    )
+    .await
+    .map_err(map_batch_generation_status_stream_access_error)?;
 
-    let stream =
-        build_batch_generation_status_stream(db.clone(), batch_id.clone(), claims.sub.clone());
-
-    Ok(Sse::new(stream).keep_alive(
-        KeepAlive::new()
-            .interval(std::time::Duration::from_secs(10))
-            .text("keep-alive"),
-    ))
+    Ok(Sse::new(stream).keep_alive(named_sse_keep_alive("keep-alive")))
 }
 
 async fn get_active_batch_generation(
@@ -259,7 +207,7 @@ async fn get_active_batch_generation(
         .await
         .map_err(map_active_batch_generation_query_error)?;
 
-    Ok(Json(result.response_payload))
+    Ok(Json(result))
 }
 
 async fn list_active_batch_generation_tasks(
@@ -267,11 +215,10 @@ async fn list_active_batch_generation_tasks(
     Extension(claims): Extension<Claims>,
     Query(query): Query<ActiveQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let limit = query.limit.unwrap_or(20).clamp(1, 100);
-    let result = load_active_batch_generation_task_list_query(&db, &claims.sub, limit)
+    let result = load_owned_active_batch_generation_task_list_query(&db, &claims.sub, query.limit)
         .await
         .map_err(map_active_batch_generation_task_list_query_error)?;
-    Ok(Json(result.response_payload))
+    Ok(Json(result))
 }
 
 async fn cancel_batch_generation(
@@ -283,7 +230,7 @@ async fn cancel_batch_generation(
         .await
         .map_err(map_cancel_batch_generation_workflow_error)?;
 
-    Ok(Json(result.response_payload))
+    Ok(Json(result))
 }
 
 async fn resume_batch_generation(
@@ -291,50 +238,14 @@ async fn resume_batch_generation(
     Extension(claims): Extension<Claims>,
     Path(batch_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let prepared = prepare_batch_generation_resume_request(&db, &batch_id, &claims.sub)
+    let result = resume_owned_batch_generation_task(&db, &batch_id, &claims.sub)
         .await
         .map_err(map_prepare_batch_generation_resume_request_error)?;
-    let response_payload = prepared.response_payload.clone();
-    let ai_config = prepared.ai_config;
-    let provider_payload = prepared.provider_payload;
 
-    match prepared.execution {
-        ResumeExecutionPlan::SingleChapter {
-            chapter_id,
-            target_word_count,
-            user_id,
-        } => {
-            dispatch_single_chapter_generation_runtime(
-                db.clone(),
-                batch_id.clone(),
-                user_id,
-                chapter_id,
-                target_word_count,
-                ai_config,
-                provider_payload,
-            );
-        }
-        ResumeExecutionPlan::Batch {
-            chapter_ids,
-            target_word_count,
-            user_id,
-        } => {
-            dispatch_batch_generation_runtime(
-                db.clone(),
-                batch_id.clone(),
-                user_id,
-                chapter_ids,
-                target_word_count,
-                ai_config,
-                provider_payload,
-            );
-        }
-    }
-
-    Ok(Json(response_payload))
+    Ok(Json(result))
 }
 
-pub fn routes() -> Router {
+pub(crate) fn routes() -> Router {
     Router::new()
         .route(
             "/chapters/project/{project_id}/batch-generate",

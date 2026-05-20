@@ -1,15 +1,16 @@
-pub mod ai;
-pub mod api;
-pub mod config;
-pub mod db;
-pub mod mcp;
-pub mod middleware;
-pub mod models;
-pub mod services;
-pub mod tasks;
-pub mod utils;
+mod ai;
+mod api;
+mod config;
+mod db;
+mod mcp;
+mod middleware;
+mod models;
+mod services;
+mod tasks;
+mod utils;
 
 use std::net::SocketAddr;
+use std::process::exit;
 
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -22,7 +23,13 @@ async fn main() {
         )
         .init();
 
-    let cfg = config::load();
+    let cfg = match config::load() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            tracing::error!("Startup configuration error: {}", err);
+            exit(1);
+        }
+    };
     let db = db::init_pool(&cfg).await;
 
     if cfg.enable_startup_schema_sync {
@@ -38,7 +45,13 @@ async fn main() {
     tasks::persistence::start_periodic_save(task_registry.clone());
     start_periodic_cleanup(task_registry.clone());
 
-    let app = api::router::build(db, &cfg, task_registry);
+    let app = match api::router::build(db, &cfg, task_registry) {
+        Ok(app) => app,
+        Err(err) => {
+            tracing::error!("Router build error: {}", err);
+            exit(1);
+        }
+    };
 
     let addr: SocketAddr = format!("{}:{}", cfg.app_host, cfg.app_port)
         .parse()

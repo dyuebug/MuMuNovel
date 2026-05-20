@@ -337,6 +337,8 @@ function Invoke-GatewaySmoke {
         $GatewaySmokeScript,
         '--base-url', 'http://localhost:8005',
         '--manifest', $GatewaySmokeManifestPath,
+        '--profile', 'deploy',
+
         '--http-timeout', '10',
         '--output', $GatewaySmokeOutputPath
     )

@@ -1,31 +1,54 @@
-use serde_json::Value;
 use sea_orm::DatabaseConnection;
+use serde_json::Value;
 
-use super::chapter_batch_generation_status_payload_adapter_service::build_active_batch_generation_task_list_response;
-use super::chapter_batch_generation_status_view_service::load_active_user_batch_generation_task_view_contexts;
+use super::chapter_batch_generation_status_view_service::{
+    build_active_batch_generation_task_list_query_response,
+    load_active_user_batch_generation_task_view_contexts,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LoadActiveBatchGenerationTaskListQueryError {
+pub(crate) enum LoadActiveBatchGenerationTaskListQueryError {
     Internal(String),
 }
 
-pub struct ActiveBatchGenerationTaskListQueryResult {
-    pub response_payload: Value,
+fn normalize_active_batch_generation_task_list_limit(limit: Option<u64>) -> u64 {
+    limit.unwrap_or(20).clamp(1, 100)
 }
 
-pub async fn load_active_batch_generation_task_list_query(
+pub(crate) async fn load_owned_active_batch_generation_task_list_query(
     db: &DatabaseConnection,
     user_id: &str,
-    limit: u64,
-) -> Result<
-    ActiveBatchGenerationTaskListQueryResult,
-    LoadActiveBatchGenerationTaskListQueryError,
-> {
-    let tasks = load_active_user_batch_generation_task_view_contexts(db, user_id, limit)
-        .await
-        .map_err(LoadActiveBatchGenerationTaskListQueryError::Internal)?;
+    limit: Option<u64>,
+) -> Result<Value, LoadActiveBatchGenerationTaskListQueryError> {
+    let tasks = load_active_user_batch_generation_task_view_contexts(
+        db,
+        user_id,
+        normalize_active_batch_generation_task_list_limit(limit),
+    )
+    .await
+    .map_err(LoadActiveBatchGenerationTaskListQueryError::Internal)?;
 
-    Ok(ActiveBatchGenerationTaskListQueryResult {
-        response_payload: build_active_batch_generation_task_list_response(tasks),
-    })
+    Ok(build_active_batch_generation_task_list_query_response(tasks))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_active_batch_generation_task_list_limit;
+
+    #[test]
+    fn should_normalize_active_batch_generation_task_list_limit() {
+        assert_eq!(normalize_active_batch_generation_task_list_limit(None), 20);
+        assert_eq!(
+            normalize_active_batch_generation_task_list_limit(Some(0)),
+            1
+        );
+        assert_eq!(
+            normalize_active_batch_generation_task_list_limit(Some(25)),
+            25
+        );
+        assert_eq!(
+            normalize_active_batch_generation_task_list_limit(Some(500)),
+            100
+        );
+    }
 }

@@ -1,43 +1,35 @@
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Select,
 };
 use serde_json::{json, Value};
 
-use crate::models::{batch_generation_snapshot, batch_generation_task};
-use crate::services::chapter_batch_generation_owned_task_query_service::load_owned_task;
-use crate::services::chapter_batch_generation_quality_status_service::{
-    build_quality_status_context,
+use crate::models::batch_generation_task;
+use crate::services::chapter_batch_generation_owned_task_query_service::{
+    load_owned_task, load_required_owned_task, map_owned_batch_generation_task_error,
 };
-pub use crate::services::chapter_batch_generation_status_semantics_service::{
-    task_execution_mode, task_stage_code, task_type,
+use crate::services::chapter_batch_generation_quality_status_service::build_quality_status_context;
+use crate::services::chapter_batch_generation_runtime_state_service::load_batch_generation_snapshot;
+use crate::services::chapter_batch_generation_status_payload_adapter_service::{
+    active_task_payload, task_status_payload,
 };
-pub use crate::services::chapter_batch_generation_status_payload_adapter_service::{
-    active_task_payload, build_active_batch_generation_response,
-    build_active_batch_generation_task_list_response, build_task_status_response,
-    checkpoint_with_runtime_metadata, task_status_payload, to_iso,
-};
-
-pub async fn load_batch_generation_snapshot(
-    db: &DatabaseConnection,
-    task_id: &str,
-) -> Result<Option<batch_generation_snapshot::Model>, String> {
-    batch_generation_snapshot::Entity::find()
-        .filter(batch_generation_snapshot::Column::BatchTaskId.eq(task_id))
-        .one(db)
-        .await
-        .map_err(|error| error.to_string())
-}
+use crate::services::chapter_batch_generation_status_semantics_service::active_batch_generation_statuses;
 
 #[derive(Debug, Clone)]
-pub struct BatchGenerationTaskViewContext {
-    pub task: batch_generation_task::Model,
-    pub workflow_runtime_state: Option<Value>,
-    pub latest_quality_metrics: Option<Value>,
-    pub quality_metrics_summary: Option<Value>,
-    pub active_story_repair_payload: Option<Value>,
+pub(crate) struct BatchGenerationTaskViewContext {
+    pub(crate) task: batch_generation_task::Model,
+    pub(crate) workflow_runtime_state: Option<Value>,
+    pub(crate) latest_quality_metrics: Option<Value>,
+    pub(crate) quality_metrics_summary: Option<Value>,
+    pub(crate) active_story_repair_payload: Option<Value>,
 }
 
-pub async fn build_batch_generation_task_view_context(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LoadBatchGenerationTaskViewContextError {
+    TaskNotFound,
+    Internal(String),
+}
+
+async fn build_batch_generation_task_view_context(
     db: &DatabaseConnection,
     task: batch_generation_task::Model,
 ) -> Result<BatchGenerationTaskViewContext, String> {
@@ -57,12 +49,10 @@ pub async fn build_batch_generation_task_view_context(
     })
 }
 
-pub async fn load_batch_generation_task_view_context(
+async fn build_optional_batch_generation_task_view_context(
     db: &DatabaseConnection,
-    batch_id: &str,
-    user_id: &str,
+    task: Option<batch_generation_task::Model>,
 ) -> Result<Option<BatchGenerationTaskViewContext>, String> {
-    let task = load_owned_task(db, batch_id, user_id).await?;
     let Some(task) = task else {
         return Ok(None);
     };
@@ -72,42 +62,10 @@ pub async fn load_batch_generation_task_view_context(
         .map(Some)
 }
 
-pub async fn load_active_project_batch_generation_task_view_context(
+async fn build_batch_generation_task_view_contexts(
     db: &DatabaseConnection,
-    project_id: &str,
-    user_id: &str,
-) -> Result<Option<BatchGenerationTaskViewContext>, String> {
-    let task = batch_generation_task::Entity::find()
-        .filter(batch_generation_task::Column::ProjectId.eq(project_id))
-        .filter(batch_generation_task::Column::UserId.eq(user_id))
-        .filter(batch_generation_task::Column::Status.is_in(["pending", "running"]))
-        .order_by_desc(batch_generation_task::Column::CreatedAt)
-        .one(db)
-        .await
-        .map_err(|error| error.to_string())?;
-    let Some(task) = task else {
-        return Ok(None);
-    };
-
-    build_batch_generation_task_view_context(db, task)
-        .await
-        .map(Some)
-}
-
-pub async fn load_active_user_batch_generation_task_view_contexts(
-    db: &DatabaseConnection,
-    user_id: &str,
-    limit: u64,
+    tasks: Vec<batch_generation_task::Model>,
 ) -> Result<Vec<BatchGenerationTaskViewContext>, String> {
-    let tasks = batch_generation_task::Entity::find()
-        .filter(batch_generation_task::Column::UserId.eq(user_id))
-        .filter(batch_generation_task::Column::Status.is_in(["pending", "running"]))
-        .order_by_desc(batch_generation_task::Column::CreatedAt)
-        .limit(limit)
-        .all(db)
-        .await
-        .map_err(|error| error.to_string())?;
-
     let mut contexts = Vec::with_capacity(tasks.len());
     for task in tasks {
         contexts.push(build_batch_generation_task_view_context(db, task).await?);
@@ -115,13 +73,195 @@ pub async fn load_active_user_batch_generation_task_view_contexts(
     Ok(contexts)
 }
 
+fn build_active_batch_generation_task_view_payload(context: BatchGenerationTaskViewContext) -> Value {
+    active_task_payload(
+        &context.task,
+        context.workflow_runtime_state,
+        context.latest_quality_metrics,
+        context.quality_metrics_summary,
+        context.active_story_repair_payload,
+    )
+}
+
+pub(crate) fn build_batch_generation_status_query_response(
+    context: BatchGenerationTaskViewContext,
+) -> Value {
+    task_status_payload(
+        &context.task,
+        context.workflow_runtime_state,
+        context.latest_quality_metrics,
+        context.quality_metrics_summary,
+        context.active_story_repair_payload,
+    )
+}
+
+pub(crate) fn build_active_batch_generation_query_response(
+    task: Option<BatchGenerationTaskViewContext>,
+) -> Value {
+    match task {
+        Some(context) => json!({
+            "has_active_task": true,
+            "task": build_active_batch_generation_task_view_payload(context),
+        }),
+        None => json!({
+            "has_active_task": false,
+            "task": null,
+        }),
+    }
+}
+
+pub(crate) fn build_active_batch_generation_task_list_query_response(
+    contexts: Vec<BatchGenerationTaskViewContext>,
+) -> Value {
+    let items: Vec<Value> = contexts
+        .into_iter()
+        .map(build_active_batch_generation_task_view_payload)
+        .collect();
+
+    json!({
+        "total": items.len(),
+        "items": items,
+    })
+}
+
+pub(crate) fn build_batch_generation_progress_event(
+    state: &BatchGenerationStreamState,
+) -> Value {
+    json!({
+        "type": "progress",
+        "message": state.message,
+        "progress": state.progress,
+        "status": state.event_status,
+    })
+}
+
+pub(crate) fn build_batch_generation_result_event(state: &BatchGenerationStreamState) -> Value {
+    json!({
+        "type": "result",
+        "data": {
+            "generation_task_id": state.task.id,
+            "chapter_id": state.task.current_chapter_id,
+            "content_source": "chapter",
+        }
+    })
+}
+
+pub(crate) fn build_batch_generation_failed_event(state: &BatchGenerationStreamState) -> Value {
+    json!({
+        "type": "error",
+        "error": state
+            .task
+            .error_message
+            .clone()
+            .unwrap_or_else(|| "Generation task failed.".to_string()),
+        "code": 500
+    })
+}
+
+pub(crate) fn build_batch_generation_cancelled_event() -> Value {
+    json!({
+        "type": "error",
+        "error": "Generation task was cancelled.",
+        "code": 499
+    })
+}
+
+pub(crate) fn build_batch_generation_not_found_event() -> Value {
+    json!({
+        "type": "error",
+        "error": "Batch generation task not found",
+        "code": 404
+    })
+}
+
+pub(crate) fn build_batch_generation_timeout_event() -> Value {
+    json!({
+        "type": "error",
+        "error": "Generation stream timed out.",
+        "code": 408
+    })
+}
+
+pub(crate) fn build_batch_generation_terminal_events(
+    state: &BatchGenerationStreamState,
+) -> Option<Vec<Value>> {
+    match state.status.as_str() {
+        "completed" => Some(vec![
+            build_batch_generation_result_event(state),
+            json!({"type":"done"}),
+        ]),
+        "failed" => Some(vec![build_batch_generation_failed_event(state)]),
+        "cancelled" => Some(vec![build_batch_generation_cancelled_event()]),
+        _ => None,
+    }
+}
+
+pub(crate) async fn load_required_batch_generation_task_view_context(
+    db: &DatabaseConnection,
+    batch_id: &str,
+    user_id: &str,
+) -> Result<BatchGenerationTaskViewContext, LoadBatchGenerationTaskViewContextError> {
+    let task = load_required_owned_task(db, batch_id, user_id)
+        .await
+        .map_err(|error| {
+            map_owned_batch_generation_task_error(
+                error,
+                || LoadBatchGenerationTaskViewContextError::TaskNotFound,
+                LoadBatchGenerationTaskViewContextError::Internal,
+            )
+        })?;
+
+    build_batch_generation_task_view_context(db, task)
+        .await
+        .map_err(LoadBatchGenerationTaskViewContextError::Internal)
+}
+
+fn build_active_batch_generation_task_query(
+    user_id: &str,
+) -> Select<batch_generation_task::Entity> {
+    batch_generation_task::Entity::find()
+        .filter(batch_generation_task::Column::UserId.eq(user_id))
+        .filter(batch_generation_task::Column::Status.is_in(active_batch_generation_statuses()))
+        .order_by_desc(batch_generation_task::Column::CreatedAt)
+}
+
+pub(crate) async fn load_active_project_batch_generation_task_view_context(
+    db: &DatabaseConnection,
+    project_id: &str,
+    user_id: &str,
+) -> Result<Option<BatchGenerationTaskViewContext>, String> {
+    let task = build_active_batch_generation_task_query(user_id)
+        .filter(batch_generation_task::Column::ProjectId.eq(project_id))
+        .order_by_desc(batch_generation_task::Column::CreatedAt)
+        .one(db)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    build_optional_batch_generation_task_view_context(db, task).await
+}
+
+pub(crate) async fn load_active_user_batch_generation_task_view_contexts(
+    db: &DatabaseConnection,
+    user_id: &str,
+    limit: u64,
+) -> Result<Vec<BatchGenerationTaskViewContext>, String> {
+    let tasks = build_active_batch_generation_task_query(user_id)
+        .limit(limit)
+        .all(db)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    build_batch_generation_task_view_contexts(db, tasks).await
+}
+
 #[derive(Debug, Clone)]
-pub struct BatchGenerationStreamState {
-    pub task: batch_generation_task::Model,
-    pub status: String,
-    pub completed: i32,
-    pub progress: i32,
-    pub message: String,
+pub(crate) struct BatchGenerationStreamState {
+    pub(crate) task: batch_generation_task::Model,
+    pub(crate) status: String,
+    pub(crate) completed: i32,
+    pub(crate) progress: i32,
+    pub(crate) message: String,
+    pub(crate) event_status: &'static str,
 }
 
 fn default_stream_progress(status: &str) -> i32 {
@@ -184,7 +324,7 @@ fn resolve_batch_generation_stream_semantics(
     }
 }
 
-pub async fn load_batch_generation_stream_state(
+pub(crate) async fn load_batch_generation_stream_state(
     db: &DatabaseConnection,
     batch_id: &str,
     user_id: &str,
@@ -208,76 +348,24 @@ pub async fn load_batch_generation_stream_state(
         completed,
         progress: semantics.progress,
         message: semantics.message,
+        event_status: semantics.event_status,
     }))
-}
-
-pub fn build_batch_generation_progress_event(state: &BatchGenerationStreamState) -> Value {
-    json!({
-        "type": "progress",
-        "message": state.message,
-        "progress": state.progress,
-        "status": map_batch_generation_stream_event_status(&state.status),
-    })
-}
-
-pub fn build_batch_generation_result_event(state: &BatchGenerationStreamState) -> Value {
-    json!({
-        "type": "result",
-        "data": {
-            "generation_task_id": state.task.id,
-            "chapter_id": state.task.current_chapter_id,
-            "content_source": "chapter",
-        }
-    })
-}
-
-pub fn build_batch_generation_failed_event(state: &BatchGenerationStreamState) -> Value {
-    json!({
-        "type": "error",
-        "error": state
-            .task
-            .error_message
-            .clone()
-            .unwrap_or_else(|| "Generation task failed.".to_string()),
-        "code": 500
-    })
-}
-
-pub fn build_batch_generation_cancelled_event() -> Value {
-    json!({
-        "type": "error",
-        "error": "Generation task was cancelled.",
-        "code": 499
-    })
-}
-
-pub fn build_batch_generation_not_found_event() -> Value {
-    json!({
-        "type": "error",
-        "error": "Batch generation task not found",
-        "code": 404
-    })
-}
-
-pub fn build_batch_generation_timeout_event() -> Value {
-    json!({
-        "type": "error",
-        "error": "Generation stream timed out.",
-        "code": 408
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_active_batch_generation_task_list_response, build_batch_generation_cancelled_event,
-        build_batch_generation_failed_event, build_batch_generation_not_found_event,
-        build_batch_generation_progress_event, build_batch_generation_result_event,
-        build_batch_generation_timeout_event, map_batch_generation_stream_event_status,
-        resolve_batch_generation_stream_semantics, task_status_payload, terminal_semantics,
-        BatchGenerationStreamState, BatchGenerationTaskViewContext,
+        build_active_batch_generation_query_response,
+        build_active_batch_generation_task_list_query_response,
+        build_batch_generation_cancelled_event, build_batch_generation_failed_event,
+        build_batch_generation_not_found_event, build_batch_generation_progress_event,
+        build_batch_generation_result_event, build_batch_generation_status_query_response,
+        build_batch_generation_terminal_events, build_batch_generation_timeout_event,
+        map_batch_generation_stream_event_status, resolve_batch_generation_stream_semantics,
+        BatchGenerationTaskViewContext, BatchGenerationStreamState,
     };
     use crate::models::batch_generation_task;
+    use crate::services::chapter_batch_generation_quality_status_service::terminal_semantics;
     use serde_json::json;
 
     fn build_task(status: &str) -> batch_generation_task::Model {
@@ -314,7 +402,13 @@ mod tests {
             "quality_gate_label": "manual review"
         }]);
 
-        let payload = task_status_payload(&task, None, None, None, None);
+        let payload = build_batch_generation_status_query_response(BatchGenerationTaskViewContext {
+            task,
+            workflow_runtime_state: None,
+            latest_quality_metrics: None,
+            quality_metrics_summary: None,
+            active_story_repair_payload: None,
+        });
 
         assert_eq!(payload["terminal_reason"], "manual_review");
         assert_eq!(payload["terminal_label"], "manual review");
@@ -339,64 +433,6 @@ mod tests {
     }
 
     #[test]
-    fn should_build_active_batch_generation_task_list_response() {
-        let task = build_task("running");
-        let response = build_active_batch_generation_task_list_response(vec![
-            BatchGenerationTaskViewContext {
-                task: task.clone(),
-                workflow_runtime_state: Some(json!({
-                    "phase": "generating",
-                    "progress": 42,
-                    "last_message": "处理中"
-                })),
-                latest_quality_metrics: Some(json!({"score": 90})),
-                quality_metrics_summary: Some(json!({"summary": "ok"})),
-                active_story_repair_payload: Some(json!({"mode": "repair"})),
-            },
-        ]);
-
-        assert_eq!(response["total"], 1);
-        assert_eq!(response["items"][0]["batch_id"], task.id);
-        assert_eq!(response["items"][0]["status"], "running");
-        assert_eq!(response["items"][0]["checkpoint"]["progress"], 42);
-        assert_eq!(response["items"][0]["active_story_repair_payload"]["mode"], "repair");
-    }
-
-    #[test]
-    fn should_build_batch_generation_stream_events() {
-        let state = BatchGenerationStreamState {
-            task: build_task("completed"),
-            status: "completed".to_string(),
-            completed: 1,
-            progress: 100,
-            message: "生成完成".to_string(),
-        };
-
-        let progress_event = build_batch_generation_progress_event(&state);
-        let result_event = build_batch_generation_result_event(&state);
-        let failed_event = build_batch_generation_failed_event(&BatchGenerationStreamState {
-            task: {
-                let mut task = build_task("failed");
-                task.error_message = Some("boom".to_string());
-                task
-            },
-            status: "failed".to_string(),
-            completed: 0,
-            progress: 100,
-            message: "生成失败".to_string(),
-        });
-
-        assert_eq!(progress_event["type"], "progress");
-        assert_eq!(progress_event["status"], "success");
-        assert_eq!(result_event["type"], "result");
-        assert_eq!(result_event["data"]["content_source"], "chapter");
-        assert_eq!(failed_event["error"], "boom");
-        assert_eq!(build_batch_generation_cancelled_event()["code"], 499);
-        assert_eq!(build_batch_generation_not_found_event()["code"], 404);
-        assert_eq!(build_batch_generation_timeout_event()["code"], 408);
-    }
-
-    #[test]
     fn should_resolve_batch_generation_stream_semantics_with_checkpoint_fallbacks() {
         let running = resolve_batch_generation_stream_semantics("running", None);
         assert_eq!(running.progress, 65);
@@ -416,9 +452,237 @@ mod tests {
     }
 
     #[test]
+    fn should_resolve_batch_generation_stream_semantics_for_terminal_and_unknown_statuses() {
+        let failed = resolve_batch_generation_stream_semantics("failed", None);
+        assert_eq!(failed.progress, 100);
+        assert_eq!(failed.message, "生成失败");
+        assert_eq!(failed.event_status, "error");
+
+        let cancelled = resolve_batch_generation_stream_semantics(
+            "cancelled",
+            Some(&json!({
+                "progress": -5,
+                "last_message": "已停止"
+            })),
+        );
+        assert_eq!(cancelled.progress, 0);
+        assert_eq!(cancelled.message, "已停止");
+        assert_eq!(cancelled.event_status, "processing");
+
+        let unknown = resolve_batch_generation_stream_semantics("queued", None);
+        assert_eq!(unknown.progress, 15);
+        assert_eq!(unknown.message, "任务处理中");
+        assert_eq!(unknown.event_status, "processing");
+    }
+
+    #[test]
     fn should_map_batch_generation_stream_event_status() {
         assert_eq!(map_batch_generation_stream_event_status("failed"), "error");
-        assert_eq!(map_batch_generation_stream_event_status("completed"), "success");
-        assert_eq!(map_batch_generation_stream_event_status("running"), "processing");
+        assert_eq!(
+            map_batch_generation_stream_event_status("completed"),
+            "success"
+        );
+        assert_eq!(
+            map_batch_generation_stream_event_status("running"),
+            "processing"
+        );
+    }
+
+    #[test]
+    fn should_build_batch_generation_stream_events() {
+        let state = BatchGenerationStreamState {
+            task: build_task("completed"),
+            status: "completed".to_string(),
+            completed: 1,
+            progress: 100,
+            message: "生成完成".to_string(),
+            event_status: "success",
+        };
+
+        let progress_event = build_batch_generation_progress_event(&state);
+        let result_event = build_batch_generation_result_event(&state);
+        let failed_event = build_batch_generation_failed_event(&BatchGenerationStreamState {
+            task: {
+                let mut task = build_task("failed");
+                task.error_message = Some("boom".to_string());
+                task
+            },
+            status: "failed".to_string(),
+            completed: 0,
+            progress: 100,
+            message: "生成失败".to_string(),
+            event_status: "error",
+        });
+
+        assert_eq!(progress_event["type"], "progress");
+        assert_eq!(progress_event["status"], "success");
+        assert_eq!(result_event["type"], "result");
+        assert_eq!(result_event["data"]["content_source"], "chapter");
+        assert_eq!(failed_event["error"], "boom");
+        assert_eq!(build_batch_generation_cancelled_event()["code"], 499);
+        assert_eq!(build_batch_generation_not_found_event()["code"], 404);
+        assert_eq!(build_batch_generation_timeout_event()["code"], 408);
+    }
+
+    #[test]
+    fn should_build_terminal_batch_generation_events() {
+        let completed = BatchGenerationStreamState {
+            task: build_task("completed"),
+            status: "completed".to_string(),
+            completed: 1,
+            progress: 100,
+            message: "生成完成".to_string(),
+            event_status: "success",
+        };
+        let mut failed = BatchGenerationStreamState {
+            task: build_task("failed"),
+            status: "failed".to_string(),
+            completed: 0,
+            progress: 100,
+            message: "生成失败".to_string(),
+            event_status: "error",
+        };
+        failed.task.error_message = Some("boom".to_string());
+        let cancelled = BatchGenerationStreamState {
+            task: build_task("cancelled"),
+            status: "cancelled".to_string(),
+            completed: 0,
+            progress: 100,
+            message: "生成已取消".to_string(),
+            event_status: "processing",
+        };
+
+        let completed_events =
+            build_batch_generation_terminal_events(&completed).expect("completed events");
+        assert_eq!(completed_events.len(), 2);
+        assert_eq!(completed_events[0]["type"], "result");
+        assert_eq!(completed_events[1]["type"], "done");
+
+        let failed_events = build_batch_generation_terminal_events(&failed).expect("failed events");
+        assert_eq!(failed_events.len(), 1);
+        assert_eq!(failed_events[0]["type"], "error");
+        assert_eq!(failed_events[0]["error"], "boom");
+
+        let cancelled_events =
+            build_batch_generation_terminal_events(&cancelled).expect("cancelled events");
+        assert_eq!(cancelled_events.len(), 1);
+        assert_eq!(cancelled_events[0]["code"], 499);
+
+        let running = BatchGenerationStreamState {
+            task: build_task("running"),
+            status: "running".to_string(),
+            completed: 0,
+            progress: 65,
+            message: "处理中".to_string(),
+            event_status: "processing",
+        };
+        assert!(build_batch_generation_terminal_events(&running).is_none());
+    }
+
+    #[test]
+    fn should_build_active_batch_generation_query_response_from_task_context() {
+        let mut task = build_task("running");
+        task.total_chapters = 3;
+        task.completed_chapters = 1;
+        task.current_chapter_id = Some("chapter-2".to_string());
+        task.current_chapter_number = Some(2);
+
+        let payload = build_active_batch_generation_query_response(Some(
+            BatchGenerationTaskViewContext {
+                task,
+                workflow_runtime_state: Some(json!({"progress": 40})),
+                latest_quality_metrics: Some(json!({"score": 88})),
+                quality_metrics_summary: Some(json!({"summary": "good"})),
+                active_story_repair_payload: Some(json!({"mode": "repair"})),
+            },
+        ));
+
+        assert_eq!(payload["has_active_task"], true);
+        assert_eq!(payload["task"]["batch_id"], "task-1");
+        assert_eq!(payload["task"]["status"], "running");
+        assert_eq!(payload["task"]["checkpoint"]["progress"], 40);
+        assert_eq!(
+            payload["task"]["checkpoint"]["stage_code"],
+            "6.writing.generating"
+        );
+        assert_eq!(payload["task"]["latest_quality_metrics"]["score"], 88);
+        assert_eq!(
+            payload["task"]["quality_metrics_summary"]["summary"],
+            "good"
+        );
+        assert_eq!(
+            payload["task"]["active_story_repair_payload"]["mode"],
+            "repair"
+        );
+        assert!(payload["task"].get("current_retry_count").is_none());
+        assert!(payload["task"].get("terminal_reason").is_none());
+    }
+
+    #[test]
+    fn should_build_empty_active_batch_generation_query_response() {
+        let payload = build_active_batch_generation_query_response(None);
+
+        assert_eq!(payload["has_active_task"], false);
+        assert!(payload["task"].is_null());
+    }
+
+    #[test]
+    fn should_build_active_batch_generation_task_list_query_response_from_contexts() {
+        let mut first_task = build_task("running");
+        first_task.id = "task-1".to_string();
+        first_task.project_id = "project-1".to_string();
+        first_task.total_chapters = 3;
+        first_task.completed_chapters = 1;
+        first_task.current_chapter_id = Some("chapter-2".to_string());
+        first_task.current_chapter_number = Some(2);
+
+        let first = BatchGenerationTaskViewContext {
+            task: first_task,
+            workflow_runtime_state: Some(json!({"progress": 42})),
+            latest_quality_metrics: Some(json!({"score": 88})),
+            quality_metrics_summary: Some(json!({"summary": "good"})),
+            active_story_repair_payload: Some(json!({"mode": "repair"})),
+        };
+
+        let mut second_task = build_task("pending");
+        second_task.id = "task-2".to_string();
+        second_task.project_id = "project-2".to_string();
+        second_task.current_chapter_id = None;
+        second_task.current_chapter_number = None;
+        let second = BatchGenerationTaskViewContext {
+            task: second_task,
+            workflow_runtime_state: None,
+            latest_quality_metrics: None,
+            quality_metrics_summary: None,
+            active_story_repair_payload: None,
+        };
+
+        let payload =
+            build_active_batch_generation_task_list_query_response(vec![first, second]);
+
+        assert_eq!(payload["total"], 2);
+        assert_eq!(payload["items"][0]["batch_id"], "task-1");
+        assert_eq!(payload["items"][0]["checkpoint"]["progress"], 42);
+        assert_eq!(
+            payload["items"][0]["quality_metrics_summary"]["summary"],
+            "good"
+        );
+        assert_eq!(payload["items"][1]["batch_id"], "task-2");
+        assert_eq!(payload["items"][1]["status"], "pending");
+        assert_eq!(
+            payload["items"][1]["checkpoint"]["stage_code"],
+            "6.writing.pending"
+        );
+        assert!(payload["items"][1]["latest_quality_metrics"].is_null());
+        assert!(payload["items"][1].get("terminal_reason").is_none());
+        assert!(payload["items"][1].get("current_retry_count").is_none());
+    }
+
+    #[test]
+    fn should_build_empty_active_batch_generation_task_list_query_response() {
+        let payload = build_active_batch_generation_task_list_query_response(vec![]);
+
+        assert_eq!(payload["total"], 0);
+        assert_eq!(payload["items"], json!([]));
     }
 }

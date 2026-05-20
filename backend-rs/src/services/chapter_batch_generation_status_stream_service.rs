@@ -2,21 +2,30 @@ use std::convert::Infallible;
 
 use axum::response::sse::Event;
 use sea_orm::DatabaseConnection;
+use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::services::chapter_batch_generation_owned_task_query_service::{
+    load_required_owned_task, map_owned_batch_generation_task_error,
+};
 use crate::services::chapter_batch_generation_status_view_service::{
-    build_batch_generation_cancelled_event, build_batch_generation_failed_event,
     build_batch_generation_not_found_event, build_batch_generation_progress_event,
-    build_batch_generation_result_event, build_batch_generation_timeout_event,
+    build_batch_generation_terminal_events, build_batch_generation_timeout_event,
     load_batch_generation_stream_state,
 };
 
 const STATUS_POLL_ATTEMPTS: usize = 300;
 const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-pub type BatchGenerationStatusStream = ReceiverStream<Result<Event, Infallible>>;
+pub(crate) type BatchGenerationStatusStream = ReceiverStream<Result<Event, Infallible>>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BatchGenerationStatusStreamAccessError {
+    TaskNotFound,
+    Internal(String),
+}
 
 struct BatchGenerationStatusCursor {
     status: String,
@@ -35,26 +44,14 @@ impl BatchGenerationStatusCursor {
         }
     }
 
-    fn has_changed(
-        &self,
-        status: &str,
-        completed: i32,
-        progress: i32,
-        message: &str,
-    ) -> bool {
+    fn has_changed(&self, status: &str, completed: i32, progress: i32, message: &str) -> bool {
         self.status != status
             || self.completed != completed
             || self.progress != progress
             || self.message != message
     }
 
-    fn update(
-        &mut self,
-        status: String,
-        completed: i32,
-        progress: i32,
-        message: String,
-    ) {
+    fn update(&mut self, status: String, completed: i32, progress: i32, message: String) {
         self.status = status;
         self.completed = completed;
         self.progress = progress;
@@ -62,14 +59,31 @@ impl BatchGenerationStatusCursor {
     }
 }
 
-async fn send_json_event(
-    tx: &mpsc::Sender<Result<Event, Infallible>>,
-    payload: serde_json::Value,
-) {
-    let _ = tx.send(Ok(Event::default().data(payload.to_string()))).await;
+async fn send_json_event(tx: &mpsc::Sender<Result<Event, Infallible>>, payload: Value) {
+    let _ = tx
+        .send(Ok(Event::default().data(payload.to_string())))
+        .await;
 }
 
-pub fn build_batch_generation_status_stream(
+async fn ensure_batch_generation_status_stream_access(
+    db: &DatabaseConnection,
+    batch_id: &str,
+    user_id: &str,
+) -> Result<(), BatchGenerationStatusStreamAccessError> {
+    load_required_owned_task(db, batch_id, user_id)
+        .await
+        .map_err(|error| {
+            map_owned_batch_generation_task_error(
+                error,
+                || BatchGenerationStatusStreamAccessError::TaskNotFound,
+                BatchGenerationStatusStreamAccessError::Internal,
+            )
+        })?;
+
+    Ok(())
+}
+
+fn build_batch_generation_status_stream(
     db: DatabaseConnection,
     batch_id: String,
     user_id: String,
@@ -96,28 +110,14 @@ pub fn build_batch_generation_status_stream(
             ) {
                 send_json_event(&tx, build_batch_generation_progress_event(&state)).await;
 
-                if state.status == "completed" {
-                    send_json_event(&tx, build_batch_generation_result_event(&state)).await;
-                    send_json_event(&tx, serde_json::json!({"type":"done"})).await;
+                if let Some(events) = build_batch_generation_terminal_events(&state) {
+                    for event in events {
+                        send_json_event(&tx, event).await;
+                    }
                     return;
                 }
 
-                if state.status == "failed" {
-                    send_json_event(&tx, build_batch_generation_failed_event(&state)).await;
-                    return;
-                }
-
-                if state.status == "cancelled" {
-                    send_json_event(&tx, build_batch_generation_cancelled_event()).await;
-                    return;
-                }
-
-                cursor.update(
-                    state.status,
-                    state.completed,
-                    state.progress,
-                    state.message,
-                );
+                cursor.update(state.status, state.completed, state.progress, state.message);
             }
 
             sleep(STATUS_POLL_INTERVAL).await;
@@ -127,4 +127,48 @@ pub fn build_batch_generation_status_stream(
     });
 
     ReceiverStream::new(rx)
+}
+
+pub(crate) async fn create_owned_batch_generation_status_stream(
+    db: DatabaseConnection,
+    batch_id: String,
+    user_id: String,
+) -> Result<BatchGenerationStatusStream, BatchGenerationStatusStreamAccessError> {
+    ensure_batch_generation_status_stream_access(&db, &batch_id, &user_id).await?;
+
+    Ok(build_batch_generation_status_stream(db, batch_id, user_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::services::chapter_batch_generation_owned_task_query_service::{
+        map_owned_batch_generation_task_error, LoadOwnedBatchGenerationTaskError,
+    };
+
+    use super::BatchGenerationStatusStreamAccessError;
+
+    #[test]
+    fn should_map_owned_task_not_found_error_for_stream_access() {
+        let error = map_owned_batch_generation_task_error(
+            LoadOwnedBatchGenerationTaskError::TaskNotFound,
+            || BatchGenerationStatusStreamAccessError::TaskNotFound,
+            BatchGenerationStatusStreamAccessError::Internal,
+        );
+
+        assert_eq!(error, BatchGenerationStatusStreamAccessError::TaskNotFound);
+    }
+
+    #[test]
+    fn should_map_owned_task_internal_error_for_stream_access() {
+        let error = map_owned_batch_generation_task_error(
+            LoadOwnedBatchGenerationTaskError::Internal("boom".to_string()),
+            || BatchGenerationStatusStreamAccessError::TaskNotFound,
+            BatchGenerationStatusStreamAccessError::Internal,
+        );
+
+        assert_eq!(
+            error,
+            BatchGenerationStatusStreamAccessError::Internal("boom".to_string())
+        );
+    }
 }

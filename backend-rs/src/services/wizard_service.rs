@@ -112,7 +112,10 @@ fn preview_text(text: &str, max_chars: usize) -> String {
     if collapsed.chars().count() <= max_chars {
         collapsed
     } else {
-        format!("{}...", collapsed.chars().take(max_chars).collect::<String>())
+        format!(
+            "{}...",
+            collapsed.chars().take(max_chars).collect::<String>()
+        )
     }
 }
 

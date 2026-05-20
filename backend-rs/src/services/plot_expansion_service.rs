@@ -109,7 +109,10 @@ fn normalize_plan_value(mut plan: Map<String, Value>, outline_id: &str, index: u
         .map(|value| value as i32)
         .unwrap_or(DEFAULT_ESTIMATED_WORDS);
 
-    plan.insert("outline_id".to_string(), Value::String(outline_id.to_string()));
+    plan.insert(
+        "outline_id".to_string(),
+        Value::String(outline_id.to_string()),
+    );
     plan.insert("sub_index".to_string(), Value::Number(index.into()));
     plan.insert("title".to_string(), Value::String(title));
     plan.insert("plot_summary".to_string(), Value::String(plot_summary));
@@ -139,9 +142,15 @@ fn normalize_plan_value(mut plan: Map<String, Value>, outline_id: &str, index: u
 
 fn fallback_plan(outline_id: &str, outline_title: &str, summary: &str) -> Value {
     let mut plan = Map::new();
-    plan.insert("outline_id".to_string(), Value::String(outline_id.to_string()));
+    plan.insert(
+        "outline_id".to_string(),
+        Value::String(outline_id.to_string()),
+    );
     plan.insert("sub_index".to_string(), Value::Number(1.into()));
-    plan.insert("title".to_string(), Value::String(format!("{}-章节1", outline_title)));
+    plan.insert(
+        "title".to_string(),
+        Value::String(format!("{}-章节1", outline_title)),
+    );
     plan.insert(
         "plot_summary".to_string(),
         Value::String(summary.chars().take(500).collect()),
@@ -151,12 +160,18 @@ fn fallback_plan(outline_id: &str, outline_title: &str, summary: &str) -> Value 
         Value::Array(vec![Value::String("解析失败".to_string())]),
     );
     plan.insert("character_focus".to_string(), Value::Array(vec![]));
-    plan.insert("emotional_tone".to_string(), Value::String("未知".to_string()));
+    plan.insert(
+        "emotional_tone".to_string(),
+        Value::String("未知".to_string()),
+    );
     plan.insert(
         "narrative_goal".to_string(),
         Value::String("需要重新生成".to_string()),
     );
-    plan.insert("conflict_type".to_string(), Value::String("未知".to_string()));
+    plan.insert(
+        "conflict_type".to_string(),
+        Value::String("未知".to_string()),
+    );
     plan.insert("ending_type".to_string(), Value::String("未知".to_string()));
     plan.insert(
         "estimated_words".to_string(),
@@ -169,7 +184,11 @@ fn build_characters_info(characters: &[character::Model]) -> String {
     let lines: Vec<String> = characters
         .iter()
         .map(|character| {
-            let kind = if character.is_organization { "组织" } else { "角色" };
+            let kind = if character.is_organization {
+                "组织"
+            } else {
+                "角色"
+            };
             let role_type = character.role_type.as_deref().unwrap_or("未知");
             let personality = character
                 .personality
@@ -177,7 +196,10 @@ fn build_characters_info(characters: &[character::Model]) -> String {
                 .map(|value| truncate_text(value, 100))
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "暂无描述".to_string());
-            format!("- {} ({}, {}): {}", character.name, kind, role_type, personality)
+            format!(
+                "- {} ({}, {}): {}",
+                character.name, kind, role_type, personality
+            )
         })
         .collect();
 
@@ -211,11 +233,19 @@ async fn build_outline_context(
     let mut context = String::new();
     if let Some(prev) = prev_outline {
         let content = prev.content.as_deref().unwrap_or("");
-        context.push_str(&format!("【前一节】{}: {}...\n\n", prev.title, truncate_text(content, 200)));
+        context.push_str(&format!(
+            "【前一节】{}: {}...\n\n",
+            prev.title,
+            truncate_text(content, 200)
+        ));
     }
     if let Some(next) = next_outline {
         let content = next.content.as_deref().unwrap_or("");
-        context.push_str(&format!("【后一节】{}: {}...\n", next.title, truncate_text(content, 200)));
+        context.push_str(&format!(
+            "【后一节】{}: {}...\n",
+            next.title,
+            truncate_text(content, 200)
+        ));
     }
 
     Ok(if context.is_empty() {
@@ -238,8 +268,20 @@ fn build_prompt_fields(
 ) -> HashMap<String, String> {
     let mut params = HashMap::new();
     params.insert("project_title".into(), project_model.title.clone());
-    params.insert("project_genre".into(), project_model.genre.clone().unwrap_or_else(|| "通用".to_string()));
-    params.insert("project_theme".into(), project_model.theme.clone().unwrap_or_else(|| "未设定".to_string()));
+    params.insert(
+        "project_genre".into(),
+        project_model
+            .genre
+            .clone()
+            .unwrap_or_else(|| "通用".to_string()),
+    );
+    params.insert(
+        "project_theme".into(),
+        project_model
+            .theme
+            .clone()
+            .unwrap_or_else(|| "未设定".to_string()),
+    );
     params.insert(
         "project_narrative_perspective".into(),
         project_model
@@ -269,12 +311,24 @@ fn build_prompt_fields(
             .unwrap_or_else(|| "未设定".to_string()),
     );
     params.insert("characters_info".into(), characters_info.to_string());
-    params.insert("outline_order_index".into(), outline_model.order_index.unwrap_or_default().to_string());
+    params.insert(
+        "outline_order_index".into(),
+        outline_model.order_index.unwrap_or_default().to_string(),
+    );
     params.insert("outline_title".into(), outline_model.title.clone());
-    params.insert("outline_content".into(), outline_model.content.clone().unwrap_or_default());
+    params.insert(
+        "outline_content".into(),
+        outline_model.content.clone().unwrap_or_default(),
+    );
     params.insert("context_info".into(), context_info.to_string());
-    params.insert("strategy_instruction".into(), expansion_strategy.to_string());
-    params.insert("target_chapter_count".into(), target_chapter_count.to_string());
+    params.insert(
+        "strategy_instruction".into(),
+        expansion_strategy.to_string(),
+    );
+    params.insert(
+        "target_chapter_count".into(),
+        target_chapter_count.to_string(),
+    );
     params.insert("scene_instruction".into(), String::new());
     params.insert("scene_field".into(), String::new());
     if let Some(previous_context) = previous_context {
@@ -408,19 +462,34 @@ impl<'a> PlotExpansionService<'a> {
                 let previous_summaries: Vec<String> = chapter_plans
                     .iter()
                     .map(|plan: &Value| {
-                        let title = plan.get("title").and_then(|value: &Value| value.as_str()).unwrap_or("?????");
-                        let summary = plan.get("plot_summary").and_then(|value: &Value| value.as_str()).unwrap_or("");
+                        let title = plan
+                            .get("title")
+                            .and_then(|value: &Value| value.as_str())
+                            .unwrap_or("?????");
+                        let summary = plan
+                            .get("plot_summary")
+                            .and_then(|value: &Value| value.as_str())
+                            .unwrap_or("");
                         let key_events = parse_string_array(plan.get("key_events"));
-                        let ending_type = plan.get("ending_type").and_then(|value: &Value| value.as_str()).unwrap_or("??");
+                        let ending_type = plan
+                            .get("ending_type")
+                            .and_then(|value: &Value| value.as_str())
+                            .unwrap_or("??");
                         format!(
                             "?{}??{}?:
   - ???{}
   - ?????{}
   - ?????{}",
-                            plan.get("sub_index").and_then(|value: &Value| value.as_i64()).unwrap_or(0),
+                            plan.get("sub_index")
+                                .and_then(|value: &Value| value.as_i64())
+                                .unwrap_or(0),
                             title,
                             truncate_text(summary, 150),
-                            if key_events.is_empty() { "?".to_string() } else { key_events[..key_events.len().min(3)].join("?") },
+                            if key_events.is_empty() {
+                                "?".to_string()
+                            } else {
+                                key_events[..key_events.len().min(3)].join("?")
+                            },
                             ending_type,
                         )
                     })
@@ -428,7 +497,16 @@ impl<'a> PlotExpansionService<'a> {
                 let used_events = if used_key_events.is_empty() {
                     "暂无".to_string()
                 } else {
-                    used_key_events.iter().rev().take(20).cloned().collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("、")
+                    used_key_events
+                        .iter()
+                        .rev()
+                        .take(20)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect::<Vec<_>>()
+                        .join("、")
                 };
                 format!(
                     "【🔴 已生成章节完整信息（必须参考以确保差异化）】\n{}\n\n【🔴 已使用的关键事件（本批次不可重复使用）】\n{}\n\n【🔴 差异化强制要求】\n⚠️ 当前是第{}-{}节（共{}节中的第{}批）\n⚠️ 每个新章节必须有完全不同的：\n   1. 开场场景（不同地点/时间/人物状态）\n   2. 核心事件（不与已生成章节的关键事件重复）\n   3. 结尾悬念（不同类型的钩子）\n⚠️ 新章节的key_events不得与上面【已使用的关键事件】中的任何事件相同或相似",
@@ -448,7 +526,11 @@ impl<'a> PlotExpansionService<'a> {
                 &context_info,
                 expansion_strategy,
                 current_batch_size,
-                if previous_context.is_empty() { None } else { Some(previous_context.as_str()) },
+                if previous_context.is_empty() {
+                    None
+                } else {
+                    Some(previous_context.as_str())
+                },
                 Some(current_start_index),
                 Some(current_end_index),
             );
@@ -457,8 +539,14 @@ impl<'a> PlotExpansionService<'a> {
             } else {
                 "OUTLINE_EXPAND_MULTI"
             };
-            params.insert("enable_scene_analysis".into(), enable_scene_analysis.to_string());
-            params.insert("target_chapter_count".into(), current_batch_size.to_string());
+            params.insert(
+                "enable_scene_analysis".into(),
+                enable_scene_analysis.to_string(),
+            );
+            params.insert(
+                "target_chapter_count".into(),
+                current_batch_size.to_string(),
+            );
             let template = PromptTemplateService::system_template_info(template_key)
                 .ok_or_else(|| format!("找不到提示词模板: {}", template_key))?;
             let prompt = PromptTemplateService::format_prompt(&template.content, &params)?;
@@ -467,11 +555,15 @@ impl<'a> PlotExpansionService<'a> {
                 .generate_text(&prompt, None, None)
                 .await
                 .map_err(|e| format!("AI调用失败: {}", e))?;
-            let batch_plans = parse_chapter_plans(&response.content, &outline_model.id, &outline_model.title);
+            let batch_plans =
+                parse_chapter_plans(&response.content, &outline_model.id, &outline_model.title);
 
             for (offset, plan) in batch_plans.into_iter().enumerate() {
                 if let Some(plan_obj) = plan.as_object() {
-                    if let Some(events) = plan_obj.get("key_events").and_then(|value| value.as_array()) {
+                    if let Some(events) = plan_obj
+                        .get("key_events")
+                        .and_then(|value| value.as_array())
+                    {
                         for event in events.iter().filter_map(|value| value.as_str()) {
                             let trimmed = event.trim();
                             if !trimmed.is_empty() {
@@ -482,7 +574,10 @@ impl<'a> PlotExpansionService<'a> {
                 }
                 let mut normalized = plan;
                 if let Some(map) = normalized.as_object_mut() {
-                    map.insert("sub_index".to_string(), Value::Number((current_start_index + offset).into()));
+                    map.insert(
+                        "sub_index".to_string(),
+                        Value::Number((current_start_index + offset).into()),
+                    );
                 }
                 chapter_plans.push(normalized);
             }
@@ -509,7 +604,9 @@ impl<'a> PlotExpansionService<'a> {
 
             let prev_outlines = outline::Entity::find()
                 .filter(outline::Column::ProjectId.eq(project_id))
-                .filter(outline::Column::OrderIndex.lt(current_outline.order_index.unwrap_or_default()))
+                .filter(
+                    outline::Column::OrderIndex.lt(current_outline.order_index.unwrap_or_default()),
+                )
                 .order_by_asc(outline::Column::OrderIndex)
                 .all(db)
                 .await
@@ -660,7 +757,8 @@ impl<'a> PlotExpansionService<'a> {
             .load_outline_and_project(db, user_id, outline_id)
             .await?;
 
-        let ai_config = SettingsService::build_ai_config(db, user_id, provider, model, None).await?;
+        let ai_config =
+            SettingsService::build_ai_config(db, user_id, provider, model, None).await?;
         let ai_service = AIService::new(ai_config);
         let service = PlotExpansionService::new(&ai_service);
 
@@ -783,7 +881,8 @@ impl<'a> PlotExpansionService<'a> {
             }));
         }
 
-        let ai_config = SettingsService::build_ai_config(db, user_id, provider, model, None).await?;
+        let ai_config =
+            SettingsService::build_ai_config(db, user_id, provider, model, None).await?;
         let ai_service = AIService::new(ai_config);
         let service = PlotExpansionService::new(&ai_service);
 

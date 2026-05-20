@@ -2,8 +2,7 @@ use sea_orm::DatabaseConnection;
 use serde_json::{json, Value};
 
 use crate::services::chapter_crud_payload_adapter_service::{
-    compatible_chapter_list_payload, compatible_chapter_payload,
-    project_path_chapter_list_payload,
+    compatible_chapter_list_payload, compatible_chapter_payload, project_path_chapter_list_payload,
 };
 use crate::services::chapter_service::ChapterService;
 

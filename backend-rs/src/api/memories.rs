@@ -15,9 +15,7 @@ use serde_json::{json, Value};
 use crate::models::{foreshadow, plot_analysis, story_memory};
 use crate::services::auth::Claims;
 use crate::services::chapter_analysis_runtime_service::enqueue_chapter_analysis_task;
-use crate::services::chapter_analysis_service::{
-    CreateChapterAnalysisTaskError,
-};
+use crate::services::chapter_analysis_service::CreateChapterAnalysisTaskError;
 use crate::services::project_service::ProjectService;
 
 #[derive(Deserialize)]
@@ -110,10 +108,9 @@ async fn analyze_chapter_memories(
                 StatusCode::BAD_REQUEST,
                 Json(json!({"detail": "章节不存在或内容为空"})),
             ),
-            CreateChapterAnalysisTaskError::ProjectMissing => (
-                StatusCode::NOT_FOUND,
-                Json(json!({"detail": "项目不存在"})),
-            ),
+            CreateChapterAnalysisTaskError::ProjectMissing => {
+                (StatusCode::NOT_FOUND, Json(json!({"detail": "项目不存在"})))
+            }
             CreateChapterAnalysisTaskError::Internal(detail) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"detail": detail})),

@@ -9,12 +9,9 @@ use crate::ai::service::AIService;
 use crate::services::chapter_regeneration_text_service::{
     finalize_chapter_regeneration_result, FinalizePartialRegenerationError,
 };
-use crate::utils::sse::{
-    sse_chunk, sse_done, sse_error, sse_result, SseProgress,
-};
+use crate::utils::sse::{sse_chunk, sse_done, sse_error, sse_result, SseProgress};
 
-pub type FullChapterRegenerationStream =
-    ReceiverStream<Result<Event, Infallible>>;
+pub type FullChapterRegenerationStream = ReceiverStream<Result<Event, Infallible>>;
 
 pub struct FullChapterRegenerationStreamInput {
     pub task_label: String,
@@ -68,30 +65,31 @@ pub fn build_full_chapter_regeneration_stream(
             }
         }
 
-        let result =
-            match finalize_chapter_regeneration_result(&full_content, &chapter_id) {
-                Ok(result) => result,
-                Err(FinalizePartialRegenerationError::EmptyContent) => {
-                    let _ = tx
-                        .send(Ok(sse_error(
-                            "Rewrite result is empty after sanitization",
-                            500,
-                        )))
-                        .await;
-                    return;
-                }
-                Err(FinalizePartialRegenerationError::WorkflowMetaText) => {
-                    let _ = tx
-                        .send(Ok(sse_error(
-                            "Rewrite result still contains workflow meta text",
-                            500,
-                        )))
-                        .await;
-                    return;
-                }
-            };
+        let result = match finalize_chapter_regeneration_result(&full_content, &chapter_id) {
+            Ok(result) => result,
+            Err(FinalizePartialRegenerationError::EmptyContent) => {
+                let _ = tx
+                    .send(Ok(sse_error(
+                        "Rewrite result is empty after sanitization",
+                        500,
+                    )))
+                    .await;
+                return;
+            }
+            Err(FinalizePartialRegenerationError::WorkflowMetaText) => {
+                let _ = tx
+                    .send(Ok(sse_error(
+                        "Rewrite result still contains workflow meta text",
+                        500,
+                    )))
+                    .await;
+                return;
+            }
+        };
 
-        let _ = tx.send(Ok(tracker.complete(Some("Rewrite complete")))).await;
+        let _ = tx
+            .send(Ok(tracker.complete(Some("Rewrite complete"))))
+            .await;
         let _ = tx.send(Ok(sse_result(&result.payload))).await;
         let _ = tx.send(Ok(sse_done())).await;
     });

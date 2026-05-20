@@ -157,7 +157,11 @@ pub(crate) fn normalize_genre_input(value: Option<serde_json::Value>) -> String 
             .join("、"),
         Some(other) => {
             let text = other.to_string();
-            if text == "null" { String::new() } else { text }
+            if text == "null" {
+                String::new()
+            } else {
+                text
+            }
         }
         None => String::new(),
     }
@@ -420,5 +424,8 @@ pub fn routes() -> Router {
         .route("/wizard-stream/career-system", post(career_system))
         .route("/wizard-stream/characters", post(characters))
         .route("/wizard-stream/outline", post(outline))
-        .route("/wizard-stream/cleanup/{project_id}", post(cleanup_wizard_data))
+        .route(
+            "/wizard-stream/cleanup/{project_id}",
+            post(cleanup_wizard_data),
+        )
 }

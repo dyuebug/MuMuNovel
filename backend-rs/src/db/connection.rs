@@ -3,21 +3,29 @@ use tracing::info;
 
 use crate::config::AppConfig;
 
+fn database_driver_label(url: &str) -> &'static str {
+    if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+        "postgres"
+    } else if url.starts_with("sqlite:") {
+        "sqlite"
+    } else {
+        "unknown"
+    }
+}
+
 pub async fn connect(
     cfg: &AppConfig,
 ) -> Result<DatabaseConnection, Box<dyn std::error::Error + Send + Sync>> {
-    let url = if cfg.database_url.is_empty() {
-        "sqlite::memory:".to_string()
-    } else {
-        cfg.database_url.clone()
-    };
-
-    let mut opt = ConnectOptions::new(url);
+    let mut opt = ConnectOptions::new(cfg.database_url.clone());
     opt.sqlx_logging(false)
         .max_connections(cfg.database_pool_size)
         .sqlx_logging_level(log::LevelFilter::Info);
 
-    info!("Connecting to database...");
+    info!(
+        "Connecting to database (driver={}, mode={})...",
+        database_driver_label(&cfg.database_url),
+        cfg.runtime_mode.as_str()
+    );
 
     let db = Database::connect(opt).await?;
     Ok(db)

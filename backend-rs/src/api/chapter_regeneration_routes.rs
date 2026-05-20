@@ -1,36 +1,30 @@
 use axum::{
     extract::{Extension, Path, Query},
     http::StatusCode,
-    response::{
-        sse::{Event, KeepAlive},
-        Json, Sse,
-    },
+    response::{sse::Event, Json, Sse},
     routing::{get, post},
     Router,
 };
 use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::time::Duration as TokioDuration;
 
 use crate::api::chapter_regeneration_query_error_mapper::map_regeneration_tasks_query_error;
 use crate::api::chapters_error_mapper::{
-    map_apply_partial_regenerate_error, map_prepare_chapter_regeneration_stream_error,
-    map_prepare_partial_regeneration_stream_error,
+    map_apply_partial_regenerate_error, map_create_chapter_regeneration_stream_workflow_error,
+    map_create_partial_regeneration_stream_workflow_error,
 };
 use crate::services::auth::Claims;
-use crate::services::chapter_access_http_service::load_accessible_chapter_or_404;
-use crate::services::chapter_regeneration_apply_service::apply_partial_regenerate_payload;
-use crate::services::chapter_regeneration_full_stream_service::{
-    build_full_chapter_regeneration_stream, FullChapterRegenerationStreamInput,
+use crate::services::chapter_regeneration_apply_service::{
+    apply_owned_partial_regenerate_payload,
+    ApplyPartialRegenerateRequest as ApplyPartialRegenerateServiceRequest,
 };
-use crate::services::chapter_regeneration_partial_stream_service::{
-    build_partial_chapter_regeneration_stream, PartialChapterRegenerationStreamInput,
+use crate::services::chapter_regeneration_query_service::load_owned_regeneration_tasks_payload;
+use crate::services::chapter_regeneration_stream_workflow_service::{
+    create_chapter_regeneration_stream_workflow, create_partial_regeneration_stream_workflow,
+    PartialRegenerationStreamWorkflowRequest,
 };
-use crate::services::chapter_regeneration_prepare_service::{
-    prepare_chapter_regeneration_stream, prepare_partial_regeneration_stream,
-};
-use crate::services::chapter_regeneration_query_service::load_regeneration_tasks_payload;
+use crate::utils::sse::default_sse_keep_alive;
 
 #[derive(Deserialize)]
 struct ApplyPartialRegenerateRequest {
@@ -64,15 +58,15 @@ async fn apply_partial_regenerate(
     Path(chapter_id): Path<String>,
     Json(body): Json<ApplyPartialRegenerateRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let chapter = load_accessible_chapter_or_404(&db, &chapter_id, &claims.sub).await?;
-    let payload = apply_partial_regenerate_payload(
+    let payload = apply_owned_partial_regenerate_payload(
         &db,
         &chapter_id,
         &claims.sub,
-        &chapter,
-        body.new_text.as_deref().unwrap_or_default(),
-        body.start_position.unwrap_or(0),
-        body.end_position.unwrap_or(0),
+        ApplyPartialRegenerateServiceRequest {
+            new_text: body.new_text.as_deref(),
+            start_position: body.start_position,
+            end_position: body.end_position,
+        },
     )
     .await
     .map_err(map_apply_partial_regenerate_error)?;
@@ -88,20 +82,11 @@ async fn regenerate_chapter_stream(
     Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>>,
     (StatusCode, Json<Value>),
 > {
-    let chapter = load_accessible_chapter_or_404(&db, &chapter_id, &claims.sub).await?;
-    let prepared = prepare_chapter_regeneration_stream(&db, &claims.sub, &chapter, &body)
+    let stream = create_chapter_regeneration_stream_workflow(&db, &claims.sub, &chapter_id, &body)
         .await
-        .map_err(map_prepare_chapter_regeneration_stream_error)?;
+        .map_err(map_create_chapter_regeneration_stream_workflow_error)?;
 
-    let stream = build_full_chapter_regeneration_stream(FullChapterRegenerationStreamInput {
-        task_label: "Chapter Rewrite".to_string(),
-        chapter_id: chapter_id.clone(),
-        chapter_word_count: chapter.word_count as usize,
-        prompt: prepared.prompt,
-        ai_service: prepared.ai_service,
-    });
-
-    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(TokioDuration::from_secs(10))))
+    Ok(Sse::new(stream).keep_alive(default_sse_keep_alive()))
 }
 
 async fn partial_regenerate_stream(
@@ -113,37 +98,27 @@ async fn partial_regenerate_stream(
     Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>>,
     (StatusCode, Json<Value>),
 > {
-    let chapter = load_accessible_chapter_or_404(&db, &chapter_id, &claims.sub).await?;
-    let stream_prepared = prepare_partial_regeneration_stream(
+    let stream = create_partial_regeneration_stream_workflow(
         &db,
         &claims.sub,
-        &chapter,
-        &body.selected_text,
-        body.start_position,
-        body.end_position,
-        body.context_chars.unwrap_or(500),
-        &body.user_instructions,
-        body.length_mode.as_deref(),
-        body.target_word_count,
-        body.style_id,
-        body.enable_web_research.unwrap_or(false),
-        body.web_research_query.as_deref(),
-    )
-    .await
-    .map_err(map_prepare_partial_regeneration_stream_error)?;
-    let prepared = stream_prepared.prepared;
-    let stream = build_partial_chapter_regeneration_stream(
-        PartialChapterRegenerationStreamInput {
-            target_words: prepared.target_words,
-            original_word_count: prepared.original_word_count,
+        &chapter_id,
+        PartialRegenerationStreamWorkflowRequest {
+            selected_text: &body.selected_text,
             start_position: body.start_position,
             end_position: body.end_position,
-            prompt: prepared.prompt,
-            ai_service: stream_prepared.ai_service,
+            context_chars: body.context_chars,
+            user_instructions: &body.user_instructions,
+            length_mode: body.length_mode.as_deref(),
+            target_word_count: body.target_word_count,
+            style_id: body.style_id,
+            enable_web_research: body.enable_web_research,
+            web_research_query: body.web_research_query.as_deref(),
         },
-    );
+    )
+    .await
+    .map_err(map_create_partial_regeneration_stream_workflow_error)?;
 
-    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(TokioDuration::from_secs(10))))
+    Ok(Sse::new(stream).keep_alive(default_sse_keep_alive()))
 }
 
 async fn get_regeneration_tasks(
@@ -152,15 +127,13 @@ async fn get_regeneration_tasks(
     Path(chapter_id): Path<String>,
     Query(query): Query<RegenerationTasksQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let _chapter = load_accessible_chapter_or_404(&db, &chapter_id, &claims.sub).await?;
-    let limit = query.limit.unwrap_or(10).clamp(1, 50);
-    let payload = load_regeneration_tasks_payload(&db, &chapter_id, limit)
+    let payload = load_owned_regeneration_tasks_payload(&db, &chapter_id, &claims.sub, query.limit)
         .await
         .map_err(map_regeneration_tasks_query_error)?;
     Ok(Json(payload))
 }
 
-pub fn routes() -> Router {
+pub(crate) fn routes() -> Router {
     Router::new()
         .route(
             "/chapters/{chapter_id}/regenerate-stream",

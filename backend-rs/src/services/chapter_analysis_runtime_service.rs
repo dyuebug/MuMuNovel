@@ -1,6 +1,8 @@
 use chrono::Utc;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set};
 use sea_orm::QuerySelect;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -13,7 +15,9 @@ use crate::services::settings_service::SettingsService;
 use crate::services::wizard_service::clean_json_response;
 
 fn json_i32(value: Option<i64>) -> i32 {
-    value.unwrap_or_default().clamp(i32::MIN as i64, i32::MAX as i64) as i32
+    value
+        .unwrap_or_default()
+        .clamp(i32::MIN as i64, i32::MAX as i64) as i32
 }
 
 fn json_f64(value: Option<f64>) -> Option<f64> {
@@ -209,41 +213,35 @@ async fn persist_chapter_analysis_result(
         id: Set(Uuid::new_v4().to_string()),
         project_id: Set(chapter_model.project_id.clone()),
         chapter_id: Set(chapter_model.id.clone()),
-        plot_stage: Set(
-            payload
-                .get("plot_stage")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-        ),
+        plot_stage: Set(payload
+            .get("plot_stage")
+            .and_then(Value::as_str)
+            .map(str::to_string)),
         conflict_level: Set(Some(json_i32(
             conflict.get("level").and_then(Value::as_i64),
         ))),
         conflict_types: Set(conflict.get("types").cloned()),
-        emotional_tone: Set(
-            emotional_arc
-                .get("primary_emotion")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-        ),
+        emotional_tone: Set(emotional_arc
+            .get("primary_emotion")
+            .and_then(Value::as_str)
+            .map(str::to_string)),
         emotional_intensity: Set(json_f64(
             emotional_arc.get("intensity").and_then(Value::as_f64),
         )),
-        emotional_curve: Set(
-            emotional_arc
-                .get("curve")
-                .cloned()
-                .or_else(|| emotional_arc.get("secondary_emotions").cloned()),
-        ),
+        emotional_curve: Set(emotional_arc
+            .get("curve")
+            .cloned()
+            .or_else(|| emotional_arc.get("secondary_emotions").cloned())),
         hooks: Set(payload.get("hooks").cloned()),
-        hooks_count: Set(
-            payload
-                .get("hooks")
-                .and_then(Value::as_array)
-                .map(|items| items.len() as i32)
-                .unwrap_or(0),
-        ),
-        hooks_avg_strength: Set(payload.get("hooks").and_then(Value::as_array).and_then(
-            |items| {
+        hooks_count: Set(payload
+            .get("hooks")
+            .and_then(Value::as_array)
+            .map(|items| items.len() as i32)
+            .unwrap_or(0)),
+        hooks_avg_strength: Set(payload
+            .get("hooks")
+            .and_then(Value::as_array)
+            .and_then(|items| {
                 let strengths = items
                     .iter()
                     .filter_map(|item| item.get("strength").and_then(Value::as_f64))
@@ -253,71 +251,65 @@ async fn persist_chapter_analysis_result(
                 } else {
                     Some(strengths.iter().sum::<f64>() / strengths.len() as f64)
                 }
-            },
-        )),
+            })),
         foreshadows: Set(payload.get("foreshadows").cloned()),
-        foreshadows_planted: Set(
-            payload
-                .get("foreshadows")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter(|item| item.get("type").and_then(Value::as_str) == Some("planted"))
-                        .count() as i32
-                })
-                .unwrap_or(0),
-        ),
-        foreshadows_resolved: Set(
-            payload
-                .get("foreshadows")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter(|item| item.get("type").and_then(Value::as_str) == Some("resolved"))
-                        .count() as i32
-                })
-                .unwrap_or(0),
-        ),
+        foreshadows_planted: Set(payload
+            .get("foreshadows")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| item.get("type").and_then(Value::as_str) == Some("planted"))
+                    .count() as i32
+            })
+            .unwrap_or(0)),
+        foreshadows_resolved: Set(payload
+            .get("foreshadows")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| item.get("type").and_then(Value::as_str) == Some("resolved"))
+                    .count() as i32
+            })
+            .unwrap_or(0)),
         plot_points: Set(payload.get("plot_points").cloned()),
-        plot_points_count: Set(
-            payload
-                .get("plot_points")
-                .and_then(Value::as_array)
-                .map(|items| items.len() as i32)
-                .unwrap_or(0),
-        ),
+        plot_points_count: Set(payload
+            .get("plot_points")
+            .and_then(Value::as_array)
+            .map(|items| items.len() as i32)
+            .unwrap_or(0)),
         character_states: Set(payload.get("character_states").cloned()),
-        scenes: Set(
-            payload
-                .get("scenes")
-                .cloned()
-                .or_else(|| payload.get("serial_rhythm").cloned()),
-        ),
-        pacing: Set(
-            payload
-                .get("pacing")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-        ),
+        scenes: Set(payload
+            .get("scenes")
+            .cloned()
+            .or_else(|| payload.get("serial_rhythm").cloned())),
+        pacing: Set(payload
+            .get("pacing")
+            .and_then(Value::as_str)
+            .map(str::to_string)),
         overall_quality_score: Set(json_f64(scores.get("overall").and_then(Value::as_f64))),
         pacing_score: Set(json_f64(scores.get("pacing").and_then(Value::as_f64))),
         engagement_score: Set(json_f64(scores.get("engagement").and_then(Value::as_f64))),
         coherence_score: Set(json_f64(scores.get("coherence").and_then(Value::as_f64))),
         analysis_report: Set(
-            build_chapter_analysis_report(payload).or_else(|| Some(payload.to_string())),
+            build_chapter_analysis_report(payload).or_else(|| Some(payload.to_string()))
         ),
         suggestions: Set(payload.get("suggestions").cloned()),
         word_count: Set(Some(chapter_model.word_count)),
-        dialogue_ratio: Set(json_f64(payload.get("dialogue_ratio").and_then(Value::as_f64))),
+        dialogue_ratio: Set(json_f64(
+            payload.get("dialogue_ratio").and_then(Value::as_f64),
+        )),
         description_ratio: Set(json_f64(
             payload.get("description_ratio").and_then(Value::as_f64),
         )),
         created_at: Set(Some(now)),
     };
 
-    analysis.insert(db).await.map_err(|error| error.to_string())?;
+    analysis
+        .insert(db)
+        .await
+        .map_err(|error| error.to_string())?;
 
     if let Some(existing) = analysis_task::Entity::find_by_id(task_id)
         .one(db)
@@ -443,5 +435,71 @@ pub async fn execute_chapter_analysis_background(
 
     if let Err(error_message) = run {
         let _ = mark_analysis_task_failed(&db, &task_id, error_message).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{build_chapter_analysis_report, json_f64, json_i32, normalize_analysis_status};
+
+    #[test]
+    fn should_clamp_json_i32_values() {
+        assert_eq!(json_i32(None), 0);
+        assert_eq!(json_i32(Some(42)), 42);
+        assert_eq!(json_i32(Some(i64::from(i32::MAX) + 1)), i32::MAX);
+        assert_eq!(json_i32(Some(i64::from(i32::MIN) - 1)), i32::MIN);
+    }
+
+    #[test]
+    fn should_filter_non_finite_json_f64_values() {
+        assert_eq!(json_f64(Some(0.75)), Some(0.75));
+        assert_eq!(json_f64(Some(f64::NAN)), None);
+        assert_eq!(json_f64(Some(f64::INFINITY)), None);
+        assert_eq!(json_f64(None), None);
+    }
+
+    #[test]
+    fn should_normalize_analysis_status() {
+        for status in ["pending", "running", "completed", "failed"] {
+            assert_eq!(normalize_analysis_status(status), status);
+        }
+        assert_eq!(normalize_analysis_status("unknown"), "failed");
+    }
+
+    #[test]
+    fn should_build_chapter_analysis_report_from_payload_sections() {
+        let payload = json!({
+            "plot_stage": " 高潮 ",
+            "conflict": {
+                "description": " 正面对抗 "
+            },
+            "scores": {
+                "score_justification": " 节奏稳定 "
+            },
+            "suggestions": [" 强化铺垫 ", "", 7, "压缩说明"]
+        });
+
+        let report = build_chapter_analysis_report(&payload);
+
+        assert_eq!(
+            report,
+            Some("剧情阶段：高潮\n冲突分析：正面对抗\n评分说明：节奏稳定\n改进建议：强化铺垫；压缩说明".to_string())
+        );
+    }
+
+    #[test]
+    fn should_skip_empty_chapter_analysis_report_sections() {
+        let payload = json!({
+            "plot_stage": "  ",
+            "conflict": {
+                "description": ""
+            },
+            "scores": {},
+            "suggestions": [" ", 1]
+        });
+
+        assert_eq!(build_chapter_analysis_report(&payload), None);
     }
 }

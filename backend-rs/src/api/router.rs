@@ -1,15 +1,23 @@
+use std::error::Error;
+use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
+use axum::http::HeaderValue;
 use axum::{Extension, Router};
 use sea_orm::DatabaseConnection;
 use tower_http::{
-    cors::CorsLayer, normalize_path::NormalizePathLayer, request_id::MakeRequestUuid,
-    services::ServeDir, trace::TraceLayer, ServiceBuilderExt as _,
+    cors::{Any, CorsLayer},
+    normalize_path::NormalizePathLayer,
+    request_id::MakeRequestUuid,
+    services::ServeDir,
+    trace::TraceLayer,
+    ServiceBuilderExt as _,
 };
-use tracing::{info, Level};
+use tracing::{info, warn, Level};
+use url::Url;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, AppRuntimeMode};
 use crate::mcp::McpClientManager;
 use crate::middleware::auth::AuthLayer;
 use crate::services::book_import_service::BookImportService;
@@ -23,16 +31,173 @@ use super::{
     relationships, settings, users, wizard, writing_styles,
 };
 
+#[derive(Debug)]
+pub enum RouterBuildError {
+    EmptyCorsOrigins {
+        mode: AppRuntimeMode,
+    },
+    WildcardCorsOriginsNotAllowed {
+        mode: AppRuntimeMode,
+    },
+    InvalidCorsOrigin {
+        origin: String,
+        reason: &'static str,
+    },
+}
+
+impl fmt::Display for RouterBuildError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyCorsOrigins { mode } => write!(
+                f,
+                "CORS_ORIGINS is required when runtime mode is {}",
+                mode.as_str()
+            ),
+            Self::WildcardCorsOriginsNotAllowed { mode } => write!(
+                f,
+                "CORS_ORIGINS='*' is only allowed in development mode; runtime mode {} requires explicit origins for credentialed requests",
+                mode.as_str()
+            ),
+            Self::InvalidCorsOrigin { origin, reason } => {
+                write!(f, "invalid CORS origin '{}': {}", origin, reason)
+            }
+        }
+    }
+}
+
+impl Error for RouterBuildError {}
+
+#[derive(Debug)]
+enum CorsPolicy {
+    DevelopmentPermissive,
+    Explicit(Vec<HeaderValue>),
+}
+
+fn normalize_origin(origin: &str) -> Result<HeaderValue, RouterBuildError> {
+    let parsed = Url::parse(origin).map_err(|_| RouterBuildError::InvalidCorsOrigin {
+        origin: origin.to_string(),
+        reason: "must be a valid absolute http(s) origin",
+    })?;
+
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(RouterBuildError::InvalidCorsOrigin {
+            origin: origin.to_string(),
+            reason: "scheme must be http or https",
+        });
+    }
+
+    if parsed.host_str().is_none() {
+        return Err(RouterBuildError::InvalidCorsOrigin {
+            origin: origin.to_string(),
+            reason: "host is required",
+        });
+    }
+
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(RouterBuildError::InvalidCorsOrigin {
+            origin: origin.to_string(),
+            reason: "userinfo is not allowed in origins",
+        });
+    }
+
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(RouterBuildError::InvalidCorsOrigin {
+            origin: origin.to_string(),
+            reason: "query and fragment are not allowed in origins",
+        });
+    }
+
+    if parsed.path() != "/" {
+        return Err(RouterBuildError::InvalidCorsOrigin {
+            origin: origin.to_string(),
+            reason: "path segments are not allowed in origins",
+        });
+    }
+
+    HeaderValue::from_str(&parsed.origin().ascii_serialization()).map_err(|_| {
+        RouterBuildError::InvalidCorsOrigin {
+            origin: origin.to_string(),
+            reason: "origin could not be encoded as an HTTP header value",
+        }
+    })
+}
+
+fn resolve_cors_policy(cfg: &AppConfig) -> Result<CorsPolicy, RouterBuildError> {
+    let raw = cfg.cors_origins.trim();
+    if raw.is_empty() {
+        return Err(RouterBuildError::EmptyCorsOrigins {
+            mode: cfg.runtime_mode,
+        });
+    }
+
+    if raw == "*" {
+        if cfg.runtime_mode.is_development() {
+            warn!(
+                "CORS_ORIGINS='*' enabled in development mode; using permissive credentialed CORS for local workflows"
+            );
+            return Ok(CorsPolicy::DevelopmentPermissive);
+        }
+
+        return Err(RouterBuildError::WildcardCorsOriginsNotAllowed {
+            mode: cfg.runtime_mode,
+        });
+    }
+
+    let mut origins = Vec::new();
+    for part in raw.split(',') {
+        let origin = part.trim();
+        if origin.is_empty() {
+            return Err(RouterBuildError::InvalidCorsOrigin {
+                origin: raw.to_string(),
+                reason: "origin list contains an empty entry",
+            });
+        }
+        if origin == "*" {
+            return Err(RouterBuildError::InvalidCorsOrigin {
+                origin: raw.to_string(),
+                reason: "wildcard must be the only CORS_ORIGINS value",
+            });
+        }
+
+        let header = normalize_origin(origin)?;
+        if !origins.contains(&header) {
+            origins.push(header);
+        }
+    }
+
+    if origins.is_empty() {
+        return Err(RouterBuildError::EmptyCorsOrigins {
+            mode: cfg.runtime_mode,
+        });
+    }
+
+    Ok(CorsPolicy::Explicit(origins))
+}
+
+fn build_cors_layer(cfg: &AppConfig) -> Result<CorsLayer, RouterBuildError> {
+    match resolve_cors_policy(cfg)? {
+        CorsPolicy::DevelopmentPermissive => Ok(CorsLayer::very_permissive()),
+        CorsPolicy::Explicit(origins) => {
+            info!(
+                "CORS allowlist configured with {} explicit origin(s) in {} mode",
+                origins.len(),
+                cfg.runtime_mode.as_str()
+            );
+            Ok(CorsLayer::new()
+                .allow_credentials(true)
+                .allow_headers(Any)
+                .allow_methods(Any)
+                .allow_origin(origins))
+        }
+    }
+}
+
 pub fn build(
     db: Option<DatabaseConnection>,
     cfg: &AppConfig,
     task_registry: TaskRegistry,
-) -> Router {
-    let cors = if cfg.debug {
-        CorsLayer::permissive()
-    } else {
-        CorsLayer::very_permissive()
-    };
+) -> Result<Router, RouterBuildError> {
+    let cors = build_cors_layer(cfg)?;
 
     let middleware_stack = tower::ServiceBuilder::new()
         .set_x_request_id(MakeRequestUuid)
@@ -172,5 +337,100 @@ pub fn build(
     }
 
     // Strip trailing slashes so /api/settings/ matches /api/settings
-    router.layer(NormalizePathLayer::trim_trailing_slash())
+    Ok(router.layer(NormalizePathLayer::trim_trailing_slash()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_cors_policy, CorsPolicy, RouterBuildError};
+    use crate::config::{AppConfig, AppRuntimeMode};
+
+    fn test_config(mode: AppRuntimeMode, cors_origins: &str) -> AppConfig {
+        AppConfig {
+            app_host: "127.0.0.1".to_string(),
+            app_port: 8001,
+            app_name: "MuMuNovel".to_string(),
+            app_version: "0.1.0-rs".to_string(),
+            database_url: "sqlite::memory:".to_string(),
+            database_pool_size: 50,
+            enable_startup_schema_sync: false,
+            log_level: "info".to_string(),
+            debug: mode.is_development(),
+            runtime_mode: mode,
+            cors_origins: cors_origins.to_string(),
+            jwt_secret: "secret".to_string(),
+            static_dir: "../backend/static".to_string(),
+            local_auth_enabled: true,
+            local_auth_username: String::new(),
+            local_auth_password: String::new(),
+            local_auth_display_name: "本地管理员".to_string(),
+            linuxdo_client_id: String::new(),
+            linuxdo_client_secret: String::new(),
+            linuxdo_redirect_uri: String::new(),
+            frontend_url: "http://localhost".to_string(),
+            session_expire_minutes: 120,
+            session_refresh_threshold_minutes: 30,
+        }
+    }
+
+    #[test]
+    fn development_mode_allows_wildcard_cors() {
+        let cfg = test_config(AppRuntimeMode::Development, "*");
+
+        let policy = resolve_cors_policy(&cfg).expect("development wildcard should be allowed");
+
+        assert!(matches!(policy, CorsPolicy::DevelopmentPermissive));
+    }
+
+    #[test]
+    fn non_development_rejects_wildcard_cors() {
+        let cfg = test_config(AppRuntimeMode::NonDevelopment, "*");
+
+        let err =
+            resolve_cors_policy(&cfg).expect_err("non-development wildcard should be rejected");
+
+        assert!(matches!(
+            err,
+            RouterBuildError::WildcardCorsOriginsNotAllowed { .. }
+        ));
+    }
+
+    #[test]
+    fn explicit_origins_are_normalized_and_deduplicated() {
+        let cfg = test_config(
+            AppRuntimeMode::NonDevelopment,
+            "http://localhost:3000/, http://localhost:3000, https://example.com",
+        );
+
+        let policy = resolve_cors_policy(&cfg).expect("explicit origins should parse");
+
+        match policy {
+            CorsPolicy::Explicit(origins) => {
+                let origins: Vec<_> = origins
+                    .into_iter()
+                    .map(|value| value.to_str().unwrap().to_string())
+                    .collect();
+                assert_eq!(
+                    origins,
+                    vec![
+                        "http://localhost:3000".to_string(),
+                        "https://example.com".to_string()
+                    ]
+                );
+            }
+            CorsPolicy::DevelopmentPermissive => {
+                panic!("explicit non-development origins should not become permissive")
+            }
+        }
+    }
+
+    #[test]
+    fn non_development_rejects_origin_with_path_segments() {
+        let cfg = test_config(AppRuntimeMode::NonDevelopment, "https://example.com/app");
+
+        let err = resolve_cors_policy(&cfg)
+            .expect_err("origin path segments should be rejected for CORS");
+
+        assert!(matches!(err, RouterBuildError::InvalidCorsOrigin { .. }));
+    }
 }

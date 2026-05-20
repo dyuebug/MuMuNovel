@@ -1,210 +1,24 @@
 use chrono::Utc;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
-};
+use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::models::{batch_generation_snapshot, batch_generation_task, chapter};
+use crate::models::{batch_generation_task, chapter};
+use crate::services::chapter_batch_generation_command_payload_adapter_service::{
+    build_batch_generation_create_response_payload,
+    build_cancel_batch_generation_response_payload,
+    build_resume_batch_generation_response_payload,
+    build_single_generation_background_create_response_payload,
+};
 use crate::services::chapter_batch_generation_chapter_payload_service::single_task_chapter_payload;
+use crate::services::chapter_batch_generation_quality_status_service::manual_review_label;
+use crate::services::chapter_batch_generation_runtime_state_service::{
+    finalize_batch_generation_cancelled, persist_new_batch_generation_task_snapshot,
+    persist_new_single_generation_task_snapshot, reset_batch_generation_task_for_resume,
+};
+use crate::services::chapter_batch_generation_status_semantics_service::task_type;
 
-fn to_iso(value: Option<chrono::NaiveDateTime>) -> Option<String> {
-    value.map(|datetime| datetime.and_utc().to_rfc3339())
-}
-
-fn task_type(task: &batch_generation_task::Model) -> &'static str {
-    if task.chapter_count == 1
-        && task
-            .chapter_ids
-            .as_array()
-            .is_some_and(|items| items.len() == 1)
-    {
-        "chapter_single_generate"
-    } else {
-        "chapters_batch_generate"
-    }
-}
-
-fn task_stage_code(task: &batch_generation_task::Model) -> &'static str {
-    match task_type(task) {
-        "chapter_single_generate" => match task.status.as_str() {
-            "completed" => "6.writing.completed",
-            "failed" => "6.writing.failed",
-            "cancelled" => "6.writing.cancelled",
-            "running" => "6.writing.generating",
-            _ => "6.writing.pending",
-        },
-        _ => match task.status.as_str() {
-            "completed" => "6.writing.completed",
-            "failed" => "6.writing.failed",
-            "cancelled" => "6.writing.cancelled",
-            "running" => "6.writing.generating",
-            _ => "6.writing.pending",
-        },
-    }
-}
-
-fn task_execution_mode(task: &batch_generation_task::Model) -> &'static str {
-    match task_type(task) {
-        "chapter_single_generate" => "interactive",
-        _ => "interactive",
-    }
-}
-
-fn manual_review_label(failed_chapters: Option<&Value>) -> Option<String> {
-    let items = failed_chapters?.as_array()?;
-    let first = items.first()?.as_object()?;
-    let decision = first.get("quality_gate_decision")?.as_str()?;
-    if decision != "manual_review" {
-        return None;
-    }
-
-    first
-        .get("quality_gate_label")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_string)
-        .or_else(|| Some("需人工复核".to_string()))
-}
-
-async fn load_batch_generation_snapshot(
-    db: &DatabaseConnection,
-    task_id: &str,
-) -> Result<Option<batch_generation_snapshot::Model>, String> {
-    batch_generation_snapshot::Entity::find()
-        .filter(batch_generation_snapshot::Column::BatchTaskId.eq(task_id))
-        .one(db)
-        .await
-        .map_err(|error| error.to_string())
-}
-
-fn build_runtime_checkpoint(
-    phase: &str,
-    progress: i32,
-    status: &str,
-    last_event: &str,
-    last_message: &str,
-    chapter_id: Option<&str>,
-    current_chapter_number: Option<i32>,
-) -> Value {
-    json!({
-        "phase": phase,
-        "progress": progress.clamp(0, 100),
-        "status": status,
-        "last_event": last_event,
-        "last_message": last_message,
-        "chapter_id": chapter_id,
-        "current_chapter_id": chapter_id,
-        "current_chapter_number": current_chapter_number,
-        "updated_at": Utc::now().to_rfc3339(),
-    })
-}
-
-fn build_resume_runtime_checkpoint(
-    current_chapter_id: Option<&str>,
-    current_chapter_number: Option<i32>,
-) -> Value {
-    build_runtime_checkpoint(
-        "pending",
-        0,
-        "pending",
-        "resume",
-        "批量生成任务已恢复，等待重新开始...",
-        current_chapter_id,
-        current_chapter_number,
-    )
-}
-
-async fn upsert_batch_generation_runtime_snapshot(
-    db: &DatabaseConnection,
-    task_id: &str,
-    workflow_runtime_state: Value,
-) -> Result<(), String> {
-    let now = Utc::now().naive_utc();
-    let existing = load_batch_generation_snapshot(db, task_id).await?;
-
-    if let Some(snapshot) = existing {
-        let mut active: batch_generation_snapshot::ActiveModel = snapshot.into();
-        let merged_runtime_state =
-            match (active.workflow_runtime_state.clone().take(), workflow_runtime_state) {
-                (Some(Some(Value::Object(mut current))), Value::Object(incoming)) => {
-                    for (key, value) in incoming {
-                        current.insert(key, value);
-                    }
-                    Value::Object(current)
-                }
-                (_, incoming) => incoming,
-            };
-        active.workflow_runtime_state = Set(Some(merged_runtime_state));
-        active.updated_at = Set(Some(now));
-        active.update(db).await.map_err(|error| error.to_string())?;
-        return Ok(());
-    }
-
-    let active = batch_generation_snapshot::ActiveModel {
-        id: Set(Uuid::new_v4().to_string()),
-        batch_task_id: Set(task_id.to_string()),
-        latest_quality_metrics: Set(None),
-        quality_metrics_history: Set(None),
-        quality_metrics_summary: Set(None),
-        workflow_runtime_state: Set(Some(workflow_runtime_state)),
-        created_at: Set(Some(now)),
-        updated_at: Set(Some(now)),
-    };
-    active.insert(db).await.map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-async fn persist_new_batch_generation_task_snapshot(
-    db: &DatabaseConnection,
-    task_id: &str,
-    total_chapters: i32,
-) -> Result<(), String> {
-    upsert_batch_generation_runtime_snapshot(
-        db,
-        task_id,
-        json!({
-            "phase": "pending",
-            "progress": 0,
-            "status": "pending",
-            "last_event": "queued",
-            "last_message": "批量生成任务已创建，等待开始...",
-            "chapter_id": null,
-            "current_chapter_id": null,
-            "current_chapter_number": null,
-            "completed": 0,
-            "total": total_chapters.max(0),
-            "updated_at": Utc::now().to_rfc3339(),
-        }),
-    )
-    .await
-}
-
-async fn persist_new_single_generation_task_snapshot(
-    db: &DatabaseConnection,
-    task_id: &str,
-    chapter_id: &str,
-    chapter_number: i32,
-) -> Result<(), String> {
-    upsert_batch_generation_runtime_snapshot(
-        db,
-        task_id,
-        json!({
-            "phase": "pending",
-            "progress": 0,
-            "status": "pending",
-            "last_event": "queued",
-            "last_message": "单章生成任务已创建，等待开始...",
-            "chapter_id": chapter_id,
-            "current_chapter_id": chapter_id,
-            "current_chapter_number": chapter_number,
-            "updated_at": Utc::now().to_rfc3339(),
-        }),
-    )
-    .await
-}
-
-pub fn parse_batch_task_chapter_ids(task: &batch_generation_task::Model) -> Vec<String> {
+fn parse_batch_task_chapter_ids(task: &batch_generation_task::Model) -> Vec<String> {
     task.chapter_ids
         .as_array()
         .into_iter()
@@ -217,14 +31,14 @@ pub fn parse_batch_task_chapter_ids(task: &batch_generation_task::Model) -> Vec<
         .collect()
 }
 
-pub struct BatchGenerationCreatePlan {
-    pub created_task: batch_generation_task::Model,
-    pub chapter_ids: Vec<String>,
-    pub target_word_count: i32,
-    pub response_payload: Value,
+pub(crate) struct BatchGenerationCreatePlan {
+    pub(crate) created_task_id: String,
+    pub(crate) chapter_ids: Vec<String>,
+    pub(crate) target_word_count: i32,
+    pub(crate) response_payload: Value,
 }
 
-pub async fn create_batch_generation_task_plan(
+pub(crate) async fn create_batch_generation_task_plan(
     db: &DatabaseConnection,
     project_id: &str,
     user_id: &str,
@@ -272,29 +86,23 @@ pub async fn create_batch_generation_task_plan(
     persist_new_batch_generation_task_snapshot(db, &created_task.id, total_chapters).await?;
 
     Ok(BatchGenerationCreatePlan {
+        created_task_id: created_task.id.clone(),
         chapter_ids,
         target_word_count,
-        response_payload: json!({
-            "batch_id": created_task.id,
-            "message": "Batch generation task created",
-            "chapters_to_generate": chapters_to_generate.iter().map(|chapter_model| json!({
-                "id": chapter_model.id,
-                "chapter_number": chapter_model.chapter_number,
-                "title": chapter_model.title,
-            })).collect::<Vec<_>>(),
-            "estimated_time_minutes": total_chapters.max(1) * 2,
-        }),
-        created_task,
+        response_payload: build_batch_generation_create_response_payload(
+            &created_task,
+            chapters_to_generate,
+        ),
     })
 }
 
-pub struct SingleGenerationBackgroundCreatePlan {
-    pub created_task: batch_generation_task::Model,
-    pub target_word_count: i32,
-    pub response_payload: Value,
+pub(crate) struct SingleGenerationBackgroundCreatePlan {
+    pub(crate) created_task_id: String,
+    pub(crate) target_word_count: i32,
+    pub(crate) response_payload: Value,
 }
 
-pub async fn create_single_generation_background_task_plan(
+pub(crate) async fn create_single_generation_background_task_plan(
     db: &DatabaseConnection,
     user_id: &str,
     chapter_model: &chapter::Model,
@@ -335,56 +143,35 @@ pub async fn create_single_generation_background_task_plan(
     .await?;
 
     Ok(SingleGenerationBackgroundCreatePlan {
-        response_payload: json!({
-            "task_id": created_task.id,
-            "chapter_id": chapter_model.id,
-            "status": "pending",
-            "message": "单章后台生成任务已创建",
-            "estimated_time_minutes": 2,
-            "active_story_repair_payload": null,
-        }),
+        created_task_id: created_task.id.clone(),
+        response_payload: build_single_generation_background_create_response_payload(
+            &created_task,
+            chapter_model,
+        ),
         target_word_count,
-        created_task,
     })
 }
 
-pub struct CancelBatchGenerationResult {
-    pub response_payload: Value,
-}
-
-pub async fn cancel_batch_generation_task(
+pub(crate) async fn cancel_batch_generation_task(
     db: &DatabaseConnection,
     task: batch_generation_task::Model,
-) -> Result<CancelBatchGenerationResult, String> {
+) -> Result<Value, String> {
     if matches!(task.status.as_str(), "completed" | "failed" | "cancelled") {
         return Err(format!("Cannot cancel task in status {}", task.status));
     }
 
-    let mut active: batch_generation_task::ActiveModel = task.clone().into();
-    active.status = Set("cancelled".to_string());
-    active.completed_at = Set(Some(Utc::now().naive_utc()));
-    active
-        .update(db)
-        .await
-        .map_err(|error| error.to_string())?;
+    finalize_batch_generation_cancelled(db, &task.id, task.completed_chapters, task.total_chapters)
+        .await?;
 
-    Ok(CancelBatchGenerationResult {
-        response_payload: json!({
-            "message": "Batch generation cancelled",
-            "batch_id": task.id,
-            "completed_chapters": task.completed_chapters,
-            "total_chapters": task.total_chapters,
-        }),
-    })
+    Ok(build_cancel_batch_generation_response_payload(&task))
 }
 
-pub struct ResumeBatchGenerationPlan {
-    pub updated_task: batch_generation_task::Model,
-    pub response_payload: Value,
-    pub execution: ResumeExecutionPlan,
+pub(crate) struct ResumeBatchGenerationPlan {
+    pub(crate) response_payload: Value,
+    pub(crate) execution: ResumeExecutionPlan,
 }
 
-pub enum ResumeExecutionPlan {
+pub(crate) enum ResumeExecutionPlan {
     SingleChapter {
         chapter_id: String,
         target_word_count: i32,
@@ -397,7 +184,7 @@ pub enum ResumeExecutionPlan {
     },
 }
 
-pub async fn prepare_batch_generation_resume(
+pub(crate) async fn prepare_batch_generation_resume(
     db: &DatabaseConnection,
     task: batch_generation_task::Model,
     user_id: &str,
@@ -431,48 +218,20 @@ pub async fn prepare_batch_generation_resume(
         }
     };
 
-    let mut active: batch_generation_task::ActiveModel = task.clone().into();
-    active.status = Set("pending".to_string());
-    active.error_message = Set(None);
-    active.completed_at = Set(None);
-    active.started_at = Set(None);
-    active.completed_chapters = Set(0);
-    active.current_retry_count = Set(0);
-    let updated_task = active.update(db).await.map_err(|error| error.to_string())?;
-    let resume_checkpoint = build_resume_runtime_checkpoint(
-        updated_task.current_chapter_id.as_deref(),
-        updated_task.current_chapter_number,
-    );
-    upsert_batch_generation_runtime_snapshot(db, &updated_task.id, resume_checkpoint).await?;
+    let updated_task = reset_batch_generation_task_for_resume(db, &task).await?;
 
     Ok(ResumeBatchGenerationPlan {
-        response_payload: json!({
-            "message": "Batch generation resumed",
-            "batch_id": task.id,
-            "project_id": updated_task.project_id,
-            "task_type": task_type(&updated_task),
-            "status": "pending",
-            "stage_code": task_stage_code(&updated_task),
-            "execution_mode": task_execution_mode(&updated_task),
-            "current_chapter_id": updated_task.current_chapter_id,
-            "checkpoint": {
-                "stage_code": task_stage_code(&updated_task),
-                "execution_mode": task_execution_mode(&updated_task),
-                "chapter_id": updated_task.current_chapter_id,
-            },
-            "total_chapters": updated_task.total_chapters,
-            "completed_chapters": 0,
-            "created_at": to_iso(updated_task.created_at),
-        }),
-        updated_task,
+        response_payload: build_resume_batch_generation_response_payload(&updated_task),
         execution,
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_resume_runtime_checkpoint, parse_batch_task_chapter_ids};
+    use super::parse_batch_task_chapter_ids;
     use crate::models::batch_generation_task;
+    use crate::services::chapter_batch_generation_quality_status_service::manual_review_label;
+    use crate::services::chapter_batch_generation_runtime_state_service::build_pending_batch_generation_runtime_checkpoint;
     use serde_json::json;
 
     fn build_task(status: &str) -> batch_generation_task::Model {
@@ -515,25 +274,42 @@ mod tests {
     }
 
     #[test]
-    fn should_build_resume_runtime_checkpoint_with_and_without_chapter_id() {
-        let with_chapter = build_resume_runtime_checkpoint(Some("chapter-1"), Some(3));
-        assert_eq!(with_chapter["phase"], "pending");
-        assert_eq!(with_chapter["progress"], 0);
-        assert_eq!(with_chapter["status"], "pending");
-        assert_eq!(with_chapter["last_event"], "resume");
-        assert_eq!(with_chapter["last_message"], "批量生成任务已恢复，等待重新开始...");
-        assert_eq!(with_chapter["chapter_id"], "chapter-1");
-        assert_eq!(with_chapter["current_chapter_id"], "chapter-1");
-        assert_eq!(with_chapter["current_chapter_number"], 3);
+    fn should_detect_manual_review_resume_blocker_from_shared_quality_semantics() {
+        assert_eq!(
+            manual_review_label(Some(&json!([{
+                "quality_gate_decision": "manual_review",
+                "quality_gate_label": "needs review"
+            }]))),
+            Some("needs review".to_string())
+        );
+        assert_eq!(
+            manual_review_label(Some(&json!([{
+                "quality_gate_decision": "manual_review"
+            }]))),
+            Some("需人工复核".to_string())
+        );
+        assert!(manual_review_label(Some(&json!([{
+            "quality_gate_decision": "passed"
+        }])))
+        .is_none());
+    }
 
-        let without_chapter = build_resume_runtime_checkpoint(None, Some(4));
-        assert_eq!(without_chapter["phase"], "pending");
-        assert_eq!(without_chapter["progress"], 0);
-        assert_eq!(without_chapter["status"], "pending");
-        assert_eq!(without_chapter["last_event"], "resume");
-        assert_eq!(without_chapter["last_message"], "批量生成任务已恢复，等待重新开始...");
-        assert!(without_chapter["chapter_id"].is_null());
-        assert!(without_chapter["current_chapter_id"].is_null());
-        assert_eq!(without_chapter["current_chapter_number"], 4);
+    #[test]
+    fn should_build_pending_runtime_checkpoint_for_queued_batch_task() {
+        let checkpoint = build_pending_batch_generation_runtime_checkpoint(
+            "queued",
+            "批量生成任务已创建，等待开始...",
+            None,
+            None,
+            Some((0, 4)),
+        );
+
+        assert_eq!(checkpoint["phase"], "pending");
+        assert_eq!(checkpoint["progress"], 0);
+        assert_eq!(checkpoint["status"], "pending");
+        assert_eq!(checkpoint["last_event"], "queued");
+        assert_eq!(checkpoint["completed"], 0);
+        assert_eq!(checkpoint["total"], 4);
+        assert!(checkpoint["chapter_id"].is_null());
     }
 }

@@ -9,12 +9,9 @@ use crate::ai::service::AIService;
 use crate::services::chapter_regeneration_text_service::{
     finalize_partial_regeneration_result, FinalizePartialRegenerationError,
 };
-use crate::utils::sse::{
-    sse_chunk, sse_done, sse_error, sse_result, SseProgress,
-};
+use crate::utils::sse::{sse_chunk, sse_done, sse_error, sse_result, SseProgress};
 
-pub type PartialChapterRegenerationStream =
-    ReceiverStream<Result<Event, Infallible>>;
+pub type PartialChapterRegenerationStream = ReceiverStream<Result<Event, Infallible>>;
 
 pub struct PartialChapterRegenerationStreamInput {
     pub target_words: usize,
@@ -110,7 +107,9 @@ pub fn build_partial_chapter_regeneration_stream(
             }
         };
 
-        let _ = tx.send(Ok(tracker.complete(Some("Rewrite complete")))).await;
+        let _ = tx
+            .send(Ok(tracker.complete(Some("Rewrite complete"))))
+            .await;
         let _ = tx.send(Ok(sse_result(&result.payload))).await;
         let _ = tx.send(Ok(sse_done())).await;
     });

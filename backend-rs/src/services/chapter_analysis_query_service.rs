@@ -6,25 +6,41 @@ use sea_orm::{
 use serde_json::{json, Value};
 
 use crate::models::{
-    analysis_task, chapter, chapter_draft_attempt, generation_history, plot_analysis,
-    story_memory,
+    analysis_task, chapter, chapter_draft_attempt, generation_history, plot_analysis, story_memory,
+};
+use crate::services::chapter_access_service::{
+    load_accessible_chapter, LoadAccessibleChapterError,
 };
 use crate::services::chapter_analysis_checker_query_service::build_chapter_analysis_checker_fragments;
 use crate::services::chapter_analysis_service::LoadAnalysisTaskStatusError;
-use crate::services::chapter_analysis_view_payload_adapter_service::{
-    build_chapter_analysis_view_payload,
-};
-use crate::services::chapter_draft_query_service::{
-    build_chapter_draft_analysis_view_fragments,
-};
+use crate::services::chapter_analysis_view_payload_adapter_service::build_chapter_analysis_view_payload;
+use crate::services::chapter_draft_query_service::build_chapter_draft_analysis_view_fragments;
 use crate::services::chapter_quality_query_service::{
     build_chapter_analysis_quality_fragments,
     load_chapter_quality_metrics_payload as load_chapter_quality_metrics_query_payload,
 };
 use crate::services::chapter_service::ChapterService;
 
+pub enum LoadChapterAnalysisViewPayloadError {
+    NotFoundOrAccessDenied,
+    Internal(String),
+}
+
+pub enum LoadChapterQualityMetricsPayloadError {
+    NotFoundOrAccessDenied,
+    Internal(String),
+}
+
 fn format_datetime(value: Option<NaiveDateTime>) -> Option<String> {
     value.map(|datetime| datetime.format("%Y-%m-%dT%H:%M:%S").to_string())
+}
+
+async fn load_chapter_for_analysis_query(
+    db: &DatabaseConnection,
+    chapter_id: &str,
+    user_id: &str,
+) -> Result<chapter::Model, LoadAccessibleChapterError> {
+    load_accessible_chapter(db, chapter_id, user_id).await
 }
 
 fn classify_analysis_error_code(error_message: Option<&str>) -> Option<&'static str> {
@@ -287,9 +303,88 @@ pub async fn load_chapter_analysis_view_payload(
     ))
 }
 
+pub async fn load_owned_chapter_analysis_view_payload(
+    db: &DatabaseConnection,
+    chapter_id: &str,
+    user_id: &str,
+) -> Result<Value, LoadChapterAnalysisViewPayloadError> {
+    let chapter = load_chapter_for_analysis_query(db, chapter_id, user_id)
+        .await
+        .map_err(|error| match error {
+            LoadAccessibleChapterError::NotFoundOrAccessDenied => {
+                LoadChapterAnalysisViewPayloadError::NotFoundOrAccessDenied
+            }
+            LoadAccessibleChapterError::Internal(detail) => {
+                LoadChapterAnalysisViewPayloadError::Internal(detail)
+            }
+        })?;
+
+    load_chapter_analysis_view_payload(db, &chapter)
+        .await
+        .map_err(LoadChapterAnalysisViewPayloadError::Internal)
+}
+
 pub async fn load_chapter_quality_metrics_payload(
     db: &DatabaseConnection,
     chapter: &chapter::Model,
 ) -> Result<Value, String> {
     load_chapter_quality_metrics_query_payload(db, chapter).await
+}
+
+pub async fn load_owned_chapter_quality_metrics_payload(
+    db: &DatabaseConnection,
+    chapter_id: &str,
+    user_id: &str,
+) -> Result<Value, LoadChapterQualityMetricsPayloadError> {
+    let chapter = load_chapter_for_analysis_query(db, chapter_id, user_id)
+        .await
+        .map_err(|error| match error {
+            LoadAccessibleChapterError::NotFoundOrAccessDenied => {
+                LoadChapterQualityMetricsPayloadError::NotFoundOrAccessDenied
+            }
+            LoadAccessibleChapterError::Internal(detail) => {
+                LoadChapterQualityMetricsPayloadError::Internal(detail)
+            }
+        })?;
+
+    load_chapter_quality_metrics_payload(db, &chapter)
+        .await
+        .map_err(LoadChapterQualityMetricsPayloadError::Internal)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_analysis_error_code;
+
+    #[test]
+    fn should_classify_known_analysis_error_codes() {
+        let cases = [
+            (Some("正在重试(1/3)：临时失败"), Some("retrying")),
+            (Some("JSON解析失败：字段缺失"), Some("json_parse_failed")),
+            (Some("AI返回格式异常：不是对象"), Some("json_parse_failed")),
+            (Some("AI响应为空或过短"), Some("ai_empty")),
+            (Some("流式响应中断：连接关闭"), Some("stream_interrupted")),
+            (
+                Some("流式生成出错：provider failed"),
+                Some("stream_interrupted"),
+            ),
+            (Some("任务超时（超过10分钟未完成）"), Some("timeout")),
+            (Some("启动超时（超过3分钟未启动）"), Some("timeout")),
+            (Some("章节不存在或内容为空"), Some("chapter_empty")),
+            (Some("项目不存在"), Some("project_missing")),
+        ];
+
+        for (message, expected) in cases {
+            assert_eq!(classify_analysis_error_code(message), expected);
+        }
+    }
+
+    #[test]
+    fn should_classify_unknown_and_missing_analysis_error_codes() {
+        assert_eq!(
+            classify_analysis_error_code(Some("供应商返回未知错误")),
+            Some("unknown")
+        );
+        assert_eq!(classify_analysis_error_code(None), None);
+    }
 }
