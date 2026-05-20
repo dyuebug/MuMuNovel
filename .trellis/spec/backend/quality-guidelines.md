@@ -106,6 +106,124 @@ The codebase contains both active refactors and compatibility layers, so
   and downstream route/stream/runtime boundaries only pass the explicit
   payload through.
 
+## Scenario: Rust startup and runtime hardening boundary
+
+### 1. Scope / Trigger
+- Trigger: a change touches Rust startup/runtime boundary files such as
+  `backend-rs/src/config.rs`, `backend-rs/src/main.rs`,
+  `backend-rs/src/db/connection.rs`, `backend-rs/src/api/router.rs`,
+  `backend-rs/src/api/auth.rs`, or `backend-rs/src/middleware/auth.rs`.
+- Why this needs code-spec depth: these files own environment wiring,
+  startup failure policy, credentialed browser access, cookie policy, and
+  public-vs-protected route boundaries. A small local edit can silently widen
+  runtime exposure or make deployment config lie about actual behavior.
+
+### 2. Signatures
+- `config::load() -> Result<AppConfig, ConfigError>` is the startup config
+  entrypoint and must remain the owner of runtime-mode-sensitive validation.
+- `db::connection::connect(cfg: &AppConfig)` consumes a validated
+  `cfg.database_url`; it must not invent a second fallback policy.
+- `api::router::build(...) -> Result<Router, RouterBuildError>` owns CORS
+  layer construction and may fail when `CORS_ORIGINS` is invalid for the
+  selected runtime mode.
+- Auth cookie writers in `backend-rs/src/api/auth.rs` must route through one
+  local cookie builder/helper boundary instead of ad hoc format strings.
+- `middleware::auth::is_public(path: &str)` remains the owner of public-path
+  auth bypass policy and should be expressed as explicit exact/prefix match
+  tables, not a long inline boolean chain.
+
+### 3. Contracts
+- Environment keys:
+  - `DEBUG=false` means non-development runtime policy.
+  - `JWT_SECRET` is required in non-development; development may generate an
+    ephemeral local secret with an explicit warning log.
+  - `DATABASE_URL` is required in non-development; development may fall back
+    to `sqlite::memory:` with an explicit warning log.
+  - `CORS_ORIGINS` must be the actual router input. In non-development it must
+    be either a comma-separated explicit origin list or startup/router build
+    must fail. `*` is development-only.
+- CORS contract:
+  - credentialed browser flows are supported, so explicit-origin mode must
+    keep `allow_credentials(true)`.
+  - origin parsing must reject userinfo, path segments, query, fragment, and
+    malformed absolute origins.
+- Cookie contract:
+  - shared attributes (`Path`, `SameSite`, `Max-Age`) come from one builder.
+  - `HttpOnly` vs non-`HttpOnly` stays explicit at the call boundary.
+- Public path contract:
+  - health/docs/auth bootstrap endpoints and static asset prefixes may stay
+    public only through the middleware owner boundary.
+  - route composition in `router.rs` must not silently change module exposure
+    while refactoring CORS or startup behavior.
+
+### 4. Validation & Error Matrix
+- Non-development + empty `JWT_SECRET` -> `ConfigError::MissingJwtSecret` and
+  process exits during startup.
+- Non-development + empty `DATABASE_URL` -> `ConfigError::MissingDatabaseUrl`
+  and process exits during startup.
+- Non-development + `CORS_ORIGINS="*"` -> `RouterBuildError::WildcardCorsOriginsNotAllowed`
+  and process exits during router build.
+- `CORS_ORIGINS` contains malformed or non-origin values -> `RouterBuildError::InvalidCorsOrigin`.
+- Editing router composition and dropping an existing route merge -> treat as a
+  behavioral regression even if `cargo check` still passes; restore the route
+  and re-run focused validation.
+
+### 5. Good/Base/Bad Cases
+- Good: runtime mode is decided once in config loading, startup errors fail
+  fast before serving traffic, router CORS behavior matches `CORS_ORIGINS`,
+  cookie formatting flows through one helper, and public paths are auditable
+  from one matcher table.
+- Base: development keeps explicit convenience fallbacks for local bootstrap,
+  but warnings make the fallback visible and non-development never reuses the
+  same implicit behavior.
+- Bad: `db::connection` or `router.rs` adds its own hidden fallback after
+  config validation already ran.
+- Bad: router refactor changes the `.merge(...)` chain and silently drops an
+  existing route group while focusing on unrelated runtime hardening.
+- Bad: a new auth cookie path reintroduces hand-built `Set-Cookie` strings
+  outside the local cookie builder.
+
+### 6. Tests Required
+- Unit tests for runtime-mode-sensitive config helpers:
+  - development allows ephemeral JWT / in-memory DB fallback
+  - non-development rejects missing JWT / DB URL
+- Unit tests for CORS parsing:
+  - development wildcard allowed
+  - non-development wildcard rejected
+  - explicit origins normalized/deduplicated
+  - path-bearing origins rejected
+- Unit tests for cookie rendering:
+  - `HttpOnly` cookie shape
+  - frontend-visible cookie shape
+  - clear-cookie shape
+- Unit tests for public/protected path classification:
+  - representative exact public paths
+  - `/assets` prefix
+  - representative protected API paths
+- After router composition edits, run at least one targeted review against the
+  `.merge(...)` list so route groups were not dropped accidentally.
+
+### 7. Wrong vs Correct
+#### Wrong
+- `config::load()` silently generates a production secret or leaves
+  `DATABASE_URL` empty and lets downstream code guess.
+- `router.rs` ignores `cfg.cors_origins`, uses a permissive default for every
+  mode, and accidentally removes an unrelated route merge in the same patch.
+- Auth handlers build `Set-Cookie` strings in multiple helper variants with
+  duplicated `Path` / `SameSite` fragments.
+- Public route policy is encoded as an ever-growing inline boolean expression
+  with no tests for representative paths.
+
+#### Correct
+- `config::load()` centralizes runtime mode classification and returns typed
+  startup errors for non-development misconfiguration.
+- `router.rs` builds CORS from validated config, preserves credential support,
+  and keeps the route merge surface intact during refactors.
+- Auth handlers use one cookie builder/helper boundary with explicit
+  `HttpOnly` control.
+- Public route policy stays local to `middleware/auth.rs` and is expressed as
+  exact/prefix policy tables with focused tests.
+
 ---
 
 ## Change Checklist
@@ -142,6 +260,9 @@ The codebase contains both active refactors and compatibility layers, so
   polling depend on them.
 - Changing request/response fields without tracing frontend consumers.
 - Assuming `/health` is enough when readiness and DB warmup semantics matter.
+- Refactoring `backend-rs/src/api/router.rs` and accidentally dropping an
+  existing `.merge(...)` route group while working on unrelated middleware or
+  CORS changes.
 
 ---
 

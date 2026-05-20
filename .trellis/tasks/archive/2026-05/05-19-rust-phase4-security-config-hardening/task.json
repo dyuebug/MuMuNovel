@@ -1,0 +1,31 @@
+{
+  "id": "rust-phase4-security-config-hardening",
+  "name": "rust-phase4-security-config-hardening",
+  "title": "Plan Rust Phase 4 security and config hardening",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "dyuebug",
+  "assignee": "dyuebug",
+  "createdAt": "2026-05-19",
+  "completedAt": "2026-05-19",
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "05-19-rust-phase4-config-bootstrap-guardrails",
+    "05-19-rust-phase4-router-cors-hardening",
+    "05-19-rust-phase4-auth-cookie-consolidation",
+    "05-19-rust-phase4-public-path-policy-consolidation"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
