@@ -204,6 +204,8 @@
 补充：
 
 - 当前 `route-groups` smoke 已经覆盖 `chapters` 的列表、analysis、batch analysis status、batch active tasks、regeneration tasks 五条低前提 owner probe
+- 当前 `route-groups` smoke 现在还覆盖 `POST /api/chapters/{chapter_id}/generate-stream`，
+  使单章流式生成写侧入口也进入 `chapters` 的 through-gateway owner 证据链
 - 这足以证明章节大域在 through-gateway 未登录边界上保持 Rust owner，但还不足以替代后续更强的业务/stream smoke
 - 当前还新增了独立 `phase5-p0` profile，把 `projects`、`wizard-stream`、
   `chapters`、`settings`、`memories` 五组 P0 route-group 从
@@ -253,6 +255,14 @@
   `401 {"detail":"未登录，请先登录"}`，Python stream access 校验则在
   `request.state.user_id` 缺失时返回 `401 {"detail":"未登录"}`，因此它是
   同路径 SSE 查询入口的真实 fallback 线索，而不是 asymmetric
+- `chapters-generate-stream-auth-guard-rust` 与
+  `chapters-generate-stream-auth-guard-python-fallback` 现在也补入
+  `phase5-p0` / `phase5-p0-fallback`：同一路径下，Rust 会先停在共享鉴权并返回
+  `401 {"detail":"未登录，请先登录"}`，Python 单章流式生成入口则在
+  `request.state.user_id` 缺失时返回 `401 {"detail":"未登录"}`。这条路径让
+  `chapters` 的单章生成治理资产从 background lane 扩到 stream lane，并把
+  本轮已完成的 Rust stream follow-up analysis owner 收口正式映射进
+  gateway cutover 证据链
 - `memories-search-auth-guard-rust` 现在也补入 `phase5-p0`：它使用
   `?query=test` 加最小 JSON body `{}`，既满足 Python fallback 的 transport
   形态，也稳定落在 Rust 鉴权中间件 `401 {"detail":"未登录，请先登录"}`
@@ -423,6 +433,9 @@
   fallback 成功条件
 - `chapters` 的 Python fallback 现在已同时覆盖 project-path 列表、
   analysis、batch status、active-tasks、regeneration tasks 五类读侧入口
+- `chapters` 的 Python fallback 现在还覆盖 `POST /api/chapters/{chapter_id}/generate-stream`
+  这条单章流式生成写侧入口，因此 `chapters` 的回切线索不再只停留在列表 /
+  analysis / batch / regeneration 或 `generate-background` 单点
 - P1 route group（`auth` / `users`）现已新增第一版 rollback runbook：
 - P1 route group（`auth` / `users`）现已新增第一版 rollback runbook：
   `docs/architecture/rust-phase5-p1-route-group-rollback-runbook-2026-05-20.zh-CN.md`

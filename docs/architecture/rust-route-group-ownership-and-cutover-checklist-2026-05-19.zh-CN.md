@@ -56,7 +56,7 @@ rollback 指在不改业务数据语义的前提下，把 route group 流量切�
 | `relationships` | Rust | 基础 CRUD smoke | `/api/relationships*` 指回 Python | 关系表兼容 | 可补 smoke |
 | `writing_styles` | Rust | CRUD smoke | `/api/writing-styles*` 指回 Python | styles/preset 数据结构兼容 | 可补 smoke |
 | `foreshadows` | Rust | CRUD + context/stats 至少 1 条 | `/api/foreshadows*` 指回 Python | foreshadows 表已在 Alembic 覆盖 | 可补 smoke |
-| `chapters` | Rust | 已补列表、analysis、batch analysis status、batch active tasks、batch stream、batch resume、single generate-background、regeneration tasks 八条 through-gateway probe；现在还新增 `batch-generate/{batch_id}/status` 与 `batch-generate/{batch_id}/cancel` 两条 P0 asymmetric 样本；下一步再补更强的 business smoke | `/api/chapters*` 指回 Python | 章节域使用 shared DB；任务语义、checkpoint、SSE event shape 已在 Phase 3/4 前后持续收口 | Phase 5 最高优先级之一 |
+| `chapters` | Rust | 已补列表、analysis、batch analysis status、batch active tasks、batch stream、batch resume、single generate-background、single generate-stream、regeneration tasks 九条 through-gateway probe；现在还新增 `batch-generate/{batch_id}/status` 与 `batch-generate/{batch_id}/cancel` 两条 P0 asymmetric 样本；下一步再补更强的 business smoke | `/api/chapters*` 指回 Python | 章节域使用 shared DB；任务语义、checkpoint、SSE event shape 已在 Phase 3/4 前后持续收口 | Phase 5 最高优先级之一 |
 | `memories` | Rust | 已补 `GET /api/memories/projects/{project_id}/stats` 与 `POST /api/memories/projects/{project_id}/search?query=test` 两条 through-gateway probe，确认 API 侧仍命中 Rust，且不再只靠单一读侧路径 | 去掉 `/api/memories` 显式 Rust location，恢复 Python API owner | 需区分 API owner 与页面/非 API fallback owner | Phase 5 重点 |
 | `mcp_plugins` | Rust | 列表 / 配置读写 smoke | `/api/mcp*` 指回 Python | mcp_plugins 表兼容 | 可补 smoke |
 | `prompt_templates` | Rust | 列表 + 保存 smoke | `/api/prompt-templates*` 指回 Python | prompt_templates 表兼容 | 可补 smoke |
@@ -120,6 +120,13 @@ rollback 指在不改业务数据语义的前提下，把 route group 流量切�
   的 owner/fallback 证据扩到单章后台生成写侧入口；Rust 侧稳定停在共享鉴权
   `401 {"detail":"未登录，请先登录"}`，Python fallback 则稳定停在
   `require_authenticated_user_id()` 的 `401 {"detail":"未登录"}`。
+- `chapters/{chapter_id}/generate-stream` 现在也进入 `phase5-p0` 与
+  `phase5-p0-fallback`：它同样使用最小 JSON body `{}`，把 `chapters`
+  的 owner/fallback 证据扩到单章流式生成写侧入口；Rust 侧稳定停在共享鉴权
+  `401 {"detail":"未登录，请先登录"}`，Python fallback 则稳定停在
+  `require_authenticated_user_id()` 的 `401 {"detail":"未登录"}`。这条 probe
+  也把本轮已完成的 Rust stream follow-up analysis owner 收口正式映射进
+  cutover 资产，而不再只让 `generate-background` 代表单章生成链路。
 - `memories` 现在也从单一 `stats` probe 扩到
   `POST /api/memories/projects/{project_id}/search?query=test`：它利用 Python
   侧必填 `query` 查询参数与 Rust 侧可接受 `{}` body 的交集，补上同组第二条
@@ -273,6 +280,9 @@ Phase 5 P0 route-group 的第一版可执行 rollback 手册已单独整理为�
 - `chapters` 的 Python fallback 现在也补进了 project-path 列表探针
   `/api/chapters/project/{project_id}`，不再只靠 analysis/batch/regeneration
   子路由侧面证明
+- `chapters/generate-stream` 现在也进入 `phase5-p0-fallback`，因此 `chapters`
+  不再只靠 `generate-background` 来证明单章生成写侧已经回切到 Python；
+  单章流式生成入口现在也有了同路径、低前提的回切线索
 
 ---
 
@@ -312,7 +322,7 @@ Python fallback 的程度。
 4. **smoke runner 现在也支持 `expected_header_contains`，可以把 cookie / 关键响应头存在性纳入业务 smoke，而不必只看 body。**
    当前实现还会保留重复响应头的多值内容，因此 `Set-Cookie` 这类多 header
    场景不会在采集阶段被静默折叠掉。
-5. **现有 `chapters` / `wizard-stream` 的 POST owner probes 已经开始发送真实 JSON body，而不是只依赖空请求命中 `401`。**
+5. **现有 `chapters` / `wizard-stream` 的 POST owner probes 已经开始发送真实 JSON body，而不是只依赖空请求命中 `401`。其中 `chapters` 已同时覆盖 `generate-background` 与 `generate-stream` 两条单章生成写侧入口。**
 6. **manifest 现在还区分了 `business` profile，可把公开 JSON/HTML 业务断言和 `route-groups` / `deploy` 物理拆分。**
 7. **下一步关键工作是利用这套能力补更强的 stream/business smoke 和 rollback 资产，而不是继续口头判断“差不多可以切了”。**
 8. **`phase5-p0` profile 已经可执行，且 `projects` 现在同时拥有更强的

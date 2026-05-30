@@ -1,7 +1,10 @@
 """应用配置管理"""
-from pydantic_settings import BaseSettings
+import json
+from typing import Annotated, Optional
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode
 from dotenv import load_dotenv
-from typing import Optional
 from pathlib import Path
 import logging
 import os
@@ -54,7 +57,10 @@ class Settings(BaseSettings):
     log_backup_count: int = 30  # 保留30个备份文件
     
     # CORS配置
-    cors_origins: list[str] = ["http://localhost:8000", "http://127.0.0.1:8000"]
+    cors_origins: Annotated[list[str], NoDecode] = [
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ]
     
     # 数据库配置 - PostgreSQL
     database_url: str = DATABASE_URL
@@ -143,6 +149,27 @@ class Settings(BaseSettings):
         env_file = ".env"
         case_sensitive = False
         extra = "ignore"  # 忽略未定义的环境变量，避免验证错误
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _parse_cors_origins(cls, value: object) -> list[str] | object:
+        if isinstance(value, list):
+            return value
+
+        if not isinstance(value, str):
+            return value
+
+        raw = value.strip()
+        if not raw:
+            return []
+
+        if raw.startswith("["):
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+            raise ValueError("CORS_ORIGINS JSON 格式必须是数组")
+
+        return [item.strip() for item in raw.split(",") if item.strip()]
 
     @staticmethod
     def _normalize_origin(origin: Optional[str]) -> Optional[str]:

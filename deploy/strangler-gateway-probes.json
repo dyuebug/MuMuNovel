@@ -1771,6 +1771,19 @@
       }
     },
     {
+      "name": "chapters-generate-stream-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "chapters",
+      "profiles": ["route-groups", "phase5-p0"],
+      "method": "POST",
+      "path": "/api/chapters/test-chapter-id/generate-stream",
+      "json_body": {},
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
       "name": "chapters-batch-active-tasks-auth-guard-python-fallback",
       "owner": "python-fallback",
       "route_group": "chapters",
@@ -1813,6 +1826,19 @@
       "profiles": ["phase5-p0-fallback"],
       "method": "POST",
       "path": "/api/chapters/test-chapter-id/generate-background",
+      "json_body": {},
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "chapters-generate-stream-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "chapters",
+      "profiles": ["phase5-p0-fallback"],
+      "method": "POST",
+      "path": "/api/chapters/test-chapter-id/generate-stream",
       "json_body": {},
       "expected_status": 401,
       "expected_json": {
