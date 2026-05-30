@@ -17,7 +17,29 @@ use crate::ai::service::AIService;
 use crate::ai::types::{ToolDef, ToolFunction};
 use crate::models::settings;
 use crate::services::auth::Claims;
+use crate::services::settings_api_key_payload_adapter_service::build_stored_api_key_payload;
+use crate::services::settings_models_payload_adapter_service::{
+    build_available_models_fallback_payload, build_available_models_payload,
+    build_fetch_models_failure_payload, build_fetch_models_fallback_payload,
+    build_fetch_models_success_payload,
+};
+use crate::services::settings_preset_query_service::{find_preset_config, FindPresetConfigError};
+use crate::services::settings_preset_request_service::{
+    build_create_preset_from_current_request,
+    build_create_settings_preset_request_from_typed_route_payload,
+    build_update_settings_preset_request_from_typed_route_payload,
+    CreatePresetFromCurrentRouteBody, CreatePresetFromCurrentRouteQuery,
+    CreateSettingsPresetRouteRequest, UpdateSettingsPresetRouteRequest,
+};
+use crate::services::settings_runtime_config_service::{
+    normalize_openai_compatible_base_url, resolve_effective_runtime_settings,
+    EffectiveSettingsOverrides,
+};
 use crate::services::settings_service::SettingsService;
+use crate::services::settings_test_preset_request_service::build_test_preset_connection_request;
+use crate::services::settings_update_request_service::{
+    build_settings_update_request_from_typed_route_payload, SettingsUpdateRouteRequest,
+};
 
 #[derive(Deserialize)]
 struct ModelsQuery {
@@ -56,12 +78,6 @@ struct TestWebResearchRequest {
     query: Option<String>,
 }
 
-#[derive(Deserialize, Default)]
-struct CreatePresetFromCurrentQuery {
-    name: Option<String>,
-    description: Option<String>,
-}
-
 async fn get_settings(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
@@ -80,14 +96,8 @@ async fn get_stored_api_key(
     Extension(db): Extension<DatabaseConnection>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match load_settings_model(&db, &claims.sub).await {
-        Ok(Some(model)) => {
-            let api_key = model.api_key.trim().to_string();
-            Ok(Json(json!({
-                "api_key": api_key,
-                "has_api_key": !model.api_key.trim().is_empty()
-            })))
-        }
-        Ok(None) => Ok(Json(json!({ "api_key": "", "has_api_key": false }))),
+        Ok(Some(model)) => Ok(Json(build_stored_api_key_payload(Some(&model.api_key)))),
+        Ok(None) => Ok(Json(build_stored_api_key_payload(None))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"detail": e})),
@@ -98,9 +108,11 @@ async fn get_stored_api_key(
 async fn create_settings(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
-    Json(body): Json<Value>,
+    Json(body): Json<SettingsUpdateRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    match SettingsService::update(&db, &claims.sub, &body).await {
+    let request = build_settings_update_request_from_typed_route_payload(body);
+
+    match SettingsService::update(&db, &claims.sub, &request).await {
         Ok(settings) => Ok(Json(settings)),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -112,9 +124,11 @@ async fn create_settings(
 async fn update_settings(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
-    Json(body): Json<Value>,
+    Json(body): Json<SettingsUpdateRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    match SettingsService::update(&db, &claims.sub, &body).await {
+    let request = build_settings_update_request_from_typed_route_payload(body);
+
+    match SettingsService::update(&db, &claims.sub, &request).await {
         Ok(settings) => Ok(Json(settings)),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -141,15 +155,15 @@ async fn get_available_models(
     Extension(db): Extension<DatabaseConnection>,
     Query(query): Query<ModelsQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let effective = resolve_effective_settings(
+    let effective = resolve_effective_runtime_settings(
         &db,
         &claims.sub,
-        query.provider.as_deref(),
-        query.api_key.clone(),
-        query.api_base_url.clone(),
-        None,
-        None,
-        None,
+        EffectiveSettingsOverrides {
+            provider: query.provider.clone(),
+            api_key: query.api_key.clone(),
+            api_base_url: query.api_base_url.clone(),
+            ..Default::default()
+        },
     )
     .await?;
 
@@ -161,30 +175,25 @@ async fn get_available_models(
     )
     .await
     {
-        Ok(models) => Ok(Json(json!({
-            "provider": effective.provider,
-            "models": models,
-            "count": models.len()
-        }))),
+        Ok(models) => Ok(Json(build_available_models_payload(
+            &effective.provider,
+            models,
+        ))),
         Err(error) => {
             let fallback = curated_model_options(&effective.provider);
             if !fallback.is_empty() {
-                Ok(Json(json!({
-                    "provider": effective.provider,
-                    "models": fallback,
-                    "count": fallback.len(),
-                    "message": format!("Model list fallback applied: {}", error),
-                    "fallback_applied": true
-                })))
+                Ok(Json(build_available_models_fallback_payload(
+                    &effective.provider,
+                    fallback,
+                    &error,
+                )))
             } else {
                 let openai_fallback = curated_model_options("openai");
-                Ok(Json(json!({
-                    "provider": effective.provider,
-                    "models": openai_fallback,
-                    "count": openai_fallback.len(),
-                    "message": format!("Model list fallback applied: {}", error),
-                    "fallback_applied": true
-                })))
+                Ok(Json(build_available_models_fallback_payload(
+                    &effective.provider,
+                    openai_fallback,
+                    &error,
+                )))
             }
         }
     }
@@ -195,15 +204,17 @@ async fn test_api_connection(
     Extension(db): Extension<DatabaseConnection>,
     Json(body): Json<TestConnectionRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let effective = resolve_effective_settings(
+    let effective = resolve_effective_runtime_settings(
         &db,
         &claims.sub,
-        body.provider.as_deref(),
-        body.api_key.clone(),
-        body.api_base_url.clone(),
-        body.llm_model.clone(),
-        body.temperature,
-        body.max_tokens,
+        EffectiveSettingsOverrides {
+            provider: body.provider.clone(),
+            api_key: body.api_key.clone(),
+            api_base_url: body.api_base_url.clone(),
+            model: body.llm_model.clone(),
+            temperature: body.temperature,
+            max_tokens: body.max_tokens,
+        },
     )
     .await?;
 
@@ -255,15 +266,15 @@ async fn fetch_models_endpoint(
     Extension(db): Extension<DatabaseConnection>,
     Json(body): Json<FetchModelsRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let effective = resolve_effective_settings(
+    let effective = resolve_effective_runtime_settings(
         &db,
         &claims.sub,
-        body.provider.as_deref(),
-        body.api_key.clone(),
-        body.api_base_url.clone(),
-        None,
-        None,
-        None,
+        EffectiveSettingsOverrides {
+            provider: body.provider.clone(),
+            api_key: body.api_key.clone(),
+            api_base_url: body.api_base_url.clone(),
+            ..Default::default()
+        },
     )
     .await?;
 
@@ -275,70 +286,19 @@ async fn fetch_models_endpoint(
     )
     .await
     {
-        Ok(models) => {
-            let model_count = models.len();
-            Ok(Json(json!({
-                "success": true,
-                "models": normalize_fetch_models_payload(models),
-                "message": format!("Fetched {} models", model_count)
-            })))
-        }
+        Ok(models) => Ok(Json(build_fetch_models_success_payload(models))),
         Err(error) => {
             let fallback = curated_fetch_models(&effective.provider);
             if !fallback.is_empty() {
-                Ok(Json(json!({
-                    "success": true,
-                    "models": fallback,
-                    "message": format!("Model list fallback applied: {}", error)
-                })))
+                Ok(Json(build_fetch_models_fallback_payload(fallback, &error)))
             } else {
-                Ok(Json(json!({
-                    "success": false,
-                    "models": [],
-                    "message": "Failed to fetch models",
-                    "error": error,
-                    "error_type": classify_error_type(&error)
-                })))
+                Ok(Json(build_fetch_models_failure_payload(
+                    &error,
+                    classify_error_type(&error),
+                )))
             }
         }
     }
-}
-
-fn normalize_fetch_models_payload(models: Vec<Value>) -> Vec<Value> {
-    models
-        .into_iter()
-        .filter_map(|item| {
-            if let Some(id) = item.get("id").and_then(Value::as_str) {
-                let trimmed = id.trim();
-                if !trimmed.is_empty() {
-                    return Some(json!({
-                        "id": trimmed,
-                        "owned_by": item
-                            .get("owned_by")
-                            .and_then(Value::as_str)
-                            .or_else(|| item.get("description").and_then(Value::as_str))
-                    }));
-                }
-            }
-
-            let value = item
-                .get("value")
-                .and_then(Value::as_str)
-                .or_else(|| item.get("name").and_then(Value::as_str))
-                .or_else(|| item.get("label").and_then(Value::as_str))
-                .map(str::trim)
-                .filter(|text| !text.is_empty())?;
-
-            Some(json!({
-                "id": value,
-                "owned_by": item
-                    .get("owned_by")
-                    .and_then(Value::as_str)
-                    .or_else(|| item.get("description").and_then(Value::as_str))
-                    .or_else(|| item.get("label").and_then(Value::as_str))
-            }))
-        })
-        .collect()
 }
 
 async fn test_web_research_connection(
@@ -453,15 +413,17 @@ async fn check_function_calling(
     Extension(db): Extension<DatabaseConnection>,
     Json(body): Json<TestConnectionRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let effective = resolve_effective_settings(
+    let effective = resolve_effective_runtime_settings(
         &db,
         &claims.sub,
-        body.provider.as_deref(),
-        body.api_key.clone(),
-        body.api_base_url.clone(),
-        body.llm_model.clone(),
-        Some(0.1),
-        Some(512),
+        EffectiveSettingsOverrides {
+            provider: body.provider.clone(),
+            api_key: body.api_key.clone(),
+            api_base_url: body.api_base_url.clone(),
+            model: body.llm_model.clone(),
+            temperature: Some(0.1),
+            max_tokens: Some(512),
+        },
     )
     .await?;
 
@@ -546,9 +508,10 @@ async fn get_presets(
 async fn create_preset(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
-    Json(body): Json<Value>,
+    Json(body): Json<CreateSettingsPresetRouteRequest>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    match SettingsService::create_preset(&db, &claims.sub, &body).await {
+    let request = build_create_settings_preset_request_from_typed_route_payload(body);
+    match SettingsService::create_preset(&db, &claims.sub, &request).await {
         Ok(result) => Ok((StatusCode::CREATED, Json(result))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -561,9 +524,10 @@ async fn update_preset(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
     Path(preset_id): Path<String>,
-    Json(body): Json<Value>,
+    Json(body): Json<UpdateSettingsPresetRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    match SettingsService::update_preset(&db, &claims.sub, &preset_id, &body).await {
+    let request = build_update_settings_preset_request_from_typed_route_payload(body);
+    match SettingsService::update_preset(&db, &claims.sub, &preset_id, &request).await {
         Ok(result) => Ok(Json(result)),
         Err(e) => {
             let detail = format!("{}", e);
@@ -632,95 +596,52 @@ async fn test_preset(
             Json(json!({"detail": "Settings not found"})),
         ))?;
 
-    let preferences: Value = settings
-        .preferences
-        .as_deref()
-        .and_then(|raw| serde_json::from_str(raw).ok())
-        .unwrap_or_else(|| json!({}));
-    let presets = preferences
-        .get("api_presets")
-        .and_then(|value| value.get("presets"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let config = find_preset_config(settings.preferences.as_deref(), &preset_id).map_err(
+        |error| match error {
+            FindPresetConfigError::PresetNotFound => (
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": "Preset not found"})),
+            ),
+        },
+    )?;
+    let request = build_test_preset_connection_request(&config);
 
-    let preset = presets
-        .into_iter()
-        .find(|preset| preset.get("id").and_then(Value::as_str) == Some(preset_id.as_str()))
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            Json(json!({"detail": "Preset not found"})),
-        ))?;
-
-    let config = preset.get("config").cloned().unwrap_or_else(|| json!({}));
-    let request = TestConnectionRequest {
-        api_key: config
-            .get("api_key")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        api_base_url: config
-            .get("api_base_url")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        provider: config
-            .get("api_provider")
-            .or_else(|| config.get("provider"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        llm_model: config
-            .get("llm_model")
-            .or_else(|| config.get("model"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        temperature: config.get("temperature").and_then(Value::as_f64),
-        max_tokens: config
-            .get("max_tokens")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok()),
-    };
-
-    test_api_connection(Extension(claims), Extension(db), Json(request)).await
+    test_api_connection(
+        Extension(claims),
+        Extension(db),
+        Json(TestConnectionRequest {
+            api_key: request.api_key,
+            api_base_url: request.api_base_url,
+            provider: request.provider,
+            llm_model: request.llm_model,
+            temperature: request.temperature,
+            max_tokens: request.max_tokens,
+        }),
+    )
+    .await
 }
 
 async fn create_preset_from_current(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
-    Query(query): Query<CreatePresetFromCurrentQuery>,
-    body: Option<Json<Value>>,
+    Query(query): Query<CreatePresetFromCurrentRouteQuery>,
+    body: Option<Json<CreatePresetFromCurrentRouteBody>>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    let body = body.map(|Json(value)| value).unwrap_or_else(|| json!({}));
-    let name = query
-        .name
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            body.get("name")
-                .and_then(|v| v.as_str())
-                .filter(|value| !value.trim().is_empty())
-        })
-        .unwrap_or("My Preset");
-    let description = query
-        .description
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| body.get("description").and_then(|v| v.as_str()));
-    match SettingsService::create_preset_from_current(&db, &claims.sub, name, description).await {
+    let request = build_create_preset_from_current_request(query, body.map(|Json(value)| value));
+    match SettingsService::create_preset_from_current(
+        &db,
+        &claims.sub,
+        &request.name,
+        request.description.as_deref(),
+    )
+    .await
+    {
         Ok(result) => Ok((StatusCode::CREATED, Json(result))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"detail": format!("{}", e)})),
         )),
     }
-}
-
-#[derive(Clone)]
-struct EffectiveSettings {
-    provider: String,
-    api_key: String,
-    base_url: String,
-    model: String,
-    temperature: f64,
-    max_tokens: u32,
 }
 
 async fn load_settings_model(
@@ -734,135 +655,12 @@ async fn load_settings_model(
         .map_err(|e| format!("{}", e))
 }
 
-async fn resolve_effective_settings(
-    db: &DatabaseConnection,
-    user_id: &str,
-    provider: Option<&str>,
-    api_key: Option<String>,
-    api_base_url: Option<String>,
-    model: Option<String>,
-    temperature: Option<f64>,
-    max_tokens: Option<u32>,
-) -> Result<EffectiveSettings, (StatusCode, Json<Value>)> {
-    let stored = load_settings_model(db, user_id).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail": e})),
-        )
-    })?;
-
-    let stored_provider = stored
-        .as_ref()
-        .map(|s| s.provider_type.clone())
-        .unwrap_or_else(|| "openai".to_string());
-    let effective_provider = provider
-        .map(|value| value.trim().to_lowercase())
-        .filter(|value| !value.is_empty())
-        .unwrap_or(stored_provider);
-
-    let stored_key = stored
-        .as_ref()
-        .map(|s| s.api_key.trim().to_string())
-        .unwrap_or_default();
-    let incoming_key = api_key
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let effective_key = incoming_key.unwrap_or(stored_key);
-    if effective_key.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"detail": "API key is required"})),
-        ));
-    }
-
-    let stored_base = stored
-        .as_ref()
-        .map(|s| s.api_base_url.trim().to_string())
-        .unwrap_or_default();
-    let raw_base = api_base_url
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or(stored_base);
-    let effective_base = resolve_provider_base_url(&effective_provider, &raw_base);
-
-    let stored_model = stored
-        .as_ref()
-        .map(|s| s.llm_model.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default_model_for_provider(&effective_provider));
-    let effective_model = model
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or(stored_model);
-
-    Ok(EffectiveSettings {
-        provider: effective_provider.clone(),
-        api_key: effective_key,
-        base_url: effective_base,
-        model: effective_model,
-        temperature: temperature.unwrap_or(stored.as_ref().map(|s| s.temperature).unwrap_or(0.7)),
-        max_tokens: max_tokens.unwrap_or(
-            stored
-                .as_ref()
-                .map(|s| s.max_tokens as u32)
-                .unwrap_or(32000),
-        ),
-    })
-}
-
-fn resolve_provider_base_url(provider: &str, raw_base_url: &str) -> String {
-    match provider {
-        "gemini" => normalize_gemini_base_url(raw_base_url),
-        "anthropic" => normalize_anthropic_base_url(raw_base_url),
-        _ => normalize_openai_compatible_base_url(raw_base_url),
-    }
-}
-
-fn normalize_openai_compatible_base_url(base_url: &str) -> String {
-    let trimmed = base_url.trim().trim_end_matches('/');
-    if trimmed.is_empty() {
-        return "https://api.openai.com/v1".to_string();
-    }
-    if let Ok(mut url) = reqwest::Url::parse(trimmed) {
-        let path = url.path().trim_matches('/');
-        if path.is_empty() {
-            url.set_path("/v1");
-            return url.to_string().trim_end_matches('/').to_string();
-        }
-    }
-    trimmed.to_string()
-}
-
-fn normalize_anthropic_base_url(base_url: &str) -> String {
-    let trimmed = base_url.trim().trim_end_matches('/');
-    if trimmed.is_empty() {
-        return "https://api.anthropic.com".to_string();
-    }
-    trimmed.to_string()
-}
-
-fn normalize_gemini_base_url(base_url: &str) -> String {
-    let trimmed = base_url.trim().trim_end_matches('/');
-    if trimmed.is_empty() {
-        return "https://generativelanguage.googleapis.com/v1beta".to_string();
-    }
-    trimmed.to_string()
-}
-
 fn normalize_exa_base_url(base_url: &str) -> String {
     let trimmed = base_url.trim().trim_end_matches('/');
     if trimmed.is_empty() {
         return "https://api.exa.ai".to_string();
     }
     trimmed.to_string()
-}
-
-fn default_model_for_provider(provider: &str) -> String {
-    match provider {
-        "anthropic" => "claude-3-5-sonnet-latest".to_string(),
-        "gemini" => "gemini-2.5-flash".to_string(),
-        _ => "gpt-4o-mini".to_string(),
-    }
 }
 
 async fn fetch_provider_models(

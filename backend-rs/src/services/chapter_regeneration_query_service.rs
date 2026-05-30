@@ -7,17 +7,31 @@ use crate::services::chapter_access_service::{
     load_accessible_chapter, LoadAccessibleChapterError,
 };
 
-pub enum LoadRegenerationTasksPayloadError {
-    NotFoundOrAccessDenied,
-    Internal(String),
+pub type LoadRegenerationTasksPayloadError = LoadAccessibleChapterError;
+const REGENERATION_TASKS_LIMIT_DEFAULT: u64 = 10;
+const REGENERATION_TASKS_LIMIT_MAX: u64 = 50;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegenerationTasksQueryRequest {
+    limit: u64,
+}
+
+impl RegenerationTasksQueryRequest {
+    pub fn from_route_limit(limit: Option<u64>) -> Self {
+        Self {
+            limit: limit
+                .unwrap_or(REGENERATION_TASKS_LIMIT_DEFAULT)
+                .clamp(1, REGENERATION_TASKS_LIMIT_MAX),
+        }
+    }
+
+    pub fn limit(&self) -> u64 {
+        self.limit
+    }
 }
 
 pub fn datetime_to_string(value: Option<NaiveDateTime>) -> Option<String> {
     value.map(|datetime| datetime.format("%Y-%m-%dT%H:%M:%S").to_string())
-}
-
-pub fn normalize_regeneration_tasks_limit(limit: Option<u64>) -> u64 {
-    limit.unwrap_or(10).clamp(1, 50)
 }
 
 pub async fn load_regeneration_tasks_payload(
@@ -60,37 +74,24 @@ pub async fn load_owned_regeneration_tasks_payload(
     db: &DatabaseConnection,
     chapter_id: &str,
     user_id: &str,
-    limit: Option<u64>,
+    request: RegenerationTasksQueryRequest,
 ) -> Result<Value, LoadRegenerationTasksPayloadError> {
-    load_accessible_chapter(db, chapter_id, user_id)
-        .await
-        .map_err(|error| match error {
-            LoadAccessibleChapterError::NotFoundOrAccessDenied => {
-                LoadRegenerationTasksPayloadError::NotFoundOrAccessDenied
-            }
-            LoadAccessibleChapterError::Internal(detail) => {
-                LoadRegenerationTasksPayloadError::Internal(detail)
-            }
-        })?;
+    let _ = load_accessible_chapter(db, chapter_id, user_id).await?;
 
-    load_regeneration_tasks_payload(db, chapter_id, normalize_regeneration_tasks_limit(limit))
+    load_regeneration_tasks_payload(db, chapter_id, request.limit())
         .await
-        .map_err(LoadRegenerationTasksPayloadError::Internal)
+        .map_err(LoadAccessibleChapterError::Internal)
 }
 
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDateTime;
 
-    use super::{datetime_to_string, normalize_regeneration_tasks_limit};
+    use crate::services::chapter_access_service::LoadAccessibleChapterError;
 
-    #[test]
-    fn should_normalize_regeneration_tasks_limit() {
-        assert_eq!(normalize_regeneration_tasks_limit(None), 10);
-        assert_eq!(normalize_regeneration_tasks_limit(Some(0)), 1);
-        assert_eq!(normalize_regeneration_tasks_limit(Some(25)), 25);
-        assert_eq!(normalize_regeneration_tasks_limit(Some(99)), 50);
-    }
+    use super::{
+        datetime_to_string, LoadRegenerationTasksPayloadError, RegenerationTasksQueryRequest,
+    };
 
     #[test]
     fn should_format_regeneration_task_datetime() {
@@ -102,5 +103,44 @@ mod tests {
             Some("2026-05-17T12:30:45".to_string())
         );
         assert_eq!(datetime_to_string(None), None);
+    }
+
+    #[test]
+    fn should_alias_access_not_found_error_for_regeneration_tasks_query() {
+        let error: LoadRegenerationTasksPayloadError =
+            LoadAccessibleChapterError::NotFoundOrAccessDenied;
+
+        assert_eq!(error, LoadAccessibleChapterError::NotFoundOrAccessDenied);
+    }
+
+    #[test]
+    fn should_alias_access_internal_error_for_regeneration_tasks_query() {
+        let error: LoadRegenerationTasksPayloadError =
+            LoadAccessibleChapterError::Internal("boom".to_string());
+
+        assert_eq!(
+            error,
+            LoadAccessibleChapterError::Internal("boom".to_string())
+        );
+    }
+
+    #[test]
+    fn should_normalize_regeneration_tasks_query_request_limit() {
+        assert_eq!(
+            RegenerationTasksQueryRequest::from_route_limit(None).limit(),
+            10
+        );
+        assert_eq!(
+            RegenerationTasksQueryRequest::from_route_limit(Some(0)).limit(),
+            1
+        );
+        assert_eq!(
+            RegenerationTasksQueryRequest::from_route_limit(Some(25)).limit(),
+            25
+        );
+        assert_eq!(
+            RegenerationTasksQueryRequest::from_route_limit(Some(99)).limit(),
+            50
+        );
     }
 }

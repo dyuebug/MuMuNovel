@@ -9,16 +9,6 @@ pub enum FinalizePartialRegenerationError {
     WorkflowMetaText,
 }
 
-pub struct FinalizedPartialRegenerationResult {
-    pub cleaned_text: String,
-    pub payload: Value,
-}
-
-pub struct FinalizedChapterRegenerationResult {
-    pub cleaned_text: String,
-    pub payload: Value,
-}
-
 pub fn normalize_partial_regeneration_output(text: &str) -> String {
     let mut cleaned = text.replace("\r\n", "\n").trim().to_string();
     let prefixes = [
@@ -63,7 +53,7 @@ pub fn finalize_partial_regeneration_result(
     original_word_count: usize,
     start_position: usize,
     end_position: usize,
-) -> Result<FinalizedPartialRegenerationResult, FinalizePartialRegenerationError> {
+) -> Result<Value, FinalizePartialRegenerationError> {
     let normalized = normalize_partial_regeneration_output(generated_text);
     let (cleaned_text, _) = sanitize_generated_narrative_text(&normalized);
     if cleaned_text.trim().is_empty() {
@@ -81,16 +71,13 @@ pub fn finalize_partial_regeneration_result(
         "end_position": end_position,
     });
 
-    Ok(FinalizedPartialRegenerationResult {
-        cleaned_text,
-        payload,
-    })
+    Ok(payload)
 }
 
 pub fn finalize_chapter_regeneration_result(
     generated_text: &str,
     chapter_id: &str,
-) -> Result<FinalizedChapterRegenerationResult, FinalizePartialRegenerationError> {
+) -> Result<Value, FinalizePartialRegenerationError> {
     let (cleaned_text, _) = sanitize_generated_narrative_text(generated_text);
     if cleaned_text.trim().is_empty() {
         return Err(FinalizePartialRegenerationError::EmptyContent);
@@ -106,10 +93,7 @@ pub fn finalize_chapter_regeneration_result(
         "analysis_task_id": Value::Null,
     });
 
-    Ok(FinalizedChapterRegenerationResult {
-        cleaned_text,
-        payload,
-    })
+    Ok(payload)
 }
 
 #[cfg(test)]
@@ -143,12 +127,11 @@ mod tests {
             Err(_) => panic!("partial regeneration result should be valid"),
         };
 
-        assert_eq!(result.cleaned_text, "新的正文");
-        assert_eq!(result.payload["new_text"], "新的正文");
-        assert_eq!(result.payload["word_count"], 4);
-        assert_eq!(result.payload["original_word_count"], 12);
-        assert_eq!(result.payload["start_position"], 3);
-        assert_eq!(result.payload["end_position"], 8);
+        assert_eq!(result["new_text"], "新的正文");
+        assert_eq!(result["word_count"], 4);
+        assert_eq!(result["original_word_count"], 12);
+        assert_eq!(result["start_position"], 3);
+        assert_eq!(result["end_position"], 8);
     }
 
     #[test]
@@ -159,11 +142,10 @@ mod tests {
             Err(_) => panic!("chapter regeneration result should be valid"),
         };
 
-        assert_eq!(result.cleaned_text, "新的章节正文");
-        assert_eq!(result.payload["content"], "新的章节正文");
-        assert_eq!(result.payload["word_count"], 6);
-        assert_eq!(result.payload["generation_task_id"], "chapter-1");
-        assert!(result.payload["analysis_task_id"].is_null());
+        assert_eq!(result["content"], "新的章节正文");
+        assert_eq!(result["word_count"], 6);
+        assert_eq!(result["generation_task_id"], "chapter-1");
+        assert!(result["analysis_task_id"].is_null());
     }
 
     #[test]
@@ -215,15 +197,15 @@ mod tests {
             Err(_) => panic!("chapter regeneration result should be valid"),
         };
 
-        assert_eq!(partial.payload["new_text"], "新的片段");
-        assert!(partial.payload.get("content").is_none());
-        assert_eq!(partial.payload["original_word_count"], 20);
-        assert_eq!(partial.payload["start_position"], 5);
-        assert_eq!(partial.payload["end_position"], 11);
+        assert_eq!(partial["new_text"], "新的片段");
+        assert!(partial.get("content").is_none());
+        assert_eq!(partial["original_word_count"], 20);
+        assert_eq!(partial["start_position"], 5);
+        assert_eq!(partial["end_position"], 11);
 
-        assert_eq!(chapter.payload["content"], "新的章节正文");
-        assert!(chapter.payload.get("new_text").is_none());
-        assert_eq!(chapter.payload["generation_task_id"], "chapter-2");
-        assert!(chapter.payload["analysis_task_id"].is_null());
+        assert_eq!(chapter["content"], "新的章节正文");
+        assert!(chapter.get("new_text").is_none());
+        assert_eq!(chapter["generation_task_id"], "chapter-2");
+        assert!(chapter["analysis_task_id"].is_null());
     }
 }

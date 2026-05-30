@@ -5,8 +5,8 @@ use crate::api::chapters_error_mapper::{
     chapter_not_found_or_access_denied_error, detail_error, internal_detail_error,
 };
 use crate::services::chapter_analysis_draft_service::{
-    ApplyOwnedAutoRevisionDraftPayloadError, ApplyOwnedCandidateDraftPayloadError,
-    LoadOwnedAutoRevisionDraftPayloadError, LoadOwnedCandidateDraftPayloadError,
+    OwnedAutoRevisionDraftPayloadError, OwnedCandidateDraftPayloadError, OwnedDraftPayloadError,
+    OwnedDraftSelectionMode,
 };
 use crate::services::chapter_analysis_service::{AutoRevisionDraftError, CandidateDraftError};
 
@@ -35,25 +35,35 @@ fn draft_load_failed_error(kind: DraftKind) -> (StatusCode, Json<Value>) {
 fn draft_not_found_error(
     kind: DraftKind,
     action: DraftAction,
-    explicit_id_provided: bool,
+    selection_mode: OwnedDraftSelectionMode,
 ) -> (StatusCode, Json<Value>) {
     detail_error(
         StatusCode::NOT_FOUND,
-        match (kind, action, explicit_id_provided) {
-            (DraftKind::AutoRevision, DraftAction::Load, true) => {
+        match (kind, action, selection_mode) {
+            (DraftKind::AutoRevision, DraftAction::Load, OwnedDraftSelectionMode::Explicit) => {
                 "指定的自动修订草稿不存在或不可用"
             }
-            (DraftKind::AutoRevision, DraftAction::Load, false) => "该章节暂无自动修订草稿",
-            (DraftKind::AutoRevision, DraftAction::Apply, true) => {
+            (DraftKind::AutoRevision, DraftAction::Load, OwnedDraftSelectionMode::Latest) => {
+                "该章节暂无自动修订草稿"
+            }
+            (DraftKind::AutoRevision, DraftAction::Apply, OwnedDraftSelectionMode::Explicit) => {
                 "指定的自动修订草稿不存在或不可用"
             }
-            (DraftKind::AutoRevision, DraftAction::Apply, false) => {
+            (DraftKind::AutoRevision, DraftAction::Apply, OwnedDraftSelectionMode::Latest) => {
                 "该章节暂无可应用的自动修订草稿"
             }
-            (DraftKind::Candidate, DraftAction::Load, true) => "指定的候选草稿不存在或不可用",
-            (DraftKind::Candidate, DraftAction::Load, false) => "该章节暂无候选草稿",
-            (DraftKind::Candidate, DraftAction::Apply, true) => "指定的候选草稿不存在或不可用",
-            (DraftKind::Candidate, DraftAction::Apply, false) => "该章节暂无可应用的候选草稿",
+            (DraftKind::Candidate, DraftAction::Load, OwnedDraftSelectionMode::Explicit) => {
+                "指定的候选草稿不存在或不可用"
+            }
+            (DraftKind::Candidate, DraftAction::Load, OwnedDraftSelectionMode::Latest) => {
+                "该章节暂无候选草稿"
+            }
+            (DraftKind::Candidate, DraftAction::Apply, OwnedDraftSelectionMode::Explicit) => {
+                "指定的候选草稿不存在或不可用"
+            }
+            (DraftKind::Candidate, DraftAction::Apply, OwnedDraftSelectionMode::Latest) => {
+                "该章节暂无可应用的候选草稿"
+            }
         },
     )
 }
@@ -92,14 +102,12 @@ fn draft_stale_error(kind: DraftKind) -> (StatusCode, Json<Value>) {
 
 pub fn map_auto_revision_draft_load_error(
     error: AutoRevisionDraftError,
-    history_id_provided: bool,
+    selection_mode: OwnedDraftSelectionMode,
 ) -> (StatusCode, Json<Value>) {
     match error {
-        AutoRevisionDraftError::NotFound => draft_not_found_error(
-            DraftKind::AutoRevision,
-            DraftAction::Load,
-            history_id_provided,
-        ),
+        AutoRevisionDraftError::NotFound => {
+            draft_not_found_error(DraftKind::AutoRevision, DraftAction::Load, selection_mode)
+        }
         AutoRevisionDraftError::Internal(detail) => internal_detail_error(detail),
         _ => draft_load_failed_error(DraftKind::AutoRevision),
     }
@@ -107,14 +115,12 @@ pub fn map_auto_revision_draft_load_error(
 
 pub fn map_auto_revision_draft_apply_error(
     error: AutoRevisionDraftError,
-    history_id_provided: bool,
+    selection_mode: OwnedDraftSelectionMode,
 ) -> (StatusCode, Json<Value>) {
     match error {
-        AutoRevisionDraftError::NotFound => draft_not_found_error(
-            DraftKind::AutoRevision,
-            DraftAction::Apply,
-            history_id_provided,
-        ),
+        AutoRevisionDraftError::NotFound => {
+            draft_not_found_error(DraftKind::AutoRevision, DraftAction::Apply, selection_mode)
+        }
         AutoRevisionDraftError::EmptyContent => draft_empty_content_error(DraftKind::AutoRevision),
         AutoRevisionDraftError::WorkflowMetaText => {
             draft_workflow_meta_text_error(DraftKind::AutoRevision)
@@ -126,11 +132,11 @@ pub fn map_auto_revision_draft_apply_error(
 
 pub fn map_candidate_draft_load_error(
     error: CandidateDraftError,
-    attempt_id_provided: bool,
+    selection_mode: OwnedDraftSelectionMode,
 ) -> (StatusCode, Json<Value>) {
     match error {
         CandidateDraftError::NotFound => {
-            draft_not_found_error(DraftKind::Candidate, DraftAction::Load, attempt_id_provided)
+            draft_not_found_error(DraftKind::Candidate, DraftAction::Load, selection_mode)
         }
         CandidateDraftError::Internal(detail) => internal_detail_error(detail),
         _ => draft_load_failed_error(DraftKind::Candidate),
@@ -139,14 +145,12 @@ pub fn map_candidate_draft_load_error(
 
 pub fn map_candidate_draft_apply_error(
     error: CandidateDraftError,
-    attempt_id_provided: bool,
+    selection_mode: OwnedDraftSelectionMode,
 ) -> (StatusCode, Json<Value>) {
     match error {
-        CandidateDraftError::NotFound => draft_not_found_error(
-            DraftKind::Candidate,
-            DraftAction::Apply,
-            attempt_id_provided,
-        ),
+        CandidateDraftError::NotFound => {
+            draft_not_found_error(DraftKind::Candidate, DraftAction::Apply, selection_mode)
+        }
         CandidateDraftError::PreviewOnly => detail_error(
             StatusCode::CONFLICT,
             "该候选草稿仅保留了预览，无法直接恢复正文",
@@ -160,59 +164,38 @@ pub fn map_candidate_draft_apply_error(
     }
 }
 
-pub fn map_owned_auto_revision_draft_load_error(
-    error: LoadOwnedAutoRevisionDraftPayloadError,
+pub(crate) fn map_owned_auto_revision_draft_error(
+    error: OwnedAutoRevisionDraftPayloadError,
+    draft_error_mapper: impl FnOnce(
+        AutoRevisionDraftError,
+        OwnedDraftSelectionMode,
+    ) -> (StatusCode, Json<Value>),
 ) -> (StatusCode, Json<Value>) {
-    match error {
-        LoadOwnedAutoRevisionDraftPayloadError::ChapterNotFoundOrAccessDenied => {
-            chapter_not_found_or_access_denied_error()
-        }
-        LoadOwnedAutoRevisionDraftPayloadError::Draft(error, history_id_provided) => {
-            map_auto_revision_draft_load_error(error, history_id_provided)
-        }
-        LoadOwnedAutoRevisionDraftPayloadError::Internal(detail) => internal_detail_error(detail),
-    }
+    map_owned_draft_error(error, draft_error_mapper)
 }
 
-pub fn map_owned_auto_revision_draft_apply_error(
-    error: ApplyOwnedAutoRevisionDraftPayloadError,
+pub(crate) fn map_owned_candidate_draft_error(
+    error: OwnedCandidateDraftPayloadError,
+    draft_error_mapper: impl FnOnce(
+        CandidateDraftError,
+        OwnedDraftSelectionMode,
+    ) -> (StatusCode, Json<Value>),
 ) -> (StatusCode, Json<Value>) {
-    match error {
-        ApplyOwnedAutoRevisionDraftPayloadError::ChapterNotFoundOrAccessDenied => {
-            chapter_not_found_or_access_denied_error()
-        }
-        ApplyOwnedAutoRevisionDraftPayloadError::Draft(error, history_id_provided) => {
-            map_auto_revision_draft_apply_error(error, history_id_provided)
-        }
-        ApplyOwnedAutoRevisionDraftPayloadError::Internal(detail) => internal_detail_error(detail),
-    }
+    map_owned_draft_error(error, draft_error_mapper)
 }
 
-pub fn map_owned_candidate_draft_load_error(
-    error: LoadOwnedCandidateDraftPayloadError,
+fn map_owned_draft_error<TDraftError>(
+    error: OwnedDraftPayloadError<TDraftError>,
+    draft_error_mapper: impl FnOnce(TDraftError, OwnedDraftSelectionMode) -> (StatusCode, Json<Value>),
 ) -> (StatusCode, Json<Value>) {
     match error {
-        LoadOwnedCandidateDraftPayloadError::ChapterNotFoundOrAccessDenied => {
+        OwnedDraftPayloadError::ChapterNotFoundOrAccessDenied => {
             chapter_not_found_or_access_denied_error()
         }
-        LoadOwnedCandidateDraftPayloadError::Draft(error, attempt_id_provided) => {
-            map_candidate_draft_load_error(error, attempt_id_provided)
+        OwnedDraftPayloadError::Draft(error, selection_mode) => {
+            draft_error_mapper(error, selection_mode)
         }
-        LoadOwnedCandidateDraftPayloadError::Internal(detail) => internal_detail_error(detail),
-    }
-}
-
-pub fn map_owned_candidate_draft_apply_error(
-    error: ApplyOwnedCandidateDraftPayloadError,
-) -> (StatusCode, Json<Value>) {
-    match error {
-        ApplyOwnedCandidateDraftPayloadError::ChapterNotFoundOrAccessDenied => {
-            chapter_not_found_or_access_denied_error()
-        }
-        ApplyOwnedCandidateDraftPayloadError::Draft(error, attempt_id_provided) => {
-            map_candidate_draft_apply_error(error, attempt_id_provided)
-        }
-        ApplyOwnedCandidateDraftPayloadError::Internal(detail) => internal_detail_error(detail),
+        OwnedDraftPayloadError::Internal(detail) => internal_detail_error(detail),
     }
 }
 
@@ -220,7 +203,10 @@ pub fn map_owned_candidate_draft_apply_error(
 mod tests {
     use super::{
         draft_not_found_error, map_auto_revision_draft_load_error, map_candidate_draft_apply_error,
-        DraftAction, DraftKind,
+        map_owned_auto_revision_draft_error, DraftAction, DraftKind,
+    };
+    use crate::services::chapter_analysis_draft_service::{
+        LoadOwnedAutoRevisionDraftPayloadError, OwnedDraftSelectionMode,
     };
     use crate::services::chapter_analysis_service::{AutoRevisionDraftError, CandidateDraftError};
     use axum::{http::StatusCode, Json};
@@ -238,12 +224,20 @@ mod tests {
     #[test]
     fn auto_revision_not_found_messages_remain_context_sensitive() {
         assert_detail_error(
-            draft_not_found_error(DraftKind::AutoRevision, DraftAction::Load, true),
+            draft_not_found_error(
+                DraftKind::AutoRevision,
+                DraftAction::Load,
+                OwnedDraftSelectionMode::Explicit,
+            ),
             StatusCode::NOT_FOUND,
             "指定的自动修订草稿不存在或不可用",
         );
         assert_detail_error(
-            draft_not_found_error(DraftKind::AutoRevision, DraftAction::Load, false),
+            draft_not_found_error(
+                DraftKind::AutoRevision,
+                DraftAction::Load,
+                OwnedDraftSelectionMode::Latest,
+            ),
             StatusCode::NOT_FOUND,
             "该章节暂无自动修订草稿",
         );
@@ -252,7 +246,10 @@ mod tests {
     #[test]
     fn candidate_apply_stale_message_remains_unchanged() {
         assert_detail_error(
-            map_candidate_draft_apply_error(CandidateDraftError::Stale, false),
+            map_candidate_draft_apply_error(
+                CandidateDraftError::Stale,
+                OwnedDraftSelectionMode::Latest,
+            ),
             StatusCode::CONFLICT,
             "候选草稿已过期，请获取最新草稿或在请求中设置 allow_stale=true",
         );
@@ -261,9 +258,24 @@ mod tests {
     #[test]
     fn auto_revision_unexpected_load_error_keeps_generic_failure_message() {
         assert_detail_error(
-            map_auto_revision_draft_load_error(AutoRevisionDraftError::Stale, false),
+            map_auto_revision_draft_load_error(
+                AutoRevisionDraftError::Stale,
+                OwnedDraftSelectionMode::Latest,
+            ),
             StatusCode::INTERNAL_SERVER_ERROR,
             "自动修订草稿加载失败",
+        );
+    }
+
+    #[test]
+    fn owned_auto_revision_load_chapter_access_denied_remains_404() {
+        assert_detail_error(
+            map_owned_auto_revision_draft_error(
+                LoadOwnedAutoRevisionDraftPayloadError::ChapterNotFoundOrAccessDenied,
+                map_auto_revision_draft_load_error,
+            ),
+            StatusCode::NOT_FOUND,
+            "Chapter not found or access denied",
         );
     }
 }

@@ -11,7 +11,6 @@ use crate::ai::service::AIService;
 use crate::models::{chapter, character, outline, project};
 use crate::services::outline_service::OutlineService;
 use crate::services::prompt_template_service::PromptTemplateService;
-use crate::services::settings_service::SettingsService;
 use crate::services::wizard_service::clean_json_response;
 
 const DEFAULT_ESTIMATED_WORDS: i32 = 3000;
@@ -757,12 +756,7 @@ impl<'a> PlotExpansionService<'a> {
             .load_outline_and_project(db, user_id, outline_id)
             .await?;
 
-        let ai_config =
-            SettingsService::build_ai_config(db, user_id, provider, model, None).await?;
-        let ai_service = AIService::new(ai_config);
-        let service = PlotExpansionService::new(&ai_service);
-
-        let chapter_plans = service
+        let chapter_plans = self
             .analyze_outline_for_chapters(
                 db,
                 &outline_model,
@@ -881,11 +875,6 @@ impl<'a> PlotExpansionService<'a> {
             }));
         }
 
-        let ai_config =
-            SettingsService::build_ai_config(db, user_id, provider, model, None).await?;
-        let ai_service = AIService::new(ai_config);
-        let service = PlotExpansionService::new(&ai_service);
-
         let mut expansion_results = Vec::new();
         let mut skipped_outlines = Vec::new();
         let mut total_chapters_created = 0usize;
@@ -906,7 +895,7 @@ impl<'a> PlotExpansionService<'a> {
                 continue;
             }
 
-            match service
+            match self
                 .analyze_outline_for_chapters(
                     db,
                     &outline_model,

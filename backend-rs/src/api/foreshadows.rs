@@ -9,6 +9,15 @@ use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::services::foreshadow_request_service::{
+    build_create_foreshadow_request_from_route_payload,
+    build_plant_foreshadow_request_from_route_payload,
+    build_resolve_foreshadow_request_from_route_payload,
+    build_sync_foreshadow_from_analysis_request_from_route_payload,
+    build_update_foreshadow_request_from_route_payload, CreateForeshadowRouteRequest,
+    PlantForeshadowRouteRequest, ResolveForeshadowRouteRequest,
+    SyncForeshadowFromAnalysisRouteRequest, UpdateForeshadowRouteRequest,
+};
 use crate::services::foreshadow_service::ForeshadowService;
 
 #[derive(Deserialize, Default)]
@@ -146,9 +155,11 @@ async fn get_one(
 
 async fn create(
     Extension(db): Extension<DatabaseConnection>,
-    Json(body): Json<Value>,
+    Json(body): Json<CreateForeshadowRouteRequest>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    ForeshadowService::create(&db, &body)
+    let request = build_create_foreshadow_request_from_route_payload(body);
+
+    ForeshadowService::create(&db, &request)
         .await
         .map(|v| (StatusCode::CREATED, Json(v)))
         .map_err(|e| {
@@ -162,9 +173,11 @@ async fn create(
 async fn update(
     Extension(db): Extension<DatabaseConnection>,
     Path(foreshadow_id): Path<String>,
-    Json(body): Json<Value>,
+    Json(body): Json<UpdateForeshadowRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    ForeshadowService::update(&db, &foreshadow_id, &body)
+    let request = build_update_foreshadow_request_from_route_payload(body);
+
+    ForeshadowService::update(&db, &foreshadow_id, &request)
         .await
         .map(Json)
         .map_err(|e| {
@@ -193,9 +206,11 @@ async fn delete_foreshadow(
 async fn plant(
     Extension(db): Extension<DatabaseConnection>,
     Path(foreshadow_id): Path<String>,
-    Json(body): Json<Value>,
+    Json(body): Json<PlantForeshadowRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    ForeshadowService::plant(&db, &foreshadow_id, &body)
+    let request = build_plant_foreshadow_request_from_route_payload(body);
+
+    ForeshadowService::plant(&db, &foreshadow_id, &request)
         .await
         .map(Json)
         .map_err(|e| {
@@ -209,9 +224,11 @@ async fn plant(
 async fn resolve(
     Extension(db): Extension<DatabaseConnection>,
     Path(foreshadow_id): Path<String>,
-    Json(body): Json<Value>,
+    Json(body): Json<ResolveForeshadowRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    ForeshadowService::resolve(&db, &foreshadow_id, &body)
+    let request = build_resolve_foreshadow_request_from_route_payload(body);
+
+    ForeshadowService::resolve(&db, &foreshadow_id, &request)
         .await
         .map(Json)
         .map_err(|e| {
@@ -241,9 +258,11 @@ async fn abandon(
 async fn sync_from_analysis(
     Extension(db): Extension<DatabaseConnection>,
     Path(project_id): Path<String>,
-    Json(body): Json<Value>,
+    Json(body): Json<SyncForeshadowFromAnalysisRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    ForeshadowService::sync_from_analysis(&db, &project_id, &body)
+    let request = build_sync_foreshadow_from_analysis_request_from_route_payload(body);
+
+    ForeshadowService::sync_from_analysis(&db, &project_id, &request)
         .await
         .map(Json)
         .map_err(|e| {

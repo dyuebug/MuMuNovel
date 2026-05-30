@@ -6,6 +6,9 @@ use sea_orm::{
 use serde_json::{json, Value};
 
 use crate::models::{project, project_default_style, writing_style};
+use crate::services::writing_style_request_service::{
+    CreateWritingStyleRequest, UpdateWritingStyleRequest,
+};
 
 struct PresetDefinition {
     preset_id: &'static str,
@@ -428,26 +431,14 @@ impl WritingStyleService {
     pub async fn create_style(
         db: &DatabaseConnection,
         user_id: &str,
-        body: &Value,
+        request: &CreateWritingStyleRequest,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         ensure_preset_styles(db).await?;
 
-        let preset_id = body
-            .get("preset_id")
-            .and_then(|value| value.as_str())
-            .map(str::to_string);
-        let mut name = body
-            .get("name")
-            .and_then(|value| value.as_str())
-            .map(str::to_string);
-        let mut description = body
-            .get("description")
-            .and_then(|value| value.as_str())
-            .map(str::to_string);
-        let mut prompt_content = body
-            .get("prompt_content")
-            .and_then(|value| value.as_str())
-            .map(str::to_string);
+        let preset_id = request.preset_id().map(str::to_string);
+        let mut name = request.name().map(str::to_string);
+        let mut description = request.description().map(str::to_string);
+        let mut prompt_content = request.prompt_content().map(str::to_string);
 
         if let Some(ref preset_id) = preset_id {
             let preset_style = writing_style::Entity::find()
@@ -484,17 +475,13 @@ impl WritingStyleService {
         let model = writing_style::ActiveModel {
             user_id: Set(Some(user_id.to_string())),
             name: Set(name.unwrap_or_default()),
-            style_type: Set(body
-                .get("style_type")
-                .and_then(|value| value.as_str())
-                .map(str::to_string)
-                .unwrap_or_else(|| {
-                    if preset_id.is_some() {
-                        "preset".to_string()
-                    } else {
-                        "custom".to_string()
-                    }
-                })),
+            style_type: Set(request.style_type().map(str::to_string).unwrap_or_else(|| {
+                if preset_id.is_some() {
+                    "preset".to_string()
+                } else {
+                    "custom".to_string()
+                }
+            })),
             preset_id: Set(preset_id),
             description: Set(description),
             prompt_content: Set(prompt_content.unwrap_or_default()),
@@ -512,7 +499,7 @@ impl WritingStyleService {
         db: &DatabaseConnection,
         user_id: &str,
         style_id: i32,
-        body: &Value,
+        request: &UpdateWritingStyleRequest,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let existing = writing_style::Entity::find_by_id(style_id)
             .one(db)
@@ -529,20 +516,20 @@ impl WritingStyleService {
         let mut active: writing_style::ActiveModel = existing.into();
         let mut content_changed = false;
 
-        if let Some(value) = body.get("name").and_then(|value| value.as_str()) {
+        if let Some(value) = request.name() {
             active.name = Set(value.to_string());
             content_changed = true;
         }
-        if let Some(value) = body.get("description").and_then(|value| value.as_str()) {
+        if let Some(value) = request.description() {
             active.description = Set(Some(value.to_string()));
             content_changed = true;
         }
-        if let Some(value) = body.get("prompt_content").and_then(|value| value.as_str()) {
+        if let Some(value) = request.prompt_content() {
             active.prompt_content = Set(value.to_string());
             content_changed = true;
         }
-        if let Some(value) = body.get("order_index").and_then(|value| value.as_i64()) {
-            active.order_index = Set(value as i32);
+        if let Some(value) = request.order_index() {
+            active.order_index = Set(value);
         }
         if content_changed {
             active.style_type = Set("custom".to_string());

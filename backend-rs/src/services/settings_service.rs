@@ -7,6 +7,12 @@ use uuid::Uuid;
 
 use crate::ai::config::AIConfig;
 use crate::models::settings;
+use crate::services::settings_preset_request_service::{
+    CreateSettingsPresetRequest, UpdateSettingsPresetRequest,
+};
+use crate::services::settings_update_request_service::{
+    SettingsApiBackupUrlsField, SettingsUpdateRequest,
+};
 
 const PLACEHOLDER_MASK: &str = "********";
 
@@ -221,6 +227,32 @@ fn resolve_base_url(provider: &str, stored_base_url: &str) -> String {
 }
 
 impl SettingsService {
+    pub(crate) async fn resolve_web_research_settings(
+        db: &DatabaseConnection,
+        user_id: &str,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+        let existing = settings::Entity::find()
+            .filter(settings::Column::UserId.eq(user_id))
+            .one(db)
+            .await?;
+
+        Ok(existing
+            .as_ref()
+            .map(|saved| merge_web_research(saved.preferences.as_deref()))
+            .unwrap_or_else(web_research_defaults))
+    }
+
+    pub async fn resolve_web_research_enabled(
+        db: &DatabaseConnection,
+        user_id: &str,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(Self::resolve_web_research_settings(db, user_id)
+            .await?
+            .get("web_research_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false))
+    }
+
     pub async fn get_or_create(
         db: &DatabaseConnection,
         user_id: &str,
@@ -274,7 +306,7 @@ impl SettingsService {
     pub async fn update(
         db: &DatabaseConnection,
         user_id: &str,
-        body: &Value,
+        request: &SettingsUpdateRequest,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let existing = settings::Entity::find()
             .filter(settings::Column::UserId.eq(user_id))
@@ -285,59 +317,59 @@ impl SettingsService {
             Some(s) => {
                 let current_prefs = s.preferences.clone().unwrap_or_default();
                 let existing_provider = s.provider_type.trim().to_lowercase();
-                let wr_patch = extract_web_research_patch(body);
-                let new_prefs = if wr_patch.is_object()
-                    && wr_patch.as_object().map(|o| o.len()).unwrap_or(0) > 0
+                let new_prefs = if request.web_research_patch.is_object()
+                    && request
+                        .web_research_patch
+                        .as_object()
+                        .map(|o| o.len())
+                        .unwrap_or(0)
+                        > 0
                 {
-                    Some(set_web_research(Some(&current_prefs), &wr_patch)?)
+                    Some(set_web_research(
+                        Some(&current_prefs),
+                        &request.web_research_patch,
+                    )?)
                 } else {
                     None
                 };
 
-                let backup_urls = body
-                    .get("api_backup_urls")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_else(|| parse_api_backup_urls(s.api_backup_urls.as_deref()));
+                let backup_urls = match &request.api_backup_urls {
+                    SettingsApiBackupUrlsField::Provided(urls) => urls.clone(),
+                    SettingsApiBackupUrlsField::Missing | SettingsApiBackupUrlsField::Invalid => {
+                        parse_api_backup_urls(s.api_backup_urls.as_deref())
+                    }
+                };
 
                 let mut active: settings::ActiveModel = s.into();
-                if let Some(v) = body.get("api_provider").and_then(|v| v.as_str()) {
-                    active.api_provider = Set(v.to_string());
+                if let Some(v) = request.api_provider.as_ref() {
+                    active.api_provider = Set(v.clone());
                 }
-                let clear_api_key = body
-                    .get("clear_api_key")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                if clear_api_key {
+                if request.clear_api_key {
                     active.api_key = Set(String::new());
                 }
-                if let Some(v) = body.get("api_key").and_then(|v| v.as_str()) {
+                if let Some(v) = request.api_key.as_ref() {
                     let trimmed = v.trim();
                     if !trimmed.is_empty() && !is_placeholder(trimmed) {
                         active.api_key = Set(trimmed.to_string());
                     }
                 }
-                if let Some(v) = body.get("api_base_url").and_then(|v| v.as_str()) {
-                    active.api_base_url = Set(v.to_string());
+                if let Some(v) = request.api_base_url.as_ref() {
+                    active.api_base_url = Set(v.clone());
                 }
                 active.api_backup_urls = Set(serialize_api_backup_urls(&backup_urls));
-                if let Some(v) = body.get("provider_type").and_then(|v| v.as_str()) {
-                    active.provider_type = Set(v.to_string());
+                if let Some(v) = request.provider_type.as_ref() {
+                    active.provider_type = Set(v.clone());
                 }
-                if let Some(v) = body.get("fallback_strategy").and_then(|v| v.as_str()) {
-                    active.fallback_strategy = Set(v.to_string());
+                if let Some(v) = request.fallback_strategy.as_ref() {
+                    active.fallback_strategy = Set(v.clone());
                 }
-                if let Some(v) = body.get("azure_api_version").and_then(|v| v.as_str()) {
-                    active.azure_api_version = Set(Some(v.to_string()));
+                if let Some(v) = request.azure_api_version.as_ref() {
+                    active.azure_api_version = Set(Some(v.clone()));
                 }
-                let target_provider = body
-                    .get("provider_type")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| body.get("api_provider").and_then(|v| v.as_str()))
+                let target_provider = request
+                    .provider_type
+                    .as_deref()
+                    .or(request.api_provider.as_deref())
                     .map(|v| v.trim().to_lowercase())
                     .filter(|v| !v.is_empty())
                     .unwrap_or_else(|| {
@@ -347,25 +379,22 @@ impl SettingsService {
                             existing_provider.clone()
                         }
                     });
-                if let Some(v) =
-                    normalize_non_empty_string(body.get("llm_model").and_then(|v| v.as_str()))
-                {
+                if let Some(v) = normalize_non_empty_string(request.llm_model.as_deref()) {
                     active.llm_model = Set(v);
-                } else if body.get("provider_type").is_some() || body.get("api_provider").is_some()
-                {
+                } else if request.provider_switch_requested {
                     active.llm_model = Set(default_model_for_provider(&target_provider));
                 }
-                if let Some(v) = body.get("temperature").and_then(|v| v.as_f64()) {
+                if let Some(v) = request.temperature {
                     active.temperature = Set(v);
                 }
-                if let Some(v) = body.get("max_tokens").and_then(|v| v.as_i64()) {
+                if let Some(v) = request.max_tokens {
                     active.max_tokens = Set(v as i32);
                 }
-                if let Some(v) = body.get("system_prompt").and_then(|v| v.as_str()) {
-                    active.system_prompt = Set(Some(v.to_string()));
+                if let Some(v) = request.system_prompt.as_ref() {
+                    active.system_prompt = Set(Some(v.clone()));
                 }
-                if let Some(v) = body.get("preferences").and_then(|v| v.as_str()) {
-                    active.preferences = Set(Some(v.to_string()));
+                if let Some(v) = request.preferences.as_ref() {
+                    active.preferences = Set(Some(v.clone()));
                 }
                 if let Some(p) = new_prefs {
                     active.preferences = Set(Some(p));
@@ -380,87 +409,74 @@ impl SettingsService {
             None => {
                 let id = Uuid::new_v4().to_string();
                 let now = Utc::now().naive_utc();
-                let wr_patch = extract_web_research_patch(body);
                 let default_prefs =
                     serde_json::to_string(&json!({"web_research": web_research_defaults()}))?;
                 let default_provider = default_ai_provider();
-                let prefs = if wr_patch.is_object()
-                    && wr_patch.as_object().map(|o| o.len()).unwrap_or(0) > 0
+                let prefs = if request.web_research_patch.is_object()
+                    && request
+                        .web_research_patch
+                        .as_object()
+                        .map(|o| o.len())
+                        .unwrap_or(0)
+                        > 0
                 {
-                    Some(set_web_research(Some(&default_prefs), &wr_patch)?)
+                    Some(set_web_research(
+                        Some(&default_prefs),
+                        &request.web_research_patch,
+                    )?)
                 } else {
                     Some(default_prefs)
                 };
 
-                let backup_urls: Vec<String> = body
-                    .get("api_backup_urls")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let api_key = normalize_api_key(
-                    body.get("api_key")
-                        .and_then(|v| v.as_str())
-                        .map(|v| v.trim().to_string()),
-                )
-                .unwrap_or_default();
+                let backup_urls: Vec<String> = match &request.api_backup_urls {
+                    SettingsApiBackupUrlsField::Provided(urls) => urls.clone(),
+                    SettingsApiBackupUrlsField::Missing | SettingsApiBackupUrlsField::Invalid => {
+                        Vec::new()
+                    }
+                };
+                let api_key =
+                    normalize_api_key(request.api_key.as_ref().map(|v| v.trim().to_string()))
+                        .unwrap_or_default();
 
                 let model = settings::ActiveModel {
                     id: Set(id.clone()),
                     user_id: Set(user_id.to_string()),
-                    api_provider: Set(body
-                        .get("api_provider")
-                        .and_then(|v| v.as_str())
+                    api_provider: Set(request
+                        .api_provider
+                        .as_deref()
                         .unwrap_or(&default_provider)
                         .to_string()),
                     api_key: Set(api_key),
-                    api_base_url: Set(body
-                        .get("api_base_url")
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
+                    api_base_url: Set(request
+                        .api_base_url
+                        .clone()
                         .unwrap_or_else(|| resolve_base_url(&default_provider, ""))),
                     api_backup_urls: Set(serialize_api_backup_urls(&backup_urls)),
-                    provider_type: Set(body
-                        .get("provider_type")
-                        .and_then(|v| v.as_str())
+                    provider_type: Set(request
+                        .provider_type
+                        .as_deref()
                         .unwrap_or(&default_provider)
                         .to_string()),
-                    fallback_strategy: Set(body
-                        .get("fallback_strategy")
-                        .and_then(|v| v.as_str())
+                    fallback_strategy: Set(request
+                        .fallback_strategy
+                        .as_deref()
                         .unwrap_or("auto")
                         .to_string()),
-                    azure_api_version: Set(body
-                        .get("azure_api_version")
-                        .and_then(|v| v.as_str())
-                        .map(String::from)),
-                    llm_model: Set(normalize_non_empty_string(
-                        body.get("llm_model").and_then(|v| v.as_str()),
-                    )
-                    .unwrap_or_else(|| {
-                        let provider = body
-                            .get("provider_type")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| body.get("api_provider").and_then(|v| v.as_str()))
-                            .unwrap_or(&default_provider);
-                        default_model_for_provider(provider)
-                    })),
-                    temperature: Set(body
-                        .get("temperature")
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(default_temperature())),
-                    max_tokens: Set(body
-                        .get("max_tokens")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(default_max_tokens() as i64)
-                        as i32),
-                    system_prompt: Set(body
-                        .get("system_prompt")
-                        .and_then(|v| v.as_str())
-                        .map(String::from)),
+                    azure_api_version: Set(request.azure_api_version.clone()),
+                    llm_model: Set(normalize_non_empty_string(request.llm_model.as_deref())
+                        .unwrap_or_else(|| {
+                            let provider = request
+                                .provider_type
+                                .as_deref()
+                                .or(request.api_provider.as_deref())
+                                .unwrap_or(&default_provider);
+                            default_model_for_provider(provider)
+                        })),
+                    temperature: Set(request.temperature.unwrap_or(default_temperature())),
+                    max_tokens: Set(
+                        request.max_tokens.unwrap_or(default_max_tokens() as i64) as i32
+                    ),
+                    system_prompt: Set(request.system_prompt.clone()),
                     preferences: Set(prefs.clone()),
                     created_at: Set(now),
                     updated_at: Set(now),
@@ -583,7 +599,7 @@ fn build_response(saved: &settings::Model, web_research: &Value, backup_urls: &[
 
 const API_PRESETS_KEY: &str = "api_presets";
 
-fn get_api_presets(prefs_json: Option<&str>) -> (Vec<Value>, String) {
+pub(crate) fn get_api_presets(prefs_json: Option<&str>) -> (Vec<Value>, String) {
     let prefs: Value = prefs_json
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(json!({}));
@@ -641,7 +657,7 @@ impl SettingsService {
     pub async fn create_preset(
         db: &DatabaseConnection,
         user_id: &str,
-        body: &Value,
+        request: &CreateSettingsPresetRequest,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let settings = settings::Entity::find()
             .filter(settings::Column::UserId.eq(user_id))
@@ -654,11 +670,11 @@ impl SettingsService {
         let now = Utc::now();
         let new_preset = json!({
             "id": format!("preset_{}", now.timestamp_millis()),
-            "name": body.get("name").and_then(|v| v.as_str()).unwrap_or(""),
-            "description": body.get("description"),
+            "name": request.name(),
+            "description": request.description().cloned().unwrap_or(Value::Null),
             "is_active": false,
             "created_at": now.to_rfc3339(),
-            "config": body.get("config").cloned().unwrap_or(json!({})),
+            "config": request.config().clone(),
         });
 
         presets.push(new_preset.clone());
@@ -676,7 +692,7 @@ impl SettingsService {
         db: &DatabaseConnection,
         user_id: &str,
         preset_id: &str,
-        body: &Value,
+        request: &UpdateSettingsPresetRequest,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let settings = settings::Entity::find()
             .filter(settings::Column::UserId.eq(user_id))
@@ -692,13 +708,13 @@ impl SettingsService {
             .ok_or("preset not found")?;
 
         let target = &mut presets[idx];
-        if let Some(v) = body.get("name").and_then(|v| v.as_str()) {
+        if let Some(v) = request.name() {
             target["name"] = json!(v);
         }
-        if body.get("description").is_some() {
-            target["description"] = body["description"].clone();
+        if request.has_description() {
+            target["description"] = request.description().cloned().unwrap_or(Value::Null);
         }
-        if let Some(config) = body.get("config") {
+        if let Some(config) = request.config() {
             target["config"] = config.clone();
         }
 
@@ -869,29 +885,4 @@ impl SettingsService {
 
         Ok(new_preset)
     }
-}
-
-fn extract_web_research_patch(body: &Value) -> Value {
-    let web_research_keys = [
-        "web_research_enabled",
-        "web_research_exa_enabled",
-        "web_research_grok_enabled",
-        "web_research_exa_api_key",
-        "web_research_exa_base_url",
-        "web_research_grok_api_key",
-        "web_research_grok_base_url",
-        "web_research_grok_model",
-        "web_research_grok_search_enabled",
-    ];
-    let mut patch = json!({});
-    if let Some(obj) = body.as_object() {
-        if let Some(patch_obj) = patch.as_object_mut() {
-            for key in &web_research_keys {
-                if let Some(v) = obj.get(*key) {
-                    patch_obj.insert(key.to_string(), v.clone());
-                }
-            }
-        }
-    }
-    patch
 }

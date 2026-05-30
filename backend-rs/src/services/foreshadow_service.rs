@@ -6,6 +6,10 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::models::foreshadow;
+use crate::services::foreshadow_request_service::{
+    CreateForeshadowRequest, PlantForeshadowRequest, ResolveForeshadowRequest,
+    SyncForeshadowFromAnalysisRequest, UpdateForeshadowRequest,
+};
 
 fn model_to_value(f: &foreshadow::Model) -> Value {
     json!({
@@ -86,6 +90,291 @@ fn compute_stats(items: &[foreshadow::Model]) -> Value {
         "long_term_count": long_term_count,
         "overdue_count": overdue_count,
     })
+}
+
+fn normalize_analysis_foreshadow_key(chapter_id: &str, content: &str) -> String {
+    let normalized = content
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .take(48)
+        .collect::<String>();
+    format!("analysis:{}:{}", chapter_id, normalized)
+}
+
+fn default_analysis_foreshadow_title(content: &str) -> String {
+    let preview = content.trim().chars().take(50).collect::<String>();
+    if content.trim().chars().count() > 50 {
+        format!("{}...", preview)
+    } else {
+        preview
+    }
+}
+
+fn analysis_item_title(item: &Value) -> String {
+    item.get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| {
+            default_analysis_foreshadow_title(
+                item.get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+        })
+}
+
+async fn sync_foreshadows_from_analysis_payload(
+    db: &DatabaseConnection,
+    project_id: &str,
+    chapter_id: &str,
+    chapter_number: i32,
+    analysis_foreshadows: &[Value],
+) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    let now = Utc::now().naive_utc();
+    let mut planted_count = 0_i64;
+    let mut resolved_count = 0_i64;
+    let mut created_ids = Vec::new();
+    let mut updated_ids = Vec::new();
+    let mut skipped_reasons = Vec::new();
+
+    for item in analysis_foreshadows {
+        let item_type = item
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("planted");
+
+        match item_type {
+            "resolved" => {
+                let Some(reference_id) = item
+                    .get("reference_foreshadow_id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                else {
+                    skipped_reasons.push(format!(
+                        "skip resolved foreshadow without reference id: {}",
+                        analysis_item_title(item)
+                    ));
+                    continue;
+                };
+
+                let Some(existing) = foreshadow::Entity::find_by_id(reference_id)
+                    .filter(foreshadow::Column::ProjectId.eq(project_id))
+                    .one(db)
+                    .await?
+                else {
+                    skipped_reasons.push(format!(
+                        "skip resolved foreshadow without matching record: {}",
+                        analysis_item_title(item)
+                    ));
+                    continue;
+                };
+
+                if existing.status == "resolved"
+                    && existing.actual_resolve_chapter_number == Some(chapter_number)
+                {
+                    continue;
+                }
+                if existing.status == "resolved" {
+                    skipped_reasons.push(format!(
+                        "skip already resolved foreshadow: {}",
+                        existing.title
+                    ));
+                    continue;
+                }
+                if existing.status != "planted" {
+                    skipped_reasons.push(format!(
+                        "skip foreshadow in non-planted state: {} ({})",
+                        existing.title, existing.status
+                    ));
+                    continue;
+                }
+
+                let mut active: foreshadow::ActiveModel = existing.into();
+                active.status = Set("resolved".to_string());
+                active.actual_resolve_chapter_id = Set(Some(chapter_id.to_string()));
+                active.actual_resolve_chapter_number = Set(Some(chapter_number));
+                active.resolution_text = Set(
+                    item.get("content")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToString::to_string),
+                );
+                active.resolved_at = Set(Some(now));
+                active.updated_at = Set(now);
+                let saved = active.update(db).await?;
+                resolved_count += 1;
+                updated_ids.push(saved.id);
+            }
+            "planted" => {
+                let Some(content) = item
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                else {
+                    skipped_reasons.push("skip planted foreshadow with empty content".to_string());
+                    continue;
+                };
+
+                let stable_source_memory_id = normalize_analysis_foreshadow_key(chapter_id, content);
+                let title = analysis_item_title(item);
+                let existing = foreshadow::Entity::find()
+                    .filter(foreshadow::Column::ProjectId.eq(project_id))
+                    .filter(foreshadow::Column::SourceType.eq("analysis"))
+                    .filter(
+                        foreshadow::Column::SourceMemoryId
+                            .eq(stable_source_memory_id.clone())
+                            .or(
+                                foreshadow::Column::PlantChapterId
+                                    .eq(chapter_id)
+                                    .and(foreshadow::Column::Title.eq(title.clone())),
+                            ),
+                    )
+                    .one(db)
+                    .await?;
+
+                if let Some(existing) = existing {
+                    let mut active: foreshadow::ActiveModel = existing.into();
+                    active.title = Set(title.clone());
+                    active.content = Set(content.to_string());
+                    active.hint_text = Set(
+                        item.get("keyword")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToString::to_string),
+                    );
+                    active.source_memory_id = Set(Some(stable_source_memory_id));
+                    active.strength = Set(
+                        item.get("strength")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(5)
+                            .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+                    );
+                    active.subtlety = Set(
+                        item.get("subtlety")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(5)
+                            .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+                    );
+                    active.category = Set(
+                        item.get("category")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToString::to_string),
+                    );
+                    active.related_characters = Set(item.get("related_characters").cloned());
+                    active.is_long_term =
+                        Set(item.get("is_long_term").and_then(Value::as_bool).unwrap_or(false));
+                    active.target_resolve_chapter_number = Set(
+                        item.get("estimated_resolve_chapter")
+                            .and_then(Value::as_i64)
+                            .map(|value| value.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
+                    );
+                    active.updated_at = Set(now);
+                    let saved = active.update(db).await?;
+                    updated_ids.push(saved.id);
+                } else {
+                    let id = Uuid::new_v4().to_string();
+                    let saved = foreshadow::ActiveModel {
+                        id: Set(id.clone()),
+                        project_id: Set(project_id.to_string()),
+                        title: Set(title),
+                        content: Set(content.to_string()),
+                        hint_text: Set(
+                            item.get("keyword")
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                                .map(ToString::to_string),
+                        ),
+                        resolution_text: Set(None),
+                        source_type: Set("analysis".to_string()),
+                        source_memory_id: Set(Some(stable_source_memory_id)),
+                        source_analysis_id: Set(None),
+                        plant_chapter_id: Set(Some(chapter_id.to_string())),
+                        plant_chapter_number: Set(Some(chapter_number)),
+                        target_resolve_chapter_id: Set(None),
+                        target_resolve_chapter_number: Set(
+                            item.get("estimated_resolve_chapter")
+                                .and_then(Value::as_i64)
+                                .map(|value| value.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
+                        ),
+                        actual_resolve_chapter_id: Set(None),
+                        actual_resolve_chapter_number: Set(None),
+                        status: Set("planted".to_string()),
+                        is_long_term: Set(
+                            item.get("is_long_term").and_then(Value::as_bool).unwrap_or(false),
+                        ),
+                        importance: Set(
+                            (item.get("strength").and_then(Value::as_f64).unwrap_or(5.0) / 10.0)
+                                .min(1.0),
+                        ),
+                        strength: Set(
+                            item.get("strength")
+                                .and_then(Value::as_i64)
+                                .unwrap_or(5)
+                                .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+                        ),
+                        subtlety: Set(
+                            item.get("subtlety")
+                                .and_then(Value::as_i64)
+                                .unwrap_or(5)
+                                .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+                        ),
+                        urgency: Set(0),
+                        related_characters: Set(item.get("related_characters").cloned()),
+                        related_foreshadow_ids: Set(None),
+                        tags: Set(None),
+                        category: Set(
+                            item.get("category")
+                                .and_then(Value::as_str)
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                                .map(ToString::to_string),
+                        ),
+                        notes: Set(None),
+                        resolution_notes: Set(None),
+                        auto_remind: Set(true),
+                        remind_before_chapters: Set(5),
+                        include_in_context: Set(true),
+                        created_at: Set(now),
+                        updated_at: Set(now),
+                        planted_at: Set(Some(now)),
+                        resolved_at: Set(None),
+                    }
+                    .insert(db)
+                    .await?;
+                    planted_count += 1;
+                    created_ids.push(saved.id);
+                }
+            }
+            _ => {
+                skipped_reasons.push(format!(
+                    "skip unknown foreshadow type: {}",
+                    analysis_item_title(item)
+                ));
+            }
+        }
+    }
+
+    Ok(json!({
+        "synced_count": planted_count + resolved_count,
+        "planted_count": planted_count,
+        "resolved_count": resolved_count,
+        "created_count": created_ids.len(),
+        "updated_ids": updated_ids,
+        "created_ids": created_ids,
+        "skipped_count": skipped_reasons.len(),
+        "skipped_reasons": skipped_reasons,
+    }))
 }
 
 pub struct ForeshadowService;
@@ -295,75 +584,42 @@ impl ForeshadowService {
 
     pub async fn create(
         db: &DatabaseConnection,
-        body: &Value,
+        request: &CreateForeshadowRequest,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let now = Utc::now().naive_utc();
         let id = Uuid::new_v4().to_string();
 
         let model = foreshadow::ActiveModel {
             id: Set(id.clone()),
-            project_id: Set(body["project_id"].as_str().unwrap_or("").to_string()),
-            title: Set(body["title"].as_str().unwrap_or("").to_string()),
-            content: Set(body["content"].as_str().unwrap_or("").to_string()),
-            hint_text: Set(body
-                .get("hint_text")
-                .and_then(|v| v.as_str())
-                .map(String::from)),
-            resolution_text: Set(body
-                .get("resolution_text")
-                .and_then(|v| v.as_str())
-                .map(String::from)),
+            project_id: Set(request.project_id().to_string()),
+            title: Set(request.title().to_string()),
+            content: Set(request.content().to_string()),
+            hint_text: Set(request.hint_text().map(ToString::to_string)),
+            resolution_text: Set(request.resolution_text().map(ToString::to_string)),
             source_type: Set("manual".to_string()),
             source_memory_id: Set(None),
             source_analysis_id: Set(None),
             plant_chapter_id: Set(None),
-            plant_chapter_number: Set(body
-                .get("plant_chapter_number")
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32)),
+            plant_chapter_number: Set(request.plant_chapter_number()),
             target_resolve_chapter_id: Set(None),
-            target_resolve_chapter_number: Set(body
-                .get("target_resolve_chapter_number")
-                .and_then(|v| v.as_i64())
-                .map(|v| v as i32)),
+            target_resolve_chapter_number: Set(request.target_resolve_chapter_number()),
             actual_resolve_chapter_id: Set(None),
             actual_resolve_chapter_number: Set(None),
             status: Set("pending".to_string()),
-            is_long_term: Set(body
-                .get("is_long_term")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)),
-            importance: Set(body
-                .get("importance")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.5)),
-            strength: Set(body.get("strength").and_then(|v| v.as_i64()).unwrap_or(5) as i32),
-            subtlety: Set(body.get("subtlety").and_then(|v| v.as_i64()).unwrap_or(5) as i32),
+            is_long_term: Set(request.is_long_term()),
+            importance: Set(request.importance()),
+            strength: Set(request.strength()),
+            subtlety: Set(request.subtlety()),
             urgency: Set(0),
-            related_characters: Set(body.get("related_characters").cloned()),
+            related_characters: Set(request.related_characters().cloned()),
             related_foreshadow_ids: Set(None),
-            tags: Set(body.get("tags").cloned()),
-            category: Set(body
-                .get("category")
-                .and_then(|v| v.as_str())
-                .map(String::from)),
-            notes: Set(body.get("notes").and_then(|v| v.as_str()).map(String::from)),
-            resolution_notes: Set(body
-                .get("resolution_notes")
-                .and_then(|v| v.as_str())
-                .map(String::from)),
-            auto_remind: Set(body
-                .get("auto_remind")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true)),
-            remind_before_chapters: Set(body
-                .get("remind_before_chapters")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(5) as i32),
-            include_in_context: Set(body
-                .get("include_in_context")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true)),
+            tags: Set(request.tags().cloned()),
+            category: Set(request.category().map(ToString::to_string)),
+            notes: Set(request.notes().map(ToString::to_string)),
+            resolution_notes: Set(request.resolution_notes().map(ToString::to_string)),
+            auto_remind: Set(request.auto_remind()),
+            remind_before_chapters: Set(request.remind_before_chapters()),
+            include_in_context: Set(request.include_in_context()),
             created_at: Set(now),
             updated_at: Set(now),
             planted_at: Set(None),
@@ -377,7 +633,7 @@ impl ForeshadowService {
     pub async fn update(
         db: &DatabaseConnection,
         foreshadow_id: &str,
-        body: &Value,
+        request: &UpdateForeshadowRequest,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let existing = foreshadow::Entity::find_by_id(foreshadow_id)
             .one(db)
@@ -385,71 +641,68 @@ impl ForeshadowService {
             .ok_or("foreshadow not found")?;
 
         let mut active: foreshadow::ActiveModel = existing.into();
-        if let Some(v) = body.get("title").and_then(|v| v.as_str()) {
-            active.title = Set(v.to_string());
+        if let Some(value) = request.title() {
+            active.title = Set(value.to_string());
         }
-        if let Some(v) = body.get("content").and_then(|v| v.as_str()) {
-            active.content = Set(v.to_string());
+        if let Some(value) = request.content() {
+            active.content = Set(value.to_string());
         }
-        if let Some(v) = body.get("hint_text").and_then(|v| v.as_str()) {
-            active.hint_text = Set(Some(v.to_string()));
+        if let Some(value) = request.hint_text() {
+            active.hint_text = Set(Some(value.to_string()));
         }
-        if let Some(v) = body.get("resolution_text").and_then(|v| v.as_str()) {
-            active.resolution_text = Set(Some(v.to_string()));
+        if let Some(value) = request.resolution_text() {
+            active.resolution_text = Set(Some(value.to_string()));
         }
-        if let Some(v) = body.get("plant_chapter_number").and_then(|v| v.as_i64()) {
-            active.plant_chapter_number = Set(Some(v as i32));
+        if let Some(value) = request.plant_chapter_number() {
+            active.plant_chapter_number = Set(Some(value));
         }
-        if let Some(v) = body
-            .get("target_resolve_chapter_number")
-            .and_then(|v| v.as_i64())
-        {
-            active.target_resolve_chapter_number = Set(Some(v as i32));
+        if let Some(value) = request.target_resolve_chapter_number() {
+            active.target_resolve_chapter_number = Set(Some(value));
         }
-        if let Some(v) = body.get("status").and_then(|v| v.as_str()) {
-            active.status = Set(v.to_string());
+        if let Some(value) = request.status() {
+            active.status = Set(value.to_string());
         }
-        if let Some(v) = body.get("is_long_term").and_then(|v| v.as_bool()) {
-            active.is_long_term = Set(v);
+        if let Some(value) = request.is_long_term() {
+            active.is_long_term = Set(value);
         }
-        if let Some(v) = body.get("importance").and_then(|v| v.as_f64()) {
-            active.importance = Set(v);
+        if let Some(value) = request.importance() {
+            active.importance = Set(value);
         }
-        if let Some(v) = body.get("strength").and_then(|v| v.as_i64()) {
-            active.strength = Set(v as i32);
+        if let Some(value) = request.strength() {
+            active.strength = Set(value);
         }
-        if let Some(v) = body.get("subtlety").and_then(|v| v.as_i64()) {
-            active.subtlety = Set(v as i32);
+        if let Some(value) = request.subtlety() {
+            active.subtlety = Set(value);
         }
-        if let Some(v) = body.get("urgency").and_then(|v| v.as_i64()) {
-            active.urgency = Set(v as i32);
+        if let Some(value) = request.urgency() {
+            active.urgency = Set(value);
         }
-        if body.get("related_characters").is_some() {
-            active.related_characters = Set(body.get("related_characters").cloned());
+        if request.related_characters_present() {
+            active.related_characters = Set(request.related_characters().cloned());
         }
-        if body.get("related_foreshadow_ids").is_some() {
-            active.related_foreshadow_ids = Set(body.get("related_foreshadow_ids").cloned());
+        if request.related_foreshadow_ids_present() {
+            active.related_foreshadow_ids = Set(request.related_foreshadow_ids().cloned());
         }
-        if body.get("tags").is_some() {
-            active.tags = Set(body.get("tags").cloned());
+        if request.tags_present() {
+            active.tags = Set(request.tags().cloned());
         }
-        if let Some(v) = body.get("category").and_then(|v| v.as_str()) {
-            active.category = Set(Some(v.to_string()));
+        if let Some(value) = request.category() {
+            active.category = Set(Some(value.to_string()));
         }
-        if let Some(v) = body.get("notes").and_then(|v| v.as_str()) {
-            active.notes = Set(Some(v.to_string()));
+        if let Some(value) = request.notes() {
+            active.notes = Set(Some(value.to_string()));
         }
-        if let Some(v) = body.get("resolution_notes").and_then(|v| v.as_str()) {
-            active.resolution_notes = Set(Some(v.to_string()));
+        if let Some(value) = request.resolution_notes() {
+            active.resolution_notes = Set(Some(value.to_string()));
         }
-        if let Some(v) = body.get("auto_remind").and_then(|v| v.as_bool()) {
-            active.auto_remind = Set(v);
+        if let Some(value) = request.auto_remind() {
+            active.auto_remind = Set(value);
         }
-        if let Some(v) = body.get("remind_before_chapters").and_then(|v| v.as_i64()) {
-            active.remind_before_chapters = Set(v as i32);
+        if let Some(value) = request.remind_before_chapters() {
+            active.remind_before_chapters = Set(value);
         }
-        if let Some(v) = body.get("include_in_context").and_then(|v| v.as_bool()) {
-            active.include_in_context = Set(v);
+        if let Some(value) = request.include_in_context() {
+            active.include_in_context = Set(value);
         }
         active.updated_at = Set(Utc::now().naive_utc());
 
@@ -470,7 +723,7 @@ impl ForeshadowService {
     pub async fn plant(
         db: &DatabaseConnection,
         foreshadow_id: &str,
-        body: &Value,
+        request: &PlantForeshadowRequest,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let existing = foreshadow::Entity::find_by_id(foreshadow_id)
             .one(db)
@@ -480,16 +733,10 @@ impl ForeshadowService {
         let now = Utc::now().naive_utc();
         let mut active: foreshadow::ActiveModel = existing.into();
         active.status = Set("planted".to_string());
-        active.plant_chapter_id = Set(body
-            .get("chapter_id")
-            .and_then(|v| v.as_str())
-            .map(String::from));
-        active.plant_chapter_number = Set(body
-            .get("chapter_number")
-            .and_then(|v| v.as_i64())
-            .map(|v| v as i32));
-        if let Some(v) = body.get("hint_text").and_then(|v| v.as_str()) {
-            active.hint_text = Set(Some(v.to_string()));
+        active.plant_chapter_id = Set(request.chapter_id().map(ToString::to_string));
+        active.plant_chapter_number = Set(request.chapter_number());
+        if let Some(value) = request.hint_text() {
+            active.hint_text = Set(Some(value.to_string()));
         }
         active.planted_at = Set(Some(now));
         active.updated_at = Set(now);
@@ -501,7 +748,7 @@ impl ForeshadowService {
     pub async fn resolve(
         db: &DatabaseConnection,
         foreshadow_id: &str,
-        body: &Value,
+        request: &ResolveForeshadowRequest,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         let existing = foreshadow::Entity::find_by_id(foreshadow_id)
             .one(db)
@@ -509,27 +756,16 @@ impl ForeshadowService {
             .ok_or("foreshadow not found")?;
 
         let now = Utc::now().naive_utc();
-        let is_partial = body
-            .get("is_partial")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
         let mut active: foreshadow::ActiveModel = existing.into();
-        active.status = Set(if is_partial {
+        active.status = Set(if request.is_partial() {
             "partially_resolved".to_string()
         } else {
             "resolved".to_string()
         });
-        active.actual_resolve_chapter_id = Set(body
-            .get("chapter_id")
-            .and_then(|v| v.as_str())
-            .map(String::from));
-        active.actual_resolve_chapter_number = Set(body
-            .get("chapter_number")
-            .and_then(|v| v.as_i64())
-            .map(|v| v as i32));
-        if let Some(v) = body.get("resolution_text").and_then(|v| v.as_str()) {
-            active.resolution_text = Set(Some(v.to_string()));
+        active.actual_resolve_chapter_id = Set(request.chapter_id().map(ToString::to_string));
+        active.actual_resolve_chapter_number = Set(request.chapter_number());
+        if let Some(value) = request.resolution_text() {
+            active.resolution_text = Set(Some(value.to_string()));
         }
         active.resolved_at = Set(Some(now));
         active.updated_at = Set(now);
@@ -561,17 +797,35 @@ impl ForeshadowService {
     }
 
     pub async fn sync_from_analysis(
-        _db: &DatabaseConnection,
-        _project_id: &str,
-        _body: &Value,
+        db: &DatabaseConnection,
+        project_id: &str,
+        request: &SyncForeshadowFromAnalysisRequest,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        // AI-dependent feature: syncing from analysis results requires
-        // chapter analysis pipeline. Return empty success for now.
-        Ok(json!({
-            "synced_count": 0,
-            "skipped_count": 0,
-            "new_foreshadows": [],
-            "skipped_reasons": [],
-        }))
+        let chapter_id = request
+            .body()
+            .get("chapter_id")
+            .and_then(Value::as_str)
+            .ok_or("chapter_id is required")?;
+        let chapter_number = request
+            .body()
+            .get("chapter_number")
+            .and_then(Value::as_i64)
+            .map(|value| value.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+            .ok_or("chapter_number is required")?;
+        let foreshadows = request
+            .body()
+            .get("analysis_foreshadows")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        sync_foreshadows_from_analysis_payload(
+            db,
+            project_id,
+            chapter_id,
+            chapter_number,
+            &foreshadows,
+        )
+        .await
     }
 }

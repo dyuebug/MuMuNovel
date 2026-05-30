@@ -5,14 +5,15 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::models::{
-    character, organization, organization_member, project, relationship, relationship_type,
-};
 use crate::services::auth::Claims;
+use crate::services::relationship_query_service::{
+    build_relationship_graph_payload, list_project_relationship_models, list_relationship_types,
+    verify_relationship_project_access,
+};
 use crate::services::relationship_service::RelationshipService;
 
 #[derive(Deserialize)]
@@ -42,20 +43,6 @@ struct ListQuery {
 #[derive(Deserialize)]
 struct ProjectRelationshipQuery {
     character_id: Option<String>,
-}
-
-async fn verify_project_access(
-    db: &DatabaseConnection,
-    project_id: &str,
-    user_id: &str,
-) -> Result<bool, String> {
-    project::Entity::find()
-        .filter(project::Column::Id.eq(project_id))
-        .filter(project::Column::UserId.eq(user_id))
-        .one(db)
-        .await
-        .map(|project| project.is_some())
-        .map_err(|e| e.to_string())
 }
 
 fn forbidden_or_missing(message: &str) -> (StatusCode, Json<Value>) {
@@ -111,12 +98,7 @@ async fn list_relationships(
 async fn list_types(
     Extension(db): Extension<DatabaseConnection>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let types = relationship_type::Entity::find()
-        .order_by_asc(relationship_type::Column::Category)
-        .order_by_asc(relationship_type::Column::Id)
-        .all(&db)
-        .await
-        .map_err(|e| server_error(e.to_string()))?;
+    let types = list_relationship_types(&db).await.map_err(server_error)?;
     Ok(Json(json!(types)))
 }
 
@@ -126,27 +108,17 @@ async fn list_project_relationships(
     Path(project_id): Path<String>,
     Query(query): Query<ProjectRelationshipQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    if !verify_project_access(&db, &project_id, &claims.sub)
+    if !verify_relationship_project_access(&db, &project_id, &claims.sub)
         .await
         .map_err(server_error)?
     {
         return Err(forbidden_or_missing("项目不存在或无权限"));
     }
 
-    let mut selector = relationship::Entity::find()
-        .filter(relationship::Column::ProjectId.eq(&project_id))
-        .order_by_desc(relationship::Column::CreatedAt);
-    if let Some(character_id) = query.character_id {
-        selector = selector.filter(
-            relationship::Column::CharacterFromId
-                .eq(character_id.clone())
-                .or(relationship::Column::CharacterToId.eq(character_id)),
-        );
-    }
-    let relationships = selector
-        .all(&db)
-        .await
-        .map_err(|e| server_error(e.to_string()))?;
+    let relationships =
+        list_project_relationship_models(&db, &project_id, query.character_id.as_deref())
+            .await
+            .map_err(server_error)?;
     Ok(Json(json!(relationships)))
 }
 
@@ -155,72 +127,17 @@ async fn relationship_graph(
     Extension(claims): Extension<Claims>,
     Path(project_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    if !verify_project_access(&db, &project_id, &claims.sub)
+    if !verify_relationship_project_access(&db, &project_id, &claims.sub)
         .await
         .map_err(server_error)?
     {
         return Err(forbidden_or_missing("项目不存在或无权限"));
     }
 
-    let characters = character::Entity::find()
-        .filter(character::Column::ProjectId.eq(&project_id))
-        .all(&db)
+    build_relationship_graph_payload(&db, &project_id)
         .await
-        .map_err(|e| server_error(e.to_string()))?;
-    let nodes: Vec<Value> = characters
-        .iter()
-        .map(|item| {
-            json!({
-                "id": item.id,
-                "name": item.name,
-                "type": if item.is_organization { "organization" } else { "character" },
-                "role_type": item.role_type,
-                "avatar": item.avatar_url,
-            })
-        })
-        .collect();
-
-    let relationships = relationship::Entity::find()
-        .filter(relationship::Column::ProjectId.eq(&project_id))
-        .all(&db)
-        .await
-        .map_err(|e| server_error(e.to_string()))?;
-    let mut links: Vec<Value> = relationships
-        .iter()
-        .map(|item| {
-            json!({
-                "source": item.character_from_id,
-                "target": item.character_to_id,
-                "relationship": item.relationship_name.as_deref().unwrap_or("未知关系"),
-                "intimacy": item.intimacy_level,
-                "status": item.status,
-            })
-        })
-        .collect();
-
-    let orgs = organization::Entity::find()
-        .filter(organization::Column::ProjectId.eq(&project_id))
-        .all(&db)
-        .await
-        .map_err(|e| server_error(e.to_string()))?;
-    for org in orgs {
-        let members = organization_member::Entity::find()
-            .filter(organization_member::Column::OrganizationId.eq(&org.id))
-            .all(&db)
-            .await
-            .map_err(|e| server_error(e.to_string()))?;
-        links.extend(members.into_iter().map(|member| {
-            json!({
-                "source": org.character_id,
-                "target": member.character_id,
-                "relationship": format!("组织成员·{}", member.position),
-                "intimacy": member.loyalty,
-                "status": member.status,
-            })
-        }));
-    }
-
-    Ok(Json(json!({"nodes": nodes, "links": links})))
+        .map(Json)
+        .map_err(server_error)
 }
 
 async fn get_relationship(

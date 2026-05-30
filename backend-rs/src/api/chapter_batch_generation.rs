@@ -10,31 +10,33 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::api::chapter_batch_generation_error_mapper::{
-    map_active_batch_generation_query_error, map_active_batch_generation_task_list_query_error,
-    map_batch_generation_status_query_error, map_batch_generation_status_stream_access_error,
-    map_cancel_batch_generation_workflow_error, map_create_batch_generation_workflow_error,
-    map_create_single_generation_background_workflow_error,
-    map_prepare_batch_generation_resume_request_error, map_single_chapter_generation_request_error,
+    map_active_batch_generation_task_list_query_error, map_cancel_batch_generation_workflow_error,
+    map_create_batch_generation_workflow_error, map_owned_batch_generation_task_route_error,
+    map_project_access_query_route_error, map_resume_batch_generation_task_command_config_route_error,
 };
 use crate::services::auth::Claims;
-use crate::services::chapter_batch_generation_active_list_query_service::load_owned_active_batch_generation_task_list_query;
-use crate::services::chapter_batch_generation_active_query_service::load_active_batch_generation_query;
 use crate::services::chapter_batch_generation_cancel_service::cancel_owned_batch_generation_task;
-use crate::services::chapter_batch_generation_create_workflow_service::start_owned_batch_generation_workflow;
-use crate::services::chapter_batch_generation_request_compat_service::BatchGenerationRequestCompatFields;
-use crate::services::chapter_batch_generation_resume_service::resume_owned_batch_generation_task;
-use crate::services::chapter_batch_generation_status_query_service::load_batch_generation_status_query;
-use crate::services::chapter_batch_generation_status_stream_service::create_owned_batch_generation_status_stream;
-use crate::services::chapter_single_generation_background_workflow_service::start_owned_single_generation_background_workflow;
-use crate::services::chapter_single_generation_request_service::{
-    build_single_chapter_generation_request, consume_single_chapter_generation_request_compat_fields,
-    SingleChapterGenerationRequest, SingleChapterGenerationRequestCompatFields,
+use crate::services::chapter_batch_generation_read_context_service::load_owned_batch_generation_status_payload;
+use crate::services::chapter_batch_generation_status_stream_service::{
+    load_owned_batch_generation_status_stream,
 };
-use crate::services::chapter_single_generation_stream_workflow_service::create_single_generation_stream_workflow;
-use crate::utils::sse::{default_sse_keep_alive, named_sse_keep_alive};
+use crate::services::chapter_batch_generation_task_view_query_service::{
+    load_active_batch_generation_query, load_active_user_batch_generation_task_list_view,
+    ActiveBatchGenerationTaskListQueryRequest,
+};
+use crate::services::chapter_batch_generation_write_workflow_service::{
+    resume_owned_batch_generation_write_workflow, start_owned_batch_generation_write_workflow,
+    BatchGenerationCreateWorkflowRequest,
+};
+use crate::utils::sse::named_sse_keep_alive;
 
-#[derive(Deserialize)]
-struct BatchGenerateRequest {
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+struct ActiveBatchGenerationTaskListRouteQuery {
+    limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+struct BatchGenerationCreateRouteRequest {
     start_chapter_number: i32,
     count: i32,
     style_id: Option<i32>,
@@ -56,115 +58,39 @@ struct BatchGenerateRequest {
     story_preserve_strengths: Option<Vec<String>>,
 }
 
-#[derive(Deserialize)]
-struct ActiveQuery {
-    limit: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct ChapterGenerateRequest {
-    target_word_count: Option<i32>,
-    model: Option<String>,
-    #[serde(default)]
-    enable_analysis: Option<bool>,
-}
-
-fn build_batch_generation_request_compat_fields(
-    body: &BatchGenerateRequest,
-) -> BatchGenerationRequestCompatFields {
-    BatchGenerationRequestCompatFields {
-        enable_mcp: body.enable_mcp,
-        enable_web_research: body.enable_web_research,
-        web_research_query: body.web_research_query.clone(),
-        creative_mode: body.creative_mode.clone(),
-        story_focus: body.story_focus.clone(),
-        plot_stage: body.plot_stage.clone(),
-        story_creation_brief: body.story_creation_brief.clone(),
-        quality_preset: body.quality_preset.clone(),
-        quality_notes: body.quality_notes.clone(),
-        story_repair_summary: body.story_repair_summary.clone(),
-        story_repair_targets: body.story_repair_targets.clone(),
-        story_preserve_strengths: body.story_preserve_strengths.clone(),
-    }
-}
-
 async fn create_batch_generate(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
     Path(project_id): Path<String>,
-    Json(body): Json<BatchGenerateRequest>,
+    Json(body): Json<BatchGenerationCreateRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let result = start_owned_batch_generation_workflow(
-        &db,
-        &project_id,
-        &claims.sub,
+    let request = BatchGenerationCreateWorkflowRequest::from_route_payload(
         body.start_chapter_number,
         body.count,
         body.style_id,
         body.target_word_count,
         body.enable_analysis,
+        body.enable_mcp,
+        body.enable_web_research,
+        body.web_research_query,
         body.max_retries,
-        body.model.clone(),
-        build_batch_generation_request_compat_fields(&body),
-    )
-    .await
-    .map_err(map_create_batch_generation_workflow_error)?;
+        body.model,
+        body.creative_mode,
+        body.story_focus,
+        body.plot_stage,
+        body.story_creation_brief,
+        body.quality_preset,
+        body.quality_notes,
+        body.story_repair_summary,
+        body.story_repair_targets,
+        body.story_preserve_strengths,
+    );
+    let result =
+        start_owned_batch_generation_write_workflow(&db, &project_id, &claims.sub, request)
+            .await
+            .map_err(map_create_batch_generation_workflow_error)?;
 
     Ok(Json(result))
-}
-
-async fn generate_chapter_content_background(
-    Extension(db): Extension<DatabaseConnection>,
-    Extension(claims): Extension<Claims>,
-    Path(chapter_id): Path<String>,
-    Json(body): Json<ChapterGenerateRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    consume_single_chapter_generation_request_compat_fields(
-        &SingleChapterGenerationRequestCompatFields {
-            enable_analysis: body.enable_analysis,
-        },
-    );
-    let request = build_single_chapter_generation_request(body.target_word_count, body.model.clone());
-    let result = start_owned_single_generation_background_workflow(
-        &db,
-        &chapter_id,
-        &claims.sub,
-        request,
-    )
-    .await
-    .map_err(map_create_single_generation_background_workflow_error)?;
-
-    Ok(Json(result))
-}
-
-async fn generate_chapter_content_stream(
-    Extension(db): Extension<DatabaseConnection>,
-    Extension(claims): Extension<Claims>,
-    Path(chapter_id): Path<String>,
-    Json(body): Json<ChapterGenerateRequest>,
-) -> Result<
-    Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>>,
-    (StatusCode, Json<Value>),
-> {
-    consume_single_chapter_generation_request_compat_fields(
-        &SingleChapterGenerationRequestCompatFields {
-            enable_analysis: body.enable_analysis,
-        },
-    );
-    let request: SingleChapterGenerationRequest = build_single_chapter_generation_request(
-        body.target_word_count,
-        body.model.clone(),
-    );
-    let stream = create_single_generation_stream_workflow(
-        db.clone(),
-        claims.sub.clone(),
-        chapter_id.clone(),
-        request,
-    )
-    .await
-    .map_err(map_single_chapter_generation_request_error)?;
-
-    Ok(Sse::new(stream).keep_alive(default_sse_keep_alive()))
 }
 
 async fn get_batch_generation_status(
@@ -172,9 +98,9 @@ async fn get_batch_generation_status(
     Extension(claims): Extension<Claims>,
     Path(batch_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let result = load_batch_generation_status_query(&db, &batch_id, &claims.sub)
+    let result = load_owned_batch_generation_status_payload(&db, &batch_id, &claims.sub)
         .await
-        .map_err(map_batch_generation_status_query_error)?;
+        .map_err(map_owned_batch_generation_task_route_error)?;
 
     Ok(Json(result))
 }
@@ -187,13 +113,13 @@ async fn stream_batch_generation_status(
     Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>>,
     (StatusCode, Json<Value>),
 > {
-    let stream = create_owned_batch_generation_status_stream(
+    let stream = load_owned_batch_generation_status_stream(
         db.clone(),
         batch_id.clone(),
         claims.sub.clone(),
     )
     .await
-    .map_err(map_batch_generation_status_stream_access_error)?;
+    .map_err(map_owned_batch_generation_task_route_error)?;
 
     Ok(Sse::new(stream).keep_alive(named_sse_keep_alive("keep-alive")))
 }
@@ -205,7 +131,7 @@ async fn get_active_batch_generation(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let result = load_active_batch_generation_query(&db, &project_id, &claims.sub)
         .await
-        .map_err(map_active_batch_generation_query_error)?;
+        .map_err(map_project_access_query_route_error)?;
 
     Ok(Json(result))
 }
@@ -213,9 +139,10 @@ async fn get_active_batch_generation(
 async fn list_active_batch_generation_tasks(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
-    Query(query): Query<ActiveQuery>,
+    Query(query): Query<ActiveBatchGenerationTaskListRouteQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let result = load_owned_active_batch_generation_task_list_query(&db, &claims.sub, query.limit)
+    let request = ActiveBatchGenerationTaskListQueryRequest::from_route_limit(query.limit);
+    let result = load_active_user_batch_generation_task_list_view(&db, &claims.sub, request)
         .await
         .map_err(map_active_batch_generation_task_list_query_error)?;
     Ok(Json(result))
@@ -238,9 +165,9 @@ async fn resume_batch_generation(
     Extension(claims): Extension<Claims>,
     Path(batch_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let result = resume_owned_batch_generation_task(&db, &batch_id, &claims.sub)
+    let result = resume_owned_batch_generation_write_workflow(&db, &batch_id, &claims.sub)
         .await
-        .map_err(map_prepare_batch_generation_resume_request_error)?;
+        .map_err(map_resume_batch_generation_task_command_config_route_error)?;
 
     Ok(Json(result))
 }
@@ -250,14 +177,6 @@ pub(crate) fn routes() -> Router {
         .route(
             "/chapters/project/{project_id}/batch-generate",
             post(create_batch_generate),
-        )
-        .route(
-            "/chapters/{chapter_id}/generate-stream",
-            post(generate_chapter_content_stream),
-        )
-        .route(
-            "/chapters/{chapter_id}/generate-background",
-            post(generate_chapter_content_background),
         )
         .route(
             "/chapters/batch-generate/{batch_id}/status",
@@ -283,4 +202,145 @@ pub(crate) fn routes() -> Router {
             "/chapters/batch-generate/{batch_id}/resume",
             post(resume_batch_generation),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::services::chapter_batch_generation_write_workflow_service::BatchGenerationCreateWorkflowRequest;
+    use crate::services::chapter_batch_generation_task_view_query_service::ActiveBatchGenerationTaskListQueryRequest;
+
+    use super::{ActiveBatchGenerationTaskListRouteQuery, BatchGenerationCreateRouteRequest};
+
+    #[test]
+    fn should_normalize_active_batch_generation_task_list_limit() {
+        let default_request = ActiveBatchGenerationTaskListQueryRequest::from_route_limit(
+            ActiveBatchGenerationTaskListRouteQuery { limit: None }.limit,
+        )
+        .limit();
+        let min_request = ActiveBatchGenerationTaskListQueryRequest::from_route_limit(
+            ActiveBatchGenerationTaskListRouteQuery { limit: Some(0) }.limit,
+        )
+        .limit();
+        let preserved_request = ActiveBatchGenerationTaskListQueryRequest::from_route_limit(
+            ActiveBatchGenerationTaskListRouteQuery { limit: Some(25) }.limit,
+        )
+        .limit();
+        let capped_request = ActiveBatchGenerationTaskListQueryRequest::from_route_limit(
+            ActiveBatchGenerationTaskListRouteQuery { limit: Some(500) }.limit,
+        )
+        .limit();
+
+        assert_eq!(default_request, 20);
+        assert_eq!(min_request, 1);
+        assert_eq!(preserved_request, 25);
+        assert_eq!(capped_request, 100);
+    }
+
+    #[test]
+    fn should_keep_batch_generation_create_route_payload_contract() {
+        let route_request = BatchGenerationCreateRouteRequest {
+            start_chapter_number: 5,
+            count: 3,
+            style_id: Some(9),
+            target_word_count: Some(3200),
+            enable_analysis: Some(true),
+            enable_mcp: Some(true),
+            enable_web_research: Some(false),
+            web_research_query: Some("ignored".to_string()),
+            max_retries: Some(6),
+            model: Some("gpt-4.1-mini".to_string()),
+            creative_mode: Some("dramatic".to_string()),
+            story_focus: Some("battle".to_string()),
+            plot_stage: Some("climax".to_string()),
+            story_creation_brief: Some("brief".to_string()),
+            quality_preset: Some("strict".to_string()),
+            quality_notes: Some("notes".to_string()),
+            story_repair_summary: Some("repair".to_string()),
+            story_repair_targets: Some(vec!["target-a".to_string()]),
+            story_preserve_strengths: Some(vec!["strength-a".to_string()]),
+        };
+        let request = BatchGenerationCreateWorkflowRequest::from_route_payload(
+            route_request.start_chapter_number,
+            route_request.count,
+            route_request.style_id,
+            route_request.target_word_count,
+            route_request.enable_analysis,
+            route_request.enable_mcp,
+            route_request.enable_web_research,
+            route_request.web_research_query,
+            route_request.max_retries,
+            route_request.model,
+            route_request.creative_mode,
+            route_request.story_focus,
+            route_request.plot_stage,
+            route_request.story_creation_brief,
+            route_request.quality_preset,
+            route_request.quality_notes,
+            route_request.story_repair_summary,
+            route_request.story_repair_targets,
+            route_request.story_preserve_strengths,
+        );
+
+        assert_eq!(request.start_chapter_number, 5);
+        assert_eq!(request.count, 3);
+        assert_eq!(request.style_id, Some(9));
+        assert_eq!(request.target_word_count, Some(3200));
+        assert!(request.enable_analysis);
+        assert_eq!(request.max_retries, 6);
+        assert_eq!(request.model_override.as_deref(), Some("gpt-4.1-mini"));
+    }
+
+    #[test]
+    fn should_keep_batch_generation_create_workflow_request_contract_minimal() {
+        let route_request = BatchGenerationCreateRouteRequest {
+            start_chapter_number: 3,
+            count: 2,
+            style_id: Some(7),
+            target_word_count: Some(2800),
+            enable_analysis: None,
+            enable_mcp: Some(true),
+            enable_web_research: Some(true),
+            web_research_query: Some("ignored".to_string()),
+            max_retries: None,
+            model: Some("gpt-4.1".to_string()),
+            creative_mode: Some("dramatic".to_string()),
+            story_focus: Some("battle".to_string()),
+            plot_stage: Some("climax".to_string()),
+            story_creation_brief: Some("brief".to_string()),
+            quality_preset: Some("strict".to_string()),
+            quality_notes: Some("notes".to_string()),
+            story_repair_summary: Some("repair".to_string()),
+            story_repair_targets: Some(vec!["target-a".to_string()]),
+            story_preserve_strengths: Some(vec!["strength-a".to_string()]),
+        };
+        let request = BatchGenerationCreateWorkflowRequest::from_route_payload(
+            route_request.start_chapter_number,
+            route_request.count,
+            route_request.style_id,
+            route_request.target_word_count,
+            route_request.enable_analysis,
+            route_request.enable_mcp,
+            route_request.enable_web_research,
+            route_request.web_research_query,
+            route_request.max_retries,
+            route_request.model,
+            route_request.creative_mode,
+            route_request.story_focus,
+            route_request.plot_stage,
+            route_request.story_creation_brief,
+            route_request.quality_preset,
+            route_request.quality_notes,
+            route_request.story_repair_summary,
+            route_request.story_repair_targets,
+            route_request.story_preserve_strengths,
+        );
+
+        assert_eq!(request.start_chapter_number, 3);
+        assert_eq!(request.count, 2);
+        assert_eq!(request.style_id, Some(7));
+        assert_eq!(request.target_word_count, Some(2800));
+        assert!(!request.enable_analysis);
+        assert_eq!(request.max_retries, 3);
+        assert_eq!(request.model_override.as_deref(), Some("gpt-4.1"));
+    }
 }

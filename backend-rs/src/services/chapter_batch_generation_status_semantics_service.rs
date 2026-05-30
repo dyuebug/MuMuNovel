@@ -1,26 +1,46 @@
 use crate::models::batch_generation_task;
+use serde_json::Value;
 
 const ACTIVE_BATCH_GENERATION_STATUSES: [&str; 2] = ["pending", "running"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BatchGenerationTaskKind {
+    SingleChapter,
+    Batch,
+}
 
 pub(crate) fn active_batch_generation_statuses() -> [&'static str; 2] {
     ACTIVE_BATCH_GENERATION_STATUSES
 }
 
-pub(crate) fn task_type(task: &batch_generation_task::Model) -> &'static str {
-    if task.chapter_count == 1
-        && task
-            .chapter_ids
-            .as_array()
-            .is_some_and(|items| items.len() == 1)
-    {
-        "chapter_single_generate"
+pub(crate) fn batch_generation_task_kind(
+    chapter_count: i32,
+    chapter_ids: &Value,
+) -> BatchGenerationTaskKind {
+    if chapter_count == 1 && chapter_ids.as_array().is_some_and(|items| items.len() == 1) {
+        BatchGenerationTaskKind::SingleChapter
     } else {
-        "chapters_batch_generate"
+        BatchGenerationTaskKind::Batch
     }
 }
 
-pub(crate) fn task_stage_code(task: &batch_generation_task::Model) -> &'static str {
-    match task.status.as_str() {
+pub(crate) fn task_kind(task: &batch_generation_task::Model) -> BatchGenerationTaskKind {
+    batch_generation_task_kind(task.chapter_count, &task.chapter_ids)
+}
+
+pub(crate) fn batch_generation_task_type(kind: BatchGenerationTaskKind) -> &'static str {
+    match kind {
+        BatchGenerationTaskKind::SingleChapter => "chapter_single_generate",
+        BatchGenerationTaskKind::Batch => "chapters_batch_generate",
+    }
+}
+
+pub(crate) fn task_type(task: &batch_generation_task::Model) -> &'static str {
+    batch_generation_task_type(task_kind(task))
+}
+
+pub(crate) fn batch_generation_stage_code(status: &str) -> &'static str {
+    match status {
         "completed" => "6.writing.completed",
         "failed" => "6.writing.failed",
         "cancelled" => "6.writing.cancelled",
@@ -29,11 +49,12 @@ pub(crate) fn task_stage_code(task: &batch_generation_task::Model) -> &'static s
     }
 }
 
-pub(crate) fn task_execution_mode(task: &batch_generation_task::Model) -> &'static str {
-    match task_type(task) {
-        "chapter_single_generate" => "interactive",
-        _ => "interactive",
-    }
+pub(crate) fn task_stage_code(task: &batch_generation_task::Model) -> &'static str {
+    batch_generation_stage_code(&task.status)
+}
+
+pub(crate) fn task_execution_mode() -> &'static str {
+    "interactive"
 }
 
 #[cfg(test)]
@@ -43,7 +64,9 @@ mod tests {
     use crate::models::batch_generation_task;
 
     use super::{
-        active_batch_generation_statuses, task_execution_mode, task_stage_code, task_type,
+        active_batch_generation_statuses, batch_generation_stage_code, batch_generation_task_kind,
+        batch_generation_task_type, task_execution_mode, task_kind, task_stage_code, task_type,
+        BatchGenerationTaskKind,
     };
 
     fn task(
@@ -82,6 +105,25 @@ mod tests {
         let batch = task("pending", 2, json!(["chapter-1", "chapter-2"]));
         let malformed_single = task("pending", 1, json!({"chapter_id": "chapter-1"}));
 
+        assert_eq!(
+            batch_generation_task_type(BatchGenerationTaskKind::SingleChapter),
+            "chapter_single_generate"
+        );
+        assert_eq!(
+            batch_generation_task_type(BatchGenerationTaskKind::Batch),
+            "chapters_batch_generate"
+        );
+        assert_eq!(
+            batch_generation_task_kind(1, &json!(["chapter-1"])),
+            BatchGenerationTaskKind::SingleChapter
+        );
+        assert_eq!(
+            batch_generation_task_kind(2, &json!(["chapter-1", "chapter-2"])),
+            BatchGenerationTaskKind::Batch
+        );
+        assert_eq!(task_kind(&single), BatchGenerationTaskKind::SingleChapter);
+        assert_eq!(task_kind(&batch), BatchGenerationTaskKind::Batch);
+        assert_eq!(task_kind(&malformed_single), BatchGenerationTaskKind::Batch);
         assert_eq!(task_type(&single), "chapter_single_generate");
         assert_eq!(task_type(&batch), "chapters_batch_generate");
         assert_eq!(task_type(&malformed_single), "chapters_batch_generate");
@@ -99,6 +141,7 @@ mod tests {
         ];
 
         for (status, expected) in cases {
+            assert_eq!(batch_generation_stage_code(status), expected);
             assert_eq!(
                 task_stage_code(&task(status, 1, json!(["chapter-1"]))),
                 expected
@@ -110,9 +153,15 @@ mod tests {
     fn should_keep_batch_generation_execution_mode_interactive() {
         let single = task("running", 1, json!(["chapter-1"]));
         let batch = task("running", 2, json!(["chapter-1", "chapter-2"]));
+        let malformed_single = task("running", 1, json!({"chapter_id": "chapter-1"}));
 
-        assert_eq!(task_execution_mode(&single), "interactive");
-        assert_eq!(task_execution_mode(&batch), "interactive");
+        assert_eq!(task_execution_mode(), "interactive");
+        assert_eq!(task_execution_mode(), "interactive");
+        assert_eq!(task_execution_mode(), "interactive");
+
+        assert_eq!(single.chapter_count, 1);
+        assert_eq!(batch.chapter_count, 2);
+        assert_eq!(malformed_single.chapter_count, 1);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use axum::http::HeaderValue;
 use axum::{Extension, Router};
 use sea_orm::DatabaseConnection;
 use tower_http::{
-    cors::{Any, CorsLayer},
+    cors::{AllowHeaders, AllowMethods, CorsLayer},
     normalize_path::NormalizePathLayer,
     request_id::MakeRequestUuid,
     services::ServeDir,
@@ -25,10 +25,10 @@ use crate::tasks::registry::TaskRegistry;
 use crate::tasks::stream::TaskStreamHub;
 
 use super::{
-    admin, ai_test, auth, background_tasks, book_import, careers, changelog,
-    chapter_batch_generation, chapters, characters, foreshadows, health, inspiration, mcp_plugins,
-    memories, organizations, outlines, polish, projects, prompt_templates, prompt_workshop,
-    relationships, settings, users, wizard, writing_styles,
+    admin, ai_test, auth, background_tasks, book_import, careers, changelog, chapters, characters,
+    foreshadows, health, inspiration, mcp_plugins, memories, organizations, outlines, polish,
+    projects, prompt_templates, prompt_workshop, relationships, settings, users, wizard,
+    writing_styles,
 };
 
 #[derive(Debug)]
@@ -185,8 +185,8 @@ fn build_cors_layer(cfg: &AppConfig) -> Result<CorsLayer, RouterBuildError> {
             );
             Ok(CorsLayer::new()
                 .allow_credentials(true)
-                .allow_headers(Any)
-                .allow_methods(Any)
+                .allow_headers(AllowHeaders::mirror_request())
+                .allow_methods(AllowMethods::mirror_request())
                 .allow_origin(origins))
         }
     }
@@ -251,7 +251,6 @@ pub fn build(
         .merge(mcp_plugins::routes())
         .merge(memories::routes())
         .merge(book_import::routes())
-        .merge(chapter_batch_generation::routes())
         .merge(polish::routes())
         .merge(inspiration::routes())
         .merge(wizard::routes())
@@ -422,6 +421,19 @@ mod tests {
                 panic!("explicit non-development origins should not become permissive")
             }
         }
+    }
+
+    #[test]
+    fn explicit_non_development_origins_build_usable_cors_layer() {
+        let cfg = test_config(
+            AppRuntimeMode::NonDevelopment,
+            "http://localhost:8005, http://127.0.0.1:8005",
+        );
+
+        let result = std::panic::catch_unwind(|| super::build_cors_layer(&cfg));
+
+        assert!(result.is_ok(), "explicit CORS config should not panic");
+        assert!(result.unwrap().is_ok(), "explicit CORS config should build");
     }
 
     #[test]

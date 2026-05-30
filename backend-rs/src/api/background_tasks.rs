@@ -13,11 +13,24 @@ use tokio::sync::{mpsc, Mutex};
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
-use crate::ai::service::AIService;
 use crate::services::auth::Claims;
-use crate::services::plot_expansion_service::create_plot_expansion_service;
-use crate::services::settings_service::SettingsService;
-use crate::services::wizard_service;
+use crate::services::background_task_payload_adapter_service::{
+    build_connected_task_event, build_missing_task_payload, build_task_list_response,
+    compatible_task_payload, enrich_task_payload,
+};
+use crate::services::background_task_request_service::normalize_task_statuses_query;
+use crate::services::generation_task_request_adapter_service::{
+    adapt_character_generation_task_request, adapt_organization_generation_task_request,
+};
+use crate::services::outline_expansion_request_service::{
+    build_outline_batch_expand_execution_request, build_outline_expand_execution_request,
+    execute_outline_batch_expand_request, execute_outline_expand_request,
+};
+use crate::services::wizard_request_service::{
+    execute_career_system_request, execute_characters_request, execute_outline_request,
+    execute_regenerate_world_building_request, execute_world_building_request, CareerSystemRequest,
+    CharactersRequest, OutlineRequest, RegenerateWorldBuildingRequest, WorldBuildingRequest,
+};
 use crate::tasks::checkpoint::touch_checkpoint;
 use crate::tasks::registry::TaskRegistry;
 use crate::tasks::stream::TaskStreamHub;
@@ -25,38 +38,6 @@ use crate::tasks::types::{
     TaskCreateRequest, TaskEvent, TaskListQuery, TaskRecord, TaskStatus, TaskWorkflowUpdate,
 };
 use crate::utils::sse::{SseChannel, SseTaskCapture};
-
-fn compatible_task_payload(record: &TaskRecord) -> serde_json::Value {
-    let record_value = serde_json::to_value(record).unwrap_or_else(|_| json!({}));
-    match record_value {
-        serde_json::Value::Object(mut map) => {
-            map.insert("success".to_string(), json!(true));
-            map.insert("data".to_string(), json!(record));
-            serde_json::Value::Object(map)
-        }
-        _ => json!({
-            "success": true,
-            "data": record
-        }),
-    }
-}
-
-fn enrich_task_payload(record: &TaskRecord, payload: serde_json::Value) -> serde_json::Value {
-    match payload {
-        serde_json::Value::Object(mut map) => {
-            if !record.project_id.trim().is_empty() {
-                map.entry("project_id".to_string())
-                    .or_insert_with(|| json!(record.project_id));
-            }
-            if !record.user_id.trim().is_empty() {
-                map.entry("user_id".to_string())
-                    .or_insert_with(|| json!(record.user_id));
-            }
-            serde_json::Value::Object(map)
-        }
-        other => other,
-    }
-}
 
 /// POST /api/background-tasks
 pub async fn create_task(
@@ -432,7 +413,7 @@ async fn run_wizard_world_building(
     record: &TaskRecord,
     payload: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let body = serde_json::from_value::<super::wizard::WorldBuildingRequest>(payload)
+    let body = serde_json::from_value::<WorldBuildingRequest>(payload)
         .map_err(|error| format!("无效的世界观任务参数: {}", error))?;
     let (tx, mut rx) = mpsc::channel(256);
     let result_capture = Arc::new(Mutex::new(None));
@@ -441,29 +422,7 @@ async fn run_wizard_world_building(
 
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
-    wizard_service::generate_world_building(
-        db,
-        &channel,
-        &record.user_id,
-        body.title.as_deref().unwrap_or_default(),
-        body.description.as_deref().unwrap_or_default(),
-        body.theme.as_deref().unwrap_or_default(),
-        super::wizard::normalize_genre_input(body.genre.clone()).as_str(),
-        body.narrative_perspective.as_deref(),
-        body.target_words,
-        body.chapter_count,
-        body.character_count,
-        body.outline_mode.as_deref(),
-        body.default_creative_mode.as_deref(),
-        body.default_story_focus.as_deref(),
-        body.default_plot_stage.as_deref(),
-        body.default_story_creation_brief.as_deref(),
-        body.default_quality_preset.as_deref(),
-        body.default_quality_notes.as_deref(),
-        body.provider.as_deref(),
-        body.model.as_deref(),
-    )
-    .await;
+    execute_world_building_request(db, &channel, &record.user_id, body).await;
 
     drop(channel);
     let _ = drain_handle.await;
@@ -484,7 +443,7 @@ async fn run_wizard_career_system(
     record: &TaskRecord,
     payload: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let body = serde_json::from_value::<super::wizard::CareerSystemRequest>(payload)
+    let body = serde_json::from_value::<CareerSystemRequest>(payload)
         .map_err(|error| format!("无效的职业体系任务参数: {}", error))?;
     let (tx, mut rx) = mpsc::channel(256);
     let result_capture = Arc::new(Mutex::new(None));
@@ -492,15 +451,7 @@ async fn run_wizard_career_system(
     let channel = SseChannel::with_captures(tx, result_capture.clone(), state_capture.clone());
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
-    wizard_service::generate_career_system(
-        db,
-        &channel,
-        &record.user_id,
-        &body.project_id,
-        body.provider.as_deref(),
-        body.model.as_deref(),
-    )
-    .await;
+    execute_career_system_request(db, &channel, &record.user_id, body).await;
 
     drop(channel);
     let _ = drain_handle.await;
@@ -521,7 +472,7 @@ async fn run_wizard_characters(
     record: &TaskRecord,
     payload: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let body = serde_json::from_value::<super::wizard::CharactersRequest>(payload)
+    let body = serde_json::from_value::<CharactersRequest>(payload)
         .map_err(|error| format!("无效的角色任务参数: {}", error))?;
     let (tx, mut rx) = mpsc::channel(256);
     let result_capture = Arc::new(Mutex::new(None));
@@ -529,20 +480,7 @@ async fn run_wizard_characters(
     let channel = SseChannel::with_captures(tx, result_capture.clone(), state_capture.clone());
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
-    wizard_service::generate_characters(
-        db,
-        &channel,
-        &record.user_id,
-        &body.project_id,
-        body.count,
-        body.world_context,
-        body.theme.as_deref(),
-        body.genre.as_deref(),
-        body.requirements.as_deref(),
-        body.provider.as_deref(),
-        body.model.as_deref(),
-    )
-    .await;
+    execute_characters_request(db, &channel, &record.user_id, body).await;
 
     drop(channel);
     let _ = drain_handle.await;
@@ -563,7 +501,7 @@ async fn run_wizard_outline(
     record: &TaskRecord,
     payload: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let body = serde_json::from_value::<super::wizard::OutlineRequest>(payload)
+    let body = serde_json::from_value::<OutlineRequest>(payload)
         .map_err(|error| format!("无效的大纲任务参数: {}", error))?;
     let (tx, mut rx) = mpsc::channel(256);
     let result_capture = Arc::new(Mutex::new(None));
@@ -571,25 +509,7 @@ async fn run_wizard_outline(
     let channel = SseChannel::with_captures(tx, result_capture.clone(), state_capture.clone());
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
-    wizard_service::generate_outline(
-        db,
-        &channel,
-        &record.user_id,
-        &body.project_id,
-        body.chapter_count,
-        body.narrative_perspective.as_deref(),
-        body.target_words,
-        body.requirements.as_deref(),
-        body.creative_mode.as_deref(),
-        body.story_focus.as_deref(),
-        body.plot_stage.as_deref(),
-        body.story_creation_brief.as_deref(),
-        body.quality_preset.as_deref(),
-        body.quality_notes.as_deref(),
-        body.provider.as_deref(),
-        body.model.as_deref(),
-    )
-    .await;
+    execute_outline_request(db, &channel, &record.user_id, body).await;
 
     drop(channel);
     let _ = drain_handle.await;
@@ -610,28 +530,20 @@ async fn run_world_regenerate(
     record: &TaskRecord,
     payload: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let body = serde_json::from_value::<super::wizard::RegenerateWorldBuildingRequest>(payload)
-        .unwrap_or(super::wizard::RegenerateWorldBuildingRequest {
-            provider: None,
-            model: None,
-            user_id: None,
-            enable_mcp: None,
-            enable_web_research: None,
-            web_research_query: None,
-        });
+    let body =
+        serde_json::from_value::<RegenerateWorldBuildingRequest>(payload).unwrap_or_default();
     let (tx, mut rx) = mpsc::channel(256);
     let result_capture = Arc::new(Mutex::new(None));
     let state_capture = Arc::new(Mutex::new(SseTaskCapture::default()));
     let channel = SseChannel::with_captures(tx, result_capture.clone(), state_capture.clone());
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
-    wizard_service::regenerate_world_building(
+    execute_regenerate_world_building_request(
         db,
         &channel,
         &record.user_id,
         &record.project_id,
-        body.provider.as_deref(),
-        body.model.as_deref(),
+        body,
     )
     .await;
 
@@ -658,102 +570,20 @@ async fn run_outline_expand(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "outline_id is required for outline_expand".to_string())?;
-
-    let target_chapter_count = payload
-        .get("target_chapter_count")
-        .and_then(|value| value.as_u64())
-        .unwrap_or_default() as usize;
-    let expansion_strategy = payload
-        .get("expansion_strategy")
-        .and_then(|value| value.as_str())
-        .unwrap_or("balanced");
-    let auto_create_chapters = payload
-        .get("auto_create_chapters")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
-    let enable_scene_analysis = payload
-        .get("enable_scene_analysis")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
-    let provider = payload.get("provider").and_then(|value| value.as_str());
-    let model = payload.get("model").and_then(|value| value.as_str());
-    let batch_size = payload
-        .get("batch_size")
-        .and_then(|value| value.as_u64())
-        .filter(|value| *value > 0)
-        .unwrap_or(5) as usize;
-
-    let ai_config =
-        SettingsService::build_ai_config(db, &record.user_id, provider, model, None).await?;
-    let ai_service = AIService::new(ai_config);
-    let service = create_plot_expansion_service(&ai_service);
-    service
-        .expand_outline(
-            db,
-            &record.user_id,
-            outline_id,
-            target_chapter_count,
-            expansion_strategy,
-            auto_create_chapters,
-            enable_scene_analysis,
-            provider,
-            model,
-            batch_size,
-        )
-        .await
+    let request = build_outline_expand_execution_request(outline_id.to_string(), &payload);
+    execute_outline_expand_request(db, &record.user_id, &request).await
 }
 
 async fn run_outline_batch_expand(
     db: &DatabaseConnection,
     record: &TaskRecord,
-    payload: serde_json::Value,
+    mut payload: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let chapters_per_outline = payload
-        .get("chapters_per_outline")
-        .and_then(|value| value.as_u64())
-        .unwrap_or_default() as usize;
-    let expansion_strategy = payload
-        .get("expansion_strategy")
-        .and_then(|value| value.as_str())
-        .unwrap_or("balanced");
-    let auto_create_chapters = payload
-        .get("auto_create_chapters")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
-    let enable_scene_analysis = payload
-        .get("enable_scene_analysis")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
-    let provider = payload.get("provider").and_then(|value| value.as_str());
-    let model = payload.get("model").and_then(|value| value.as_str());
-    let outline_ids = payload
-        .get("outline_ids")
-        .and_then(|value| value.as_array())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str().map(ToString::to_string))
-                .collect::<Vec<_>>()
-        });
-
-    let ai_config =
-        SettingsService::build_ai_config(db, &record.user_id, provider, model, None).await?;
-    let ai_service = AIService::new(ai_config);
-    let service = create_plot_expansion_service(&ai_service);
-    service
-        .batch_expand_outlines(
-            db,
-            &record.user_id,
-            &record.project_id,
-            chapters_per_outline,
-            expansion_strategy,
-            auto_create_chapters,
-            enable_scene_analysis,
-            outline_ids.as_deref(),
-            provider,
-            model,
-        )
-        .await
+    if payload.get("project_id").is_none() {
+        payload["project_id"] = serde_json::Value::String(record.project_id.clone());
+    }
+    let request = build_outline_batch_expand_execution_request(&payload);
+    execute_outline_batch_expand_request(db, &record.user_id, &request).await
 }
 
 async fn run_character_generate(
@@ -761,18 +591,11 @@ async fn run_character_generate(
     record: &TaskRecord,
     payload: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let body = serde_json::from_value::<super::characters::GenerateCharacterRequest>(json!({
-        "project_id": record.project_id,
-        "name": payload.get("name").cloned(),
-        "role_type": payload.get("role_type").cloned(),
-        "background": payload.get("background").cloned(),
-        "requirements": payload.get("requirements").cloned(),
-        "provider": payload.get("provider").cloned(),
-        "model": payload.get("model").cloned(),
-    }))
-    .map_err(|error| format!("无效的角色生成参数: {}", error))?;
+    let body = adapt_character_generation_task_request(&record.project_id, &payload)?;
 
-    super::characters::generate_character_task(db, &record.user_id, body).await
+    super::characters::generate_character_task(db, &record.user_id, body)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn run_organization_generate(
@@ -780,18 +603,11 @@ async fn run_organization_generate(
     record: &TaskRecord,
     payload: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let body = serde_json::from_value::<super::organizations::GenerateOrganizationRequest>(json!({
-        "project_id": record.project_id,
-        "name": payload.get("name").cloned(),
-        "organization_type": payload.get("organization_type").cloned(),
-        "background": payload.get("background").cloned(),
-        "requirements": payload.get("requirements").cloned(),
-        "provider": payload.get("provider").cloned(),
-        "model": payload.get("model").cloned(),
-    }))
-    .map_err(|error| format!("无效的组织生成参数: {}", error))?;
+    let body = adapt_organization_generation_task_request(&record.project_id, &payload)?;
 
-    super::organizations::generate_organization_task(db, &record.user_id, body).await
+    super::organizations::generate_organization_task(db, &record.user_id, body)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// GET /api/background-tasks
@@ -800,18 +616,7 @@ pub async fn list_tasks(
     Extension(registry): Extension<TaskRegistry>,
     Query(query): Query<TaskListQuery>,
 ) -> impl IntoResponse {
-    let statuses: Option<Vec<TaskStatus>> = query.statuses.as_ref().map(|s| {
-        s.split(',')
-            .filter_map(|part| match part.trim() {
-                "pending" => Some(TaskStatus::Pending),
-                "running" => Some(TaskStatus::Running),
-                "completed" => Some(TaskStatus::Completed),
-                "failed" => Some(TaskStatus::Failed),
-                "cancelled" => Some(TaskStatus::Cancelled),
-                _ => None,
-            })
-            .collect()
-    });
+    let statuses = normalize_task_statuses_query(&query);
 
     let tasks = registry
         .list_for_user(
@@ -823,16 +628,7 @@ pub async fn list_tasks(
         )
         .await;
 
-    (
-        StatusCode::OK,
-        Json(json!({
-            "success": true,
-            "data": tasks,
-            "items": tasks,
-            "total": tasks.len(),
-        })),
-    )
-        .into_response()
+    (StatusCode::OK, Json(build_task_list_response(tasks))).into_response()
 }
 
 /// GET /api/background-tasks/:task_id
@@ -852,28 +648,7 @@ pub async fn get_task(
             }
             (StatusCode::OK, Json(compatible_task_payload(&record))).into_response()
         }
-        None => (
-            StatusCode::OK,
-            Json(json!({
-                "success": true,
-                "message": "任务不存在",
-                "task_id": task_id,
-                "project_id": "",
-                "task_type": "unknown",
-                "status": "cancelled",
-                "progress": 100,
-                "message_detail": "任务不存在",
-                "data": {
-                    "task_id": task_id,
-                    "project_id": "",
-                    "task_type": "unknown",
-                    "status": "cancelled",
-                    "progress": 100,
-                    "message": "任务不存在"
-                }
-            })),
-        )
-            .into_response(),
+        None => (StatusCode::OK, Json(build_missing_task_payload(&task_id))).into_response(),
     }
 }
 
@@ -1042,16 +817,7 @@ pub async fn stream_task(
     };
 
     // Build initial "connected" event with full task state
-    let record_json = serde_json::to_value(&record).unwrap_or_default();
-    let status_event = TaskEvent {
-        event_type: "connected".into(),
-        task_id: Some(task_id.clone()),
-        message: Some(record.message),
-        progress: Some(record.progress),
-        status: Some(record.status.to_string()),
-        data: Some(record_json),
-        error: None,
-    };
+    let status_event = build_connected_task_event(&task_id, &record);
     let initial_json = serde_json::to_string(&status_event).unwrap_or_default();
 
     let rx = stream_hub.subscribe(&task_id).await;

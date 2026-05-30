@@ -84,6 +84,11 @@ pub fn sse_result(data: &Value) -> Event {
     Event::default().data(serde_json::to_string(&payload).unwrap_or_default())
 }
 
+/// Create a custom JSON event payload for non-standard stream contracts.
+pub fn sse_json(data: &Value) -> Event {
+    Event::default().data(serde_json::to_string(data).unwrap_or_default())
+}
+
 /// Create an error event (matching Python SSEResponse.send_error)
 pub fn sse_error(error: &str, code: u16) -> Event {
     let payload = ErrorPayload {
@@ -370,6 +375,7 @@ mod tests {
     fn test_sse_event_functions_dont_panic() {
         let _ = sse_progress("test", 0, "processing");
         let _ = sse_chunk("hello");
+        let _ = sse_json(&serde_json::json!({"type": "analysis_started", "task_id": "task-1"}));
         let _ = sse_result(&serde_json::json!({"key": "value"}));
         let _ = sse_error("error", 500);
         let _ = sse_done();

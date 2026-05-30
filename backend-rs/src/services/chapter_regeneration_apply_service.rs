@@ -9,50 +9,73 @@ use crate::services::chapter_narrative_cleaner_service::{
 };
 use crate::services::chapter_service::ChapterService;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ApplyPartialRegenerateRequest {
+    new_text: Option<String>,
+    start_position: Option<usize>,
+    end_position: Option<usize>,
+}
+
+impl ApplyPartialRegenerateRequest {
+    pub fn new(
+        new_text: Option<String>,
+        start_position: Option<usize>,
+        end_position: Option<usize>,
+    ) -> Self {
+        Self {
+            new_text,
+            start_position,
+            end_position,
+        }
+    }
+
+    pub fn from_route_payload(
+        new_text: Option<String>,
+        start_position: Option<usize>,
+        end_position: Option<usize>,
+    ) -> Self {
+        Self::new(new_text, start_position, end_position)
+    }
+
+    pub fn new_text(&self) -> Option<&str> {
+        self.new_text.as_deref()
+    }
+
+    pub fn start_position(&self) -> usize {
+        self.start_position.unwrap_or(0)
+    }
+
+    pub fn end_position(&self) -> usize {
+        self.end_position.unwrap_or(0)
+    }
+}
+
 pub enum ApplyPartialRegenerateError {
     EmptyContent,
     WorkflowMetaText,
     InvalidRange,
-    NotFound,
+    Chapter(LoadAccessibleChapterError),
     Internal(String),
-}
-
-pub struct ApplyPartialRegenerateRequest<'a> {
-    pub new_text: Option<&'a str>,
-    pub start_position: Option<usize>,
-    pub end_position: Option<usize>,
-}
-
-struct PreparedPartialRegenerateApply {
-    new_content: String,
-    old_word_count: i32,
 }
 
 pub async fn apply_owned_partial_regenerate_payload(
     db: &sea_orm::DatabaseConnection,
     chapter_id: &str,
     user_id: &str,
-    request: ApplyPartialRegenerateRequest<'_>,
+    request: ApplyPartialRegenerateRequest,
 ) -> Result<Value, ApplyPartialRegenerateError> {
     let chapter = load_accessible_chapter(db, chapter_id, user_id)
         .await
-        .map_err(|error| match error {
-            LoadAccessibleChapterError::NotFoundOrAccessDenied => {
-                ApplyPartialRegenerateError::NotFound
-            }
-            LoadAccessibleChapterError::Internal(detail) => {
-                ApplyPartialRegenerateError::Internal(detail)
-            }
-        })?;
+        .map_err(ApplyPartialRegenerateError::Chapter)?;
 
     apply_partial_regenerate_payload(
         db,
         chapter_id,
         user_id,
         &chapter,
-        request.new_text.unwrap_or_default(),
-        request.start_position.unwrap_or(0),
-        request.end_position.unwrap_or(0),
+        request.new_text().unwrap_or_default(),
+        request.start_position(),
+        request.end_position(),
     )
     .await
 }
@@ -66,7 +89,7 @@ pub async fn apply_partial_regenerate_payload(
     start_position: usize,
     end_position: usize,
 ) -> Result<Value, ApplyPartialRegenerateError> {
-    let prepared =
+    let new_content =
         prepare_partial_regenerate_apply(chapter, new_text_raw, start_position, end_position)?;
 
     match ChapterService::update(
@@ -74,7 +97,7 @@ pub async fn apply_partial_regenerate_payload(
         chapter_id,
         user_id,
         None,
-        Some(&prepared.new_content),
+        Some(&new_content),
         None,
         None,
         None,
@@ -86,10 +109,12 @@ pub async fn apply_partial_regenerate_payload(
             "success": true,
             "chapter_id": chapter_id,
             "word_count": updated.word_count,
-            "old_word_count": prepared.old_word_count,
+            "old_word_count": chapter.word_count,
             "message": "局部改写已应用",
         })),
-        Ok(None) => Err(ApplyPartialRegenerateError::NotFound),
+        Ok(None) => Err(ApplyPartialRegenerateError::Chapter(
+            LoadAccessibleChapterError::NotFoundOrAccessDenied,
+        )),
         Err(error) => Err(ApplyPartialRegenerateError::Internal(error)),
     }
 }
@@ -99,7 +124,7 @@ fn prepare_partial_regenerate_apply(
     new_text_raw: &str,
     start_position: usize,
     end_position: usize,
-) -> Result<PreparedPartialRegenerateApply, ApplyPartialRegenerateError> {
+) -> Result<String, ApplyPartialRegenerateError> {
     let (new_text, _) = sanitize_generated_narrative_text(new_text_raw);
     if new_text.trim().is_empty() {
         return Err(ApplyPartialRegenerateError::EmptyContent);
@@ -119,10 +144,7 @@ fn prepare_partial_regenerate_apply(
     let suffix: String = content_chars[end_position..].iter().collect();
     let new_content = format!("{prefix}{new_text}{suffix}");
 
-    Ok(PreparedPartialRegenerateApply {
-        new_content,
-        old_word_count: chapter.word_count,
-    })
+    Ok(new_content)
 }
 
 #[cfg(test)]
@@ -130,10 +152,11 @@ mod tests {
     use chrono::NaiveDateTime;
 
     use crate::models::chapter;
+    use crate::services::chapter_access_service::LoadAccessibleChapterError;
 
     use super::{
         prepare_partial_regenerate_apply, ApplyPartialRegenerateError,
-        PreparedPartialRegenerateApply,
+        ApplyPartialRegenerateRequest,
     };
 
     fn chapter_with_content(content: &str) -> chapter::Model {
@@ -154,9 +177,7 @@ mod tests {
         }
     }
 
-    fn valid_prepared_apply(
-        result: Result<PreparedPartialRegenerateApply, ApplyPartialRegenerateError>,
-    ) -> PreparedPartialRegenerateApply {
+    fn valid_prepared_apply(result: Result<String, ApplyPartialRegenerateError>) -> String {
         match result {
             Ok(prepared) => prepared,
             Err(_) => panic!("partial regenerate apply should be valid"),
@@ -164,7 +185,7 @@ mod tests {
     }
 
     fn apply_error(
-        result: Result<PreparedPartialRegenerateApply, ApplyPartialRegenerateError>,
+        result: Result<String, ApplyPartialRegenerateError>,
     ) -> ApplyPartialRegenerateError {
         match result {
             Ok(_) => panic!("partial regenerate apply should be rejected"),
@@ -178,8 +199,7 @@ mod tests {
         let prepared =
             valid_prepared_apply(prepare_partial_regenerate_apply(&chapter, "替换文本", 1, 4));
 
-        assert_eq!(prepared.new_content, "一替换文本五");
-        assert_eq!(prepared.old_word_count, 5);
+        assert_eq!(prepared, "一替换文本五");
     }
 
     #[test]
@@ -209,5 +229,54 @@ mod tests {
         let error = apply_error(prepare_partial_regenerate_apply(&chapter, "替换", 2, 2));
 
         assert!(matches!(error, ApplyPartialRegenerateError::InvalidRange));
+    }
+
+    #[test]
+    fn should_build_apply_partial_regenerate_request_from_route_payload() {
+        let request = ApplyPartialRegenerateRequest::from_route_payload(
+            Some("新文本".to_string()),
+            Some(12),
+            Some(24),
+        );
+
+        assert_eq!(request.new_text(), Some("新文本"));
+        assert_eq!(request.start_position(), 12);
+        assert_eq!(request.end_position(), 24);
+    }
+
+    #[test]
+    fn should_alias_chapter_access_not_found_error_for_partial_apply() {
+        let error = ApplyPartialRegenerateError::Chapter(
+            LoadAccessibleChapterError::NotFoundOrAccessDenied,
+        );
+
+        assert!(matches!(
+            error,
+            ApplyPartialRegenerateError::Chapter(
+                LoadAccessibleChapterError::NotFoundOrAccessDenied
+            )
+        ));
+    }
+
+    #[test]
+    fn should_alias_chapter_access_internal_error_for_partial_apply() {
+        let error = ApplyPartialRegenerateError::Chapter(LoadAccessibleChapterError::Internal(
+            "boom".to_string(),
+        ));
+
+        assert!(matches!(
+            error,
+            ApplyPartialRegenerateError::Chapter(LoadAccessibleChapterError::Internal(detail))
+            if detail == "boom"
+        ));
+    }
+
+    #[test]
+    fn should_keep_apply_partial_regenerate_request_defaults_contract() {
+        let request = ApplyPartialRegenerateRequest::default();
+
+        assert_eq!(request.new_text(), None);
+        assert_eq!(request.start_position(), 0);
+        assert_eq!(request.end_position(), 0);
     }
 }

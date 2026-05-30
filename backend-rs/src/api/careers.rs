@@ -19,7 +19,9 @@ use uuid::Uuid;
 use crate::models::{career, character, character_career, project};
 use crate::services::auth::Claims;
 use crate::services::career_service::CareerService;
-use crate::services::wizard_service;
+use crate::services::wizard_request_service::{
+    execute_career_system_request, legacy_career_system_query_to_request, resolve_effective_user_id,
+};
 
 type ApiError = (StatusCode, Json<Value>);
 
@@ -647,24 +649,31 @@ async fn generate_career_system_legacy(
     let (tx, rx) = mpsc::channel::<Result<Event, std::convert::Infallible>>(256);
     let channel = crate::utils::sse::SseChannel::new(tx);
 
-    let user_id = query.user_id.unwrap_or_else(|| claims.sub.clone());
-    let project_id = query.project_id;
-    let provider = query.provider;
-    let model = query.model;
-    let _main_career_count = query.main_career_count;
-    let _sub_career_count = query.sub_career_count;
-    let _enable_mcp = query.enable_mcp;
+    let LegacyCareerSystemQuery {
+        project_id,
+        main_career_count,
+        sub_career_count,
+        enable_mcp,
+        provider,
+        model,
+        user_id: request_user_id,
+    } = query;
+
+    let user_id = resolve_effective_user_id(request_user_id.clone(), &claims.sub);
+    let request = legacy_career_system_query_to_request(
+        project_id,
+        provider,
+        model,
+        request_user_id,
+        enable_mcp,
+        None,
+        None,
+    );
+    let _main_career_count = main_career_count;
+    let _sub_career_count = sub_career_count;
 
     tokio::spawn(async move {
-        wizard_service::generate_career_system(
-            &db,
-            &channel,
-            &user_id,
-            &project_id,
-            provider.as_deref(),
-            model.as_deref(),
-        )
-        .await;
+        execute_career_system_request(&db, &channel, &user_id, request).await;
     });
 
     Sse::new(ReceiverStream::new(rx))

@@ -13,13 +13,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::ai::service::AIService;
 use crate::models::{chapter, outline, project};
 use crate::services::auth::Claims;
+use crate::services::outline_expansion_request_service::{
+    build_outline_batch_expand_execution_request_from_route_request,
+    build_outline_expand_execution_request_from_route_request,
+    execute_outline_batch_expand_request, execute_outline_expand_request,
+    OutlineBatchExpandRouteRequest, OutlineExpandRouteRequest,
+};
 use crate::services::outline_service::OutlineService;
-use crate::services::plot_expansion_service::create_plot_expansion_service;
-use crate::services::settings_service::SettingsService;
-use crate::services::wizard_service;
+use crate::services::wizard_request_service::{
+    execute_outline_request, outline_generate_request_to_wizard_request,
+};
 use crate::utils::sse::SseChannel;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -140,41 +145,25 @@ async fn generate_outlines(
     let channel = SseChannel::with_result_capture(tx, result_capture.clone());
     let db_for_task = db.clone();
     let user_id = claims.sub.clone();
-    let project_id = body.project_id.clone();
-    let chapter_count = body.chapter_count;
-    let narrative_perspective = body.narrative_perspective.clone();
-    let target_words = body.target_words;
-    let requirements = body.requirements.clone();
-    let creative_mode = body.creative_mode.clone();
-    let story_focus = body.story_focus.clone();
-    let plot_stage = body.plot_stage.clone();
-    let story_creation_brief = body.story_creation_brief.clone();
-    let quality_preset = body.quality_preset.clone();
-    let quality_notes = body.quality_notes.clone();
-    let provider = body.provider.clone();
-    let model = body.model.clone();
+    let request = outline_generate_request_to_wizard_request(
+        body.project_id.clone(),
+        body.chapter_count,
+        body.narrative_perspective.clone(),
+        body.target_words,
+        body.requirements.clone(),
+        body.creative_mode.clone(),
+        body.story_focus.clone(),
+        body.plot_stage.clone(),
+        body.story_creation_brief.clone(),
+        body.quality_preset.clone(),
+        body.quality_notes.clone(),
+        body.provider.clone(),
+        body.model.clone(),
+    );
 
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
-    wizard_service::generate_outline(
-        &db_for_task,
-        &channel,
-        &user_id,
-        &project_id,
-        chapter_count,
-        narrative_perspective.as_deref(),
-        target_words,
-        requirements.as_deref(),
-        creative_mode.as_deref(),
-        story_focus.as_deref(),
-        plot_stage.as_deref(),
-        story_creation_brief.as_deref(),
-        quality_preset.as_deref(),
-        quality_notes.as_deref(),
-        provider.as_deref(),
-        model.as_deref(),
-    )
-    .await;
+    execute_outline_request(&db_for_task, &channel, &user_id, request).await;
 
     let _ = drain_handle.await;
     let result = result_capture.lock().await.clone().ok_or_else(|| {
@@ -257,7 +246,7 @@ async fn expand_outline_compat(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
     Path(outline_id): Path<String>,
-    Json(body): Json<Value>,
+    Json(body): Json<OutlineExpandRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let Some(_outline_model) = OutlineService::get(&db, &outline_id, &claims.sub)
         .await
@@ -274,54 +263,10 @@ async fn expand_outline_compat(
         ));
     };
 
-    let target_chapter_count = body
-        .get("target_chapter_count")
-        .and_then(Value::as_i64)
-        .unwrap_or_default() as usize;
-    let expansion_strategy = body
-        .get("expansion_strategy")
-        .and_then(Value::as_str)
-        .unwrap_or("balanced");
-    let auto_create_chapters = body
-        .get("auto_create_chapters")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let enable_scene_analysis = body
-        .get("enable_scene_analysis")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let provider = body.get("provider").and_then(Value::as_str);
-    let model = body.get("model").and_then(Value::as_str);
-    let batch_size = body
-        .get("batch_size")
-        .and_then(Value::as_i64)
-        .filter(|value| *value > 0)
-        .unwrap_or(5) as usize;
+    let request =
+        build_outline_expand_execution_request_from_route_request(outline_id.clone(), &body);
 
-    let ai_config = SettingsService::build_ai_config(&db, &claims.sub, provider, model, None)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": error})),
-            )
-        })?;
-    let ai_service = AIService::new(ai_config);
-    let service = create_plot_expansion_service(&ai_service);
-
-    service
-        .expand_outline(
-            &db,
-            &claims.sub,
-            &outline_id,
-            target_chapter_count,
-            expansion_strategy,
-            auto_create_chapters,
-            enable_scene_analysis,
-            provider,
-            model,
-            batch_size,
-        )
+    execute_outline_expand_request(&db, &claims.sub, &request)
         .await
         .map(Json)
         .map_err(|error| {
@@ -335,65 +280,11 @@ async fn expand_outline_compat(
 async fn batch_expand_outlines_compat(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
-    Json(body): Json<Value>,
+    Json(body): Json<OutlineBatchExpandRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let project_id = body
-        .get("project_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let chapters_per_outline = body
-        .get("chapters_per_outline")
-        .and_then(Value::as_i64)
-        .unwrap_or_default() as usize;
-    let expansion_strategy = body
-        .get("expansion_strategy")
-        .and_then(Value::as_str)
-        .unwrap_or("balanced");
-    let auto_create_chapters = body
-        .get("auto_create_chapters")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let enable_scene_analysis = body
-        .get("enable_scene_analysis")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let provider = body.get("provider").and_then(Value::as_str);
-    let model = body.get("model").and_then(Value::as_str);
-    let outline_ids = body
-        .get("outline_ids")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        });
+    let request = build_outline_batch_expand_execution_request_from_route_request(&body);
 
-    let ai_config = SettingsService::build_ai_config(&db, &claims.sub, provider, model, None)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": error})),
-            )
-        })?;
-    let ai_service = AIService::new(ai_config);
-    let service = create_plot_expansion_service(&ai_service);
-
-    service
-        .batch_expand_outlines(
-            &db,
-            &claims.sub,
-            project_id,
-            chapters_per_outline,
-            expansion_strategy,
-            auto_create_chapters,
-            enable_scene_analysis,
-            outline_ids.as_deref(),
-            provider,
-            model,
-        )
+    execute_outline_batch_expand_request(&db, &claims.sub, &request)
         .await
         .map(Json)
         .map_err(|error| {

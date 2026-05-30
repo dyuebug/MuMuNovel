@@ -6,78 +6,27 @@ use axum::{
     Router,
 };
 use reqwest::Method;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    Set,
-};
+use sea_orm::DatabaseConnection;
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use crate::config::AppConfig;
-use crate::models::writing_style;
 use crate::services::auth::Claims;
+use crate::services::prompt_workshop_request_service::{
+    build_workshop_download_payload, create_writing_style_from_workshop_item,
+    default_workshop_category, prepare_admin_create_item_request,
+    prepare_admin_review_submission_request, prepare_admin_update_item_request,
+    prepare_submit_prompt_request, workshop_instance_id, workshop_user_identifier,
+    PromptWorkshopAdminCreateItemRouteRequest, PromptWorkshopAdminReviewRouteRequest,
+    PromptWorkshopAdminUpdateItemRouteRequest,
+};
 use crate::services::prompt_workshop_service::PromptWorkshopService;
-
-fn normalize_tags_value(tags: Option<&Value>) -> Option<String> {
-    let value = tags?;
-
-    match value {
-        Value::Null => None,
-        Value::String(text) => {
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                return None;
-            }
-
-            if trimmed.starts_with('[') {
-                return Some(trimmed.to_string());
-            }
-
-            let items: Vec<String> = trimmed
-                .split(',')
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .map(str::to_string)
-                .collect();
-
-            if items.is_empty() {
-                None
-            } else {
-                serde_json::to_string(&items).ok()
-            }
-        }
-        Value::Array(items) => {
-            let normalized: Vec<String> = items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .map(str::to_string)
-                .collect();
-
-            if normalized.is_empty() {
-                None
-            } else {
-                serde_json::to_string(&normalized).ok()
-            }
-        }
-        _ => None,
-    }
-}
 
 fn workshop_cloud_url() -> String {
     std::env::var("WORKSHOP_CLOUD_URL")
         .unwrap_or_else(|_| "https://mumuverse.space:1566".to_string())
         .trim_end_matches('/')
         .to_string()
-}
-
-fn workshop_instance_id() -> String {
-    std::env::var("INSTANCE_ID").unwrap_or_else(|_| "local".to_string())
-}
-
-fn workshop_user_identifier(user_id: &str) -> String {
-    format!("{}:{}", workshop_instance_id(), user_id)
 }
 
 fn cloud_error(message: impl Into<String>) -> (StatusCode, Json<Value>) {
@@ -143,57 +92,6 @@ fn workshop_response_data(response: &Value) -> &Value {
     response.get("data").unwrap_or(response)
 }
 
-fn required_workshop_text<'a>(item: &'a Value, field: &str) -> Result<&'a str, String> {
-    item.get(field)
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| format!("云端提示词缺少必要字段: {}", field))
-}
-
-async fn create_writing_style_from_workshop_item(
-    db: &DatabaseConnection,
-    item: &Value,
-    custom_name: Option<&str>,
-    user_id: &str,
-) -> Result<Value, String> {
-    let name = required_workshop_text(item, "name")?;
-    let prompt_content = required_workshop_text(item, "prompt_content")?;
-    let description = item
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-
-    let count = writing_style::Entity::find()
-        .filter(writing_style::Column::UserId.eq(user_id))
-        .count(db)
-        .await
-        .map_err(|error| format!("{}", error))?;
-
-    let inserted = writing_style::ActiveModel {
-        user_id: Set(Some(user_id.to_string())),
-        name: Set(custom_name.unwrap_or(name).to_string()),
-        style_type: Set("custom".to_string()),
-        description: Set(Some(format!("从提示词工坊导入: {}", description))),
-        prompt_content: Set(prompt_content.to_string()),
-        order_index: Set(count as i32 + 1),
-        ..Default::default()
-    }
-    .insert(db)
-    .await
-    .map_err(|error| format!("{}", error))?;
-
-    Ok(json!({
-        "success": true,
-        "message": "导入成功",
-        "writing_style": {
-            "id": inserted.id,
-            "name": inserted.name,
-            "style_type": inserted.style_type,
-            "prompt_content": inserted.prompt_content,
-        }
-    }))
-}
-
 #[derive(Deserialize)]
 struct ImportRequest {
     custom_name: Option<String>,
@@ -204,34 +102,12 @@ struct SubmitRequest {
     name: String,
     description: Option<String>,
     prompt_content: String,
-    #[serde(default = "default_category")]
+    #[serde(default = "default_workshop_category")]
     category: String,
     tags: Option<Value>,
     author_display_name: Option<String>,
     #[serde(default)]
     is_anonymous: bool,
-}
-
-fn default_category() -> String {
-    "general".to_string()
-}
-
-#[derive(Deserialize)]
-struct ReviewRequest {
-    action: String,
-    review_note: Option<String>,
-    category: Option<String>,
-    tags: Option<Value>,
-}
-
-#[derive(Deserialize)]
-struct AdminItemCreate {
-    name: String,
-    description: Option<String>,
-    prompt_content: String,
-    #[serde(default = "default_category")]
-    category: String,
-    tags: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -396,10 +272,10 @@ async fn import_item(
             Method::POST,
             &format!("/items/{}/download", item_id),
             Vec::new(),
-            Some(json!({
-                "instance_id": workshop_instance_id(),
-                "user_identifier": user_identifier,
-            })),
+            Some(build_workshop_download_payload(
+                &workshop_instance_id(),
+                &user_identifier,
+            )),
             Some(&user_identifier),
         )
         .await;
@@ -470,10 +346,10 @@ async fn record_download(
             Method::POST,
             &format!("/items/{}/download", item_id),
             Vec::new(),
-            Some(json!({
-                "instance_id": workshop_instance_id(),
-                "user_identifier": user_identifier,
-            })),
+            Some(build_workshop_download_payload(
+                &workshop_instance_id(),
+                &user_identifier,
+            )),
             Some(&user_identifier),
         )
         .await
@@ -493,40 +369,25 @@ async fn submit_prompt(
     Json(body): Json<SubmitRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let instance_id = workshop_instance_id();
-    let user_identifier = workshop_user_identifier(&claims.sub);
-    let submitter_name = body
-        .author_display_name
-        .clone()
-        .unwrap_or_else(|| claims.sub.clone());
-    let tags = normalize_tags_value(body.tags.as_ref());
+    let prepared = prepare_submit_prompt_request(
+        &instance_id,
+        &claims.sub,
+        &body.name,
+        body.description.as_deref(),
+        &body.prompt_content,
+        &body.category,
+        body.tags.as_ref(),
+        body.author_display_name.as_deref(),
+        body.is_anonymous,
+    );
 
     if !PromptWorkshopService::check_workshop_server(&cfg) {
-        let header_user_identifier = user_identifier.clone();
-        let mut payload = Map::new();
-        payload.insert("instance_id".to_string(), json!(instance_id));
-        payload.insert("submitter_id".to_string(), json!(user_identifier));
-        payload.insert("submitter_name".to_string(), json!(submitter_name));
-        payload.insert("name".to_string(), json!(body.name));
-        payload.insert("description".to_string(), json!(body.description));
-        payload.insert("prompt_content".to_string(), json!(body.prompt_content));
-        payload.insert("category".to_string(), json!(body.category));
-        payload.insert(
-            "author_display_name".to_string(),
-            json!(body.author_display_name),
-        );
-        payload.insert("is_anonymous".to_string(), json!(body.is_anonymous));
-        payload.insert(
-            "tags".to_string(),
-            tags.as_deref()
-                .and_then(|value| serde_json::from_str::<Value>(value).ok())
-                .unwrap_or(Value::Null),
-        );
         return proxy_workshop_request(
             Method::POST,
             "/submit",
             Vec::new(),
-            Some(Value::Object(payload)),
-            Some(&header_user_identifier),
+            Some(prepared.proxy_payload),
+            Some(&prepared.user_identifier),
         )
         .await
         .map(Json);
@@ -534,13 +395,13 @@ async fn submit_prompt(
 
     match PromptWorkshopService::submit_prompt(
         &db,
-        &user_identifier,
-        &submitter_name,
+        &prepared.user_identifier,
+        &prepared.submitter_name,
         &body.name,
         body.description.as_deref(),
         &body.prompt_content,
         &body.category,
-        tags.as_deref(),
+        prepared.normalized_tags.as_deref(),
         body.author_display_name.as_deref(),
         body.is_anonymous,
         &instance_id,
@@ -688,17 +549,17 @@ async fn admin_review_submission(
     Extension(claims): Extension<Claims>,
     Extension(cfg): Extension<AppConfig>,
     Path(submission_id): Path<String>,
-    Json(body): Json<ReviewRequest>,
+    Json(body): Json<PromptWorkshopAdminReviewRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     check_admin(&cfg, &claims)?;
-    let tags = normalize_tags_value(body.tags.as_ref());
+    let request = prepare_admin_review_submission_request(body);
     match PromptWorkshopService::admin_review_submission(
         &db,
         &submission_id,
-        &body.action,
-        body.review_note.as_deref(),
-        body.category.as_deref(),
-        tags.as_deref(),
+        &request.action,
+        request.review_note.as_deref(),
+        request.category.as_deref(),
+        request.normalized_tags.as_deref(),
         &claims.sub,
     )
     .await
@@ -712,17 +573,17 @@ async fn admin_create_item(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
     Extension(cfg): Extension<AppConfig>,
-    Json(body): Json<AdminItemCreate>,
+    Json(body): Json<PromptWorkshopAdminCreateItemRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     check_admin(&cfg, &claims)?;
-    let tags = normalize_tags_value(body.tags.as_ref());
+    let request = prepare_admin_create_item_request(body);
     match PromptWorkshopService::admin_create_item(
         &db,
-        &body.name,
-        body.description.as_deref(),
-        &body.prompt_content,
-        &body.category,
-        tags.as_deref(),
+        &request.name,
+        request.description.as_deref(),
+        &request.prompt_content,
+        &request.category,
+        request.normalized_tags.as_deref(),
     )
     .await
     {
@@ -739,10 +600,11 @@ async fn admin_update_item(
     Extension(claims): Extension<Claims>,
     Extension(cfg): Extension<AppConfig>,
     Path(item_id): Path<String>,
-    Json(body): Json<Value>,
+    Json(body): Json<PromptWorkshopAdminUpdateItemRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     check_admin(&cfg, &claims)?;
-    match PromptWorkshopService::admin_update_item(&db, &item_id, body).await {
+    let request = prepare_admin_update_item_request(body);
+    match PromptWorkshopService::admin_update_item(&db, &item_id, &request).await {
         Ok(data) => Ok(Json(data)),
         Err(e) => Err((StatusCode::NOT_FOUND, Json(json!({"detail": e})))),
     }

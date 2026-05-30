@@ -13,6 +13,9 @@ use serde_json::{json, Value};
 
 use crate::mcp::McpClientManager;
 use crate::services::auth::Claims;
+use crate::services::mcp_plugin_request_service::{
+    build_mcp_plugin_update_request_from_typed_route_payload, McpPluginUpdateRouteRequest,
+};
 use crate::services::mcp_plugin_service::McpPluginService;
 
 #[derive(Deserialize)]
@@ -154,9 +157,11 @@ async fn update_plugin(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
     Path(plugin_id): Path<String>,
-    Json(body): Json<Value>,
+    Json(body): Json<McpPluginUpdateRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    match McpPluginService::update(&db, &plugin_id, &claims.sub, body).await {
+    let request = build_mcp_plugin_update_request_from_typed_route_payload(body);
+
+    match McpPluginService::update(&db, &plugin_id, &claims.sub, request).await {
         Ok(Some(data)) => Ok(Json(data)),
         Ok(None) => Err((StatusCode::NOT_FOUND, Json(json!({"detail": "插件不存在"})))),
         Err(e) => Err((

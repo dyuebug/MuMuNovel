@@ -7,8 +7,15 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use super::book_import_ai_generation_service::{
+    execute_book_import_ai_step, BookImportAiExecutionContext, BookImportAiStepExecutionError,
+    BookImportAiStepKind,
+};
+use super::book_import_apply_execution_service::{
+    create_book_import_project, import_book_import_chapters, import_book_import_outlines,
+    read_book_import_project_suggestion,
+};
 use super::txt_parser_service::TxtParserService;
-use crate::services::project_service::CreateProjectParams;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -406,6 +413,40 @@ impl BookImportService {
         Ok(task.clone())
     }
 
+    async fn set_imported_project_id(&self, task_id: &str, project_id: &str) {
+        let mut tasks = self.tasks.lock().await;
+        if let Some(task) = tasks.get_mut(task_id) {
+            task.imported_project_id = Some(project_id.to_string());
+        }
+    }
+
+    async fn execute_book_import_ai_generation_step(
+        db: &sea_orm::DatabaseConnection,
+        project: &crate::models::project::Model,
+        ai_service: &crate::ai::service::AIService,
+        step: BookImportAiStepKind,
+        description: &str,
+        theme: Option<&str>,
+        genre: Option<&str>,
+    ) -> Result<Option<Value>, String> {
+        execute_book_import_ai_step(
+            db,
+            project,
+            ai_service,
+            step,
+            BookImportAiExecutionContext {
+                description,
+                theme,
+                genre,
+            },
+        )
+        .await
+        .map_err(|error| match error {
+            BookImportAiStepExecutionError::PromptFormat(detail)
+            | BookImportAiStepExecutionError::Ai(detail) => detail,
+        })
+    }
+
     pub async fn apply_import(
         &self,
         db: &sea_orm::DatabaseConnection,
@@ -416,94 +457,26 @@ impl BookImportService {
         outlines: &[Value],
         import_mode: &str,
     ) -> Result<Value, String> {
-        use crate::services::chapter_service::ChapterService;
-        use crate::services::outline_service::OutlineService;
-        use crate::services::project_service::ProjectService;
-
         let task = self.get_task(task_id, user_id).await?;
         if task.status != "completed" {
             return Err("任务尚未完成解析，无法导入".to_string());
         }
 
-        // --- Step 1: Create project ---
-        let title = project_suggestion["title"]
-            .as_str()
-            .unwrap_or("拆书导入项目");
-        let description = project_suggestion["description"].as_str().unwrap_or("");
-        let theme = project_suggestion["theme"].as_str();
-        let genre = project_suggestion["genre"].as_str();
-        let narrative_perspective = project_suggestion["narrative_perspective"].as_str();
-        let target_words = project_suggestion["target_words"]
-            .as_i64()
-            .unwrap_or(100000) as i32;
-
-        let create_params = CreateProjectParams {
-            user_id: user_id.to_string(),
-            title: title.to_string(),
-            description: Some(description.to_string()),
-            theme: theme.map(|s| s.to_string()),
-            genre: genre.map(|s| s.to_string()),
-            target_words,
-            outline_mode: import_mode.to_string(),
-            narrative_perspective: narrative_perspective.map(|s| s.to_string()),
-            ..Default::default()
-        };
-
-        let project = ProjectService::create_full(db, create_params)
-            .await
-            .map_err(|e| format!("项目创建失败: {}", e))?;
-
-        // Self-update task
-        {
-            let mut tasks = self.tasks.lock().await;
-            if let Some(t) = tasks.get_mut(task_id) {
-                t.imported_project_id = Some(project.id.clone());
-            }
-        }
-
-        // --- Step 2: Import outlines ---
-        for (i, outline_item) in outlines.iter().enumerate() {
-            let default_ot = format!("第{}节", i + 1);
-            let ot = outline_item["title"].as_str().unwrap_or(&default_ot);
-            let _ = OutlineService::create(
-                db,
-                &project.id,
-                user_id,
-                ot,
-                None,
-                Some((i + 1) as i32),
-                None,
-            )
-            .await;
-        }
-
-        // --- Step 3: Import chapters ---
-        for (i, ch) in chapters.iter().enumerate() {
-            let default_ct = format!("第{}章", i + 1);
-            let ct = ch["title"].as_str().unwrap_or(&default_ct);
-            let content = ch["content"].as_str().unwrap_or("");
-            let _ = ChapterService::create(
-                db,
-                &project.id,
-                user_id,
-                ct,
-                (i + 1) as i32,
-                Some(content),
-                None,
-                None,
-                None,
-            )
-            .await;
-        }
+        let suggestion = read_book_import_project_suggestion(project_suggestion);
+        let project = create_book_import_project(db, user_id, import_mode, &suggestion).await?;
+        self.set_imported_project_id(task_id, &project.id).await;
+        import_book_import_outlines(db, &project.id, user_id, outlines).await;
+        let _chapter_summary =
+            import_book_import_chapters(db, &project.id, user_id, chapters).await;
 
         // --- Step 4-6: AI Wizard generation ---
         let ai_result = Self::run_wizard_generation(
             db,
             user_id,
             &project,
-            description,
-            theme,
-            genre,
+            &suggestion.description,
+            suggestion.theme.as_deref(),
+            suggestion.genre.as_deref(),
             None,
             None,
         )
@@ -544,11 +517,6 @@ impl BookImportService {
         channel: &crate::utils::sse::SseChannel,
     ) {
         use crate::ai::service::AIService;
-        use crate::services::career_service::CareerService;
-        use crate::services::chapter_service::ChapterService;
-        use crate::services::character_service::CharacterService;
-        use crate::services::outline_service::OutlineService;
-        use crate::services::project_service::ProjectService;
         use crate::services::prompt_template_service::PromptTemplateService;
         use crate::services::settings_service::SettingsService;
 
@@ -574,50 +542,23 @@ impl BookImportService {
             return;
         }
 
+        let suggestion = read_book_import_project_suggestion(project_suggestion);
         channel
             .progress("开始导入拆书数据...", 0, "processing")
             .await;
 
         // --- Step 1: Create project (0-5%) ---
         channel.progress("正在创建项目...", 2, "processing").await;
-        let title = project_suggestion["title"]
-            .as_str()
-            .unwrap_or("拆书导入项目");
-        let description = project_suggestion["description"].as_str().unwrap_or("");
-        let theme = project_suggestion["theme"].as_str();
-        let genre = project_suggestion["genre"].as_str();
-        let narrative_perspective = project_suggestion["narrative_perspective"].as_str();
-        let target_words = project_suggestion["target_words"]
-            .as_i64()
-            .unwrap_or(100000) as i32;
-
-        let create_params = CreateProjectParams {
-            user_id: user_id.to_string(),
-            title: title.to_string(),
-            description: Some(description.to_string()),
-            theme: theme.map(|s| s.to_string()),
-            genre: genre.map(|s| s.to_string()),
-            target_words,
-            outline_mode: import_mode.to_string(),
-            narrative_perspective: narrative_perspective.map(|s| s.to_string()),
-            ..Default::default()
-        };
-
-        let project = match ProjectService::create_full(db, create_params).await {
+        let project = match create_book_import_project(db, user_id, import_mode, &suggestion).await
+        {
             Ok(p) => p,
             Err(e) => {
-                channel.error(&format!("项目创建失败: {}", e), 500).await;
+                channel.error(&e, 500).await;
                 channel.done().await;
                 return;
             }
         };
-
-        {
-            let mut tasks = self.tasks.lock().await;
-            if let Some(t) = tasks.get_mut(task_id) {
-                t.imported_project_id = Some(project.id.clone());
-            }
-        }
+        self.set_imported_project_id(task_id, &project.id).await;
         channel.progress("项目创建完成", 5, "processing").await;
 
         // --- Step 2: Import outlines (5-10%) ---
@@ -629,20 +570,7 @@ impl BookImportService {
                 "processing",
             )
             .await;
-        for (i, outline_item) in outlines.iter().enumerate() {
-            let default_ot = format!("第{}节", i + 1);
-            let ot = outline_item["title"].as_str().unwrap_or(&default_ot);
-            let _ = OutlineService::create(
-                db,
-                &project.id,
-                user_id,
-                ot,
-                None,
-                Some((i + 1) as i32),
-                None,
-            )
-            .await;
-        }
+        import_book_import_outlines(db, &project.id, user_id, outlines).await;
         channel
             .progress(
                 &format!("已导入 {} 个大纲", outline_count),
@@ -653,7 +581,6 @@ impl BookImportService {
 
         // --- Step 3: Import chapters (10-20%) ---
         let chapter_count = chapters.len();
-        let mut total_words = 0usize;
         channel
             .progress(
                 &format!("正在导入 {} 个章节...", chapter_count),
@@ -661,24 +588,8 @@ impl BookImportService {
                 "processing",
             )
             .await;
-        for (i, ch) in chapters.iter().enumerate() {
-            let default_ct = format!("第{}章", i + 1);
-            let ct = ch["title"].as_str().unwrap_or(&default_ct);
-            let content = ch["content"].as_str().unwrap_or("");
-            total_words += content.chars().count();
-            let _ = ChapterService::create(
-                db,
-                &project.id,
-                user_id,
-                ct,
-                (i + 1) as i32,
-                Some(content),
-                None,
-                None,
-                None,
-            )
-            .await;
-        }
+        let chapter_summary = import_book_import_chapters(db, &project.id, user_id, chapters).await;
+        let total_words = chapter_summary.total_words;
         channel
             .progress(
                 &format!("已导入 {} 个章节（{}字）", chapter_count, total_words),
@@ -707,90 +618,55 @@ impl BookImportService {
         channel
             .progress("🌍 正在初始化AI服务...", 25, "processing")
             .await;
-        if let Some(world_template) = PromptTemplateService::system_template_info("WORLD_BUILDING")
-        {
+        if PromptTemplateService::system_template_info("WORLD_BUILDING").is_some() {
             channel
                 .progress("🌍 正在准备世界观提示词...", 28, "processing")
                 .await;
-            let mut params: HashMap<String, String> = HashMap::new();
-            params.insert("title".into(), project.title.clone());
-            params.insert("theme".into(), theme.unwrap_or("未设定").to_string());
-            params.insert("genre".into(), genre.unwrap_or("通用").to_string());
-            params.insert("description".into(), description.to_string());
-
-            if let Ok(prompt) =
-                PromptTemplateService::format_prompt(&world_template.content, &params)
+            channel
+                .progress("🌍 AI正在生成世界观...", 32, "processing")
+                .await;
+            match Self::execute_book_import_ai_generation_step(
+                db,
+                &project,
+                &ai_service,
+                BookImportAiStepKind::WorldBuilding,
+                &suggestion.description,
+                suggestion.theme.as_deref(),
+                suggestion.genre.as_deref(),
+            )
+            .await
             {
-                channel
-                    .progress("🌍 AI正在生成世界观...", 32, "processing")
-                    .await;
-                match Self::ai_call_with_retry(&ai_service, &prompt, 3).await {
-                    Ok(data) => {
-                        channel
-                            .progress("🌍 正在解析世界观数据...", 36, "processing")
-                            .await;
-                        if let Some(obj) = data.as_object() {
-                            let mut active: crate::models::project::ActiveModel =
-                                project.clone().into();
-                            let mut updated = false;
-                            if let Some(v) = obj.get("time_period").and_then(|v| v.as_str()) {
-                                active.world_time_period = Set(Some(v.to_string()));
-                                updated = true;
-                            }
-                            if let Some(v) = obj.get("location").and_then(|v| v.as_str()) {
-                                active.world_location = Set(Some(v.to_string()));
-                                updated = true;
-                            }
-                            if let Some(v) = obj.get("atmosphere").and_then(|v| v.as_str()) {
-                                active.world_atmosphere = Set(Some(v.to_string()));
-                                updated = true;
-                            }
-                            if let Some(v) = obj.get("rules").and_then(|v| v.as_str()) {
-                                active.world_rules = Set(Some(v.to_string()));
-                                updated = true;
-                            }
-                            if updated {
-                                active.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
-                                let _ = active.update(db).await;
-                            }
-                        }
-                        channel
-                            .progress("🌍 世界观写入完成", 38, "processing")
-                            .await;
-                        channel
-                            .progress("🌍 世界观生成完成", 40, "processing")
-                            .await;
-                    }
-                    Err(e) => {
-                        failed_steps.push(json!({
-                            "step": "world_building",
-                            "label": "世界观生成",
-                            "error": e,
-                            "retry_count": 0,
-                        }));
-                        channel
-                            .progress(
-                                &format!("⚠️ 世界观生成失败：{}，将继续后续步骤", e),
-                                40,
-                                "warning",
-                            )
-                            .await;
-                    }
+                Ok(Some(_)) => {
+                    channel
+                        .progress("🌍 正在解析世界观数据...", 36, "processing")
+                        .await;
+                    channel
+                        .progress("🌍 世界观写入完成", 38, "processing")
+                        .await;
+                    channel
+                        .progress("🌍 世界观生成完成", 40, "processing")
+                        .await;
                 }
-            } else {
-                failed_steps.push(json!({
-                    "step": "world_building",
-                    "label": "世界观生成",
-                    "error": "提示词格式化失败",
-                    "retry_count": 0,
-                }));
-                channel
-                    .progress(
-                        "⚠️ 世界观生成失败：提示词格式化失败，将继续后续步骤",
-                        40,
-                        "warning",
-                    )
-                    .await;
+                Ok(None) => {
+                    channel
+                        .progress("🌍 世界观生成完成", 40, "processing")
+                        .await;
+                }
+                Err(e) => {
+                    failed_steps.push(json!({
+                        "step": BookImportAiStepKind::WorldBuilding.step_name(),
+                        "label": BookImportAiStepKind::WorldBuilding.step_label(),
+                        "error": e,
+                        "retry_count": 0,
+                    }));
+                    channel
+                        .progress(
+                            &format!("⚠️ 世界观生成失败：{}，将继续后续步骤", e),
+                            40,
+                            "warning",
+                        )
+                        .await;
+                }
             }
         } else {
             channel
@@ -802,163 +678,60 @@ impl BookImportService {
         channel
             .progress("💼 正在生成职业体系...", 42, "processing")
             .await;
-        if let Some(career_template) =
-            PromptTemplateService::system_template_info("CAREER_SYSTEM_GENERATION")
-        {
+        if PromptTemplateService::system_template_info("CAREER_SYSTEM_GENERATION").is_some() {
             channel
                 .progress("💼 正在准备职业体系提示词...", 45, "processing")
                 .await;
-            let mut cparams: HashMap<String, String> = HashMap::new();
-            cparams.insert("title".into(), project.title.clone());
-            cparams.insert(
-                "theme".into(),
-                project.theme.clone().unwrap_or_else(|| "未设定".into()),
-            );
-            cparams.insert(
-                "genre".into(),
-                project.genre.clone().unwrap_or_else(|| "通用".into()),
-            );
-            cparams.insert(
-                "time_period".into(),
-                project
-                    .world_time_period
-                    .clone()
-                    .unwrap_or_else(|| "未设定".into()),
-            );
-            cparams.insert(
-                "location".into(),
-                project
-                    .world_location
-                    .clone()
-                    .unwrap_or_else(|| "未设定".into()),
-            );
-            cparams.insert(
-                "atmosphere".into(),
-                project
-                    .world_atmosphere
-                    .clone()
-                    .unwrap_or_else(|| "未设定".into()),
-            );
-            cparams.insert(
-                "rules".into(),
-                project
-                    .world_rules
-                    .clone()
-                    .unwrap_or_else(|| "未设定".into()),
-            );
-            cparams.insert("description".into(), description.to_string());
-
-            if let Ok(cprompt) =
-                PromptTemplateService::format_prompt(&career_template.content, &cparams)
+            channel
+                .progress("💼 AI正在生成职业体系...", 50, "processing")
+                .await;
+            match Self::execute_book_import_ai_generation_step(
+                db,
+                &project,
+                &ai_service,
+                BookImportAiStepKind::CareerSystem,
+                &suggestion.description,
+                suggestion.theme.as_deref(),
+                suggestion.genre.as_deref(),
+            )
+            .await
             {
-                channel
-                    .progress("💼 AI正在生成职业体系...", 50, "processing")
-                    .await;
-                match Self::ai_call_with_retry(&ai_service, &cprompt, 3).await {
-                    Ok(data) => {
-                        channel
-                            .progress("💼 正在解析职业数据...", 58, "processing")
-                            .await;
-                        let main_careers = data.get("main_careers").and_then(|v| v.as_array());
-                        let sub_careers = data.get("sub_careers").and_then(|v| v.as_array());
-                        let mut ccount = 0;
-                        if let Some(mains) = main_careers {
-                            for mc in mains {
-                                let name = mc
-                                    .get("name")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("未命名主职业");
-                                if CareerService::create_full(
-                                    db,
-                                    &project.id,
-                                    name,
-                                    "main",
-                                    mc.get("description").and_then(|v| v.as_str()),
-                                    mc.get("category").and_then(|v| v.as_str()),
-                                    mc.get("stages").and_then(|v| v.as_str()).unwrap_or(""),
-                                    mc.get("max_stage").and_then(|v| v.as_i64()).unwrap_or(1)
-                                        as i32,
-                                    mc.get("requirements").and_then(|v| v.as_str()),
-                                    mc.get("special_abilities").and_then(|v| v.as_str()),
-                                    mc.get("worldview_rules").and_then(|v| v.as_str()),
-                                    mc.get("attribute_bonuses").and_then(|v| v.as_str()),
-                                )
-                                .await
-                                .is_ok()
-                                {
-                                    ccount += 1;
-                                }
-                            }
-                        }
-                        if let Some(subs) = sub_careers {
-                            for sc in subs {
-                                let name = sc
-                                    .get("name")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("未命名副职业");
-                                if CareerService::create_full(
-                                    db,
-                                    &project.id,
-                                    name,
-                                    "sub",
-                                    sc.get("description").and_then(|v| v.as_str()),
-                                    sc.get("category").and_then(|v| v.as_str()),
-                                    sc.get("stages").and_then(|v| v.as_str()).unwrap_or(""),
-                                    sc.get("max_stage").and_then(|v| v.as_i64()).unwrap_or(1)
-                                        as i32,
-                                    sc.get("requirements").and_then(|v| v.as_str()),
-                                    sc.get("special_abilities").and_then(|v| v.as_str()),
-                                    sc.get("worldview_rules").and_then(|v| v.as_str()),
-                                    sc.get("attribute_bonuses").and_then(|v| v.as_str()),
-                                )
-                                .await
-                                .is_ok()
-                                {
-                                    ccount += 1;
-                                }
-                            }
-                        }
-                        channel
-                            .progress("💼 正在保存职业数据...", 62, "processing")
-                            .await;
-                        channel
-                            .progress(
-                                &format!("💼 职业体系生成完成（{}个）", ccount),
-                                65,
-                                "processing",
-                            )
-                            .await;
-                    }
-                    Err(e) => {
-                        failed_steps.push(json!({
-                            "step": "career_system",
-                            "label": "职业体系生成",
-                            "error": e,
-                            "retry_count": 0,
-                        }));
-                        channel
-                            .progress(
-                                &format!("⚠️ 职业体系生成失败：{}，将继续后续步骤", e),
-                                65,
-                                "warning",
-                            )
-                            .await;
-                    }
+                Ok(Some(data)) => {
+                    let ccount = data.get("count").and_then(Value::as_i64).unwrap_or(0);
+                    channel
+                        .progress("💼 正在解析职业数据...", 58, "processing")
+                        .await;
+                    channel
+                        .progress("💼 正在保存职业数据...", 62, "processing")
+                        .await;
+                    channel
+                        .progress(
+                            &format!("💼 职业体系生成完成（{}个）", ccount),
+                            65,
+                            "processing",
+                        )
+                        .await;
                 }
-            } else {
-                failed_steps.push(json!({
-                    "step": "career_system",
-                    "label": "职业体系生成",
-                    "error": "提示词格式化失败",
-                    "retry_count": 0,
-                }));
-                channel
-                    .progress(
-                        "⚠️ 职业体系生成失败：提示词格式化失败，将继续后续步骤",
-                        65,
-                        "warning",
-                    )
-                    .await;
+                Ok(None) => {
+                    channel
+                        .progress("💼 职业体系生成完成（0个）", 65, "processing")
+                        .await;
+                }
+                Err(e) => {
+                    failed_steps.push(json!({
+                        "step": BookImportAiStepKind::CareerSystem.step_name(),
+                        "label": BookImportAiStepKind::CareerSystem.step_label(),
+                        "error": e,
+                        "retry_count": 0,
+                    }));
+                    channel
+                        .progress(
+                            &format!("⚠️ 职业体系生成失败：{}，将继续后续步骤", e),
+                            65,
+                            "warning",
+                        )
+                        .await;
+                }
             }
         } else {
             channel
@@ -970,140 +743,56 @@ impl BookImportService {
         channel
             .progress("👥 正在生成角色与组织...", 67, "processing")
             .await;
-        if let Some(char_template) =
-            PromptTemplateService::system_template_info("CHARACTERS_BATCH_GENERATION")
-        {
+        if PromptTemplateService::system_template_info("CHARACTERS_BATCH_GENERATION").is_some() {
             channel
                 .progress("👥 正在准备角色提示词...", 70, "processing")
                 .await;
-            let mut chparams: HashMap<String, String> = HashMap::new();
-            chparams.insert("count".into(), "5".into());
-            chparams.insert(
-                "time_period".into(),
-                project
-                    .world_time_period
-                    .clone()
-                    .unwrap_or_else(|| "未设定".into()),
-            );
-            chparams.insert(
-                "location".into(),
-                project
-                    .world_location
-                    .clone()
-                    .unwrap_or_else(|| "未设定".into()),
-            );
-            chparams.insert(
-                "atmosphere".into(),
-                project
-                    .world_atmosphere
-                    .clone()
-                    .unwrap_or_else(|| "未设定".into()),
-            );
-            chparams.insert(
-                "rules".into(),
-                project
-                    .world_rules
-                    .clone()
-                    .unwrap_or_else(|| "未设定".into()),
-            );
-            chparams.insert(
-                "theme".into(),
-                project.theme.clone().unwrap_or_else(|| "未设定".into()),
-            );
-            chparams.insert(
-                "genre".into(),
-                project.genre.clone().unwrap_or_else(|| "通用".into()),
-            );
-            chparams.insert("requirements".into(), String::new());
-            chparams.insert("external_assets".into(), String::new());
-            chparams.insert("reference_assets".into(), String::new());
-
-            if let Ok(chprompt) =
-                PromptTemplateService::format_prompt(&char_template.content, &chparams)
+            channel
+                .progress("👥 AI正在生成角色...", 75, "processing")
+                .await;
+            match Self::execute_book_import_ai_generation_step(
+                db,
+                &project,
+                &ai_service,
+                BookImportAiStepKind::Characters,
+                &suggestion.description,
+                suggestion.theme.as_deref(),
+                suggestion.genre.as_deref(),
+            )
+            .await
             {
-                channel
-                    .progress("👥 AI正在生成角色...", 75, "processing")
-                    .await;
-                match Self::ai_call_with_retry(&ai_service, &chprompt, 3).await {
-                    Ok(data) => {
-                        channel
-                            .progress("👥 正在解析角色数据...", 85, "processing")
-                            .await;
-                        let chars: Vec<&Value> = if let Some(arr) = data.as_array() {
-                            arr.iter().collect()
-                        } else {
-                            vec![&data]
-                        };
-                        channel
-                            .progress("👥 正在保存角色...", 88, "processing")
-                            .await;
-                        let mut chcount = 0i32;
-                        for ch in chars.iter().take(5) {
-                            let name = ch
-                                .get("name")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("未命名角色");
-                            let age_str: Option<String> = ch.get("age").and_then(|v| {
-                                if let Some(n) = v.as_i64() {
-                                    Some(n.to_string())
-                                } else {
-                                    v.as_str().map(|s| s.to_string())
-                                }
-                            });
-                            if CharacterService::create_full(
-                                db,
-                                &project.id,
-                                name,
-                                ch.get("is_organization")
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(false),
-                                ch.get("role_type").and_then(|v| v.as_str()),
-                                ch.get("personality").and_then(|v| v.as_str()),
-                                ch.get("background").and_then(|v| v.as_str()),
-                                ch.get("appearance").and_then(|v| v.as_str()),
-                                age_str.as_deref(),
-                                ch.get("gender").and_then(|v| v.as_str()),
-                                ch.get("traits").and_then(|v| v.as_str()),
-                                ch.get("organization_type").and_then(|v| v.as_str()),
-                                ch.get("organization_purpose").and_then(|v| v.as_str()),
-                                ch.get("relationships_text").and_then(|v| v.as_str()),
-                            )
-                            .await
-                            .is_ok()
-                            {
-                                chcount += 1;
-                            }
-                        }
-                        channel
-                            .progress(
-                                &format!("👥 角色/组织生成完成（{}个）", chcount),
-                                92,
-                                "processing",
-                            )
-                            .await;
-                    }
-                    Err(e) => {
-                        failed_steps.push(json!({
-                            "step": "characters",
-                            "label": "角色与组织生成",
-                            "error": e,
-                            "retry_count": 0,
-                        }));
-                        channel
-                            .progress(&format!("⚠️ 角色/组织生成失败：{}", e), 92, "warning")
-                            .await;
-                    }
+                Ok(Some(data)) => {
+                    let chcount = data.get("count").and_then(Value::as_i64).unwrap_or(0);
+                    channel
+                        .progress("👥 正在解析角色数据...", 85, "processing")
+                        .await;
+                    channel
+                        .progress("👥 正在保存角色...", 88, "processing")
+                        .await;
+                    channel
+                        .progress(
+                            &format!("👥 角色/组织生成完成（{}个）", chcount),
+                            92,
+                            "processing",
+                        )
+                        .await;
                 }
-            } else {
-                failed_steps.push(json!({
-                    "step": "characters",
-                    "label": "角色与组织生成",
-                    "error": "提示词格式化失败",
-                    "retry_count": 0,
-                }));
-                channel
-                    .progress("⚠️ 角色/组织生成失败：提示词格式化失败", 92, "warning")
-                    .await;
+                Ok(None) => {
+                    channel
+                        .progress("👥 角色/组织生成完成（0个）", 92, "processing")
+                        .await;
+                }
+                Err(e) => {
+                    failed_steps.push(json!({
+                        "step": BookImportAiStepKind::Characters.step_name(),
+                        "label": BookImportAiStepKind::Characters.step_label(),
+                        "error": e,
+                        "retry_count": 0,
+                    }));
+                    channel
+                        .progress(&format!("⚠️ 角色/组织生成失败：{}", e), 92, "warning")
+                        .await;
+                }
             }
         } else {
             channel
@@ -1193,8 +882,6 @@ impl BookImportService {
         channel: &crate::utils::sse::SseChannel,
     ) {
         use crate::ai::service::AIService;
-        use crate::services::career_service::CareerService;
-        use crate::services::character_service::CharacterService;
         use crate::services::project_service::ProjectService;
         use crate::services::prompt_template_service::PromptTemplateService;
         use crate::services::settings_service::SettingsService;
@@ -1270,345 +957,43 @@ impl BookImportService {
         for (idx, step) in steps_to_retry.iter().enumerate() {
             let start_pct = (5 + idx * 85 / total) as u32;
             let end_pct = (5 + (idx + 1) * 85 / total) as u32;
-            let label = step_label(step);
+            let step_kind = BookImportAiStepKind::from_step_name(step);
+            let label = step_kind
+                .map(|kind| kind.step_label())
+                .unwrap_or("未知步骤");
 
             channel
                 .progress(&format!("🔄 正在重试{}...", label), start_pct, "processing")
                 .await;
 
-            let result: Result<Value, String> = match step.as_str() {
-                "world_building" => {
-                    if let Some(tmpl) =
-                        PromptTemplateService::system_template_info("WORLD_BUILDING")
+            let result: Result<Value, String> = match step_kind {
+                Some(step_kind) => {
+                    if PromptTemplateService::system_template_info(step_kind.template_key())
+                        .is_none()
                     {
-                        let mut p: HashMap<String, String> = HashMap::new();
-                        p.insert("title".into(), project.title.clone());
-                        p.insert(
-                            "theme".into(),
-                            project.theme.clone().unwrap_or_else(|| "未设定".into()),
-                        );
-                        p.insert(
-                            "genre".into(),
-                            project.genre.clone().unwrap_or_else(|| "通用".into()),
-                        );
-                        p.insert(
-                            "description".into(),
-                            project.description.clone().unwrap_or_default(),
-                        );
-                        match PromptTemplateService::format_prompt(&tmpl.content, &p) {
-                            Ok(prompt) => {
-                                channel
-                                    .progress(
-                                        "🌍 AI正在生成世界观...",
-                                        start_pct + (end_pct - start_pct) / 2,
-                                        "processing",
-                                    )
-                                    .await;
-                                match Self::ai_call_with_retry(&ai_service, &prompt, 3).await {
-                                    Ok(data) => {
-                                        if let Some(obj) = data.as_object() {
-                                            let mut active: crate::models::project::ActiveModel =
-                                                project.clone().into();
-                                            let mut updated = false;
-                                            if let Some(v) =
-                                                obj.get("time_period").and_then(|v| v.as_str())
-                                            {
-                                                active.world_time_period = Set(Some(v.to_string()));
-                                                updated = true;
-                                            }
-                                            if let Some(v) =
-                                                obj.get("location").and_then(|v| v.as_str())
-                                            {
-                                                active.world_location = Set(Some(v.to_string()));
-                                                updated = true;
-                                            }
-                                            if let Some(v) =
-                                                obj.get("atmosphere").and_then(|v| v.as_str())
-                                            {
-                                                active.world_atmosphere = Set(Some(v.to_string()));
-                                                updated = true;
-                                            }
-                                            if let Some(v) =
-                                                obj.get("rules").and_then(|v| v.as_str())
-                                            {
-                                                active.world_rules = Set(Some(v.to_string()));
-                                                updated = true;
-                                            }
-                                            if updated {
-                                                active.updated_at =
-                                                    Set(Some(chrono::Utc::now().naive_utc()));
-                                                let _ = active.update(db).await;
-                                            }
-                                        }
-                                        Ok(data)
-                                    }
-                                    Err(e) => Err(e),
-                                }
-                            }
-                            Err(e) => Err(format!("提示词格式化失败: {}", e)),
-                        }
+                        Err(step_kind.missing_template_message().into())
                     } else {
-                        Err("世界观模板不存在".into())
+                        channel
+                            .progress(
+                                step_kind.ai_progress_message(),
+                                start_pct + (end_pct - start_pct) / 2,
+                                "processing",
+                            )
+                            .await;
+                        Self::execute_book_import_ai_generation_step(
+                            db,
+                            &project,
+                            &ai_service,
+                            step_kind,
+                            project.description.as_deref().unwrap_or_default(),
+                            project.theme.as_deref(),
+                            project.genre.as_deref(),
+                        )
+                        .await
+                        .map(|value| value.unwrap_or(Value::Null))
                     }
                 }
-                "career_system" => {
-                    if let Some(tmpl) =
-                        PromptTemplateService::system_template_info("CAREER_SYSTEM_GENERATION")
-                    {
-                        let mut p: HashMap<String, String> = HashMap::new();
-                        p.insert("title".into(), project.title.clone());
-                        p.insert(
-                            "theme".into(),
-                            project.theme.clone().unwrap_or_else(|| "未设定".into()),
-                        );
-                        p.insert(
-                            "genre".into(),
-                            project.genre.clone().unwrap_or_else(|| "通用".into()),
-                        );
-                        p.insert(
-                            "time_period".into(),
-                            project
-                                .world_time_period
-                                .clone()
-                                .unwrap_or_else(|| "未设定".into()),
-                        );
-                        p.insert(
-                            "location".into(),
-                            project
-                                .world_location
-                                .clone()
-                                .unwrap_or_else(|| "未设定".into()),
-                        );
-                        p.insert(
-                            "atmosphere".into(),
-                            project
-                                .world_atmosphere
-                                .clone()
-                                .unwrap_or_else(|| "未设定".into()),
-                        );
-                        p.insert(
-                            "rules".into(),
-                            project
-                                .world_rules
-                                .clone()
-                                .unwrap_or_else(|| "未设定".into()),
-                        );
-                        p.insert(
-                            "description".into(),
-                            project.description.clone().unwrap_or_default(),
-                        );
-                        match PromptTemplateService::format_prompt(&tmpl.content, &p) {
-                            Ok(prompt) => {
-                                channel
-                                    .progress(
-                                        "💼 AI正在生成职业体系...",
-                                        start_pct + (end_pct - start_pct) / 2,
-                                        "processing",
-                                    )
-                                    .await;
-                                match Self::ai_call_with_retry(&ai_service, &prompt, 3).await {
-                                    Ok(data) => {
-                                        let mut count = 0;
-                                        if let Some(mains) =
-                                            data.get("main_careers").and_then(|v| v.as_array())
-                                        {
-                                            for mc in mains {
-                                                let name = mc
-                                                    .get("name")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("未命名主职业");
-                                                if CareerService::create_full(
-                                                    db,
-                                                    &project.id,
-                                                    name,
-                                                    "main",
-                                                    mc.get("description").and_then(|v| v.as_str()),
-                                                    mc.get("category").and_then(|v| v.as_str()),
-                                                    mc.get("stages")
-                                                        .and_then(|v| v.as_str())
-                                                        .unwrap_or(""),
-                                                    mc.get("max_stage")
-                                                        .and_then(|v| v.as_i64())
-                                                        .unwrap_or(1)
-                                                        as i32,
-                                                    mc.get("requirements").and_then(|v| v.as_str()),
-                                                    mc.get("special_abilities")
-                                                        .and_then(|v| v.as_str()),
-                                                    mc.get("worldview_rules")
-                                                        .and_then(|v| v.as_str()),
-                                                    mc.get("attribute_bonuses")
-                                                        .and_then(|v| v.as_str()),
-                                                )
-                                                .await
-                                                .is_ok()
-                                                {
-                                                    count += 1;
-                                                }
-                                            }
-                                        }
-                                        if let Some(subs) =
-                                            data.get("sub_careers").and_then(|v| v.as_array())
-                                        {
-                                            for sc in subs {
-                                                let name = sc
-                                                    .get("name")
-                                                    .and_then(|v| v.as_str())
-                                                    .unwrap_or("未命名副职业");
-                                                if CareerService::create_full(
-                                                    db,
-                                                    &project.id,
-                                                    name,
-                                                    "sub",
-                                                    sc.get("description").and_then(|v| v.as_str()),
-                                                    sc.get("category").and_then(|v| v.as_str()),
-                                                    sc.get("stages")
-                                                        .and_then(|v| v.as_str())
-                                                        .unwrap_or(""),
-                                                    sc.get("max_stage")
-                                                        .and_then(|v| v.as_i64())
-                                                        .unwrap_or(1)
-                                                        as i32,
-                                                    sc.get("requirements").and_then(|v| v.as_str()),
-                                                    sc.get("special_abilities")
-                                                        .and_then(|v| v.as_str()),
-                                                    sc.get("worldview_rules")
-                                                        .and_then(|v| v.as_str()),
-                                                    sc.get("attribute_bonuses")
-                                                        .and_then(|v| v.as_str()),
-                                                )
-                                                .await
-                                                .is_ok()
-                                                {
-                                                    count += 1;
-                                                }
-                                            }
-                                        }
-                                        Ok(json!({"count": count}))
-                                    }
-                                    Err(e) => Err(e),
-                                }
-                            }
-                            Err(e) => Err(format!("提示词格式化失败: {}", e)),
-                        }
-                    } else {
-                        Err("职业体系模板不存在".into())
-                    }
-                }
-                "characters" => {
-                    if let Some(tmpl) =
-                        PromptTemplateService::system_template_info("CHARACTERS_BATCH_GENERATION")
-                    {
-                        let mut p: HashMap<String, String> = HashMap::new();
-                        p.insert("count".into(), "5".into());
-                        p.insert(
-                            "time_period".into(),
-                            project
-                                .world_time_period
-                                .clone()
-                                .unwrap_or_else(|| "未设定".into()),
-                        );
-                        p.insert(
-                            "location".into(),
-                            project
-                                .world_location
-                                .clone()
-                                .unwrap_or_else(|| "未设定".into()),
-                        );
-                        p.insert(
-                            "atmosphere".into(),
-                            project
-                                .world_atmosphere
-                                .clone()
-                                .unwrap_or_else(|| "未设定".into()),
-                        );
-                        p.insert(
-                            "rules".into(),
-                            project
-                                .world_rules
-                                .clone()
-                                .unwrap_or_else(|| "未设定".into()),
-                        );
-                        p.insert(
-                            "theme".into(),
-                            project.theme.clone().unwrap_or_else(|| "未设定".into()),
-                        );
-                        p.insert(
-                            "genre".into(),
-                            project.genre.clone().unwrap_or_else(|| "通用".into()),
-                        );
-                        p.insert("requirements".into(), String::new());
-                        p.insert("external_assets".into(), String::new());
-                        p.insert("reference_assets".into(), String::new());
-                        match PromptTemplateService::format_prompt(&tmpl.content, &p) {
-                            Ok(prompt) => {
-                                channel
-                                    .progress(
-                                        "👥 AI正在生成角色...",
-                                        start_pct + (end_pct - start_pct) / 2,
-                                        "processing",
-                                    )
-                                    .await;
-                                match Self::ai_call_with_retry(&ai_service, &prompt, 3).await {
-                                    Ok(data) => {
-                                        let chars: Vec<&Value> = if let Some(arr) = data.as_array()
-                                        {
-                                            arr.iter().collect()
-                                        } else {
-                                            vec![&data]
-                                        };
-                                        let mut count = 0i32;
-                                        for ch in chars.iter().take(5) {
-                                            let name = ch
-                                                .get("name")
-                                                .and_then(|v| v.as_str())
-                                                .unwrap_or("未命名角色");
-                                            let age_str: Option<String> =
-                                                ch.get("age").and_then(|v| {
-                                                    if let Some(n) = v.as_i64() {
-                                                        Some(n.to_string())
-                                                    } else {
-                                                        v.as_str().map(|s| s.to_string())
-                                                    }
-                                                });
-                                            if CharacterService::create_full(
-                                                db,
-                                                &project.id,
-                                                name,
-                                                ch.get("is_organization")
-                                                    .and_then(|v| v.as_bool())
-                                                    .unwrap_or(false),
-                                                ch.get("role_type").and_then(|v| v.as_str()),
-                                                ch.get("personality").and_then(|v| v.as_str()),
-                                                ch.get("background").and_then(|v| v.as_str()),
-                                                ch.get("appearance").and_then(|v| v.as_str()),
-                                                age_str.as_deref(),
-                                                ch.get("gender").and_then(|v| v.as_str()),
-                                                ch.get("traits").and_then(|v| v.as_str()),
-                                                ch.get("organization_type")
-                                                    .and_then(|v| v.as_str()),
-                                                ch.get("organization_purpose")
-                                                    .and_then(|v| v.as_str()),
-                                                ch.get("relationships_text")
-                                                    .and_then(|v| v.as_str()),
-                                            )
-                                            .await
-                                            .is_ok()
-                                            {
-                                                count += 1;
-                                            }
-                                        }
-                                        Ok(json!({"count": count}))
-                                    }
-                                    Err(e) => Err(e),
-                                }
-                            }
-                            Err(e) => Err(format!("提示词格式化失败: {}", e)),
-                        }
-                    } else {
-                        Err("角色模板不存在".into())
-                    }
-                }
-                _ => Err(format!("未知步骤: {}", step)),
+                None => Err(format!("未知步骤: {}", step)),
             };
 
             match result {
@@ -1698,7 +1083,6 @@ impl BookImportService {
         model_override: Option<&str>,
     ) -> Option<Value> {
         use crate::ai::service::AIService;
-        use crate::services::prompt_template_service::PromptTemplateService;
         use crate::services::settings_service::SettingsService;
 
         let ai_config = match SettingsService::build_ai_config(
@@ -1717,256 +1101,35 @@ impl BookImportService {
 
         let mut results = Vec::new();
 
-        // --- World Building ---
-        let world_template = PromptTemplateService::system_template_info("WORLD_BUILDING")?;
-        let mut params: HashMap<String, String> = HashMap::new();
-        params.insert("title".into(), project.title.clone());
-        params.insert("theme".into(), theme.unwrap_or("未设定").to_string());
-        params.insert("genre".into(), genre.unwrap_or("通用").to_string());
-        params.insert("description".into(), description.to_string());
-
-        let prompt = PromptTemplateService::format_prompt(&world_template.content, &params).ok()?;
-        match Self::ai_call_with_retry(&ai_service, &prompt, 3).await {
-            Ok(data) => {
-                if let Some(obj) = data.as_object() {
-                    let mut active: crate::models::project::ActiveModel = project.clone().into();
-                    let mut updated = false;
-                    if let Some(v) = obj.get("time_period").and_then(|v| v.as_str()) {
-                        active.world_time_period = Set(Some(v.to_string()));
-                        updated = true;
+        for step in BookImportAiStepKind::ALL {
+            match Self::execute_book_import_ai_generation_step(
+                db,
+                project,
+                &ai_service,
+                step,
+                description,
+                theme,
+                genre,
+            )
+            .await
+            {
+                Ok(Some(data)) => match step {
+                    BookImportAiStepKind::WorldBuilding => {
+                        results.push(json!({"step": step.step_name(), "status": "ok"}));
                     }
-                    if let Some(v) = obj.get("location").and_then(|v| v.as_str()) {
-                        active.world_location = Set(Some(v.to_string()));
-                        updated = true;
+                    BookImportAiStepKind::CareerSystem | BookImportAiStepKind::Characters => {
+                        let count = data.get("count").and_then(Value::as_i64).unwrap_or(0);
+                        results.push(
+                            json!({"step": step.step_name(), "status": "ok", "count": count}),
+                        );
                     }
-                    if let Some(v) = obj.get("atmosphere").and_then(|v| v.as_str()) {
-                        active.world_atmosphere = Set(Some(v.to_string()));
-                        updated = true;
-                    }
-                    if let Some(v) = obj.get("rules").and_then(|v| v.as_str()) {
-                        active.world_rules = Set(Some(v.to_string()));
-                        updated = true;
-                    }
-                    if updated {
-                        active.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
-                        let _ = active.update(db).await;
-                    }
-                    results.push(json!({"step": "world_building", "status": "ok"}));
+                },
+                Ok(None) => {}
+                Err(error) => {
+                    results.push(
+                        json!({"step": step.step_name(), "status": "failed", "error": error}),
+                    );
                 }
-            }
-            Err(e) => {
-                results.push(json!({"step": "world_building", "status": "failed", "error": e}));
-            }
-        }
-
-        // --- Career System ---
-        let career_template =
-            PromptTemplateService::system_template_info("CAREER_SYSTEM_GENERATION")?;
-        let mut cparams: HashMap<String, String> = HashMap::new();
-        cparams.insert("title".into(), project.title.clone());
-        cparams.insert(
-            "theme".into(),
-            project.theme.clone().unwrap_or_else(|| "未设定".into()),
-        );
-        cparams.insert(
-            "genre".into(),
-            project.genre.clone().unwrap_or_else(|| "通用".into()),
-        );
-        cparams.insert(
-            "time_period".into(),
-            project
-                .world_time_period
-                .clone()
-                .unwrap_or_else(|| "未设定".into()),
-        );
-        cparams.insert(
-            "location".into(),
-            project
-                .world_location
-                .clone()
-                .unwrap_or_else(|| "未设定".into()),
-        );
-        cparams.insert(
-            "atmosphere".into(),
-            project
-                .world_atmosphere
-                .clone()
-                .unwrap_or_else(|| "未设定".into()),
-        );
-        cparams.insert(
-            "rules".into(),
-            project
-                .world_rules
-                .clone()
-                .unwrap_or_else(|| "未设定".into()),
-        );
-        cparams.insert("description".into(), description.to_string());
-
-        let cprompt =
-            PromptTemplateService::format_prompt(&career_template.content, &cparams).ok()?;
-        match Self::ai_call_with_retry(&ai_service, &cprompt, 3).await {
-            Ok(data) => {
-                use crate::services::career_service::CareerService;
-                let main_careers = data.get("main_careers").and_then(|v| v.as_array());
-                let sub_careers = data.get("sub_careers").and_then(|v| v.as_array());
-                let mut count = 0;
-                if let Some(mains) = main_careers {
-                    for mc in mains {
-                        let name = mc
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("未命名主职业");
-                        if CareerService::create_full(
-                            db,
-                            &project.id,
-                            name,
-                            "main",
-                            mc.get("description").and_then(|v| v.as_str()),
-                            mc.get("category").and_then(|v| v.as_str()),
-                            mc.get("stages").and_then(|v| v.as_str()).unwrap_or(""),
-                            mc.get("max_stage").and_then(|v| v.as_i64()).unwrap_or(1) as i32,
-                            mc.get("requirements").and_then(|v| v.as_str()),
-                            mc.get("special_abilities").and_then(|v| v.as_str()),
-                            mc.get("worldview_rules").and_then(|v| v.as_str()),
-                            mc.get("attribute_bonuses").and_then(|v| v.as_str()),
-                        )
-                        .await
-                        .is_ok()
-                        {
-                            count += 1;
-                        }
-                    }
-                }
-                if let Some(subs) = sub_careers {
-                    for sc in subs {
-                        let name = sc
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("未命名副职业");
-                        if CareerService::create_full(
-                            db,
-                            &project.id,
-                            name,
-                            "sub",
-                            sc.get("description").and_then(|v| v.as_str()),
-                            sc.get("category").and_then(|v| v.as_str()),
-                            sc.get("stages").and_then(|v| v.as_str()).unwrap_or(""),
-                            sc.get("max_stage").and_then(|v| v.as_i64()).unwrap_or(1) as i32,
-                            sc.get("requirements").and_then(|v| v.as_str()),
-                            sc.get("special_abilities").and_then(|v| v.as_str()),
-                            sc.get("worldview_rules").and_then(|v| v.as_str()),
-                            sc.get("attribute_bonuses").and_then(|v| v.as_str()),
-                        )
-                        .await
-                        .is_ok()
-                        {
-                            count += 1;
-                        }
-                    }
-                }
-                results.push(json!({"step": "career_system", "status": "ok", "count": count}));
-            }
-            Err(e) => {
-                results.push(json!({"step": "career_system", "status": "failed", "error": e}));
-            }
-        }
-
-        // --- Characters ---
-        let char_template =
-            PromptTemplateService::system_template_info("CHARACTERS_BATCH_GENERATION")?;
-        let mut chparams: HashMap<String, String> = HashMap::new();
-        chparams.insert("count".into(), "5".into());
-        chparams.insert(
-            "time_period".into(),
-            project
-                .world_time_period
-                .clone()
-                .unwrap_or_else(|| "未设定".into()),
-        );
-        chparams.insert(
-            "location".into(),
-            project
-                .world_location
-                .clone()
-                .unwrap_or_else(|| "未设定".into()),
-        );
-        chparams.insert(
-            "atmosphere".into(),
-            project
-                .world_atmosphere
-                .clone()
-                .unwrap_or_else(|| "未设定".into()),
-        );
-        chparams.insert(
-            "rules".into(),
-            project
-                .world_rules
-                .clone()
-                .unwrap_or_else(|| "未设定".into()),
-        );
-        chparams.insert(
-            "theme".into(),
-            project.theme.clone().unwrap_or_else(|| "未设定".into()),
-        );
-        chparams.insert(
-            "genre".into(),
-            project.genre.clone().unwrap_or_else(|| "通用".into()),
-        );
-        chparams.insert("requirements".into(), String::new());
-        chparams.insert("external_assets".into(), String::new());
-        chparams.insert("reference_assets".into(), String::new());
-
-        let chprompt =
-            PromptTemplateService::format_prompt(&char_template.content, &chparams).ok()?;
-        match Self::ai_call_with_retry(&ai_service, &chprompt, 3).await {
-            Ok(data) => {
-                use crate::services::character_service::CharacterService;
-                let chars: Vec<&Value> = if let Some(arr) = data.as_array() {
-                    arr.iter().collect()
-                } else {
-                    vec![&data]
-                };
-                let mut count = 0i32;
-                for ch in chars.iter().take(5) {
-                    let name = ch
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("未命名角色");
-                    let age_str: Option<String> = ch.get("age").and_then(|v| {
-                        if let Some(n) = v.as_i64() {
-                            Some(n.to_string())
-                        } else {
-                            v.as_str().map(|s| s.to_string())
-                        }
-                    });
-                    if CharacterService::create_full(
-                        db,
-                        &project.id,
-                        name,
-                        ch.get("is_organization")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false),
-                        ch.get("role_type").and_then(|v| v.as_str()),
-                        ch.get("personality").and_then(|v| v.as_str()),
-                        ch.get("background").and_then(|v| v.as_str()),
-                        ch.get("appearance").and_then(|v| v.as_str()),
-                        age_str.as_deref(),
-                        ch.get("gender").and_then(|v| v.as_str()),
-                        ch.get("traits").and_then(|v| v.as_str()),
-                        ch.get("organization_type").and_then(|v| v.as_str()),
-                        ch.get("organization_purpose").and_then(|v| v.as_str()),
-                        ch.get("relationships_text").and_then(|v| v.as_str()),
-                    )
-                    .await
-                    .is_ok()
-                    {
-                        count += 1;
-                    }
-                }
-                results.push(json!({"step": "characters", "status": "ok", "count": count}));
-            }
-            Err(e) => {
-                results.push(json!({"step": "characters", "status": "failed", "error": e}));
             }
         }
 
@@ -1974,47 +1137,6 @@ impl BookImportService {
             "steps": results,
             "total_steps": 3,
         }))
-    }
-
-    async fn ai_call_with_retry(
-        ai_service: &crate::ai::service::AIService,
-        prompt: &str,
-        max_retries: u32,
-    ) -> Result<Value, String> {
-        let mut last_error = String::new();
-        for attempt in 0..max_retries {
-            match ai_service.generate_text(prompt, None, None).await {
-                Ok(response) => {
-                    let cleaned =
-                        crate::services::wizard_service::clean_json_response(&response.content);
-                    match serde_json::from_str::<Value>(&cleaned) {
-                        Ok(data) => return Ok(data),
-                        Err(e) => {
-                            last_error = format!("JSON解析失败: {}", e);
-                            if attempt + 1 < max_retries {
-                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    last_error = format!("AI调用失败: {}", e);
-                    if attempt + 1 < max_retries {
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    }
-                }
-            }
-        }
-        Err(last_error)
-    }
-}
-
-fn step_label(step: &str) -> &'static str {
-    match step {
-        "world_building" => "世界观生成",
-        "career_system" => "职业体系生成",
-        "characters" => "角色与组织生成",
-        _ => "未知步骤",
     }
 }
 

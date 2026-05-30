@@ -16,11 +16,9 @@ use url::Url;
 use crate::config::AppConfig;
 use crate::models::{user, user_password};
 use crate::services::auth::{AuthService, Claims};
-use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
-    Argon2,
+use crate::services::auth_password_workflow_service::{
+    initialize_password_workflow, load_password_status_workflow, set_password_workflow,
 };
-use chrono::Utc;
 
 const OAUTH_STATE_TTL: Duration = Duration::from_secs(300);
 const OAUTH_STATE_COOKIE: &str = "oauth_states";
@@ -637,61 +635,9 @@ async fn get_password_status(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let pwd = user_password::Entity::find_by_id(&claims.sub)
-        .one(&db)
+    load_password_status_workflow(&db, &claims.sub)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"detail": format!("{}", e)})),
-            )
-        })?;
-
-    match pwd {
-        Some(p) => {
-            let user = user::Entity::find_by_id(&claims.sub)
-                .one(&db)
-                .await
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"detail": format!("{}", e)})),
-                    )
-                })?;
-
-            let username = user.as_ref().map(|u| u.username.clone());
-            let default_password = if !p.has_custom_password {
-                username.as_ref().map(|name| format!("{}@666", name))
-            } else {
-                None
-            };
-
-            Ok(Json(json!({
-                "has_password": true,
-                "has_custom_password": p.has_custom_password,
-                "username": username,
-                "default_password": default_password,
-            })))
-        }
-        None => {
-            let user = user::Entity::find_by_id(&claims.sub)
-                .one(&db)
-                .await
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"detail": format!("{}", e)})),
-                    )
-                })?;
-
-            Ok(Json(json!({
-                "has_password": false,
-                "has_custom_password": false,
-                "username": user.map(|u| u.username),
-                "default_password": null,
-            })))
-        }
-    }
+        .map(Json)
 }
 
 // local/login is the actual path the frontend calls
@@ -742,14 +688,6 @@ async fn refresh_session(
     response
 }
 
-fn hash_password(password: &str) -> Result<String, String> {
-    let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map(|h| h.to_string())
-        .map_err(|e| format!("password hash failed: {}", e))
-}
-
 #[derive(Deserialize)]
 struct SetPasswordRequest {
     password: String,
@@ -760,67 +698,9 @@ async fn set_password(
     Extension(db): Extension<DatabaseConnection>,
     Json(body): Json<SetPasswordRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let hash = hash_password(&body.password).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail": e})),
-        )
-    })?;
-
-    let now = Utc::now();
-    let existing = user_password::Entity::find_by_id(&claims.sub)
-        .one(&db)
+    set_password_workflow(&db, &claims.sub, &body.password)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"detail": format!("{}", e)})),
-            )
-        })?;
-
-    match existing {
-        Some(p) => {
-            let mut active: user_password::ActiveModel = p.into();
-            active.password_hash = Set(hash);
-            active.has_custom_password = Set(true);
-            active.updated_at = Set(now);
-            active.update(&db).await.map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"detail": format!("{}", e)})),
-                )
-            })?;
-        }
-        None => {
-            let user = user::Entity::find_by_id(&claims.sub)
-                .one(&db)
-                .await
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"detail": format!("{}", e)})),
-                    )
-                })?
-                .ok_or((StatusCode::NOT_FOUND, Json(json!({"detail": "用户不存在"}))))?;
-
-            let pwd = user_password::ActiveModel {
-                user_id: Set(claims.sub.clone()),
-                username: Set(user.username.clone()),
-                password_hash: Set(hash),
-                has_custom_password: Set(true),
-                created_at: Set(now),
-                updated_at: Set(now),
-            };
-            pwd.insert(&db).await.map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"detail": format!("{}", e)})),
-                )
-            })?;
-        }
-    }
-
-    Ok(Json(json!({"success": true, "message": "密码设置成功"})))
+        .map(Json)
 }
 
 async fn initialize_password(
@@ -828,59 +708,9 @@ async fn initialize_password(
     Extension(db): Extension<DatabaseConnection>,
     Json(body): Json<SetPasswordRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    // Same logic as set_password but for initialization
-    let hash = hash_password(&body.password).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail": e})),
-        )
-    })?;
-
-    let now = Utc::now();
-    let existing = user_password::Entity::find_by_id(&claims.sub)
-        .one(&db)
+    initialize_password_workflow(&db, &claims.sub, &body.password)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"detail": format!("{}", e)})),
-            )
-        })?;
-
-    if existing.is_some() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"detail": "密码已存在，请使用密码设置接口"})),
-        ));
-    }
-
-    let user = user::Entity::find_by_id(&claims.sub)
-        .one(&db)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"detail": format!("{}", e)})),
-            )
-        })?
-        .ok_or((StatusCode::NOT_FOUND, Json(json!({"detail": "用户不存在"}))))?;
-
-    let pwd = user_password::ActiveModel {
-        user_id: Set(claims.sub.clone()),
-        username: Set(user.username.clone()),
-        password_hash: Set(hash),
-        has_custom_password: Set(true),
-        created_at: Set(now),
-        updated_at: Set(now),
-    };
-    pwd.insert(&db).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail": format!("{}", e)})),
-        )
-    })?;
-
-    Ok(Json(json!({"success": true, "message": "密码初始化成功"})))
+        .map(Json)
 }
 
 pub fn routes() -> Router {

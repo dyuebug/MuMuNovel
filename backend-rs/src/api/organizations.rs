@@ -88,6 +88,25 @@ pub(crate) struct GenerateOrganizationRequest {
     model: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GenerateOrganizationTaskError {
+    ProjectNotFoundOrAccessDenied,
+    BadRequest(String),
+    BadGateway(String),
+    Internal(String),
+}
+
+impl std::fmt::Display for GenerateOrganizationTaskError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProjectNotFoundOrAccessDenied => write!(f, "项目不存在或无权限"),
+            Self::BadRequest(message) => write!(f, "{}", message),
+            Self::BadGateway(message) => write!(f, "{}", message),
+            Self::Internal(message) => write!(f, "{}", message),
+        }
+    }
+}
+
 fn normalized_string(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -225,19 +244,25 @@ pub(crate) async fn generate_organization_task(
     db: &DatabaseConnection,
     user_id: &str,
     body: GenerateOrganizationRequest,
-) -> Result<Value, String> {
+) -> Result<Value, GenerateOrganizationTaskError> {
     let project_model = load_generate_project(db, &body.project_id, user_id)
-        .await?
-        .ok_or_else(|| "项目不存在或无权限".to_string())?;
+        .await
+        .map_err(GenerateOrganizationTaskError::Internal)?
+        .ok_or(GenerateOrganizationTaskError::ProjectNotFoundOrAccessDenied)?;
 
-    let prompt_template = load_organization_prompt_template(db, user_id).await?;
-    let project_context = build_organization_generation_context(db, &project_model).await?;
+    let prompt_template = load_organization_prompt_template(db, user_id)
+        .await
+        .map_err(GenerateOrganizationTaskError::Internal)?;
+    let project_context = build_organization_generation_context(db, &project_model)
+        .await
+        .map_err(GenerateOrganizationTaskError::Internal)?;
     let user_input = build_organization_generation_user_input(&body);
 
     let mut params = HashMap::new();
     params.insert("project_context".to_string(), project_context);
     params.insert("user_input".to_string(), user_input);
-    let prompt = PromptTemplateService::format_prompt(&prompt_template, &params)?;
+    let prompt = PromptTemplateService::format_prompt(&prompt_template, &params)
+        .map_err(GenerateOrganizationTaskError::Internal)?;
 
     let ai_config = SettingsService::build_ai_config(
         db,
@@ -247,17 +272,18 @@ pub(crate) async fn generate_organization_task(
         None,
     )
     .await
-    .map_err(|error| error.to_string())?;
+    .map_err(GenerateOrganizationTaskError::BadRequest)?;
     let used_model = ai_config.model.clone();
     let ai_service = AIService::new(ai_config);
     let response = ai_service
         .generate_text(&prompt, None, None)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(GenerateOrganizationTaskError::BadGateway)?;
 
     let cleaned = clean_json_response(&response.content);
-    let ai_payload = serde_json::from_str::<Value>(&cleaned)
-        .map_err(|error| format!("组织生成结果不是有效 JSON: {}", error))?;
+    let ai_payload = serde_json::from_str::<Value>(&cleaned).map_err(|error| {
+        GenerateOrganizationTaskError::BadGateway(format!("组织生成结果不是有效 JSON: {}", error))
+    })?;
 
     let name = value_text(ai_payload.get("name"))
         .or_else(|| normalized_string(body.name.as_deref()))
@@ -322,7 +348,7 @@ pub(crate) async fn generate_organization_task(
     }
     .insert(db)
     .await
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| GenerateOrganizationTaskError::Internal(error.to_string()))?;
 
     organization::ActiveModel {
         id: Set(organization_id),
@@ -340,7 +366,7 @@ pub(crate) async fn generate_organization_task(
     }
     .insert(db)
     .await
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| GenerateOrganizationTaskError::Internal(error.to_string()))?;
 
     generation_history::ActiveModel {
         id: Set(Uuid::new_v4().to_string()),
@@ -355,7 +381,7 @@ pub(crate) async fn generate_organization_task(
     }
     .insert(db)
     .await
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| GenerateOrganizationTaskError::Internal(error.to_string()))?;
 
     Ok(json!({
         "character": {
@@ -387,7 +413,7 @@ async fn generate_org_stream_legacy(
                 channel.done().await;
             }
             Err(error) => {
-                channel.error(&error, 500).await;
+                channel.error(&error.to_string(), 500).await;
                 channel.done().await;
             }
         }
@@ -914,4 +940,28 @@ pub fn routes() -> Router {
             "/organizations/{org_id}",
             get(get_org).put(update_org).delete(delete_org),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GenerateOrganizationTaskError;
+
+    #[test]
+    fn organization_task_error_display_keeps_project_access_message() {
+        assert_eq!(
+            GenerateOrganizationTaskError::ProjectNotFoundOrAccessDenied.to_string(),
+            "项目不存在或无权限"
+        );
+    }
+
+    #[test]
+    fn organization_task_error_display_keeps_bad_gateway_message() {
+        assert_eq!(
+            GenerateOrganizationTaskError::BadGateway(
+                "组织生成结果不是有效 JSON: boom".to_string()
+            )
+            .to_string(),
+            "组织生成结果不是有效 JSON: boom"
+        );
+    }
 }

@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::models::{prompt_submission, prompt_workshop_item, prompt_workshop_like, writing_style};
+use crate::services::prompt_workshop_request_service::PreparedPromptWorkshopAdminUpdateItemRequest;
 
 const WORKSHOP_SERVER_MODE: &str = "server";
 
@@ -44,10 +45,6 @@ async fn check_cloud_connection(cloud_url: &str) -> bool {
         Ok(response) => response.status().is_success(),
         Err(_) => false,
     }
-}
-
-fn user_identifier(instance_id: &str, user_id: &str) -> String {
-    format!("{}:{}", instance_id, user_id)
 }
 
 fn item_to_dict(item: &prompt_workshop_item::Model, is_liked: bool) -> Value {
@@ -596,7 +593,7 @@ impl PromptWorkshopService {
     pub async fn admin_update_item(
         db: &DatabaseConnection,
         item_id: &str,
-        updates: Value,
+        updates: &PreparedPromptWorkshopAdminUpdateItemRequest,
     ) -> Result<Value, String> {
         let item = prompt_workshop_item::Entity::find_by_id(item_id)
             .one(db)
@@ -607,23 +604,23 @@ impl PromptWorkshopService {
         };
         let mut active: prompt_workshop_item::ActiveModel = item.into();
 
-        if let Some(v) = updates.get("name").and_then(|v| v.as_str()) {
-            active.name = Set(v.to_string());
+        if let Some(v) = updates.name.as_ref() {
+            active.name = Set(v.clone());
         }
-        if let Some(v) = updates.get("description").and_then(|v| v.as_str()) {
-            active.description = Set(Some(v.to_string()));
+        if let Some(v) = updates.description.as_ref() {
+            active.description = Set(Some(v.clone()));
         }
-        if let Some(v) = updates.get("prompt_content").and_then(|v| v.as_str()) {
-            active.prompt_content = Set(v.to_string());
+        if let Some(v) = updates.prompt_content.as_ref() {
+            active.prompt_content = Set(v.clone());
         }
-        if let Some(v) = updates.get("category").and_then(|v| v.as_str()) {
-            active.category = Set(v.to_string());
+        if let Some(v) = updates.category.as_ref() {
+            active.category = Set(v.clone());
         }
-        if let Some(v) = updates.get("tags") {
+        if let Some(v) = updates.tags.as_ref() {
             active.tags = Set(Some(v.to_string()));
         }
-        if let Some(v) = updates.get("status").and_then(|v| v.as_str()) {
-            active.status = Set(v.to_string());
+        if let Some(v) = updates.status.as_ref() {
+            active.status = Set(v.clone());
         }
         active.updated_at = Set(Some(Utc::now().naive_utc()));
 
@@ -691,9 +688,5 @@ impl PromptWorkshopService {
 
     pub fn check_workshop_server(cfg: &crate::config::AppConfig) -> bool {
         is_workshop_server(cfg)
-    }
-
-    pub fn get_user_identifier(user_id: &str) -> String {
-        user_identifier(&instance_id(), user_id)
     }
 }

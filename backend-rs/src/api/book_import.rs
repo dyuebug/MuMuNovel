@@ -13,6 +13,13 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 use crate::services::auth::Claims;
+use crate::services::book_import_request_service::{
+    build_book_import_apply_request_from_route_payload,
+    build_book_import_create_task_request_from_route_fields,
+    build_book_import_retry_request_from_route_payload, BookImportApplyRouteRequest,
+    BookImportCreateTaskRouteFields, BookImportRetryRouteRequest,
+    BuildBookImportCreateTaskRequestError,
+};
 use crate::services::book_import_service::BookImportService;
 
 const MAX_TXT_SIZE: usize = 50 * 1024 * 1024; // 50MB
@@ -22,96 +29,79 @@ async fn create_task(
     Extension(claims): Extension<Claims>,
     mut multipart: Multipart,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let mut file_content: Option<Vec<u8>> = None;
-    let mut filename: Option<String> = None;
-    let mut project_id: Option<String> = None;
-    let mut create_new_project = true;
-    let mut import_mode = "append".to_string();
+    let mut fields = BookImportCreateTaskRouteFields::new();
 
     while let Ok(Some(field)) = multipart.next_field().await {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
             "file" => {
                 let fname = field.file_name().unwrap_or("unknown.txt").to_string();
-                filename = Some(fname);
+                fields.filename = Some(fname);
                 let data = field.bytes().await.map_err(|e| {
                     (
                         StatusCode::BAD_REQUEST,
                         Json(json!({"detail": format!("读取文件失败: {}", e)})),
                     )
                 })?;
-                file_content = Some(data.to_vec());
+                fields.file_content = Some(data.to_vec());
             }
             "project_id" => {
                 let val = field.text().await.unwrap_or_default();
                 if !val.is_empty() {
-                    project_id = Some(val);
+                    fields.project_id = Some(val);
                 }
             }
             "create_new_project" => {
                 let val = field.text().await.unwrap_or_default();
                 if val == "false" || val == "0" {
-                    create_new_project = false;
+                    fields.create_new_project = false;
                 }
             }
             "import_mode" => {
                 let val = field.text().await.unwrap_or_default();
                 if !val.is_empty() {
-                    import_mode = val;
+                    fields.import_mode = val;
                 }
             }
             _ => {}
         }
     }
 
-    let filename = filename.ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"detail": "未提供文件"})),
-        )
-    })?;
+    let request = build_book_import_create_task_request_from_route_fields(fields, MAX_TXT_SIZE)
+        .map_err(|error| match error {
+            BuildBookImportCreateTaskRequestError::MissingFile => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "未提供文件"})),
+            ),
+            BuildBookImportCreateTaskRequestError::EmptyFileContent => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "文件内容为空"})),
+            ),
+            BuildBookImportCreateTaskRequestError::UnsupportedFileType => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "仅支持 .txt 文件"})),
+            ),
+            BuildBookImportCreateTaskRequestError::UnsupportedImportMode => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "import_mode 仅支持 append 或 overwrite"})),
+            ),
+            BuildBookImportCreateTaskRequestError::ProjectIdNotSupported => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "当前仅支持新建项目导入，不支持指定 project_id"})),
+            ),
+            BuildBookImportCreateTaskRequestError::ExistingProjectImportNotSupported => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "当前仅支持新建项目导入"})),
+            ),
+            BuildBookImportCreateTaskRequestError::FileTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(json!({"detail": "文件大小超过 50MB 限制"})),
+            ),
+        })?;
 
-    if !filename.to_lowercase().ends_with(".txt") {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"detail": "仅支持 .txt 文件"})),
-        ));
-    }
-
-    if import_mode != "append" && import_mode != "overwrite" {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"detail": "import_mode 仅支持 append 或 overwrite"})),
-        ));
-    }
-
-    if project_id.is_some() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"detail": "当前仅支持新建项目导入，不支持指定 project_id"})),
-        ));
-    }
-
-    if !create_new_project {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"detail": "当前仅支持新建项目导入"})),
-        ));
-    }
-
-    let file_content = file_content.ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"detail": "文件内容为空"})),
-        )
-    })?;
-
-    if file_content.len() > MAX_TXT_SIZE {
-        return Err((
-            StatusCode::PAYLOAD_TOO_LARGE,
-            Json(json!({"detail": "文件大小超过 50MB 限制"})),
-        ));
-    }
+    let filename = request.filename().to_string();
+    let import_mode = request.import_mode().to_string();
+    let file_content = request.into_file_content();
 
     let result = service
         .create_task(&claims.sub, &filename, file_content, &import_mode)
@@ -186,28 +176,19 @@ async fn apply_import(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
     Path(task_id): Path<String>,
-    Json(body): Json<Value>,
+    Json(body): Json<BookImportApplyRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let project_suggestion = &body["project_suggestion"];
-    let chapters = body["chapters"]
-        .as_array()
-        .map(|a| a.as_slice())
-        .unwrap_or(&[]);
-    let outlines = body["outlines"]
-        .as_array()
-        .map(|a| a.as_slice())
-        .unwrap_or(&[]);
-    let import_mode = body["import_mode"].as_str().unwrap_or("append");
+    let request = build_book_import_apply_request_from_route_payload(body);
 
     match service
         .apply_import(
             &db,
             &task_id,
             &claims.sub,
-            project_suggestion,
-            chapters,
-            outlines,
-            import_mode,
+            request.project_suggestion(),
+            request.chapters(),
+            request.outlines(),
+            request.import_mode(),
         )
         .await
     {
@@ -230,15 +211,12 @@ async fn apply_stream(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
     Path(task_id): Path<String>,
-    Json(body): Json<Value>,
+    Json(body): Json<BookImportApplyRouteRequest>,
 ) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
     let (tx, rx) = mpsc::channel::<Result<Event, std::convert::Infallible>>(256);
     let channel = crate::utils::sse::SseChannel::new(tx);
 
-    let project_suggestion = body["project_suggestion"].clone();
-    let chapters = body["chapters"].as_array().cloned().unwrap_or_default();
-    let outlines = body["outlines"].as_array().cloned().unwrap_or_default();
-    let import_mode = body["import_mode"].as_str().unwrap_or("append").to_string();
+    let request = build_book_import_apply_request_from_route_payload(body);
     let user_id = claims.sub.clone();
 
     tokio::spawn(async move {
@@ -247,10 +225,10 @@ async fn apply_stream(
                 &db,
                 &task_id,
                 &user_id,
-                &project_suggestion,
-                &chapters,
-                &outlines,
-                &import_mode,
+                request.project_suggestion(),
+                request.chapters(),
+                request.outlines(),
+                request.import_mode(),
                 &channel,
             )
             .await;
@@ -265,24 +243,17 @@ async fn retry_stream(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
     Path(task_id): Path<String>,
-    Json(body): Json<serde_json::Value>,
+    Json(body): Json<BookImportRetryRouteRequest>,
 ) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
     let (tx, rx) = mpsc::channel::<Result<Event, std::convert::Infallible>>(256);
     let channel = crate::utils::sse::SseChannel::new(tx);
 
-    let steps: Vec<String> = body["steps"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let request = build_book_import_retry_request_from_route_payload(body);
     let user_id = claims.sub.clone();
 
     tokio::spawn(async move {
         service
-            .retry_stream(&db, &task_id, &user_id, &steps, &channel)
+            .retry_stream(&db, &task_id, &user_id, request.steps(), &channel)
             .await;
     });
 

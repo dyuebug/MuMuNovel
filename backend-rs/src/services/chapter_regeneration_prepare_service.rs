@@ -4,15 +4,18 @@ use serde_json::Value;
 
 use crate::ai::service::AIService;
 use crate::models::chapter;
+use crate::services::chapter_generation_context_compaction_service::compact_generation_context;
+use crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload;
+use crate::services::chapter_generation_prompt_service::PreviousChapterPromptContext;
+use crate::services::chapter_generation_research_payload_service::build_single_chapter_research_provider_payload;
+use crate::services::chapter_single_generation_prepare_service::{
+    SingleChapterGenerationCompatOptions, SingleChapterGenerationTarget,
+};
 use crate::services::settings_service::SettingsService;
 use crate::services::writing_style_service::WritingStyleService;
 
 pub enum BuildRegenerationAiServiceError {
     InvalidConfig(String),
-}
-
-pub enum LoadPartialStyleContentError {
-    InvalidStyle(String),
 }
 
 pub enum PreparePartialRegenerationError {
@@ -21,165 +24,602 @@ pub enum PreparePartialRegenerationError {
 }
 
 pub enum PreparePartialRegenerationStreamError {
-    InvalidRange,
-    EmptySelectedText,
-    InvalidStyle(String),
-    InvalidConfig(String),
+    Input(PreparePartialRegenerationError),
+    Style(String),
+    Config(BuildRegenerationAiServiceError),
 }
 
-pub enum PrepareChapterRegenerationStreamError {
-    InvalidConfig(String),
+pub struct FullChapterRegenerationStreamInput {
+    pub chapter_id: String,
+    pub chapter_word_count: usize,
+    pub prompt: String,
+    pub ai_service: AIService,
+}
+
+pub struct PartialChapterRegenerationStreamInput {
+    pub target_words: usize,
+    pub original_word_count: usize,
+    pub start_position: usize,
+    pub end_position: usize,
+    pub prompt: String,
+    pub ai_service: AIService,
 }
 
 pub struct PreparedPartialRegenerationInput {
-    pub selected_text: String,
-    pub context_before: String,
-    pub context_after: String,
     pub original_word_count: usize,
     pub target_words: usize,
     pub max_tokens: u32,
     pub prompt: String,
 }
 
-pub struct PreparedPartialRegenerationStream {
-    pub prepared: PreparedPartialRegenerationInput,
-    pub ai_service: AIService,
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FullChapterRegenerationStreamRequest {
+    target_word_count: Option<i64>,
+    custom_instructions: Option<String>,
+    selected_suggestion_indices: Vec<String>,
+    focus_areas: Vec<String>,
+    story_creation_brief: Option<String>,
+    quality_notes: Option<String>,
+    story_repair_summary: Option<String>,
+    creative_mode: Option<String>,
+    story_focus: Option<String>,
+    quality_preset: Option<String>,
+    enable_web_research: Option<bool>,
+    web_research_query: Option<String>,
+    preserve_structure: bool,
+    preserve_dialogues: Vec<String>,
+    preserve_plot_points: Vec<String>,
+    preserve_character_traits: bool,
+    story_repair_targets: Vec<String>,
+    story_preserve_strengths: Vec<String>,
 }
 
-pub struct PreparedChapterRegenerationStream {
-    pub prompt: String,
-    pub ai_service: AIService,
+impl FullChapterRegenerationStreamRequest {
+    fn read_string_list(value: Option<&Value>) -> Vec<String> {
+        value
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn read_preserve_elements_string_list(preserve_elements: &Value, key: &str) -> Vec<String> {
+        Self::read_string_list(preserve_elements.get(key))
+    }
+
+    fn read_preserve_elements_bool(preserve_elements: &Value, key: &str, default: bool) -> bool {
+        preserve_elements
+            .get(key)
+            .and_then(Value::as_bool)
+            .unwrap_or(default)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        target_word_count: Option<i64>,
+        custom_instructions: Option<String>,
+        selected_suggestion_indices: Vec<String>,
+        focus_areas: Vec<String>,
+        story_creation_brief: Option<String>,
+        quality_notes: Option<String>,
+        story_repair_summary: Option<String>,
+        creative_mode: Option<String>,
+        story_focus: Option<String>,
+        quality_preset: Option<String>,
+        enable_web_research: Option<bool>,
+        web_research_query: Option<String>,
+        preserve_structure: bool,
+        preserve_dialogues: Vec<String>,
+        preserve_plot_points: Vec<String>,
+        preserve_character_traits: bool,
+        story_repair_targets: Vec<String>,
+        story_preserve_strengths: Vec<String>,
+    ) -> Self {
+        Self {
+            target_word_count,
+            custom_instructions,
+            selected_suggestion_indices,
+            focus_areas,
+            story_creation_brief,
+            quality_notes,
+            story_repair_summary,
+            creative_mode,
+            story_focus,
+            quality_preset,
+            enable_web_research,
+            web_research_query,
+            preserve_structure,
+            preserve_dialogues,
+            preserve_plot_points,
+            preserve_character_traits,
+            story_repair_targets,
+            story_preserve_strengths,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_route_payload(
+        target_word_count: Option<i64>,
+        custom_instructions: Option<String>,
+        selected_suggestion_indices: Vec<Value>,
+        focus_areas: Vec<Value>,
+        story_creation_brief: Option<String>,
+        quality_notes: Option<String>,
+        story_repair_summary: Option<String>,
+        creative_mode: Option<String>,
+        story_focus: Option<String>,
+        quality_preset: Option<String>,
+        enable_web_research: Option<bool>,
+        web_research_query: Option<String>,
+        preserve_elements: Option<Value>,
+        story_repair_targets: Vec<Value>,
+        story_preserve_strengths: Vec<Value>,
+    ) -> Self {
+        let preserve_elements = preserve_elements.unwrap_or_default();
+
+        Self::new(
+            target_word_count,
+            custom_instructions,
+            selected_suggestion_indices
+                .into_iter()
+                .filter_map(|value| value.as_i64().map(|value| value.to_string()))
+                .collect(),
+            focus_areas
+                .into_iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect(),
+            story_creation_brief,
+            quality_notes,
+            story_repair_summary,
+            creative_mode,
+            story_focus,
+            quality_preset,
+            enable_web_research,
+            web_research_query,
+            Self::read_preserve_elements_bool(&preserve_elements, "preserve_structure", false),
+            Self::read_preserve_elements_string_list(&preserve_elements, "preserve_dialogues"),
+            Self::read_preserve_elements_string_list(&preserve_elements, "preserve_plot_points"),
+            Self::read_preserve_elements_bool(
+                &preserve_elements,
+                "preserve_character_traits",
+                true,
+            ),
+            story_repair_targets
+                .into_iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect(),
+            story_preserve_strengths
+                .into_iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect(),
+        )
+    }
+
+    pub fn target_word_count(&self) -> i64 {
+        self.target_word_count.unwrap_or(3000)
+    }
+
+    pub fn custom_instructions(&self) -> &str {
+        self.custom_instructions.as_deref().unwrap_or_default()
+    }
+
+    pub fn selected_suggestion_indices(&self) -> &[String] {
+        &self.selected_suggestion_indices
+    }
+
+    pub fn focus_areas(&self) -> &[String] {
+        &self.focus_areas
+    }
+
+    pub fn story_creation_brief(&self) -> &str {
+        self.story_creation_brief.as_deref().unwrap_or_default()
+    }
+
+    pub fn quality_notes(&self) -> &str {
+        self.quality_notes.as_deref().unwrap_or_default()
+    }
+
+    pub fn story_repair_summary(&self) -> &str {
+        self.story_repair_summary.as_deref().unwrap_or_default()
+    }
+
+    pub fn creative_mode(&self) -> &str {
+        self.creative_mode.as_deref().unwrap_or_default()
+    }
+
+    pub fn story_focus(&self) -> &str {
+        self.story_focus.as_deref().unwrap_or_default()
+    }
+
+    pub fn quality_preset(&self) -> &str {
+        self.quality_preset.as_deref().unwrap_or_default()
+    }
+
+    pub fn enable_web_research(&self) -> Option<bool> {
+        self.enable_web_research
+    }
+
+    pub fn web_research_query(&self) -> Option<&str> {
+        self.web_research_query.as_deref()
+    }
+
+    pub fn preserve_structure(&self) -> bool {
+        self.preserve_structure
+    }
+
+    pub fn preserve_dialogues(&self) -> &[String] {
+        &self.preserve_dialogues
+    }
+
+    pub fn preserve_plot_points(&self) -> &[String] {
+        &self.preserve_plot_points
+    }
+
+    pub fn preserve_character_traits(&self) -> bool {
+        self.preserve_character_traits
+    }
+
+    pub fn story_repair_targets(&self) -> &[String] {
+        &self.story_repair_targets
+    }
+
+    pub fn story_preserve_strengths(&self) -> &[String] {
+        &self.story_preserve_strengths
+    }
+
+    pub fn compat_options_with_web_research_default(
+        &self,
+        web_research_default: bool,
+    ) -> SingleChapterGenerationCompatOptions {
+        SingleChapterGenerationCompatOptions {
+            style_id: None,
+            enable_analysis: true,
+            enable_mcp: true,
+            web_research_enabled: self.enable_web_research.unwrap_or(web_research_default),
+            web_research_query: self.web_research_query.clone(),
+            narrative_perspective: None,
+            creative_mode: self.creative_mode.clone(),
+            story_focus: self.story_focus.clone(),
+            plot_stage: None,
+            story_creation_brief: self.story_creation_brief.clone(),
+            quality_preset: self.quality_preset.clone(),
+            quality_notes: self.quality_notes.clone(),
+            story_repair_summary: self.story_repair_summary.clone(),
+            story_repair_targets: self.story_repair_targets.clone(),
+            story_preserve_strengths: self.story_preserve_strengths.clone(),
+        }
+    }
 }
 
-pub fn build_regeneration_prompt(chapter: &chapter::Model, body: &Value) -> String {
-    let selected_suggestions = body
-        .get("selected_suggestion_indices")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_i64)
-                .map(|value| value.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .unwrap_or_default();
-    let custom_instructions = body
-        .get("custom_instructions")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let focus_areas = body
-        .get("focus_areas")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join("、")
-        })
-        .unwrap_or_default();
-    let story_creation_brief = body
-        .get("story_creation_brief")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let quality_notes = body
-        .get("quality_notes")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let story_repair_summary = body
-        .get("story_repair_summary")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let creative_mode = body
-        .get("creative_mode")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let story_focus = body
-        .get("story_focus")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let quality_preset = body
-        .get("quality_preset")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let preserve_elements = body.get("preserve_elements");
-    let preserve_structure = preserve_elements
-        .and_then(|value| value.get("preserve_structure"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let preserve_dialogues = preserve_elements
-        .and_then(|value| value.get("preserve_dialogues"))
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join("、")
-        })
-        .unwrap_or_default();
-    let preserve_plot_points = preserve_elements
-        .and_then(|value| value.get("preserve_plot_points"))
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join("、")
-        })
-        .unwrap_or_default();
-    let preserve_character_traits = preserve_elements
-        .and_then(|value| value.get("preserve_character_traits"))
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let story_repair_targets = body
-        .get("story_repair_targets")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join("、")
-        })
-        .unwrap_or_default();
-    let story_preserve_strengths = body
-        .get("story_preserve_strengths")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join("、")
-        })
-        .unwrap_or_default();
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartialRegenerationStreamWorkflowRequest {
+    selected_text: String,
+    start_position: usize,
+    end_position: usize,
+    context_chars: Option<usize>,
+    user_instructions: String,
+    length_mode: Option<String>,
+    target_word_count: Option<usize>,
+    style_id: Option<i32>,
+    enable_web_research: Option<bool>,
+    web_research_query: Option<String>,
+}
 
+impl PartialRegenerationStreamWorkflowRequest {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        selected_text: String,
+        start_position: usize,
+        end_position: usize,
+        context_chars: Option<usize>,
+        user_instructions: String,
+        length_mode: Option<String>,
+        target_word_count: Option<usize>,
+        style_id: Option<i32>,
+        enable_web_research: Option<bool>,
+        web_research_query: Option<String>,
+    ) -> Self {
+        Self {
+            selected_text,
+            start_position,
+            end_position,
+            context_chars,
+            user_instructions,
+            length_mode,
+            target_word_count,
+            style_id,
+            enable_web_research,
+            web_research_query,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_route_payload(
+        selected_text: String,
+        start_position: usize,
+        end_position: usize,
+        user_instructions: String,
+        context_chars: Option<usize>,
+        style_id: Option<i32>,
+        length_mode: Option<String>,
+        target_word_count: Option<usize>,
+        enable_web_research: Option<bool>,
+        web_research_query: Option<String>,
+    ) -> Self {
+        Self::new(
+            selected_text,
+            start_position,
+            end_position,
+            context_chars,
+            user_instructions,
+            length_mode,
+            target_word_count,
+            style_id,
+            enable_web_research,
+            web_research_query,
+        )
+    }
+
+    pub fn selected_text(&self) -> &str {
+        &self.selected_text
+    }
+
+    pub fn start_position(&self) -> usize {
+        self.start_position
+    }
+
+    pub fn end_position(&self) -> usize {
+        self.end_position
+    }
+
+    pub fn context_chars(&self) -> usize {
+        normalize_partial_regeneration_context_chars(self.context_chars)
+    }
+
+    pub fn user_instructions(&self) -> &str {
+        &self.user_instructions
+    }
+
+    pub fn length_mode(&self) -> Option<&str> {
+        self.length_mode.as_deref()
+    }
+
+    pub fn target_word_count(&self) -> Option<usize> {
+        self.target_word_count
+    }
+
+    pub fn style_id(&self) -> Option<i32> {
+        self.style_id
+    }
+
+    pub fn web_research_enabled(&self) -> bool {
+        normalize_partial_regeneration_web_research_enabled(self.enable_web_research)
+    }
+
+    pub fn web_research_query(&self) -> Option<&str> {
+        self.web_research_query.as_deref()
+    }
+
+    pub fn compat_options_with_web_research_default(
+        &self,
+        web_research_default: bool,
+    ) -> SingleChapterGenerationCompatOptions {
+        SingleChapterGenerationCompatOptions {
+            style_id: self.style_id,
+            enable_analysis: true,
+            enable_mcp: true,
+            web_research_enabled: self.enable_web_research.unwrap_or(web_research_default),
+            web_research_query: self.web_research_query.clone(),
+            narrative_perspective: None,
+            creative_mode: None,
+            story_focus: None,
+            plot_stage: None,
+            story_creation_brief: None,
+            quality_preset: None,
+            quality_notes: None,
+            story_repair_summary: None,
+            story_repair_targets: Vec::new(),
+            story_preserve_strengths: Vec::new(),
+        }
+    }
+}
+
+fn normalize_partial_regeneration_context_chars(context_chars: Option<usize>) -> usize {
+    context_chars.unwrap_or(500)
+}
+
+fn normalize_partial_regeneration_web_research_enabled(enabled: Option<bool>) -> bool {
+    enabled.unwrap_or(false)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PartialRegenerationLengthMode {
+    Similar,
+    Expand,
+    Condense,
+    Custom,
+}
+
+impl PartialRegenerationLengthMode {
+    fn normalize(length_mode: Option<&str>) -> Self {
+        match length_mode.unwrap_or("similar") {
+            "expand" => PartialRegenerationLengthMode::Expand,
+            "condense" => PartialRegenerationLengthMode::Condense,
+            "custom" => PartialRegenerationLengthMode::Custom,
+            _ => PartialRegenerationLengthMode::Similar,
+        }
+    }
+
+    fn resolve_plan(
+        self,
+        target_word_count: Option<usize>,
+        original_word_count: usize,
+    ) -> PartialRegenerationLengthPlan {
+        match self {
+            PartialRegenerationLengthMode::Expand => {
+                let min_words = (original_word_count as f64 * 1.2) as usize;
+                let max_words = (original_word_count as f64 * 2.0) as usize;
+                PartialRegenerationLengthPlan {
+                    requirement: format!("建议扩写至 {}-{} 字", min_words, max_words),
+                    target_words: max_words,
+                }
+            }
+            PartialRegenerationLengthMode::Condense => {
+                let min_words = (original_word_count as f64 * 0.5) as usize;
+                let max_words = (original_word_count as f64 * 0.8) as usize;
+                PartialRegenerationLengthPlan {
+                    requirement: format!("建议压缩至 {}-{} 字", min_words, max_words),
+                    target_words: (original_word_count as f64 * 1.5) as usize,
+                }
+            }
+            PartialRegenerationLengthMode::Custom => PartialRegenerationLengthPlan {
+                requirement: target_word_count
+                    .map(|count| format!("目标长度约 {} 字，允许上下浮动 20%", count))
+                    .unwrap_or_else(|| {
+                        format!("默认按接近原文长度处理，原文约 {} 字", original_word_count)
+                    }),
+                target_words: target_word_count
+                    .unwrap_or_else(|| (original_word_count as f64 * 1.5) as usize),
+            },
+            PartialRegenerationLengthMode::Similar => {
+                let min_words = (original_word_count as f64 * 0.8) as usize;
+                let max_words = (original_word_count as f64 * 1.2) as usize;
+                PartialRegenerationLengthPlan {
+                    requirement: format!(
+                        "尽量保持与原文接近，原文约 {} 字，目标 {}-{} 字",
+                        original_word_count, min_words, max_words
+                    ),
+                    target_words: (original_word_count as f64 * 1.5) as usize,
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PartialRegenerationLengthPlan {
+    requirement: String,
+    target_words: usize,
+}
+
+impl PartialRegenerationLengthPlan {
+    fn requirement(self) -> String {
+        self.requirement
+    }
+
+    fn target_words(self) -> usize {
+        self.target_words
+    }
+}
+
+fn join_regeneration_prompt_items(items: &[String], separator: &str) -> String {
+    items.join(separator)
+}
+
+fn build_regeneration_external_assets_block(
+    external_assets: Option<&str>,
+    reference_assets: Option<&str>,
+) -> String {
+    let external_assets = external_assets.unwrap_or_default().trim();
+    let reference_assets = reference_assets.unwrap_or_default().trim();
+    if (external_assets.is_empty() || external_assets == "[]")
+        && (reference_assets.is_empty() || reference_assets == "[]")
+    {
+        return "（未提供）".to_string();
+    }
+
+    let mut lines = Vec::new();
+    if !external_assets.is_empty() && external_assets != "[]" {
+        lines.push(format!("external_assets: {}", external_assets));
+    }
+    if !reference_assets.is_empty() && reference_assets != "[]" {
+        lines.push(format!("reference_assets: {}", reference_assets));
+    }
+
+    if lines.is_empty() {
+        "（未提供）".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+pub fn build_regeneration_prompt(
+    chapter: &chapter::Model,
+    request: &FullChapterRegenerationStreamRequest,
+    provider_payload: &PromptContextProviderPayload,
+    web_research_note: Option<&str>,
+    external_assets: Option<&str>,
+    reference_assets: Option<&str>,
+) -> String {
+    let web_research_note = web_research_note.unwrap_or("（未启用）");
+    let external_assets_block =
+        build_regeneration_external_assets_block(external_assets, reference_assets);
     format!(
-        "你是小说正文重写助手。请基于以下章节内容和要求输出重写后的正文，不要输出解释。\n\n章节标题：{}\n章节编号：{}\n目标字数：{}\n\n原章节内容：\n{}\n\n用户修改要求：\n{}\n\n选中建议索引：{}\n重点优化方向：{}\n创作模式：{}\n故事关注点：{}\n质量预设：{}\n保留结构：{}\n保留对话：{}\n保留剧情点：{}\n保留人物特征：{}\n创作总控：{}\n质量补充偏好：{}\n剧情质量修复摘要：{}\n修复目标：{}\n保留优势：{}\n\n要求：\n- 只输出可直接替换的正文内容\n- 不要输出标题、编号、前言、后记或流程说明\n- 如果有角色/世界观信息，保持一致\n- 尽量保留原有剧情骨架",
+        "你是小说正文重写助手。请基于以下章节内容和要求输出重写后的正文，不要输出解释。\n\n章节标题：{}\n章节编号：{}\n目标字数：{}\n\n原章节内容：\n{}\n\n用户修改要求：\n{}\n\n选中建议索引：{}\n重点优化方向：{}\n创作模式：{}\n故事关注点：{}\n质量预设：{}\n\n最近章节规划：\n{}\n\n上一章已完成剧情：\n{}\n\n本章角色信息：\n{}\n\n本章职业信息：\n{}\n\n伏笔提醒：\n{}\n\n相关记忆：\n{}\n\n联网检索说明：{}\n外部参考资料：\n{}\n保留结构：{}\n保留对话：{}\n保留剧情点：{}\n保留人物特征：{}\n创作总控：{}\n质量补充偏好：{}\n剧情质量修复摘要：{}\n修复目标：{}\n保留优势：{}\n\n要求：\n- 只输出可直接替换的正文内容\n- 不要输出标题、编号、前言、后记或流程说明\n- 如果有角色/世界观信息，保持一致\n- 尽量保留原有剧情骨架",
         chapter.title,
         chapter.chapter_number,
-        body.get("target_word_count")
-            .and_then(Value::as_i64)
-            .unwrap_or(3000),
+        request.target_word_count(),
         chapter.content.clone().unwrap_or_default(),
-        custom_instructions,
-        selected_suggestions,
-        focus_areas,
-        creative_mode,
-        story_focus,
-        quality_preset,
-        preserve_structure,
-        preserve_dialogues,
-        preserve_plot_points,
-        preserve_character_traits,
-        story_creation_brief,
-        quality_notes,
-        story_repair_summary,
-        story_repair_targets,
-        story_preserve_strengths,
+        request.custom_instructions(),
+        join_regeneration_prompt_items(request.selected_suggestion_indices(), ", "),
+        join_regeneration_prompt_items(request.focus_areas(), "、"),
+        request.creative_mode(),
+        request.story_focus(),
+        request.quality_preset(),
+        if provider_payload.recent_chapters_context.trim().is_empty() {
+            "（未提供）"
+        } else {
+            provider_payload.recent_chapters_context.as_str()
+        },
+        if provider_payload.previous_chapter_summary.trim().is_empty() {
+            "（未提供）"
+        } else {
+            provider_payload.previous_chapter_summary.as_str()
+        },
+        if provider_payload.characters_info.trim().is_empty()
+            || provider_payload.characters_info == "[]"
+        {
+            "（未提供）"
+        } else {
+            provider_payload.characters_info.as_str()
+        },
+        if provider_payload.chapter_careers.trim().is_empty()
+            || provider_payload.chapter_careers == "[]"
+        {
+            "（未提供）"
+        } else {
+            provider_payload.chapter_careers.as_str()
+        },
+        if provider_payload.foreshadow_reminders.trim().is_empty()
+            || provider_payload.foreshadow_reminders == "[]"
+        {
+            "（未提供）"
+        } else {
+            provider_payload.foreshadow_reminders.as_str()
+        },
+        if provider_payload.relevant_memories.trim().is_empty()
+            || provider_payload.relevant_memories == "[]"
+        {
+            "（未提供）"
+        } else {
+            provider_payload.relevant_memories.as_str()
+        },
+        web_research_note,
+        external_assets_block,
+        request.preserve_structure(),
+        join_regeneration_prompt_items(request.preserve_dialogues(), "、"),
+        join_regeneration_prompt_items(request.preserve_plot_points(), "、"),
+        request.preserve_character_traits(),
+        request.story_creation_brief(),
+        request.quality_notes(),
+        request.story_repair_summary(),
+        join_regeneration_prompt_items(request.story_repair_targets(), "、"),
+        join_regeneration_prompt_items(request.story_preserve_strengths(), "、"),
     )
 }
 
@@ -188,31 +628,9 @@ pub fn build_partial_length_requirement(
     target_word_count: Option<usize>,
     original_word_count: usize,
 ) -> String {
-    match length_mode.unwrap_or("similar") {
-        "expand" => {
-            let min_words = (original_word_count as f64 * 1.2) as usize;
-            let max_words = (original_word_count as f64 * 2.0) as usize;
-            format!("建议扩写至 {}-{} 字", min_words, max_words)
-        }
-        "condense" => {
-            let min_words = (original_word_count as f64 * 0.5) as usize;
-            let max_words = (original_word_count as f64 * 0.8) as usize;
-            format!("建议压缩至 {}-{} 字", min_words, max_words)
-        }
-        "custom" => target_word_count
-            .map(|count| format!("目标长度约 {} 字，允许上下浮动 20%", count))
-            .unwrap_or_else(|| {
-                format!("默认按接近原文长度处理，原文约 {} 字", original_word_count)
-            }),
-        _ => {
-            let min_words = (original_word_count as f64 * 0.8) as usize;
-            let max_words = (original_word_count as f64 * 1.2) as usize;
-            format!(
-                "尽量保持与原文接近，原文约 {} 字，目标 {}-{} 字",
-                original_word_count, min_words, max_words
-            )
-        }
-    }
+    PartialRegenerationLengthMode::normalize(length_mode)
+        .resolve_plan(target_word_count, original_word_count)
+        .requirement()
 }
 
 pub fn calculate_partial_target_words(
@@ -220,13 +638,9 @@ pub fn calculate_partial_target_words(
     target_word_count: Option<usize>,
     original_word_count: usize,
 ) -> usize {
-    match length_mode.unwrap_or("similar") {
-        "expand" => (original_word_count as f64 * 2.0) as usize,
-        "custom" => {
-            target_word_count.unwrap_or_else(|| (original_word_count as f64 * 1.5) as usize)
-        }
-        _ => (original_word_count as f64 * 1.5) as usize,
-    }
+    PartialRegenerationLengthMode::normalize(length_mode)
+        .resolve_plan(target_word_count, original_word_count)
+        .target_words()
 }
 
 pub fn build_partial_regeneration_prompt(
@@ -237,13 +651,18 @@ pub fn build_partial_regeneration_prompt(
     user_instructions: &str,
     length_requirement: &str,
     style_content: Option<&str>,
+    provider_payload: &PromptContextProviderPayload,
     web_research_note: Option<&str>,
+    external_assets: Option<&str>,
+    reference_assets: Option<&str>,
 ) -> String {
     let style_content = style_content.unwrap_or("（未提供风格约束）");
     let web_research_note = web_research_note.unwrap_or("（未启用）");
+    let external_assets_block =
+        build_regeneration_external_assets_block(external_assets, reference_assets);
 
     format!(
-        "你是小说正文局部重写助手。请基于以下内容重写选中片段，只输出可直接替换的正文内容，不要输出解释。\n\n章节标题：{}\n章节编号：{}\n原文选中片段：\n{}\n\n前文上下文：\n{}\n\n后文上下文：\n{}\n\n用户修改要求：\n{}\n\n长度要求：{}\n\n风格约束：\n{}\n\n联网检索说明：{}\n\n要求：\n- 只输出重写后的正文\n- 不要输出标题、编号、前言、后记或流程说明\n- 保持人物、设定与上下文一致\n- 尽量贴合原文节奏与叙事视角",
+        "你是小说正文局部重写助手。请基于以下内容重写选中片段，只输出可直接替换的正文内容，不要输出解释。\n\n章节标题：{}\n章节编号：{}\n原文选中片段：\n{}\n\n前文上下文：\n{}\n\n后文上下文：\n{}\n\n用户修改要求：\n{}\n\n长度要求：{}\n\n风格约束：\n{}\n\n上一章已完成剧情：\n{}\n\n本章角色信息：\n{}\n\n本章职业信息：\n{}\n\n伏笔提醒：\n{}\n\n相关记忆：\n{}\n\n联网检索说明：{}\n\n外部参考资料：\n{}\n\n要求：\n- 只输出重写后的正文\n- 不要输出标题、编号、前言、后记或流程说明\n- 保持人物、设定与上下文一致\n- 尽量贴合原文节奏与叙事视角",
         chapter.title,
         chapter.chapter_number,
         selected_text,
@@ -264,7 +683,41 @@ pub fn build_partial_regeneration_prompt(
         },
         length_requirement,
         style_content,
+        if provider_payload.previous_chapter_summary.trim().is_empty() {
+            "（未提供）"
+        } else {
+            provider_payload.previous_chapter_summary.as_str()
+        },
+        if provider_payload.characters_info.trim().is_empty()
+            || provider_payload.characters_info == "[]"
+        {
+            "（未提供）"
+        } else {
+            provider_payload.characters_info.as_str()
+        },
+        if provider_payload.chapter_careers.trim().is_empty()
+            || provider_payload.chapter_careers == "[]"
+        {
+            "（未提供）"
+        } else {
+            provider_payload.chapter_careers.as_str()
+        },
+        if provider_payload.foreshadow_reminders.trim().is_empty()
+            || provider_payload.foreshadow_reminders == "[]"
+        {
+            "（未提供）"
+        } else {
+            provider_payload.foreshadow_reminders.as_str()
+        },
+        if provider_payload.relevant_memories.trim().is_empty()
+            || provider_payload.relevant_memories == "[]"
+        {
+            "（未提供）"
+        } else {
+            provider_payload.relevant_memories.as_str()
+        },
         web_research_note,
+        external_assets_block,
     )
 }
 
@@ -278,7 +731,10 @@ pub fn prepare_partial_regeneration_input(
     length_mode: Option<&str>,
     target_word_count: Option<usize>,
     style_content: Option<&str>,
+    provider_payload: &PromptContextProviderPayload,
     web_research_note: Option<&str>,
+    external_assets: Option<&str>,
+    reference_assets: Option<&str>,
 ) -> Result<PreparedPartialRegenerationInput, PreparePartialRegenerationError> {
     let current_content = chapter.content.clone().unwrap_or_default();
     let content_chars: Vec<char> = current_content.chars().collect();
@@ -326,13 +782,13 @@ pub fn prepare_partial_regeneration_input(
         user_instructions,
         &length_requirement,
         style_content,
+        provider_payload,
         web_research_note,
+        external_assets,
+        reference_assets,
     );
 
     Ok(PreparedPartialRegenerationInput {
-        selected_text,
-        context_before,
-        context_after,
         original_word_count,
         target_words,
         max_tokens,
@@ -358,14 +814,14 @@ pub async fn load_partial_style_content(
     db: &sea_orm::DatabaseConnection,
     user_id: &str,
     style_id: Option<i32>,
-) -> Result<Option<String>, LoadPartialStyleContentError> {
+) -> Result<Option<String>, String> {
     let Some(style_id) = style_id else {
         return Ok(None);
     };
 
     let value = WritingStyleService::get_style(db, user_id, style_id)
         .await
-        .map_err(|error| LoadPartialStyleContentError::InvalidStyle(error.to_string()))?;
+        .map_err(|error| error.to_string())?;
 
     Ok(value
         .get("prompt_content")
@@ -377,95 +833,154 @@ pub async fn prepare_chapter_regeneration_stream(
     db: &sea_orm::DatabaseConnection,
     user_id: &str,
     chapter: &chapter::Model,
-    body: &Value,
-) -> Result<PreparedChapterRegenerationStream, PrepareChapterRegenerationStreamError> {
-    let prompt = build_regeneration_prompt(chapter, body);
-    let ai_service = build_regeneration_ai_service(db, user_id, None)
+    request: &FullChapterRegenerationStreamRequest,
+) -> Result<FullChapterRegenerationStreamInput, BuildRegenerationAiServiceError> {
+    let web_research_default = SettingsService::resolve_web_research_enabled(db, user_id)
         .await
-        .map_err(|error| match error {
-            BuildRegenerationAiServiceError::InvalidConfig(detail) => {
-                PrepareChapterRegenerationStreamError::InvalidConfig(detail)
-            }
-        })?;
+        .map_err(|error| BuildRegenerationAiServiceError::InvalidConfig(error.to_string()))?;
+    let compat_options = request.compat_options_with_web_research_default(web_research_default);
+    let provider_payload = build_single_chapter_research_provider_payload(
+        db,
+        user_id,
+        &SingleChapterGenerationTarget {
+            project_id: chapter.project_id.clone(),
+            chapter_id: chapter.id.clone(),
+            chapter_number: chapter.chapter_number,
+            title: chapter.title.clone(),
+        },
+        &compat_options,
+    )
+    .await
+    .map_err(BuildRegenerationAiServiceError::InvalidConfig)?;
+    let (provider_payload, _) = compact_generation_context(
+        "one-to-many",
+        request.target_word_count() as i32,
+        provider_payload,
+        PreviousChapterPromptContext::default(),
+    );
+    let web_research_note = if compat_options.web_research_enabled() {
+        compat_options
+            .web_research_query()
+            .map(|query| format!("已请求联网检索，检索问题：{}", query))
+            .or_else(|| Some("已请求联网检索，请优先吸收外部资料中的事实与细节。".to_string()))
+    } else {
+        None
+    };
+    let prompt = build_regeneration_prompt(
+        chapter,
+        request,
+        &provider_payload,
+        web_research_note.as_deref(),
+        Some(&provider_payload.external_assets),
+        Some(&provider_payload.reference_assets),
+    );
+    let ai_service = build_regeneration_ai_service(db, user_id, None).await?;
 
-    Ok(PreparedChapterRegenerationStream { prompt, ai_service })
+    Ok(FullChapterRegenerationStreamInput {
+        chapter_id: chapter.id.clone(),
+        chapter_word_count: chapter.word_count as usize,
+        prompt,
+        ai_service,
+    })
 }
 
 pub async fn prepare_partial_regeneration_stream(
     db: &sea_orm::DatabaseConnection,
     user_id: &str,
     chapter: &chapter::Model,
-    selected_text_override: &str,
-    start_position: usize,
-    end_position: usize,
-    context_chars: usize,
-    user_instructions: &str,
-    length_mode: Option<&str>,
-    target_word_count: Option<usize>,
-    style_id: Option<i32>,
-    enable_web_research: bool,
-    web_research_query: Option<&str>,
-) -> Result<PreparedPartialRegenerationStream, PreparePartialRegenerationStreamError> {
-    let style_content = load_partial_style_content(db, user_id, style_id)
+    request: &PartialRegenerationStreamWorkflowRequest,
+) -> Result<PartialChapterRegenerationStreamInput, PreparePartialRegenerationStreamError> {
+    let style_content = load_partial_style_content(db, user_id, request.style_id())
         .await
-        .map_err(|error| match error {
-            LoadPartialStyleContentError::InvalidStyle(detail) => {
-                PreparePartialRegenerationStreamError::InvalidStyle(detail)
-            }
-        })?;
+        .map_err(PreparePartialRegenerationStreamError::Style)?;
 
-    let web_research_note = if enable_web_research {
-        web_research_query.map(|query| format!("已请求联网检索，检索问题：{}", query))
+    let web_research_default = SettingsService::resolve_web_research_enabled(db, user_id)
+        .await
+        .map_err(|error| {
+            PreparePartialRegenerationStreamError::Config(
+                BuildRegenerationAiServiceError::InvalidConfig(error.to_string()),
+            )
+        })?;
+    let compat_options = request.compat_options_with_web_research_default(web_research_default);
+    let provider_payload = build_single_chapter_research_provider_payload(
+        db,
+        user_id,
+        &SingleChapterGenerationTarget {
+            project_id: chapter.project_id.clone(),
+            chapter_id: chapter.id.clone(),
+            chapter_number: chapter.chapter_number,
+            title: chapter.title.clone(),
+        },
+        &compat_options,
+    )
+    .await
+    .map_err(|error| {
+        PreparePartialRegenerationStreamError::Config(
+            BuildRegenerationAiServiceError::InvalidConfig(error),
+        )
+    })?;
+    let (provider_payload, _) = compact_generation_context(
+        "one-to-one",
+        request.target_word_count().unwrap_or(chapter.word_count as usize) as i32,
+        provider_payload,
+        PreviousChapterPromptContext::default(),
+    );
+
+    let web_research_note = if compat_options.web_research_enabled() {
+        compat_options
+            .web_research_query()
+            .map(|query| format!("已请求联网检索，检索问题：{}", query))
+            .or_else(|| Some("已请求联网检索，请优先吸收外部资料中的事实与细节。".to_string()))
     } else {
         None
     };
 
     let prepared = prepare_partial_regeneration_input(
         chapter,
-        selected_text_override,
-        start_position,
-        end_position,
-        context_chars,
-        user_instructions,
-        length_mode,
-        target_word_count,
+        request.selected_text(),
+        request.start_position(),
+        request.end_position(),
+        request.context_chars(),
+        request.user_instructions(),
+        request.length_mode(),
+        request.target_word_count(),
         style_content.as_deref(),
+        &provider_payload,
         web_research_note.as_deref(),
+        Some(&provider_payload.external_assets),
+        Some(&provider_payload.reference_assets),
     )
-    .map_err(|error| match error {
-        PreparePartialRegenerationError::InvalidRange => {
-            PreparePartialRegenerationStreamError::InvalidRange
-        }
-        PreparePartialRegenerationError::EmptySelectedText => {
-            PreparePartialRegenerationStreamError::EmptySelectedText
-        }
-    })?;
+    .map_err(PreparePartialRegenerationStreamError::Input)?;
 
     let ai_service = build_regeneration_ai_service(db, user_id, Some(prepared.max_tokens))
         .await
-        .map_err(|error| match error {
-            BuildRegenerationAiServiceError::InvalidConfig(detail) => {
-                PreparePartialRegenerationStreamError::InvalidConfig(detail)
-            }
-        })?;
+        .map_err(PreparePartialRegenerationStreamError::Config)?;
 
-    Ok(PreparedPartialRegenerationStream {
-        prepared,
+    Ok(PartialChapterRegenerationStreamInput {
+        target_words: prepared.target_words,
+        original_word_count: prepared.original_word_count,
+        start_position: request.start_position(),
+        end_position: request.end_position(),
+        prompt: prepared.prompt,
         ai_service,
     })
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::api::chapter_regeneration_routes::FullChapterRegenerationStreamRouteRequest;
     use chrono::NaiveDateTime;
-
-    use serde_json::json;
+    use serde_json::Value;
 
     use crate::models::chapter;
+    use crate::services::chapter_generation_prompt_context_provider_service::{
+        build_placeholder_prompt_context_provider_payload, PromptContextProviderPayload,
+    };
 
     use super::{
         build_partial_length_requirement, build_regeneration_prompt,
         calculate_partial_target_words, prepare_partial_regeneration_input,
+        FullChapterRegenerationStreamRequest, PartialRegenerationLengthMode,
         PreparePartialRegenerationError, PreparedPartialRegenerationInput,
     };
 
@@ -496,10 +1011,51 @@ mod tests {
         }
     }
 
+    fn regeneration_provider_payload() -> PromptContextProviderPayload {
+        PromptContextProviderPayload {
+            recent_chapters_context: "【最近章节规划】\n第三章追查漕运税卡".to_string(),
+            previous_chapter_summary: "上一章发现账册缺页".to_string(),
+            chapter_careers: "【职业】\n主职业: 漕帮账房".to_string(),
+            characters_info: "【角色】\n沈三\n当前状态: 起疑".to_string(),
+            foreshadow_reminders: "【伏笔提醒】\n- 夜航税卡".to_string(),
+            relevant_memories: "【相关记忆】\n- 码头旧案".to_string(),
+            research_query: String::new(),
+            research_assets: "[]".to_string(),
+            external_assets: "[{\"kind\":\"web\",\"summary\":\"夜航税卡协商\"}]".to_string(),
+            reference_assets: "[{\"kind\":\"web\",\"summary\":\"夜航税卡协商\"}]".to_string(),
+            mcp_references: String::new(),
+        }
+    }
+
     #[test]
     fn should_build_regeneration_prompt_with_default_fields() {
         let chapter = chapter_with_content("原始正文");
-        let prompt = build_regeneration_prompt(&chapter, &json!({}));
+        let route_request = FullChapterRegenerationStreamRouteRequest::default();
+        let request = FullChapterRegenerationStreamRequest::from_route_payload(
+            route_request.target_word_count,
+            route_request.custom_instructions,
+            route_request.selected_suggestion_indices,
+            route_request.focus_areas,
+            route_request.story_creation_brief,
+            route_request.quality_notes,
+            route_request.story_repair_summary,
+            route_request.creative_mode,
+            route_request.story_focus,
+            route_request.quality_preset,
+            None,
+            None,
+            route_request.preserve_elements,
+            route_request.story_repair_targets,
+            route_request.story_preserve_strengths,
+        );
+        let prompt = build_regeneration_prompt(
+            &chapter,
+            &request,
+            &build_placeholder_prompt_context_provider_payload(),
+            None,
+            None,
+            None,
+        );
 
         assert!(prompt.contains("章节标题：测试章节"));
         assert!(prompt.contains("章节编号：1"));
@@ -512,28 +1068,52 @@ mod tests {
     #[test]
     fn should_build_regeneration_prompt_with_explicit_fields() {
         let chapter = chapter_with_content("原始正文");
+        let route_request = FullChapterRegenerationStreamRouteRequest {
+            target_word_count: Some(1800),
+            custom_instructions: Some("强化冲突".to_string()),
+            selected_suggestion_indices: vec![Value::from(1), Value::from("skip"), Value::from(3)],
+            focus_areas: vec![Value::from("节奏"), Value::from(7), Value::from("人物")],
+            story_creation_brief: Some("总控说明".to_string()),
+            quality_notes: Some("质量偏好".to_string()),
+            story_repair_summary: Some("修复摘要".to_string()),
+            creative_mode: Some("dramatic".to_string()),
+            story_focus: Some("主线推进".to_string()),
+            quality_preset: Some("balanced".to_string()),
+            enable_web_research: Some(true),
+            web_research_query: Some("晚清漕运夜航与税卡协商".to_string()),
+            preserve_elements: Some(serde_json::json!({
+                "preserve_structure": true,
+                "preserve_dialogues": ["对白A", "对白B"],
+                "preserve_plot_points": ["转折A"],
+                "preserve_character_traits": false
+            })),
+            story_repair_targets: vec![Value::from("目标A"), Value::from("目标B")],
+            story_preserve_strengths: vec![Value::from("优势A")],
+        };
+        let request = FullChapterRegenerationStreamRequest::from_route_payload(
+            route_request.target_word_count,
+            route_request.custom_instructions,
+            route_request.selected_suggestion_indices,
+            route_request.focus_areas,
+            route_request.story_creation_brief,
+            route_request.quality_notes,
+            route_request.story_repair_summary,
+            route_request.creative_mode,
+            route_request.story_focus,
+            route_request.quality_preset,
+            route_request.enable_web_research,
+            route_request.web_research_query,
+            route_request.preserve_elements,
+            route_request.story_repair_targets,
+            route_request.story_preserve_strengths,
+        );
         let prompt = build_regeneration_prompt(
             &chapter,
-            &json!({
-                "target_word_count": 1800,
-                "custom_instructions": "强化冲突",
-                "selected_suggestion_indices": [1, "skip", 3],
-                "focus_areas": ["节奏", 7, "人物"],
-                "creative_mode": "dramatic",
-                "story_focus": "主线推进",
-                "quality_preset": "balanced",
-                "preserve_elements": {
-                    "preserve_structure": true,
-                    "preserve_dialogues": ["对白A", "对白B"],
-                    "preserve_plot_points": ["转折A"],
-                    "preserve_character_traits": false
-                },
-                "story_creation_brief": "总控说明",
-                "quality_notes": "质量偏好",
-                "story_repair_summary": "修复摘要",
-                "story_repair_targets": ["目标A", "目标B"],
-                "story_preserve_strengths": ["优势A"]
-            }),
+            &request,
+            &build_placeholder_prompt_context_provider_payload(),
+            None,
+            None,
+            None,
         );
 
         assert!(prompt.contains("目标字数：1800"));
@@ -547,6 +1127,29 @@ mod tests {
         assert!(prompt.contains("保留人物特征：false"));
         assert!(prompt.contains("修复目标：目标A、目标B"));
         assert!(prompt.contains("保留优势：优势A"));
+    }
+
+    #[test]
+    fn should_build_regeneration_prompt_with_rust_owned_context_payload() {
+        let chapter = chapter_with_content("原始正文");
+        let request = FullChapterRegenerationStreamRequest::default();
+
+        let prompt = build_regeneration_prompt(
+            &chapter,
+            &request,
+            &regeneration_provider_payload(),
+            Some("联网说明"),
+            Some("[{\"kind\":\"web\",\"summary\":\"夜航税卡协商\"}]"),
+            Some("[{\"kind\":\"web\",\"summary\":\"夜航税卡协商\"}]"),
+        );
+
+        assert!(prompt.contains("最近章节规划"));
+        assert!(prompt.contains("第三章追查漕运税卡"));
+        assert!(prompt.contains("上一章发现账册缺页"));
+        assert!(prompt.contains("沈三"));
+        assert!(prompt.contains("主职业: 漕帮账房"));
+        assert!(prompt.contains("夜航税卡"));
+        assert!(prompt.contains("码头旧案"));
     }
 
     #[test]
@@ -583,6 +1186,46 @@ mod tests {
     }
 
     #[test]
+    fn should_normalize_partial_regeneration_length_mode() {
+        assert_eq!(
+            PartialRegenerationLengthMode::normalize(None),
+            PartialRegenerationLengthMode::Similar
+        );
+        assert_eq!(
+            PartialRegenerationLengthMode::normalize(Some("expand")),
+            PartialRegenerationLengthMode::Expand
+        );
+        assert_eq!(
+            PartialRegenerationLengthMode::normalize(Some("condense")),
+            PartialRegenerationLengthMode::Condense
+        );
+        assert_eq!(
+            PartialRegenerationLengthMode::normalize(Some("custom")),
+            PartialRegenerationLengthMode::Custom
+        );
+        assert_eq!(
+            PartialRegenerationLengthMode::normalize(Some("unexpected")),
+            PartialRegenerationLengthMode::Similar
+        );
+    }
+
+    #[test]
+    fn should_resolve_partial_regeneration_length_plan_from_shared_owner() {
+        let expand =
+            PartialRegenerationLengthMode::normalize(Some("expand")).resolve_plan(None, 100);
+        assert_eq!(expand.requirement, "建议扩写至 120-200 字");
+        assert_eq!(expand.target_words, 200);
+
+        let custom_fallback =
+            PartialRegenerationLengthMode::normalize(Some("custom")).resolve_plan(None, 100);
+        assert_eq!(
+            custom_fallback.requirement,
+            "默认按接近原文长度处理，原文约 100 字"
+        );
+        assert_eq!(custom_fallback.target_words, 150);
+    }
+
+    #[test]
     fn should_prepare_partial_regeneration_input_with_override_and_context() {
         let chapter = chapter_with_content("一二三四五六七八九十");
 
@@ -596,31 +1239,51 @@ mod tests {
             Some("custom"),
             Some(120),
             Some("风格说明"),
+            &regeneration_provider_payload(),
             Some("联网说明"),
+            Some("[{\"title\":\"资料A\",\"summary\":\"夜航税卡协商\"}]"),
+            Some("[{\"title\":\"资料A\",\"summary\":\"夜航税卡协商\"}]"),
         );
         let prepared = valid_prepared_partial_input(result);
 
-        assert_eq!(prepared.selected_text, "替换文本");
-        assert_eq!(prepared.context_before, "一二");
-        assert_eq!(prepared.context_after, "六七");
         assert_eq!(prepared.original_word_count, 4);
         assert_eq!(prepared.target_words, 120);
+        assert!(prepared.prompt.contains("原文选中片段：\n替换文本"));
+        assert!(prepared.prompt.contains("前文上下文：\n一二"));
+        assert!(prepared.prompt.contains("后文上下文：\n六七"));
         assert!(prepared.prompt.contains("风格说明"));
+        assert!(prepared.prompt.contains("沈三"));
+        assert!(prepared.prompt.contains("上一章发现账册缺页"));
         assert!(prepared.prompt.contains("联网说明"));
+        assert!(prepared.prompt.contains("external_assets"));
+        assert!(prepared.prompt.contains("夜航税卡协商"));
     }
 
     #[test]
     fn should_prepare_partial_regeneration_input_with_content_fallback_and_edge_context() {
         let chapter = chapter_with_content("一二三四五六七八九十");
 
-        let result =
-            prepare_partial_regeneration_input(&chapter, "  ", 0, 2, 3, "", None, None, None, None);
+        let result = prepare_partial_regeneration_input(
+            &chapter,
+            "  ",
+            0,
+            2,
+            3,
+            "",
+            None,
+            None,
+            None,
+            &build_placeholder_prompt_context_provider_payload(),
+            None,
+            None,
+            None,
+        );
         let prepared = valid_prepared_partial_input(result);
 
-        assert_eq!(prepared.selected_text, "一二");
-        assert_eq!(prepared.context_before, "");
-        assert_eq!(prepared.context_after, "三四五");
+        assert_eq!(prepared.original_word_count, 2);
+        assert!(prepared.prompt.contains("原文选中片段：\n一二"));
         assert!(prepared.prompt.contains("（无前文上下文）"));
+        assert!(prepared.prompt.contains("后文上下文：\n三四五"));
         assert!(prepared.prompt.contains("（无额外要求）"));
     }
 
@@ -638,6 +1301,9 @@ mod tests {
             Some("custom"),
             Some(1),
             None,
+            &build_placeholder_prompt_context_provider_payload(),
+            None,
+            None,
             None,
         );
         let floor_prepared = valid_prepared_partial_input(floor_result);
@@ -651,6 +1317,9 @@ mod tests {
             "",
             Some("custom"),
             Some(10_000),
+            None,
+            &build_placeholder_prompt_context_provider_payload(),
+            None,
             None,
             None,
         );
@@ -666,8 +1335,21 @@ mod tests {
     fn should_reject_invalid_partial_regeneration_range() {
         let chapter = chapter_with_content("一二三");
 
-        let result =
-            prepare_partial_regeneration_input(&chapter, "", 2, 2, 1, "", None, None, None, None);
+        let result = prepare_partial_regeneration_input(
+            &chapter,
+            "",
+            2,
+            2,
+            1,
+            "",
+            None,
+            None,
+            None,
+            &build_placeholder_prompt_context_provider_payload(),
+            None,
+            None,
+            None,
+        );
         let error = match result {
             Ok(_) => panic!("empty range should be invalid"),
             Err(error) => error,
@@ -683,8 +1365,21 @@ mod tests {
     fn should_reject_empty_partial_regeneration_selection() {
         let chapter = chapter_with_content("   ");
 
-        let result =
-            prepare_partial_regeneration_input(&chapter, "", 0, 1, 1, "", None, None, None, None);
+        let result = prepare_partial_regeneration_input(
+            &chapter,
+            "",
+            0,
+            1,
+            1,
+            "",
+            None,
+            None,
+            None,
+            &build_placeholder_prompt_context_provider_payload(),
+            None,
+            None,
+            None,
+        );
         let error = match result {
             Ok(_) => panic!("blank selected text should be invalid"),
             Err(error) => error,

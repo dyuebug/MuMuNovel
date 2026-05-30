@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::models::mcp_plugin;
+use crate::services::mcp_plugin_request_service::McpPluginUpdateRequest;
 
 fn plugin_to_dict(p: &mcp_plugin::Model) -> Value {
     json!({
@@ -237,7 +238,7 @@ impl McpPluginService {
         db: &DatabaseConnection,
         plugin_id: &str,
         user_id: &str,
-        updates: Value,
+        updates: McpPluginUpdateRequest,
     ) -> Result<Option<Value>, String> {
         let plugin = mcp_plugin::Entity::find()
             .filter(mcp_plugin::Column::Id.eq(plugin_id))
@@ -250,37 +251,37 @@ impl McpPluginService {
         };
         let mut active: mcp_plugin::ActiveModel = plugin.into();
 
-        if let Some(v) = updates.get("display_name").and_then(|v| v.as_str()) {
-            active.display_name = Set(v.to_string());
+        if let Some(v) = updates.display_name.as_ref() {
+            active.display_name = Set(v.clone());
         }
-        if let Some(v) = updates.get("description").and_then(|v| v.as_str()) {
-            active.description = Set(Some(v.to_string()));
+        if let Some(v) = updates.description.as_ref() {
+            active.description = Set(Some(v.clone()));
         }
-        if let Some(v) = updates.get("plugin_type").and_then(|v| v.as_str()) {
-            active.plugin_type = Set(v.to_string());
+        if let Some(v) = updates.plugin_type.as_ref() {
+            active.plugin_type = Set(v.clone());
         }
-        if let Some(v) = updates.get("server_url").and_then(|v| v.as_str()) {
-            active.server_url = Set(Some(v.to_string()));
+        if let Some(v) = updates.server_url.as_ref() {
+            active.server_url = Set(Some(v.clone()));
         }
-        if let Some(v) = updates.get("command").and_then(|v| v.as_str()) {
-            active.command = Set(Some(v.to_string()));
+        if let Some(v) = updates.command.as_ref() {
+            active.command = Set(Some(v.clone()));
         }
-        if let Some(v) = updates.get("category").and_then(|v| v.as_str()) {
-            active.category = Set(v.to_string());
+        if let Some(v) = updates.category.as_ref() {
+            active.category = Set(v.clone());
         }
-        if let Some(v) = updates.get("sort_order").and_then(|v| v.as_i64()) {
+        if let Some(v) = updates.sort_order {
             active.sort_order = Set(v as i32);
         }
-        if let Some(v) = updates.get("headers") {
+        if let Some(v) = updates.headers.as_ref() {
             active.headers = Set(Some(v.to_string()));
         }
-        if let Some(v) = updates.get("config") {
+        if let Some(v) = updates.config.as_ref() {
             active.config = Set(Some(v.to_string()));
         }
-        if let Some(v) = updates.get("args") {
+        if let Some(v) = updates.args.as_ref() {
             active.args = Set(Some(v.to_string()));
         }
-        if let Some(v) = updates.get("env") {
+        if let Some(v) = updates.env.as_ref() {
             active.env = Set(Some(v.to_string()));
         }
         active.updated_at = Set(Some(Utc::now().naive_utc()));

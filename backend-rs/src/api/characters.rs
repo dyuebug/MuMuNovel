@@ -102,6 +102,66 @@ pub(crate) struct GenerateCharacterRequest {
     model: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GenerateCharacterTaskError {
+    ProjectNotFoundOrAccessDenied,
+    CharacterNotFoundOrAccessDenied,
+    InvalidMainCareer(String),
+    SyncCharacterCareers(String),
+    BadRequest(String),
+    BadGateway(String),
+    Internal(String),
+}
+
+impl std::fmt::Display for GenerateCharacterTaskError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProjectNotFoundOrAccessDenied => write!(f, "项目不存在或无权限"),
+            Self::CharacterNotFoundOrAccessDenied => write!(f, "角色不存在或无权限"),
+            Self::InvalidMainCareer(message) => write!(f, "{}", message),
+            Self::SyncCharacterCareers(message) => write!(f, "{}", message),
+            Self::BadRequest(message) => write!(f, "{}", message),
+            Self::BadGateway(message) => write!(f, "{}", message),
+            Self::Internal(message) => write!(f, "{}", message),
+        }
+    }
+}
+
+fn map_generate_character_task_error(
+    error: GenerateCharacterTaskError,
+) -> (StatusCode, Json<Value>) {
+    match error {
+        GenerateCharacterTaskError::ProjectNotFoundOrAccessDenied => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"success": false, "message": "项目不存在或无权限"})),
+        ),
+        GenerateCharacterTaskError::CharacterNotFoundOrAccessDenied => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"success": false, "message": "角色不存在或无权限"})),
+        ),
+        GenerateCharacterTaskError::InvalidMainCareer(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"success": false, "message": message})),
+        ),
+        GenerateCharacterTaskError::SyncCharacterCareers(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"success": false, "message": message})),
+        ),
+        GenerateCharacterTaskError::BadRequest(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"success": false, "message": message})),
+        ),
+        GenerateCharacterTaskError::BadGateway(message) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"success": false, "message": message})),
+        ),
+        GenerateCharacterTaskError::Internal(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": message})),
+        ),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SubCareerPayload {
     career_id: String,
@@ -1085,19 +1145,25 @@ pub(crate) async fn generate_character_task(
     db: &DatabaseConnection,
     user_id: &str,
     body: GenerateCharacterRequest,
-) -> Result<Value, String> {
+) -> Result<Value, GenerateCharacterTaskError> {
     let project_model = load_generate_project(db, &body.project_id, user_id)
-        .await?
-        .ok_or_else(|| "项目不存在或无权限".to_string())?;
+        .await
+        .map_err(GenerateCharacterTaskError::Internal)?
+        .ok_or(GenerateCharacterTaskError::ProjectNotFoundOrAccessDenied)?;
 
-    let prompt_template = load_character_prompt_template(db, user_id).await?;
-    let project_context = build_character_generation_context(db, &project_model).await?;
+    let prompt_template = load_character_prompt_template(db, user_id)
+        .await
+        .map_err(GenerateCharacterTaskError::Internal)?;
+    let project_context = build_character_generation_context(db, &project_model)
+        .await
+        .map_err(GenerateCharacterTaskError::Internal)?;
     let user_input = build_character_generation_user_input(&body);
 
     let mut params = HashMap::new();
     params.insert("project_context".to_string(), project_context);
     params.insert("user_input".to_string(), user_input);
-    let prompt = PromptTemplateService::format_prompt(&prompt_template, &params)?;
+    let prompt = PromptTemplateService::format_prompt(&prompt_template, &params)
+        .map_err(GenerateCharacterTaskError::Internal)?;
 
     let ai_config = SettingsService::build_ai_config(
         db,
@@ -1107,16 +1173,17 @@ pub(crate) async fn generate_character_task(
         None,
     )
     .await
-    .map_err(|error| error.to_string())?;
+    .map_err(GenerateCharacterTaskError::BadRequest)?;
     let ai_service = AIService::new(ai_config);
     let response = ai_service
         .generate_text(&prompt, None, None)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(GenerateCharacterTaskError::BadGateway)?;
 
     let cleaned = clean_json_response(&response.content);
-    let ai_payload = serde_json::from_str::<Value>(&cleaned)
-        .map_err(|error| format!("角色生成结果不是有效 JSON: {}", error))?;
+    let ai_payload = serde_json::from_str::<Value>(&cleaned).map_err(|error| {
+        GenerateCharacterTaskError::BadGateway(format!("角色生成结果不是有效JSON: {}", error))
+    })?;
 
     let name = value_text(ai_payload.get("name"))
         .or_else(|| normalized_string(body.name.as_deref()))
@@ -1146,14 +1213,15 @@ pub(crate) async fn generate_character_task(
         age.as_deref(),
         gender.as_deref(),
     )
-    .await?
-    .ok_or_else(|| "项目不存在或无权限".to_string())?;
+    .await
+    .map_err(GenerateCharacterTaskError::Internal)?
+    .ok_or(GenerateCharacterTaskError::ProjectNotFoundOrAccessDenied)?;
 
     let careers = career::Entity::find()
         .filter(career::Column::ProjectId.eq(&project_model.id))
         .all(db)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| GenerateCharacterTaskError::Internal(error.to_string()))?;
     let (main_career_id, main_career_stage, sub_careers) =
         resolve_career_payloads(&project_model.id, &ai_payload, &careers);
     validate_main_career(
@@ -1164,11 +1232,13 @@ pub(crate) async fn generate_character_task(
     )
     .await
     .map_err(|(_, Json(payload))| {
-        payload
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("主职业信息无效")
-            .to_string()
+        GenerateCharacterTaskError::InvalidMainCareer(
+            payload
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("主职业信息无效")
+                .to_string(),
+        )
     })?;
 
     let character = persist_character_extra_fields(
@@ -1184,7 +1254,8 @@ pub(crate) async fn generate_character_task(
         sub_careers.as_deref(),
         false,
     )
-    .await?;
+    .await
+    .map_err(GenerateCharacterTaskError::Internal)?;
 
     sync_character_careers(
         db,
@@ -1195,20 +1266,24 @@ pub(crate) async fn generate_character_task(
     )
     .await
     .map_err(|(_, Json(payload))| {
-        payload
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("同步角色职业失败")
-            .to_string()
+        GenerateCharacterTaskError::SyncCharacterCareers(
+            payload
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("同步角色职业失败")
+                .to_string(),
+        )
     })?;
 
     let refreshed = character::Entity::find_by_id(&character.id)
         .one(db)
         .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "角色不存在或无权限".to_string())?;
+        .map_err(|error| GenerateCharacterTaskError::Internal(error.to_string()))?
+        .ok_or(GenerateCharacterTaskError::CharacterNotFoundOrAccessDenied)?;
 
-    enrich_character(db, refreshed).await
+    enrich_character(db, refreshed)
+        .await
+        .map_err(GenerateCharacterTaskError::Internal)
 }
 
 async fn generate_character(
@@ -1216,194 +1291,9 @@ async fn generate_character(
     Extension(claims): Extension<Claims>,
     Json(body): Json<GenerateCharacterRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let project_model = load_generate_project(&db, &body.project_id, &claims.sub)
+    let payload = generate_character_task(&db, &claims.sub, body)
         .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": error})),
-            )
-        })?
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "项目不存在或无权限"})),
-        ))?;
-
-    let prompt_template = load_character_prompt_template(&db, &claims.sub)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": error})),
-            )
-        })?;
-    let project_context = build_character_generation_context(&db, &project_model)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": error})),
-            )
-        })?;
-    let user_input = build_character_generation_user_input(&body);
-
-    let mut params = HashMap::new();
-    params.insert("project_context".to_string(), project_context);
-    params.insert("user_input".to_string(), user_input);
-    let prompt =
-        PromptTemplateService::format_prompt(&prompt_template, &params).map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": error})),
-            )
-        })?;
-
-    let ai_config = SettingsService::build_ai_config(
-        &db,
-        &claims.sub,
-        body.provider.as_deref(),
-        body.model.as_deref(),
-        None,
-    )
-    .await
-    .map_err(|error| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"success": false, "message": error})),
-        )
-    })?;
-    let ai_service = AIService::new(ai_config);
-    let response = ai_service
-        .generate_text(&prompt, None, None)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({"success": false, "message": error})),
-            )
-        })?;
-
-    let cleaned = clean_json_response(&response.content);
-    let ai_payload = serde_json::from_str::<Value>(&cleaned).map_err(|error| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({
-                "success": false,
-                "message": format!("角色生成结果不是有效JSON: {}", error),
-            })),
-        )
-    })?;
-
-    let name = value_text(ai_payload.get("name"))
-        .or_else(|| normalized_string(body.name.as_deref()))
-        .unwrap_or_else(|| "未命名角色".to_string());
-    let age = value_text(ai_payload.get("age"));
-    let gender = value_text(ai_payload.get("gender"));
-    let appearance = value_text(ai_payload.get("appearance"));
-    let personality = value_text(ai_payload.get("personality"));
-    let background = value_text(ai_payload.get("background"))
-        .or_else(|| normalized_string(body.background.as_deref()));
-    let traits = value_text(ai_payload.get("traits"));
-    let relationships = value_text(ai_payload.get("relationships_text"));
-    let role_type = value_text(ai_payload.get("role_type"))
-        .or_else(|| normalized_string(body.role_type.as_deref()))
-        .or_else(|| Some("supporting".to_string()));
-
-    let created = CharacterService::create(
-        &db,
-        &project_model.id,
-        &claims.sub,
-        &name,
-        false,
-        role_type.as_deref(),
-        personality.as_deref(),
-        background.as_deref(),
-        appearance.as_deref(),
-        age.as_deref(),
-        gender.as_deref(),
-    )
-    .await
-    .map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": error})),
-        )
-    })?
-    .ok_or((
-        StatusCode::NOT_FOUND,
-        Json(json!({"success": false, "message": "项目不存在或无权限"})),
-    ))?;
-
-    let careers = career::Entity::find()
-        .filter(career::Column::ProjectId.eq(&project_model.id))
-        .all(&db)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": error.to_string()})),
-            )
-        })?;
-    let (main_career_id, main_career_stage, sub_careers) =
-        resolve_career_payloads(&project_model.id, &ai_payload, &careers);
-    validate_main_career(
-        &db,
-        &project_model.id,
-        main_career_id.as_deref(),
-        main_career_stage,
-    )
-    .await?;
-
-    let character = persist_character_extra_fields(
-        &db,
-        created,
-        relationships.as_deref(),
-        None,
-        None,
-        traits.as_deref(),
-        None,
-        main_career_id.as_deref(),
-        main_career_stage,
-        sub_careers.as_deref(),
-        false,
-    )
-    .await
-    .map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": error})),
-        )
-    })?;
-
-    sync_character_careers(
-        &db,
-        &character,
-        main_career_id.as_deref(),
-        main_career_stage,
-        sub_careers.as_deref(),
-    )
-    .await?;
-
-    let refreshed = character::Entity::find_by_id(&character.id)
-        .one(&db)
-        .await
-        .map_err(|error| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": error.to_string()})),
-            )
-        })?
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "角色不存在或无权限"})),
-        ))?;
-    let payload = enrich_character(&db, refreshed).await.map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": error})),
-        )
-    })?;
-
+        .map_err(map_generate_character_task_error)?;
     Ok(Json(payload))
 }
 

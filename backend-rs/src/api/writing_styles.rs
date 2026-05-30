@@ -6,21 +6,17 @@ use axum::{
     Router,
 };
 use sea_orm::DatabaseConnection;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::services::auth::Claims;
+use crate::services::writing_style_request_service::{
+    build_create_writing_style_request_from_typed_route_payload,
+    build_set_default_style_project_id,
+    build_update_writing_style_request_from_typed_route_payload, BuildSetDefaultStyleRequestError,
+    CreateWritingStyleRouteRequest, SetDefaultStyleRouteBody, SetDefaultStyleRouteQuery,
+    UpdateWritingStyleRouteRequest,
+};
 use crate::services::writing_style_service::WritingStyleService;
-
-#[derive(Deserialize, Default)]
-struct SetDefaultQuery {
-    project_id: Option<String>,
-}
-
-#[derive(Deserialize, Default)]
-struct SetDefaultBody {
-    project_id: Option<String>,
-}
 
 async fn list_presets(
     Extension(db): Extension<DatabaseConnection>,
@@ -86,9 +82,10 @@ async fn get_style(
 async fn create_style(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
-    Json(body): Json<Value>,
+    Json(body): Json<CreateWritingStyleRouteRequest>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    WritingStyleService::create_style(&db, &claims.sub, &body)
+    let request = build_create_writing_style_request_from_typed_route_payload(body);
+    WritingStyleService::create_style(&db, &claims.sub, &request)
         .await
         .map(|v| (StatusCode::CREATED, Json(v)))
         .map_err(|e| {
@@ -103,9 +100,10 @@ async fn update_style(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
     Path(style_id): Path<i32>,
-    Json(body): Json<Value>,
+    Json(body): Json<UpdateWritingStyleRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    WritingStyleService::update_style(&db, &claims.sub, style_id, &body)
+    let request = build_update_writing_style_request_from_typed_route_payload(body);
+    WritingStyleService::update_style(&db, &claims.sub, style_id, &request)
         .await
         .map(Json)
         .map_err(|e| {
@@ -136,20 +134,16 @@ async fn set_default_style(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
     Path(style_id): Path<i32>,
-    Query(params): Query<SetDefaultQuery>,
-    body: Option<Json<SetDefaultBody>>,
+    Query(params): Query<SetDefaultStyleRouteQuery>,
+    body: Option<Json<SetDefaultStyleRouteBody>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let project_id = body
-        .and_then(|Json(payload)| payload.project_id)
-        .or(params.project_id)
-        .unwrap_or_default();
-
-    if project_id.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"detail": "project_id is required"})),
-        ));
-    }
+    let project_id = build_set_default_style_project_id(params, body.map(|Json(payload)| payload))
+        .map_err(|error| match error {
+            BuildSetDefaultStyleRequestError::MissingProjectId => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "project_id is required"})),
+            ),
+        })?;
 
     WritingStyleService::set_default_style(&db, &claims.sub, style_id, &project_id)
         .await
