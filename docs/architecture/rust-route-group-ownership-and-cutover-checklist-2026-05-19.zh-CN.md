@@ -45,27 +45,27 @@ rollback 指在不改业务数据语义的前提下，把 route group 流量切�
 | `health / livez / readyz` | Rust | 保持现有 `rust-health` / `rust-livez` / `rust-readiness` probe；另补 `rust-health-db-sessions` 作为结构化 DB 统计 smoke | Nginx health path 指回 Python 或临时下线 Rust health gate | Rust 启动链、DB readiness、config bootstrap 正常 | 已成型 |
 | `auth` | Rust | 已补公开 `config` 读取、`logout` 动作、`linuxdo/url` 未配置分支、`callback` 缺参 public error、`local/login` 与 `bind/login` 错误凭证 public failure，以及 `/user`、`/password/status`、`/password/set`、`/password/initialize`、`/refresh` 五条登录边界；后续再补真实登录态建立与 callback 成功分支 smoke | `/api/auth*` 指回 Python | JWT secret、cookie policy、public path policy 已与 Phase 4 收口一致；`local/login` probe 还依赖 `local_auth_enabled=true` 的当前部署前提，而 `bind/login` 不需要这一前置检查 | 已有第一版 owner/fallback 资产，仍需更强业务 smoke |
 | `users` | Rust | 已补 `/api/users` 列表读侧与 `/api/users/current` 两条未登录鉴权 probe；后续再补管理员权限成功/403 分支等更强 smoke | `/api/users*` 指回 Python；但需额外确认前端当前用户链路是否改回 `/api/auth/user` | users 表字段语义保持兼容；`users/current` 与 Python 当前用户路径不完全同构 | 已有第一版 smoke，fallback 仍需谨慎 |
-| `settings` | Rust | 已补根路径读取、`/api-key`、`/models`、`/fetch-models`、`/test` 与 `/check-function-calling` 子路由未登录 owner probe；Python fallback 也已补 `/api/settings`、`/api/settings/api-key`、`/api/settings/fetch-models`、`/api/settings/test` 与 `/api/settings/check-function-calling` 五条线索；后续再补保存配置、模型探测成功/回退、preset 激活等更强 smoke | `/api/settings*` 指回 Python | `settings` 表默认值语义已完成第一轮收口；API key / preferences 仍允许为空 | owner 稳定，需补更强 smoke |
-| `projects` | Rust | 现已补 `GET /api/projects` 未登录 owner probe、`POST /api/projects/validate-import` 同路径 public/business probe、`POST /api/projects/import` 的合法 multipart 鉴权 probe，以及 `POST /api/projects/{project_id}/export-data` 的最小 JSON 鉴权 probe；下一步再补更强的详情/修复类 smoke | 需要新增明确的 Python fallback location，或让 `/api/projects*` 临时回到 Python catch-all | `projects` 表字段已做一组中风险收口；当前更应警惕旧注释/旧认知与真实 owner 不一致 | Phase 5 重点 |
-| `wizard-stream` | Rust | 现已补 `POST /api/wizard-stream/outline`、`POST /api/wizard-stream/world-building/{project_id}/regenerate`、`POST /api/wizard-stream/career-system`、`POST /api/wizard-stream/characters` 与 `POST /api/wizard-stream/cleanup/{project_id}` 五条 through-gateway probe；其中 `career-system` 与 `characters` 已进入真实 fallback 矩阵，而 `cleanup` 仍只作为 Rust owner 收口证据 | 回退方式是调整或删除 Rust 显式 location，让 `/api/wizard-stream/` catch-all 生效 | 流式 SSE 行为、keep-alive、模型访问配置兼容 | Phase 5 重点 |
-| `inspiration` | Rust | 列表/生成至少 1 条 GET/POST smoke | `/api/inspiration*` 指回 Python | 依赖配置与 AI provider 能力稳定 | 可补 smoke 后固化 |
+| `settings` | Rust | 已补根路径读取、`/api-key`、`/presets`、preset 创建/更新/删除/from-current/activate/test、`/models`、`/fetch-models`、`/test` 与 `/check-function-calling` 子路由未登录 owner probe；Python fallback 也已补同路径低前提线索；2026-06-02 新增 `GET /api/settings` 与 `GET /api/settings/presets` 登录态 business smoke（Rust/Python 双侧），并让公共 smoke runner 支持本地登录会话与 cookie 复用；2026-06-03 又补入 `POST /api/settings/test` 与 `POST /api/settings/check-function-calling` 登录态 business smoke（Rust/Python 双侧），且刻意锁定稳定 `200 + failure shell`，避免把 route-group readiness 绑到真实上游 provider 成功态；同日 Rust owner 继续补齐 `settings/test` / `check-function-calling` 的 probe transport owner：已支持 openai-compatible root base URL 优先切到 normalized `/v1` candidate，并在 success path 返回稳定 `details.transport_diagnostics.events/attempts/summary`；同日后续切片又把 `fallback_strategy == auto` 的 backup endpoint failover 真正迁入 Rust 执行，不再只停留在 widened diagnostics metadata，且已用 auto/manual focused tests 锁住 primary -> backup 与 manual-no-failover 语义；同日再向前收口后，candidate fallback 与 backup failover 的触发边界也已对齐 Python：`404/405/415/422` 与 parse/non-JSON drift 只允许切下一个 base URL candidate，不再错误触发 backup endpoint，而 `5xx/429` 与网络错误仍可触发真实 backup failover；后续再补保存配置、preset CRUD success 与更深层 diagnostics/provider parity smoke | `/api/settings*` 指回 Python | `settings` 表默认值语义已完成第一轮收口；API key / preferences 仍允许为空；`presets` 仍存放于 `preferences` JSON，不引入新 schema owner；真实 business smoke 还依赖 `LOCAL_AUTH_USERNAME / LOCAL_AUTH_PASSWORD` 环境前提 | owner 稳定，已进入第一批 fallback shrink readiness 模板，且 probe lane 已从外壳 smoke 推进到真实 transport execution owner 收口 |
+| `projects` | Rust | 现已补 `GET /api/projects` 列表、`GET /api/projects/{project_id}` 详情、`POST /api/projects` 创建、`PUT /api/projects/{project_id}` 更新、`DELETE /api/projects/{project_id}` 删除、`GET /api/projects/{project_id}/export` TXT 导出、`POST /api/projects/validate-import` 同路径 public/business probe、`POST /api/projects/import` 的合法 multipart 鉴权 probe、`POST /api/projects/{project_id}/export-data` 的最小 JSON 鉴权 probe，以及 `POST /api/projects/{project_id}/check-consistency`、`fix-organizations`、`fix-member-counts` 三条维护类入口 probe | 需要新增明确的 Python fallback location，或让 `/api/projects*` 临时回到 Python catch-all | `projects` 表字段已做一组中风险收口；当前更应警惕旧注释/旧认知与真实 owner 不一致；基础 CRUD / TXT 导出 probes 仍只证明低前提鉴权边界，维护类入口依赖 `organization_members` / relationships 等共享表语义 | 第一批 fallback shrink readiness 模板 |
+| `wizard-stream` | Rust | 现已补 `POST /api/wizard-stream/outline`、`POST /api/wizard-stream/world-building`、`POST /api/wizard-stream/world-building/{project_id}/regenerate`、`POST /api/wizard-stream/career-system`、`POST /api/wizard-stream/characters` 与 `POST /api/wizard-stream/cleanup/{project_id}` 六条 through-gateway probe；其中 `world-building`、`regenerate`、`career-system` 与 `characters` 已进入真实 fallback 矩阵，而 `cleanup` 仍只作为 Rust owner 收口证据 | 回退方式是调整或删除 Rust 显式 location，让 `/api/wizard-stream/` catch-all 生效 | 流式 SSE 行为、keep-alive、模型访问配置兼容；当前 probes 仍主要证明登录边界，不代表 SSE 业务成功态已完整等价 | Phase 5 重点 |
+| `inspiration` | Rust | 已补 `POST /api/inspiration/generate-options` 与 `POST /api/inspiration/quick-generate` 两条低前提 owner/fallback probe；后续再补 refine-options 与登录态 AI 生成成功/失败分支 stronger smoke | `/api/inspiration*` 指回 Python | 依赖配置、AI provider、prompt template 与可选 web research 语义稳定；当前 Rust 组无 GET 列表入口 | 已进入 P1 starter evidence |
 | `outlines` | Rust | CRUD + expand/create-chapters 中至少 1 条 | `/api/outlines*` 指回 Python | outlines 表 / compat 路径保持兼容 | 可补 smoke 后固化 |
 | `characters` | Rust | CRUD + generate-stream 至少各 1 条 | `/api/characters*` 指回 Python | characters 表默认值与生成兼容字段保持一致 | 可补 smoke 后固化 |
-| `careers` | Rust | 基础 CRUD + `generate-system` | `/api/careers*` 指回 Python | careers / character link 表兼容 | 可补 smoke 后固化 |
-| `organizations` | Rust | CRUD + `generate-stream` | `/api/organizations*` 指回 Python | `organization_members` 字段级一致性仍需持续关注 | 有 schema 风险注记 |
-| `relationships` | Rust | 基础 CRUD smoke | `/api/relationships*` 指回 Python | 关系表兼容 | 可补 smoke |
-| `writing_styles` | Rust | CRUD smoke | `/api/writing-styles*` 指回 Python | styles/preset 数据结构兼容 | 可补 smoke |
-| `foreshadows` | Rust | CRUD + context/stats 至少 1 条 | `/api/foreshadows*` 指回 Python | foreshadows 表已在 Alembic 覆盖 | 可补 smoke |
+| `careers` | Rust | 已补 `GET /api/careers?project_id=...` 与 `GET /api/careers/generate-system?project_id=...` 两条低前提 owner/fallback probe；后续再补职业 CRUD、角色职业绑定和生成成功态 stronger smoke | `/api/careers*` 指回 Python | careers / character link 表兼容；`generate-system` 还依赖 AI 配置、SSE 与职业落库语义 | 已进入 P1 starter evidence |
+| `organizations` | Rust | 已补 `GET /api/organizations/project/{project_id}` 与 `POST /api/organizations/generate-stream` 两条低前提 owner/fallback probe；后续再补组织详情、成员列表、成员增删改和生成成功态 stronger smoke | `/api/organizations*` 指回 Python | `organization_members` 字段级一致性仍需持续关注；生成流还依赖角色组织化、成员计数与 generation_history 语义 | 已进入 P1 starter evidence，仍有 schema 风险注记 |
+| `relationships` | Rust | 已补 `GET /api/relationships/project/{project_id}` 与 `GET /api/relationships/graph/{project_id}` 两条低前提 owner/fallback probe；后续再补类型列表 public 读取、创建/更新/删除成功态等更强 smoke | `/api/relationships*` 指回 Python | 关系表兼容；graph 还依赖 `organization_members` 与角色节点 join 语义 | 已进入 P1 starter evidence |
+| `writing_styles` | Rust | 已补 `GET /api/writing-styles/user` 与 `GET /api/writing-styles/project/{project_id}` 两条低前提 owner/fallback probe；后续再补 presets public list、创建/更新/删除、set-default、init-defaults 等 stronger smoke | `/api/writing-styles*` 指回 Python | styles/preset 数据结构兼容；project default style 仍依赖 `project_default_styles` 与用户自定义风格语义 | 已进入 P1 starter evidence |
+| `foreshadows` | Rust | 已补 `GET /api/foreshadows/projects/{project_id}` 与 `GET /api/foreshadows/projects/{project_id}/stats` 两条低前提 owner/fallback probe；后续再补 context、pending-resolve、plant/resolve/abandon 写侧和登录态业务 smoke | `/api/foreshadows*` 指回 Python | foreshadows 表已在 Alembic 覆盖；章节生成上下文依赖 chapter_number 与 pending/overdue 查询语义 | 已进入 P1 starter evidence |
 | `chapters` | Rust | 已补列表、analysis、batch analysis status、batch active tasks、batch stream、batch resume、single generate-background、single generate-stream、regeneration tasks 九条 through-gateway probe；现在还新增 `batch-generate/{batch_id}/status` 与 `batch-generate/{batch_id}/cancel` 两条 P0 asymmetric 样本；下一步再补更强的 business smoke | `/api/chapters*` 指回 Python | 章节域使用 shared DB；任务语义、checkpoint、SSE event shape 已在 Phase 3/4 前后持续收口 | Phase 5 最高优先级之一 |
-| `memories` | Rust | 已补 `GET /api/memories/projects/{project_id}/stats` 与 `POST /api/memories/projects/{project_id}/search?query=test` 两条 through-gateway probe，确认 API 侧仍命中 Rust，且不再只靠单一读侧路径 | 去掉 `/api/memories` 显式 Rust location，恢复 Python API owner | 需区分 API owner 与页面/非 API fallback owner | Phase 5 重点 |
-| `mcp_plugins` | Rust | 列表 / 配置读写 smoke | `/api/mcp*` 指回 Python | mcp_plugins 表兼容 | 可补 smoke |
-| `prompt_templates` | Rust | 列表 + 保存 smoke | `/api/prompt-templates*` 指回 Python | prompt_templates 表兼容 | 可补 smoke |
-| `prompt_workshop` | Rust | 列表 + 互动/提交流程 smoke | `/api/prompt-workshop*` 指回 Python | prompt workshop 三张表 Alembic 已覆盖 | 可补 smoke |
-| `background_tasks` | Rust | 任务列表 + 流式或状态查询 smoke | `/api/background-tasks*` 指回 Python | shared task registry / stream hub 正常 | 可补 smoke |
+| `memories` | Rust | 已补 `stats`、`memories` 列表、`analysis/{chapter_id}`、`foreshadows`、`search`、`chapters/{chapter_id}/memories` 删除六条 `/api/memories/projects/{project_id}` through-gateway probe，确认 API 侧仍命中 Rust，且覆盖读、查、删三类入口 | 去掉 `/api/memories` 显式 Rust location，恢复 Python API owner；不要误动 `/memories/` 页面/非 API fallback | 需区分 API owner 与页面/非 API fallback owner；记忆 API 仍依赖 shared DB / vector memory 侧效应 | Phase 5 重点，API readiness 已明显增强 |
+| `mcp_plugins` | Rust | 已补 `GET /api/mcp/plugins` 与 `POST /api/mcp/plugins/simple` 两条低前提 owner/fallback probe；后续再补插件详情、toggle/status/tools/test/call 和登录态创建成功/失败 stronger smoke | `/api/mcp*` 指回 Python | mcp_plugins 表兼容；插件注册/断开还依赖 MCP client session 与后台任务语义 | 已进入 P1 starter evidence |
+| `prompt_templates` | Rust | 已补 `GET /api/prompt-templates` 与 `GET /api/prompt-templates/system-defaults` 两条低前提 owner/fallback probe；后续再补 categories、sync-status、保存/删除/导入/预览 stronger smoke | `/api/prompt-templates*` 指回 Python | prompt_templates 表兼容；managed template sync、系统默认模板和 preview 参数替换语义需继续对齐 | 已进入 P1 starter evidence |
+| `prompt_workshop` | Rust | 已补 `POST /api/prompt-workshop/submit` 与 `POST /api/prompt-workshop/items/{item_id}/like` 两条低前提 owner/fallback probe；后续再补公开 items/status、import/download/my-submissions/admin 和登录态业务 stronger smoke | `/api/prompt-workshop*` 指回 Python | prompt workshop 三张表 Alembic 已覆盖；该组公开接口与登录接口混合，不能把未登录 probe 误读为公开列表等价 | 已进入 P1 starter evidence |
+| `background_tasks` | Rust | 已补 `GET /api/background-tasks` 与 `POST /api/background-tasks` 两条低前提 owner/fallback probe；后续再补 status/stream/cancel/workflow-state 和真实任务生命周期 stronger smoke | `/api/background-tasks*` 指回 Python | shared task registry / stream hub 正常；SSE keep-alive 与任务缺失 payload 仍需后续验证 | 已进入 P1 starter evidence |
 | `book_import` | Rust | 任务创建 + apply/retry-stream 至少各 1 条 | `/api/book-import*` 指回 Python | 导入工作流与 background task 兼容 | 可补 smoke |
-| `changelog` | Rust | 列表读取 smoke | `/api/changelog*` 指回 Python | 兼容读取 | 低风险 |
-| `polish` | Rust | 单条请求 smoke | `/api/polish*` 指回 Python 或下线该功能 | 依赖 provider 配置 | 低风险但需补 smoke |
-| `ai_test / ai` | Rust | provider test / stream smoke | `/api/ai*` 指回 Python 或直接临时禁用 | provider 配置、超时策略、SSE 行为兼容 | 低风险但需补 smoke |
+| `changelog` | Rust | 已补 `GET /api/changelog` 与 `POST /api/changelog/refresh` 两条 public owner/fallback probe；后续若要作为业务 smoke，需要接受 GitHub API 网络可用性与限流波动 | `/api/changelog*` 指回 Python | 兼容读取；该组无登录依赖，但真实 smoke 依赖 GitHub API 外部可用性 | 已进入 P1 starter evidence |
+| `polish` | Rust | 已补 `POST /api/polish` 与 `POST /api/polish/batch` 两条低前提 owner/fallback probe；后续再补登录态 provider 调用、history 写入和批量结果 stronger smoke | `/api/polish*` 指回 Python 或下线该功能 | 依赖 provider 配置；Python fallback 通过 `get_user_ai_service` 先停在登录依赖 | 已进入 P1 starter evidence |
+| `ai_test / ai` | Rust | 已补 `POST /api/ai-test` 与 `POST /api/ai/test` 两条 Rust auth-boundary asymmetric probe；当前仓库未发现 Python fallback router，暂不纳入 `phase5-p1-fallback` | `/api/ai*` 当前更适合按 Rust-only 或禁用策略处理，而不是假设可回 Python | provider 配置、超时策略、SSE 行为兼容；Python fallback 缺失需单独确认产品保留策略 | 已进入 P1 asymmetric starter evidence |
 
 ---
 
@@ -90,15 +90,39 @@ rollback 指在不改业务数据语义的前提下，把 route group 流量切�
   P0 public/business probe：它对同一个最小导入文件分别固定 Rust owner 与
   Python fallback 的不同成功响应结构，使 `phase5-p0` 不再只依赖未登录
   `401` 边界。
+- `projects` 现在也补入 `GET /api/projects/{project_id}` 详情读侧：
+  它与列表入口一样是低前提未登录边界，但覆盖 Nginx 中单项目详情的显式
+  Rust location，可直接证明 `projects` 不只列表路径具备 owner/fallback
+  双侧证据。
 - `projects` 现在又补入 `POST /api/projects/import`：它与
   `validate-import` 共用同一个最小 multipart 文件，但断言的是合法导入形态下
   的 Rust/Python 鉴权分界，而不是 public-success 结构。
 - `projects` 现在还补入 `POST /api/projects/{project_id}/export-data`：它使用
   最小合法 JSON body `{}`，把 `projects` 的 owner/fallback 证据再扩到 JSON
   写侧导出入口，而不是只停留在列表和 multipart 路径。
+- `projects` 现在继续补入基础 CRUD 与 TXT 导出低前提边界：
+  `POST /api/projects`、`PUT /api/projects/{project_id}`、
+  `DELETE /api/projects/{project_id}` 与 `GET /api/projects/{project_id}/export`
+  同时进入 `phase5-p0` 与 `phase5-p0-fallback`。这把第一批 fallback shrink
+  readiness 的覆盖面从列表、详情、导入、JSON 导出、维护修复扩展到项目基础
+  生命周期与 TXT 导出入口；当前仍只证明 owner/fallback 鉴权边界，不代表
+  登录态创建、更新、删除级联清理或章节 TXT 内容导出完全等价。
+- `projects` 现在还补入 `POST /api/projects/{project_id}/check-consistency`：
+  它覆盖显式 Rust location 中的数据维护入口，并在未登录边界验证 Python
+  fallback 同路径仍可回切。该 probe 只证明 owner/fallback 边界，不代表已验证
+  登录态下的一致性修复报告等价。
+- `projects` 现在继续补入 `POST /api/projects/{project_id}/fix-organizations`
+  和 `POST /api/projects/{project_id}/fix-member-counts`：这两条与
+  `check-consistency` 属于同一组维护类显式 Rust location，补齐后 `projects`
+  的 P0 owner/fallback 证据已覆盖当前 Nginx 中所有项目维护修复入口。
 - `wizard-stream` 现在也从单一 `outline` probe 扩到
   `world-building/{project_id}/regenerate`：它使用最小合法 JSON body `{}`，
   把该组的 owner/fallback 证据从一个 SSE 入口扩到第二个同层级入口。
+- `wizard-stream/world-building` 基础入口现在也进入 `phase5-p0` 与
+  `phase5-p0-fallback`：它使用最小 JSON body `{}`，覆盖 Python 与 Rust 都
+  存在的初始世界观生成 SSE 入口。该 probe 只证明未登录 owner/fallback
+  边界，不代表登录态世界观生成、流式 event shape、模型调用或落库副作用完整
+  等价。
 - `wizard-stream/cleanup/{project_id}` 现在也补入 `phase5-p0`，把该组 owner
   证据再扩到第三条显式 SSE/cleanup 子路径；由于 Python 当前没有同路径 API，
   这条路径暂不进入 `phase5-p0-fallback`。
@@ -131,9 +155,21 @@ rollback 指在不改业务数据语义的前提下，把 route group 流量切�
   `POST /api/memories/projects/{project_id}/search?query=test`：它利用 Python
   侧必填 `query` 查询参数与 Rust 侧可接受 `{}` body 的交集，补上同组第二条
   查询入口 owner/fallback 证据。
+- `memories` 现在进一步补入列表、章节分析读取、未完伏笔读取、章节记忆删除
+  四类 `/api/memories/projects/{project_id}` route。这样该组不再只靠 stats/search
+  判断 owner，而是覆盖 API 侧读、查、删三类低前提边界。
 - `settings/api-key` 现在也加入 `phase5-p0` 与 `phase5-p0-fallback`，因此
   `settings` 不再只覆盖“根路径 + provider 探测子路由”，还补上了已保存凭据
   读取入口的同路径 owner/fallback 证据。
+- `settings/presets` 现在也加入 `phase5-p0` 与 `phase5-p0-fallback`，因此
+  `settings` 的第一批 cutover 资产开始覆盖 `preferences` JSON 内的 preset
+  读取入口。这条路径仍是低前提未登录边界，不证明 preset 业务成功态完整等价，
+  但可直接证明 owner / fallback 在同一路由形态下可切换。
+- `settings/presets` 写侧现在继续补入 create、update、delete、
+  `from-current`、`activate` 与 `test` 六条同路径低前提 probe。至此
+  `settings` 的 P0 owner/fallback 证据已经从 preset 读取扩展到主要 preset
+  管理入口，但仍只证明登录边界和网关 owner/fallback 可切换，不证明登录态下
+  `preferences` JSON 写入、激活应用主字段或 provider 测试结果完整等价。
 
 ### 4.2 P1
 
@@ -144,6 +180,17 @@ rollback 指在不改业务数据语义的前提下，把 route group 流量切�
 3. `characters`
 4. `outlines`
 5. `book_import`
+6. `relationships`
+7. `foreshadows`
+8. `writing_styles`
+9. `organizations`
+10. `careers`
+11. `inspiration`
+12. `mcp_plugins`
+13. `prompt_templates`
+14. `background_tasks`
+15. `prompt_workshop`
+16. `polish`
 
 补充执行资产：
 
@@ -176,10 +223,37 @@ rollback 指在不改业务数据语义的前提下，把 route group 流量切�
   `book-import-cancel-auth-guard-rust`、
   `book-import-apply-auth-guard-rust` 与
   `book-import-retry-stream-auth-guard-rust`、
-  `book-import-apply-stream-auth-guard-rust`
+  `book-import-apply-stream-auth-guard-rust`、
+  `relationships-project-list-auth-guard-rust` 与
+  `relationships-graph-auth-guard-rust`、
+  `foreshadows-project-list-auth-guard-rust` 与
+  `foreshadows-stats-auth-guard-rust`、
+  `writing-styles-user-auth-guard-rust` 与
+  `writing-styles-project-auth-guard-rust`、
+  `organizations-project-list-auth-guard-rust` 与
+  `organizations-generate-stream-auth-guard-rust`、
+  `careers-list-auth-guard-rust` 与
+  `careers-generate-system-auth-guard-rust`、
+  `inspiration-generate-options-auth-guard-rust` 与
+  `inspiration-quick-generate-auth-guard-rust`、
+  `mcp-plugins-list-auth-guard-rust` 与
+  `mcp-plugins-simple-create-auth-guard-rust`、
+  `prompt-templates-list-auth-guard-rust` 与
+  `prompt-templates-system-defaults-auth-guard-rust`、
+  `background-tasks-list-auth-guard-rust` 与
+  `background-tasks-create-auth-guard-rust`、
+  `prompt-workshop-submit-auth-guard-rust` 与
+  `prompt-workshop-like-auth-guard-rust`、
+  `polish-text-auth-guard-rust` 与
+  `polish-batch-auth-guard-rust`、
+  `changelog-public-rust` 与 `changelog-refresh-public-rust`
 - 这还不是完整的 P1 业务 smoke，只是把 `auth` / `users` 从“纯文档待办”
   推进到第一版可执行 profile；现在又把 `characters`、`outlines`、
-  `book_import` 三组推进到 starter slice，但后续仍需补真实登录态、
+  `book_import`、`relationships`、`foreshadows`、`writing_styles`、
+  `organizations`、`careers`、`inspiration`、`mcp_plugins`、
+  `prompt_templates`、`background_tasks`、`prompt_workshop`、`polish`
+  十四组推进到 starter slice，并把 `changelog` 推进到 public starter slice；
+  但后续仍需补真实登录态、
   cookie/session 刷新、管理员权限读写、导入上传/流式等更强业务断言
 - 现已新增第一版 `phase5-p1-fallback` profile，当前覆盖 `auth` 的
   `logout`、`/api/auth/user`、`/api/auth/password/status`，现在还继续补入
@@ -195,7 +269,19 @@ rollback 指在不改业务数据语义的前提下，把 route group 流量切�
   （现已同时包含 project-path、query-list、`generate-stream`、
   `export`、`import`、
   `batch-expand-stream`、`create-chapters-from-plans`、上传创建、task preview，
-  以及 cancel/apply/retry-stream/apply-stream 写侧边界）
+  以及 cancel/apply/retry-stream/apply-stream 写侧边界），
+  以及 `relationships` 的 project-list 与 graph 两条同路径未登录边界，
+  以及 `foreshadows` 的 project-list 与 stats 两条同路径未登录边界，
+  以及 `writing_styles` 的 user 与 project 两条同路径未登录边界，
+  以及 `organizations` 的 project-list 与 generate-stream 两条同路径未登录边界，
+  以及 `careers` 的 list 与 generate-system 两条同路径未登录边界，
+  以及 `inspiration` 的 generate-options 与 quick-generate 两条同路径未登录边界，
+  以及 `mcp_plugins` 的 list 与 simple-create 两条同路径未登录边界，
+  以及 `prompt_templates` 的 list 与 system-defaults 两条同路径未登录边界，
+  以及 `background_tasks` 的 list 与 create 两条同路径未登录边界，
+  以及 `prompt_workshop` 的 submit 与 like 两条同路径未登录边界，
+  以及 `polish` 的 text 与 batch 两条同路径未登录边界，
+  以及 `changelog` 的 public list 与 refresh 两条同路径 public 边界
 - `users` 现在已进入 fallback profile，但应明确解释为同路径
   auth-boundary 线索，而不是管理员列表/当前用户业务语义的完整等价证明
 - `users` 现在也开始具备写侧 fallback 线索，但这些写侧 probe 仍只证明
@@ -207,6 +293,69 @@ rollback 指在不改业务数据语义的前提下，把 route group 流量切�
   Rust owner 侧在同一路径先停在共享鉴权 `401`，Python fallback 侧则继续进入
   公开模型列表逻辑并在最小不可达 base URL 下稳定返回连接失败 `400`；这类路径
   同样不应混入 `phase5-p0-fallback`
+- `ai_test` 现进入独立的 `phase5-p1-asymmetric` profile：当前只收录
+  `POST /api/ai-test` 与别名 `POST /api/ai/test` 的 Rust 未登录边界。
+  仓库未发现对应 Python router，因此这组暂不补 `phase5-p1-fallback`，
+  也不应被统计为“可直接回 Python 的同路径 fallback”。
+- `relationships/project` 与 `relationships/graph` 现新增到 `phase5-p1`
+  与 `phase5-p1-fallback`：这是该组第一版可执行 owner/fallback 证据，证明
+  Nginx 已将默认 API 流量交给 Rust，且 path 级回切后 Python 同路径仍会先停在
+  `verify_project_access()` 的未登录边界。该证据不代表已验证登录态下的关系
+  graph 节点/边聚合语义完整等价。
+- `foreshadows/projects` 与 `foreshadows/projects/{project_id}/stats` 现新增到
+  `phase5-p1` 与 `phase5-p1-fallback`：这是该组第一版可执行
+  owner/fallback 证据，覆盖伏笔列表和统计两个低前提读侧入口。该证据不代表
+  已验证登录态下的 context、pending-resolve、plant/resolve/abandon 等写侧和
+  章节生成上下文语义完整等价。
+- `writing-styles/user` 与 `writing-styles/project/{project_id}` 现新增到
+  `phase5-p1` 与 `phase5-p1-fallback`：这是该组第一版可执行
+  owner/fallback 证据，覆盖用户可用风格列表和项目可用风格列表两个低前提
+  读侧入口。该证据不代表已验证登录态下的 preset 同步、自定义风格 CRUD、
+  默认风格写入或 `project_default_styles` 侧效应完整等价。
+- `organizations/project` 与 `organizations/generate-stream` 现新增到
+  `phase5-p1` 与 `phase5-p1-fallback`：这是该组第一版可执行
+  owner/fallback 证据，覆盖组织列表读侧和组织生成流入口两个低前提边界。
+  该证据不代表已验证登录态下的组织 CRUD、成员增删改、生成结果落库、
+  `organization_members` 字段一致性或 generation_history 语义完整等价。
+- `careers` 列表与 `careers/generate-system` 现新增到 `phase5-p1`
+  与 `phase5-p1-fallback`：这是该组第一版可执行 owner/fallback 证据，
+  覆盖职业列表读侧和职业体系生成 SSE 入口两个低前提边界。该证据不代表
+  已验证登录态下的职业 CRUD、角色职业绑定、生成结果落库、职业阶段进度或
+  character-career 关联语义完整等价。
+- `inspiration/generate-options` 与 `inspiration/quick-generate` 现新增到
+  `phase5-p1` 与 `phase5-p1-fallback`：这是该组第一版可执行
+  owner/fallback 证据，覆盖灵感模式选项生成与快速补全两个低前提生成入口。
+  该证据不代表已验证登录态下的 prompt template、AI provider、web research、
+  retry/validation 或完整灵感工作流语义等价。
+- `mcp/plugins` 列表与 `mcp/plugins/simple` 现新增到 `phase5-p1`
+  与 `phase5-p1-fallback`：这是该组第一版可执行 owner/fallback 证据，
+  覆盖插件列表读侧和标准 JSON 配置创建入口两个低前提边界。该证据不代表
+  已验证登录态下的插件创建/更新、toggle、status/tools/test/call、MCP session
+  注册/断开或后台任务语义完整等价。
+- `prompt-templates` 列表与 `prompt-templates/system-defaults` 现新增到
+  `phase5-p1` 与 `phase5-p1-fallback`：这是该组第一版可执行
+  owner/fallback 证据，覆盖用户模板列表和系统默认模板读取两个低前提边界。
+  该证据不代表已验证登录态下的 categories、sync-status、保存/删除/导入/预览、
+  managed template sync 或 prompt formatting 语义完整等价。
+- `background-tasks` 列表与创建入口现新增到 `phase5-p1` 与
+  `phase5-p1-fallback`：这是该组第一版可执行 owner/fallback 证据，覆盖
+  任务列表读侧和任务创建写侧两个低前提边界。该证据不代表已验证登录态下的
+  task registry 生命周期、SSE stream、cancel、workflow-state 或任务缺失 payload
+  语义完整等价。
+- `prompt-workshop/submit` 与 `prompt-workshop/items/{item_id}/like` 现新增到
+  `phase5-p1` 与 `phase5-p1-fallback`：这是该组第一版可执行
+  owner/fallback 证据，覆盖提交和互动两个登录态入口边界。该证据不代表已验证
+  公开 items/status、import/download、my-submissions、admin 审核或云端代理语义
+  完整等价。
+- `polish` 单条与批量入口现新增到 `phase5-p1` 与 `phase5-p1-fallback`：
+  这是该组第一版可执行 owner/fallback 证据，覆盖 AI 去味单条和批量两个入口。
+  该证据不代表已验证登录态 provider 调用、PromptService 模板、generation_history
+  写入或批量结果 payload 语义完整等价。
+- `changelog` 列表与刷新入口现新增到 `phase5-p1` 与
+  `phase5-p1-fallback`：这是该组第一版 public owner/fallback 证据，覆盖
+  `GET /api/changelog` 与 `POST /api/changelog/refresh`。该证据证明双侧同路径
+  public contract 形态存在，但真实 smoke 仍受 GitHub API 可用性、限流和网络
+  超时影响，不应和本地纯 auth-boundary probe 等价解读。
 
 ---
 
@@ -265,18 +414,170 @@ Phase 5 P0 route-group 的第一版可执行 rollback 手册已单独整理为�
   同时拥有根路径、模型列表探测、连接测试三条低前提回切线索
 - `settings/check-function-calling` 现在也进入 `phase5-p0-fallback`，因此
   `settings` 的低前提探测子路由矩阵已经基本补齐
+- `settings/presets` 现在也进入 `phase5-p0-fallback`，因此 `settings`
+  已开始覆盖 `preferences` JSON 内 preset 读取入口的同路径回切线索，
+  可作为第一批 fallback shrink readiness 模板的一部分
+- `settings/presets` 写侧入口现在也进入 `phase5-p0-fallback`，覆盖
+  create、update、delete、from-current、activate、test；这让 `settings`
+  的回切证据从 provider 探测扩展到 `preferences` JSON preset 管理边界
+- `settings` 现在已固化专用 shrink-readiness profiles：
+  `phase5-settings-owner`（13 条）、`phase5-settings-fallback`（12 条）与
+  `phase5-settings-asymmetric`（2 条）。其中 `settings/models` 明确归入
+  asymmetric profile，因为 Rust owner 是鉴权边界，而 Python fallback 是 public
+  network-error 分支，不能混进普通 fallback 包。
+- `settings` 现又补入第一组登录态 business smoke profile：
+  `phase5-settings-business-owner` 与 `phase5-settings-business-fallback`
+  分别承载 `settings-get-business-rust` / `settings-get-business-python-fallback`。
+  这两条 probe 复用新的公共本地登录 bootstrap，要求 manifest 显式声明
+  `requires_login=true`，并通过 `GET /api/settings` 的稳定外壳字段证明请求已进入
+  真实登录态业务 handler，而不是仍停在未登录边界。
+- `settings` 现在又补入第二组登录态 business smoke：
+  `settings-presets-get-business-rust` /
+  `settings-presets-get-business-python-fallback`。它们共同覆盖
+  `GET /api/settings/presets`，断言 `presets / total / active_preset_id`
+  这三个稳定业务字段，从而把 `settings` 的真实登录态证据扩到
+  `preferences` JSON preset 读取入口，不再只靠根设置读取。
+- 与这组新 business smoke 同步，Rust preset owner 也已补齐一轮真实业务语义
+  收口：preset 读取 / 创建 / 更新 / 删除 / 激活 / from-current 在缺少
+  `settings` 行时会自动创建默认设置，不再暴露 `settings not found`；
+  同时对齐了“激活中的预设不可删除”的 `400` 保护和 activate 返回摘要。
+  这说明 `settings` route-group 不只是 probe 数量在增长，而是已经开始把
+  Python 定义的 preset success/failure 业务契约收进 Rust owner。
+- `settings` 主设置写侧现在也完成了一轮真实 Python 契约收口：
+  - `POST /api/settings` 保持 upsert
+  - `PUT /api/settings` 不再隐式创建，而是在缺失设置时返回
+    `404 {"detail":"设置不存在，请先创建设置"}`
+  - `DELETE /api/settings` 在缺失设置时返回
+    `404 {"detail":"设置不存在"}`
+  - `POST /api/settings` 手动修改当前配置且偏离激活中的 preset config 时，
+    Rust 现在也会自动取消该 preset 的激活状态
+  这意味着 `settings` route-group 的剩余 Phase 5 缺口，已经从基础
+  save/update/delete 语义进一步收缩到更强的登录态 provider-test /
+  preset create-update-delete-activate success smoke，而不是仍卡在主写路径契约。
+- `settings` preset action owner 现在也继续收口到 Python 语义：
+  - `POST /api/settings/presets/{preset_id}/activate` 不再借由 preset config
+    回写 `api_backup_urls`、`provider_type`、`fallback_strategy`、
+    `azure_api_version`
+  - `POST /api/settings/presets/from-current` 不再把当前 `settings` 行里的
+    扩展 provider 状态原样快照进 preset config，而是改为 Python-shaped
+    snapshot 默认值
+  - 这让 `settings` 的剩余 Phase 5 缺口进一步聚焦到登录态 success smoke、
+    provider-test/result parity，而不是仍卡在 preset action contract drift
+- `settings/models` 的 provider-specific success contract 现在也完成了一轮
+  真实 Python 语义收口：
+  - openai-compatible providers 已按 Python 风格尝试 candidate URL fallback，
+    不再只打单一路径 `/models`
+  - Azure 在这条路由上改为 `api-key` header，并在 `404/403` 或空结果时
+    返回 `200 + 空列表 + 友好 message`
+  - Anthropic 不再走 Rust 本地 curated model 列表，而是改为真实请求
+    `/v1/models`
+  - Gemini 现在只暴露支持 `generateContent` 的模型
+  - 这意味着 `settings` route-group 的剩余 Phase 5 缺口，进一步从
+    model-list success path 收缩到 `settings/test` /
+    `check-function-calling` 的 probe parity 与更强的登录态 success smoke
+- `settings/check-function-calling` 现在也完成了一轮真实 Python 核心契约收口：
+  - Rust AI owner path 新增 `ToolChoice` 能力，并由 `AIService` 透传到
+    OpenAI / Anthropic client，不再只能依赖默认 `auto`
+  - `POST /api/settings/check-function-calling` 现在改用 Python 对齐的
+    `get_weather` 工具，并显式强制 `required` tool choice
+  - 当模型成功返回但仅输出纯文本时，Rust 现在也与 Python 一样保持
+    `success = true`、`supported = false`，而不是误判为整次 probe 失败
+  - 成功与失败路径都补上了 Python 风格的最小 `details` 外壳：
+    `endpoint_diagnostics / finish_reason / has_tool_calls /
+    tool_call_count / test_tool / response_type`
+  - 这意味着 `settings` route-group 的剩余 Phase 5 缺口，又从
+    function-calling 的核心 success/error 壳层继续收缩到
+    `settings/test` transport parity、backup/fallback/request-options 更深层
+    owner 收口，以及更强的登录态 success smoke
+- `settings/test` 现在也完成了一轮真实 Python probe contract 收口：
+  - `POST /api/settings/test` 现在接受 widened probe request body：
+    `api_backup_urls` / `fallback_strategy`
+  - probe 成功路径现在回到 Python 风格的 `details` 壳层：
+    `api_available / model_accessible / response_valid / temperature /
+    max_tokens / probe_max_tokens / endpoint_diagnostics`
+  - `endpoint_diagnostics` 现在开始对齐 Python 的归一化 owner 语义：
+    - `backup_endpoints`
+    - `configured_endpoint_count`
+    - `fallback_strategy`
+    - `auto_failover_enabled`
+    不再固定为 Rust 本地 `[] + auto(false)` 的占位形态
+  - 失败路径现在也补上了 `details.endpoint_diagnostics`
+  - `settings/presets/{preset_id}/test` 复用链路也开始透传
+    `api_backup_urls` / `fallback_strategy`，避免 preset probe 与主 probe
+    在 transport 相关字段上继续分叉
+  - 这意味着 `settings` route-group 的剩余 Phase 5 缺口，又从
+    API-connection probe 的核心 response shell 继续收缩到更深层的
+    transport parity（`request_options` / provider-specific probe pathing /
+    `transport_diagnostics`）与更强的登录态 success smoke
+- `settings` 现又补入第三组、也是第一组 probe-lane 登录态 business smoke：
+  - `settings-test-business-rust` /
+    `settings-test-business-python-fallback`
+  - `settings-check-function-calling-business-rust` /
+    `settings-check-function-calling-business-python-fallback`
+  - 这四条 probe 继续挂在
+    `phase5-settings-business-owner` /
+    `phase5-settings-business-fallback` 两个专用 profile 下，并统一声明
+    `requires_login=true`
+  - 它们刻意只锁稳定的 `200 + failure shell`：
+    - `settings/test` 断言 `success=false` 与稳定 message/shell
+    - `check-function-calling` 断言 `success=false`、`supported=null` 与
+      稳定 error/details shell；不要把 owner smoke 绑死到单一 generic
+      message，因为 Python/Rust 现在都会按 `5xx/429/401/404/timeout`
+      产生不同失败文案
+  - 这样 cutover readiness 证明的是“请求已进入真实登录态业务 handler 且
+    owner/fallback 契约壳层稳定”，而不是把 route-group smoke 误绑到外网
+    provider 成功率
+  - 这让 `settings` 的真实登录态 business smoke 已经覆盖根设置读取、
+    preset 读取、API probe 与 function-calling probe 四条主线；下一步再把
+    success smoke 和 transport parity 拆成独立 lane 推进
 - `projects` 的 fallback 现在不只剩未登录列表线索，还补入了同路径公开
   `validate-import` 成功断言，可直接证明 owner 已切回 Python 而不是只靠
   `401` 语义侧面判断
+- `projects/detail` 现在也进入 `phase5-p0-fallback`，因此 `projects`
+  同时拥有列表与详情两条读侧回切线索，覆盖 `/api/projects` 与
+  `/api/projects/{project_id}` 两类 Nginx owner 规则
 - `projects/import` 现在也进入 `phase5-p0-fallback`，因此 `projects` 已同时
   拥有列表读侧、public validator 成功态、multipart 写侧三类回切线索
 - `projects/export-data` 现在也进入 `phase5-p0-fallback`，因此 `projects`
   又增加了一条合法 JSON body 进入后的写侧回切线索
+- `projects` 基础 CRUD 与 TXT 导出现在也进入 `phase5-p0-fallback`，覆盖
+  create、update、delete、export；因此 `projects` 的回切线索已覆盖基础项目
+  生命周期、读侧、导入、两类导出和维护修复入口。下一阶段应转向登录态
+  business smoke 与 fallback shrink checklist，而不是继续只扩未登录边界
+- `projects` 现在还固化了两个专用 shrink-readiness profile：
+  `phase5-projects-owner` 与 `phase5-projects-fallback`，各覆盖 12 条同路径
+  probe。后续验证 `projects` 切流/回切时可以直接跑这两个 profile，而不再
+  依赖 `phase5-p0 + --route-group projects` 的组合参数。
+- `projects/check-consistency` 现在也进入 `phase5-p0-fallback`，因此
+  `projects` 的回切线索已经覆盖数据维护类入口，不再只覆盖列表、导入、
+  导出路径
+- `projects/fix-organizations` 与 `projects/fix-member-counts` 现在也进入
+  `phase5-p0-fallback`，因此 `projects` 的维护类回切线索已经覆盖
+  check + 两条 fix 入口
 - `wizard-stream/world-building/{project_id}/regenerate` 现在也进入
   `phase5-p0-fallback`，因此该组不再只靠 `outline` 单路径来证明回切后的
   SSE 入口 owner
+- `wizard-stream/world-building` 基础入口现在也进入 `phase5-p0-fallback`，
+  因此该组的回切线索同时覆盖初始世界观生成与重新生成两类 SSE 入口；但仍需
+  后续登录态 stronger smoke 才能判定流式 payload 与落库副作用等价
 - `memories/search` 现在也进入 `phase5-p0-fallback`，因此该组不再只靠
   `/stats` 单路径来证明回切后的 Python API owner
+- `memories/list`、`memories/analysis`、`memories/foreshadows`、
+  `memories/delete-chapter` 现在也进入 `phase5-p0-fallback`，因此
+  `/api/memories/*` 的 Python API owner 回切证据已覆盖更多核心入口；但
+  `/memories/` 仍应继续作为页面/非 API fallback 边界单独处理
+- `relationships/project` 与 `relationships/graph` 现在也进入
+  `phase5-p1-fallback`，因此 `relationships` 不再只是 ownership checklist
+  里的“可补 smoke”待办，而是开始拥有第一组同路径 owner/fallback 线索
+- `foreshadows/projects` 与 `foreshadows/stats` 现在也进入
+  `phase5-p1-fallback`，因此 `foreshadows` 不再只是 ownership checklist
+  里的“可补 smoke”待办，而是开始拥有第一组同路径 owner/fallback 线索
+- `writing-styles/user` 与 `writing-styles/project` 现在也进入
+  `phase5-p1-fallback`，因此 `writing_styles` 不再只是 ownership checklist
+  里的“可补 smoke”待办，而是开始拥有第一组同路径 owner/fallback 线索
+- `organizations/project` 与 `organizations/generate-stream` 现在也进入
+  `phase5-p1-fallback`，因此 `organizations` 不再只是 ownership checklist
+  里的“有 schema 风险注记”待办，而是开始拥有第一组同路径 owner/fallback 线索
 - `chapters` 的 Python fallback 现在也补进了 project-path 列表探针
   `/api/chapters/project/{project_id}`，不再只靠 analysis/batch/regeneration
   子路由侧面证明
@@ -295,6 +596,10 @@ Phase 5 P0 route-group 的第一版可执行 rollback 手册已单独整理为�
 3. **shared DB 下的 route-group cutover，不应绑定新的 schema 扩张。**
 4. **`analysis_tasks`、`batch_generation_tasks`、`regeneration_tasks` 的第一轮默认值语义已在仓库层收口，但真实环境仍依赖迁移已落地。**
 5. **`organization_members`、`projects`、`settings` 等中风险共享表，仍需保持“先验证字段级一致性，再扩大切流”的纪律。**
+6. **`settings` 的当前 cutover 证据已覆盖主设置读写删除基础契约，以及 `settings/presets` 读取、主要写侧入口和 preset action owner 的一轮 Python 语义收口；但仍不代表已完成登录态 preset 创建、更新、删除、激活、from-current 或 provider 测试业务等价验证。**
+7. **`organizations` 的当前 cutover 证据只覆盖未登录 owner/fallback 边界；
+   因为它触碰 `organization_members`、组织角色映射、成员计数与生成历史，
+   后续扩大切流前必须补字段级一致性和登录态 business smoke。**
 
 ---
 
@@ -302,10 +607,10 @@ Phase 5 P0 route-group 的第一版可执行 rollback 手册已单独整理为�
 
 建议按以下顺序推进，而不是平铺所有 route group：
 
-1. 先补 `chapters` / `projects` / `wizard-stream` / `memories` 的 smoke manifest
-2. 再把 `settings` / `auth` / `users` 做成稳定业务 smoke
-3. 之后按 route group 把 rollback 步骤写成可直接执行的运维手册
-4. 最后才评估是否收缩 Python `/api/` catch-all 或移除特定 fallback
+1. 先把 `settings` / `projects` 做成 fallback shrink readiness 模板。
+2. 再补 `chapters` / `wizard-stream` / `memories` 的 stronger smoke 与边界枚举。
+3. 之后把 `auth` / `users` / P1 组迁入同一模板，但保持更高安全门槛。
+4. 最后才评估是否收缩 Python `/api/` catch-all 或移除特定 fallback。
 
 ---
 
@@ -353,6 +658,6 @@ Python fallback 的程度。
 16. **`users` 现在还开始拥有写侧 fallback 资产；但 `set-admin` /
     `reset-password` 现阶段同样只应解读为同路径登录边界证据，不应误读成
     管理员写侧行为已完成语义对齐。**
-14. **`characters` / `outlines` / `book_import` 现在也已进入 `phase5-p1`
+17. **`characters` / `outlines` / `book_import` / `relationships` / `foreshadows` / `writing_styles` / `organizations` 现在也已进入 `phase5-p1`
     的 starter owner smoke，并补入了第一版同路径 Python fallback 线索；但当前
     仍只有未登录边界证据，不应误判为已经完成了导入流、SSE 或生成流的完整业务验证。**

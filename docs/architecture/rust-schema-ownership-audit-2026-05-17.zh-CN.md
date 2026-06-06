@@ -264,4 +264,27 @@
  2. **Rust 已停止在部署时自动建表，这是正确的阶段性收口。**
  3. **Rust entities 与 Alembic 表级覆盖大体匹配，但字段级一致性尚未系统审计。**
 4. **`organization_members` 已有 Alembic 表级覆盖，但字段级一致性风险较高。**
-5. **下一步应该先做字段级审计与运行时热点表试点，而不是立刻全量迁移 schema ownership。**
+5. **下一步应该先做字段级审计与运行时热点表试点，而不是立刻全量迁移 schema ownership。**
+
+---
+
+## 10. 2026-05-31 收口补充
+
+本轮又补了一条与 schema owner 直接相关的启动期约束：
+
+1. `backend-rs/src/config.rs` 现在会在 non-development 模式下拒绝
+   `ENABLE_STARTUP_SCHEMA_SYNC=true`。
+2. development 模式下即使显式设置该标志，也只会告警并归一化为 `false`。
+3. `backend-rs/src/main.rs` 不再保留“看到该标志仅 warning 后继续启动”的
+   软处理路径。
+
+这意味着当前 shared-db strangler 的 schema ownership 不仅在部署链路上
+由 `db-migrator -> Python Alembic` 显式承担，在 Rust 启动配置层也已经有了
+对应的防漂移约束。
+
+这仍然 **不是** Rust migration ownership 的接管完成；它只是进一步明确：
+
+- Rust 当前角色是消费既有 schema
+- Python Alembic 仍然是唯一被允许的显式 schema mutation owner
+- 后续若要推进 Rust migration 试点，应以新的独立 migration pipeline
+  和更细粒度字段审计为前提，而不是重新打开启动期 schema sync

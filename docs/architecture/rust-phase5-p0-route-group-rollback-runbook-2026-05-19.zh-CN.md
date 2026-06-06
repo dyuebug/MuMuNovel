@@ -84,11 +84,11 @@ python backend/tools/run_strangler_gateway_smoke.py `
 
 | Route group | 当前 P0 probe |
 |---|---|
-| `settings` | `settings-auth-guard-rust` / `settings-fetch-models-auth-guard-rust` / `settings-test-auth-guard-rust` / `settings-check-function-calling-auth-guard-rust` |
-| `projects` | `projects-list-auth-guard-rust` / `projects-validate-import-public-rust` / `projects-import-auth-guard-rust` / `projects-export-data-auth-guard-rust` |
+| `settings` | `settings-auth-guard-rust` / `settings-api-key-auth-guard-rust` / `settings-presets-auth-guard-rust` / `settings-presets-create-auth-guard-rust` / `settings-presets-from-current-auth-guard-rust` / `settings-presets-update-auth-guard-rust` / `settings-presets-delete-auth-guard-rust` / `settings-presets-activate-auth-guard-rust` / `settings-presets-test-auth-guard-rust` / `settings-models-auth-guard-rust` / `settings-fetch-models-auth-guard-rust` / `settings-test-auth-guard-rust` / `settings-check-function-calling-auth-guard-rust` |
+| `projects` | `projects-list-auth-guard-rust` / `projects-detail-auth-guard-rust` / `projects-create-auth-guard-rust` / `projects-update-auth-guard-rust` / `projects-delete-auth-guard-rust` / `projects-export-txt-auth-guard-rust` / `projects-validate-import-public-rust` / `projects-import-auth-guard-rust` / `projects-export-data-auth-guard-rust` / `projects-check-consistency-auth-guard-rust` / `projects-fix-organizations-auth-guard-rust` / `projects-fix-member-counts-auth-guard-rust` |
 | `chapters` | `chapters-list-auth-guard-rust` / `chapters-analysis-auth-guard-rust` / `chapters-batch-analysis-status-auth-guard-rust` / `chapters-batch-active-tasks-auth-guard-rust` / `chapters-batch-stream-auth-guard-rust` / `chapters-batch-resume-auth-guard-rust` / `chapters-generate-background-auth-guard-rust` / `chapters-regeneration-tasks-auth-guard-rust` |
 | `wizard-stream` | `wizard-stream-outline-auth-guard-rust` / `wizard-stream-world-building-regenerate-auth-guard-rust` / `wizard-stream-cleanup-auth-guard-rust` / `wizard-stream-career-system-auth-guard-rust` / `wizard-stream-characters-auth-guard-rust` |
-| `memories` | `memories-stats-auth-guard-rust` / `memories-search-auth-guard-rust` |
+| `memories` | `memories-stats-auth-guard-rust` / `memories-list-auth-guard-rust` / `memories-analysis-auth-guard-rust` / `memories-foreshadows-auth-guard-rust` / `memories-search-auth-guard-rust` / `memories-delete-chapter-auth-guard-rust` |
 
 ### 5.2 修改 gateway owner
 
@@ -144,6 +144,120 @@ python backend/tools/run_strangler_gateway_smoke.py `
   --base-url http://127.0.0.1:8005
 ```
 
+#### `projects` 专用 shrink-readiness profile
+
+`projects` 现在已固化为独立的一键 smoke 包，避免每次依赖
+`--profile phase5-p0 --route-group projects` 组合参数：
+
+```powershell
+python backend/tools/run_strangler_gateway_smoke.py `
+  --manifest deploy/strangler-gateway-probes.json `
+  --profile phase5-projects-owner `
+  --base-url http://127.0.0.1:8005
+```
+
+```powershell
+python backend/tools/run_strangler_gateway_smoke.py `
+  --manifest deploy/strangler-gateway-probes.json `
+  --profile phase5-projects-fallback `
+  --base-url http://127.0.0.1:8005
+```
+
+这两个 profile 当前各包含 12 条同路径 probe，覆盖基础 CRUD、列表/详情、
+public import validation、multipart import、TXT/JSON 两类导出，以及维护修复
+入口。它们仍主要证明 owner/fallback 边界；登录态项目生命周期、导出内容、
+级联清理和 shared-table 副作用需要后续 business smoke。
+
+从 2026-06-02 开始，建议在人工阅读 owner/fallback runbook 之前，先输出
+`projects` route-group readiness 摘要：
+
+```powershell
+python backend/tools/run_strangler_gateway_smoke.py `
+  --manifest deploy/strangler-gateway-probes.json `
+  --route-group projects `
+  --readiness-summary-only `
+  --output tmp/smoke/projects-readiness-summary.json
+```
+
+这一步的作用不是替代 owner/fallback smoke，而是先快速回答：
+
+- 当前是否同时具备 Rust owner 与 Python fallback 双侧证据
+- 是否已有 dedicated owner / fallback profile
+- 是否已经存在 `business` 样本，可支撑后续 stronger smoke 扩展
+- 当前 readiness 仍卡在“证据缺失”，还是卡在“业务 smoke 不够强”
+
+#### `settings` 专用 shrink-readiness profile
+
+`settings` 现在也已固化为独立 smoke 包，并额外拆出非对称 models 入口：
+
+```powershell
+python backend/tools/run_strangler_gateway_smoke.py `
+  --manifest deploy/strangler-gateway-probes.json `
+  --profile phase5-settings-owner `
+  --base-url http://127.0.0.1:8005
+```
+
+```powershell
+python backend/tools/run_strangler_gateway_smoke.py `
+  --manifest deploy/strangler-gateway-probes.json `
+  --profile phase5-settings-fallback `
+  --base-url http://127.0.0.1:8005
+```
+
+```powershell
+python backend/tools/run_strangler_gateway_smoke.py `
+  --manifest deploy/strangler-gateway-probes.json `
+  --profile phase5-settings-asymmetric `
+  --base-url http://127.0.0.1:8005
+```
+
+当前 `phase5-settings-owner` 覆盖 13 条 Rust owner probe，
+`phase5-settings-fallback` 覆盖 12 条 Python fallback probe，
+`phase5-settings-asymmetric` 覆盖 2 条 models 非对称 probe。`settings/models`
+不能混入普通 fallback profile，因为 Rust owner 是鉴权边界，而 Python fallback
+是 public network-error 分支。
+
+从 2026-06-02 开始，也建议先输出 `settings` route-group readiness 摘要：
+
+```powershell
+python backend/tools/run_strangler_gateway_smoke.py `
+  --manifest deploy/strangler-gateway-probes.json `
+  --route-group settings `
+  --readiness-summary-only `
+  --output tmp/smoke/settings-readiness-summary.json
+```
+
+这一步可用于在进入 owner/fallback/asymmetric 细读前先快速确认：
+
+- 当前 `settings` 是否已同时具备 owner / fallback / asymmetric 三类证据
+- 当前是否已有 dedicated owner / fallback / asymmetric profiles
+- 当前 readiness 仍主要缺 business smoke，还是缺 route-group 基础证据
+
+如需执行当前第一版 `settings` 登录态 business smoke，可使用：
+
+```powershell
+python backend/tools/run_strangler_gateway_smoke.py `
+  --manifest deploy/strangler-gateway-probes.json `
+  --profile business `
+  --probe-name settings-get-business-rust `
+  --base-url http://127.0.0.1:8005
+```
+
+```powershell
+python backend/tools/run_strangler_gateway_smoke.py `
+  --manifest deploy/strangler-gateway-probes.json `
+  --profile business `
+  --probe-name settings-get-business-python-fallback `
+  --base-url http://127.0.0.1:8005
+```
+
+说明：
+
+- 这两条 probe 依赖本地登录凭据。runner 会优先读取 CLI 参数、
+  环境变量或 `.env` 中的 `LOCAL_AUTH_USERNAME / LOCAL_AUTH_PASSWORD`。
+- 如果当前环境缺少这两个值，probe 会显式失败并提示环境前提缺口；
+  这表示登录态 smoke 的执行条件未满足，不表示 runner 代码路径未打通。
+
 ### 5.4A 再跑 P0 非对称接口 smoke
 
 当前 `phase5-p0-asymmetric` 用来承载“同路径存在，但 Rust owner 与 Python fallback
@@ -188,13 +302,22 @@ Python 后，短期更适合先用“稳定差异线索”判断 owner 是否真
 |---|---|---|---|
 | `settings` | `GET /api/settings` | `401 {"detail":"需要登录"}` | Python `settings` 路由统一走 `require_login()`，未登录语义与 Rust 的 `未登录，请先登录` 可区分 |
 | `settings` | `GET /api/settings/api-key` | `401 {"detail":"需要登录"}` | 这是最小同路径凭据读取入口；Python 侧同样先走 `Depends(require_login)`，因此回切后应稳定停在登录边界，而不会先进入设置加载或 provider 分支 |
+| `settings` | `GET /api/settings/presets` | `401 {"detail":"需要登录"}` | 这是 `preferences` JSON 内 preset 读取入口；Python 侧同样先走 `Depends(require_login)`，因此回切后应稳定停在登录边界，而不会先进入 preset 解析或默认创建逻辑 |
 | `settings` | `POST /api/settings/fetch-models` | `401 {"detail":"需要登录"}` | 这是最小合法模型拉取请求体；Python 侧同样先走 `Depends(require_login)`，因此回切后应稳定停在同一个登录边界，而不会先掉进缺参或网络探测异常 |
 | `settings` | `POST /api/settings/test` | `401 {"detail":"需要登录"}` | 这是最小合法连接测试请求体；Python 侧同样先经过 `Depends(require_login)`，因此回切后应稳定停在登录边界，而不会先进入外部 API 连通性探测 |
 | `settings` | `POST /api/settings/check-function-calling` | `401 {"detail":"需要登录"}` | 这是最小合法 Function Calling 探测请求体；Python 侧同样先经过 `Depends(require_login)`，因此回切后应稳定停在登录边界，而不会先进入工具调用能力探测逻辑 |
 | `projects` | `GET /api/projects` | `401 {"detail":"未登录"}` | Python `projects` 路由直接读取 `request.state.user_id`，未登录返回短语义 `未登录` |
+| `projects` | `GET /api/projects/{project_id}` | `401 {"detail":"未登录"}` | Python 项目详情路由同样先读取 `request.state.user_id`，未登录在查项目之前返回 `未登录`；这条线索覆盖单项目详情的显式 Rust location |
+| `projects` | `POST /api/projects` | `401 {"detail":"未登录"}` | Python 创建项目入口在落库前先读取 `request.state.user_id`，未登录稳定返回 `未登录`；这条线索覆盖项目基础生命周期创建入口 |
+| `projects` | `PUT /api/projects/{project_id}` | `401 {"detail":"未登录"}` | Python 更新项目入口在查询项目和写入字段前先读取 `request.state.user_id`，未登录稳定返回 `未登录` |
+| `projects` | `DELETE /api/projects/{project_id}` | `401 {"detail":"未登录"}` | Python 删除项目入口在查询项目和执行级联/向量清理前先读取 `request.state.user_id`，未登录稳定返回 `未登录` |
+| `projects` | `GET /api/projects/{project_id}/export` | `401 {"detail":"未登录"}` | Python TXT 导出入口在查询项目和章节内容前先读取 `request.state.user_id`，未登录稳定返回 `未登录` |
 | `projects` | `POST /api/projects/validate-import` | `200` 且 `valid=true`；Python fallback 应返回 `organization_members` / `character_careers` / `story_memories` / `has_default_style=false`，并带 `warnings=["项目没有章节数据","项目没有角色数据"]` | 这是同路径 public validator，不依赖登录态；Rust owner 与 Python fallback 会对同一个最小导入文件返回不同但稳定的统计/告警结构，适合作为更强的回切成功线索 |
 | `projects` | `POST /api/projects/import` | `401 {"detail":"未登录"}` | 这是与 `validate-import` 共用最小 multipart 文件的写侧入口；Python 在读文件业务前就会先做 `request.state.user_id` 检查，可作为合法导入形态下的 fallback 鉴权线索 |
 | `projects` | `POST /api/projects/{project_id}/export-data` | `401 {"detail":"未登录"}` | 这是最小合法 JSON body 为 `{}` 的导出写侧入口；Python 在读取导出选项后仍会先停在 `request.state.user_id` 登录检查上，可作为 JSON 写侧 fallback 线索 |
+| `projects` | `POST /api/projects/{project_id}/check-consistency` | `401 {"detail":"未登录"}` | Python 数据一致性检查入口在查询项目或执行修复前先读取 `request.state.user_id`，未登录稳定返回 `未登录`；这条线索覆盖项目维护类显式 Rust location |
+| `projects` | `POST /api/projects/{project_id}/fix-organizations` | `401 {"detail":"未登录"}` | Python 组织记录修复入口在查询项目或创建 Organization 记录前先读取 `request.state.user_id`，未登录稳定返回 `未登录`；这条线索覆盖项目维护类显式 Rust location |
+| `projects` | `POST /api/projects/{project_id}/fix-member-counts` | `401 {"detail":"未登录"}` | Python 成员计数修复入口在查询项目或重算组织成员数前先读取 `request.state.user_id`，未登录稳定返回 `未登录`；这条线索覆盖项目维护类显式 Rust location |
 | `chapters` | `GET /api/chapters/project/{project_id}` | `401 {"detail":"未登录"}` | Python章节列表主路径是 project-path 形态，现已进入 `phase5-p0-fallback` |
 | `chapters` | `GET /api/chapters/{id}/analysis` | `401 {"detail":"未登录"}` | Python analysis 兼容服务走 `require_authenticated_user_id()` |
 | `chapters` | `POST /api/chapters/analysis/status/batch` | `401 {"detail":"未登录"}` | Python batch analysis status 兼容服务也走 `require_authenticated_user_id()` |
@@ -208,7 +331,11 @@ Python 后，短期更适合先用“稳定差异线索”判断 owner 是否真
 | `wizard-stream` | `POST /api/wizard-stream/career-system` | `401 {"detail":"需要登录"}` | 这是最小合法 JSON body 为 `{"projectId":"test-project-id"}` 的 SSE 职业体系入口；Python 同样先经过 `get_user_ai_service -> require_login()`，可作为第三条同组 fallback 线索 |
 | `wizard-stream` | `POST /api/wizard-stream/characters` | `401 {"detail":"需要登录"}` | 这是最小合法 JSON body 为 `{"projectId":"test-project-id"}` 的 SSE 角色入口；Python 同样先经过 `get_user_ai_service -> require_login()`，可作为第四条同组 fallback 线索 |
 | `memories` | `GET /api/memories/projects/{project_id}/stats` | `401 {"detail":"未登录"}` | Python `memories` 走 `verify_project_access()`，未登录优先返回 `未登录` |
+| `memories` | `GET /api/memories/projects/{project_id}/memories` | `401 {"detail":"未登录"}` | Python 记忆列表入口先走 `verify_project_access()`，未登录稳定返回 `未登录` |
+| `memories` | `GET /api/memories/projects/{project_id}/analysis/{chapter_id}` | `401 {"detail":"未登录"}` | Python 章节分析读取入口先走 `verify_project_access()`，未登录稳定返回 `未登录` |
+| `memories` | `GET /api/memories/projects/{project_id}/foreshadows?current_chapter=1` | `401 {"detail":"未登录"}` | Python 未完伏笔入口先走 `verify_project_access()`，未登录稳定返回 `未登录` |
 | `memories` | `POST /api/memories/projects/{project_id}/search?query=test` | `401 {"detail":"未登录"}` | 这是最小合法查询形态：Python 侧 `query` 是必填 query 参数，而 Rust 侧 body 可保持 `{}`；回切到 Python 后应稳定先停在 `verify_project_access()` 的未登录边界 |
+| `memories` | `DELETE /api/memories/projects/{project_id}/chapters/{chapter_id}/memories` | `401 {"detail":"未登录"}` | Python 章节记忆删除入口先走 `verify_project_access()`，未登录稳定返回 `未登录` |
 
 当前明确不能直接复用为 Python 成功条件的 Rust-side probe：
 
@@ -280,15 +407,26 @@ Python 后，短期更适合先用“稳定差异线索”判断 owner 是否真
 当前 Rust owner location：
 
 - `/api/settings`
+- `/api/settings/api-key`
 - `/api/settings/models`
+- `/api/settings/presets`
 - `/api/settings/test`
 - `/api/settings/fetch-models`
+- `/api/settings/check-function-calling`
 - `presets` 相关路径
 
 当前 P0 治理资产：
 
 - `GET /api/settings`
 - `GET /api/settings/api-key`
+- `GET /api/settings/presets`
+- `POST /api/settings/presets`
+- `POST /api/settings/presets/from-current`
+- `PUT /api/settings/presets/{preset_id}`
+- `DELETE /api/settings/presets/{preset_id}`
+- `POST /api/settings/presets/{preset_id}/activate`
+- `POST /api/settings/presets/{preset_id}/test`
+- `GET /api/settings/models`
 - `POST /api/settings/fetch-models`
 - `POST /api/settings/test`
 - `POST /api/settings/check-function-calling`
@@ -301,6 +439,8 @@ Python 后，短期更适合先用“稳定差异线索”判断 owner 是否真
 
 - 优先整组回切 `/api/settings*`
 - 不建议只回切某一个 `preset` 子路径，除非已经明确是单子路径回归
+- 当前 `settings/presets` 只证明读取入口的 owner/fallback 鉴权边界；
+  preset 创建、激活、测试仍需后续 stronger smoke 才能支持更激进的 fallback 收缩。
 
 ### 6.2 `projects`
 
@@ -311,10 +451,36 @@ Python 后，短期更适合先用“稳定差异线索”判断 owner 是否真
 - `/api/projects/validate-import`
 - `export-data` / `check-consistency` / `fix-*`
 
+当前 P0 治理资产：
+
+- `GET /api/projects`
+- `GET /api/projects/{project_id}`
+- `POST /api/projects`
+- `PUT /api/projects/{project_id}`
+- `DELETE /api/projects/{project_id}`
+- `GET /api/projects/{project_id}/export`
+- `POST /api/projects/validate-import`
+- `POST /api/projects/import`
+- `POST /api/projects/{project_id}/export-data`
+- `POST /api/projects/{project_id}/check-consistency`
+- `POST /api/projects/{project_id}/fix-organizations`
+- `POST /api/projects/{project_id}/fix-member-counts`
+
 回滚原则：
 
 - 优先移除这一组显式 Rust location，让它重新落到 Python `/api` catch-all
 - 不要只回切单条 `fix-*` 子路由，除非已确认是 isolated regression
+- 当前详情 probe 只证明未登录 owner/fallback 边界；真实项目详情成功态、
+  404/403 等业务分支仍需后续 stronger smoke 或登录态测试覆盖。
+- 当前基础 CRUD 与 TXT export probes 只证明未登录 owner/fallback 边界；
+  登录态创建、更新持久化、删除级联/向量清理、TXT 内容与响应头仍需后续
+  business smoke 覆盖。
+- 当前一致性检查 probe 也只证明未登录 owner/fallback 边界；登录态下的
+  consistency report、auto-fix 语义和 shared-table 修复结果仍需后续 business
+  smoke 覆盖。
+- 当前两条 fix probe 同样只证明未登录 owner/fallback 边界；登录态下的
+  Organization 记录补齐、成员计数重算和 shared-table side effects 仍需后续
+  business smoke 覆盖。
 
 ### 6.3 `chapters`
 
@@ -352,12 +518,18 @@ Python 后，短期更适合先用“稳定差异线索”判断 owner 是否真
 当前 P0 治理资产：
 
 - `GET /api/memories/projects/{project_id}/stats`
+- `GET /api/memories/projects/{project_id}/memories`
+- `GET /api/memories/projects/{project_id}/analysis/{chapter_id}`
+- `GET /api/memories/projects/{project_id}/foreshadows?current_chapter=1`
 - `POST /api/memories/projects/{project_id}/search?query=test`
+- `DELETE /api/memories/projects/{project_id}/chapters/{chapter_id}/memories`
 
 回滚原则：
 
 - 只动 `/api/memories*`，不要误改 `/memories/`
 - 回滚后要确认 API owner 与页面 owner 没被混淆
+- 当前新增 probes 只证明未登录 owner/fallback 边界；登录态下的 vector memory
+  搜索、分析读取、伏笔检索和删除 side effects 仍需后续 business smoke 覆盖。
 
 ---
 

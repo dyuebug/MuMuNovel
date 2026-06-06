@@ -9,17 +9,15 @@ from __future__ import annotations
 
 
 import argparse
-
+import copy
+import http.cookiejar
 import json
-
+import os
+import re
 import sys
-
 import time
-
 import uuid
-
 import urllib.error
-
 import urllib.request
 
 from pathlib import Path
@@ -33,6 +31,8 @@ from typing import Any, Dict, List, Mapping, Sequence
 DEFAULT_BASE_URL = 'http://127.0.0.1:8005'
 DEFAULT_HTTP_TIMEOUT = 10.0
 DEFAULT_PROFILE = 'deploy'
+DEFAULT_LOGIN_PATH = '/api/auth/local/login'
+PLACEHOLDER_PATTERN = re.compile(r'\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}')
 
 
 
@@ -64,6 +64,11 @@ def default_manifest_path() -> Path:
 def default_output_path() -> Path:
 
     return repo_root() / 'tmp' / 'smoke' / 'tmp_strangler_gateway_smoke_latest.json'
+
+
+def default_env_file() -> Path:
+
+    return repo_root() / '.env'
 
 
 
@@ -114,11 +119,37 @@ def build_parser() -> argparse.ArgumentParser:
         help='JSON output path (defaults to tmp/smoke/)',
 
     )
+    parser.add_argument(
+        '--env-file',
+        type=Path,
+        help='Optional .env file path for LOCAL_AUTH_USERNAME / LOCAL_AUTH_PASSWORD',
+    )
+    parser.add_argument(
+        '--local-auth-username',
+        help='Optional local auth username override for requires_login probes',
+    )
+    parser.add_argument(
+        '--local-auth-password',
+        help='Optional local auth password override for requires_login probes',
+    )
+    parser.add_argument(
+        '--login-path',
+        default=DEFAULT_LOGIN_PATH,
+        help='Local auth login path used by requires_login probes',
+    )
 
     parser.add_argument(
         '--validate-manifest-only',
         action='store_true',
         help='Validate manifest structure without issuing HTTP requests',
+    )
+    parser.add_argument(
+        '--readiness-summary-only',
+        action='store_true',
+        help=(
+            'Summarize route-group shrink-readiness signals from the manifest '
+            'without profile filtering or HTTP requests'
+        ),
     )
     parser.add_argument(
         '--profile',
@@ -155,6 +186,61 @@ def load_json_file(path: Path) -> Any:
     except json.JSONDecodeError as exc:
 
         raise SmokeFailure(f'Invalid JSON file: {path}\nerror={exc}') from exc
+
+
+def load_env_map(path: Path) -> Dict[str, str]:
+
+    if not path.exists():
+
+        raise SmokeFailure(f'.env file not found: {path}')
+
+    values: Dict[str, str] = {}
+    for raw_line in path.read_text(encoding='utf-8').splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = raw_line.split('=', 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def resolve_local_auth_credentials(
+    *,
+    username: str | None,
+    password: str | None,
+    env_file: Path | None,
+) -> tuple[str, str, Path | None]:
+
+    resolved_env_file = env_file.resolve() if env_file else default_env_file()
+    env_map: Dict[str, str] = {}
+    used_env_file: Path | None = None
+    if resolved_env_file.exists():
+        env_map = load_env_map(resolved_env_file)
+        used_env_file = resolved_env_file
+
+    resolved_username = (
+        (username or '').strip()
+        or str(os.getenv('LOCAL_AUTH_USERNAME') or '').strip()
+        or str(env_map.get('LOCAL_AUTH_USERNAME') or '').strip()
+    )
+    resolved_password = (
+        (password or '').strip()
+        or str(os.getenv('LOCAL_AUTH_PASSWORD') or '').strip()
+        or str(env_map.get('LOCAL_AUTH_PASSWORD') or '').strip()
+    )
+
+    if not resolved_username or not resolved_password:
+        env_hint = (
+            str(resolved_env_file)
+            if used_env_file is not None
+            else 'missing default .env; pass --env-file or CLI/env credentials'
+        )
+        raise SmokeFailure(
+            'requires_login probes need LOCAL_AUTH_USERNAME / LOCAL_AUTH_PASSWORD; '
+            f'env_hint={env_hint}'
+        )
+
+    return resolved_username, resolved_password, used_env_file
 
 
 
@@ -200,6 +286,18 @@ def require_string_mapping(value: Any, *, label: str) -> Dict[str, str]:
         if not isinstance(item, str) or not item.strip():
             raise SmokeFailure(f'{label}.{key} must be a non-empty string')
         normalized[key] = item
+    return normalized
+
+
+def require_extract_mapping(value: Any, *, label: str) -> Dict[str, str]:
+    mapping = require_mapping(value, label=label)
+    normalized: Dict[str, str] = {}
+    for key, item in mapping.items():
+        if not isinstance(key, str) or not key.strip():
+            raise SmokeFailure(f'{label} keys must be non-empty strings')
+        if not isinstance(item, str) or not item.strip():
+            raise SmokeFailure(f'{label}.{key} must be a non-empty string JSON path')
+        normalized[key.strip()] = item.strip()
     return normalized
 
 
@@ -348,6 +446,12 @@ def validate_manifest(raw_manifest: Any, *, manifest_path: Path) -> Dict[str, An
                 raise SmokeFailure(
                     f'manifest.probes[{index}].json_body must be JSON-serializable'
                 ) from exc
+        extract_json = probe.get('extract_json')
+        if extract_json is not None:
+            probe['extract_json'] = require_extract_mapping(
+                extract_json,
+                label=f'manifest.probes[{index}].extract_json',
+            )
         if multipart_form is not None:
             probe['multipart_form'] = require_multipart_form(
                 multipart_form,
@@ -389,6 +493,14 @@ def validate_manifest(raw_manifest: Any, *, manifest_path: Path) -> Dict[str, An
                     f'manifest.probes[{index}].route_group must be a non-empty string when present'
                 )
             probe['route_group'] = route_group.strip()
+
+        requires_login = probe.get('requires_login')
+        if requires_login is not None:
+            if not isinstance(requires_login, bool):
+                raise SmokeFailure(
+                    f'manifest.probes[{index}].requires_login must be a boolean when present'
+                )
+            probe['requires_login'] = requires_login
 
         profiles = probe.get('profiles')
         if profiles is not None:
@@ -445,6 +557,149 @@ def body_preview(body: Any, *, limit: int = 400) -> str:
     return text[:limit]
 
 
+def render_template_string(value: str, state: Mapping[str, Any], *, label: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        key = match.group(1).strip()
+        if key not in state:
+            raise SmokeFailure(f'{label} references unknown placeholder {key!r}')
+
+        replacement = state[key]
+        if replacement is None:
+            return ''
+        if isinstance(replacement, (dict, list)):
+            return json.dumps(replacement, ensure_ascii=False)
+        return str(replacement)
+
+    return PLACEHOLDER_PATTERN.sub(replace, value)
+
+
+def render_template_value(value: Any, state: Mapping[str, Any], *, label: str) -> Any:
+    if isinstance(value, str):
+        full_match = PLACEHOLDER_PATTERN.fullmatch(value)
+        if full_match is not None:
+            key = full_match.group(1).strip()
+            if key not in state:
+                raise SmokeFailure(f'{label} references unknown placeholder {key!r}')
+            return copy.deepcopy(state[key])
+        return render_template_string(value, state, label=label)
+
+    if isinstance(value, list):
+        return [
+            render_template_value(item, state, label=f'{label}[{index}]')
+            for index, item in enumerate(value)
+        ]
+
+    if isinstance(value, dict):
+        rendered: Dict[str, Any] = {}
+        for key, item in value.items():
+            rendered[key] = render_template_value(item, state, label=f'{label}.{key}')
+        return rendered
+
+    return value
+
+
+def resolve_probe_templates(probe: Mapping[str, Any], state: Mapping[str, Any]) -> Dict[str, Any]:
+    resolved = dict(probe)
+    probe_name = str(probe.get('name') or '<unknown>')
+
+    for field in ('path', 'body', 'expected_text_startswith'):
+        value = resolved.get(field)
+        if value is not None:
+            resolved[field] = render_template_string(
+                str(value),
+                state,
+                label=f'{probe_name}.{field}',
+            )
+
+    for field in (
+        'headers',
+        'json_body',
+        'multipart_form',
+        'expected_json',
+        'expected_header_contains',
+        'expected_text_contains',
+        'expected_content_type_contains',
+    ):
+        value = resolved.get(field)
+        if value is not None:
+            resolved[field] = render_template_value(
+                value,
+                state,
+                label=f'{probe_name}.{field}',
+            )
+
+    return resolved
+
+
+def extract_json_value(value: Any, json_path: str, *, label: str) -> Any:
+    normalized = json_path.strip()
+    if not normalized:
+        raise SmokeFailure(f'{label} must not be empty')
+
+    if normalized == '$':
+        return copy.deepcopy(value)
+
+    if normalized.startswith('$.'):
+        normalized = normalized[2:]
+    elif normalized.startswith('$'):
+        normalized = normalized[1:]
+
+    segments = [segment for segment in normalized.split('.') if segment]
+    if not segments:
+        return copy.deepcopy(value)
+
+    current = value
+    traversed: List[str] = []
+    for segment in segments:
+        traversed.append(segment)
+        current_path = '.'.join(traversed)
+        if isinstance(current, dict):
+            if segment not in current:
+                raise SmokeFailure(f'{label} missing object field {segment!r} at {current_path!r}')
+            current = current[segment]
+            continue
+
+        if isinstance(current, list):
+            try:
+                index = int(segment)
+            except ValueError as exc:
+                raise SmokeFailure(
+                    f'{label} expected numeric array index at {current_path!r}; got {segment!r}'
+                ) from exc
+
+            if index < 0 or index >= len(current):
+                raise SmokeFailure(
+                    f'{label} array index out of range at {current_path!r}; len={len(current)}'
+                )
+            current = current[index]
+            continue
+
+        raise SmokeFailure(
+            f'{label} cannot descend into {type(current).__name__} at {current_path!r}'
+        )
+
+    return copy.deepcopy(current)
+
+
+def collect_probe_extracts(
+    probe: Mapping[str, Any],
+    response: Mapping[str, Any],
+) -> Dict[str, Any]:
+    extract_json = probe.get('extract_json') or {}
+    if not extract_json:
+        return {}
+
+    extracted: Dict[str, Any] = {}
+    actual_body = response.get('body')
+    for state_key, json_path in extract_json.items():
+        extracted[state_key] = extract_json_value(
+            actual_body,
+            str(json_path),
+            label=f'{probe["name"]}.extract_json.{state_key}',
+        )
+    return extracted
+
+
 
 
 def collect_response_headers(headers: Any) -> Dict[str, str]:
@@ -453,6 +708,48 @@ def collect_response_headers(headers: Any) -> Dict[str, str]:
         key = str(name)
         collected.setdefault(key, []).append(str(value))
     return {key: '\n'.join(values) for key, values in collected.items()}
+
+
+def build_opener(
+    cookie_jar: http.cookiejar.CookieJar | None = None,
+) -> urllib.request.OpenerDirector:
+    if cookie_jar is None:
+        return urllib.request.build_opener()
+    return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+
+
+def collect_cookie_names(cookie_jar: http.cookiejar.CookieJar) -> List[str]:
+    return sorted({cookie.name for cookie in cookie_jar})
+
+
+def selected_probes_require_login(probes: Sequence[Mapping[str, Any]]) -> bool:
+    return any(bool(probe.get('requires_login')) for probe in probes)
+
+
+def selected_probes_require_token_cookie(probes: Sequence[Mapping[str, Any]]) -> bool:
+    return any(
+        bool(probe.get('requires_login')) and str(probe.get('owner')) == 'rust'
+        for probe in probes
+    )
+
+
+def ensure_login_cookies(
+    cookie_jar: http.cookiejar.CookieJar,
+    *,
+    require_token_cookie: bool,
+) -> List[str]:
+    cookie_names = collect_cookie_names(cookie_jar)
+    required_names = {'user_id', 'session_expire_at'}
+    if require_token_cookie:
+        required_names.add('token')
+
+    missing = sorted(required_names.difference(cookie_names))
+    if missing:
+        raise SmokeFailure(
+            'login did not produce required cookies; '
+            f'missing={missing!r} cookies={cookie_names!r}'
+        )
+    return cookie_names
 
 
 def encode_multipart_form_data(multipart_form: Mapping[str, Any]) -> tuple[bytes, str]:
@@ -542,6 +839,7 @@ def request_probe(
     body: str | None = None,
     json_body: Any | None = None,
     multipart_form: Mapping[str, Any] | None = None,
+    opener: urllib.request.OpenerDirector | None = None,
 ) -> Dict[str, Any]:
     url = f"{base_url.rstrip('/')}{path}"
     request_headers = {
@@ -569,10 +867,11 @@ def request_probe(
         headers=request_headers,
     )
     started = time.perf_counter()
+    urlopen = opener.open if opener is not None else urllib.request.urlopen
 
     try:
 
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urlopen(request, timeout=timeout) as response:
 
             raw = response.read()
 
@@ -611,6 +910,49 @@ def request_probe(
         'headers': response_headers,
         'body': body,
 
+    }
+
+
+def bootstrap_local_login_session(
+    *,
+    base_url: str,
+    timeout: float,
+    username: str,
+    password: str,
+    login_path: str,
+    require_token_cookie: bool,
+) -> tuple[urllib.request.OpenerDirector, Dict[str, Any]]:
+
+    cookie_jar = http.cookiejar.CookieJar()
+    opener = build_opener(cookie_jar)
+    response = request_probe(
+        base_url=base_url,
+        path=login_path,
+        method='POST',
+        timeout=timeout,
+        json_body={'username': username, 'password': password},
+        opener=opener,
+    )
+
+    body = response.get('body')
+    if response['status_code'] != 200 or not isinstance(body, dict) or body.get('success') is not True:
+        raise SmokeFailure(
+            'local login bootstrap failed: '
+            f'status={response["status_code"]} '
+            f'body_preview={body_preview(body)}'
+        )
+
+    cookie_names = ensure_login_cookies(
+        cookie_jar,
+        require_token_cookie=require_token_cookie,
+    )
+    return opener, {
+        'path': login_path,
+        'status_code': response['status_code'],
+        'elapsed_ms': response['elapsed_ms'],
+        'message': body.get('message'),
+        'cookie_names': cookie_names,
+        'user_id': body.get('user', {}).get('user_id') if isinstance(body.get('user'), dict) else None,
     }
 
 
@@ -719,8 +1061,15 @@ def ensure_probe_expectations(probe: Mapping[str, Any], response: Mapping[str, A
             )
 
 
-def run_probes(*, manifest: Mapping[str, Any], base_url: str, timeout: float) -> List[Dict[str, Any]]:
+def run_probes(
+    *,
+    manifest: Mapping[str, Any],
+    base_url: str,
+    timeout: float,
+    opener: urllib.request.OpenerDirector | None = None,
+) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
+    state: Dict[str, Any] = {}
 
     for probe in manifest['probes']:
 
@@ -735,24 +1084,36 @@ def run_probes(*, manifest: Mapping[str, Any], base_url: str, timeout: float) ->
             'path': probe['path'],
 
             'expected_status': probe['expected_status'],
+            'requires_login': bool(probe.get('requires_login')),
 
             'ok': False,
 
         }
 
         try:
+            resolved_probe = resolve_probe_templates(probe, state)
+            result['path'] = resolved_probe['path']
+            if resolved_probe['path'] != probe['path']:
+                result['template_path'] = probe['path']
 
-            response = request_probe(
-                base_url=base_url,
-                path=probe['path'],
-                method=probe['method'],
-                timeout=timeout,
-                headers=probe.get('headers'),
-                body=probe.get('body'),
-                json_body=probe.get('json_body'),
-                multipart_form=probe.get('multipart_form'),
-            )
-            ensure_probe_expectations(probe, response)
+            request_kwargs: Dict[str, Any] = {
+                'base_url': base_url,
+                'path': resolved_probe['path'],
+                'method': resolved_probe['method'],
+                'timeout': timeout,
+                'headers': resolved_probe.get('headers'),
+                'body': resolved_probe.get('body'),
+                'json_body': resolved_probe.get('json_body'),
+                'multipart_form': resolved_probe.get('multipart_form'),
+            }
+            if opener is not None and probe.get('requires_login'):
+                request_kwargs['opener'] = opener
+
+            response = request_probe(**request_kwargs)
+            ensure_probe_expectations(resolved_probe, response)
+            extracted = collect_probe_extracts(resolved_probe, response)
+            if extracted:
+                state.update(extracted)
             result.update({
                 'ok': True,
                 'status_code': response['status_code'],
@@ -761,18 +1122,19 @@ def run_probes(*, manifest: Mapping[str, Any], base_url: str, timeout: float) ->
                 'content_type': response['content_type'],
 
                 'body_preview': body_preview(response['body']),
+                'extracted': extracted,
 
                 'assertions': {
-                    'expected_json': probe.get('expected_json'),
-                    'expected_json_has_keys': probe.get('expected_json_has_keys'),
-                    'expected_content_type_contains': probe.get('expected_content_type_contains'),
-                    'expected_text_startswith': probe.get('expected_text_startswith'),
-                    'expected_text_contains': probe.get('expected_text_contains'),
+                    'expected_json': resolved_probe.get('expected_json'),
+                    'expected_json_has_keys': resolved_probe.get('expected_json_has_keys'),
+                    'expected_content_type_contains': resolved_probe.get('expected_content_type_contains'),
+                    'expected_text_startswith': resolved_probe.get('expected_text_startswith'),
+                    'expected_text_contains': resolved_probe.get('expected_text_contains'),
                 },
             })
             print(
 
-                f"[OK] owner={probe['owner']} path={probe['path']} "
+                f"[OK] owner={probe['owner']} path={resolved_probe['path']} "
 
                 f"status={response['status_code']} elapsed_ms={response['elapsed_ms']}"
 
@@ -784,7 +1146,7 @@ def run_probes(*, manifest: Mapping[str, Any], base_url: str, timeout: float) ->
 
             print(
 
-                f"[FAIL] owner={probe['owner']} path={probe['path']} error={exc}",
+                f"[FAIL] owner={probe['owner']} path={result['path']} error={exc}",
 
                 file=sys.stderr,
 
@@ -909,6 +1271,90 @@ def summarize_probe_inventory(probes: Sequence[Mapping[str, Any]]) -> Dict[str, 
     }
 
 
+def summarize_route_group_readiness(
+    probes: Sequence[Mapping[str, Any]]
+) -> Dict[str, Dict[str, Any]]:
+    readiness: Dict[str, Dict[str, Any]] = {}
+
+    for probe in probes:
+        route_group = probe.get('route_group')
+        if not isinstance(route_group, str) or not route_group.strip():
+            continue
+
+        normalized_route_group = route_group.strip()
+        owner = str(probe['owner'])
+        profiles = [str(item) for item in probe.get('profiles') or []]
+
+        entry = readiness.setdefault(
+            normalized_route_group,
+            {
+                'probe_count': 0,
+                'owner_counts': {},
+                'profile_counts': {},
+                'probe_names_by_owner': {},
+                'probe_names_by_profile': {},
+                'dedicated_profiles': {
+                    'owner': [],
+                    'fallback': [],
+                    'asymmetric': [],
+                },
+                'readiness_flags': {
+                    'has_rust_owner': False,
+                    'has_python_fallback': False,
+                    'has_business_smoke': False,
+                    'has_asymmetric_evidence': False,
+                    'has_dedicated_owner_profile': False,
+                    'has_dedicated_fallback_profile': False,
+                    'has_dedicated_asymmetric_profile': False,
+                },
+            },
+        )
+
+        entry['probe_count'] += 1
+        owner_counts = entry['owner_counts']
+        owner_counts[owner] = owner_counts.get(owner, 0) + 1
+        entry['probe_names_by_owner'].setdefault(owner, []).append(str(probe['name']))
+
+        flags = entry['readiness_flags']
+        if owner == 'rust':
+            flags['has_rust_owner'] = True
+        if owner == 'python-fallback':
+            flags['has_python_fallback'] = True
+
+        profile_counts = entry['profile_counts']
+        probe_names_by_profile = entry['probe_names_by_profile']
+        dedicated_profiles = entry['dedicated_profiles']
+        for profile in profiles:
+            profile_counts[profile] = profile_counts.get(profile, 0) + 1
+            probe_names_by_profile.setdefault(profile, []).append(str(probe['name']))
+
+            if profile == 'business':
+                flags['has_business_smoke'] = True
+
+            if profile.endswith('-owner') and profile not in dedicated_profiles['owner']:
+                dedicated_profiles['owner'].append(profile)
+            if profile.endswith('-fallback') and profile not in dedicated_profiles['fallback']:
+                dedicated_profiles['fallback'].append(profile)
+            if 'asymmetric' in profile and profile not in dedicated_profiles['asymmetric']:
+                dedicated_profiles['asymmetric'].append(profile)
+
+        flags['has_dedicated_owner_profile'] = bool(dedicated_profiles['owner'])
+        flags['has_dedicated_fallback_profile'] = bool(dedicated_profiles['fallback'])
+        flags['has_dedicated_asymmetric_profile'] = bool(dedicated_profiles['asymmetric'])
+        flags['has_asymmetric_evidence'] = flags['has_dedicated_asymmetric_profile']
+
+    return readiness
+
+
+def build_readiness_summary(probes: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    summary = {
+        'probe_count': len(probes),
+        'route_group_readiness': summarize_route_group_readiness(probes),
+    }
+    summary.update(summarize_probe_inventory(probes))
+    return summary
+
+
 def manifest_summary(manifest: Mapping[str, Any], *, manifest_path: Path) -> Dict[str, Any]:
     summary = {
         'manifest_path': str(manifest_path),
@@ -929,6 +1375,8 @@ def manifest_summary(manifest: Mapping[str, Any], *, manifest_path: Path) -> Dic
                 'expected_status': probe['expected_status'],
                 'route_group': probe.get('route_group'),
                 'profiles': probe.get('profiles'),
+                'requires_login': bool(probe.get('requires_login')),
+                'extract_json': probe.get('extract_json'),
             }
             for probe in manifest['probes']
         ],
@@ -961,9 +1409,31 @@ def main() -> int:
 
 
     try:
+        validated_manifest = validate_manifest(
+            load_json_file(args.manifest.resolve()),
+            manifest_path=args.manifest.resolve(),
+        )
+        readiness_manifest = select_probes_by_route_group(
+            validated_manifest,
+            route_groups=args.route_groups,
+        )
+        readiness_manifest = select_probes_by_name(
+            readiness_manifest,
+            probe_names=args.probe_names,
+        )
+        summary['readiness_summary'] = build_readiness_summary(
+            readiness_manifest['probes']
+        )
 
-        manifest = validate_manifest(load_json_file(args.manifest.resolve()), manifest_path=args.manifest.resolve())
-        manifest = select_probes_by_profile(manifest, profile=args.profile)
+        if args.readiness_summary_only:
+            summary['mode'] = 'readiness-summary-only'
+            summary['ok'] = True
+            summary['finished_at'] = time.strftime('%Y-%m-%dT%H:%M:%S')
+            write_summary(output_path, summary)
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+            return 0
+
+        manifest = select_probes_by_profile(validated_manifest, profile=args.profile)
         manifest = select_probes_by_route_group(manifest, route_groups=args.route_groups)
         manifest = select_probes_by_name(manifest, probe_names=args.probe_names)
         summary.update(manifest_summary(manifest, manifest_path=args.manifest.resolve()))
@@ -983,9 +1453,33 @@ def main() -> int:
 
             return 0
 
+        opener = None
+        if selected_probes_require_login(manifest['probes']):
+            local_auth_username, local_auth_password, used_env_file = resolve_local_auth_credentials(
+                username=args.local_auth_username,
+                password=args.local_auth_password,
+                env_file=args.env_file,
+            )
+            opener, login_summary = bootstrap_local_login_session(
+                base_url=args.base_url,
+                timeout=args.http_timeout,
+                username=local_auth_username,
+                password=local_auth_password,
+                login_path=args.login_path,
+                require_token_cookie=selected_probes_require_token_cookie(manifest['probes']),
+            )
+            summary['login'] = {
+                **login_summary,
+                'username': local_auth_username,
+                'env_file': str(used_env_file) if used_env_file is not None else None,
+            }
 
-
-        results = run_probes(manifest=manifest, base_url=args.base_url, timeout=args.http_timeout)
+        results = run_probes(
+            manifest=manifest,
+            base_url=args.base_url,
+            timeout=args.http_timeout,
+            opener=opener,
+        )
 
         summary['mode'] = 'probe'
 

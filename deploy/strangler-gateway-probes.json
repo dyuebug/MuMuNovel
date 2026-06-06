@@ -1195,7 +1195,8 @@
     {
       "name": "changelog-public-rust",
       "owner": "rust",
-      "profiles": ["route-groups", "business"],
+      "route_group": "changelog",
+      "profiles": ["route-groups", "business", "phase5-p1"],
       "method": "GET",
       "path": "/api/changelog",
       "expected_status": 200,
@@ -1209,10 +1210,28 @@
       ]
     },
     {
+      "name": "changelog-refresh-public-rust",
+      "owner": "rust",
+      "route_group": "changelog",
+      "profiles": ["route-groups", "business", "phase5-p1"],
+      "method": "POST",
+      "path": "/api/changelog/refresh",
+      "expected_status": 200,
+      "expected_content_type_contains": [
+        "application/json"
+      ],
+      "expected_json_has_keys": [
+        "success",
+        "message",
+        "commit_count",
+        "cache_time"
+      ]
+    },
+    {
       "name": "settings-auth-guard-rust",
       "owner": "rust",
       "route_group": "settings",
-      "profiles": ["route-groups", "phase5-p0"],
+      "profiles": ["route-groups", "phase5-p0", "phase5-settings-owner"],
       "method": "GET",
       "path": "/api/settings",
       "expected_status": 401,
@@ -1224,9 +1243,108 @@
       "name": "settings-api-key-auth-guard-rust",
       "owner": "rust",
       "route_group": "settings",
-      "profiles": ["route-groups", "phase5-p0"],
+      "profiles": ["route-groups", "phase5-p0", "phase5-settings-owner"],
       "method": "GET",
       "path": "/api/settings/api-key",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "settings-presets-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "phase5-p0", "phase5-settings-owner"],
+      "method": "GET",
+      "path": "/api/settings/presets",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "settings-presets-create-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "phase5-p0", "phase5-settings-owner"],
+      "method": "POST",
+      "path": "/api/settings/presets",
+      "json_body": {
+        "name": "Smoke Preset",
+        "description": "Smoke preset",
+        "config": {
+          "api_provider": "openai",
+          "api_key": "test-key",
+          "api_base_url": "http://127.0.0.1:9/v1",
+          "llm_model": "gpt-4o-mini",
+          "temperature": 0.7,
+          "max_tokens": 64
+        }
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "settings-presets-from-current-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "phase5-p0", "phase5-settings-owner"],
+      "method": "POST",
+      "path": "/api/settings/presets/from-current?name=Smoke%20Preset&description=Smoke%20preset",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "settings-presets-update-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "phase5-p0", "phase5-settings-owner"],
+      "method": "PUT",
+      "path": "/api/settings/presets/smoke-preset-id",
+      "json_body": {
+        "name": "Smoke Preset Updated"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "settings-presets-delete-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "phase5-p0", "phase5-settings-owner"],
+      "method": "DELETE",
+      "path": "/api/settings/presets/smoke-preset-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "settings-presets-activate-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "phase5-p0", "phase5-settings-owner"],
+      "method": "POST",
+      "path": "/api/settings/presets/smoke-preset-id/activate",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "settings-presets-test-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "phase5-p0", "phase5-settings-owner"],
+      "method": "POST",
+      "path": "/api/settings/presets/smoke-preset-id/test",
       "expected_status": 401,
       "expected_json": {
         "detail": "未登录，请先登录"
@@ -1236,7 +1354,7 @@
       "name": "settings-models-auth-guard-rust",
       "owner": "rust",
       "route_group": "settings",
-      "profiles": ["route-groups", "phase5-p0"],
+      "profiles": ["route-groups", "phase5-p0", "phase5-settings-owner"],
       "method": "GET",
       "path": "/api/settings/models?provider=openai&api_key=test-key&api_base_url=http://127.0.0.1:9/v1",
       "expected_status": 401,
@@ -1248,7 +1366,7 @@
       "name": "settings-fetch-models-auth-guard-rust",
       "owner": "rust",
       "route_group": "settings",
-      "profiles": ["route-groups", "phase5-p0"],
+      "profiles": ["route-groups", "phase5-p0", "phase5-settings-owner"],
       "method": "POST",
       "path": "/api/settings/fetch-models",
       "headers": {
@@ -1268,7 +1386,7 @@
       "name": "settings-test-auth-guard-rust",
       "owner": "rust",
       "route_group": "settings",
-      "profiles": ["route-groups", "phase5-p0"],
+      "profiles": ["route-groups", "phase5-p0", "phase5-settings-owner"],
       "method": "POST",
       "path": "/api/settings/test",
       "headers": {
@@ -1289,7 +1407,7 @@
       "name": "settings-check-function-calling-auth-guard-rust",
       "owner": "rust",
       "route_group": "settings",
-      "profiles": ["route-groups", "phase5-p0"],
+      "profiles": ["route-groups", "phase5-p0", "phase5-settings-owner"],
       "method": "POST",
       "path": "/api/settings/check-function-calling",
       "headers": {
@@ -1307,10 +1425,333 @@
       }
     },
     {
+      "name": "settings-get-business-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-owner"],
+      "method": "GET",
+      "path": "/api/settings",
+      "requires_login": true,
+      "expected_status": 200,
+      "expected_json_has_keys": [
+        "id",
+        "user_id",
+        "api_provider",
+        "has_api_key",
+        "llm_model"
+      ]
+    },
+    {
+      "name": "settings-presets-get-business-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-owner"],
+      "method": "GET",
+      "path": "/api/settings/presets",
+      "requires_login": true,
+      "expected_status": 200,
+      "expected_json_has_keys": [
+        "presets",
+        "total",
+        "active_preset_id"
+      ]
+    },
+    {
+      "name": "settings-test-business-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-owner"],
+      "method": "POST",
+      "path": "/api/settings/test",
+      "requires_login": true,
+      "headers": {
+        "X-Smoke-Probe": "phase5-settings-business-owner"
+      },
+      "json_body": {
+        "provider": "openai",
+        "api_key": "test-key",
+        "api_base_url": "http://127.0.0.1:9/v1",
+        "llm_model": "gpt-4o-mini"
+      },
+      "expected_status": 200,
+      "expected_json": {
+        "success": false,
+        "message": "API 测试失败"
+      },
+      "expected_json_has_keys": [
+        "provider",
+        "model",
+        "error",
+        "error_type",
+        "suggestions",
+        "details"
+      ]
+    },
+    {
+      "name": "settings-check-function-calling-business-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-owner"],
+      "method": "POST",
+      "path": "/api/settings/check-function-calling",
+      "requires_login": true,
+      "headers": {
+        "X-Smoke-Probe": "phase5-settings-business-owner"
+      },
+      "json_body": {
+        "provider": "openai",
+        "api_key": "test-key",
+        "api_base_url": "http://127.0.0.1:9/v1",
+        "llm_model": "gpt-4o-mini"
+      },
+      "expected_status": 200,
+      "expected_json": {
+        "success": false,
+        "supported": null
+      },
+      "expected_json_has_keys": [
+        "provider",
+        "model",
+        "message",
+        "error",
+        "error_type",
+        "suggestions",
+        "details"
+      ]
+    },
+    {
+      "name": "settings-presets-create-business-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-owner"],
+      "method": "POST",
+      "path": "/api/settings/presets",
+      "requires_login": true,
+      "headers": {
+        "X-Smoke-Probe": "phase5-settings-business-owner"
+      },
+      "json_body": {
+        "name": "Smoke Preset Business",
+        "description": "Created by phase5 settings business smoke",
+        "config": {
+          "api_provider": "openai",
+          "api_key": "test-key",
+          "api_base_url": "http://127.0.0.1:9/v1",
+          "llm_model": "gpt-4o-mini",
+          "temperature": 0.7,
+          "max_tokens": 64
+        }
+      },
+      "extract_json": {
+        "settings_business_rust_preset_id": "$.id"
+      },
+      "expected_status": 200,
+      "expected_json": {
+        "name": "Smoke Preset Business",
+        "is_active": false,
+        "config": {
+          "api_provider": "openai",
+          "api_base_url": "http://127.0.0.1:9/v1",
+          "llm_model": "gpt-4o-mini"
+        }
+      },
+      "expected_json_has_keys": [
+        "id",
+        "created_at",
+        "config"
+      ]
+    },
+    {
+      "name": "settings-presets-update-business-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-owner"],
+      "method": "PUT",
+      "path": "/api/settings/presets/{{settings_business_rust_preset_id}}",
+      "requires_login": true,
+      "json_body": {
+        "name": "Smoke Preset Business Updated",
+        "description": "Updated by phase5 settings business smoke",
+        "config": {
+          "api_provider": "openai",
+          "api_key": "test-key",
+          "api_base_url": "http://127.0.0.1:9/v1",
+          "llm_model": "smoke-preset-model-updated",
+          "temperature": 0.2,
+          "max_tokens": 96
+        }
+      },
+      "expected_status": 200,
+      "expected_json": {
+        "id": "{{settings_business_rust_preset_id}}",
+        "name": "Smoke Preset Business Updated",
+        "config": {
+          "api_provider": "openai",
+          "api_base_url": "http://127.0.0.1:9/v1",
+          "llm_model": "smoke-preset-model-updated"
+        }
+      }
+    },
+    {
+      "name": "settings-presets-test-business-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-owner"],
+      "method": "POST",
+      "path": "/api/settings/presets/{{settings_business_rust_preset_id}}/test",
+      "requires_login": true,
+      "headers": {
+        "X-Smoke-Probe": "phase5-settings-business-owner"
+      },
+      "expected_status": 200,
+      "expected_json": {
+        "success": false,
+        "message": "API 测试失败"
+      },
+      "expected_json_has_keys": [
+        "provider",
+        "model",
+        "error",
+        "error_type",
+        "suggestions",
+        "details"
+      ]
+    },
+    {
+      "name": "settings-presets-activate-business-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-owner"],
+      "method": "POST",
+      "path": "/api/settings/presets/{{settings_business_rust_preset_id}}/activate",
+      "requires_login": true,
+      "expected_status": 200,
+      "expected_json": {
+        "message": "预设已激活",
+        "preset_id": "{{settings_business_rust_preset_id}}",
+        "preset_name": "Smoke Preset Business Updated"
+      }
+    },
+    {
+      "name": "settings-get-after-preset-activate-business-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-owner"],
+      "method": "GET",
+      "path": "/api/settings",
+      "requires_login": true,
+      "expected_status": 200,
+      "expected_json": {
+        "api_provider": "openai",
+        "api_base_url": "http://127.0.0.1:9/v1",
+        "llm_model": "smoke-preset-model-updated",
+        "has_api_key": true
+      }
+    },
+    {
+      "name": "settings-deactivate-active-preset-business-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-owner"],
+      "method": "POST",
+      "path": "/api/settings",
+      "requires_login": true,
+      "headers": {
+        "X-Smoke-Probe": "phase5-settings-business-owner"
+      },
+      "json_body": {
+        "api_provider": "openai",
+        "api_key": "sk-deactivated",
+        "api_base_url": "https://api.openai.com/v1",
+        "llm_model": "smoke-deactivated-model",
+        "temperature": 0.4,
+        "max_tokens": 1024
+      },
+      "expected_status": 200,
+      "expected_json": {
+        "api_provider": "openai",
+        "api_base_url": "https://api.openai.com/v1",
+        "llm_model": "smoke-deactivated-model",
+        "has_api_key": true
+      }
+    },
+    {
+      "name": "settings-presets-list-after-deactivate-business-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-owner"],
+      "method": "GET",
+      "path": "/api/settings/presets",
+      "requires_login": true,
+      "expected_status": 200,
+      "expected_json": {
+        "active_preset_id": null
+      },
+      "expected_json_has_keys": [
+        "presets",
+        "total",
+        "active_preset_id"
+      ]
+    },
+    {
+      "name": "settings-presets-delete-business-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-owner"],
+      "method": "DELETE",
+      "path": "/api/settings/presets/{{settings_business_rust_preset_id}}",
+      "requires_login": true,
+      "expected_status": 200,
+      "expected_json": {
+        "message": "预设已删除",
+        "preset_id": "{{settings_business_rust_preset_id}}"
+      }
+    },
+    {
+      "name": "settings-presets-from-current-business-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-owner"],
+      "method": "POST",
+      "path": "/api/settings/presets/from-current?name=Smoke%20Current%20Preset&description=Created%20from%20current%20settings",
+      "requires_login": true,
+      "extract_json": {
+        "settings_business_rust_current_preset_id": "$.id"
+      },
+      "expected_status": 200,
+      "expected_json": {
+        "name": "Smoke Current Preset",
+        "is_active": false,
+        "config": {
+          "api_base_url": "https://api.openai.com/v1",
+          "llm_model": "smoke-deactivated-model"
+        }
+      },
+      "expected_json_has_keys": [
+        "id",
+        "created_at",
+        "config"
+      ]
+    },
+    {
+      "name": "settings-presets-delete-current-business-rust",
+      "owner": "rust",
+      "route_group": "settings",
+      "profiles": ["route-groups", "business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-owner"],
+      "method": "DELETE",
+      "path": "/api/settings/presets/{{settings_business_rust_current_preset_id}}",
+      "requires_login": true,
+      "expected_status": 200,
+      "expected_json": {
+        "message": "预设已删除",
+        "preset_id": "{{settings_business_rust_current_preset_id}}"
+      }
+    },
+    {
       "name": "settings-auth-guard-python-fallback",
       "owner": "python-fallback",
       "route_group": "settings",
-      "profiles": ["phase5-p0-fallback"],
+      "profiles": ["phase5-p0-fallback", "phase5-settings-fallback"],
       "method": "GET",
       "path": "/api/settings",
       "expected_status": 401,
@@ -1322,9 +1763,108 @@
       "name": "settings-api-key-auth-guard-python-fallback",
       "owner": "python-fallback",
       "route_group": "settings",
-      "profiles": ["phase5-p0-fallback"],
+      "profiles": ["phase5-p0-fallback", "phase5-settings-fallback"],
       "method": "GET",
       "path": "/api/settings/api-key",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "settings-presets-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["phase5-p0-fallback", "phase5-settings-fallback"],
+      "method": "GET",
+      "path": "/api/settings/presets",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "settings-presets-create-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["phase5-p0-fallback", "phase5-settings-fallback"],
+      "method": "POST",
+      "path": "/api/settings/presets",
+      "json_body": {
+        "name": "Smoke Preset",
+        "description": "Smoke preset",
+        "config": {
+          "api_provider": "openai",
+          "api_key": "test-key",
+          "api_base_url": "http://127.0.0.1:9/v1",
+          "llm_model": "gpt-4o-mini",
+          "temperature": 0.7,
+          "max_tokens": 64
+        }
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "settings-presets-from-current-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["phase5-p0-fallback", "phase5-settings-fallback"],
+      "method": "POST",
+      "path": "/api/settings/presets/from-current?name=Smoke%20Preset&description=Smoke%20preset",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "settings-presets-update-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["phase5-p0-fallback", "phase5-settings-fallback"],
+      "method": "PUT",
+      "path": "/api/settings/presets/smoke-preset-id",
+      "json_body": {
+        "name": "Smoke Preset Updated"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "settings-presets-delete-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["phase5-p0-fallback", "phase5-settings-fallback"],
+      "method": "DELETE",
+      "path": "/api/settings/presets/smoke-preset-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "settings-presets-activate-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["phase5-p0-fallback", "phase5-settings-fallback"],
+      "method": "POST",
+      "path": "/api/settings/presets/smoke-preset-id/activate",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "settings-presets-test-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["phase5-p0-fallback", "phase5-settings-fallback"],
+      "method": "POST",
+      "path": "/api/settings/presets/smoke-preset-id/test",
       "expected_status": 401,
       "expected_json": {
         "detail": "需要登录"
@@ -1334,7 +1874,7 @@
       "name": "settings-fetch-models-auth-guard-python-fallback",
       "owner": "python-fallback",
       "route_group": "settings",
-      "profiles": ["phase5-p0-fallback"],
+      "profiles": ["phase5-p0-fallback", "phase5-settings-fallback"],
       "method": "POST",
       "path": "/api/settings/fetch-models",
       "headers": {
@@ -1354,7 +1894,7 @@
       "name": "settings-test-auth-guard-python-fallback",
       "owner": "python-fallback",
       "route_group": "settings",
-      "profiles": ["phase5-p0-fallback"],
+      "profiles": ["phase5-p0-fallback", "phase5-settings-fallback"],
       "method": "POST",
       "path": "/api/settings/test",
       "headers": {
@@ -1375,7 +1915,7 @@
       "name": "settings-check-function-calling-auth-guard-python-fallback",
       "owner": "python-fallback",
       "route_group": "settings",
-      "profiles": ["phase5-p0-fallback"],
+      "profiles": ["phase5-p0-fallback", "phase5-settings-fallback"],
       "method": "POST",
       "path": "/api/settings/check-function-calling",
       "headers": {
@@ -1393,10 +1933,326 @@
       }
     },
     {
+      "name": "settings-get-business-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-fallback"],
+      "method": "GET",
+      "path": "/api/settings",
+      "requires_login": true,
+      "expected_status": 200,
+      "expected_json_has_keys": [
+        "id",
+        "user_id",
+        "api_provider",
+        "has_api_key",
+        "llm_model"
+      ]
+    },
+    {
+      "name": "settings-presets-get-business-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-fallback"],
+      "method": "GET",
+      "path": "/api/settings/presets",
+      "requires_login": true,
+      "expected_status": 200,
+      "expected_json_has_keys": [
+        "presets",
+        "total",
+        "active_preset_id"
+      ]
+    },
+    {
+      "name": "settings-test-business-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-fallback"],
+      "method": "POST",
+      "path": "/api/settings/test",
+      "requires_login": true,
+      "headers": {
+        "X-Smoke-Probe": "phase5-settings-business-fallback"
+      },
+      "json_body": {
+        "provider": "openai",
+        "api_key": "test-key",
+        "api_base_url": "http://127.0.0.1:9/v1",
+        "llm_model": "gpt-4o-mini"
+      },
+      "expected_status": 200,
+      "expected_json": {
+        "success": false,
+        "message": "API 测试失败"
+      },
+      "expected_json_has_keys": [
+        "error",
+        "error_type",
+        "suggestions",
+        "details"
+      ]
+    },
+    {
+      "name": "settings-check-function-calling-business-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-fallback"],
+      "method": "POST",
+      "path": "/api/settings/check-function-calling",
+      "requires_login": true,
+      "headers": {
+        "X-Smoke-Probe": "phase5-settings-business-fallback"
+      },
+      "json_body": {
+        "provider": "openai",
+        "api_key": "test-key",
+        "api_base_url": "http://127.0.0.1:9/v1",
+        "llm_model": "gpt-4o-mini"
+      },
+      "expected_status": 200,
+      "expected_json": {
+        "success": false,
+        "supported": null
+      },
+      "expected_json_has_keys": [
+        "error",
+        "error_type",
+        "suggestions",
+        "details"
+      ]
+    },
+    {
+      "name": "settings-presets-create-business-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-fallback"],
+      "method": "POST",
+      "path": "/api/settings/presets",
+      "requires_login": true,
+      "headers": {
+        "X-Smoke-Probe": "phase5-settings-business-fallback"
+      },
+      "json_body": {
+        "name": "Smoke Preset Business",
+        "description": "Created by phase5 settings business smoke",
+        "config": {
+          "api_provider": "openai",
+          "api_key": "test-key",
+          "api_base_url": "http://127.0.0.1:9/v1",
+          "llm_model": "gpt-4o-mini",
+          "temperature": 0.7,
+          "max_tokens": 64
+        }
+      },
+      "extract_json": {
+        "settings_business_python_preset_id": "$.id"
+      },
+      "expected_status": 200,
+      "expected_json": {
+        "name": "Smoke Preset Business",
+        "is_active": false,
+        "config": {
+          "api_provider": "openai",
+          "api_base_url": "http://127.0.0.1:9/v1",
+          "llm_model": "gpt-4o-mini"
+        }
+      },
+      "expected_json_has_keys": [
+        "id",
+        "created_at",
+        "config"
+      ]
+    },
+    {
+      "name": "settings-presets-update-business-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-fallback"],
+      "method": "PUT",
+      "path": "/api/settings/presets/{{settings_business_python_preset_id}}",
+      "requires_login": true,
+      "json_body": {
+        "name": "Smoke Preset Business Updated",
+        "description": "Updated by phase5 settings business smoke",
+        "config": {
+          "api_provider": "openai",
+          "api_key": "test-key",
+          "api_base_url": "http://127.0.0.1:9/v1",
+          "llm_model": "smoke-preset-model-updated",
+          "temperature": 0.2,
+          "max_tokens": 96
+        }
+      },
+      "expected_status": 200,
+      "expected_json": {
+        "id": "{{settings_business_python_preset_id}}",
+        "name": "Smoke Preset Business Updated",
+        "config": {
+          "api_provider": "openai",
+          "api_base_url": "http://127.0.0.1:9/v1",
+          "llm_model": "smoke-preset-model-updated"
+        }
+      }
+    },
+    {
+      "name": "settings-presets-test-business-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-fallback"],
+      "method": "POST",
+      "path": "/api/settings/presets/{{settings_business_python_preset_id}}/test",
+      "requires_login": true,
+      "headers": {
+        "X-Smoke-Probe": "phase5-settings-business-fallback"
+      },
+      "expected_status": 200,
+      "expected_json": {
+        "success": false,
+        "message": "API 测试失败"
+      },
+      "expected_json_has_keys": [
+        "error",
+        "error_type",
+        "suggestions",
+        "details"
+      ]
+    },
+    {
+      "name": "settings-presets-activate-business-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-fallback"],
+      "method": "POST",
+      "path": "/api/settings/presets/{{settings_business_python_preset_id}}/activate",
+      "requires_login": true,
+      "expected_status": 200,
+      "expected_json": {
+        "message": "预设已激活",
+        "preset_id": "{{settings_business_python_preset_id}}",
+        "preset_name": "Smoke Preset Business Updated"
+      }
+    },
+    {
+      "name": "settings-get-after-preset-activate-business-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-fallback"],
+      "method": "GET",
+      "path": "/api/settings",
+      "requires_login": true,
+      "expected_status": 200,
+      "expected_json": {
+        "api_provider": "openai",
+        "api_base_url": "http://127.0.0.1:9/v1",
+        "llm_model": "smoke-preset-model-updated",
+        "has_api_key": true
+      }
+    },
+    {
+      "name": "settings-deactivate-active-preset-business-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-fallback"],
+      "method": "POST",
+      "path": "/api/settings",
+      "requires_login": true,
+      "headers": {
+        "X-Smoke-Probe": "phase5-settings-business-fallback"
+      },
+      "json_body": {
+        "api_provider": "openai",
+        "api_key": "sk-deactivated",
+        "api_base_url": "https://api.openai.com/v1",
+        "llm_model": "smoke-deactivated-model",
+        "temperature": 0.4,
+        "max_tokens": 1024
+      },
+      "expected_status": 200,
+      "expected_json": {
+        "api_provider": "openai",
+        "api_base_url": "https://api.openai.com/v1",
+        "llm_model": "smoke-deactivated-model",
+        "has_api_key": true
+      }
+    },
+    {
+      "name": "settings-presets-list-after-deactivate-business-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-fallback"],
+      "method": "GET",
+      "path": "/api/settings/presets",
+      "requires_login": true,
+      "expected_status": 200,
+      "expected_json": {
+        "active_preset_id": null
+      },
+      "expected_json_has_keys": [
+        "presets",
+        "total",
+        "active_preset_id"
+      ]
+    },
+    {
+      "name": "settings-presets-delete-business-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-fallback"],
+      "method": "DELETE",
+      "path": "/api/settings/presets/{{settings_business_python_preset_id}}",
+      "requires_login": true,
+      "expected_status": 200,
+      "expected_json": {
+        "message": "预设已删除",
+        "preset_id": "{{settings_business_python_preset_id}}"
+      }
+    },
+    {
+      "name": "settings-presets-from-current-business-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-fallback"],
+      "method": "POST",
+      "path": "/api/settings/presets/from-current?name=Smoke%20Current%20Preset&description=Created%20from%20current%20settings",
+      "requires_login": true,
+      "extract_json": {
+        "settings_business_python_current_preset_id": "$.id"
+      },
+      "expected_status": 200,
+      "expected_json": {
+        "name": "Smoke Current Preset",
+        "is_active": false,
+        "config": {
+          "api_base_url": "https://api.openai.com/v1",
+          "llm_model": "smoke-deactivated-model"
+        }
+      },
+      "expected_json_has_keys": [
+        "id",
+        "created_at",
+        "config"
+      ]
+    },
+    {
+      "name": "settings-presets-delete-current-business-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "settings",
+      "profiles": ["business", "phase5-p1", "phase5-settings-business", "phase5-settings-business-fallback"],
+      "method": "DELETE",
+      "path": "/api/settings/presets/{{settings_business_python_current_preset_id}}",
+      "requires_login": true,
+      "expected_status": 200,
+      "expected_json": {
+        "message": "预设已删除",
+        "preset_id": "{{settings_business_python_current_preset_id}}"
+      }
+    },
+    {
       "name": "settings-models-auth-guard-rust-asymmetric",
       "owner": "rust",
       "route_group": "settings",
-      "profiles": ["phase5-p0-asymmetric"],
+      "profiles": ["phase5-p0-asymmetric", "phase5-settings-asymmetric"],
       "method": "GET",
       "path": "/api/settings/models?provider=openai&api_key=test-key&api_base_url=http://127.0.0.1:9/v1",
       "expected_status": 401,
@@ -1408,7 +2264,7 @@
       "name": "settings-models-public-network-error-python-fallback",
       "owner": "python-fallback",
       "route_group": "settings",
-      "profiles": ["phase5-p0-asymmetric"],
+      "profiles": ["phase5-p0-asymmetric", "phase5-settings-asymmetric"],
       "method": "GET",
       "path": "/api/settings/models?provider=openai&api_key=test-key&api_base_url=http://127.0.0.1:9/v1",
       "expected_status": 400,
@@ -1468,9 +2324,73 @@
       "name": "projects-list-auth-guard-rust",
       "owner": "rust",
       "route_group": "projects",
-      "profiles": ["route-groups", "phase5-p0"],
+      "profiles": ["route-groups", "phase5-p0", "phase5-projects-owner"],
       "method": "GET",
       "path": "/api/projects",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "projects-detail-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "projects",
+      "profiles": ["route-groups", "phase5-p0", "phase5-projects-owner"],
+      "method": "GET",
+      "path": "/api/projects/test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "projects-create-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "projects",
+      "profiles": ["route-groups", "phase5-p0", "phase5-projects-owner"],
+      "method": "POST",
+      "path": "/api/projects",
+      "json_body": {
+        "title": "Smoke Project"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "projects-update-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "projects",
+      "profiles": ["route-groups", "phase5-p0", "phase5-projects-owner"],
+      "method": "PUT",
+      "path": "/api/projects/test-project-id",
+      "json_body": {},
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "projects-delete-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "projects",
+      "profiles": ["route-groups", "phase5-p0", "phase5-projects-owner"],
+      "method": "DELETE",
+      "path": "/api/projects/test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "projects-export-txt-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "projects",
+      "profiles": ["route-groups", "phase5-p0", "phase5-projects-owner"],
+      "method": "GET",
+      "path": "/api/projects/test-project-id/export",
       "expected_status": 401,
       "expected_json": {
         "detail": "未登录，请先登录"
@@ -1480,7 +2400,7 @@
       "name": "projects-validate-import-public-rust",
       "owner": "rust",
       "route_group": "projects",
-      "profiles": ["route-groups", "phase5-p0", "business"],
+      "profiles": ["route-groups", "phase5-p0", "phase5-projects-owner", "business"],
       "method": "POST",
       "path": "/api/projects/validate-import",
       "multipart_form": {
@@ -1517,7 +2437,7 @@
       "name": "projects-import-auth-guard-rust",
       "owner": "rust",
       "route_group": "projects",
-      "profiles": ["route-groups", "phase5-p0"],
+      "profiles": ["route-groups", "phase5-p0", "phase5-projects-owner"],
       "method": "POST",
       "path": "/api/projects/import",
       "multipart_form": {
@@ -1538,7 +2458,7 @@
       "name": "projects-export-data-auth-guard-rust",
       "owner": "rust",
       "route_group": "projects",
-      "profiles": ["route-groups", "phase5-p0"],
+      "profiles": ["route-groups", "phase5-p0", "phase5-projects-owner"],
       "method": "POST",
       "path": "/api/projects/test-project-id/export-data",
       "json_body": {},
@@ -1548,12 +2468,112 @@
       }
     },
     {
+      "name": "projects-check-consistency-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "projects",
+      "profiles": ["route-groups", "phase5-p0", "phase5-projects-owner"],
+      "method": "POST",
+      "path": "/api/projects/test-project-id/check-consistency",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "projects-fix-organizations-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "projects",
+      "profiles": ["route-groups", "phase5-p0", "phase5-projects-owner"],
+      "method": "POST",
+      "path": "/api/projects/test-project-id/fix-organizations",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "projects-fix-member-counts-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "projects",
+      "profiles": ["route-groups", "phase5-p0", "phase5-projects-owner"],
+      "method": "POST",
+      "path": "/api/projects/test-project-id/fix-member-counts",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
       "name": "projects-list-auth-guard-python-fallback",
       "owner": "python-fallback",
       "route_group": "projects",
-      "profiles": ["phase5-p0-fallback"],
+      "profiles": ["phase5-p0-fallback", "phase5-projects-fallback"],
       "method": "GET",
       "path": "/api/projects",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "projects-detail-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "projects",
+      "profiles": ["phase5-p0-fallback", "phase5-projects-fallback"],
+      "method": "GET",
+      "path": "/api/projects/test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "projects-create-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "projects",
+      "profiles": ["phase5-p0-fallback", "phase5-projects-fallback"],
+      "method": "POST",
+      "path": "/api/projects",
+      "json_body": {
+        "title": "Smoke Project"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "projects-update-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "projects",
+      "profiles": ["phase5-p0-fallback", "phase5-projects-fallback"],
+      "method": "PUT",
+      "path": "/api/projects/test-project-id",
+      "json_body": {},
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "projects-delete-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "projects",
+      "profiles": ["phase5-p0-fallback", "phase5-projects-fallback"],
+      "method": "DELETE",
+      "path": "/api/projects/test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "projects-export-txt-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "projects",
+      "profiles": ["phase5-p0-fallback", "phase5-projects-fallback"],
+      "method": "GET",
+      "path": "/api/projects/test-project-id/export",
       "expected_status": 401,
       "expected_json": {
         "detail": "未登录"
@@ -1563,7 +2583,7 @@
       "name": "projects-validate-import-public-python-fallback",
       "owner": "python-fallback",
       "route_group": "projects",
-      "profiles": ["phase5-p0-fallback"],
+      "profiles": ["phase5-p0-fallback", "phase5-projects-fallback"],
       "method": "POST",
       "path": "/api/projects/validate-import",
       "multipart_form": {
@@ -1603,7 +2623,7 @@
       "name": "projects-import-auth-guard-python-fallback",
       "owner": "python-fallback",
       "route_group": "projects",
-      "profiles": ["phase5-p0-fallback"],
+      "profiles": ["phase5-p0-fallback", "phase5-projects-fallback"],
       "method": "POST",
       "path": "/api/projects/import",
       "multipart_form": {
@@ -1624,13 +2644,714 @@
       "name": "projects-export-data-auth-guard-python-fallback",
       "owner": "python-fallback",
       "route_group": "projects",
-      "profiles": ["phase5-p0-fallback"],
+      "profiles": ["phase5-p0-fallback", "phase5-projects-fallback"],
       "method": "POST",
       "path": "/api/projects/test-project-id/export-data",
       "json_body": {},
       "expected_status": 401,
       "expected_json": {
         "detail": "未登录"
+      }
+    },
+    {
+      "name": "projects-check-consistency-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "projects",
+      "profiles": ["phase5-p0-fallback", "phase5-projects-fallback"],
+      "method": "POST",
+      "path": "/api/projects/test-project-id/check-consistency",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "projects-fix-organizations-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "projects",
+      "profiles": ["phase5-p0-fallback", "phase5-projects-fallback"],
+      "method": "POST",
+      "path": "/api/projects/test-project-id/fix-organizations",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "projects-fix-member-counts-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "projects",
+      "profiles": ["phase5-p0-fallback", "phase5-projects-fallback"],
+      "method": "POST",
+      "path": "/api/projects/test-project-id/fix-member-counts",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "relationships-project-list-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "relationships",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "GET",
+      "path": "/api/relationships/project/test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "relationships-graph-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "relationships",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "GET",
+      "path": "/api/relationships/graph/test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "relationships-project-list-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "relationships",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "GET",
+      "path": "/api/relationships/project/test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "relationships-graph-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "relationships",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "GET",
+      "path": "/api/relationships/graph/test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "foreshadows-project-list-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "foreshadows",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "GET",
+      "path": "/api/foreshadows/projects/test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "foreshadows-stats-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "foreshadows",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "GET",
+      "path": "/api/foreshadows/projects/test-project-id/stats",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "foreshadows-project-list-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "foreshadows",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "GET",
+      "path": "/api/foreshadows/projects/test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "foreshadows-stats-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "foreshadows",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "GET",
+      "path": "/api/foreshadows/projects/test-project-id/stats",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "writing-styles-user-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "writing_styles",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "GET",
+      "path": "/api/writing-styles/user",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "writing-styles-project-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "writing_styles",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "GET",
+      "path": "/api/writing-styles/project/test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "writing-styles-user-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "writing_styles",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "GET",
+      "path": "/api/writing-styles/user",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "writing-styles-project-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "writing_styles",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "GET",
+      "path": "/api/writing-styles/project/test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "organizations-project-list-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "organizations",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "GET",
+      "path": "/api/organizations/project/test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "organizations-generate-stream-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "organizations",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "POST",
+      "path": "/api/organizations/generate-stream",
+      "json_body": {
+        "project_id": "test-project-id"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "organizations-project-list-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "organizations",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "GET",
+      "path": "/api/organizations/project/test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "organizations-generate-stream-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "organizations",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "POST",
+      "path": "/api/organizations/generate-stream",
+      "json_body": {
+        "project_id": "test-project-id"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "careers-list-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "careers",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "GET",
+      "path": "/api/careers?project_id=test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "careers-generate-system-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "careers",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "GET",
+      "path": "/api/careers/generate-system?project_id=test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "careers-list-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "careers",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "GET",
+      "path": "/api/careers?project_id=test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "careers-generate-system-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "careers",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "GET",
+      "path": "/api/careers/generate-system?project_id=test-project-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "inspiration-generate-options-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "inspiration",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "POST",
+      "path": "/api/inspiration/generate-options",
+      "json_body": {
+        "step": "title",
+        "context": {}
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "inspiration-quick-generate-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "inspiration",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "POST",
+      "path": "/api/inspiration/quick-generate",
+      "json_body": {
+        "title": "测试标题",
+        "description": "测试简介"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "inspiration-generate-options-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "inspiration",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "POST",
+      "path": "/api/inspiration/generate-options",
+      "json_body": {
+        "step": "title",
+        "context": {}
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "inspiration-quick-generate-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "inspiration",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "POST",
+      "path": "/api/inspiration/quick-generate",
+      "json_body": {
+        "title": "测试标题",
+        "description": "测试简介"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "mcp-plugins-list-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "mcp_plugins",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "GET",
+      "path": "/api/mcp/plugins",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "mcp-plugins-simple-create-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "mcp_plugins",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "POST",
+      "path": "/api/mcp/plugins/simple",
+      "json_body": {
+        "config_json": "{\"mcpServers\":{\"demo\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:1\"}}}",
+        "category": "test",
+        "enabled": false
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "mcp-plugins-list-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "mcp_plugins",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "GET",
+      "path": "/api/mcp/plugins",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "mcp-plugins-simple-create-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "mcp_plugins",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "POST",
+      "path": "/api/mcp/plugins/simple",
+      "json_body": {
+        "config_json": "{\"mcpServers\":{\"demo\":{\"type\":\"http\",\"url\":\"http://127.0.0.1:1\"}}}",
+        "category": "test",
+        "enabled": false
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "prompt-templates-list-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "prompt_templates",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "GET",
+      "path": "/api/prompt-templates",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "prompt-templates-system-defaults-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "prompt_templates",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "GET",
+      "path": "/api/prompt-templates/system-defaults",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "prompt-templates-list-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "prompt_templates",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "GET",
+      "path": "/api/prompt-templates",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "prompt-templates-system-defaults-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "prompt_templates",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "GET",
+      "path": "/api/prompt-templates/system-defaults",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "background-tasks-list-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "background_tasks",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "GET",
+      "path": "/api/background-tasks",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "background-tasks-create-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "background_tasks",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "POST",
+      "path": "/api/background-tasks",
+      "json_body": {
+        "task_type": "wizard_world_building",
+        "payload": {},
+        "execution_mode": "interactive"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "background-tasks-list-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "background_tasks",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "GET",
+      "path": "/api/background-tasks",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "Unauthorized"
+      }
+    },
+    {
+      "name": "background-tasks-create-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "background_tasks",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "POST",
+      "path": "/api/background-tasks",
+      "json_body": {
+        "task_type": "wizard_world_building",
+        "payload": {},
+        "execution_mode": "interactive"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "Unauthorized"
+      }
+    },
+    {
+      "name": "prompt-workshop-submit-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "prompt_workshop",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "POST",
+      "path": "/api/prompt-workshop/submit",
+      "json_body": {
+        "name": "测试提示词",
+        "prompt_content": "测试内容",
+        "category": "general"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "prompt-workshop-like-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "prompt_workshop",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "POST",
+      "path": "/api/prompt-workshop/items/test-item-id/like",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "prompt-workshop-submit-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "prompt_workshop",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "POST",
+      "path": "/api/prompt-workshop/submit",
+      "json_body": {
+        "name": "测试提示词",
+        "prompt_content": "测试内容",
+        "category": "general"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录或用户ID缺失"
+      }
+    },
+    {
+      "name": "prompt-workshop-like-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "prompt_workshop",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "POST",
+      "path": "/api/prompt-workshop/items/test-item-id/like",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录或用户ID缺失"
+      }
+    },
+    {
+      "name": "polish-text-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "polish",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "POST",
+      "path": "/api/polish",
+      "json_body": {
+        "original_text": "这是一段测试文本。"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "polish-batch-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "polish",
+      "profiles": ["route-groups", "phase5-p1"],
+      "method": "POST",
+      "path": "/api/polish/batch",
+      "json_body": {
+        "texts": ["这是一段测试文本。"]
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "polish-text-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "polish",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "POST",
+      "path": "/api/polish",
+      "json_body": {
+        "original_text": "这是一段测试文本。"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "polish-batch-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "polish",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "POST",
+      "path": "/api/polish/batch",
+      "json_body": {
+        "texts": ["这是一段测试文本。"]
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
+      "name": "changelog-public-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "changelog",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "GET",
+      "path": "/api/changelog",
+      "expected_status": 200,
+      "expected_content_type_contains": [
+        "application/json"
+      ],
+      "expected_json_has_keys": [
+        "commits",
+        "cached",
+        "cache_time"
+      ]
+    },
+    {
+      "name": "changelog-refresh-public-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "changelog",
+      "profiles": ["phase5-p1-fallback"],
+      "method": "POST",
+      "path": "/api/changelog/refresh",
+      "expected_status": 200,
+      "expected_content_type_contains": [
+        "application/json"
+      ],
+      "expected_json_has_keys": [
+        "success",
+        "message",
+        "commit_count",
+        "cache_time"
+      ]
+    },
+    {
+      "name": "ai-test-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "ai_test",
+      "profiles": ["route-groups", "phase5-p1-asymmetric"],
+      "method": "POST",
+      "path": "/api/ai-test",
+      "json_body": {
+        "prompt": "test",
+        "api_key": "",
+        "base_url": "http://127.0.0.1:1",
+        "model": "test",
+        "max_tokens": 1
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "ai-test-alias-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "ai_test",
+      "profiles": ["route-groups", "phase5-p1-asymmetric"],
+      "method": "POST",
+      "path": "/api/ai/test",
+      "json_body": {
+        "prompt": "test",
+        "api_key": "",
+        "base_url": "http://127.0.0.1:1",
+        "model": "test",
+        "max_tokens": 1
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
       }
     },
     {
@@ -1888,6 +3609,22 @@
       }
     },
     {
+      "name": "wizard-stream-world-building-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "wizard-stream",
+      "profiles": ["route-groups", "phase5-p0"],
+      "method": "POST",
+      "path": "/api/wizard-stream/world-building",
+      "headers": {
+        "X-Smoke-Probe": "phase5-p0"
+      },
+      "json_body": {},
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
       "name": "wizard-stream-world-building-regenerate-auth-guard-rust",
       "owner": "rust",
       "route_group": "wizard-stream",
@@ -1974,6 +3711,22 @@
       }
     },
     {
+      "name": "wizard-stream-world-building-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "wizard-stream",
+      "profiles": ["phase5-p0-fallback"],
+      "method": "POST",
+      "path": "/api/wizard-stream/world-building",
+      "headers": {
+        "X-Smoke-Probe": "phase5-p0-fallback"
+      },
+      "json_body": {},
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "需要登录"
+      }
+    },
+    {
       "name": "wizard-stream-world-building-regenerate-auth-guard-python-fallback",
       "owner": "python-fallback",
       "route_group": "wizard-stream",
@@ -2038,6 +3791,42 @@
       }
     },
     {
+      "name": "memories-list-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "memories",
+      "profiles": ["route-groups", "phase5-p0"],
+      "method": "GET",
+      "path": "/api/memories/projects/test-project-id/memories",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "memories-analysis-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "memories",
+      "profiles": ["route-groups", "phase5-p0"],
+      "method": "GET",
+      "path": "/api/memories/projects/test-project-id/analysis/test-chapter-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "memories-foreshadows-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "memories",
+      "profiles": ["route-groups", "phase5-p0"],
+      "method": "GET",
+      "path": "/api/memories/projects/test-project-id/foreshadows?current_chapter=1",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
       "name": "memories-search-auth-guard-rust",
       "owner": "rust",
       "route_group": "memories",
@@ -2045,6 +3834,18 @@
       "method": "POST",
       "path": "/api/memories/projects/test-project-id/search?query=test",
       "json_body": {},
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "memories-delete-chapter-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "memories",
+      "profiles": ["route-groups", "phase5-p0"],
+      "method": "DELETE",
+      "path": "/api/memories/projects/test-project-id/chapters/test-chapter-id/memories",
       "expected_status": 401,
       "expected_json": {
         "detail": "未登录，请先登录"
@@ -2063,6 +3864,42 @@
       }
     },
     {
+      "name": "memories-list-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "memories",
+      "profiles": ["phase5-p0-fallback"],
+      "method": "GET",
+      "path": "/api/memories/projects/test-project-id/memories",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "memories-analysis-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "memories",
+      "profiles": ["phase5-p0-fallback"],
+      "method": "GET",
+      "path": "/api/memories/projects/test-project-id/analysis/test-chapter-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "memories-foreshadows-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "memories",
+      "profiles": ["phase5-p0-fallback"],
+      "method": "GET",
+      "path": "/api/memories/projects/test-project-id/foreshadows?current_chapter=1",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
       "name": "memories-search-auth-guard-python-fallback",
       "owner": "python-fallback",
       "route_group": "memories",
@@ -2070,6 +3907,18 @@
       "method": "POST",
       "path": "/api/memories/projects/test-project-id/search?query=test",
       "json_body": {},
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录"
+      }
+    },
+    {
+      "name": "memories-delete-chapter-auth-guard-python-fallback",
+      "owner": "python-fallback",
+      "route_group": "memories",
+      "profiles": ["phase5-p0-fallback"],
+      "method": "DELETE",
+      "path": "/api/memories/projects/test-project-id/chapters/test-chapter-id/memories",
       "expected_status": 401,
       "expected_json": {
         "detail": "未登录"

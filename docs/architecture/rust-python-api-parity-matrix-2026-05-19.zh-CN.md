@@ -123,6 +123,13 @@
 - `POST /api/projects/{project_id}/export-data` 现在也已进入 P0 manifest，
   使用最小合法 JSON body `{}`，断言合法 JSON 写侧请求下的 auth boundary：
   Rust 侧停在共享鉴权中间件，Python 侧停在 `request.state.user_id` 登录检查
+- 基础项目生命周期与 TXT 导出入口现在也已进入 P0 manifest：
+  `POST /api/projects`、`PUT /api/projects/{project_id}`、
+  `DELETE /api/projects/{project_id}`、`GET /api/projects/{project_id}/export`
+  均具备 Rust owner 与 Python fallback 双侧 auth-boundary 证据
+- `projects` 现在已固化两个专用 shrink-readiness profile：
+  `phase5-projects-owner` 与 `phase5-projects-fallback`，各覆盖 12 条同路径
+  probe
 
 这意味着：
 
@@ -134,6 +141,9 @@
   不再只是“读侧 + public validator”二元证据
 - `projects/export-data` 又补上了合法 JSON 写侧鉴权线索，因此 `projects`
   现在具备读侧、public-success、multipart 写侧、JSON 写侧四类 P0 证据
+- `projects` 现在具备一键执行的 owner/fallback shrink 包，下一步更应该补
+  登录态 project lifecycle / export business smoke，而不是继续只增加未登录
+  probe 数量
 
 ### 5.2 `wizard-stream`
 
@@ -293,6 +303,11 @@
   而是继续进入公开模型列表逻辑，并在不可达 `api_base_url=http://127.0.0.1:9/v1`
   下稳定返回 `400 {"detail":"无法连接到 API: All connection attempts failed"}`
   这类路径需要单独建模，不能误写成 `phase5-p0-fallback` 的 auth-boundary 证据
+- `settings` 现在进一步固化为三个专用 shrink-readiness profile：
+  `phase5-settings-owner`（13 条）、`phase5-settings-fallback`（12 条）与
+  `phase5-settings-asymmetric`（2 条）。这让 settings 的 owner/fallback/
+  asymmetric 证据可以独立一键执行，并明确避免把 models 非对称入口误读成
+  普通 fallback parity
 - `phase5-p0-fallback` 现在也补入
   `projects-validate-import-public-python-fallback`：同一路径下，Python 返回
   `organization_members` / `character_careers` / `story_memories` /

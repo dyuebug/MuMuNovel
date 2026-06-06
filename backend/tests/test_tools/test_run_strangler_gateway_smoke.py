@@ -46,6 +46,59 @@ def test_validate_manifest_accepts_expected_shape():
     assert validated['probes'][0]['profiles'] == ['deploy', 'route-groups']
 
 
+def test_validate_manifest_accepts_requires_login_flag():
+    smoke = load_gateway_smoke_module()
+    manifest = {
+        'manifest_version': 1,
+        'probes': [
+            {
+                'name': 'settings-get-business-rust',
+                'owner': 'rust',
+                'method': 'GET',
+                'path': '/api/settings',
+                'expected_status': 200,
+                'expected_json_has_keys': ['user_id', 'has_api_key', 'api_provider', 'llm_model'],
+                'requires_login': True,
+                'profiles': ['business'],
+            }
+        ],
+    }
+
+    validated = smoke.validate_manifest(manifest, manifest_path=Path('deploy/strangler-gateway-probes.json'))
+
+    assert validated['probes'][0]['requires_login'] is True
+
+
+def test_validate_manifest_accepts_extract_json_mapping():
+    smoke = load_gateway_smoke_module()
+    manifest = {
+        'manifest_version': 1,
+        'probes': [
+            {
+                'name': 'settings-presets-create-business-rust',
+                'owner': 'rust',
+                'method': 'POST',
+                'path': '/api/settings/presets',
+                'json_body': {
+                    'name': 'Smoke Preset',
+                },
+                'extract_json': {
+                    'preset_id': '$.id',
+                    'preset_name': '$.name',
+                },
+                'expected_status': 200,
+            }
+        ],
+    }
+
+    validated = smoke.validate_manifest(manifest, manifest_path=Path('deploy/strangler-gateway-probes.json'))
+
+    assert validated['probes'][0]['extract_json'] == {
+        'preset_id': '$.id',
+        'preset_name': '$.name',
+    }
+
+
 def test_validate_manifest_rejects_duplicate_probe_names():
     smoke = load_gateway_smoke_module()
     manifest = {
@@ -164,6 +217,78 @@ def test_run_probes_records_owner_path_and_error(monkeypatch):
     assert 'status mismatch' in results[1]['error']
 
 
+def test_run_probes_only_passes_opener_for_requires_login_probe(monkeypatch):
+    smoke = load_gateway_smoke_module()
+    manifest = {
+        'manifest_version': 1,
+        'probes': [
+            {
+                'name': 'settings-business-rust',
+                'owner': 'rust',
+                'method': 'GET',
+                'path': '/api/settings',
+                'expected_status': 200,
+                'expected_json_has_keys': ['user_id'],
+                'requires_login': True,
+            },
+            {
+                'name': 'health-public-rust',
+                'owner': 'rust',
+                'method': 'GET',
+                'path': '/health',
+                'expected_status': 200,
+                'expected_json': {'status': 'ok'},
+            },
+        ],
+    }
+    captured = []
+    opener = object()
+
+    def fake_request_probe(
+        *,
+        base_url: str,
+        path: str,
+        method: str,
+        timeout: float,
+        headers=None,
+        body=None,
+        json_body=None,
+        multipart_form=None,
+        opener=None,
+    ):
+        captured.append({'path': path, 'opener': opener})
+        if path == '/api/settings':
+            return {
+                'status_code': 200,
+                'elapsed_ms': 3.2,
+                'content_type': 'application/json; charset=utf-8',
+                'headers': {},
+                'body': {'user_id': 'local_test'},
+            }
+        return {
+            'status_code': 200,
+            'elapsed_ms': 2.1,
+            'content_type': 'application/json; charset=utf-8',
+            'headers': {},
+            'body': {'status': 'ok'},
+        }
+
+    monkeypatch.setattr(smoke, 'request_probe', fake_request_probe)
+
+    results = smoke.run_probes(
+        manifest=manifest,
+        base_url='http://localhost:8005',
+        timeout=10.0,
+        opener=opener,
+    )
+
+    assert [item['ok'] for item in results] == [True, True]
+    assert captured == [
+        {'path': '/api/settings', 'opener': opener},
+        {'path': '/health', 'opener': None},
+    ]
+
+
 def test_run_probes_passes_headers_and_json_body(monkeypatch):
     smoke = load_gateway_smoke_module()
     manifest = {
@@ -218,6 +343,221 @@ def test_run_probes_passes_headers_and_json_body(monkeypatch):
     assert captured['body'] is None
     assert captured['json_body'] == {'projectId': 'test-project-id'}
     assert captured['multipart_form'] is None
+
+
+def test_run_probes_supports_extract_json_and_placeholder_templates(monkeypatch):
+    smoke = load_gateway_smoke_module()
+    manifest = {
+        'manifest_version': 1,
+        'probes': [
+            {
+                'name': 'settings-presets-create-business-rust',
+                'owner': 'rust',
+                'method': 'POST',
+                'path': '/api/settings/presets',
+                'json_body': {
+                    'name': 'Smoke Preset',
+                    'description': 'created by smoke',
+                },
+                'extract_json': {
+                    'preset_id': '$.id',
+                    'preset_name': '$.name',
+                },
+                'expected_status': 200,
+                'expected_json': {
+                    'id': 'preset_123',
+                    'name': 'Smoke Preset',
+                },
+            },
+            {
+                'name': 'settings-presets-activate-business-rust',
+                'owner': 'rust',
+                'method': 'POST',
+                'path': '/api/settings/presets/{{preset_id}}/activate',
+                'headers': {
+                    'X-Smoke-Preset': '{{preset_name}}',
+                },
+                'expected_status': 200,
+                'expected_json': {
+                    'preset_id': '{{preset_id}}',
+                    'preset_name': '{{preset_name}}',
+                },
+            },
+        ],
+    }
+    captured = []
+
+    def fake_request_probe(
+        *,
+        base_url: str,
+        path: str,
+        method: str,
+        timeout: float,
+        headers=None,
+        body=None,
+        json_body=None,
+        multipart_form=None,
+    ):
+        captured.append(
+            {
+                'path': path,
+                'headers': headers,
+                'json_body': json_body,
+            }
+        )
+        if path == '/api/settings/presets':
+            return {
+                'status_code': 200,
+                'elapsed_ms': 5.4,
+                'content_type': 'application/json; charset=utf-8',
+                'headers': {},
+                'body': {'id': 'preset_123', 'name': 'Smoke Preset'},
+            }
+
+        return {
+            'status_code': 200,
+            'elapsed_ms': 3.6,
+            'content_type': 'application/json; charset=utf-8',
+            'headers': {},
+            'body': {'preset_id': 'preset_123', 'preset_name': 'Smoke Preset'},
+        }
+
+    monkeypatch.setattr(smoke, 'request_probe', fake_request_probe)
+
+    results = smoke.run_probes(manifest=manifest, base_url='http://localhost:8005', timeout=10.0)
+
+    assert [item['ok'] for item in results] == [True, True]
+    assert results[0]['extracted'] == {
+        'preset_id': 'preset_123',
+        'preset_name': 'Smoke Preset',
+    }
+    assert captured == [
+        {
+            'path': '/api/settings/presets',
+            'headers': None,
+            'json_body': {
+                'name': 'Smoke Preset',
+                'description': 'created by smoke',
+            },
+        },
+        {
+            'path': '/api/settings/presets/preset_123/activate',
+            'headers': {'X-Smoke-Preset': 'Smoke Preset'},
+            'json_body': None,
+        },
+    ]
+
+
+def test_run_probes_rejects_unknown_placeholder_reference(monkeypatch):
+    smoke = load_gateway_smoke_module()
+    manifest = {
+        'manifest_version': 1,
+        'probes': [
+            {
+                'name': 'settings-presets-delete-business-rust',
+                'owner': 'rust',
+                'method': 'DELETE',
+                'path': '/api/settings/presets/{{missing_preset_id}}',
+                'expected_status': 200,
+            }
+        ],
+    }
+
+    def fake_request_probe(**kwargs):  # pragma: no cover - should never run
+        raise AssertionError('request_probe should not be called when placeholder resolution fails')
+
+    monkeypatch.setattr(smoke, 'request_probe', fake_request_probe)
+
+    results = smoke.run_probes(manifest=manifest, base_url='http://localhost:8005', timeout=10.0)
+
+    assert results[0]['ok'] is False
+    assert "unknown placeholder 'missing_preset_id'" in results[0]['error']
+
+
+def test_bootstrap_local_login_session_requires_expected_cookies(monkeypatch):
+    smoke = load_gateway_smoke_module()
+
+    class FakeCookie:
+        def __init__(self, name: str):
+            self.name = name
+
+    class FakeCookieJar:
+        def __iter__(self):
+            return iter([
+                FakeCookie('token'),
+                FakeCookie('user_id'),
+                FakeCookie('session_expire_at'),
+            ])
+
+    fake_opener = object()
+
+    monkeypatch.setattr(smoke.http.cookiejar, 'CookieJar', lambda: FakeCookieJar())
+    monkeypatch.setattr(smoke, 'build_opener', lambda cookie_jar: fake_opener)
+
+    def fake_request_probe(
+        *,
+        base_url: str,
+        path: str,
+        method: str,
+        timeout: float,
+        headers=None,
+        body=None,
+        json_body=None,
+        multipart_form=None,
+        opener=None,
+    ):
+        assert opener is fake_opener
+        assert json_body == {'username': 'admin', 'password': 'secret'}
+        return {
+            'status_code': 200,
+            'elapsed_ms': 6.4,
+            'content_type': 'application/json; charset=utf-8',
+            'headers': {},
+            'body': {
+                'success': True,
+                'message': '登录成功',
+                'user': {'user_id': 'local_test_user'},
+            },
+        }
+
+    monkeypatch.setattr(smoke, 'request_probe', fake_request_probe)
+
+    opener, summary = smoke.bootstrap_local_login_session(
+        base_url='http://localhost:8005',
+        timeout=10.0,
+        username='admin',
+        password='secret',
+        login_path='/api/auth/local/login',
+        require_token_cookie=True,
+    )
+
+    assert opener is fake_opener
+    assert summary == {
+        'path': '/api/auth/local/login',
+        'status_code': 200,
+        'elapsed_ms': 6.4,
+        'message': '登录成功',
+        'cookie_names': ['session_expire_at', 'token', 'user_id'],
+        'user_id': 'local_test_user',
+    }
+
+
+def test_ensure_login_cookies_allows_python_style_cookie_set_without_token():
+    smoke = load_gateway_smoke_module()
+
+    class FakeCookie:
+        def __init__(self, name: str):
+            self.name = name
+
+    cookie_names = smoke.ensure_login_cookies(
+        [
+            FakeCookie('user_id'),
+            FakeCookie('session_expire_at'),
+        ],
+        require_token_cookie=False,
+    )
+
+    assert cookie_names == ['session_expire_at', 'user_id']
 
 
 def test_run_probes_passes_multipart_form(monkeypatch):
@@ -368,6 +708,154 @@ def test_manifest_summary_includes_inventory_rollups():
     assert summary['route_group_probe_names'] == {
         'settings': ['settings-auth-guard-rust'],
         'chapters': ['chapters-project-list-auth-guard-python-fallback'],
+    }
+
+
+def test_summarize_route_group_readiness_rolls_up_owner_profile_and_business_flags():
+    smoke = load_gateway_smoke_module()
+    probes = [
+        {
+            'name': 'settings-auth-guard-rust',
+            'owner': 'rust',
+            'method': 'GET',
+            'path': '/api/settings',
+            'expected_status': 401,
+            'route_group': 'settings',
+            'profiles': ['route-groups', 'phase5-p0', 'phase5-settings-owner'],
+        },
+        {
+            'name': 'settings-auth-guard-python-fallback',
+            'owner': 'python-fallback',
+            'method': 'GET',
+            'path': '/api/settings',
+            'expected_status': 401,
+            'route_group': 'settings',
+            'profiles': ['phase5-p0-fallback', 'phase5-settings-fallback'],
+        },
+        {
+            'name': 'settings-models-public-network-error-python-fallback',
+            'owner': 'python-fallback',
+            'method': 'GET',
+            'path': '/api/settings/models?provider=openai',
+            'expected_status': 400,
+            'route_group': 'settings',
+            'profiles': ['phase5-p0-asymmetric', 'phase5-settings-asymmetric'],
+        },
+        {
+            'name': 'settings-presets-get-business-rust',
+            'owner': 'rust',
+            'method': 'GET',
+            'path': '/api/settings/presets',
+            'expected_status': 200,
+            'route_group': 'settings',
+            'profiles': [
+                'route-groups',
+                'business',
+                'phase5-p1',
+                'phase5-settings-business',
+                'phase5-settings-business-owner',
+            ],
+            'requires_login': True,
+        },
+        {
+            'name': 'settings-test-business-rust',
+            'owner': 'rust',
+            'method': 'POST',
+            'path': '/api/settings/test',
+            'expected_status': 200,
+            'route_group': 'settings',
+            'profiles': [
+                'route-groups',
+                'business',
+                'phase5-p1',
+                'phase5-settings-business',
+                'phase5-settings-business-owner',
+            ],
+            'requires_login': True,
+        },
+        {
+            'name': 'projects-validate-import-public-rust',
+            'owner': 'rust',
+            'method': 'POST',
+            'path': '/api/projects/validate-import',
+            'expected_status': 200,
+            'route_group': 'projects',
+            'profiles': ['route-groups', 'phase5-p0', 'phase5-projects-owner', 'business'],
+        },
+        {
+            'name': 'projects-list-auth-guard-python-fallback',
+            'owner': 'python-fallback',
+            'method': 'GET',
+            'path': '/api/projects',
+            'expected_status': 401,
+            'route_group': 'projects',
+            'profiles': ['phase5-p0-fallback', 'phase5-projects-fallback'],
+        },
+    ]
+
+    summary = smoke.summarize_route_group_readiness(probes)
+
+    assert summary['settings']['probe_count'] == 5
+    assert summary['settings']['owner_counts'] == {'rust': 3, 'python-fallback': 2}
+    assert summary['settings']['dedicated_profiles'] == {
+        'owner': ['phase5-settings-owner', 'phase5-settings-business-owner'],
+        'fallback': ['phase5-p0-fallback', 'phase5-settings-fallback'],
+        'asymmetric': ['phase5-p0-asymmetric', 'phase5-settings-asymmetric'],
+    }
+    assert summary['settings']['readiness_flags'] == {
+        'has_rust_owner': True,
+        'has_python_fallback': True,
+        'has_business_smoke': True,
+        'has_asymmetric_evidence': True,
+        'has_dedicated_owner_profile': True,
+        'has_dedicated_fallback_profile': True,
+        'has_dedicated_asymmetric_profile': True,
+    }
+
+    assert summary['projects']['probe_count'] == 2
+    assert summary['projects']['owner_counts'] == {'rust': 1, 'python-fallback': 1}
+    assert summary['projects']['readiness_flags']['has_business_smoke'] is True
+    assert summary['projects']['readiness_flags']['has_dedicated_owner_profile'] is True
+    assert summary['projects']['readiness_flags']['has_dedicated_fallback_profile'] is True
+    assert summary['projects']['readiness_flags']['has_dedicated_asymmetric_profile'] is False
+
+
+def test_build_readiness_summary_includes_inventory_rollups():
+    smoke = load_gateway_smoke_module()
+    probes = [
+        {
+            'name': 'projects-validate-import-public-rust',
+            'owner': 'rust',
+            'method': 'POST',
+            'path': '/api/projects/validate-import',
+            'expected_status': 200,
+            'route_group': 'projects',
+            'profiles': ['phase5-projects-owner', 'business'],
+        },
+        {
+            'name': 'projects-list-auth-guard-python-fallback',
+            'owner': 'python-fallback',
+            'method': 'GET',
+            'path': '/api/projects',
+            'expected_status': 401,
+            'route_group': 'projects',
+            'profiles': ['phase5-projects-fallback'],
+        },
+    ]
+
+    summary = smoke.build_readiness_summary(probes)
+
+    assert summary['probe_count'] == 2
+    assert summary['owner_counts'] == {'rust': 1, 'python-fallback': 1}
+    assert summary['route_group_counts'] == {'projects': 2}
+    assert summary['route_group_readiness']['projects']['readiness_flags'] == {
+        'has_rust_owner': True,
+        'has_python_fallback': True,
+        'has_business_smoke': True,
+        'has_asymmetric_evidence': False,
+        'has_dedicated_owner_profile': True,
+        'has_dedicated_fallback_profile': True,
+        'has_dedicated_asymmetric_profile': False,
     }
 
 
