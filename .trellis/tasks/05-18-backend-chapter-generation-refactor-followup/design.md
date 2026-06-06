@@ -4,8 +4,9 @@
 
 This follow-up task continues the Rust chapter-generation refactor as a new
 execution checkpoint after the previous task was archived. The scope is to
-finish one or more remaining low-risk seam-tightening slices, not to redesign
-the subsystem.
+finish remaining Rust migration work in coherent module packages. Narrow
+slices remain useful when a compatibility boundary is risky, but the default
+unit should now be a module-level migration package with explicit validation.
 
 The design remains anchored to
 `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`
@@ -27,11 +28,12 @@ follow-up task exists to:
 
 ## Current Technical Direction
 
-### Primary seam
+### Primary migration package
 
 `chapter_batch_generation` remains the highest-signal area because it still
-contains behavior-sensitive runtime and read-side semantics that benefit from
-service-owned helpers and focused tests.
+contains behavior-sensitive runtime, read-side, resume, stream, and write
+workflow semantics. Future work should treat it as a module package, not as an
+unbounded sequence of tiny ownership moves.
 
 Current checkpoint:
 
@@ -42,23 +44,27 @@ Current checkpoint:
   `BatchGenerationStreamState`
 - focused tests now cover additional terminal/unknown fallback cases
 
-Target slice categories:
+Target package categories:
 
-- read-side status or fallback normalization
-- runtime checkpoint/progress helper extraction
-- workflow-result assembly consolidation that preserves defaults
+- read-side status, stream, and fallback normalization
+- runtime checkpoint/progress and resume/recover ownership
+- workflow-result and task response assembly
+- route ownership evidence, fallback shrink readiness, and rollback notes
 
-### Secondary seam
+### Secondary migration package
 
-Chapter route seam compression remains valid, but only after the current batch
-generation slice is stable or when route-only cleanup can be done without
-overlapping behavior-sensitive files.
+Chapter route compression remains valid, but the next acceleration step should
+bundle route cleanup with the service module that owns the behavior. Route-only
+cleanup is useful only when it reduces cutover risk or removes obsolete Python
+fallback semantics.
 
 Current recommendation:
 
-- do not prioritize route compression next
-- first finish one more low-risk batch-generation semantics slice or a
-  provider-payload ownership cleanup that does not overlap runtime-write files
+- prefer module packages over one-off route compression
+- choose package boundaries that can be verified with focused Rust tests plus
+  route-group smoke or manifest checks
+- allow framework/control-flow adjustments when they consolidate ownership and
+  make the module easier to reason about
 
 Updated checkpoint:
 
@@ -93,6 +99,43 @@ Updated checkpoint:
 - `chapter_batch_generation_task_payload_base_service.rs` now owns the shared
   checkpoint override path for resume-style response payloads, so response
   adapters no longer patch nested checkpoint fields in place
+- `chapter_batch_generation_task_payload_base_service.rs` now also owns the
+  shared create/resume task response payload assembly contract for the batch
+  module:
+  - create and resume now both build response payloads through one shared
+    owner boundary
+  - loading-stage compatibility fields now come from the same payload owner
+    instead of being patched separately in runtime-state response code
+  - quality payload, active story-repair payload, quality history context,
+    summary fields, and extra compat fields now flow through one options
+    contract, which makes the next batch route/fallback cutover step easier to
+    audit
+- `chapter_batch_generation_task_payload_base_service.rs` now also owns the
+  shared read/query task view payload assembly contract for the batch module:
+  - read-context status payload, active-project payload, active-task-list item,
+    and single-generation existing-background payload now all build through one
+    shared owner boundary
+  - retry metadata, terminal fields, existing-background task metadata, and
+    quality payload injection are now variant-driven payload options instead of
+    being reassembled across multiple read-context branches
+  - this narrows `chapter_batch_generation_read_context_service.rs` back to
+    read-context loading and stream-state projection, which makes the next
+    read/stream cutover and fallback audit easier to reason about
+- `chapter_batch_generation_status_stream_event_service.rs` now also owns the
+  shared status-stream system event contract for the batch module:
+  - connected/task-not-found/timeout payloads and heartbeat/data transport
+    event builders now live beside the stream event resolution owner
+  - `chapter_batch_generation_status_stream_service.rs` is narrower and keeps
+    polling / transport orchestration instead of also owning repeated system
+    event construction
+- stream observation ownership is now also narrower:
+  - `BatchGenerationStreamState` now materializes one
+    `BatchGenerationStreamObservationKey`
+  - `BatchGenerationStreamCursor` now compares that owner-provided observation
+    contract instead of locally caching only `status/completed/progress/message`
+  - this keeps phase changes, quality-gate projection changes, and
+    analysis-started metadata changes on the same stream owner boundary as the
+    event batch they drive
 - `chapter_batch_generation_command_payload_adapter_service.rs` now owns the
   resume response envelope through a dedicated helper, so the adapter no
   longer hand-builds the outer resume message and totals inline
@@ -107,6 +150,19 @@ Updated checkpoint:
   `resolve_batch_generation_stream_semantics()` returns terminal-kind together
   with progress/message/event-status, so the status-view layer no longer does
   a second terminal-kind lookup for the same status value
+- batch owned task-sources ownership is now narrower:
+  - `chapter_batch_generation_owned_task_query_service.rs` now exposes a
+    shared `OwnedBatchGenerationTaskSources` owner for the lower-level
+    `owned task + snapshot` chain
+  - the same module now keeps two explicit layers:
+    - `load_owned_batch_generation_task_sources(...)`
+    - `load_owned_batch_generation_task_read_state(...)`
+  - this split is intentional because read/query lanes need
+    `task -> recover -> snapshot`, but command lanes such as cancel/resume must
+    preserve the current non-recovery semantics
+  - the batch module therefore no longer needs to choose between
+    duplicated `task + snapshot` loading and accidentally over-sharing the
+    recovery owner into command semantics
 - explicit cancel now also reuses the existing cancelled runtime-checkpoint
   semantics so task status and persisted checkpoint state do not drift apart
   when a batch is cancelled outside the runtime loop
@@ -121,6 +177,151 @@ Updated checkpoint:
   `chapter_batch_generation_runtime_state_service.rs` owns runtime
   checkpoint/snapshot writes, while read-side task status semantics and payload
   construction remain in the status/quality/payload adapter services.
+- batch resume restored-launch ownership is now narrower:
+  - `RestoredResumeRuntimeStateProjection` exposes `into_launch_parts()` so the
+    restored resume owner projects request-runtime state and reset runtime seed
+    once
+  - `BatchGenerationResumeLaunchPersistencePlan` consumes that owner
+    projection instead of cloning the seed locally while dispatch reopens the
+    broader restored projection
+  - this keeps resume reset persistence and dispatch-plan assembly on the same
+    restored owner boundary without changing task lifecycle or response
+    payloads
+- batch resume restored-state launch ownership is now narrower:
+  - `RestoredResumeRuntimeStateProjection` now also owns the final
+    batch/single runtime launch materialization through:
+    - `prepare_batch_runtime_launch(...)`
+    - `prepare_single_chapter_runtime_launch(...)`
+  - `chapter_batch_generation_resume_task_command_service.rs` no longer reopens
+    `into_launch_parts()` at the command layer and no longer replays
+    `request_runtime_state -> runtime_input` assembly after the restored owner
+    is already materialized
+  - this keeps restored-state projection, launch-input materialization,
+    reset-persistence preparation, and dispatch-plan assembly on the same
+    restored owner chain without changing resume payloads or task lifecycle
+- batch cancel/resume command sources ownership is now narrower:
+  - `chapter_batch_generation_cancel_service.rs` no longer replays:
+    `load owned task -> load snapshot`
+  - `chapter_batch_generation_resume_task_command_service.rs` no longer replays:
+    `load owned task -> load snapshot`
+  - both neighboring command lanes now consume the shared
+    `OwnedBatchGenerationTaskSources` owner directly, while preserving their
+    existing error boundary:
+    - task lookup failures still map through task errors
+    - snapshot load failures still map through domain/config edges as before
+  - this keeps the command-side status gating, cancel persistence planning,
+    and resume launch preparation on the same lower-level owner chain without
+    introducing read-side recovery semantics into cancel/resume
+- batch cancel write-workflow ownership is now narrower:
+  - `chapter_batch_generation_write_workflow_service.rs` now also owns the
+    batch cancel public-start / workflow-start boundary beside create/resume
+  - `chapter_batch_generation_cancel_service.rs` is reduced to:
+    - owned sources loading
+    - terminal status gating
+    - cancelled persistence-plan preparation
+  - the route no longer treats cancel as a special direct command-service
+    branch while create/resume already go through one batch write-workflow
+    public-start owner
+  - this gives the batch command lane one more consistent module-level owner
+    shape:
+    - create -> write workflow
+    - resume -> write workflow
+    - cancel -> write workflow
+- batch write-workflow start ownership is now narrower:
+  - `chapter_batch_generation_write_workflow_service.rs` no longer keeps a
+    second `PreparedBatchGeneration*WorkflowStart` shell for create/resume/
+    cancel after the neighboring workflow entry / workflow launch owners are
+    already materialized
+  - create now starts directly from:
+    - `PreparedBatchGenerationCreateWorkflowEntry::start(...)`
+  - resume now starts directly from:
+    - `PreparedBatchGenerationResumeWorkflowLaunch::start(...)`
+  - cancel now starts directly from:
+    - `PreparedBatchGenerationCancelWorkflowLaunch::start(...)`
+  - this split is intentional because the removed `workflow start` wrappers
+    were no longer adding timestamp ownership, validation, branch selection,
+    or error translation; they only replayed
+    `prepare -> persist_and_dispatch`
+  - the batch write lane therefore now keeps one tighter owner chain across
+    create / resume / cancel instead of preserving a redundant compatibility
+    hop at the public-start neighbor boundary
+- batch create workflow-entry ownership is now narrower:
+  - `chapter_batch_generation_write_workflow_service.rs` no longer keeps a
+    dedicated `PreparedBatchGenerationCreateWorkflowEntry` layer after the
+    neighboring create persistence-plan owner is already materialized
+  - create now starts directly from:
+    - `BatchGenerationCreateLaunchPersistencePlan::start(...)`
+  - the same owner now also prepares:
+    - `BatchGenerationCreateLaunchPersistencePlan::prepare(...)`
+  - this split is intentional because the removed `workflow entry` wrapper
+    was no longer adding access checks, request normalization, branch
+    selection, or error translation; it only replayed
+    `prepare persistence plan -> persist_and_dispatch`
+  - the batch create lane therefore now keeps one tighter owner chain:
+    `public start -> create persistence-plan owner -> persist-and-dispatch`
+    instead of preserving a redundant compatibility hop between the public
+    write-workflow entry and the already-ready persistence owner
+- batch cancel service file ownership is now narrower:
+  - `chapter_batch_generation_write_workflow_service.rs` now also owns the
+    remaining batch cancel production chain that was still split across a
+    neighboring module file:
+    - terminal status validation
+    - cancelled persistence-plan preparation from owned sources
+    - cancel workflow launch preparation
+    - final cancel write-workflow start
+  - `chapter_batch_generation_cancel_service.rs` has been removed because it
+    no longer owned an independent compatibility boundary after cancel had
+    already joined the shared batch write-workflow lane
+  - this split is intentional because the removed file was no longer adding
+    transport translation, route branching, cross-module policy, or a
+    separate rollback seam; it only reopened one more module hop around the
+    same batch cancel owner chain
+  - the batch cancel lane therefore now keeps one tighter file-local owner
+    chain:
+    `public cancel start -> owned cancel prepare -> cancelled persistence`
+    instead of preserving a redundant compatibility file beside the already
+    dominant batch write-workflow owner
+- batch stream-state file ownership is now narrower:
+  - `chapter_batch_generation_status_stream_service.rs` now also owns the
+    remaining batch status-stream production chain that was still split across
+    a neighboring module file:
+    - shared owned read-state loading
+    - stream-state projection from task + snapshot sources
+    - status-stream poll loop
+    - SSE event emission / close behavior
+  - `chapter_batch_generation_stream_state_query_service.rs` has been removed
+    because it no longer owned an independent compatibility boundary after the
+    stream lane had already collapsed read-state projection and event
+    semantics around the same status-stream owner chain
+  - this split is intentional because the removed file was no longer adding
+    route translation, alternative stream transport, rollback policy, or a
+    separate error boundary; it only reopened one more module hop around the
+    same owned read-state -> stream projection contract
+  - the batch status-stream lane therefore now keeps one tighter file-local
+    owner chain:
+    `owned read-state -> stream state -> poll / emit`
+    instead of preserving a redundant compatibility file beside the already
+    dominant status-stream owner
+- batch status-query file ownership is now narrower:
+  - `chapter_batch_generation_read_context_service.rs` now also owns the
+    remaining batch status-query production chain that was still split across
+    a neighboring module file:
+    - shared owned read-state loading for status routes
+    - task + snapshot -> quality-context materialization
+    - final status payload projection
+  - `chapter_batch_generation_status_task_query_service.rs` has been removed
+    because it no longer owned an independent compatibility boundary after the
+    read-side owner chain had already converged around shared read-context and
+    payload projection semantics
+  - this split is intentional because the removed file was no longer adding
+    route translation, alternate query transport, rollback policy, or a
+    separate error contract; it only reopened one more module hop around the
+    same owned read-state -> status payload contract
+  - the batch status-query lane therefore now keeps one tighter file-local
+    owner chain:
+    `owned read-state -> status payload`
+    instead of preserving a redundant compatibility file beside the already
+    dominant read-context owner
 - manual-review quality gate parsing is a shared quality-status semantic.
   Both read-side terminal labels and task-command resume blocking should use
   the same `manual_review_label()` helper.
@@ -144,6 +345,381 @@ Updated checkpoint:
     entrypoints
   - this keeps the route-compatible request shape unchanged while reducing
     one more write-lane owner split before runtime launch
+- single-chapter runtime lifecycle ownership is now narrower:
+  - `chapter_single_generation_runtime_state_service.rs` now owns an explicit
+    `SingleGenerationRuntimeLifecyclePlan`
+  - the same owner now sequences:
+    `persist preparing -> execute generation -> run follow-up analysis ->
+    persist completed/manual-review/failed`
+  - runtime dispatch no longer reopens a separate
+    `dispatch -> execute_single_generation_runtime(...)` wrapper chain, which
+    keeps the background/resume runtime handoff closer to one lifecycle owner
+    boundary
+- single-chapter runtime direct generation-analysis ownership is now narrower:
+  - `SingleGenerationRuntimeLifecyclePlan` now directly owns the active
+    `generation execution -> follow-up analysis -> manual-review/completed/
+    failed persistence` chain
+  - the single runtime lane no longer reopens
+    `execute_owned_single_chapter_generation(...)`,
+    `run_single_generation_follow_up_analysis(...)`, or
+    `maybe_fail_single_generation_for_quality_gate_manual_review(...)`
+    as free-helper handoff hops beside the lifecycle owner
+  - this keeps single runtime launch input, generation execution, analysis
+    routing, and terminal persistence on the same production owner boundary
+    without changing quality-gate or checkpoint semantics
+- single-chapter stream workflow public-start ownership is now narrower:
+  - `chapter_single_generation_stream_workflow_service.rs` now owns an
+    explicit `SingleGenerationStreamWorkflowStart`
+  - the same owner now sequences:
+    `prepare restored runtime launch -> hand off to lifecycle.spawn`
+  - the outer public stream entry no longer reopens
+    `prepare -> into_runtime_launch_input -> from_runtime_launch(...).spawn(...)`
+    as a repeated handoff chain
+- single-chapter restored-launch materialization ownership is now narrower:
+  - `PreparedSingleChapterGenerationRestoredRuntimeLaunch` now also exposes
+    direct owner materialization for neighboring production lanes:
+    - `prepare_runtime_launch_input(...)`
+    - `prepare_background_launch_parts_from_target(...)`
+  - `chapter_single_generation_stream_workflow_service.rs` no longer reopens
+    `prepare(...).into_runtime_launch_input()` at the stream workflow edge
+  - `chapter_single_generation_write_workflow_service.rs` no longer reopens
+    `prepare_from_target(...).into_background_launch_parts(task_id)` at the
+    background write-workflow edge
+  - this keeps restored-launch preparation, startup snapshot planning,
+    background response/task-seed assembly, and runtime launch materialization
+    on the same restored-launch owner chain without changing payloads or task
+    lifecycle semantics
+- single-chapter prepare/runtime owner chain is now narrower:
+  - `PreparedSingleChapterGenerationRestoredRuntimeLaunch::prepare_from_target(...)`
+    now directly owns the validated request/target -> restored-launch
+    materialization chain; the previous `prepare_validated_*` wrapper hop has
+    been removed
+  - `SingleGenerationRuntimeLaunchInput` now directly owns
+    `execute_generation(...)`, and both runtime lifecycle and stream lifecycle
+    consume that owner method instead of a separate
+    `execute_single_generation_runtime_generation(...)` free helper
+  - this keeps validated prepare, runtime launch materialization, and direct
+    generation execution on the same single-generation owner chain without
+    changing task lifecycle, SSE ordering, or payload semantics
+- single-chapter background launch-parts persistence ownership is now narrower:
+  - `PreparedSingleGenerationBackgroundLaunchParts` now also owns:
+    `persist_and_dispatch(...)`
+  - the same owner now sequences:
+    `task insert -> startup snapshot persist -> runtime dispatch ->
+    response payload`
+  - `chapter_single_generation_write_workflow_service.rs` no longer keeps
+    a neighboring free helper that reopens the final persistence/dispatch
+    chain after the launch-parts owner is already fully materialized
+  - this keeps background task-seed assembly, startup snapshot ownership,
+    runtime launch input, and final persistence/dispatch on the same
+    production owner boundary without changing payloads or task lifecycle
+    semantics
+- single-chapter stream success analysis-projection ownership is now narrower:
+  - `SingleGenerationStreamAnalysisOutcome` now also owns:
+    - `from_generated_result(...)`
+    - `run_follow_up_analysis(...)`
+    - `quality_metrics_event(...)`
+    - `quality_gate_event(...)`
+    - `analysis_started_event(...)`
+    - `response_payload(...)`
+  - `SingleGenerationStreamCompletionProjection` now consumes one explicit
+    analysis owner result instead of reopening free helper hops for follow-up
+    analysis execution and success payload/event reconstruction
+  - this keeps stream success analysis, quality-event projection,
+    analysis-started projection, and terminal response payload assembly on the
+    same production owner chain without changing SSE ordering or payload
+    semantics
+- single-chapter stream success owner chain is now narrower again:
+  - `SingleGenerationStreamAnalysisOutcome` now also owns:
+    - `completion_message()`
+    - `ordered_success_event_payloads(...)`
+    - `emit_success(...)`
+  - `chapter_single_generation_stream_workflow_service.rs` no longer keeps a
+    neighboring `SingleGenerationStreamCompletionProjection` owner between
+    `analysis outcome` and `complete -> quality events -> result ->
+    analysis-started -> done`
+  - this keeps follow-up analysis, completion projection, ordered success
+    emission, and terminal SSE close on the same production owner chain
+    without changing SSE ordering or payload semantics
+- single-chapter runtime checkpoint ownership is now narrower:
+  - `chapter_single_generation_runtime_state_service.rs` now also owns:
+    - `SingleGenerationSnapshotStage`
+    - `build_single_generation_runtime_checkpoint_for_stage(...)`
+  - `chapter_single_generation_prepare_service.rs` now consumes that runtime
+    owner directly for pending checkpoint projection
+  - the neighboring
+    `chapter_single_generation_runtime_checkpoint_service.rs` file has been
+    removed instead of preserving one more module hop around the same
+    `snapshot stage -> checkpoint payload` projection contract
+  - this keeps single runtime task mutation, runtime snapshot persistence, and
+    checkpoint payload projection on the same production owner chain without
+    changing payload semantics
+- single-chapter existing-background query ownership is now narrower:
+  - `chapter_single_generation_write_workflow_service.rs` now also owns:
+    - `load_active_single_generation_background_tasks(...)`
+    - `load_owned_single_generation_existing_background_task_payload(...)`
+  - the existing-background branch no longer reopens one neighboring batch
+    task-view query entrypoint before returning to the single background write
+    owner
+  - `chapter_batch_generation_task_view_query_service.rs` now keeps only the
+    batch active-task-list / active-project query lanes, while the
+    single-background existing-task query lane has been pulled back into the
+    single-generation write owner
+  - this keeps target loading, existing-task short-circuit selection, and the
+    final compat payload consumer on the same single-generation production
+    owner chain without changing payload semantics
+- single-chapter existing-background payload ownership is now narrower again:
+  - `chapter_single_generation_write_workflow_service.rs` now also owns:
+    - `into_single_generation_existing_background_task_payload(...)`
+  - the existing-background branch no longer reopens one neighboring batch
+    read-context projection seam before returning the final compat payload
+  - `chapter_batch_generation_read_context_service.rs` now keeps only the
+    remaining batch shared read-context payload owners, while the
+    single-generation-specific existing-background payload projection has been
+    pulled back into the single-generation write owner
+  - this keeps active-task query selection, chapter match filtering, and the
+    final compat payload projection on the same single-generation production
+    owner chain without changing payload semantics
+- single-chapter existing-background payload variant ownership is now narrower again:
+  - `chapter_single_generation_write_workflow_service.rs` now also owns the
+    single-generation-specific existing-background payload field assembly on
+    top of the shared task-view payload base
+  - the existing-background branch no longer reopens one neighboring batch
+    payload-base variant before returning the final compat payload
+  - `chapter_batch_generation_task_payload_base_service.rs` now keeps only the
+    remaining batch shared task-view payload variants, while the
+    single-generation-specific existing-background payload variant has been
+    pulled back into the single-generation write owner
+  - this keeps shared task-view base projection, quality-context insertion,
+    and the final single-generation existing-background payload shape on the
+    same single-generation production owner chain without changing payload
+    semantics
+- single-chapter existing-background read-context ownership is now narrower again:
+  - `chapter_single_generation_write_workflow_service.rs` now also owns:
+    - `SingleGenerationExistingBackgroundTaskContext`
+    - `load_active_single_generation_existing_background_task_contexts(...)`
+    - `single_generation_existing_background_task_contains_chapter(...)`
+  - the existing-background branch no longer reopens one neighboring batch
+    read-context owner chain before reaching the final single-generation
+    payload projection
+  - `chapter_batch_generation_read_context_service.rs` now keeps only the
+    remaining batch shared read-context owner lanes, while the
+    single-generation-specific existing-background read-state/context chain has
+    been pulled back into the single-generation write owner
+  - this keeps active-task recovery, snapshot-backed quality-context
+    preparation, chapter match filtering, and the final existing-background
+    payload projection on the same single-generation production owner chain
+    without changing payload semantics
+- single-chapter background payload base ownership is now narrower again:
+  - `chapter_single_generation_prepare_service.rs` now also owns:
+    - `estimated_single_generation_task_minutes(...)`
+    - `single_generation_pending_stage_code()`
+    - `single_generation_active_task_statuses()`
+    - `build_single_generation_runtime_payload_base(...)`
+    - `build_single_generation_task_view_payload_from_task_state(...)`
+  - `chapter_single_generation_write_workflow_service.rs` now consumes that
+    local payload base owner directly for existing-background payloads instead
+    of reopening neighboring batch task-view/status semantics
+  - the background create response payload and the existing-background
+    short-circuit payload now share one single-generation-local base contract
+    for task/runtime fields, stage semantics, execution mode, and estimated
+    duration semantics
+  - this keeps background create payload projection and existing-task payload
+    projection on the same single-generation production owner chain without
+    changing payload semantics
+- single-chapter quality-status ownership is now narrower again:
+  - `chapter_single_generation_quality_status_service.rs` now owns:
+    - `SingleGenerationQualityStatusContext`
+    - `SingleGenerationQualityStatusContext::from_snapshot_and_runtime_state(...)`
+    - `SingleGenerationQualityStatusContext::insert_into_payload(...)`
+    - `manual_review_label_from_single_generation_quality_context(...)`
+  - `chapter_single_generation_write_workflow_service.rs` no longer reopens
+    a neighboring batch quality-status semantic shell for existing-background
+    quality payload projection
+  - `chapter_single_generation_runtime_state_service.rs` no longer reopens
+    a neighboring batch quality-status helper for runtime manual-review label
+    resolution
+  - this keeps chapter-scoped quality payload reconstruction and
+    single-generation manual-review label semantics on the same
+    single-generation production owner chain without changing payload
+    semantics
+- single-chapter route workflow-start ownership is now narrower:
+  - `chapter_generation_routes.rs` no longer rebuilds
+    `SingleChapterGenerationRequest` locally before calling neighboring
+    background/stream workflows
+  - `chapter_single_generation_write_workflow_service.rs` now exposes
+    `start_owned_single_generation_background_write_workflow_from_route_payload(...)`
+    directly, and the background write lane no longer keeps
+    `SingleGenerationBackgroundWorkflowRouteStart` /
+    `SingleGenerationBackgroundWorkflowStart` as extra wrapper hops around the
+    workflow-entry owner
+  - `chapter_single_generation_stream_workflow_service.rs` now exposes
+    `create_single_generation_stream_workflow_from_route_payload(...)`
+    directly, and the stream lane no longer keeps
+    `SingleGenerationStreamWorkflowRouteStart` or a separate
+    `SingleGenerationStreamWorkflowStart::start(...)` wrapper around the same
+    prepare/spawn owner chain
+  - this keeps route-payload normalization and workflow public-start handoff
+    on the same background/stream owner boundary while leaving the HTTP route
+    transport-only
+- batch-create route workflow-start ownership is now narrower:
+  - `chapter_batch_generation.rs` no longer rebuilds
+    `BatchGenerationCreateWorkflowRequest` locally before calling the
+    neighboring batch create write workflow
+  - `chapter_batch_generation_write_workflow_service.rs` now exposes
+    `build_batch_generation_create_workflow_request_from_route_payload(...)` and
+    `start_owned_batch_generation_write_workflow_from_route_payload(...)`
+  - this keeps route-payload normalization and workflow public-start handoff
+    on the same batch-create owner boundary while leaving the HTTP route
+    transport-only
+- batch create route-start ownership is now narrower:
+  - `chapter_batch_generation_write_workflow_service.rs` no longer keeps a
+    neighboring `BatchGenerationCreateWorkflowRouteStart` shell after the
+    route edge already hands transport payload directly into the batch create
+    write-workflow owner chain
+  - the create lane now stops at:
+    - `build_batch_generation_create_workflow_request_from_route_payload(...)`
+    - `start_owned_batch_generation_write_workflow_from_route_payload(...)`
+    - `start_owned_batch_generation_write_workflow(...)`
+  - this split is intentional because the removed route-start wrapper was no
+    longer adding validation, access control, error translation, or branch
+    selection; it only replayed `route payload -> workflow request -> start`
+    into the same neighboring write-workflow owner chain
+  - the batch create route lane therefore now keeps one tighter owner shape
+    across route-payload normalization and workflow public-start handoff
+    instead of preserving a Python-era compatibility hop beside the
+    already-materialized write-workflow boundary
+- batch active-task-list route-query ownership is now narrower:
+  - `chapter_batch_generation.rs` no longer rebuilds
+    `ActiveBatchGenerationTaskListQueryRequest` locally before calling the
+    neighboring active-task query workflow
+  - `chapter_batch_generation_task_view_query_service.rs` now exposes
+    `ActiveBatchGenerationTaskListRouteQuery`,
+    `build_active_batch_generation_task_list_query_request_from_route_query(...)`,
+    and
+    `load_active_user_batch_generation_task_list_view_from_route_query(...)`
+  - `chapter_batch_generation_error_mapper.rs` now also owns the shared
+    route-query error mapping through
+    `map_active_batch_generation_task_list_route_error(...)`
+  - this keeps route-query normalization, active-task query start, and
+    request/query error ownership on the same batch active-query boundary
+    while leaving the HTTP route transport-only
+- batch active-project route-query ownership is now narrower:
+  - `chapter_batch_generation.rs` no longer directly replays the
+    `project_id -> active-project query` handoff before calling the
+    neighboring active-project query workflow
+  - `chapter_batch_generation_task_view_query_service.rs` now exposes
+    `ActiveProjectBatchGenerationRouteError` and
+    `load_active_batch_generation_view_from_route_project(...)`
+  - `chapter_batch_generation_error_mapper.rs` now also owns the shared
+    route-query error mapping through
+    `map_active_project_batch_generation_route_error(...)`
+  - this keeps route-project handoff, active-project query start, and
+    project-access/query error ownership on the same batch active-project
+    boundary while leaving the HTTP route transport-only
+- batch task-view route-start ownership is now narrower:
+  - `chapter_batch_generation_task_view_query_service.rs` no longer keeps
+    neighboring `ActiveBatchGenerationTaskListRouteStart` or
+    `ActiveProjectBatchGenerationRouteStart` shells after the route edges
+    already hand query/path transport inputs directly into route-query owners
+  - the active-task-list lane now stops at:
+    - `ActiveBatchGenerationTaskListRouteQuery`
+    - `build_active_batch_generation_task_list_query_request_from_route_query(...)`
+    - `load_active_user_batch_generation_task_list_view_from_route_query(...)`
+  - the active-project lane now stops at:
+    - `load_active_batch_generation_view_from_route_project(...)`
+    - `ActiveProjectBatchGenerationRouteError`
+  - this split is intentional because the removed route-start wrappers were no
+    longer adding validation, access control, error translation, or branch
+    selection; they only replayed route-normalized values into the same query
+    owner chain
+  - the batch task-view query lane therefore now keeps one tighter owner
+    shape across active-task-list and active-project reads instead of
+    preserving a Python-era compatibility hop beside already-materialized
+    route-query owners
+- batch owned read-state ownership is now narrower:
+  - `chapter_batch_generation_status_task_query_service.rs` and
+    `chapter_batch_generation_stream_state_query_service.rs` no longer keep
+    parallel copies of the same owned `task -> recover -> snapshot` read
+    chain
+  - `chapter_batch_generation_owned_task_query_service.rs` now exposes
+    `OwnedBatchGenerationTaskReadState` and
+    `load_owned_batch_generation_task_read_state(...)`
+  - status-payload projection and stream-state projection now both consume
+    that shared owner state instead of each reopening owned-task recovery plus
+    snapshot load independently
+  - this keeps owned-task load, active-timeout recovery, and snapshot
+    materialization on one shared batch read-state boundary before the
+    neighboring status-payload and status-stream owners diverge
+- batch status/stream read-state projection ownership is now narrower:
+  - `chapter_batch_generation_status_task_query_service.rs` no longer keeps a
+    neighboring `PreparedOwnedBatchGenerationStatusPayloadQuery` shell after
+    the status lane already consumes one shared
+    `OwnedBatchGenerationTaskReadState`
+  - `chapter_batch_generation_stream_state_query_service.rs` no longer keeps a
+    separate `build_batch_generation_stream_state_from_read_state(...)` hop
+    after the stream lane already consumes the same shared read-state owner
+  - the status lane now stops at:
+    - `load_owned_batch_generation_status_payload(...)`
+    - `build_owned_batch_generation_status_payload_from_read_state(...)`
+  - the stream lane now stops at:
+    - `load_owned_batch_generation_stream_state(...)`
+    - `OwnedBatchGenerationTaskReadState::into_parts()`
+    - `build_batch_generation_stream_state_for_task_and_snapshot(...)`
+  - this split is intentional because the removed wrappers were no longer
+    adding validation, access control, recovery, or branch selection; they
+    only replayed one already-materialized shared read-state into the same
+    neighboring payload/stream projections
+  - the batch status-query / status-stream lanes therefore now keep one tighter
+    owner shape after the shared owned read-state boundary instead of
+    preserving a second Python-era compatibility hop beside already-explicit
+    final projection owners
+- batch task-view prepared-query ownership is now narrower:
+  - `chapter_batch_generation_task_view_query_service.rs` no longer keeps
+    neighboring query/view wrappers after the task-view lane already owns both
+    direct active-task loading and final payload projection:
+    - `PreparedActiveBatchGenerationTaskListView`
+    - `PreparedActiveProjectBatchGenerationQuery`
+    - `PreparedExistingSingleGenerationBackgroundTaskPayloadQuery`
+  - the active-task-list lane now stops at:
+    - `load_active_user_batch_generation_task_list_view(...)`
+    - `build_active_batch_generation_task_list_view_payload(...)`
+  - the active-project lane now stops at:
+    - `load_active_batch_generation_query(...)`
+    - `build_active_project_batch_generation_view_payload(...)`
+  - the existing single-background branch now stops at:
+    - `load_existing_single_generation_background_task_payload(...)`
+    - `load_existing_single_generation_background_task_payload_for_tasks(...)`
+  - this split is intentional because the removed wrappers were no longer
+    adding access control, request validation, error translation, or branch
+    selection; they only replayed `prepare -> into_payload` after the same
+    task-view owner had already loaded the relevant active task set
+  - the batch task-view query lane therefore now keeps one tighter owner shape
+    across active-task-list, active-project, and existing-background query
+    branches instead of preserving a second Python-era compatibility hop
+    beside already-materialized final payload projections
+- batch resume launch-sources ownership is now narrower:
+  - `chapter_batch_generation_resume_task_command_service.rs` no longer keeps
+    a neighboring `PreparedBatchGenerationResumeLaunchSources` shell after the
+    resume lane already owns:
+    - restored runtime-state materialization
+    - manual-review blocker detection
+    - validated execution selection
+    - launch-persistence plan assembly
+  - the batch resume lane now stops at:
+    - `prepare_resume_launch_restored_state(...)`
+    - `BatchGenerationResumeLaunchPersistencePlan::prepare(...)`
+    - `BatchGenerationResumeLaunchPersistencePlan::prepare_from_validated_execution(...)`
+  - this split is intentional because the removed wrapper was no longer adding
+    error translation, access control, request validation, or dispatch branch
+    selection; it only replayed
+    `prepare restored state -> into launch persistence plan`
+    after the same command owner had already materialized the required resume
+    sources
+  - the batch resume command lane therefore now keeps one tighter owner chain
+    from restored-state recovery into final launch-persistence materialization
+    instead of preserving a Python-era compatibility hop beside the already
+    explicit resume persistence owner
 - batch write-workflow execution-config ownership is now narrower:
   - `chapter_batch_generation_write_workflow_service.rs` now prepares the
     explicit `AIConfig + provider_payload` execution config before handing off
@@ -153,6 +729,212 @@ Updated checkpoint:
     dispatch, instead of reloading execution config inside the launch owner
   - this keeps create/resume payloads and runtime behavior stable while making
     the write-workflow boundary consistent with single-chapter generation
+- batch create workflow-launch persistence ownership is now narrower:
+  - `PreparedBatchGenerationCreateWorkflowLaunch` now also owns direct
+    persistence-plan materialization through
+    `prepare_persistence_plan(...)`
+  - `PreparedBatchGenerationCreateWorkflowEntry::prepare(...)` no longer
+    reopens `prepare(...).into_persistence_plan(...)` at the create workflow
+    edge after the workflow-launch owner is already materialized
+  - this keeps create launch preparation, startup snapshot planning,
+    response/task-seed assembly, and persistence-plan materialization on the
+    same batch-create owner chain without changing payloads or task lifecycle
+    semantics
+- single-generation startup snapshot ownership is now narrower:
+  - `chapter_single_generation_snapshot_service.rs` now owns the full
+    chapter-scoped startup snapshot contract through
+    `SingleGenerationStartupSnapshotPlan`
+  - `chapter_single_generation_prepare_service.rs` and
+    `chapter_single_generation_write_workflow_service.rs` no longer reopen
+    that owner from the neighboring batch snapshot file
+  - `chapter_batch_generation_snapshot_service.rs` now keeps only the
+    remaining batch-shared snapshot owners plus persistence helpers
+  - this keeps restored-launch preparation, startup snapshot planning,
+    quality/runtime restore payloads, and snapshot persistence on the same
+    single-generation owner chain without changing payloads or task lifecycle
+    semantics
+- single-generation existing-background query file ownership is now narrower:
+  - `chapter_single_generation_existing_background_query_service.rs` now owns
+    the existing-background task lookup, recovered read-state loading, and
+    compat payload projection in one dedicated single-generation file
+  - `chapter_single_generation_write_workflow_service.rs` no longer mixes
+    workflow-entry branching with the full
+    `active task -> snapshot -> payload` owner chain inline
+  - this keeps existing-background query/load/projection semantics on the
+    same single-generation owner chain while leaving write-workflow focused on
+    branch selection plus launch/persist-and-dispatch behavior
+- single-generation snapshot persistence / merge ownership is now narrower:
+  - `chapter_single_generation_snapshot_service.rs` now also owns the
+    chapter-scoped runtime-state merge and snapshot upsert boundary through:
+    - `merge_single_generation_runtime_state(...)`
+    - `upsert_single_generation_runtime_snapshot(...)`
+  - `chapter_single_generation_runtime_state_service.rs` no longer reopens
+    `project_merged_batch_generation_runtime_state(...)` or
+    `upsert_batch_generation_runtime_snapshot(...)` from the neighboring batch
+    snapshot owner chain
+  - this keeps startup snapshot planning, single runtime checkpoint
+    persistence, and snapshot merge semantics on one clearer
+    single-generation owner boundary without changing payloads or task
+    lifecycle semantics
+- single-generation task-model ownership is now narrower:
+  - `chapter_single_generation_task_model_service.rs` now owns the
+    chapter-scoped task insert seed and runtime task mutation boundary
+    through:
+    - `SingleGenerationTaskPersistenceSeed`
+    - `build_single_generation_background_task_persistence_seed(...)`
+    - `build_single_generation_background_task_active_model(...)`
+    - `SingleGenerationTaskStage`
+  - `chapter_single_generation_prepare_service.rs` no longer reopens batch
+    task seed semantics for the single background create lane
+  - `chapter_single_generation_runtime_state_service.rs` no longer keeps a
+    file-local copy of the single task stage mutation contract
+  - this keeps single background task insertion, runtime task-stage
+    persistence, and chapter-scoped task-model semantics on one clearer
+    single-generation owner boundary without changing payloads or task
+    lifecycle semantics
+- chapter-generation shared snapshot-query / task-recovery ownership is now narrower:
+  - `chapter_generation_snapshot_query_service.rs` now owns the shared
+    chapter-generation snapshot load/query boundary through:
+    - `load_chapter_generation_snapshot(...)`
+    - `load_chapter_generation_snapshot_map(...)`
+  - `chapter_generation_task_recovery_service.rs` now owns the shared
+    generation-task timeout auto-recovery boundary through:
+    - `resolve_generation_task_auto_recovery_error(...)`
+    - `recover_generation_task_if_needed(...)`
+  - single-generation existing-background query and the neighboring batch
+    read/query/runtime owners now consume that shared lower-level owner
+    directly instead of leaving single-generation production lanes attached
+    to batch file names for the same lower-level semantics
+  - this keeps batch/single module owners behavior-preserving while making
+    the shared lower-level owner chain explicit and easier to audit for
+    fallback shrink, rollback, and stronger smoke readiness
+- chapter-generation shared chapter-access ownership is now narrower:
+  - `chapter_generation_access_service.rs` now owns the shared
+    chapter-generation access boundary through:
+    - `LoadAccessibleChapterForGenerationError`
+    - `load_accessible_chapter_for_generation(...)`
+    - `load_accessible_chapters_for_generation(...)`
+  - `chapter_generation_runtime_service.rs`,
+    `chapter_batch_generation_resume_task_command_service.rs`,
+    `chapter_single_generation_prepare_service.rs`,
+    `chapter_single_generation_stream_workflow_service.rs`, and
+    `chapter_generation_error_mapper.rs` now consume that shared lower-level
+    owner directly instead of leaving non-batch production lanes attached to
+    a batch-named access file for the same lower-level semantics
+  - `chapter_batch_generation_access_service.rs` has been removed because it
+    no longer owned a real batch-only compatibility boundary after the access
+    semantics were shown to be shared lower-level chapter-generation
+    ownership
+  - this keeps batch/single module owners behavior-preserving while making
+    the shared lower-level access chain explicit and easier to audit for
+    fallback shrink, rollback, and stronger smoke readiness
+- chapter-generation shared quality runtime-context persisted-source ownership is now narrower:
+  - `chapter_generation_snapshot_persistence_service.rs` no longer routes its
+    persisted quality-column backfill through a batch-named quality runtime
+    context owner
+  - the shared snapshot persistence owner now consumes:
+    - `resolve_generation_quality_runtime_context_from_persisted_sources("batch", ...)`
+    from `chapter_generation_quality_runtime_context_service.rs`
+  - the shared generation quality owner now carries an explicit batch-scope
+    regression proving the persisted-source rebuild contract still preserves
+    batch summary-state / history semantics
+  - this keeps batch/single module owners behavior-preserving while making
+    the shared lower-level persisted quality chain explicit and easier to
+    audit for fallback shrink, rollback, and stronger smoke readiness
+- chapter-generation shared snapshot persistence ownership is now narrower:
+  - `chapter_generation_snapshot_persistence_service.rs` now owns the shared
+    chapter-generation snapshot merge / replace persistence boundary through:
+    - `ChapterGenerationSnapshotWriteMode`
+    - `merge_chapter_generation_runtime_state(...)`
+    - `persist_chapter_generation_runtime_snapshot(...)`
+    - `upsert_chapter_generation_runtime_snapshot(...)`
+  - `chapter_batch_generation_snapshot_service.rs` now keeps only batch-local
+    queued/resume snapshot plan ownership plus the batch public API surface,
+    while delegating lower-level snapshot writes into that shared owner
+  - `chapter_single_generation_snapshot_service.rs` now delegates directly
+    into that shared persistence owner instead of routing the chapter-scoped
+    write path back through the batch snapshot file
+  - this keeps batch/single module owners behavior-preserving while making
+    the shared lower-level write chain explicit and easier to audit for
+    fallback shrink, rollback, and stronger smoke readiness
+- batch runtime public-start ownership is now narrower:
+  - `chapter_batch_generation_runtime_state_service.rs` now lets
+    `BatchGenerationRuntimeLifecyclePlan::start(...)` own the public runtime
+    handoff directly
+  - batch runtime dispatch no longer reopens
+    `dispatch -> execute_batch_generation_runtime(...) -> runtime driver ->
+    lifecycle.execute(...)` as a repeated wrapper chain
+  - this keeps batch runtime dispatch and lifecycle sequencing on the same
+    runtime owner boundary without changing task lifecycle or checkpoint
+    semantics
+- batch runtime post-analysis ownership is now narrower:
+  - `PreparedBatchGenerationStepExecution::execute_success_chain(...)` now
+    hands the follow-up analysis result directly to
+    `BatchGenerationPostAnalysisTerminalPlan`
+  - the success lane no longer reopens
+    `run_follow_up_analysis(...) -> resolve_analysis_outcome(...)` as a local
+    forwarding chain after the analysis owner is already explicit
+  - this keeps batch runtime success, follow-up analysis, and terminal
+    post-analysis routing on the same production owner boundary without
+    changing retry, quality-gate, or persistence semantics
+- batch runtime analysis-attempt ownership is now narrower:
+  - `BatchGenerationAnalysisAttemptPlan::execute(...)` now directly owns
+    prepared-analysis selection, started-snapshot persistence, prepared vs
+    fallback execution, and resolution handoff
+  - the analysis-attempt lane no longer reopens
+    `persist_started(...)` in one branch and
+    `execute_prepared_or_fallback(...)` in another local wrapper chain
+  - this keeps batch runtime follow-up analysis attempt preparation and
+    execution on the same production owner boundary without changing analysis
+    retry or completion semantics
+- batch runtime analysis-attempt resolution ownership is now narrower:
+  - `BatchGenerationAnalysisAttemptPlan::execute(...)` now also directly owns
+    completion vs retry resolution after prepared/fallback analysis returns
+  - the analysis-attempt lane no longer materializes a separate
+    `BatchGenerationAnalysisAttemptResolutionPlan` neighbor for the same
+    production handoff
+  - this keeps batch runtime follow-up analysis attempt execution and
+    completion/retry routing on the same production owner boundary without
+    changing analysis retry budget or completion snapshot semantics
+- batch runtime terminal quality-gate ownership is now narrower:
+  - `BatchGenerationPostAnalysisTerminalPlan` now directly owns quality-gate
+    retry-budget loading and terminal routing on the success path
+  - the terminal lane no longer materializes a separate
+    `BatchGenerationQualityGateResolutionPlan` neighbor for the same
+    production handoff
+  - this keeps batch runtime post-analysis terminal routing and quality-gate
+    retry/manual-review resolution on the same production owner boundary
+    without changing retry or failure semantics
+- batch runtime lifecycle-step ownership is now narrower:
+  - `PreparedBatchGenerationStepExecution::start(...)` now directly owns the
+    retry-aware step entry on the production runtime lane
+  - the lifecycle lane no longer reopens
+    `prepare step -> carry retry -> execute prepared step` as a local wrapper
+    chain inside `BatchGenerationRuntimeLifecyclePlan::execute(...)`
+  - this keeps batch runtime step preparation, retry carry, and prepared-step
+    execution on the same production owner boundary without changing
+    prerequisite, generation, or terminal persistence semantics
+- batch runtime step-generation-attempt ownership is now narrower:
+  - `PreparedBatchGenerationStepExecution::execute(...)` now directly owns the
+    full generation-attempt chain on the production runtime lane
+  - the prepared-step lane no longer reopens
+    `execute_generation_attempt(...)` or `execute_success_chain(...)` as local
+    wrapper chains around the same production path
+  - this keeps batch runtime chapter-started persistence, prerequisite gate,
+    attempt-input preparation, generation execution, post-write guard,
+    follow-up analysis, and terminal routing on the same production owner
+    boundary without changing retry, quality-gate, or persistence semantics
+- batch runtime attempt-input generation ownership is now narrower:
+  - `BatchGenerationAttemptInputPlan::execute(...)` now directly owns the
+    full `attempt-input materialization -> generation execution` chain on the
+    production runtime lane
+  - the prepared-step lane no longer reopens
+    `prepare attempt input -> local generate_and_persist... call` after the
+    attempt-input owner is already explicit
+  - this keeps batch runtime compat restore, prompt overrides, provider
+    payload preparation, and generation execution on the same production owner
+    boundary without changing prerequisite, retry, post-write guard, or
+    terminal routing semantics
 - analysis trigger ownership is now narrower:
   - `PreparedChapterAnalysisTrigger` no longer carries the raw chapter model,
     because dispatch only needs the task and chapter identifiers plus the
@@ -181,6 +963,79 @@ Updated checkpoint:
   - 当前任务仍以线 A 为主，但每轮都应尽量产出对线 B / 线 C 有帮助的
     结构化结论，而不是只做局部代码美化
 
+### Module Package Strategy
+
+The earlier micro-slice approach was useful while owner boundaries were still
+unclear. It is now slowing the migration because each tiny move repeats
+context loading, documentation, and validation overhead. Future execution must
+use whole-file, whole-function-group, or whole-module migration packages as the
+default unit:
+
+- package A: `chapter_generation` shared lower-level owner package
+- package B: `chapter_single_generation` prepare/write/stream/runtime package
+- package C: `chapter_batch_generation` read/write/resume/status/runtime package
+- package D: `chapters` compatibility shell and route delegation cleanup
+- package E: `schema / migration owner` when route packages expose table or
+  field assumptions that must stop depending on Python startup behavior
+
+Each package should include:
+
+- entrypoint map: Python routes, Rust routes, services, task tables, smoke
+  probes, and rollback knobs
+- behavior contract: HTTP payloads, SSE events, task lifecycle, checkpoint
+  shape, default provider behavior, and failure semantics
+- implementation plan: move or rewrite the Python-owned logic into Rust
+  services first, then remove fallback/delegation only after owner evidence is
+  strong enough
+- quality gate: focused tests for changed service behavior, `cargo check`, and
+  route-group smoke/manifest validation when transport ownership changes
+- maintainability gate: cohesive module names, small readable functions,
+  explicit error types, and short comments for non-obvious lifecycle or
+  compatibility decisions
+
+Small slices are still allowed inside a package when they reduce review risk,
+but a package should not be considered complete until the whole module's
+behavior, smoke coverage, rollback story, and remaining Python dependency are
+documented together.
+
+### 2026-06-06 Whole-Module Acceleration Strategy
+
+The execution model is now package-first. A package can contain several commits
+or validation checkpoints, but the planning target must be a complete file,
+function group, or module capability. The package owner decides the boundary
+before code changes start, then keeps all package edits pointed at that
+boundary until it is either completed or explicitly paused.
+
+Priority table:
+
+| Priority | Package | Rust target files | Python / fallback target | Done means |
+|----------|---------|-------------------|--------------------------|------------|
+| A | `chapter_generation` shared owners | `chapter_generation_*` shared access, snapshot, recovery, quality, runtime-context services | Batch-named helpers that are actually shared generation semantics | Shared lower-level owners no longer live under batch-only file names unless they are truly batch-only. |
+| B | `chapter_single_generation` | `chapter_single_generation_prepare_service.rs`, `chapter_single_generation_write_workflow_service.rs`, `chapter_single_generation_stream_workflow_service.rs`, `chapter_single_generation_runtime_state_service.rs`, `chapter_single_generation_snapshot_service.rs`, `chapter_single_generation_task_model_service.rs`, `chapter_single_generation_quality_status_service.rs` | `chapter_generation_routes.py` and single-branch logic inside `chapters.py` compatibility shells | Single-chapter generation can be audited as one Rust-owned prepare/write/stream/runtime module with explicit fallback and smoke evidence. |
+| C | `chapter_batch_generation` | `chapter_batch_generation_read_context_service.rs`, `chapter_batch_generation_status_stream_service.rs`, `chapter_batch_generation_runtime_state_service.rs`, `chapter_batch_generation_write_workflow_service.rs`, `chapter_batch_generation_resume_task_command_service.rs`, task/query/status services | `chapter_batch_generation_routes.py` compatibility shell and batch branches in `chapters.py` | Batch create/resume/read/status/stream/runtime is owned as one coherent Rust package with route parity and rollback notes. |
+| D | `chapters` compatibility shell | `backend-rs/src/api/chapters.rs`, CRUD/generation/regeneration/analysis route owners, request/response adapters | `backend/app/api/chapters.py` | Python shell is either frozen as explicit fallback or shrunk only where Rust route parity, smoke, and rollback are proven. |
+| E | `schema / migration owner` | Rust migration readiness docs, model/migration owners, startup assumptions | Python Alembic startup and legacy schema mutation assumptions | Table/field ownership no longer depends on implicit Python app startup behavior for package-owned flows. |
+
+Package start gate:
+
+- Write the Python source map before editing Rust code.
+- Write the Rust target map and decide whether the package is file-level,
+  function-group-level, or module-level.
+- List the preserved behavior contract: HTTP response shell, SSE event order,
+  task lifecycle, runtime checkpoint, provider defaults, and error mapping.
+- List package validation commands and smoke/manifest checks.
+- List rollback/cutover evidence and the remaining compatibility shell.
+
+Package stop rule:
+
+- Do not start another standalone seam while the selected package still has
+  unresolved owner, fallback, smoke, rollback, or schema assumptions.
+- Do not count helper relocation as migration progress unless it removes or
+  freezes a Python dependency, shrinks a fallback shell, clarifies cutover, or
+  makes a stronger package-level validation possible.
+- Micro-slices are allowed only as review checkpoints inside the selected
+  package, not as the thing being planned or reported.
+
 ### Paused seam
 
 `chapter_quality` remains paused unless direct dependency pressure appears.
@@ -194,11 +1049,12 @@ Updated checkpoint:
 - Moving logic across boundaries is allowed only when the observable result
   remains unchanged.
 
-2. Choose one seam at a time
+2. Choose one package at a time
 
-- Each slice should be understandable and reviewable on its own.
-- Avoid overlapping edits across runtime, API, and models unless the seam
-  requires it.
+- Each package should be understandable and reviewable as a coherent module.
+- Avoid overlapping unrelated packages in one implementation batch.
+- Within a package, allow multiple coordinated file edits when they retire a
+  real Python dependency or remove repeated compatibility logic.
 
 3. Prefer service-owned contracts
 
@@ -206,10 +1062,20 @@ Updated checkpoint:
 - Repeated fallback assembly, progress calculation, status adaptation, and
   task semantics belong in focused service helpers.
 
-4. Stop at diminishing returns
+4. Maintainability and robustness are migration requirements
 
-- If the next move only relocates code without reducing compatibility risk or
-  clarifying ownership, stop and leave a checkpoint.
+- Code should remain readable, cohesive, and robust after the migration.
+- Add concise comments only for non-obvious runtime, fallback, checkpoint, or
+  rollback behavior.
+- If a larger framework or control-flow adjustment materially reduces
+  migration drag and preserves behavior, prefer that over another narrow
+  wrapper move.
+
+5. Stop at diminishing returns
+
+- If the next move only relocates code without reducing compatibility risk,
+  clarifying ownership, or helping a package reach cutover readiness, stop and
+  leave a checkpoint.
 
 ## File-Level Boundaries
 
