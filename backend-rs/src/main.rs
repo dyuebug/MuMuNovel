@@ -32,12 +32,6 @@ async fn main() {
     };
     let db = db::init_pool(&cfg).await;
 
-    if cfg.enable_startup_schema_sync {
-        tracing::warn!(
-            "ENABLE_STARTUP_SCHEMA_SYNC is enabled, but startup schema sync has been disabled for strangler deployments. Use the explicit migration step instead."
-        );
-    }
-
     // Initialize background task system
     let task_registry = tasks::registry::TaskRegistry::new();
     tasks::persistence::load_from_disk(&task_registry).await;

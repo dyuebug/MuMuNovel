@@ -23,53 +23,43 @@ use crate::api::chapters_error_mapper::{
 use crate::services::auth::Claims;
 use crate::services::chapter_analysis_draft_service::{
     apply_owned_auto_revision_draft_payload, apply_owned_candidate_draft_payload,
-    load_owned_auto_revision_draft_payload, load_owned_candidate_draft_payload,
-    OwnedDraftPayloadRequest,
+    build_auto_revision_draft_payload_request_from_route_payload,
+    build_auto_revision_draft_payload_request_from_route_query,
+    build_candidate_draft_payload_request_from_route_payload,
+    build_candidate_draft_payload_request_from_route_query, load_owned_auto_revision_draft_payload,
+    load_owned_candidate_draft_payload, AutoRevisionDraftApplyRouteRequest,
+    AutoRevisionDraftLookupRouteQuery, CandidateDraftApplyRouteRequest,
+    CandidateDraftLookupRouteQuery,
 };
 use crate::services::chapter_analysis_query_service::{
-    load_analysis_task_status_payload, load_batch_analysis_task_status_payload,
-    BatchAnalysisStatusRequest,
+    build_batch_analysis_status_request_from_route_payload, load_analysis_task_status_payload,
+    load_batch_analysis_task_status_payload, BatchAnalysisStatusRouteRequest,
 };
 use crate::services::chapter_analysis_runtime_service::trigger_chapter_analysis_write_workflow;
-use crate::services::chapter_analysis_view_query_service::load_owned_chapter_analysis_view_payload;
+use crate::services::chapter_analysis_view_query_service::{
+    load_owned_chapter_analysis_view_payload, ChapterAnalysisViewOptions,
+};
 use crate::services::chapter_quality_metrics_query_service::load_owned_chapter_quality_metrics_payload;
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub(crate) struct BatchAnalysisStatusRouteRequest {
-    pub(crate) chapter_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-struct AutoRevisionDraftLookupRouteQuery {
-    history_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-struct CandidateDraftLookupRouteQuery {
-    attempt_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-struct AutoRevisionDraftApplyRouteRequest {
-    history_id: Option<String>,
+struct ChapterAnalysisViewRouteQuery {
     #[serde(default)]
-    allow_stale: bool,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-struct CandidateDraftApplyRouteRequest {
-    attempt_id: Option<String>,
-    #[serde(default)]
-    allow_stale: bool,
+    include_full_draft: bool,
 }
 async fn get_chapter_analysis(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
     Path(chapter_id): Path<String>,
+    Query(query): Query<ChapterAnalysisViewRouteQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let payload = load_owned_chapter_analysis_view_payload(&db, &chapter_id, &claims.sub)
-        .await
-        .map_err(map_owned_chapter_analysis_view_error)?;
+    let payload = load_owned_chapter_analysis_view_payload(
+        &db,
+        &chapter_id,
+        &claims.sub,
+        ChapterAnalysisViewOptions::new(query.include_full_draft),
+    )
+    .await
+    .map_err(map_owned_chapter_analysis_view_error)?;
     Ok(Json(payload))
 }
 
@@ -90,7 +80,7 @@ async fn get_auto_revision_draft(
     Path(chapter_id): Path<String>,
     Query(query): Query<AutoRevisionDraftLookupRouteQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let request = OwnedDraftPayloadRequest::from_route_selector(query.history_id, false);
+    let request = build_auto_revision_draft_payload_request_from_route_query(query);
     let payload = load_owned_auto_revision_draft_payload(&db, &chapter_id, &claims.sub, request)
         .await
         .map_err(|error| {
@@ -105,7 +95,7 @@ async fn apply_auto_revision_draft(
     Path(chapter_id): Path<String>,
     Json(body): Json<AutoRevisionDraftApplyRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let request = OwnedDraftPayloadRequest::from_route_selector(body.history_id, body.allow_stale);
+    let request = build_auto_revision_draft_payload_request_from_route_payload(body);
     let payload = apply_owned_auto_revision_draft_payload(&db, &chapter_id, &claims.sub, request)
         .await
         .map_err(|error| {
@@ -120,7 +110,7 @@ async fn get_candidate_draft(
     Path(chapter_id): Path<String>,
     Query(query): Query<CandidateDraftLookupRouteQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let request = OwnedDraftPayloadRequest::from_route_selector(query.attempt_id, false);
+    let request = build_candidate_draft_payload_request_from_route_query(query);
     let payload = load_owned_candidate_draft_payload(&db, &chapter_id, &claims.sub, request)
         .await
         .map_err(|error| map_owned_candidate_draft_error(error, map_candidate_draft_load_error))?;
@@ -133,7 +123,7 @@ async fn apply_candidate_draft(
     Path(chapter_id): Path<String>,
     Json(body): Json<CandidateDraftApplyRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let request = OwnedDraftPayloadRequest::from_route_selector(body.attempt_id, body.allow_stale);
+    let request = build_candidate_draft_payload_request_from_route_payload(body);
     let payload = apply_owned_candidate_draft_payload(&db, &chapter_id, &claims.sub, request)
         .await
         .map_err(|error| map_owned_candidate_draft_error(error, map_candidate_draft_apply_error))?;
@@ -156,7 +146,7 @@ async fn get_batch_analysis_task_status(
     Extension(claims): Extension<Claims>,
     Json(body): Json<BatchAnalysisStatusRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let request = BatchAnalysisStatusRequest::from_route_chapter_ids(body.chapter_ids);
+    let request = build_batch_analysis_status_request_from_route_payload(body);
     let payload = load_batch_analysis_task_status_payload(&db, &claims.sub, request)
         .await
         .map_err(internal_detail_error)?;
@@ -216,33 +206,49 @@ mod tests {
     use super::{
         AutoRevisionDraftApplyRouteRequest, AutoRevisionDraftLookupRouteQuery,
         BatchAnalysisStatusRouteRequest, CandidateDraftApplyRouteRequest,
-        CandidateDraftLookupRouteQuery,
+        CandidateDraftLookupRouteQuery, ChapterAnalysisViewRouteQuery,
     };
-    use crate::services::chapter_analysis_query_service::BatchAnalysisStatusRequest;
-    use crate::services::chapter_analysis_draft_service::OwnedDraftPayloadRequest;
+    use crate::services::chapter_analysis_draft_service::{
+        build_auto_revision_draft_payload_request_from_route_payload,
+        build_auto_revision_draft_payload_request_from_route_query,
+        build_candidate_draft_payload_request_from_route_payload,
+        build_candidate_draft_payload_request_from_route_query, OwnedDraftPayloadRequest,
+    };
+    use crate::services::chapter_analysis_query_service::build_batch_analysis_status_request_from_route_payload;
 
     #[test]
     fn should_build_batch_analysis_status_request_from_route_payload() {
-        let request = BatchAnalysisStatusRequest::from_route_chapter_ids(
+        let request = build_batch_analysis_status_request_from_route_payload(
             BatchAnalysisStatusRouteRequest {
-            chapter_ids: vec![
-                " chapter-1 ".to_string(),
-                "".to_string(),
-                "chapter-2".to_string(),
-                "chapter-1".to_string(),
-                "   ".to_string(),
-            ],
-        }
-        .chapter_ids,
+                chapter_ids: vec![
+                    " chapter-1 ".to_string(),
+                    "".to_string(),
+                    "chapter-2".to_string(),
+                    "chapter-1".to_string(),
+                    "   ".to_string(),
+                ],
+            },
         );
 
         assert_eq!(
             request,
-            BatchAnalysisStatusRequest::from_route_chapter_ids(vec![
-                "chapter-1".to_string(),
-                "chapter-2".to_string(),
-            ])
+            build_batch_analysis_status_request_from_route_payload(
+                BatchAnalysisStatusRouteRequest {
+                    chapter_ids: vec!["chapter-1".to_string(), "chapter-2".to_string()],
+                }
+            )
         );
+    }
+
+    #[test]
+    fn should_parse_chapter_analysis_view_route_query_include_full_draft() {
+        let query = ChapterAnalysisViewRouteQuery {
+            include_full_draft: true,
+        };
+        let default_query = ChapterAnalysisViewRouteQuery::default();
+
+        assert!(query.include_full_draft);
+        assert!(!default_query.include_full_draft);
     }
 
     #[test]
@@ -250,7 +256,7 @@ mod tests {
         let route_query = AutoRevisionDraftLookupRouteQuery {
             history_id: Some(" history-1 ".to_string()),
         };
-        let request = OwnedDraftPayloadRequest::from_route_selector(route_query.history_id, false);
+        let request = build_auto_revision_draft_payload_request_from_route_query(route_query);
 
         assert_eq!(
             request,
@@ -264,10 +270,7 @@ mod tests {
             history_id: Some(" history-1 ".to_string()),
             allow_stale: true,
         };
-        let request = OwnedDraftPayloadRequest::from_route_selector(
-            route_request.history_id,
-            route_request.allow_stale,
-        );
+        let request = build_auto_revision_draft_payload_request_from_route_payload(route_request);
 
         assert_eq!(
             request,
@@ -280,7 +283,7 @@ mod tests {
         let route_query = CandidateDraftLookupRouteQuery {
             attempt_id: Some(" attempt-1 ".to_string()),
         };
-        let request = OwnedDraftPayloadRequest::from_route_selector(route_query.attempt_id, false);
+        let request = build_candidate_draft_payload_request_from_route_query(route_query);
 
         assert_eq!(
             request,
@@ -294,10 +297,7 @@ mod tests {
             attempt_id: Some("   ".to_string()),
             allow_stale: false,
         };
-        let request = OwnedDraftPayloadRequest::from_route_selector(
-            route_request.attempt_id,
-            route_request.allow_stale,
-        );
+        let request = build_candidate_draft_payload_request_from_route_payload(route_request);
 
         assert_eq!(request, OwnedDraftPayloadRequest::new(None, false));
     }

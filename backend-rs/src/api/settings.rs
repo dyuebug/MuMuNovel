@@ -8,13 +8,14 @@ use axum::{
     Router,
 };
 use reqwest::Client;
+use reqwest::Url;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::ai::config::AIConfig;
 use crate::ai::service::AIService;
-use crate::ai::types::{ToolDef, ToolFunction};
+use crate::ai::types::{ToolChoice, ToolDef, ToolFunction};
 use crate::models::settings;
 use crate::services::auth::Claims;
 use crate::services::settings_api_key_payload_adapter_service::build_stored_api_key_payload;
@@ -35,7 +36,9 @@ use crate::services::settings_runtime_config_service::{
     normalize_openai_compatible_base_url, resolve_effective_runtime_settings,
     EffectiveSettingsOverrides,
 };
-use crate::services::settings_service::SettingsService;
+use crate::services::settings_service::{
+    SettingsService, SETTINGS_DELETE_MISSING_DETAIL, SETTINGS_UPDATE_MISSING_DETAIL,
+};
 use crate::services::settings_test_preset_request_service::build_test_preset_connection_request;
 use crate::services::settings_update_request_service::{
     build_settings_update_request_from_typed_route_payload, SettingsUpdateRouteRequest,
@@ -56,6 +59,8 @@ struct TestConnectionRequest {
     llm_model: Option<String>,
     temperature: Option<f64>,
     max_tokens: Option<u32>,
+    api_backup_urls: Option<Vec<String>>,
+    fallback_strategy: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -112,7 +117,7 @@ async fn create_settings(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let request = build_settings_update_request_from_typed_route_payload(body);
 
-    match SettingsService::update(&db, &claims.sub, &request).await {
+    match SettingsService::create_or_update(&db, &claims.sub, &request).await {
         Ok(settings) => Ok(Json(settings)),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -128,12 +133,22 @@ async fn update_settings(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let request = build_settings_update_request_from_typed_route_payload(body);
 
-    match SettingsService::update(&db, &claims.sub, &request).await {
+    match SettingsService::update_existing(&db, &claims.sub, &request).await {
         Ok(settings) => Ok(Json(settings)),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail": format!("{}", e)})),
-        )),
+        Err(e) => {
+            let detail = format!("{}", e);
+            if detail.contains(SETTINGS_UPDATE_MISSING_DETAIL) {
+                Err((
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"detail": SETTINGS_UPDATE_MISSING_DETAIL})),
+                ))
+            } else {
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"detail": detail})),
+                ))
+            }
+        }
     }
 }
 
@@ -141,12 +156,22 @@ async fn delete_settings(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    match SettingsService::delete(&db, &claims.sub).await {
+    match SettingsService::delete_existing(&db, &claims.sub).await {
         Ok(result) => Ok(Json(result)),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail": format!("{}", e)})),
-        )),
+        Err(e) => {
+            let detail = format!("{}", e);
+            if detail.contains(SETTINGS_DELETE_MISSING_DETAIL) {
+                Err((
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"detail": SETTINGS_DELETE_MISSING_DETAIL})),
+                ))
+            } else {
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"detail": detail})),
+                ))
+            }
+        }
     }
 }
 
@@ -167,18 +192,30 @@ async fn get_available_models(
     )
     .await?;
 
-    match fetch_provider_models(
+    let lookup_base_url = query
+        .api_base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(effective.base_url.as_str());
+
+    match fetch_available_models_for_provider(
         &effective.provider,
         &effective.api_key,
-        &effective.base_url,
-        None,
+        lookup_base_url,
     )
     .await
     {
-        Ok(models) => Ok(Json(build_available_models_payload(
-            &effective.provider,
-            models,
-        ))),
+        Ok(models) => {
+            let message = available_models_success_message(&effective.provider, &models);
+            let mut payload = build_available_models_payload(&effective.provider, models);
+            if let Some(message) = message {
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("message".to_string(), Value::String(message.to_string()));
+                }
+            }
+            Ok(Json(payload))
+        }
         Err(error) => {
             let fallback = curated_model_options(&effective.provider);
             if !fallback.is_empty() {
@@ -204,6 +241,11 @@ async fn test_api_connection(
     Extension(db): Extension<DatabaseConnection>,
     Json(body): Json<TestConnectionRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let temperature = body.temperature.unwrap_or(0.7);
+    let max_tokens = body.max_tokens.unwrap_or(2000);
+    let probe_max_tokens = max_tokens.clamp(1, 64);
+    let api_backup_urls = normalize_probe_backup_urls(body.api_backup_urls.as_deref());
+    let fallback_strategy = normalize_probe_fallback_strategy(body.fallback_strategy.as_deref());
     let effective = resolve_effective_runtime_settings(
         &db,
         &claims.sub,
@@ -212,52 +254,106 @@ async fn test_api_connection(
             api_key: body.api_key.clone(),
             api_base_url: body.api_base_url.clone(),
             model: body.llm_model.clone(),
-            temperature: body.temperature,
-            max_tokens: body.max_tokens,
+            temperature: None,
+            max_tokens: None,
         },
     )
     .await?;
 
-    let probe_max_tokens = effective.max_tokens.clamp(1, 64);
     let started = Instant::now();
+    let (prefer_normalized_v1_candidate, read_timeout_secs, transport_max_retries) =
+        build_probe_transport_config(&effective.provider, &effective.base_url);
+    let effective_backup_urls = if fallback_strategy == "auto" {
+        api_backup_urls.clone()
+    } else {
+        Vec::new()
+    };
     let service = AIService::new(AIConfig {
         provider: effective.provider.clone(),
         api_key: effective.api_key.clone(),
         base_url: effective.base_url.clone(),
+        backup_urls: effective_backup_urls,
         model: effective.model.clone(),
-        temperature: effective.temperature,
+        temperature,
         max_tokens: probe_max_tokens,
+        prefer_normalized_v1_candidate,
+        read_timeout_secs,
+        transport_max_retries: Some(transport_max_retries),
         ..Default::default()
     });
 
     match service
-        .generate_text(
+        .generate_text_detailed(
             "Please reply with the single word OK.",
             Some("You are an API connectivity probe."),
             None,
         )
         .await
     {
-        Ok(response) => Ok(Json(json!({
-            "success": true,
-            "message": "API connection succeeded",
-            "response_time_ms": started.elapsed().as_millis(),
-            "provider": effective.provider,
-            "model": effective.model,
-            "probe_max_tokens": probe_max_tokens,
-            "response_preview": response.content.chars().take(200).collect::<String>()
-        }))),
-        Err(error) => Ok(Json(json!({
-            "success": false,
-            "message": "API test failed",
-            "response_time_ms": started.elapsed().as_millis(),
-            "provider": effective.provider,
-            "model": effective.model,
-            "probe_max_tokens": probe_max_tokens,
-            "error": error,
-            "error_type": classify_error_type(&error),
-            "suggestions": generic_suggestions("api_test")
-        }))),
+        Ok(response) => {
+            let transport_diagnostics = response.transport_diagnostics.clone();
+            let mut details = Map::new();
+            details.insert("api_available".to_string(), json!(true));
+            details.insert("model_accessible".to_string(), json!(true));
+            details.insert(
+                "response_valid".to_string(),
+                json!(!response.content.trim().is_empty()),
+            );
+            details.insert("temperature".to_string(), json!(temperature));
+            details.insert("max_tokens".to_string(), json!(max_tokens));
+            details.insert("probe_max_tokens".to_string(), json!(probe_max_tokens));
+
+            Ok(Json(json!({
+                "success": true,
+                "message": "API 连接测试成功",
+                "response_time_ms": started.elapsed().as_millis(),
+                "provider": effective.provider,
+                "model": effective.model,
+                "response_preview": response.content.chars().take(100).collect::<String>(),
+                "details": build_probe_details(
+                    &effective.base_url,
+                    Some(api_backup_urls.as_slice()),
+                    Some(fallback_strategy.as_str()),
+                    transport_diagnostics,
+                    Some(details),
+                ),
+            })))
+        }
+        Err(error) => {
+            let error_message = error.message;
+            let transport_diagnostics = error.transport_diagnostics;
+            let error_type = classify_error_type(&error_message);
+            let http_status_code = error
+                .status_code
+                .or_else(|| extract_http_status_code(&error_message));
+            Ok(Json(json!({
+                "success": false,
+                "message": if error_type == "TimeoutError" { "API 请求超时" } else { "API 测试失败" },
+                "response_time_ms": started.elapsed().as_millis(),
+                "provider": effective.provider,
+                "model": effective.model,
+                "error": error_message,
+                "error_type": error_type,
+                "suggestions": build_api_probe_failure_suggestions(
+                    &error_message,
+                    &effective.base_url,
+                    Some(api_backup_urls.as_slice()),
+                    Some(fallback_strategy.as_str()),
+                    http_status_code,
+                ),
+                "details": build_probe_details(
+                    &effective.base_url,
+                    Some(api_backup_urls.as_slice()),
+                    Some(fallback_strategy.as_str()),
+                    transport_diagnostics,
+                    http_status_code.map(|status_code| {
+                        let mut details = Map::new();
+                        details.insert("http_status_code".to_string(), json!(status_code));
+                        details
+                    }),
+                ),
+            })))
+        }
     }
 }
 
@@ -413,6 +509,8 @@ async fn check_function_calling(
     Extension(db): Extension<DatabaseConnection>,
     Json(body): Json<TestConnectionRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let api_backup_urls = normalize_probe_backup_urls(body.api_backup_urls.as_deref());
+    let fallback_strategy = normalize_probe_fallback_strategy(body.fallback_strategy.as_deref());
     let effective = resolve_effective_runtime_settings(
         &db,
         &claims.sub,
@@ -427,18 +525,34 @@ async fn check_function_calling(
     )
     .await?;
 
+    let probe_max_tokens = effective.max_tokens.clamp(1, 64);
     let started = Instant::now();
+    let (prefer_normalized_v1_candidate, read_timeout_secs, transport_max_retries) =
+        build_probe_transport_config(&effective.provider, &effective.base_url);
+    let effective_backup_urls = if fallback_strategy == "auto" {
+        api_backup_urls.clone()
+    } else {
+        Vec::new()
+    };
     let tools = vec![ToolDef {
         tool_type: "function".to_string(),
         function: ToolFunction {
-            name: "ping_tool".to_string(),
-            description: "Return a test ping result.".to_string(),
+            name: "get_weather".to_string(),
+            description: "获取指定城市的当前天气信息".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "message": { "type": "string" }
+                    "city": {
+                        "type": "string",
+                        "description": "城市名称，例如：北京、上海、深圳"
+                    },
+                    "unit": {
+                        "type": "string",
+                        "enum": ["celsius", "fahrenheit"],
+                        "description": "温度单位"
+                    }
                 },
-                "required": ["message"]
+                "required": ["city"]
             }),
         },
     }];
@@ -447,48 +561,144 @@ async fn check_function_calling(
         provider: effective.provider.clone(),
         api_key: effective.api_key.clone(),
         base_url: effective.base_url.clone(),
+        backup_urls: effective_backup_urls,
         model: effective.model.clone(),
-        temperature: 0.1,
-        max_tokens: 512,
+        temperature: 0.3,
+        max_tokens: probe_max_tokens,
+        prefer_normalized_v1_candidate,
+        read_timeout_secs,
+        transport_max_retries: Some(transport_max_retries),
         ..Default::default()
     });
 
     match service
-        .generate_text(
-            "Call the ping_tool function with message='ok'.",
-            Some("You must call the provided function when available."),
+        .generate_text_with_tool_choice_detailed(
+            "Do not explain or answer directly. Call the get_weather tool immediately for city=Beijing and unit=celsius.",
+            None,
             Some(&tools),
+            Some(&ToolChoice::Required),
         )
         .await
     {
         Ok(response) => {
-            let supported = response
-                .tool_calls
+            let transport_diagnostics = response.transport_diagnostics.clone();
+            let finish_reason = response.finish_reason.clone();
+            let response_preview = response.content.chars().take(200).collect::<String>();
+            let tool_calls = response.tool_calls;
+            let supported = tool_calls
                 .as_ref()
                 .map(|calls| !calls.is_empty())
                 .unwrap_or(false);
-            Ok(Json(json!({
-                "success": supported,
+            let message = if supported {
+                "✅ 支持 Function Calling"
+            } else {
+                "❌ 不支持 Function Calling"
+            };
+            let response_type = if supported { "tool_calls" } else { "text" };
+            let mut details = Map::new();
+            details.insert("finish_reason".to_string(), json!(finish_reason));
+            details.insert("has_tool_calls".to_string(), json!(supported));
+            details.insert(
+                "tool_call_count".to_string(),
+                json!(tool_calls.as_ref().map(|calls| calls.len()).unwrap_or(0)),
+            );
+            details.insert("test_tool".to_string(), json!("get_weather"));
+            details.insert("response_type".to_string(), json!(response_type));
+            let mut payload = json!({
+                "success": true,
                 "supported": supported,
-                "message": if supported { "Function calling is supported" } else { "Model did not return tool calls" },
+                "message": message,
                 "response_time_ms": started.elapsed().as_millis(),
                 "provider": effective.provider,
                 "model": effective.model,
-                "tool_calls": response.tool_calls,
-                "response_preview": response.content.chars().take(200).collect::<String>()
-            })))
+                "details": build_probe_details(
+                    &effective.base_url,
+                    Some(api_backup_urls.as_slice()),
+                    Some(fallback_strategy.as_str()),
+                    transport_diagnostics,
+                    Some(details),
+                )
+            });
+
+            if let Some(tool_calls) = tool_calls {
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("tool_calls".to_string(), Value::Array(tool_calls.into_iter().map(|call| serde_json::to_value(call).unwrap_or(Value::Null)).collect()));
+                    object.insert(
+                        "suggestions".to_string(),
+                        json!([
+                            "✅ 该模型支持 Function Calling，可以正常使用 MCP 插件",
+                            "建议：启用需要的 MCP 插件以扩展 AI 能力",
+                            "提示：测试成功检测到工具调用，模型能够正确解析和使用外部工具"
+                        ]),
+                    );
+                }
+            } else if let Some(object) = payload.as_object_mut() {
+                object.insert(
+                    "response_preview".to_string(),
+                    Value::String(response_preview),
+                );
+                object.insert(
+                    "suggestions".to_string(),
+                    json!([
+                        "❌ 该模型不支持 Function Calling，无法使用 MCP 插件功能",
+                        "建议：更换支持工具调用的模型",
+                        "推荐模型：GPT-4 系列、GPT-4-turbo、Claude 3 Opus/Sonnet、Gemini 1.5 Pro 等",
+                        "说明：模型返回了文本回复而非工具调用，表明不支持该功能"
+                    ]),
+                );
+            }
+
+            Ok(Json(payload))
         }
-        Err(error) => Ok(Json(json!({
+        Err(error) => {
+            let error_message = error.message;
+            let transport_diagnostics = error.transport_diagnostics;
+            let error_type = classify_error_type(&error_message);
+            let http_status_code = error
+                .status_code
+                .or_else(|| extract_http_status_code(&error_message));
+            let failure_message = if error_type == "TimeoutError" {
+                "检测超时".to_string()
+            } else if let Some(status_code) = http_status_code {
+                match status_code {
+                    500..=599 => format!("上游服务暂时不可用（HTTP {status_code}）"),
+                    429 => "请求过于频繁，暂时无法确认模型能力".to_string(),
+                    401 => "认证失败，暂时无法确认模型能力".to_string(),
+                    404 => "接口地址或模型不可用，暂时无法确认模型能力".to_string(),
+                    _ => "检测失败，暂时无法确认模型能力".to_string(),
+                }
+            } else {
+                "Function Calling 检测失败，暂时无法确认模型能力".to_string()
+            };
+            Ok(Json(json!({
             "success": false,
             "supported": Value::Null,
-            "message": "Unable to confirm function-calling support",
+            "message": failure_message,
             "response_time_ms": started.elapsed().as_millis(),
             "provider": effective.provider,
             "model": effective.model,
-            "error": error,
-            "error_type": classify_error_type(&error),
-            "suggestions": generic_suggestions("function_calling")
-        }))),
+            "error": error_message,
+            "error_type": error_type,
+            "suggestions": build_api_probe_failure_suggestions(
+                &error_message,
+                &effective.base_url,
+                Some(api_backup_urls.as_slice()),
+                Some(fallback_strategy.as_str()),
+                http_status_code,
+            ),
+            "details": build_probe_details(
+                &effective.base_url,
+                Some(api_backup_urls.as_slice()),
+                Some(fallback_strategy.as_str()),
+                transport_diagnostics,
+                http_status_code.map(|status_code| {
+                    let mut details = Map::new();
+                    details.insert("http_status_code".to_string(), json!(status_code));
+                    details
+                }),
+            )
+        })))
+        }
     }
 }
 
@@ -509,10 +719,10 @@ async fn create_preset(
     Extension(claims): Extension<Claims>,
     Extension(db): Extension<DatabaseConnection>,
     Json(body): Json<CreateSettingsPresetRouteRequest>,
-) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let request = build_create_settings_preset_request_from_typed_route_payload(body);
     match SettingsService::create_preset(&db, &claims.sub, &request).await {
-        Ok(result) => Ok((StatusCode::CREATED, Json(result))),
+        Ok(result) => Ok(Json(result)),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"detail": format!("{}", e)})),
@@ -532,7 +742,7 @@ async fn update_preset(
         Err(e) => {
             let detail = format!("{}", e);
             if detail.contains("not found") {
-                Err((StatusCode::NOT_FOUND, Json(json!({"detail": detail}))))
+                Err((StatusCode::NOT_FOUND, Json(json!({"detail": "预设不存在"}))))
             } else {
                 Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -550,10 +760,19 @@ async fn delete_preset(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match SettingsService::delete_preset(&db, &claims.sub, &preset_id).await {
         Ok(result) => Ok(Json(result)),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail": format!("{}", e)})),
-        )),
+        Err(e) => {
+            let detail = format!("{}", e);
+            if detail.contains("无法删除激活中的预设") {
+                Err((StatusCode::BAD_REQUEST, Json(json!({"detail": detail}))))
+            } else if detail.contains("not found") {
+                Err((StatusCode::NOT_FOUND, Json(json!({"detail": "预设不存在"}))))
+            } else {
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"detail": detail})),
+                ))
+            }
+        }
     }
 }
 
@@ -567,7 +786,7 @@ async fn activate_preset(
         Err(e) => {
             let detail = format!("{}", e);
             if detail.contains("not found") {
-                Err((StatusCode::NOT_FOUND, Json(json!({"detail": detail}))))
+                Err((StatusCode::NOT_FOUND, Json(json!({"detail": "预设不存在"}))))
             } else {
                 Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -583,27 +802,25 @@ async fn test_preset(
     Extension(db): Extension<DatabaseConnection>,
     Path(preset_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let settings = load_settings_model(&db, &claims.sub)
+    let settings_payload = SettingsService::get_or_create(&db, &claims.sub)
         .await
         .map_err(|error| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"detail": error})),
+                Json(json!({"detail": format!("{}", error)})),
             )
-        })?
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            Json(json!({"detail": "Settings not found"})),
-        ))?;
+        })?;
 
-    let config = find_preset_config(settings.preferences.as_deref(), &preset_id).map_err(
-        |error| match error {
-            FindPresetConfigError::PresetNotFound => (
-                StatusCode::NOT_FOUND,
-                Json(json!({"detail": "Preset not found"})),
-            ),
-        },
-    )?;
+    let settings_preferences = settings_payload
+        .get("preferences")
+        .and_then(|value| value.as_str());
+
+    let config =
+        find_preset_config(settings_preferences, &preset_id).map_err(|error| match error {
+            FindPresetConfigError::PresetNotFound => {
+                (StatusCode::NOT_FOUND, Json(json!({"detail": "预设不存在"})))
+            }
+        })?;
     let request = build_test_preset_connection_request(&config);
 
     test_api_connection(
@@ -616,6 +833,8 @@ async fn test_preset(
             llm_model: request.llm_model,
             temperature: request.temperature,
             max_tokens: request.max_tokens,
+            api_backup_urls: request.api_backup_urls,
+            fallback_strategy: request.fallback_strategy,
         }),
     )
     .await
@@ -626,7 +845,7 @@ async fn create_preset_from_current(
     Extension(db): Extension<DatabaseConnection>,
     Query(query): Query<CreatePresetFromCurrentRouteQuery>,
     body: Option<Json<CreatePresetFromCurrentRouteBody>>,
-) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let request = build_create_preset_from_current_request(query, body.map(|Json(value)| value));
     match SettingsService::create_preset_from_current(
         &db,
@@ -636,7 +855,7 @@ async fn create_preset_from_current(
     )
     .await
     {
-        Ok(result) => Ok((StatusCode::CREATED, Json(result))),
+        Ok(result) => Ok(Json(result)),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"detail": format!("{}", e)})),
@@ -661,6 +880,325 @@ fn normalize_exa_base_url(base_url: &str) -> String {
         return "https://api.exa.ai".to_string();
     }
     trimmed.to_string()
+}
+
+const AZURE_MODELS_EMPTY_MESSAGE: &str =
+    "Azure OpenAI 无法自动获取模型列表，请手动填写部署名称到模型字段";
+const DEFAULT_PROBE_READ_TIMEOUT_SECONDS: f64 = 10.0;
+
+fn is_openai_compatible_provider(provider: &str) -> bool {
+    matches!(
+        provider,
+        "openai" | "openai_responses" | "azure" | "newapi" | "custom" | "sub2api"
+    )
+}
+
+fn build_openai_compatible_model_candidate_urls(base_url: &str) -> Vec<String> {
+    let normalized = base_url.trim().trim_end_matches('/');
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let mut candidates = Vec::new();
+
+    if normalized.ends_with("/v1") {
+        candidates.push(format!("{normalized}/models"));
+        let root_base = normalized.trim_end_matches("/v1").trim_end_matches('/');
+        if !root_base.is_empty() {
+            candidates.push(format!("{root_base}/models"));
+        }
+    } else {
+        candidates.push(format!("{normalized}/models"));
+        candidates.push(format!("{normalized}/v1/models"));
+    }
+
+    let mut unique_candidates = Vec::new();
+    for candidate in candidates {
+        if !unique_candidates.contains(&candidate) {
+            unique_candidates.push(candidate);
+        }
+    }
+
+    unique_candidates
+}
+
+fn build_provider_model_header_pairs(provider: &str, api_key: &str) -> Vec<(&'static str, String)> {
+    match provider {
+        "azure" => vec![
+            ("api-key", api_key.to_string()),
+            ("Content-Type", "application/json".to_string()),
+        ],
+        "anthropic" => vec![
+            ("x-api-key", api_key.to_string()),
+            ("anthropic-version", "2023-06-01".to_string()),
+        ],
+        _ => vec![
+            ("Authorization", format!("Bearer {api_key}")),
+            ("Content-Type", "application/json".to_string()),
+        ],
+    }
+}
+
+fn parse_openai_compatible_available_models(payload: &Value) -> Vec<Value> {
+    let raw_models = payload
+        .get("data")
+        .or_else(|| payload.get("models"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    raw_models
+        .into_iter()
+        .filter_map(|model| match model {
+            Value::String(model_id) => {
+                let trimmed = model_id.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(json!({
+                        "value": trimmed,
+                        "label": trimmed,
+                        "description": "",
+                    }))
+                }
+            }
+            Value::Object(object) => {
+                let model_id = object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .or_else(|| object.get("name").and_then(Value::as_str))
+                    .map(|value| value.trim().trim_start_matches("models/").to_string())
+                    .filter(|value| !value.is_empty())?;
+
+                let description = object
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .or_else(|| {
+                        object
+                            .get("display_name")
+                            .and_then(Value::as_str)
+                            .filter(|value| !value.trim().is_empty())
+                    })
+                    .map(|value| value.to_string())
+                    .or_else(|| {
+                        object.get("created").and_then(|created| {
+                            if let Some(text) = created.as_str() {
+                                Some(format!("Created: {text}"))
+                            } else if let Some(value) = created.as_i64() {
+                                Some(format!("Created: {value}"))
+                            } else if let Some(value) = created.as_u64() {
+                                Some(format!("Created: {value}"))
+                            } else {
+                                created.as_f64().map(|value| format!("Created: {value}"))
+                            }
+                        })
+                    })
+                    .unwrap_or_default();
+
+                Some(json!({
+                    "value": model_id,
+                    "label": model_id,
+                    "description": description,
+                }))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn parse_anthropic_available_models(payload: &Value) -> Vec<Value> {
+    payload
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|model| {
+            let model_id = model.get("id").and_then(Value::as_str)?.trim();
+            if model_id.is_empty() {
+                return None;
+            }
+
+            Some(json!({
+                "value": model_id,
+                "label": model_id,
+                "description": model
+                    .get("display_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+            }))
+        })
+        .collect()
+}
+
+fn parse_gemini_available_models(payload: &Value) -> Vec<Value> {
+    payload
+        .get("models")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|model| {
+            let supported_methods = model
+                .get("supportedGenerationMethods")
+                .and_then(Value::as_array)?;
+            if !supported_methods
+                .iter()
+                .any(|method| method.as_str() == Some("generateContent"))
+            {
+                return None;
+            }
+
+            let raw_name = model.get("name").and_then(Value::as_str)?.trim();
+            let model_id = raw_name.trim_start_matches("models/").trim();
+            if model_id.is_empty() {
+                return None;
+            }
+
+            Some(json!({
+                "value": model_id,
+                "label": model
+                    .get("displayName")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or(model_id),
+                "description": "",
+            }))
+        })
+        .collect()
+}
+
+fn available_models_success_message(provider: &str, models: &[Value]) -> Option<&'static str> {
+    if provider == "azure" && models.is_empty() {
+        Some(AZURE_MODELS_EMPTY_MESSAGE)
+    } else {
+        None
+    }
+}
+
+async fn send_get_request_with_headers(
+    client: &Client,
+    url: &str,
+    header_pairs: &[(&'static str, String)],
+) -> Result<reqwest::Response, reqwest::Error> {
+    let mut request = client.get(url);
+    for (name, value) in header_pairs {
+        request = request.header(*name, value);
+    }
+    request.send().await
+}
+
+async fn fetch_available_models_for_provider(
+    provider: &str,
+    api_key: &str,
+    base_url: &str,
+) -> Result<Vec<Value>, String> {
+    let client = Client::new();
+
+    match provider {
+        "anthropic" => {
+            let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
+            let response = send_get_request_with_headers(
+                &client,
+                &url,
+                &build_provider_model_header_pairs(provider, api_key),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            let status = response.status();
+            let payload: Value = response.json().await.map_err(|error| error.to_string())?;
+            if !status.is_success() {
+                return Err(format!("HTTP {}: {}", status.as_u16(), payload));
+            }
+            Ok(parse_anthropic_available_models(&payload))
+        }
+        "gemini" => {
+            let url = format!("{}/models", base_url.trim_end_matches('/'));
+            let response = client
+                .get(url)
+                .query(&[("key", api_key)])
+                .send()
+                .await
+                .map_err(|error| error.to_string())?;
+            let status = response.status();
+            let payload: Value = response.json().await.map_err(|error| error.to_string())?;
+            if !status.is_success() {
+                return Err(format!("HTTP {}: {}", status.as_u16(), payload));
+            }
+            Ok(parse_gemini_available_models(&payload))
+        }
+        _ if is_openai_compatible_provider(provider) => {
+            let candidate_urls = build_openai_compatible_model_candidate_urls(base_url);
+            let header_pairs = build_provider_model_header_pairs(provider, api_key);
+            let mut last_http_error: Option<String> = None;
+            let mut last_network_error: Option<String> = None;
+
+            for (index, url) in candidate_urls.iter().enumerate() {
+                let response = send_get_request_with_headers(&client, url, &header_pairs).await;
+
+                match response {
+                    Ok(response) => {
+                        let status = response.status();
+                        let payload: Value =
+                            response.json().await.map_err(|error| error.to_string())?;
+
+                        if !status.is_success() {
+                            let error = format!("HTTP {}: {}", status.as_u16(), payload);
+                            last_http_error = Some(error.clone());
+
+                            if provider == "azure" && matches!(status.as_u16(), 403 | 404) {
+                                return Ok(Vec::new());
+                            }
+
+                            if status.as_u16() == 404 && index + 1 < candidate_urls.len() {
+                                continue;
+                            }
+
+                            return Err(error);
+                        }
+
+                        let models = parse_openai_compatible_available_models(&payload);
+                        if !models.is_empty() {
+                            return Ok(models);
+                        }
+
+                        if index + 1 < candidate_urls.len() {
+                            continue;
+                        }
+
+                        if provider == "azure" {
+                            return Ok(Vec::new());
+                        }
+                    }
+                    Err(error) => {
+                        last_network_error = Some(error.to_string());
+                        if (error.is_connect() || error.is_timeout())
+                            && index + 1 < candidate_urls.len()
+                        {
+                            continue;
+                        }
+                        return Err(error.to_string());
+                    }
+                }
+            }
+
+            if provider == "azure" {
+                return Ok(Vec::new());
+            }
+
+            if let Some(error) = last_http_error {
+                return Err(error);
+            }
+
+            if let Some(error) = last_network_error {
+                return Err(error);
+            }
+
+            Err("未能从 API 获取到可用的模型列表".to_string())
+        }
+        _ => Err(format!("不支持的提供商: {provider}")),
+    }
 }
 
 async fn fetch_provider_models(
@@ -774,6 +1312,258 @@ fn curated_fetch_models(provider: &str) -> Vec<Value> {
         .collect()
 }
 
+fn normalize_probe_backup_urls(backup_urls: Option<&[String]>) -> Vec<String> {
+    let mut normalized = Vec::new();
+
+    for item in backup_urls.unwrap_or(&[]) {
+        let candidate = item.trim().trim_end_matches('/');
+        if candidate.is_empty() || normalized.iter().any(|existing| existing == candidate) {
+            continue;
+        }
+        normalized.push(candidate.to_string());
+    }
+
+    normalized
+}
+
+fn normalize_probe_fallback_strategy(fallback_strategy: Option<&str>) -> String {
+    let normalized = fallback_strategy
+        .unwrap_or("auto")
+        .trim()
+        .to_ascii_lowercase();
+    if normalized.is_empty() {
+        "auto".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn build_probe_endpoint_diagnostics(
+    api_base_url: &str,
+    backup_urls: Option<&[String]>,
+    fallback_strategy: Option<&str>,
+) -> Value {
+    let normalized_primary = api_base_url.trim().trim_end_matches('/').to_string();
+    let normalized_backups = normalize_probe_backup_urls(backup_urls);
+    let normalized_strategy = normalize_probe_fallback_strategy(fallback_strategy);
+    json!({
+        "primary_endpoint": normalized_primary,
+        "backup_endpoints": normalized_backups,
+        "configured_endpoint_count": (if normalized_primary.is_empty() { 0 } else { 1 }) + normalized_backups.len(),
+        "fallback_strategy": normalized_strategy,
+        "auto_failover_enabled": normalized_strategy == "auto" && !normalized_backups.is_empty(),
+    })
+}
+
+fn build_probe_transport_config(provider: &str, api_base_url: &str) -> (bool, Option<f64>, u32) {
+    let normalized_provider = provider.trim().to_ascii_lowercase();
+    let normalized_base_url = api_base_url.trim().trim_end_matches('/');
+    let prefer_normalized_v1_candidate = !normalized_base_url.is_empty()
+        && is_openai_compatible_provider(&normalized_provider)
+        && !normalized_base_url.ends_with("/v1");
+    (
+        prefer_normalized_v1_candidate,
+        Some(DEFAULT_PROBE_READ_TIMEOUT_SECONDS),
+        1,
+    )
+}
+
+fn build_probe_details(
+    api_base_url: &str,
+    backup_urls: Option<&[String]>,
+    fallback_strategy: Option<&str>,
+    transport_diagnostics: Option<Value>,
+    extra: Option<Map<String, Value>>,
+) -> Value {
+    let mut details = extra.unwrap_or_default();
+    details.insert(
+        "endpoint_diagnostics".to_string(),
+        build_probe_endpoint_diagnostics(api_base_url, backup_urls, fallback_strategy),
+    );
+    if let Some(transport_diagnostics) = transport_diagnostics {
+        details.insert("transport_diagnostics".to_string(), transport_diagnostics);
+    }
+    Value::Object(details)
+}
+
+fn is_running_in_docker_environment() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+}
+
+fn is_local_gateway_host(hostname: Option<&str>) -> bool {
+    matches!(
+        hostname,
+        Some("127.0.0.1" | "localhost" | "host.docker.internal")
+    )
+}
+
+fn extract_http_status_code(error: &str) -> Option<u16> {
+    error
+        .split(|ch: char| !ch.is_ascii_digit())
+        .find_map(|part| match part.len() {
+            3 => part
+                .parse::<u16>()
+                .ok()
+                .filter(|status| (100..=599).contains(status)),
+            _ => None,
+        })
+}
+
+fn build_api_probe_failure_suggestions(
+    error: &str,
+    api_base_url: &str,
+    backup_urls: Option<&[String]>,
+    fallback_strategy: Option<&str>,
+    status_code: Option<u16>,
+) -> Vec<String> {
+    let lowered = error.to_ascii_lowercase();
+    let normalized_base_url = api_base_url.trim().trim_end_matches('/');
+    let normalized_backups = normalize_probe_backup_urls(backup_urls);
+    let normalized_strategy = normalize_probe_fallback_strategy(fallback_strategy);
+    let auto_failover_enabled = normalized_strategy == "auto" && !normalized_backups.is_empty();
+    let parsed_base_url = Url::parse(normalized_base_url).ok();
+    let base_url_hostname = parsed_base_url.as_ref().and_then(|url| url.host_str());
+    let is_local_gateway = normalized_base_url.starts_with("http://127.0.0.1")
+        || normalized_base_url.starts_with("http://localhost")
+        || normalized_base_url.starts_with("https://127.0.0.1")
+        || normalized_base_url.starts_with("https://localhost");
+    let status_code = status_code.or_else(|| extract_http_status_code(error));
+
+    if lowered.contains("blocked") {
+        return vec![
+            "The upstream API request was blocked or rejected".to_string(),
+            "Check whether the API key has permission for the target model".to_string(),
+            "Confirm the API key is bound to the expected proxy or gateway".to_string(),
+            "Verify the API base URL and gateway policy are consistent".to_string(),
+        ];
+    }
+
+    if lowered.contains("unauthorized") || lowered.contains("401") {
+        return vec![
+            "API key authentication failed".to_string(),
+            "Check whether the API key is correct and active".to_string(),
+            "Confirm the API key has sufficient permission".to_string(),
+        ];
+    }
+
+    if lowered.contains("not found") || lowered.contains("404") {
+        return vec![
+            "The API endpoint or model could not be found".to_string(),
+            "Confirm the API base URL is correct".to_string(),
+            "Verify the target model exists on the current service".to_string(),
+        ];
+    }
+
+    if lowered.contains("rate limit") || lowered.contains("429") {
+        return vec![
+            "The API request hit a rate limit".to_string(),
+            "Retry later after the rate limit window resets".to_string(),
+            "Consider reducing concurrency or switching to a backup endpoint".to_string(),
+        ];
+    }
+
+    if lowered.contains("insufficient") || lowered.contains("quota") {
+        return vec![
+            "The API quota appears to be exhausted".to_string(),
+            "Check the account balance or quota usage".to_string(),
+            "Confirm the current key is allowed to use this model".to_string(),
+        ];
+    }
+
+    if matches!(status_code, Some(502 | 503 | 504)) {
+        let mut suggestions = if is_local_gateway {
+            vec![
+                "The local gateway or proxy is reachable, but it failed to forward the model request upstream".to_string(),
+                "Check the local gateway logs and verify its upstream provider configuration for /chat/completions or /responses".to_string(),
+            ]
+        } else {
+            vec![
+                "The upstream gateway or proxy returned a server error while processing the request".to_string(),
+                "Check whether the current API gateway can reach its model provider and whether the target model is healthy".to_string(),
+            ]
+        };
+
+        if auto_failover_enabled {
+            suggestions.push(
+                "Retry the request and inspect transport diagnostics to confirm whether failover was attempted"
+                    .to_string(),
+            );
+        } else {
+            suggestions.push(
+                "Configure at least one backup endpoint and keep fallback strategy as auto if you want automatic failover"
+                    .to_string(),
+            );
+        }
+        return suggestions;
+    }
+
+    if lowered.contains("non-json")
+        || lowered.contains("non json")
+        || lowered.contains("doctype html")
+    {
+        let mut suggestions = vec![
+            "The configured Base URL returned an HTML page, not an API JSON response".to_string(),
+            "Use the provider's API root instead of its web console or homepage".to_string(),
+            "For DeepSeek-compatible Chat Completions, try a documented endpoint such as `https://api.deepseek.com/v1` or the gateway's exact `/v1` API base path".to_string(),
+            "If this gateway requires a vendor-specific path, copy the complete API Base URL from the gateway documentation".to_string(),
+        ];
+        if !normalized_base_url.is_empty() && !normalized_base_url.ends_with("/v1") {
+            suggestions.insert(
+                1,
+                "The current Base URL does not end with `/v1`; configure the exact API base path from the gateway instead of relying on the homepage root".to_string(),
+            );
+        }
+        return suggestions;
+    }
+
+    if lowered.contains("timeout")
+        || lowered.contains("connecttimeout")
+        || lowered.contains("readtimeout")
+        || lowered.contains("pooltimeout")
+        || lowered.contains("connecterror")
+    {
+        let mut suggestions = vec![
+            "The API endpoint did not respond in time or could not be reached".to_string(),
+            "Check the network path, API base URL, and gateway process status".to_string(),
+        ];
+
+        if base_url_hostname == Some("host.docker.internal") {
+            if is_running_in_docker_environment() {
+                suggestions.push(
+                    "The current backend appears to run inside Docker; confirm the host machine is exposing the gateway on the configured port".to_string(),
+                );
+            } else {
+                suggestions.push(
+                    "`host.docker.internal` usually only works from inside Docker Desktop containers; if this backend runs on the host OS, switch the API base URL to `http://127.0.0.1:<port>` or `http://localhost:<port>`".to_string(),
+                );
+            }
+        } else if is_local_gateway || is_local_gateway_host(base_url_hostname) {
+            suggestions.push(
+                "If this is a local gateway, verify the gateway process is listening and can answer /chat/completions on the configured port".to_string(),
+            );
+        }
+
+        if auto_failover_enabled {
+            suggestions.push(
+                "Retry after checking transport diagnostics to confirm whether backup endpoint failover was attempted"
+                    .to_string(),
+            );
+        } else {
+            suggestions.push(
+                "Configure at least one backup endpoint and keep fallback strategy as auto if you want automatic failover"
+                    .to_string(),
+            );
+        }
+        return suggestions;
+    }
+
+    vec![
+        "An unknown error occurred during the request".to_string(),
+        "Check the network and configuration parameters".to_string(),
+        "Review the detailed error message for more clues".to_string(),
+    ]
+}
+
 fn classify_error_type(error: &str) -> &'static str {
     let lowered = error.to_lowercase();
     if lowered.contains("401")
@@ -782,10 +1572,20 @@ fn classify_error_type(error: &str) -> &'static str {
         || lowered.contains("forbidden")
     {
         "AuthenticationError"
+    } else if lowered.contains("429") || lowered.contains("rate limit") {
+        "HTTPStatusError"
+    } else if lowered.contains("502")
+        || lowered.contains("503")
+        || lowered.contains("504")
+        || lowered.contains("bad gateway")
+    {
+        "HTTPStatusError"
     } else if lowered.contains("timeout") {
         "TimeoutError"
     } else if lowered.contains("404") {
         "EndpointNotFound"
+    } else if lowered.contains("http ") {
+        "HTTPStatusError"
     } else if lowered.contains("connection")
         || lowered.contains("network")
         || lowered.contains("dns")
@@ -798,6 +1598,11 @@ fn classify_error_type(error: &str) -> &'static str {
 
 fn generic_suggestions(kind: &str) -> Vec<&'static str> {
     match kind {
+        "api_test" => vec![
+            "检查 API Key、Base URL 和模型配置是否正确",
+            "确认网络连通性以及当前端点是否可访问",
+            "如果配置了备用端点，请同时检查主端点和备用端点状态",
+        ],
         "function_calling" => vec![
             "Check whether the selected model supports tool/function calling",
             "Verify the API base URL and provider type",
@@ -847,4 +1652,1517 @@ pub fn routes() -> Router {
             post(activate_preset),
         )
         .route("/settings/presets/{preset_id}/test", post(test_preset))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        extract::Query,
+        http::{HeaderMap, StatusCode},
+        routing::{get, post},
+        Extension, Json, Router,
+    };
+    use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Schema};
+    use serde_json::{json, Value};
+    use tokio::net::TcpListener;
+
+    use super::{
+        available_models_success_message, build_api_probe_failure_suggestions,
+        build_openai_compatible_model_candidate_urls, build_probe_endpoint_diagnostics,
+        build_probe_transport_config, build_provider_model_header_pairs, check_function_calling,
+        delete_settings, get_available_models, parse_anthropic_available_models,
+        parse_gemini_available_models, parse_openai_compatible_available_models,
+        test_api_connection, update_settings, ModelsQuery, TestConnectionRequest,
+    };
+    use crate::services::auth::Claims;
+    use crate::services::settings_update_request_service::SettingsUpdateRouteRequest;
+
+    async fn setup_settings_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite memory db");
+        let builder = DbBackend::Sqlite;
+        let schema = Schema::new(builder);
+        db.execute(
+            builder.build(&schema.create_table_from_entity(crate::models::settings::Entity)),
+        )
+        .await
+        .expect("create settings table");
+        db
+    }
+
+    fn test_claims() -> Claims {
+        Claims {
+            sub: "user-1".to_string(),
+            username: "tester".to_string(),
+            is_admin: false,
+            exp: 0,
+            iat: 0,
+        }
+    }
+
+    async fn spawn_models_server(app: Router) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let address = listener.local_addr().expect("listener address");
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test app");
+        });
+        (format!("http://{}", address), handle)
+    }
+
+    async fn spawn_chat_completion_server(app: Router) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let address = listener.local_addr().expect("listener address");
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test app");
+        });
+        (format!("http://{}/v1", address), handle)
+    }
+
+    #[tokio::test]
+    async fn update_settings_returns_404_when_missing() {
+        let db = setup_settings_db().await;
+        let request = SettingsUpdateRouteRequest {
+            llm_model: Some(serde_json::json!("gpt-4.1")),
+            ..Default::default()
+        };
+
+        let error = update_settings(Extension(test_claims()), Extension(db), Json(request))
+            .await
+            .expect_err("missing settings should map to 404");
+
+        assert_eq!(error.0, StatusCode::NOT_FOUND);
+        assert_eq!(
+            error.1 .0["detail"],
+            Value::String("设置不存在，请先创建设置".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_settings_returns_404_when_missing() {
+        let db = setup_settings_db().await;
+
+        let error = delete_settings(Extension(test_claims()), Extension(db))
+            .await
+            .expect_err("missing settings delete should map to 404");
+
+        assert_eq!(error.0, StatusCode::NOT_FOUND);
+        assert_eq!(
+            error.1 .0["detail"],
+            Value::String("设置不存在".to_string())
+        );
+    }
+
+    #[test]
+    fn openai_compatible_model_candidates_follow_python_fallback_order() {
+        assert_eq!(
+            build_openai_compatible_model_candidate_urls("https://provider.example.com"),
+            vec![
+                "https://provider.example.com/models".to_string(),
+                "https://provider.example.com/v1/models".to_string(),
+            ]
+        );
+        assert_eq!(
+            build_openai_compatible_model_candidate_urls("https://provider.example.com/v1"),
+            vec![
+                "https://provider.example.com/v1/models".to_string(),
+                "https://provider.example.com/models".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn provider_model_headers_match_provider_contracts() {
+        let openai_headers = build_provider_model_header_pairs("openai", "sk-test");
+        assert_eq!(
+            openai_headers[0],
+            ("Authorization", "Bearer sk-test".to_string())
+        );
+
+        let azure_headers = build_provider_model_header_pairs("azure", "azure-key");
+        assert_eq!(azure_headers[0], ("api-key", "azure-key".to_string()));
+        assert!(!azure_headers
+            .iter()
+            .any(|(name, _)| *name == "Authorization"));
+
+        let anthropic_headers = build_provider_model_header_pairs("anthropic", "ak-test");
+        assert_eq!(anthropic_headers[0], ("x-api-key", "ak-test".to_string()));
+        assert_eq!(
+            anthropic_headers[1],
+            ("anthropic-version", "2023-06-01".to_string())
+        );
+    }
+
+    #[test]
+    fn openai_compatible_model_parser_matches_python_shapes() {
+        let models = parse_openai_compatible_available_models(&json!({
+            "data": [
+                {"id": "gpt-4.1-mini", "created": 123},
+                {"name": "models/custom-model", "display_name": "Custom Model"},
+                "deepseek-chat"
+            ]
+        }));
+
+        assert_eq!(models.len(), 3);
+        assert_eq!(models[0]["value"], "gpt-4.1-mini");
+        assert_eq!(models[0]["description"], "Created: 123");
+        assert_eq!(models[1]["value"], "custom-model");
+        assert_eq!(models[1]["description"], "Custom Model");
+        assert_eq!(models[2]["value"], "deepseek-chat");
+    }
+
+    #[test]
+    fn anthropic_and_gemini_model_parsers_match_python_contracts() {
+        let anthropic_models = parse_anthropic_available_models(&json!({
+            "data": [
+                {"id": "claude-3-5-sonnet", "display_name": "Claude 3.5 Sonnet"}
+            ]
+        }));
+        assert_eq!(anthropic_models[0]["value"], "claude-3-5-sonnet");
+        assert_eq!(anthropic_models[0]["description"], "Claude 3.5 Sonnet");
+
+        let gemini_models = parse_gemini_available_models(&json!({
+            "models": [
+                {
+                    "name": "models/gemini-2.0-pro",
+                    "displayName": "Gemini 2.0 Pro",
+                    "supportedGenerationMethods": ["generateContent"]
+                },
+                {
+                    "name": "models/embedding-001",
+                    "displayName": "Embedding",
+                    "supportedGenerationMethods": ["embedContent"]
+                }
+            ]
+        }));
+        assert_eq!(gemini_models.len(), 1);
+        assert_eq!(gemini_models[0]["value"], "gemini-2.0-pro");
+        assert_eq!(gemini_models[0]["label"], "Gemini 2.0 Pro");
+    }
+
+    #[test]
+    fn azure_empty_models_return_friendly_message_only_for_azure() {
+        assert_eq!(
+            available_models_success_message("azure", &[]),
+            Some("Azure OpenAI 无法自动获取模型列表，请手动填写部署名称到模型字段")
+        );
+        assert_eq!(available_models_success_message("openai", &[]), None);
+        assert_eq!(
+            available_models_success_message("azure", &[json!({"value": "gpt-4.1"})]),
+            None
+        );
+    }
+
+    #[test]
+    fn probe_endpoint_diagnostics_match_python_minimal_contract() {
+        let diagnostics = build_probe_endpoint_diagnostics("https://api.openai.com/v1", None, None);
+        assert_eq!(
+            diagnostics["primary_endpoint"],
+            Value::String("https://api.openai.com/v1".to_string())
+        );
+        assert_eq!(diagnostics["backup_endpoints"], json!([]));
+        assert_eq!(diagnostics["configured_endpoint_count"], json!(1));
+        assert_eq!(diagnostics["fallback_strategy"], json!("auto"));
+        assert_eq!(diagnostics["auto_failover_enabled"], json!(false));
+    }
+
+    #[test]
+    fn probe_endpoint_diagnostics_include_backup_urls_and_manual_strategy() {
+        let backup_urls = vec![
+            "https://backup-1.example.com/v1/".to_string(),
+            " https://backup-2.example.com/v1 ".to_string(),
+            "https://backup-1.example.com/v1".to_string(),
+        ];
+        let diagnostics = build_probe_endpoint_diagnostics(
+            "https://api.openai.com/v1/",
+            Some(backup_urls.as_slice()),
+            Some("manual"),
+        );
+
+        assert_eq!(
+            diagnostics["primary_endpoint"],
+            json!("https://api.openai.com/v1")
+        );
+        assert_eq!(
+            diagnostics["backup_endpoints"],
+            json!([
+                "https://backup-1.example.com/v1",
+                "https://backup-2.example.com/v1"
+            ])
+        );
+        assert_eq!(diagnostics["configured_endpoint_count"], json!(3));
+        assert_eq!(diagnostics["fallback_strategy"], json!("manual"));
+        assert_eq!(diagnostics["auto_failover_enabled"], json!(false));
+    }
+
+    #[test]
+    fn probe_transport_config_prefers_normalized_v1_for_openai_compatible_root_base_url() {
+        let (prefer_normalized_v1_candidate, read_timeout_secs, transport_max_retries) =
+            build_probe_transport_config("custom", "https://gateway.example.com");
+        assert!(prefer_normalized_v1_candidate);
+        assert_eq!(read_timeout_secs, Some(10.0));
+        assert_eq!(transport_max_retries, 1);
+
+        let (prefer_normalized_v1_candidate, _, _) =
+            build_probe_transport_config("custom", "https://gateway.example.com/v1");
+        assert!(!prefer_normalized_v1_candidate);
+    }
+
+    #[tokio::test]
+    async fn get_available_models_falls_back_from_root_to_v1_for_openai_compatible_provider() {
+        let db = setup_settings_db().await;
+
+        let app = Router::new()
+            .route(
+                "/models",
+                get(|| async { (StatusCode::NOT_FOUND, Json(json!({"error": "not found"}))) }),
+            )
+            .route(
+                "/v1/models",
+                get(|| async { Json(json!({"data": [{"id": "gpt-5.3-codex"}]})) }),
+            );
+        let (base_url, handle) = spawn_models_server(app).await;
+
+        let response = get_available_models(
+            Extension(test_claims()),
+            Extension(db),
+            Query(ModelsQuery {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(base_url),
+                provider: Some("sub2api".to_string()),
+            }),
+        )
+        .await
+        .expect("models route should succeed");
+
+        handle.abort();
+
+        assert_eq!(response.0["provider"], "sub2api");
+        assert_eq!(response.0["count"], 1);
+        assert_eq!(response.0["models"][0]["value"], "gpt-5.3-codex");
+    }
+
+    #[tokio::test]
+    async fn get_available_models_returns_friendly_empty_message_for_azure_404() {
+        let db = setup_settings_db().await;
+        let captured_headers = std::sync::Arc::new(std::sync::Mutex::new(Vec::<HeaderMap>::new()));
+        let captured_headers_clone = captured_headers.clone();
+
+        let app = Router::new().route(
+            "/models",
+            get(move |headers: HeaderMap| {
+                let captured_headers = captured_headers_clone.clone();
+                async move {
+                    captured_headers
+                        .lock()
+                        .expect("lock captured headers")
+                        .push(headers);
+                    (StatusCode::NOT_FOUND, Json(json!({"error": "not found"})))
+                }
+            }),
+        );
+        let (base_url, handle) = spawn_models_server(app).await;
+
+        let response = get_available_models(
+            Extension(test_claims()),
+            Extension(db),
+            Query(ModelsQuery {
+                api_key: Some("azure-key".to_string()),
+                api_base_url: Some(base_url),
+                provider: Some("azure".to_string()),
+            }),
+        )
+        .await
+        .expect("azure empty models should be friendly success");
+
+        handle.abort();
+
+        let captured_headers = captured_headers.lock().expect("lock captured headers");
+        let first_headers = captured_headers.first().expect("captured azure request");
+        assert_eq!(
+            first_headers
+                .get("api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("azure-key")
+        );
+        assert!(first_headers.get("authorization").is_none());
+        assert_eq!(response.0["provider"], "azure");
+        assert_eq!(response.0["count"], 0);
+        assert_eq!(
+            response.0["message"],
+            "Azure OpenAI 无法自动获取模型列表，请手动填写部署名称到模型字段"
+        );
+    }
+
+    #[tokio::test]
+    async fn check_function_calling_returns_supported_true_when_tool_calls_present() {
+        let db = setup_settings_db().await;
+
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                Json(json!({
+                    "choices": [{
+                        "message": {
+                            "content": "",
+                            "tool_calls": [{
+                                "id": "call_001",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": "{\"city\":\"Beijing\"}"
+                                }
+                            }]
+                        },
+                        "finish_reason": "tool_calls"
+                    }]
+                }))
+            }),
+        );
+        let (base_url, handle) = spawn_chat_completion_server(app).await;
+        let expected_base_url = base_url.clone();
+
+        let response = check_function_calling(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(base_url),
+                provider: Some("openai".to_string()),
+                llm_model: Some("gpt-4.1-mini".to_string()),
+                temperature: None,
+                max_tokens: None,
+                api_backup_urls: None,
+                fallback_strategy: None,
+            }),
+        )
+        .await
+        .expect("function calling probe should succeed");
+
+        handle.abort();
+
+        assert_eq!(response.0["success"], json!(true));
+        assert_eq!(response.0["supported"], json!(true));
+        assert_eq!(response.0["details"]["has_tool_calls"], json!(true));
+        assert_eq!(response.0["details"]["tool_call_count"], json!(1));
+        assert_eq!(response.0["details"]["response_type"], json!("tool_calls"));
+        assert_eq!(
+            response.0["details"]["endpoint_diagnostics"]["primary_endpoint"],
+            json!(expected_base_url)
+        );
+    }
+
+    #[tokio::test]
+    async fn check_function_calling_keeps_success_true_when_model_returns_plain_text() {
+        let db = setup_settings_db().await;
+
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                Json(json!({
+                    "choices": [{
+                        "message": {
+                            "content": "plain text response"
+                        },
+                        "finish_reason": "stop"
+                    }]
+                }))
+            }),
+        );
+        let (base_url, handle) = spawn_chat_completion_server(app).await;
+
+        let response = check_function_calling(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(base_url),
+                provider: Some("openai".to_string()),
+                llm_model: Some("gpt-4.1-mini".to_string()),
+                temperature: None,
+                max_tokens: None,
+                api_backup_urls: None,
+                fallback_strategy: None,
+            }),
+        )
+        .await
+        .expect("function calling probe should still return a success shell");
+
+        handle.abort();
+
+        assert_eq!(response.0["success"], json!(true));
+        assert_eq!(response.0["supported"], json!(false));
+        assert_eq!(response.0["details"]["has_tool_calls"], json!(false));
+        assert_eq!(response.0["details"]["tool_call_count"], json!(0));
+        assert_eq!(response.0["details"]["response_type"], json!("text"));
+        assert_eq!(response.0["response_preview"], json!("plain text response"));
+    }
+
+    #[tokio::test]
+    async fn check_function_calling_gateway_failure_returns_python_aligned_guidance() {
+        let db = setup_settings_db().await;
+
+        let gateway_app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({"error": "bad gateway"})),
+                )
+            }),
+        );
+
+        let (gateway_base_url, gateway_handle) = spawn_chat_completion_server(gateway_app).await;
+
+        let response = check_function_calling(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(gateway_base_url.clone()),
+                provider: Some("openai_responses".to_string()),
+                llm_model: Some("gpt-4.1-mini".to_string()),
+                temperature: None,
+                max_tokens: None,
+                api_backup_urls: None,
+                fallback_strategy: Some("auto".to_string()),
+            }),
+        )
+        .await
+        .expect("gateway error should still return failure shell");
+
+        gateway_handle.abort();
+
+        assert_eq!(response.0["success"], json!(false));
+        assert_eq!(response.0["supported"], Value::Null);
+        assert_eq!(response.0["error_type"], json!("HTTPStatusError"));
+        assert_eq!(
+            response.0["message"],
+            json!("上游服务暂时不可用（HTTP 502）")
+        );
+        assert_eq!(response.0["details"]["http_status_code"], json!(502));
+        assert_eq!(
+            response.0["details"]["endpoint_diagnostics"]["primary_endpoint"],
+            json!(gateway_base_url)
+        );
+        let suggestions = response.0["suggestions"]
+            .as_array()
+            .expect("suggestions should be an array");
+        assert!(suggestions.iter().any(|item| {
+            item.as_str()
+                .map(|value| {
+                    value
+                        .to_ascii_lowercase()
+                        .contains("local gateway or proxy")
+                })
+                .unwrap_or(false)
+        }));
+        assert!(suggestions.iter().any(|item| {
+            item.as_str()
+                .map(|value| value.to_ascii_lowercase().contains("backup endpoint"))
+                .unwrap_or(false)
+        }));
+    }
+
+    #[tokio::test]
+    async fn check_function_calling_uses_gemini_owner_path_for_tool_calls() {
+        let db = setup_settings_db().await;
+
+        let app = Router::new().route(
+            "/models/gemini-2.5-flash:generateContent",
+            post(|| async {
+                Json(json!({
+                    "candidates": [{
+                        "content": {
+                            "parts": [{
+                                "functionCall": {
+                                    "name": "get_weather",
+                                    "args": { "city": "Beijing", "unit": "celsius" }
+                                }
+                            }]
+                        },
+                        "finishReason": "STOP"
+                    }]
+                }))
+            }),
+        );
+        let (base_url, handle) = spawn_models_server(app).await;
+
+        let response = check_function_calling(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("gk-test".to_string()),
+                api_base_url: Some(base_url.clone()),
+                provider: Some("gemini".to_string()),
+                llm_model: Some("gemini-2.5-flash".to_string()),
+                temperature: None,
+                max_tokens: None,
+                api_backup_urls: None,
+                fallback_strategy: None,
+            }),
+        )
+        .await
+        .expect("gemini function calling probe should succeed");
+
+        handle.abort();
+
+        assert_eq!(response.0["success"], json!(true));
+        assert_eq!(response.0["supported"], json!(true));
+        assert_eq!(response.0["details"]["has_tool_calls"], json!(true));
+        assert_eq!(response.0["details"]["tool_call_count"], json!(1));
+        assert_eq!(response.0["details"]["response_type"], json!("tool_calls"));
+        assert_eq!(
+            response.0["details"]["endpoint_diagnostics"]["primary_endpoint"],
+            json!(base_url)
+        );
+        assert_eq!(
+            response.0["tool_calls"][0]["function"]["name"],
+            json!("get_weather")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_api_connection_uses_gemini_owner_path_for_success_shell() {
+        let db = setup_settings_db().await;
+
+        let app = Router::new().route(
+            "/models/gemini-2.5-flash:generateContent",
+            post(|| async {
+                Json(json!({
+                    "candidates": [{
+                        "content": {
+                            "parts": [{
+                                "text": "OK from gemini"
+                            }]
+                        },
+                        "finishReason": "STOP"
+                    }]
+                }))
+            }),
+        );
+        let (base_url, handle) = spawn_models_server(app).await;
+
+        let response = test_api_connection(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("gk-test".to_string()),
+                api_base_url: Some(base_url.clone()),
+                provider: Some("gemini".to_string()),
+                llm_model: Some("gemini-2.5-flash".to_string()),
+                temperature: Some(0.2),
+                max_tokens: Some(256),
+                api_backup_urls: None,
+                fallback_strategy: Some("manual".to_string()),
+            }),
+        )
+        .await
+        .expect("gemini API probe should succeed");
+
+        handle.abort();
+
+        assert_eq!(response.0["success"], json!(true));
+        assert_eq!(response.0["message"], json!("API 连接测试成功"));
+        assert_eq!(response.0["provider"], json!("gemini"));
+        assert_eq!(response.0["model"], json!("gemini-2.5-flash"));
+        assert_eq!(response.0["response_preview"], json!("OK from gemini"));
+        assert_eq!(response.0["details"]["api_available"], json!(true));
+        assert_eq!(response.0["details"]["model_accessible"], json!(true));
+        assert_eq!(response.0["details"]["response_valid"], json!(true));
+        assert_eq!(response.0["details"]["temperature"], json!(0.2));
+        assert_eq!(response.0["details"]["max_tokens"], json!(256));
+        assert_eq!(response.0["details"]["probe_max_tokens"], json!(64));
+        assert_eq!(
+            response.0["details"]["endpoint_diagnostics"]["primary_endpoint"],
+            json!(base_url)
+        );
+        assert!(response.0["details"].get("transport_diagnostics").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_api_connection_returns_python_style_details_shell() {
+        let db = setup_settings_db().await;
+
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                Json(json!({
+                    "choices": [{
+                        "message": {
+                            "content": "TEST_OK from probe response"
+                        },
+                        "finish_reason": "stop"
+                    }]
+                }))
+            }),
+        );
+        let (base_url, handle) = spawn_chat_completion_server(app).await;
+
+        let response = test_api_connection(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(base_url),
+                provider: Some("openai".to_string()),
+                llm_model: Some("gpt-4.1-mini".to_string()),
+                temperature: Some(0.9),
+                max_tokens: Some(512),
+                api_backup_urls: Some(vec![
+                    "https://backup-1.example.com/v1/".to_string(),
+                    "https://backup-2.example.com/v1".to_string(),
+                ]),
+                fallback_strategy: Some("manual".to_string()),
+            }),
+        )
+        .await
+        .expect("api test probe should succeed");
+
+        handle.abort();
+
+        assert_eq!(response.0["success"], json!(true));
+        assert_eq!(response.0["message"], json!("API 连接测试成功"));
+        assert_eq!(response.0["provider"], json!("openai"));
+        assert_eq!(response.0["model"], json!("gpt-4.1-mini"));
+        assert_eq!(
+            response.0["response_preview"],
+            json!("TEST_OK from probe response")
+        );
+        assert_eq!(response.0["details"]["api_available"], json!(true));
+        assert_eq!(response.0["details"]["model_accessible"], json!(true));
+        assert_eq!(response.0["details"]["response_valid"], json!(true));
+        assert_eq!(response.0["details"]["temperature"], json!(0.9));
+        assert_eq!(response.0["details"]["max_tokens"], json!(512));
+        assert_eq!(response.0["details"]["probe_max_tokens"], json!(64));
+        assert_eq!(
+            response.0["details"]["endpoint_diagnostics"]["backup_endpoints"],
+            json!([
+                "https://backup-1.example.com/v1",
+                "https://backup-2.example.com/v1"
+            ])
+        );
+        assert_eq!(
+            response.0["details"]["endpoint_diagnostics"]["fallback_strategy"],
+            json!("manual")
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["total_attempts"],
+            json!(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_api_connection_prefers_normalized_v1_candidate_for_root_base_url() {
+        let db = setup_settings_db().await;
+
+        let app = Router::new()
+            .route(
+                "/chat/completions",
+                post(|| async {
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"error": "root endpoint not found"})),
+                    )
+                }),
+            )
+            .route(
+                "/v1/chat/completions",
+                post(|| async {
+                    Json(json!({
+                        "choices": [{
+                            "message": {
+                                "content": "TEST_OK from normalized candidate"
+                            },
+                            "finish_reason": "stop"
+                        }]
+                    }))
+                }),
+            );
+        let (base_url, handle) = spawn_models_server(app).await;
+
+        let response = test_api_connection(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(base_url.clone()),
+                provider: Some("custom".to_string()),
+                llm_model: Some("gpt-4.1-mini".to_string()),
+                temperature: Some(0.4),
+                max_tokens: Some(128),
+                api_backup_urls: None,
+                fallback_strategy: None,
+            }),
+        )
+        .await
+        .expect("api test should succeed via normalized /v1 candidate");
+
+        handle.abort();
+
+        assert_eq!(response.0["success"], json!(true));
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["total_attempts"],
+            json!(1)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["effective_base_url"],
+            json!(format!("{}/v1", base_url))
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][0]["result"],
+            json!("success")
+        );
+    }
+
+    #[tokio::test]
+    async fn check_function_calling_prefers_normalized_v1_candidate_for_root_base_url() {
+        let db = setup_settings_db().await;
+
+        let app = Router::new()
+            .route(
+                "/chat/completions",
+                post(|| async {
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"error": "root endpoint not found"})),
+                    )
+                }),
+            )
+            .route(
+                "/v1/chat/completions",
+                post(|| async {
+                    Json(json!({
+                        "choices": [{
+                            "message": {
+                                "content": "",
+                                "tool_calls": [{
+                                    "id": "call_001",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": "{\"city\":\"Beijing\"}"
+                                    }
+                                }]
+                            },
+                            "finish_reason": "tool_calls"
+                        }]
+                    }))
+                }),
+            );
+        let (base_url, handle) = spawn_models_server(app).await;
+
+        let response = check_function_calling(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(base_url.clone()),
+                provider: Some("custom".to_string()),
+                llm_model: Some("gpt-4.1-mini".to_string()),
+                temperature: None,
+                max_tokens: None,
+                api_backup_urls: None,
+                fallback_strategy: None,
+            }),
+        )
+        .await
+        .expect("function calling probe should succeed via normalized /v1 candidate");
+
+        handle.abort();
+
+        assert_eq!(response.0["success"], json!(true));
+        assert_eq!(response.0["supported"], json!(true));
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["total_attempts"],
+            json!(1)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["effective_base_url"],
+            json!(format!("{}/v1", base_url))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_api_connection_openai_responses_root_base_url_does_not_fallback_to_root_candidate(
+    ) {
+        let db = setup_settings_db().await;
+
+        let app = Router::new()
+            .route(
+                "/v1/chat/completions",
+                post(|| async {
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"error": "normalized endpoint not found"})),
+                    )
+                }),
+            )
+            .route(
+                "/chat/completions",
+                post(|| async {
+                    Json(json!({
+                        "choices": [{
+                            "message": {
+                                "content": "TEST_OK from root candidate"
+                            },
+                            "finish_reason": "stop"
+                        }]
+                    }))
+                }),
+            );
+        let (base_url, handle) = spawn_models_server(app).await;
+
+        let response = test_api_connection(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(base_url.clone()),
+                provider: Some("openai_responses".to_string()),
+                llm_model: Some("gpt-4.1-mini".to_string()),
+                temperature: Some(0.4),
+                max_tokens: Some(128),
+                api_backup_urls: None,
+                fallback_strategy: Some("auto".to_string()),
+            }),
+        )
+        .await
+        .expect("openai_responses probe should keep the Python /v1-only candidate contract");
+
+        handle.abort();
+
+        assert_eq!(response.0["success"], json!(false));
+        assert_eq!(response.0["error_type"], json!("EndpointNotFound"));
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["total_attempts"],
+            json!(1)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["effective_base_url"],
+            json!(format!("{}/v1", base_url))
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][0]["base_url"],
+            json!(format!("{}/v1", base_url))
+        );
+    }
+
+    #[tokio::test]
+    async fn check_function_calling_sub2api_root_base_url_does_not_fallback_to_root_candidate() {
+        let db = setup_settings_db().await;
+
+        let app = Router::new()
+            .route(
+                "/v1/chat/completions",
+                post(|| async {
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"error": "normalized endpoint not found"})),
+                    )
+                }),
+            )
+            .route(
+                "/chat/completions",
+                post(|| async {
+                    Json(json!({
+                        "choices": [{
+                            "message": {
+                                "content": "",
+                                "tool_calls": [{
+                                    "id": "call_001",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": "{\"city\":\"Beijing\"}"
+                                    }
+                                }]
+                            },
+                            "finish_reason": "tool_calls"
+                        }]
+                    }))
+                }),
+            );
+        let (base_url, handle) = spawn_models_server(app).await;
+
+        let response = check_function_calling(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(base_url.clone()),
+                provider: Some("sub2api".to_string()),
+                llm_model: Some("gpt-4.1-mini".to_string()),
+                temperature: None,
+                max_tokens: None,
+                api_backup_urls: None,
+                fallback_strategy: Some("auto".to_string()),
+            }),
+        )
+        .await
+        .expect(
+            "sub2api function-calling probe should keep the Python /v1-only candidate contract",
+        );
+
+        handle.abort();
+
+        assert_eq!(response.0["success"], json!(false));
+        assert_eq!(response.0["supported"], Value::Null);
+        assert_eq!(response.0["error_type"], json!("EndpointNotFound"));
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["total_attempts"],
+            json!(1)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["effective_base_url"],
+            json!(format!("{}/v1", base_url))
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][0]["base_url"],
+            json!(format!("{}/v1", base_url))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_api_connection_https_local_gateway_falls_back_to_http_candidate() {
+        let db = setup_settings_db().await;
+
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                Json(json!({
+                    "choices": [{
+                        "message": {
+                            "content": "TEST_OK from http local gateway candidate"
+                        },
+                        "finish_reason": "stop"
+                    }]
+                }))
+            }),
+        );
+        let (http_base_url, handle) = spawn_chat_completion_server(app).await;
+        let https_base_url = http_base_url.replacen("http://", "https://", 1);
+
+        let response = test_api_connection(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(https_base_url.clone()),
+                provider: Some("openai".to_string()),
+                llm_model: Some("gpt-4.1-mini".to_string()),
+                temperature: Some(0.4),
+                max_tokens: Some(128),
+                api_backup_urls: None,
+                fallback_strategy: Some("auto".to_string()),
+            }),
+        )
+        .await
+        .expect("https local gateway probe should fall back to the http candidate");
+
+        handle.abort();
+
+        assert_eq!(response.0["success"], json!(true));
+        assert_eq!(
+            response.0["response_preview"],
+            json!("TEST_OK from http local gateway candidate")
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["effective_base_url"],
+            json!(http_base_url)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["total_attempts"],
+            json!(2)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][0]["result"],
+            json!("network_error")
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][1]["result"],
+            json!("success")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_api_connection_auto_fallback_uses_backup_endpoint() {
+        let db = setup_settings_db().await;
+
+        let primary_app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "primary failed"})),
+                )
+            }),
+        );
+        let backup_app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                Json(json!({
+                    "choices": [{
+                        "message": {
+                            "content": "TEST_OK from backup"
+                        },
+                        "finish_reason": "stop"
+                    }]
+                }))
+            }),
+        );
+
+        let (primary_base_url, primary_handle) = spawn_chat_completion_server(primary_app).await;
+        let (backup_base_url, backup_handle) = spawn_chat_completion_server(backup_app).await;
+
+        let response = test_api_connection(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(primary_base_url),
+                provider: Some("openai".to_string()),
+                llm_model: Some("gpt-4.1-mini".to_string()),
+                temperature: Some(0.4),
+                max_tokens: Some(128),
+                api_backup_urls: Some(vec![backup_base_url.clone()]),
+                fallback_strategy: Some("auto".to_string()),
+            }),
+        )
+        .await
+        .expect("api test should succeed via backup endpoint");
+
+        primary_handle.abort();
+        backup_handle.abort();
+
+        assert_eq!(response.0["success"], json!(true));
+        assert_eq!(response.0["response_preview"], json!("TEST_OK from backup"));
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["effective_base_url"],
+            json!(backup_base_url)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["backup_endpoint_used"],
+            json!(true)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["failover_count"],
+            json!(1)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][0]["will_failover"],
+            json!(true)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][1]["endpoint_role"],
+            json!("backup")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_api_connection_v1_404_does_not_fallback_to_root_or_backup() {
+        let db = setup_settings_db().await;
+
+        let primary_app = Router::new()
+            .route(
+                "/v1/chat/completions",
+                post(|| async {
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"error": "normalized endpoint not found"})),
+                    )
+                }),
+            )
+            .route(
+                "/chat/completions",
+                post(|| async {
+                    Json(json!({
+                        "choices": [{
+                            "message": {
+                                "content": "TEST_OK from root candidate"
+                            },
+                            "finish_reason": "stop"
+                        }]
+                    }))
+                }),
+            );
+        let backup_app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                Json(json!({
+                    "choices": [{
+                        "message": {
+                            "content": "TEST_OK from backup"
+                        },
+                        "finish_reason": "stop"
+                    }]
+                }))
+            }),
+        );
+
+        let (primary_base_url, primary_handle) = spawn_chat_completion_server(primary_app).await;
+        let (backup_base_url, backup_handle) = spawn_chat_completion_server(backup_app).await;
+
+        let response = test_api_connection(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(primary_base_url.clone()),
+                provider: Some("custom".to_string()),
+                llm_model: Some("gpt-4.1-mini".to_string()),
+                temperature: Some(0.4),
+                max_tokens: Some(128),
+                api_backup_urls: Some(vec![backup_base_url.clone()]),
+                fallback_strategy: Some("auto".to_string()),
+            }),
+        )
+        .await
+        .expect("v1 404 should still return a failure shell");
+
+        primary_handle.abort();
+        backup_handle.abort();
+
+        assert_eq!(response.0["success"], json!(false));
+        assert_eq!(response.0["error_type"], json!("EndpointNotFound"));
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["effective_base_url"],
+            json!(primary_base_url)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["backup_endpoint_used"],
+            json!(false)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["failover_count"],
+            json!(0)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][0]["status_code"],
+            json!(404)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][0]["will_failover"],
+            json!(false)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["total_attempts"],
+            json!(1)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][0]["endpoint_role"],
+            json!("primary")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_api_connection_manual_fallback_does_not_use_backup_endpoint() {
+        let db = setup_settings_db().await;
+
+        let primary_app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "primary failed"})),
+                )
+            }),
+        );
+        let backup_app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                Json(json!({
+                    "choices": [{
+                        "message": {
+                            "content": "TEST_OK from backup"
+                        },
+                        "finish_reason": "stop"
+                    }]
+                }))
+            }),
+        );
+
+        let (primary_base_url, primary_handle) = spawn_chat_completion_server(primary_app).await;
+        let (backup_base_url, backup_handle) = spawn_chat_completion_server(backup_app).await;
+
+        let response = test_api_connection(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(primary_base_url),
+                provider: Some("openai".to_string()),
+                llm_model: Some("gpt-4.1-mini".to_string()),
+                temperature: Some(0.4),
+                max_tokens: Some(128),
+                api_backup_urls: Some(vec![backup_base_url]),
+                fallback_strategy: Some("manual".to_string()),
+            }),
+        )
+        .await
+        .expect("manual fallback should still return failure shell");
+
+        primary_handle.abort();
+        backup_handle.abort();
+
+        assert_eq!(response.0["success"], json!(false));
+        assert_eq!(
+            response.0["details"]["endpoint_diagnostics"]["fallback_strategy"],
+            json!("manual")
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["total_attempts"],
+            json!(1)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["backup_endpoint_used"],
+            json!(false)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][0]["endpoint_role"],
+            json!("primary")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_api_connection_auto_fallback_failure_keeps_transport_diagnostics() {
+        let db = setup_settings_db().await;
+
+        let primary_app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "primary failed"})),
+                )
+            }),
+        );
+        let backup_app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "backup failed"})),
+                )
+            }),
+        );
+
+        let (primary_base_url, primary_handle) = spawn_chat_completion_server(primary_app).await;
+        let (backup_base_url, backup_handle) = spawn_chat_completion_server(backup_app).await;
+
+        let response = test_api_connection(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(primary_base_url),
+                provider: Some("openai".to_string()),
+                llm_model: Some("gpt-4.1-mini".to_string()),
+                temperature: Some(0.4),
+                max_tokens: Some(128),
+                api_backup_urls: Some(vec![backup_base_url]),
+                fallback_strategy: Some("auto".to_string()),
+            }),
+        )
+        .await
+        .expect("auto fallback failure should still return failure shell");
+
+        primary_handle.abort();
+        backup_handle.abort();
+
+        assert_eq!(response.0["success"], json!(false));
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["total_attempts"],
+            json!(2)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["backup_endpoint_used"],
+            json!(true)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["summary"]["failover_count"],
+            json!(1)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][0]["status_code"],
+            json!(500)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][0]["will_failover"],
+            json!(true)
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][1]["endpoint_role"],
+            json!("backup")
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][1]["status_code"],
+            json!(500)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_api_connection_gateway_failure_returns_python_aligned_guidance() {
+        let db = setup_settings_db().await;
+
+        let gateway_app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({"error": "bad gateway"})),
+                )
+            }),
+        );
+
+        let (gateway_base_url, gateway_handle) = spawn_chat_completion_server(gateway_app).await;
+
+        let response = test_api_connection(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("sk-test".to_string()),
+                api_base_url: Some(gateway_base_url.clone()),
+                provider: Some("openai_responses".to_string()),
+                llm_model: Some("gpt-4.1-mini".to_string()),
+                temperature: Some(0.4),
+                max_tokens: Some(128),
+                api_backup_urls: None,
+                fallback_strategy: Some("auto".to_string()),
+            }),
+        )
+        .await
+        .expect("gateway error should still return failure shell");
+
+        gateway_handle.abort();
+
+        assert_eq!(response.0["success"], json!(false));
+        assert_eq!(response.0["error_type"], json!("HTTPStatusError"));
+        assert_eq!(response.0["details"]["http_status_code"], json!(502));
+        assert_eq!(
+            response.0["details"]["endpoint_diagnostics"]["primary_endpoint"],
+            json!(gateway_base_url)
+        );
+        assert_eq!(
+            response.0["details"]["endpoint_diagnostics"]["auto_failover_enabled"],
+            json!(false)
+        );
+        let suggestions = response.0["suggestions"]
+            .as_array()
+            .expect("suggestions should be an array");
+        assert!(suggestions.iter().any(|item| {
+            item.as_str()
+                .map(|value| {
+                    value
+                        .to_ascii_lowercase()
+                        .contains("local gateway or proxy")
+                })
+                .unwrap_or(false)
+        }));
+        assert!(suggestions.iter().any(|item| {
+            item.as_str()
+                .map(|value| value.to_ascii_lowercase().contains("backup endpoint"))
+                .unwrap_or(false)
+        }));
+    }
+
+    #[tokio::test]
+    async fn test_api_connection_anthropic_gateway_failure_keeps_structured_status_code() {
+        let db = setup_settings_db().await;
+
+        let gateway_app = Router::new().route(
+            "/v1/messages",
+            post(|| async {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({"error": {"message": "bad gateway"}})),
+                )
+            }),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let address = listener.local_addr().expect("listener address");
+        let gateway_handle = tokio::spawn(async move {
+            axum::serve(listener, gateway_app)
+                .await
+                .expect("serve test app");
+        });
+        let gateway_base_url = format!("http://{address}/v1");
+
+        let response = test_api_connection(
+            Extension(test_claims()),
+            Extension(db),
+            Json(TestConnectionRequest {
+                api_key: Some("ak-test".to_string()),
+                api_base_url: Some(gateway_base_url.clone()),
+                provider: Some("anthropic".to_string()),
+                llm_model: Some("claude-3-5-sonnet-latest".to_string()),
+                temperature: Some(0.4),
+                max_tokens: Some(128),
+                api_backup_urls: None,
+                fallback_strategy: Some("auto".to_string()),
+            }),
+        )
+        .await
+        .expect("gateway error should still return failure shell");
+
+        gateway_handle.abort();
+
+        assert_eq!(response.0["success"], json!(false));
+        assert_eq!(response.0["error_type"], json!("HTTPStatusError"));
+        assert_eq!(response.0["details"]["http_status_code"], json!(502));
+        assert_eq!(
+            response.0["details"]["endpoint_diagnostics"]["primary_endpoint"],
+            json!(gateway_base_url)
+        );
+        assert!(response.0["error"]
+            .as_str()
+            .map(|value| value.contains("Anthropic HTTP 502"))
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn build_api_probe_failure_suggestions_prefers_structured_status_code_over_message_parsing() {
+        let suggestions = build_api_probe_failure_suggestions(
+            "gateway failed without numeric status in message",
+            "http://127.0.0.1:8317/v1",
+            None,
+            Some("auto"),
+            Some(502),
+        );
+
+        assert!(suggestions
+            .iter()
+            .any(|item| { item.contains("local gateway or proxy") }));
+        assert!(suggestions
+            .iter()
+            .any(|item| { item.to_ascii_lowercase().contains("backup endpoint") }));
+    }
+
+    #[test]
+    fn host_docker_timeout_guidance_matches_python_contract() {
+        let suggestions = build_api_probe_failure_suggestions(
+            "ReadTimeout upstream timeout for http://host.docker.internal:8317/v1/chat/completions",
+            "http://host.docker.internal:8317/v1",
+            None,
+            Some("auto"),
+            None,
+        );
+
+        assert!(suggestions
+            .iter()
+            .any(|item: &String| item.contains("host.docker.internal")));
+        assert!(suggestions
+            .iter()
+            .any(|item: &String| item.contains("127.0.0.1")));
+        assert!(suggestions
+            .iter()
+            .any(|item: &String| { item.to_ascii_lowercase().contains("backup endpoint") }));
+    }
 }

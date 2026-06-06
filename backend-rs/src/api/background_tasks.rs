@@ -18,7 +18,9 @@ use crate::services::background_task_payload_adapter_service::{
     build_connected_task_event, build_missing_task_payload, build_task_list_response,
     compatible_task_payload, enrich_task_payload,
 };
-use crate::services::background_task_request_service::normalize_task_statuses_query;
+use crate::services::background_task_request_service::{
+    TaskListQueryRequestError, TaskListRequest,
+};
 use crate::services::generation_task_request_adapter_service::{
     adapt_character_generation_task_request, adapt_organization_generation_task_request,
 };
@@ -616,19 +618,77 @@ pub async fn list_tasks(
     Extension(registry): Extension<TaskRegistry>,
     Query(query): Query<TaskListQuery>,
 ) -> impl IntoResponse {
-    let statuses = normalize_task_statuses_query(&query);
+    let request = match TaskListRequest::from_route_query(query) {
+        Ok(request) => request,
+        Err(error) => return map_task_list_query_request_error(error).into_response(),
+    };
 
     let tasks = registry
         .list_for_user(
             &claims.sub,
-            query.project_id.as_deref(),
-            statuses.as_deref(),
-            query.active_only.unwrap_or(false),
-            query.limit,
+            request.project_id(),
+            request.statuses(),
+            request.active_only(),
+            Some(request.limit()),
         )
         .await;
 
     (StatusCode::OK, Json(build_task_list_response(tasks))).into_response()
+}
+
+fn map_task_list_query_request_error(
+    error: TaskListQueryRequestError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let detail = match error {
+        TaskListQueryRequestError::InvalidStatuses(invalid) => {
+            format!("Invalid task statuses: {}", invalid.join(", "))
+        }
+        TaskListQueryRequestError::LimitTooSmall => {
+            "limit must be greater than or equal to 1".to_string()
+        }
+        TaskListQueryRequestError::LimitTooLarge => {
+            "limit must be less than or equal to 100".to_string()
+        }
+    };
+
+    (StatusCode::BAD_REQUEST, Json(json!({ "detail": detail })))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+
+    use crate::services::background_task_request_service::TaskListQueryRequestError;
+
+    use super::map_task_list_query_request_error;
+
+    #[test]
+    fn task_list_query_errors_match_python_route_boundary() {
+        let cases = [
+            (
+                TaskListQueryRequestError::InvalidStatuses(vec![
+                    "archived".to_string(),
+                    "unknown".to_string(),
+                ]),
+                "Invalid task statuses: archived, unknown",
+            ),
+            (
+                TaskListQueryRequestError::LimitTooSmall,
+                "limit must be greater than or equal to 1",
+            ),
+            (
+                TaskListQueryRequestError::LimitTooLarge,
+                "limit must be less than or equal to 100",
+            ),
+        ];
+
+        for (error, expected_detail) in cases {
+            let (status, body) = map_task_list_query_request_error(error);
+
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(body.0["detail"], expected_detail);
+        }
+    }
 }
 
 /// GET /api/background-tasks/:task_id

@@ -8,6 +8,8 @@ pub struct TestPresetConnectionRequest {
     pub llm_model: Option<String>,
     pub temperature: Option<f64>,
     pub max_tokens: Option<u32>,
+    pub api_backup_urls: Option<Vec<String>>,
+    pub fallback_strategy: Option<String>,
 }
 
 pub fn build_test_preset_connection_request(config: &Value) -> TestPresetConnectionRequest {
@@ -35,6 +37,18 @@ pub fn build_test_preset_connection_request(config: &Value) -> TestPresetConnect
             .get("max_tokens")
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok()),
+        api_backup_urls: config.get("api_backup_urls").and_then(|value| {
+            value.as_array().map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(ToString::to_string))
+                    .collect()
+            })
+        }),
+        fallback_strategy: config
+            .get("fallback_strategy")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
     }
 }
 
@@ -54,7 +68,9 @@ mod tests {
             "llm_model": "gpt-4o",
             "model": "gemini-2.5-pro",
             "temperature": 0.7,
-            "max_tokens": 1024
+            "max_tokens": 1024,
+            "api_backup_urls": ["https://backup-1.example.com/v1", 1, "https://backup-2.example.com/v1"],
+            "fallback_strategy": "manual"
         }));
 
         assert_eq!(request.api_key.as_deref(), Some("sk-test"));
@@ -66,6 +82,14 @@ mod tests {
         assert_eq!(request.llm_model.as_deref(), Some("gpt-4o"));
         assert_eq!(request.temperature, Some(0.7));
         assert_eq!(request.max_tokens, Some(1024));
+        assert_eq!(
+            request.api_backup_urls,
+            Some(vec![
+                "https://backup-1.example.com/v1".to_string(),
+                "https://backup-2.example.com/v1".to_string()
+            ])
+        );
+        assert_eq!(request.fallback_strategy.as_deref(), Some("manual"));
     }
 
     #[test]
@@ -83,6 +107,8 @@ mod tests {
         );
         assert_eq!(request.temperature, Some(0.125));
         assert_eq!(request.max_tokens, None);
+        assert_eq!(request.api_backup_urls, None);
+        assert_eq!(request.fallback_strategy, None);
     }
 
     #[test]

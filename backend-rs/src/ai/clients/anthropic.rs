@@ -5,7 +5,8 @@ use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::ai::types::{
-    AIResponse, AIStreamChunk, ChatMessage, ToolCall, ToolCallFunction, ToolDef,
+    AIRequestError, AIResponse, AIStreamChunk, ChatMessage, ToolCall, ToolCallFunction, ToolChoice,
+    ToolDef,
 };
 
 pub struct AnthropicClient {
@@ -14,7 +15,92 @@ pub struct AnthropicClient {
     base_url: String,
 }
 
+#[cfg(test)]
+mod tests {
+    use axum::{http::StatusCode, routing::post, Json, Router};
+    use serde_json::json;
+    use tokio::net::TcpListener;
+
+    use super::AnthropicClient;
+    use crate::ai::types::{ChatMessage, ToolChoice, ToolChoiceFunction};
+
+    #[test]
+    fn serializes_required_and_named_tool_choice() {
+        assert_eq!(
+            AnthropicClient::serialize_tool_choice(Some(&ToolChoice::Required)),
+            Some(json!({ "type": "any" }))
+        );
+        assert_eq!(
+            AnthropicClient::serialize_tool_choice(Some(&ToolChoice::Function(
+                ToolChoiceFunction {
+                    name: "get_weather".to_string(),
+                }
+            ))),
+            Some(json!({
+                "type": "tool",
+                "name": "get_weather"
+            }))
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_completion_detailed_keeps_http_status_code() {
+        let app = Router::new().route(
+            "/v1/messages",
+            post(|| async {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({"error": {"message": "bad gateway"}})),
+                )
+            }),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let address = listener.local_addr().expect("listener address");
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test app");
+        });
+
+        let client = AnthropicClient::new("ak-test", &format!("http://{address}/v1"));
+        let error = client
+            .chat_completion_detailed(
+                &[ChatMessage {
+                    role: "user".to_string(),
+                    content: "hello".to_string(),
+                }],
+                "claude-3-5-sonnet-latest",
+                0.1,
+                64,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect_err("gateway error should return structured failure");
+
+        handle.abort();
+
+        assert_eq!(error.status_code, Some(502));
+        assert_eq!(error.transport_diagnostics, None);
+        assert!(error.message.contains("Anthropic HTTP 502"));
+    }
+}
+
 impl AnthropicClient {
+    fn serialize_tool_choice(tool_choice: Option<&ToolChoice>) -> Option<Value> {
+        match tool_choice {
+            Some(ToolChoice::Auto) => Some(serde_json::json!({ "type": "auto" })),
+            Some(ToolChoice::Required) => Some(serde_json::json!({ "type": "any" })),
+            Some(ToolChoice::Function(function)) => Some(serde_json::json!({
+                "type": "tool",
+                "name": function.name.clone(),
+            })),
+            Some(ToolChoice::None) | None => None,
+        }
+    }
+
     pub fn new(api_key: &str, base_url: &str) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
@@ -27,6 +113,47 @@ impl AnthropicClient {
         }
     }
 
+    fn build_request_body(
+        messages: &[ChatMessage],
+        model: &str,
+        temperature: f64,
+        max_tokens: u32,
+        system_prompt: Option<&str>,
+        tools: Option<&[ToolDef]>,
+        tool_choice: Option<&ToolChoice>,
+        stream: bool,
+    ) -> Result<Value, String> {
+        let mut body = serde_json::json!({
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": messages,
+        });
+
+        if stream {
+            body["stream"] = serde_json::json!(true);
+        }
+
+        if let Some(sp) = system_prompt {
+            body["system"] = serde_json::json!(sp);
+        }
+        if let Some(t) = tools {
+            body["tools"] = serde_json::to_value(t).map_err(|e| format!("{e}"))?;
+            match tool_choice {
+                Some(tool_choice) => {
+                    if let Some(tool_choice) = Self::serialize_tool_choice(Some(tool_choice)) {
+                        body["tool_choice"] = tool_choice;
+                    }
+                }
+                None => {
+                    body["tool_choice"] = serde_json::json!({ "type": "auto" });
+                }
+            }
+        }
+
+        Ok(body)
+    }
+
     pub async fn chat_completion(
         &self,
         messages: &[ChatMessage],
@@ -35,22 +162,43 @@ impl AnthropicClient {
         max_tokens: u32,
         system_prompt: Option<&str>,
         tools: Option<&[ToolDef]>,
+        tool_choice: Option<&ToolChoice>,
     ) -> Result<AIResponse, String> {
+        self.chat_completion_detailed(
+            messages,
+            model,
+            temperature,
+            max_tokens,
+            system_prompt,
+            tools,
+            tool_choice,
+        )
+        .await
+        .map_err(|error| error.message)
+    }
+
+    pub async fn chat_completion_detailed(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        temperature: f64,
+        max_tokens: u32,
+        system_prompt: Option<&str>,
+        tools: Option<&[ToolDef]>,
+        tool_choice: Option<&ToolChoice>,
+    ) -> Result<AIResponse, AIRequestError> {
         let url = format!("{}/messages", self.base_url);
-
-        let mut body = serde_json::json!({
-            "model": model,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "messages": messages,
-        });
-
-        if let Some(sp) = system_prompt {
-            body["system"] = serde_json::json!(sp);
-        }
-        if let Some(t) = tools {
-            body["tools"] = serde_json::to_value(t).map_err(|e| format!("{}", e))?;
-        }
+        let body = Self::build_request_body(
+            messages,
+            model,
+            temperature,
+            max_tokens,
+            system_prompt,
+            tools,
+            tool_choice,
+            false,
+        )
+        .map_err(AIRequestError::new)?;
 
         let resp = self
             .client
@@ -60,16 +208,23 @@ impl AnthropicClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("Anthropic request failed: {}", e))?;
+            .map_err(|e| AIRequestError::new(format!("Anthropic request failed: {e}")))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(format!("Anthropic HTTP {}: {}", status, text));
+            return Err(AIRequestError {
+                message: format!("Anthropic HTTP {status}: {text}"),
+                transport_diagnostics: None,
+                status_code: Some(status.as_u16()),
+            });
         }
 
-        let json: Value = resp.json().await.map_err(|e| format!("{}", e))?;
-        Self::parse_response(&json)
+        let json: Value = resp
+            .json()
+            .await
+            .map_err(|e| AIRequestError::new(format!("{e}")))?;
+        Self::parse_response(&json).map_err(AIRequestError::new)
     }
 
     pub fn chat_completion_stream(
@@ -80,6 +235,7 @@ impl AnthropicClient {
         max_tokens: u32,
         system_prompt: Option<String>,
         tools: Option<Vec<ToolDef>>,
+        tool_choice: Option<ToolChoice>,
     ) -> ReceiverStream<Result<AIStreamChunk, String>> {
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<AIStreamChunk, String>>(32);
         let client = self.client.clone();
@@ -97,6 +253,7 @@ impl AnthropicClient {
                 max_tokens,
                 system_prompt,
                 tools,
+                tool_choice,
                 tx.clone(),
             )
             .await;
@@ -118,24 +275,20 @@ impl AnthropicClient {
         max_tokens: u32,
         system_prompt: Option<String>,
         tools: Option<Vec<ToolDef>>,
+        tool_choice: Option<ToolChoice>,
         tx: tokio::sync::mpsc::Sender<Result<AIStreamChunk, String>>,
     ) -> Result<(), String> {
         let url = format!("{}/messages", base_url);
-
-        let mut body = serde_json::json!({
-            "model": model,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "messages": messages,
-            "stream": true,
-        });
-
-        if let Some(ref sp) = system_prompt {
-            body["system"] = serde_json::json!(sp);
-        }
-        if let Some(ref t) = tools {
-            body["tools"] = serde_json::to_value(t).map_err(|e| format!("{}", e))?;
-        }
+        let body = Self::build_request_body(
+            &messages,
+            &model,
+            temperature,
+            max_tokens,
+            system_prompt.as_deref(),
+            tools.as_deref(),
+            tool_choice.as_ref(),
+            true,
+        )?;
 
         let resp = client
             .post(&url)
@@ -336,6 +489,7 @@ impl AnthropicClient {
                 Some(tool_calls)
             },
             finish_reason,
+            transport_diagnostics: None,
         })
     }
 }

@@ -49,10 +49,6 @@ pub(crate) fn batch_generation_stage_code(status: &str) -> &'static str {
     }
 }
 
-pub(crate) fn task_stage_code(task: &batch_generation_task::Model) -> &'static str {
-    batch_generation_stage_code(&task.status)
-}
-
 pub(crate) fn task_execution_mode() -> &'static str {
     "interactive"
 }
@@ -65,7 +61,7 @@ mod tests {
 
     use super::{
         active_batch_generation_statuses, batch_generation_stage_code, batch_generation_task_kind,
-        batch_generation_task_type, task_execution_mode, task_kind, task_stage_code, task_type,
+        batch_generation_task_type, task_execution_mode, task_kind, task_type,
         BatchGenerationTaskKind,
     };
 
@@ -142,10 +138,6 @@ mod tests {
 
         for (status, expected) in cases {
             assert_eq!(batch_generation_stage_code(status), expected);
-            assert_eq!(
-                task_stage_code(&task(status, 1, json!(["chapter-1"]))),
-                expected
-            );
         }
     }
 

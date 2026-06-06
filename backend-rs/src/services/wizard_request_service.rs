@@ -113,6 +113,8 @@ pub struct OutlineRequest {
     pub quality_preset: Option<String>,
     #[serde(alias = "qualityNotes")]
     pub quality_notes: Option<String>,
+    #[serde(alias = "compactMode")]
+    pub compact_mode: Option<bool>,
     pub provider: Option<String>,
     pub model: Option<String>,
     #[serde(alias = "userId")]
@@ -292,6 +294,7 @@ pub async fn execute_outline_request(
         body.story_creation_brief.as_deref(),
         body.quality_preset.as_deref(),
         body.quality_notes.as_deref(),
+        body.compact_mode.unwrap_or(true),
         body.provider.as_deref(),
         body.model.as_deref(),
     )
@@ -330,6 +333,7 @@ pub fn outline_generate_request_to_wizard_request(
     story_creation_brief: Option<String>,
     quality_preset: Option<String>,
     quality_notes: Option<String>,
+    compact_mode: Option<bool>,
     provider: Option<String>,
     model: Option<String>,
 ) -> OutlineRequest {
@@ -345,6 +349,7 @@ pub fn outline_generate_request_to_wizard_request(
         story_creation_brief,
         quality_preset,
         quality_notes,
+        compact_mode,
         provider,
         model,
         user_id: None,
@@ -450,6 +455,7 @@ mod tests {
             Some("brief".to_string()),
             Some("high".to_string()),
             Some("notes".to_string()),
+            Some(false),
             Some("openai".to_string()),
             Some("gpt-4.1".to_string()),
         );
@@ -459,6 +465,7 @@ mod tests {
         assert_eq!(request.target_words, 120_000);
         assert_eq!(request.provider.as_deref(), Some("openai"));
         assert_eq!(request.model.as_deref(), Some("gpt-4.1"));
+        assert_eq!(request.compact_mode, Some(false));
         assert!(request.user_id.is_none());
     }
 

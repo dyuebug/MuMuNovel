@@ -1,4 +1,5 @@
 use sea_orm::DatabaseConnection;
+use serde::Deserialize;
 
 use crate::models::chapter;
 use crate::services::chapter_access_service::{
@@ -15,6 +16,30 @@ use crate::services::chapter_draft_view_payload_service::{
     build_auto_revision_draft_payload, build_candidate_draft_payload,
 };
 use serde_json::Value;
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub(crate) struct AutoRevisionDraftLookupRouteQuery {
+    pub(crate) history_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub(crate) struct CandidateDraftLookupRouteQuery {
+    pub(crate) attempt_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub(crate) struct AutoRevisionDraftApplyRouteRequest {
+    pub(crate) history_id: Option<String>,
+    #[serde(default)]
+    pub(crate) allow_stale: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub(crate) struct CandidateDraftApplyRouteRequest {
+    pub(crate) attempt_id: Option<String>,
+    #[serde(default)]
+    pub(crate) allow_stale: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OwnedDraftSelectionMode {
@@ -42,13 +67,43 @@ impl OwnedDraftPayloadRequest {
         }
     }
 
-    pub(crate) fn from_route_selector(selector: Option<String>, allow_stale: bool) -> Self {
+    fn from_route_selector(selector: Option<String>, allow_stale: bool) -> Self {
         let selector = selector
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
 
         Self::new(selector.as_deref(), allow_stale)
     }
+}
+
+pub(crate) fn build_auto_revision_draft_payload_request_from_route_query(
+    route_query: AutoRevisionDraftLookupRouteQuery,
+) -> OwnedDraftPayloadRequest {
+    OwnedDraftPayloadRequest::from_route_selector(route_query.history_id, false)
+}
+
+pub(crate) fn build_auto_revision_draft_payload_request_from_route_payload(
+    route_request: AutoRevisionDraftApplyRouteRequest,
+) -> OwnedDraftPayloadRequest {
+    OwnedDraftPayloadRequest::from_route_selector(
+        route_request.history_id,
+        route_request.allow_stale,
+    )
+}
+
+pub(crate) fn build_candidate_draft_payload_request_from_route_query(
+    route_query: CandidateDraftLookupRouteQuery,
+) -> OwnedDraftPayloadRequest {
+    OwnedDraftPayloadRequest::from_route_selector(route_query.attempt_id, false)
+}
+
+pub(crate) fn build_candidate_draft_payload_request_from_route_payload(
+    route_request: CandidateDraftApplyRouteRequest,
+) -> OwnedDraftPayloadRequest {
+    OwnedDraftPayloadRequest::from_route_selector(
+        route_request.attempt_id,
+        route_request.allow_stale,
+    )
 }
 
 struct OwnedDraftPayloadContext {
@@ -231,8 +286,14 @@ mod tests {
     use crate::services::chapter_analysis_service::{AutoRevisionDraftError, CandidateDraftError};
 
     use super::{
+        build_auto_revision_draft_payload_request_from_route_payload,
+        build_auto_revision_draft_payload_request_from_route_query,
+        build_candidate_draft_payload_request_from_route_payload,
+        build_candidate_draft_payload_request_from_route_query,
         map_auto_revision_chapter_access_error, map_candidate_chapter_access_error,
         ApplyOwnedAutoRevisionDraftPayloadError, ApplyOwnedCandidateDraftPayloadError,
+        AutoRevisionDraftApplyRouteRequest, AutoRevisionDraftLookupRouteQuery,
+        CandidateDraftApplyRouteRequest, CandidateDraftLookupRouteQuery,
         LoadOwnedAutoRevisionDraftPayloadError, LoadOwnedCandidateDraftPayloadError,
         OwnedAutoRevisionDraftPayloadError, OwnedCandidateDraftPayloadError,
         OwnedDraftPayloadRequest, OwnedDraftSelectionMode,
@@ -252,18 +313,65 @@ mod tests {
     }
 
     #[test]
-    fn owned_draft_payload_request_normalizes_route_selector() {
-        let explicit =
-            OwnedDraftPayloadRequest::from_route_selector(Some(" history-1 ".to_string()), true);
+    fn should_build_auto_revision_draft_payload_request_from_route_query() {
+        let explicit = build_auto_revision_draft_payload_request_from_route_query(
+            AutoRevisionDraftLookupRouteQuery {
+                history_id: Some(" history-1 ".to_string()),
+            },
+        );
         assert_eq!(explicit.selector.as_deref(), Some("history-1"));
         assert_eq!(explicit.selection_mode, OwnedDraftSelectionMode::Explicit);
-        assert!(explicit.allow_stale);
+        assert!(!explicit.allow_stale);
 
-        let latest =
-            OwnedDraftPayloadRequest::from_route_selector(Some("   ".to_string()), false);
+        let latest = build_auto_revision_draft_payload_request_from_route_query(
+            AutoRevisionDraftLookupRouteQuery {
+                history_id: Some("   ".to_string()),
+            },
+        );
         assert_eq!(latest.selector, None);
         assert_eq!(latest.selection_mode, OwnedDraftSelectionMode::Latest);
         assert!(!latest.allow_stale);
+    }
+
+    #[test]
+    fn should_build_auto_revision_draft_payload_request_from_route_payload() {
+        let request = build_auto_revision_draft_payload_request_from_route_payload(
+            AutoRevisionDraftApplyRouteRequest {
+                history_id: Some(" history-1 ".to_string()),
+                allow_stale: true,
+            },
+        );
+
+        assert_eq!(request.selector.as_deref(), Some("history-1"));
+        assert_eq!(request.selection_mode, OwnedDraftSelectionMode::Explicit);
+        assert!(request.allow_stale);
+    }
+
+    #[test]
+    fn should_build_candidate_draft_payload_request_from_route_query() {
+        let request = build_candidate_draft_payload_request_from_route_query(
+            CandidateDraftLookupRouteQuery {
+                attempt_id: Some(" attempt-1 ".to_string()),
+            },
+        );
+
+        assert_eq!(request.selector.as_deref(), Some("attempt-1"));
+        assert_eq!(request.selection_mode, OwnedDraftSelectionMode::Explicit);
+        assert!(!request.allow_stale);
+    }
+
+    #[test]
+    fn should_build_candidate_draft_payload_request_from_route_payload() {
+        let request = build_candidate_draft_payload_request_from_route_payload(
+            CandidateDraftApplyRouteRequest {
+                attempt_id: Some("   ".to_string()),
+                allow_stale: false,
+            },
+        );
+
+        assert_eq!(request.selector, None);
+        assert_eq!(request.selection_mode, OwnedDraftSelectionMode::Latest);
+        assert!(!request.allow_stale);
     }
 
     #[test]

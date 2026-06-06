@@ -6,13 +6,15 @@ use crate::services::chapter_analysis_runtime_service::PrepareChapterAnalysisTri
 use crate::services::chapter_analysis_service::CreateChapterAnalysisTaskError;
 use crate::services::chapter_query_service::{
     ChapterQueryPayloadError, LoadAnnotationsPayloadError, LoadCanGeneratePayloadError,
-    LoadNavigationPayloadError, LoadQualityTrendPayloadError, ReadQueryPayloadError,
+    LoadNavigationPayloadError, LoadQualityTrendPayloadError, QualityTrendQueryRequestError,
+    ReadQueryPayloadError,
 };
 use crate::services::chapter_regeneration_apply_service::ApplyPartialRegenerateError;
 use crate::services::chapter_regeneration_prepare_service::{
     BuildRegenerationAiServiceError, PreparePartialRegenerationError,
     PreparePartialRegenerationStreamError,
 };
+use crate::services::chapter_regeneration_query_service::RegenerationTasksQueryRequestError;
 use crate::services::chapter_regeneration_stream_workflow_service::{
     CreateChapterRegenerationStreamWorkflowError, CreatePartialRegenerationStreamWorkflowError,
     CreateRegenerationStreamWorkflowError,
@@ -42,6 +44,36 @@ pub fn map_load_accessible_chapter_error(error: LoadAccessibleChapterError) -> C
             chapter_not_found_or_access_denied_error()
         }
         LoadAccessibleChapterError::Internal(error) => internal_detail_error(error),
+    }
+}
+
+pub fn map_regeneration_tasks_query_request_error(
+    error: RegenerationTasksQueryRequestError,
+) -> ChapterRouteError {
+    match error {
+        RegenerationTasksQueryRequestError::LimitTooSmall => detail_error(
+            StatusCode::BAD_REQUEST,
+            "limit must be greater than or equal to 1",
+        ),
+        RegenerationTasksQueryRequestError::LimitTooLarge => detail_error(
+            StatusCode::BAD_REQUEST,
+            "limit must be less than or equal to 50",
+        ),
+    }
+}
+
+pub fn map_quality_trend_query_request_error(
+    error: QualityTrendQueryRequestError,
+) -> ChapterRouteError {
+    match error {
+        QualityTrendQueryRequestError::LimitTooSmall => detail_error(
+            StatusCode::BAD_REQUEST,
+            "limit must be greater than or equal to 1",
+        ),
+        QualityTrendQueryRequestError::LimitTooLarge => detail_error(
+            StatusCode::BAD_REQUEST,
+            "limit must be less than or equal to 50",
+        ),
     }
 }
 
@@ -129,6 +161,38 @@ fn map_build_regeneration_ai_service_error(
         BuildRegenerationAiServiceError::InvalidConfig(detail) => {
             detail_error(StatusCode::BAD_REQUEST, detail)
         }
+        BuildRegenerationAiServiceError::InvalidTargetWordCountTooSmall => detail_error(
+            StatusCode::BAD_REQUEST,
+            "target_word_count must be greater than or equal to 500",
+        ),
+        BuildRegenerationAiServiceError::InvalidTargetWordCountTooLarge => detail_error(
+            StatusCode::BAD_REQUEST,
+            "target_word_count must be less than or equal to 10000",
+        ),
+        BuildRegenerationAiServiceError::InvalidCreativeMode => {
+            detail_error(StatusCode::BAD_REQUEST, "creative_mode is invalid")
+        }
+        BuildRegenerationAiServiceError::InvalidStoryFocus => {
+            detail_error(StatusCode::BAD_REQUEST, "story_focus is invalid")
+        }
+        BuildRegenerationAiServiceError::InvalidPlotStage => {
+            detail_error(StatusCode::BAD_REQUEST, "plot_stage is invalid")
+        }
+        BuildRegenerationAiServiceError::InvalidQualityPreset => {
+            detail_error(StatusCode::BAD_REQUEST, "quality_preset is invalid")
+        }
+        BuildRegenerationAiServiceError::StoryCreationBriefTooLong => detail_error(
+            StatusCode::BAD_REQUEST,
+            "story_creation_brief must be at most 1200 characters",
+        ),
+        BuildRegenerationAiServiceError::QualityNotesTooLong => detail_error(
+            StatusCode::BAD_REQUEST,
+            "quality_notes must be at most 600 characters",
+        ),
+        BuildRegenerationAiServiceError::WebResearchQueryTooLong => detail_error(
+            StatusCode::BAD_REQUEST,
+            "web_research_query must be at most 500 characters",
+        ),
     }
 }
 
@@ -148,6 +212,48 @@ pub fn map_prepare_partial_regeneration_stream_error(
         PreparePartialRegenerationStreamError::Input(
             PreparePartialRegenerationError::EmptySelectedText,
         ) => detail_error(StatusCode::BAD_REQUEST, "选中内容为空"),
+        PreparePartialRegenerationStreamError::Input(
+            PreparePartialRegenerationError::EmptyUserInstructions,
+        ) => detail_error(
+            StatusCode::BAD_REQUEST,
+            "user_instructions must be at least 1 character",
+        ),
+        PreparePartialRegenerationStreamError::Input(
+            PreparePartialRegenerationError::UserInstructionsTooLong,
+        ) => detail_error(
+            StatusCode::BAD_REQUEST,
+            "user_instructions must be at most 1000 characters",
+        ),
+        PreparePartialRegenerationStreamError::Input(
+            PreparePartialRegenerationError::ContextCharsTooSmall,
+        ) => detail_error(
+            StatusCode::BAD_REQUEST,
+            "context_chars must be greater than or equal to 100",
+        ),
+        PreparePartialRegenerationStreamError::Input(
+            PreparePartialRegenerationError::ContextCharsTooLarge,
+        ) => detail_error(
+            StatusCode::BAD_REQUEST,
+            "context_chars must be less than or equal to 2000",
+        ),
+        PreparePartialRegenerationStreamError::Input(
+            PreparePartialRegenerationError::TargetWordCountTooSmall,
+        ) => detail_error(
+            StatusCode::BAD_REQUEST,
+            "target_word_count must be greater than or equal to 10",
+        ),
+        PreparePartialRegenerationStreamError::Input(
+            PreparePartialRegenerationError::TargetWordCountTooLarge,
+        ) => detail_error(
+            StatusCode::BAD_REQUEST,
+            "target_word_count must be less than or equal to 5000",
+        ),
+        PreparePartialRegenerationStreamError::Input(
+            PreparePartialRegenerationError::WebResearchQueryTooLong,
+        ) => detail_error(
+            StatusCode::BAD_REQUEST,
+            "web_research_query must be at most 500 characters",
+        ),
         PreparePartialRegenerationStreamError::Style(detail) => {
             detail_error(StatusCode::BAD_REQUEST, detail)
         }
@@ -194,18 +300,21 @@ mod tests {
         map_create_chapter_analysis_task_error, map_load_can_generate_payload_error,
         map_load_navigation_payload_error, map_prepare_chapter_analysis_trigger_error,
         map_prepare_chapter_regeneration_stream_error,
-        map_prepare_partial_regeneration_stream_error,
+        map_prepare_partial_regeneration_stream_error, map_quality_trend_query_request_error,
+        map_regeneration_tasks_query_request_error,
     };
     use crate::services::chapter_access_service::LoadAccessibleChapterError;
     use crate::services::chapter_analysis_runtime_service::PrepareChapterAnalysisTriggerError;
     use crate::services::chapter_analysis_service::CreateChapterAnalysisTaskError;
     use crate::services::chapter_query_service::{
-        ChapterQueryPayloadError, ChapterReadNotFound, ReadQueryPayloadError,
+        ChapterQueryPayloadError, ChapterReadNotFound, QualityTrendQueryRequestError,
+        ReadQueryPayloadError,
     };
     use crate::services::chapter_regeneration_prepare_service::{
         BuildRegenerationAiServiceError, PreparePartialRegenerationError,
         PreparePartialRegenerationStreamError,
     };
+    use crate::services::chapter_regeneration_query_service::RegenerationTasksQueryRequestError;
     use axum::http::StatusCode;
     use serde_json::json;
 
@@ -249,6 +358,123 @@ mod tests {
 
         assert_eq!(response.0, StatusCode::BAD_REQUEST);
         assert_eq!(response.1 .0, json!({ "detail": "missing provider" }));
+    }
+
+    #[test]
+    fn chapter_regeneration_target_word_count_bounds_match_python_contract() {
+        let lower_response = map_prepare_chapter_regeneration_stream_error(
+            BuildRegenerationAiServiceError::InvalidTargetWordCountTooSmall,
+        );
+        let upper_response = map_prepare_chapter_regeneration_stream_error(
+            BuildRegenerationAiServiceError::InvalidTargetWordCountTooLarge,
+        );
+
+        assert_eq!(lower_response.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            lower_response.1 .0,
+            json!({ "detail": "target_word_count must be greater than or equal to 500" })
+        );
+        assert_eq!(upper_response.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            upper_response.1 .0,
+            json!({ "detail": "target_word_count must be less than or equal to 10000" })
+        );
+    }
+
+    #[test]
+    fn chapter_regeneration_generation_choice_errors_remain_bad_request() {
+        let cases = [
+            (
+                BuildRegenerationAiServiceError::InvalidCreativeMode,
+                "creative_mode is invalid",
+            ),
+            (
+                BuildRegenerationAiServiceError::InvalidStoryFocus,
+                "story_focus is invalid",
+            ),
+            (
+                BuildRegenerationAiServiceError::InvalidPlotStage,
+                "plot_stage is invalid",
+            ),
+            (
+                BuildRegenerationAiServiceError::InvalidQualityPreset,
+                "quality_preset is invalid",
+            ),
+        ];
+
+        for (error, expected_detail) in cases {
+            let response = map_prepare_chapter_regeneration_stream_error(error);
+
+            assert_eq!(response.0, StatusCode::BAD_REQUEST);
+            assert_eq!(response.1 .0, json!({ "detail": expected_detail }));
+        }
+    }
+
+    #[test]
+    fn chapter_regeneration_generation_text_length_errors_remain_bad_request() {
+        let cases = [
+            (
+                BuildRegenerationAiServiceError::StoryCreationBriefTooLong,
+                "story_creation_brief must be at most 1200 characters",
+            ),
+            (
+                BuildRegenerationAiServiceError::QualityNotesTooLong,
+                "quality_notes must be at most 600 characters",
+            ),
+            (
+                BuildRegenerationAiServiceError::WebResearchQueryTooLong,
+                "web_research_query must be at most 500 characters",
+            ),
+        ];
+
+        for (error, expected_detail) in cases {
+            let response = map_prepare_chapter_regeneration_stream_error(error);
+
+            assert_eq!(response.0, StatusCode::BAD_REQUEST);
+            assert_eq!(response.1 .0, json!({ "detail": expected_detail }));
+        }
+    }
+
+    #[test]
+    fn regeneration_tasks_query_limit_errors_match_python_query_bounds() {
+        let cases = [
+            (
+                RegenerationTasksQueryRequestError::LimitTooSmall,
+                "limit must be greater than or equal to 1",
+            ),
+            (
+                RegenerationTasksQueryRequestError::LimitTooLarge,
+                "limit must be less than or equal to 50",
+            ),
+        ];
+
+        for (error, expected_detail) in cases {
+            let response = map_regeneration_tasks_query_request_error(error);
+
+            assert_eq!(response.0, StatusCode::BAD_REQUEST);
+            assert_eq!(response.1 .0, json!({ "detail": expected_detail }));
+        }
+    }
+
+    #[test]
+    fn quality_trend_query_limit_errors_match_python_query_bounds() {
+        let cases = [
+            (
+                QualityTrendQueryRequestError::LimitTooSmall,
+                "limit must be greater than or equal to 1",
+            ),
+            (
+                QualityTrendQueryRequestError::LimitTooLarge,
+                "limit must be less than or equal to 50",
+            ),
+        ];
+
+        for (error, expected_detail) in cases {
+            let response = map_quality_trend_query_request_error(error);
+
+            assert_eq!(response.0, StatusCode::BAD_REQUEST);
+            assert_eq!(response.1 .0, json!({ "detail": expected_detail }));
+        }
     }
 
     #[test]
@@ -319,6 +545,49 @@ mod tests {
 
         assert_eq!(response.0, StatusCode::BAD_REQUEST);
         assert_eq!(response.1 .0, json!({ "detail": "改写位置非法" }));
+    }
+
+    #[test]
+    fn partial_regeneration_python_request_bound_errors_remain_bad_request() {
+        let cases = [
+            (
+                PreparePartialRegenerationError::EmptyUserInstructions,
+                "user_instructions must be at least 1 character",
+            ),
+            (
+                PreparePartialRegenerationError::UserInstructionsTooLong,
+                "user_instructions must be at most 1000 characters",
+            ),
+            (
+                PreparePartialRegenerationError::ContextCharsTooSmall,
+                "context_chars must be greater than or equal to 100",
+            ),
+            (
+                PreparePartialRegenerationError::ContextCharsTooLarge,
+                "context_chars must be less than or equal to 2000",
+            ),
+            (
+                PreparePartialRegenerationError::TargetWordCountTooSmall,
+                "target_word_count must be greater than or equal to 10",
+            ),
+            (
+                PreparePartialRegenerationError::TargetWordCountTooLarge,
+                "target_word_count must be less than or equal to 5000",
+            ),
+            (
+                PreparePartialRegenerationError::WebResearchQueryTooLong,
+                "web_research_query must be at most 500 characters",
+            ),
+        ];
+
+        for (error, expected_detail) in cases {
+            let response = map_prepare_partial_regeneration_stream_error(
+                PreparePartialRegenerationStreamError::Input(error),
+            );
+
+            assert_eq!(response.0, StatusCode::BAD_REQUEST);
+            assert_eq!(response.1 .0, json!({ "detail": expected_detail }));
+        }
     }
 
     #[test]

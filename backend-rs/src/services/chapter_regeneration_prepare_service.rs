@@ -1,5 +1,6 @@
 use std::cmp::{max, min};
 
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::ai::service::AIService;
@@ -14,13 +15,67 @@ use crate::services::chapter_single_generation_prepare_service::{
 use crate::services::settings_service::SettingsService;
 use crate::services::writing_style_service::WritingStyleService;
 
+const MIN_REGENERATION_TARGET_WORD_COUNT: i64 = 500;
+const MAX_REGENERATION_TARGET_WORD_COUNT: i64 = 10_000;
+const MAX_REGENERATION_STORY_CREATION_BRIEF_LENGTH: usize = 1200;
+const MAX_REGENERATION_QUALITY_NOTES_LENGTH: usize = 600;
+const MAX_REGENERATION_WEB_RESEARCH_QUERY_LENGTH: usize = 500;
+const REGENERATION_CREATIVE_MODE_VALUES: &[&str] = &[
+    "balanced",
+    "hook",
+    "emotion",
+    "suspense",
+    "relationship",
+    "payoff",
+];
+const REGENERATION_STORY_FOCUS_VALUES: &[&str] = &[
+    "advance_plot",
+    "deepen_character",
+    "escalate_conflict",
+    "reveal_mystery",
+    "relationship_shift",
+    "foreshadow_payoff",
+];
+const REGENERATION_PLOT_STAGE_VALUES: &[&str] = &["development", "climax", "ending"];
+const REGENERATION_QUALITY_PRESET_VALUES: &[&str] = &[
+    "balanced",
+    "plot_drive",
+    "immersive",
+    "emotion_drama",
+    "clean_prose",
+];
+const MIN_PARTIAL_REGENERATION_CONTEXT_CHARS: usize = 100;
+const MAX_PARTIAL_REGENERATION_CONTEXT_CHARS: usize = 2000;
+const MIN_PARTIAL_REGENERATION_TARGET_WORD_COUNT: usize = 10;
+const MAX_PARTIAL_REGENERATION_TARGET_WORD_COUNT: usize = 5000;
+const MAX_PARTIAL_REGENERATION_USER_INSTRUCTIONS_LENGTH: usize = 1000;
+const MAX_PARTIAL_REGENERATION_WEB_RESEARCH_QUERY_LENGTH: usize = 500;
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum BuildRegenerationAiServiceError {
     InvalidConfig(String),
+    InvalidTargetWordCountTooSmall,
+    InvalidTargetWordCountTooLarge,
+    InvalidCreativeMode,
+    InvalidStoryFocus,
+    InvalidPlotStage,
+    InvalidQualityPreset,
+    StoryCreationBriefTooLong,
+    QualityNotesTooLong,
+    WebResearchQueryTooLong,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum PreparePartialRegenerationError {
     InvalidRange,
     EmptySelectedText,
+    EmptyUserInstructions,
+    UserInstructionsTooLong,
+    ContextCharsTooSmall,
+    ContextCharsTooLarge,
+    TargetWordCountTooSmall,
+    TargetWordCountTooLarge,
+    WebResearchQueryTooLong,
 }
 
 pub enum PreparePartialRegenerationStreamError {
@@ -52,6 +107,30 @@ pub struct PreparedPartialRegenerationInput {
     pub prompt: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
+pub struct FullChapterRegenerationStreamRouteRequest {
+    pub target_word_count: Option<i64>,
+    pub custom_instructions: Option<String>,
+    #[serde(default)]
+    pub selected_suggestion_indices: Vec<Value>,
+    #[serde(default)]
+    pub focus_areas: Vec<Value>,
+    pub story_creation_brief: Option<String>,
+    pub quality_notes: Option<String>,
+    pub story_repair_summary: Option<String>,
+    pub creative_mode: Option<String>,
+    pub story_focus: Option<String>,
+    pub plot_stage: Option<String>,
+    pub quality_preset: Option<String>,
+    pub enable_web_research: Option<bool>,
+    pub web_research_query: Option<String>,
+    pub preserve_elements: Option<Value>,
+    #[serde(default)]
+    pub story_repair_targets: Vec<Value>,
+    #[serde(default)]
+    pub story_preserve_strengths: Vec<Value>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FullChapterRegenerationStreamRequest {
     target_word_count: Option<i64>,
@@ -63,6 +142,7 @@ pub struct FullChapterRegenerationStreamRequest {
     story_repair_summary: Option<String>,
     creative_mode: Option<String>,
     story_focus: Option<String>,
+    plot_stage: Option<String>,
     quality_preset: Option<String>,
     enable_web_research: Option<bool>,
     web_research_query: Option<String>,
@@ -110,6 +190,7 @@ impl FullChapterRegenerationStreamRequest {
         story_repair_summary: Option<String>,
         creative_mode: Option<String>,
         story_focus: Option<String>,
+        plot_stage: Option<String>,
         quality_preset: Option<String>,
         enable_web_research: Option<bool>,
         web_research_query: Option<String>,
@@ -130,6 +211,7 @@ impl FullChapterRegenerationStreamRequest {
             story_repair_summary,
             creative_mode,
             story_focus,
+            plot_stage,
             quality_preset,
             enable_web_research,
             web_research_query,
@@ -142,45 +224,31 @@ impl FullChapterRegenerationStreamRequest {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_route_payload(
-        target_word_count: Option<i64>,
-        custom_instructions: Option<String>,
-        selected_suggestion_indices: Vec<Value>,
-        focus_areas: Vec<Value>,
-        story_creation_brief: Option<String>,
-        quality_notes: Option<String>,
-        story_repair_summary: Option<String>,
-        creative_mode: Option<String>,
-        story_focus: Option<String>,
-        quality_preset: Option<String>,
-        enable_web_research: Option<bool>,
-        web_research_query: Option<String>,
-        preserve_elements: Option<Value>,
-        story_repair_targets: Vec<Value>,
-        story_preserve_strengths: Vec<Value>,
-    ) -> Self {
-        let preserve_elements = preserve_elements.unwrap_or_default();
+    fn from_route_request(route_request: FullChapterRegenerationStreamRouteRequest) -> Self {
+        let preserve_elements = route_request.preserve_elements.unwrap_or_default();
 
         Self::new(
-            target_word_count,
-            custom_instructions,
-            selected_suggestion_indices
+            route_request.target_word_count,
+            normalize_optional_regeneration_request_string(route_request.custom_instructions),
+            route_request
+                .selected_suggestion_indices
                 .into_iter()
                 .filter_map(|value| value.as_i64().map(|value| value.to_string()))
                 .collect(),
-            focus_areas
+            route_request
+                .focus_areas
                 .into_iter()
                 .filter_map(|value| value.as_str().map(str::to_owned))
                 .collect(),
-            story_creation_brief,
-            quality_notes,
-            story_repair_summary,
-            creative_mode,
-            story_focus,
-            quality_preset,
-            enable_web_research,
-            web_research_query,
+            normalize_optional_regeneration_request_string(route_request.story_creation_brief),
+            normalize_optional_regeneration_request_string(route_request.quality_notes),
+            normalize_optional_regeneration_request_string(route_request.story_repair_summary),
+            normalize_optional_regeneration_request_string(route_request.creative_mode),
+            normalize_optional_regeneration_request_string(route_request.story_focus),
+            normalize_optional_regeneration_request_string(route_request.plot_stage),
+            normalize_optional_regeneration_request_string(route_request.quality_preset),
+            route_request.enable_web_research,
+            normalize_optional_regeneration_request_string(route_request.web_research_query),
             Self::read_preserve_elements_bool(&preserve_elements, "preserve_structure", false),
             Self::read_preserve_elements_string_list(&preserve_elements, "preserve_dialogues"),
             Self::read_preserve_elements_string_list(&preserve_elements, "preserve_plot_points"),
@@ -189,11 +257,13 @@ impl FullChapterRegenerationStreamRequest {
                 "preserve_character_traits",
                 true,
             ),
-            story_repair_targets
+            route_request
+                .story_repair_targets
                 .into_iter()
                 .filter_map(|value| value.as_str().map(str::to_owned))
                 .collect(),
-            story_preserve_strengths
+            route_request
+                .story_preserve_strengths
                 .into_iter()
                 .filter_map(|value| value.as_str().map(str::to_owned))
                 .collect(),
@@ -236,8 +306,66 @@ impl FullChapterRegenerationStreamRequest {
         self.story_focus.as_deref().unwrap_or_default()
     }
 
+    #[cfg(test)]
+    pub fn plot_stage(&self) -> &str {
+        self.plot_stage.as_deref().unwrap_or_default()
+    }
+
     pub fn quality_preset(&self) -> &str {
         self.quality_preset.as_deref().unwrap_or_default()
+    }
+
+    fn validate_request_bounds(&self) -> Result<(), BuildRegenerationAiServiceError> {
+        if self.target_word_count() < MIN_REGENERATION_TARGET_WORD_COUNT {
+            return Err(BuildRegenerationAiServiceError::InvalidTargetWordCountTooSmall);
+        }
+        if self.target_word_count() > MAX_REGENERATION_TARGET_WORD_COUNT {
+            return Err(BuildRegenerationAiServiceError::InvalidTargetWordCountTooLarge);
+        }
+        if !is_valid_optional_regeneration_choice(
+            self.creative_mode.as_deref(),
+            REGENERATION_CREATIVE_MODE_VALUES,
+        ) {
+            return Err(BuildRegenerationAiServiceError::InvalidCreativeMode);
+        }
+        if !is_valid_optional_regeneration_choice(
+            self.story_focus.as_deref(),
+            REGENERATION_STORY_FOCUS_VALUES,
+        ) {
+            return Err(BuildRegenerationAiServiceError::InvalidStoryFocus);
+        }
+        if !is_valid_optional_regeneration_choice(
+            self.plot_stage.as_deref(),
+            REGENERATION_PLOT_STAGE_VALUES,
+        ) {
+            return Err(BuildRegenerationAiServiceError::InvalidPlotStage);
+        }
+        if !is_valid_optional_regeneration_choice(
+            self.quality_preset.as_deref(),
+            REGENERATION_QUALITY_PRESET_VALUES,
+        ) {
+            return Err(BuildRegenerationAiServiceError::InvalidQualityPreset);
+        }
+        if !is_valid_optional_regeneration_text_length(
+            self.story_creation_brief.as_deref(),
+            MAX_REGENERATION_STORY_CREATION_BRIEF_LENGTH,
+        ) {
+            return Err(BuildRegenerationAiServiceError::StoryCreationBriefTooLong);
+        }
+        if !is_valid_optional_regeneration_text_length(
+            self.quality_notes.as_deref(),
+            MAX_REGENERATION_QUALITY_NOTES_LENGTH,
+        ) {
+            return Err(BuildRegenerationAiServiceError::QualityNotesTooLong);
+        }
+        if !is_valid_optional_regeneration_text_length(
+            self.web_research_query.as_deref(),
+            MAX_REGENERATION_WEB_RESEARCH_QUERY_LENGTH,
+        ) {
+            return Err(BuildRegenerationAiServiceError::WebResearchQueryTooLong);
+        }
+
+        Ok(())
     }
 
     pub fn enable_web_research(&self) -> Option<bool> {
@@ -285,7 +413,7 @@ impl FullChapterRegenerationStreamRequest {
             narrative_perspective: None,
             creative_mode: self.creative_mode.clone(),
             story_focus: self.story_focus.clone(),
-            plot_stage: None,
+            plot_stage: self.plot_stage.clone(),
             story_creation_brief: self.story_creation_brief.clone(),
             quality_preset: self.quality_preset.clone(),
             quality_notes: self.quality_notes.clone(),
@@ -294,6 +422,54 @@ impl FullChapterRegenerationStreamRequest {
             story_preserve_strengths: self.story_preserve_strengths.clone(),
         }
     }
+}
+
+pub fn build_full_chapter_regeneration_stream_request_from_route_payload(
+    route_request: FullChapterRegenerationStreamRouteRequest,
+) -> FullChapterRegenerationStreamRequest {
+    FullChapterRegenerationStreamRequest::from_route_request(route_request)
+}
+
+pub(crate) fn validate_full_chapter_regeneration_stream_request_bounds(
+    request: &FullChapterRegenerationStreamRequest,
+) -> Result<(), BuildRegenerationAiServiceError> {
+    request.validate_request_bounds()
+}
+
+fn normalize_optional_regeneration_request_string(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn is_valid_optional_regeneration_choice(value: Option<&str>, allowed_values: &[&str]) -> bool {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| allowed_values.contains(&value))
+        .unwrap_or(true)
+}
+
+fn is_valid_optional_regeneration_text_length(value: Option<&str>, max_chars: usize) -> bool {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().count() <= max_chars)
+        .unwrap_or(true)
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct PartialRegenerationStreamRouteRequest {
+    pub selected_text: String,
+    pub start_position: usize,
+    pub end_position: usize,
+    pub user_instructions: String,
+    pub context_chars: Option<usize>,
+    pub style_id: Option<i32>,
+    pub length_mode: Option<String>,
+    pub target_word_count: Option<usize>,
+    pub enable_web_research: Option<bool>,
+    pub web_research_query: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -338,30 +514,19 @@ impl PartialRegenerationStreamWorkflowRequest {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_route_payload(
-        selected_text: String,
-        start_position: usize,
-        end_position: usize,
-        user_instructions: String,
-        context_chars: Option<usize>,
-        style_id: Option<i32>,
-        length_mode: Option<String>,
-        target_word_count: Option<usize>,
-        enable_web_research: Option<bool>,
-        web_research_query: Option<String>,
-    ) -> Self {
+    fn from_route_request(route_request: PartialRegenerationStreamRouteRequest) -> Self {
         Self::new(
-            selected_text,
-            start_position,
-            end_position,
-            context_chars,
-            user_instructions,
-            length_mode,
-            target_word_count,
-            style_id,
-            enable_web_research,
-            web_research_query,
+            route_request.selected_text,
+            route_request.start_position,
+            route_request.end_position,
+            route_request.context_chars,
+            normalize_optional_regeneration_request_string(Some(route_request.user_instructions))
+                .unwrap_or_default(),
+            normalize_optional_regeneration_request_string(route_request.length_mode),
+            route_request.target_word_count,
+            route_request.style_id,
+            route_request.enable_web_research,
+            normalize_optional_regeneration_request_string(route_request.web_research_query),
         )
     }
 
@@ -397,12 +562,52 @@ impl PartialRegenerationStreamWorkflowRequest {
         self.style_id
     }
 
+    #[cfg(test)]
     pub fn web_research_enabled(&self) -> bool {
         normalize_partial_regeneration_web_research_enabled(self.enable_web_research)
     }
 
+    #[cfg(test)]
     pub fn web_research_query(&self) -> Option<&str> {
         self.web_research_query.as_deref()
+    }
+
+    fn validate_request_bounds(&self) -> Result<(), PreparePartialRegenerationError> {
+        if self.start_position >= self.end_position {
+            return Err(PreparePartialRegenerationError::InvalidRange);
+        }
+        if self.user_instructions.is_empty() {
+            return Err(PreparePartialRegenerationError::EmptyUserInstructions);
+        }
+        if self.user_instructions.chars().count()
+            > MAX_PARTIAL_REGENERATION_USER_INSTRUCTIONS_LENGTH
+        {
+            return Err(PreparePartialRegenerationError::UserInstructionsTooLong);
+        }
+        if let Some(context_chars) = self.context_chars {
+            if context_chars < MIN_PARTIAL_REGENERATION_CONTEXT_CHARS {
+                return Err(PreparePartialRegenerationError::ContextCharsTooSmall);
+            }
+            if context_chars > MAX_PARTIAL_REGENERATION_CONTEXT_CHARS {
+                return Err(PreparePartialRegenerationError::ContextCharsTooLarge);
+            }
+        }
+        if let Some(target_word_count) = self.target_word_count {
+            if target_word_count < MIN_PARTIAL_REGENERATION_TARGET_WORD_COUNT {
+                return Err(PreparePartialRegenerationError::TargetWordCountTooSmall);
+            }
+            if target_word_count > MAX_PARTIAL_REGENERATION_TARGET_WORD_COUNT {
+                return Err(PreparePartialRegenerationError::TargetWordCountTooLarge);
+            }
+        }
+        if !is_valid_optional_regeneration_text_length(
+            self.web_research_query.as_deref(),
+            MAX_PARTIAL_REGENERATION_WEB_RESEARCH_QUERY_LENGTH,
+        ) {
+            return Err(PreparePartialRegenerationError::WebResearchQueryTooLong);
+        }
+
+        Ok(())
     }
 
     pub fn compat_options_with_web_research_default(
@@ -429,10 +634,23 @@ impl PartialRegenerationStreamWorkflowRequest {
     }
 }
 
+pub fn build_partial_regeneration_stream_workflow_request_from_route_payload(
+    route_request: PartialRegenerationStreamRouteRequest,
+) -> PartialRegenerationStreamWorkflowRequest {
+    PartialRegenerationStreamWorkflowRequest::from_route_request(route_request)
+}
+
+pub(crate) fn validate_partial_regeneration_stream_request_bounds(
+    request: &PartialRegenerationStreamWorkflowRequest,
+) -> Result<(), PreparePartialRegenerationError> {
+    request.validate_request_bounds()
+}
+
 fn normalize_partial_regeneration_context_chars(context_chars: Option<usize>) -> usize {
     context_chars.unwrap_or(500)
 }
 
+#[cfg(test)]
 fn normalize_partial_regeneration_web_research_enabled(enabled: Option<bool>) -> bool {
     enabled.unwrap_or(false)
 }
@@ -835,6 +1053,8 @@ pub async fn prepare_chapter_regeneration_stream(
     chapter: &chapter::Model,
     request: &FullChapterRegenerationStreamRequest,
 ) -> Result<FullChapterRegenerationStreamInput, BuildRegenerationAiServiceError> {
+    request.validate_request_bounds()?;
+
     let web_research_default = SettingsService::resolve_web_research_enabled(db, user_id)
         .await
         .map_err(|error| BuildRegenerationAiServiceError::InvalidConfig(error.to_string()))?;
@@ -890,6 +1110,10 @@ pub async fn prepare_partial_regeneration_stream(
     chapter: &chapter::Model,
     request: &PartialRegenerationStreamWorkflowRequest,
 ) -> Result<PartialChapterRegenerationStreamInput, PreparePartialRegenerationStreamError> {
+    request
+        .validate_request_bounds()
+        .map_err(PreparePartialRegenerationStreamError::Input)?;
+
     let style_content = load_partial_style_content(db, user_id, request.style_id())
         .await
         .map_err(PreparePartialRegenerationStreamError::Style)?;
@@ -921,7 +1145,9 @@ pub async fn prepare_partial_regeneration_stream(
     })?;
     let (provider_payload, _) = compact_generation_context(
         "one-to-one",
-        request.target_word_count().unwrap_or(chapter.word_count as usize) as i32,
+        request
+            .target_word_count()
+            .unwrap_or(chapter.word_count as usize) as i32,
         provider_payload,
         PreviousChapterPromptContext::default(),
     );
@@ -968,7 +1194,6 @@ pub async fn prepare_partial_regeneration_stream(
 
 #[cfg(test)]
 mod tests {
-    use crate::api::chapter_regeneration_routes::FullChapterRegenerationStreamRouteRequest;
     use chrono::NaiveDateTime;
     use serde_json::Value;
 
@@ -978,10 +1203,15 @@ mod tests {
     };
 
     use super::{
-        build_partial_length_requirement, build_regeneration_prompt,
-        calculate_partial_target_words, prepare_partial_regeneration_input,
-        FullChapterRegenerationStreamRequest, PartialRegenerationLengthMode,
-        PreparePartialRegenerationError, PreparedPartialRegenerationInput,
+        build_full_chapter_regeneration_stream_request_from_route_payload,
+        build_partial_length_requirement,
+        build_partial_regeneration_stream_workflow_request_from_route_payload,
+        build_regeneration_prompt, calculate_partial_target_words,
+        prepare_partial_regeneration_input, BuildRegenerationAiServiceError,
+        FullChapterRegenerationStreamRequest, FullChapterRegenerationStreamRouteRequest,
+        PartialRegenerationLengthMode, PartialRegenerationStreamRouteRequest,
+        PartialRegenerationStreamWorkflowRequest, PreparePartialRegenerationError,
+        PreparedPartialRegenerationInput,
     };
 
     fn chapter_with_content(content: &str) -> chapter::Model {
@@ -1011,6 +1241,21 @@ mod tests {
         }
     }
 
+    fn valid_partial_regeneration_workflow_request() -> PartialRegenerationStreamWorkflowRequest {
+        PartialRegenerationStreamWorkflowRequest {
+            selected_text: "选中文本".to_string(),
+            start_position: 1,
+            end_position: 3,
+            context_chars: Some(500),
+            user_instructions: "有效指令".to_string(),
+            length_mode: Some("similar".to_string()),
+            target_word_count: Some(120),
+            style_id: None,
+            enable_web_research: None,
+            web_research_query: None,
+        }
+    }
+
     fn regeneration_provider_payload() -> PromptContextProviderPayload {
         PromptContextProviderPayload {
             recent_chapters_context: "【最近章节规划】\n第三章追查漕运税卡".to_string(),
@@ -1031,23 +1276,8 @@ mod tests {
     fn should_build_regeneration_prompt_with_default_fields() {
         let chapter = chapter_with_content("原始正文");
         let route_request = FullChapterRegenerationStreamRouteRequest::default();
-        let request = FullChapterRegenerationStreamRequest::from_route_payload(
-            route_request.target_word_count,
-            route_request.custom_instructions,
-            route_request.selected_suggestion_indices,
-            route_request.focus_areas,
-            route_request.story_creation_brief,
-            route_request.quality_notes,
-            route_request.story_repair_summary,
-            route_request.creative_mode,
-            route_request.story_focus,
-            route_request.quality_preset,
-            None,
-            None,
-            route_request.preserve_elements,
-            route_request.story_repair_targets,
-            route_request.story_preserve_strengths,
-        );
+        let request =
+            build_full_chapter_regeneration_stream_request_from_route_payload(route_request);
         let prompt = build_regeneration_prompt(
             &chapter,
             &request,
@@ -1076,8 +1306,9 @@ mod tests {
             story_creation_brief: Some("总控说明".to_string()),
             quality_notes: Some("质量偏好".to_string()),
             story_repair_summary: Some("修复摘要".to_string()),
-            creative_mode: Some("dramatic".to_string()),
-            story_focus: Some("主线推进".to_string()),
+            creative_mode: Some("hook".to_string()),
+            story_focus: Some("advance_plot".to_string()),
+            plot_stage: Some("climax".to_string()),
             quality_preset: Some("balanced".to_string()),
             enable_web_research: Some(true),
             web_research_query: Some("晚清漕运夜航与税卡协商".to_string()),
@@ -1090,23 +1321,8 @@ mod tests {
             story_repair_targets: vec![Value::from("目标A"), Value::from("目标B")],
             story_preserve_strengths: vec![Value::from("优势A")],
         };
-        let request = FullChapterRegenerationStreamRequest::from_route_payload(
-            route_request.target_word_count,
-            route_request.custom_instructions,
-            route_request.selected_suggestion_indices,
-            route_request.focus_areas,
-            route_request.story_creation_brief,
-            route_request.quality_notes,
-            route_request.story_repair_summary,
-            route_request.creative_mode,
-            route_request.story_focus,
-            route_request.quality_preset,
-            route_request.enable_web_research,
-            route_request.web_research_query,
-            route_request.preserve_elements,
-            route_request.story_repair_targets,
-            route_request.story_preserve_strengths,
-        );
+        let request =
+            build_full_chapter_regeneration_stream_request_from_route_payload(route_request);
         let prompt = build_regeneration_prompt(
             &chapter,
             &request,
@@ -1120,13 +1336,211 @@ mod tests {
         assert!(prompt.contains("用户修改要求：\n强化冲突"));
         assert!(prompt.contains("选中建议索引：1, 3"));
         assert!(prompt.contains("重点优化方向：节奏、人物"));
-        assert!(prompt.contains("创作模式：dramatic"));
+        assert!(prompt.contains("创作模式：hook"));
         assert!(prompt.contains("保留结构：true"));
         assert!(prompt.contains("保留对话：对白A、对白B"));
         assert!(prompt.contains("保留剧情点：转折A"));
         assert!(prompt.contains("保留人物特征：false"));
         assert!(prompt.contains("修复目标：目标A、目标B"));
         assert!(prompt.contains("保留优势：优势A"));
+    }
+
+    #[test]
+    fn should_normalize_full_regeneration_fields_like_python_schema() {
+        let request = build_full_chapter_regeneration_stream_request_from_route_payload(
+            FullChapterRegenerationStreamRouteRequest {
+                target_word_count: Some(2200),
+                custom_instructions: Some(" 强化冲突 ".to_string()),
+                story_creation_brief: Some(" 总控说明 ".to_string()),
+                quality_notes: Some(" 质量偏好 ".to_string()),
+                story_repair_summary: Some(" 修复摘要 ".to_string()),
+                creative_mode: Some(" hook ".to_string()),
+                story_focus: Some(" advance_plot ".to_string()),
+                plot_stage: Some(" development ".to_string()),
+                quality_preset: Some(" plot_drive ".to_string()),
+                web_research_query: Some(" 晚清漕运 ".to_string()),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(request.target_word_count(), 2200);
+        assert_eq!(request.custom_instructions(), "强化冲突");
+        assert_eq!(request.story_creation_brief(), "总控说明");
+        assert_eq!(request.quality_notes(), "质量偏好");
+        assert_eq!(request.story_repair_summary(), "修复摘要");
+        assert_eq!(request.creative_mode(), "hook");
+        assert_eq!(request.story_focus(), "advance_plot");
+        assert_eq!(request.quality_preset(), "plot_drive");
+        assert_eq!(request.web_research_query(), Some("晚清漕运"));
+        request
+            .validate_request_bounds()
+            .expect("normalized python regeneration request fields should pass");
+    }
+
+    #[test]
+    fn should_convert_blank_full_regeneration_fields_to_none() {
+        let request = build_full_chapter_regeneration_stream_request_from_route_payload(
+            FullChapterRegenerationStreamRouteRequest {
+                custom_instructions: Some("   ".to_string()),
+                story_creation_brief: Some("\t".to_string()),
+                quality_notes: Some("\n".to_string()),
+                story_repair_summary: Some("   ".to_string()),
+                creative_mode: Some("   ".to_string()),
+                story_focus: Some("   ".to_string()),
+                plot_stage: Some("   ".to_string()),
+                quality_preset: Some("   ".to_string()),
+                web_research_query: Some("   ".to_string()),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(request.custom_instructions(), "");
+        assert_eq!(request.story_creation_brief(), "");
+        assert_eq!(request.quality_notes(), "");
+        assert_eq!(request.story_repair_summary(), "");
+        assert_eq!(request.creative_mode(), "");
+        assert_eq!(request.story_focus(), "");
+        assert_eq!(request.quality_preset(), "");
+        assert_eq!(request.web_research_query(), None);
+        request
+            .validate_request_bounds()
+            .expect("blank python regeneration request fields normalize to None");
+    }
+
+    #[test]
+    fn should_reject_full_regeneration_target_word_count_outside_python_bounds() {
+        let too_low = FullChapterRegenerationStreamRequest {
+            target_word_count: Some(499),
+            ..Default::default()
+        };
+        let too_high = FullChapterRegenerationStreamRequest {
+            target_word_count: Some(10_001),
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            too_low
+                .validate_request_bounds()
+                .expect_err("target_word_count below python limit should fail"),
+            BuildRegenerationAiServiceError::InvalidTargetWordCountTooSmall
+        ));
+        assert!(matches!(
+            too_high
+                .validate_request_bounds()
+                .expect_err("target_word_count above python limit should fail"),
+            BuildRegenerationAiServiceError::InvalidTargetWordCountTooLarge
+        ));
+    }
+
+    #[test]
+    fn should_reject_full_regeneration_invalid_choice_fields() {
+        let cases = [
+            (
+                FullChapterRegenerationStreamRequest {
+                    creative_mode: Some("too_fancy".to_string()),
+                    ..Default::default()
+                },
+                BuildRegenerationAiServiceError::InvalidCreativeMode,
+            ),
+            (
+                FullChapterRegenerationStreamRequest {
+                    story_focus: Some("too_broad".to_string()),
+                    ..Default::default()
+                },
+                BuildRegenerationAiServiceError::InvalidStoryFocus,
+            ),
+            (
+                FullChapterRegenerationStreamRequest {
+                    plot_stage: Some("middle".to_string()),
+                    ..Default::default()
+                },
+                BuildRegenerationAiServiceError::InvalidPlotStage,
+            ),
+            (
+                FullChapterRegenerationStreamRequest {
+                    quality_preset: Some("max_quality".to_string()),
+                    ..Default::default()
+                },
+                BuildRegenerationAiServiceError::InvalidQualityPreset,
+            ),
+        ];
+
+        for (request, expected_error) in cases {
+            assert_eq!(
+                request
+                    .validate_request_bounds()
+                    .expect_err("invalid generation choice should fail"),
+                expected_error
+            );
+        }
+    }
+
+    #[test]
+    fn should_reject_full_regeneration_text_fields_above_python_limits() {
+        let long_brief = FullChapterRegenerationStreamRequest {
+            story_creation_brief: Some("a".repeat(1201)),
+            ..Default::default()
+        };
+        let long_quality_notes = FullChapterRegenerationStreamRequest {
+            quality_notes: Some("b".repeat(601)),
+            ..Default::default()
+        };
+        let long_web_research_query = FullChapterRegenerationStreamRequest {
+            web_research_query: Some("c".repeat(501)),
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            long_brief
+                .validate_request_bounds()
+                .expect_err("story_creation_brief above python limit should fail"),
+            BuildRegenerationAiServiceError::StoryCreationBriefTooLong
+        ));
+        assert!(matches!(
+            long_quality_notes
+                .validate_request_bounds()
+                .expect_err("quality_notes above python limit should fail"),
+            BuildRegenerationAiServiceError::QualityNotesTooLong
+        ));
+        assert!(matches!(
+            long_web_research_query
+                .validate_request_bounds()
+                .expect_err("web_research_query above python limit should fail"),
+            BuildRegenerationAiServiceError::WebResearchQueryTooLong
+        ));
+    }
+
+    #[test]
+    fn should_accept_full_regeneration_python_request_bounds() {
+        let lower_bound_request = FullChapterRegenerationStreamRequest {
+            target_word_count: Some(500),
+            ..Default::default()
+        };
+        let upper_bound_request = FullChapterRegenerationStreamRequest {
+            target_word_count: Some(10_000),
+            ..Default::default()
+        };
+        let choice_and_text_request = FullChapterRegenerationStreamRequest {
+            target_word_count: Some(3000),
+            creative_mode: Some("hook".to_string()),
+            story_focus: Some("advance_plot".to_string()),
+            plot_stage: Some("development".to_string()),
+            quality_preset: Some("plot_drive".to_string()),
+            story_creation_brief: Some("a".repeat(1200)),
+            quality_notes: Some("b".repeat(600)),
+            web_research_query: Some("c".repeat(500)),
+            ..Default::default()
+        };
+
+        lower_bound_request
+            .validate_request_bounds()
+            .expect("python lower target word count should pass");
+        upper_bound_request
+            .validate_request_bounds()
+            .expect("python upper target word count should pass");
+        choice_and_text_request
+            .validate_request_bounds()
+            .expect("valid python regeneration choices and text lengths should pass");
     }
 
     #[test]
@@ -1207,6 +1621,151 @@ mod tests {
             PartialRegenerationLengthMode::normalize(Some("unexpected")),
             PartialRegenerationLengthMode::Similar
         );
+    }
+
+    #[test]
+    fn should_normalize_partial_regeneration_route_text_fields_like_python_schema() {
+        let request = build_partial_regeneration_stream_workflow_request_from_route_payload(
+            PartialRegenerationStreamRouteRequest {
+                selected_text: "选中文本".to_string(),
+                start_position: 1,
+                end_position: 3,
+                user_instructions: " 强化心理压迫 ".to_string(),
+                context_chars: Some(500),
+                style_id: None,
+                length_mode: Some(" expand ".to_string()),
+                target_word_count: Some(120),
+                enable_web_research: Some(true),
+                web_research_query: Some(" 晚清码头规约 ".to_string()),
+            },
+        );
+
+        assert_eq!(request.user_instructions(), "强化心理压迫");
+        assert_eq!(request.length_mode(), Some("expand"));
+        assert_eq!(request.web_research_query(), Some("晚清码头规约"));
+        request
+            .validate_request_bounds()
+            .expect("normalized python partial regeneration fields should pass");
+    }
+
+    #[test]
+    fn should_convert_blank_partial_regeneration_optional_text_to_none() {
+        let request = build_partial_regeneration_stream_workflow_request_from_route_payload(
+            PartialRegenerationStreamRouteRequest {
+                selected_text: "选中文本".to_string(),
+                start_position: 1,
+                end_position: 3,
+                user_instructions: " 有效指令 ".to_string(),
+                context_chars: None,
+                style_id: None,
+                length_mode: Some("   ".to_string()),
+                target_word_count: None,
+                enable_web_research: None,
+                web_research_query: Some("\t".to_string()),
+            },
+        );
+
+        assert_eq!(request.user_instructions(), "有效指令");
+        assert_eq!(request.length_mode(), None);
+        assert_eq!(request.web_research_query(), None);
+        request
+            .validate_request_bounds()
+            .expect("blank optional partial regeneration fields should normalize to None");
+    }
+
+    #[test]
+    fn should_reject_partial_regeneration_request_bounds_like_python_schema() {
+        let cases = [
+            (
+                PartialRegenerationStreamWorkflowRequest {
+                    start_position: 3,
+                    end_position: 3,
+                    ..valid_partial_regeneration_workflow_request()
+                },
+                PreparePartialRegenerationError::InvalidRange,
+            ),
+            (
+                PartialRegenerationStreamWorkflowRequest {
+                    user_instructions: String::new(),
+                    ..valid_partial_regeneration_workflow_request()
+                },
+                PreparePartialRegenerationError::EmptyUserInstructions,
+            ),
+            (
+                PartialRegenerationStreamWorkflowRequest {
+                    user_instructions: "a".repeat(1001),
+                    ..valid_partial_regeneration_workflow_request()
+                },
+                PreparePartialRegenerationError::UserInstructionsTooLong,
+            ),
+            (
+                PartialRegenerationStreamWorkflowRequest {
+                    context_chars: Some(99),
+                    ..valid_partial_regeneration_workflow_request()
+                },
+                PreparePartialRegenerationError::ContextCharsTooSmall,
+            ),
+            (
+                PartialRegenerationStreamWorkflowRequest {
+                    context_chars: Some(2001),
+                    ..valid_partial_regeneration_workflow_request()
+                },
+                PreparePartialRegenerationError::ContextCharsTooLarge,
+            ),
+            (
+                PartialRegenerationStreamWorkflowRequest {
+                    target_word_count: Some(9),
+                    ..valid_partial_regeneration_workflow_request()
+                },
+                PreparePartialRegenerationError::TargetWordCountTooSmall,
+            ),
+            (
+                PartialRegenerationStreamWorkflowRequest {
+                    target_word_count: Some(5001),
+                    ..valid_partial_regeneration_workflow_request()
+                },
+                PreparePartialRegenerationError::TargetWordCountTooLarge,
+            ),
+            (
+                PartialRegenerationStreamWorkflowRequest {
+                    web_research_query: Some("q".repeat(501)),
+                    ..valid_partial_regeneration_workflow_request()
+                },
+                PreparePartialRegenerationError::WebResearchQueryTooLong,
+            ),
+        ];
+
+        for (request, expected_error) in cases {
+            assert_eq!(
+                request
+                    .validate_request_bounds()
+                    .expect_err("invalid python partial regeneration boundary should fail"),
+                expected_error
+            );
+        }
+    }
+
+    #[test]
+    fn should_accept_partial_regeneration_python_request_bounds() {
+        let lower_bound_request = PartialRegenerationStreamWorkflowRequest {
+            context_chars: Some(100),
+            target_word_count: Some(10),
+            ..valid_partial_regeneration_workflow_request()
+        };
+        let upper_bound_request = PartialRegenerationStreamWorkflowRequest {
+            context_chars: Some(2000),
+            target_word_count: Some(5000),
+            user_instructions: "a".repeat(1000),
+            web_research_query: Some("q".repeat(500)),
+            ..valid_partial_regeneration_workflow_request()
+        };
+
+        lower_bound_request
+            .validate_request_bounds()
+            .expect("python lower partial regeneration bounds should pass");
+        upper_bound_request
+            .validate_request_bounds()
+            .expect("python upper partial regeneration bounds should pass");
     }
 
     #[test]

@@ -102,7 +102,10 @@ fn compact_bulleted_reference_block(
     detail_lines_per_item: usize,
     line_preview_length: usize,
 ) -> Option<String> {
-    let lines: Vec<String> = text.lines().map(|line| line.trim_end().to_string()).collect();
+    let lines: Vec<String> = text
+        .lines()
+        .map(|line| line.trim_end().to_string())
+        .collect();
     if lines.is_empty() {
         return None;
     }
@@ -284,7 +287,10 @@ fn maybe_replace(current_value: &mut String, candidate: Option<String>) {
     let Some(candidate) = candidate.map(|value| value.trim().to_string()) else {
         return;
     };
-    if current_trimmed.is_empty() || candidate.is_empty() || candidate.chars().count() >= current_trimmed.chars().count() {
+    if current_trimmed.is_empty()
+        || candidate.is_empty()
+        || candidate.chars().count() >= current_trimmed.chars().count()
+    {
         return;
     }
     *current_value = candidate;
@@ -344,8 +350,10 @@ pub(crate) fn compact_generation_context(
         &mut provider_payload.relevant_memories,
         compacted_relevant_memories,
     );
-    let compacted_continuation_point =
-        compact_tail_text(&previous_context.continuation_point, profile.continuation_point);
+    let compacted_continuation_point = compact_tail_text(
+        &previous_context.continuation_point,
+        profile.continuation_point,
+    );
     maybe_replace(
         &mut previous_context.continuation_point,
         compacted_continuation_point,
@@ -451,7 +459,10 @@ mod tests {
         assert!(compacted_payload.relevant_memories.chars().count() < 860 + 4);
         assert!(compacted_payload.previous_chapter_summary.chars().count() < 220 + 4);
         assert_eq!(compacted_previous.continuation_point.chars().count(), 420);
-        assert_eq!(compacted_previous.previous_chapter_content.chars().count(), 420);
+        assert_eq!(
+            compacted_previous.previous_chapter_content.chars().count(),
+            420
+        );
     }
 
     #[test]

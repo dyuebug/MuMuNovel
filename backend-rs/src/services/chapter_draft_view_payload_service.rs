@@ -588,6 +588,7 @@ pub fn build_chapter_draft_analysis_view_fragments(
     histories: &[generation_history::Model],
     candidate_attempt: Option<&chapter_draft_attempt::Model>,
     chapter_updated_at: Option<NaiveDateTime>,
+    include_full_text: bool,
 ) -> ChapterDraftAnalysisViewFragments {
     let auto_revision_draft = histories.iter().find_map(|history| {
         let reviser_result =
@@ -597,12 +598,13 @@ pub fn build_chapter_draft_analysis_view_fragments(
             Some(&history.id),
             history.created_at,
             chapter_updated_at,
-            false,
+            include_full_text,
         ))
     });
 
-    let candidate_draft = candidate_attempt
-        .map(|attempt| build_candidate_draft_payload(attempt, chapter_updated_at, false));
+    let candidate_draft = candidate_attempt.map(|attempt| {
+        build_candidate_draft_payload(attempt, chapter_updated_at, include_full_text)
+    });
 
     ChapterDraftAnalysisViewFragments {
         auto_revision_draft,
@@ -1250,6 +1252,7 @@ mod tests {
             &[invalid_history, valid_history],
             Some(&candidate_attempt),
             Some(chapter_updated_at),
+            false,
         );
 
         let auto_revision = fragments.auto_revision_draft.expect("auto revision draft");
@@ -1266,7 +1269,7 @@ mod tests {
 
     #[test]
     fn should_build_empty_chapter_draft_analysis_view_fragments_without_inputs() {
-        let fragments = build_chapter_draft_analysis_view_fragments(&[], None, None);
+        let fragments = build_chapter_draft_analysis_view_fragments(&[], None, None, false);
 
         assert!(fragments.auto_revision_draft.is_none());
         assert!(fragments.candidate_draft.is_none());
@@ -1291,6 +1294,45 @@ mod tests {
         let parsed = parse_reviser_result_from_history(history.generated_content.as_deref());
 
         assert_eq!(parsed, Some(json!({"revised_text": "修订正文"})));
+    }
+
+    #[test]
+    fn should_build_chapter_draft_analysis_view_fragments_with_full_text_when_requested() {
+        let chapter_updated_at = naive_datetime(2026, 5, 18, 9, 0, 0);
+        let history = generation_history(
+            "history-full",
+            Some(
+                json!({
+                    "log_type": "chapter_text_reviser_v1",
+                    "reviser_result": {
+                        "revised_text": "修订正文"
+                    }
+                })
+                .to_string(),
+            ),
+            Some(naive_datetime(2026, 5, 17, 12, 30, 45)),
+        );
+        let candidate_attempt = candidate_draft_attempt(
+            Some("候选正文"),
+            4,
+            Some(json!({
+                "candidate_full_content": "完整候选正文",
+                "content_complete": true
+            })),
+        );
+
+        let fragments = build_chapter_draft_analysis_view_fragments(
+            &[history],
+            Some(&candidate_attempt),
+            Some(chapter_updated_at),
+            true,
+        );
+
+        let auto_revision = fragments.auto_revision_draft.expect("auto revision draft");
+        let candidate = fragments.candidate_draft.expect("candidate draft");
+
+        assert_eq!(auto_revision["revised_text"], json!("修订正文"));
+        assert_eq!(candidate["content"], json!("完整候选正文"));
     }
 
     #[test]

@@ -83,6 +83,12 @@ impl ProjectService {
         genre: Option<&str>,
         outline_mode: Option<&str>,
         target_words: Option<i32>,
+        default_creative_mode: Option<&str>,
+        default_story_focus: Option<&str>,
+        default_plot_stage: Option<&str>,
+        default_story_creation_brief: Option<&str>,
+        default_quality_preset: Option<&str>,
+        default_quality_notes: Option<&str>,
     ) -> Result<project::Model, String> {
         let now = Utc::now().naive_utc();
         let model = project::ActiveModel {
@@ -105,12 +111,12 @@ impl ProjectService {
             chapter_count: Set(None),
             narrative_perspective: Set(None),
             character_count: Set(5),
-            default_creative_mode: Set(None),
-            default_story_focus: Set(None),
-            default_plot_stage: Set(None),
-            default_story_creation_brief: Set(None),
-            default_quality_preset: Set(None),
-            default_quality_notes: Set(None),
+            default_creative_mode: Set(default_creative_mode.map(str::to_string)),
+            default_story_focus: Set(default_story_focus.map(str::to_string)),
+            default_plot_stage: Set(default_plot_stage.map(str::to_string)),
+            default_story_creation_brief: Set(default_story_creation_brief.map(str::to_string)),
+            default_quality_preset: Set(default_quality_preset.map(str::to_string)),
+            default_quality_notes: Set(default_quality_notes.map(str::to_string)),
             created_at: Set(now),
             updated_at: Set(Some(now)),
         };
@@ -258,8 +264,13 @@ impl ProjectService {
         genre: Option<&str>,
         status: Option<&str>,
         target_words: Option<i32>,
-        outline_mode: Option<&str>,
+        world_time_period: Option<&str>,
+        world_location: Option<&str>,
+        world_atmosphere: Option<&str>,
+        world_rules: Option<&str>,
+        chapter_count: Option<i32>,
         narrative_perspective: Option<&str>,
+        character_count: Option<i32>,
         default_creative_mode: Option<&str>,
         default_story_focus: Option<&str>,
         default_plot_stage: Option<&str>,
@@ -291,11 +302,26 @@ impl ProjectService {
         if let Some(v) = target_words {
             active.target_words = Set(v);
         }
-        if let Some(v) = outline_mode {
-            active.outline_mode = Set(v.to_string());
+        if let Some(v) = world_time_period {
+            active.world_time_period = Set(Some(v.to_string()));
+        }
+        if let Some(v) = world_location {
+            active.world_location = Set(Some(v.to_string()));
+        }
+        if let Some(v) = world_atmosphere {
+            active.world_atmosphere = Set(Some(v.to_string()));
+        }
+        if let Some(v) = world_rules {
+            active.world_rules = Set(Some(v.to_string()));
+        }
+        if let Some(v) = chapter_count {
+            active.chapter_count = Set(Some(v));
         }
         if let Some(v) = narrative_perspective {
             active.narrative_perspective = Set(Some(v.to_string()));
+        }
+        if let Some(v) = character_count {
+            active.character_count = Set(v);
         }
         if let Some(v) = default_creative_mode {
             active.default_creative_mode = Set(Some(v.to_string()));

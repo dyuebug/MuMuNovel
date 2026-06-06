@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::models::chapter;
@@ -9,18 +10,25 @@ use crate::services::chapter_narrative_cleaner_service::{
 };
 use crate::services::chapter_service::ChapterService;
 
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct ApplyPartialRegenerateRouteRequest {
+    pub new_text: Option<Value>,
+    pub start_position: Option<i64>,
+    pub end_position: Option<i64>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ApplyPartialRegenerateRequest {
     new_text: Option<String>,
-    start_position: Option<usize>,
-    end_position: Option<usize>,
+    start_position: Option<i64>,
+    end_position: Option<i64>,
 }
 
 impl ApplyPartialRegenerateRequest {
     pub fn new(
         new_text: Option<String>,
-        start_position: Option<usize>,
-        end_position: Option<usize>,
+        start_position: Option<i64>,
+        end_position: Option<i64>,
     ) -> Self {
         Self {
             new_text,
@@ -29,25 +37,41 @@ impl ApplyPartialRegenerateRequest {
         }
     }
 
-    pub fn from_route_payload(
-        new_text: Option<String>,
-        start_position: Option<usize>,
-        end_position: Option<usize>,
-    ) -> Self {
-        Self::new(new_text, start_position, end_position)
+    fn from_route_request(route_request: ApplyPartialRegenerateRouteRequest) -> Self {
+        Self::new(
+            route_request.new_text.and_then(coerce_apply_new_text_value),
+            route_request.start_position,
+            route_request.end_position,
+        )
     }
 
     pub fn new_text(&self) -> Option<&str> {
         self.new_text.as_deref()
     }
 
-    pub fn start_position(&self) -> usize {
+    pub fn start_position(&self) -> i64 {
         self.start_position.unwrap_or(0)
     }
 
-    pub fn end_position(&self) -> usize {
+    pub fn end_position(&self) -> i64 {
         self.end_position.unwrap_or(0)
     }
+}
+
+fn coerce_apply_new_text_value(value: Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::String(value) => Some(value),
+        Value::Bool(value) => Some(if value { "True" } else { "False" }.to_string()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Array(_) | Value::Object(_) => Some(value.to_string()),
+    }
+}
+
+pub fn build_apply_partial_regenerate_request_from_route_payload(
+    route_request: ApplyPartialRegenerateRouteRequest,
+) -> ApplyPartialRegenerateRequest {
+    ApplyPartialRegenerateRequest::from_route_request(route_request)
 }
 
 pub enum ApplyPartialRegenerateError {
@@ -86,8 +110,8 @@ pub async fn apply_partial_regenerate_payload(
     user_id: &str,
     chapter: &chapter::Model,
     new_text_raw: &str,
-    start_position: usize,
-    end_position: usize,
+    start_position: i64,
+    end_position: i64,
 ) -> Result<Value, ApplyPartialRegenerateError> {
     let new_content =
         prepare_partial_regenerate_apply(chapter, new_text_raw, start_position, end_position)?;
@@ -98,8 +122,6 @@ pub async fn apply_partial_regenerate_payload(
         user_id,
         None,
         Some(&new_content),
-        None,
-        None,
         None,
         None,
     )
@@ -122,8 +144,8 @@ pub async fn apply_partial_regenerate_payload(
 fn prepare_partial_regenerate_apply(
     chapter: &chapter::Model,
     new_text_raw: &str,
-    start_position: usize,
-    end_position: usize,
+    start_position: i64,
+    end_position: i64,
 ) -> Result<String, ApplyPartialRegenerateError> {
     let (new_text, _) = sanitize_generated_narrative_text(new_text_raw);
     if new_text.trim().is_empty() {
@@ -136,9 +158,15 @@ fn prepare_partial_regenerate_apply(
     let current_content = chapter.content.clone().unwrap_or_default();
     let content_chars: Vec<char> = current_content.chars().collect();
     let content_length = content_chars.len();
-    if start_position >= end_position || end_position > content_length {
+    if start_position < 0
+        || end_position < 0
+        || start_position >= end_position
+        || end_position as usize > content_length
+    {
         return Err(ApplyPartialRegenerateError::InvalidRange);
     }
+    let start_position = start_position as usize;
+    let end_position = end_position as usize;
 
     let prefix: String = content_chars[..start_position].iter().collect();
     let suffix: String = content_chars[end_position..].iter().collect();
@@ -150,13 +178,15 @@ fn prepare_partial_regenerate_apply(
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDateTime;
+    use serde_json::json;
 
     use crate::models::chapter;
     use crate::services::chapter_access_service::LoadAccessibleChapterError;
 
     use super::{
+        build_apply_partial_regenerate_request_from_route_payload,
         prepare_partial_regenerate_apply, ApplyPartialRegenerateError,
-        ApplyPartialRegenerateRequest,
+        ApplyPartialRegenerateRequest, ApplyPartialRegenerateRouteRequest,
     };
 
     fn chapter_with_content(content: &str) -> chapter::Model {
@@ -232,16 +262,49 @@ mod tests {
     }
 
     #[test]
+    fn should_reject_negative_partial_regenerate_apply_range() {
+        let chapter = chapter_with_content("一二三");
+        let error = apply_error(prepare_partial_regenerate_apply(&chapter, "替换", -1, 2));
+
+        assert!(matches!(error, ApplyPartialRegenerateError::InvalidRange));
+    }
+
+    #[test]
     fn should_build_apply_partial_regenerate_request_from_route_payload() {
-        let request = ApplyPartialRegenerateRequest::from_route_payload(
-            Some("新文本".to_string()),
-            Some(12),
-            Some(24),
+        let request = build_apply_partial_regenerate_request_from_route_payload(
+            ApplyPartialRegenerateRouteRequest {
+                new_text: Some(json!("新文本")),
+                start_position: Some(12),
+                end_position: Some(24),
+            },
         );
 
         assert_eq!(request.new_text(), Some("新文本"));
         assert_eq!(request.start_position(), 12);
         assert_eq!(request.end_position(), 24);
+    }
+
+    #[test]
+    fn should_coerce_apply_partial_regenerate_new_text_like_python_dict() {
+        let number_request = build_apply_partial_regenerate_request_from_route_payload(
+            ApplyPartialRegenerateRouteRequest {
+                new_text: Some(json!(123)),
+                start_position: Some(-1),
+                end_position: Some(2),
+            },
+        );
+        let bool_request = build_apply_partial_regenerate_request_from_route_payload(
+            ApplyPartialRegenerateRouteRequest {
+                new_text: Some(json!(true)),
+                start_position: None,
+                end_position: None,
+            },
+        );
+
+        assert_eq!(number_request.new_text(), Some("123"));
+        assert_eq!(number_request.start_position(), -1);
+        assert_eq!(number_request.end_position(), 2);
+        assert_eq!(bool_request.new_text(), Some("True"));
     }
 
     #[test]

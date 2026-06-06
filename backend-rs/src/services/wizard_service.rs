@@ -11,6 +11,13 @@ use crate::models::{career, character, project};
 use crate::services::career_service::CareerService;
 use crate::services::chapter_service::ChapterService;
 use crate::services::character_service::CharacterService;
+use crate::services::outline_quality_summary_snapshot_service::build_outline_quality_guidance_bundle;
+use crate::services::outline_requirement_service::{
+    build_project_long_term_goal, build_wizard_outline_requirements,
+};
+use crate::services::outline_runtime_system_prompt_service::{
+    build_outline_runtime_system_prompt, OutlineRuntimeStage,
+};
 use crate::services::outline_service::OutlineService;
 use crate::services::project_service::{CreateProjectParams, ProjectService};
 use crate::services::prompt_template_service::PromptTemplateService;
@@ -18,6 +25,13 @@ use crate::services::settings_service::SettingsService;
 use crate::utils::sse::SseChannel;
 
 const MAX_WORLD_RETRIES: u32 = 3;
+
+fn build_outline_create_system_prompt(
+    project_model: &project::Model,
+    chapter_count: usize,
+) -> String {
+    build_outline_runtime_system_prompt(project_model, chapter_count, OutlineRuntimeStage::Opening)
+}
 
 pub fn clean_json_response(text: &str) -> String {
     let text = text.trim();
@@ -149,8 +163,45 @@ fn default_world_data() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{clean_json_response, parse_character_batch_items};
+    use super::{
+        build_outline_create_system_prompt, clean_json_response, parse_character_batch_items,
+    };
+    use crate::models::project;
+    use chrono::NaiveDateTime;
     use serde_json::json;
+
+    fn project_model() -> project::Model {
+        project::Model {
+            id: "project-1".to_string(),
+            user_id: "user-1".to_string(),
+            title: "测试小说".to_string(),
+            description: None,
+            theme: Some("成长".to_string()),
+            genre: Some("玄幻".to_string()),
+            target_words: 100000,
+            current_words: 0,
+            status: "active".to_string(),
+            wizard_status: "completed".to_string(),
+            wizard_step: 4,
+            outline_mode: "one-to-many".to_string(),
+            world_time_period: Some("乱世末年".to_string()),
+            world_location: Some("北境雪原".to_string()),
+            world_atmosphere: Some("压抑肃杀".to_string()),
+            world_rules: Some("灵力暴走会反噬经脉".to_string()),
+            chapter_count: Some(100),
+            narrative_perspective: Some("第三人称".to_string()),
+            character_count: 4,
+            default_creative_mode: None,
+            default_story_focus: None,
+            default_plot_stage: None,
+            default_story_creation_brief: None,
+            default_quality_preset: None,
+            default_quality_notes: None,
+            created_at: NaiveDateTime::parse_from_str("1970-01-01 00:00:00", "%Y-%m-%d %H:%M:%S")
+                .unwrap(),
+            updated_at: None,
+        }
+    }
 
     #[test]
     fn extracts_json_array_from_wrapped_text() {
@@ -182,6 +233,16 @@ mod tests {
         let parsed = parse_character_batch_items(cleaned).unwrap();
 
         assert_eq!(parsed, vec![json!({"name":"甲"}), json!({"name":"乙"})]);
+    }
+
+    #[test]
+    fn outline_create_system_prompt_uses_shared_runtime_constraints() {
+        let prompt = build_outline_create_system_prompt(&project_model(), 3);
+
+        assert!(prompt.contains("当前阶段：开局阶段"));
+        assert!(prompt.contains("本轮目标章节数：3"));
+        assert!(prompt.contains("时间背景：乱世末年"));
+        assert!(prompt.contains("每章至少包含一次“目标受阻→角色选择→代价/新麻烦”的推进链"));
     }
 }
 
@@ -541,11 +602,11 @@ pub async fn regenerate_world_building(
     params.insert("title".into(), project.title.clone());
     params.insert(
         "theme".into(),
-        project.theme.unwrap_or_else(|| "未设定".into()),
+        project.theme.as_deref().unwrap_or("未设定").to_string(),
     );
     params.insert(
         "genre".into(),
-        project.genre.unwrap_or_else(|| "通用".into()),
+        project.genre.as_deref().unwrap_or("通用").to_string(),
     );
     params.insert(
         "description".into(),
@@ -1760,7 +1821,7 @@ pub async fn generate_characters(
 
 // --- Outline generation helpers ---
 
-fn normalize_outline_items(raw: &Value) -> Vec<Value> {
+pub(crate) fn normalize_outline_items(raw: &Value) -> Vec<Value> {
     if let Some(obj) = raw.as_object() {
         if let Some(chapters) = obj.get("chapters").and_then(|v| v.as_array()) {
             if !chapters.is_empty() {
@@ -1818,7 +1879,7 @@ fn format_outline_value(value: &Value) -> String {
     value.as_str().unwrap_or("").to_string()
 }
 
-fn build_outline_content(item: &Value) -> String {
+pub(crate) fn build_outline_content(item: &Value) -> String {
     let summary = item
         .get("summary")
         .or_else(|| item.get("content"))
@@ -1882,6 +1943,7 @@ pub async fn generate_outline(
     story_creation_brief: Option<&str>,
     quality_preset: Option<&str>,
     quality_notes: Option<&str>,
+    compact_mode: bool,
     provider: Option<&str>,
     model: Option<&str>,
 ) {
@@ -1971,16 +2033,24 @@ pub async fn generate_outline(
             return;
         }
     };
+    let quality_guidance_bundle =
+        match build_outline_quality_guidance_bundle(db, project_id, chapter_count).await {
+            Ok(bundle) => bundle,
+            Err(error) => {
+                warn!("Build outline-create quality guidance failed: {}", error);
+                Default::default()
+            }
+        };
 
     let mut params: HashMap<String, String> = HashMap::new();
     params.insert("title".into(), project.title.clone());
     params.insert(
         "theme".into(),
-        project.theme.unwrap_or_else(|| "未设定".into()),
+        project.theme.as_deref().unwrap_or("未设定").to_string(),
     );
     params.insert(
         "genre".into(),
-        project.genre.unwrap_or_else(|| "通用".into()),
+        project.genre.as_deref().unwrap_or("通用").to_string(),
     );
     params.insert("chapter_count".into(), chapter_count.to_string());
     params.insert(
@@ -1990,25 +2060,68 @@ pub async fn generate_outline(
     params.insert("target_words".into(), (target_words / 10).to_string());
     params.insert(
         "time_period".into(),
-        project.world_time_period.unwrap_or_else(|| "未设定".into()),
+        project
+            .world_time_period
+            .as_deref()
+            .unwrap_or("未设定")
+            .to_string(),
     );
     params.insert(
         "location".into(),
-        project.world_location.unwrap_or_else(|| "未设定".into()),
+        project
+            .world_location
+            .as_deref()
+            .unwrap_or("未设定")
+            .to_string(),
     );
     params.insert(
         "atmosphere".into(),
-        project.world_atmosphere.unwrap_or_else(|| "未设定".into()),
+        project
+            .world_atmosphere
+            .as_deref()
+            .unwrap_or("未设定")
+            .to_string(),
     );
     params.insert(
         "rules".into(),
-        project.world_rules.unwrap_or_else(|| "未设定".into()),
+        project
+            .world_rules
+            .as_deref()
+            .unwrap_or("未设定")
+            .to_string(),
     );
     params.insert("characters_info".into(), characters_info);
     params.insert("mcp_references".into(), String::new());
+    let project_long_term_goal = build_project_long_term_goal(
+        project.theme.as_deref(),
+        project.description.as_deref(),
+        story_creation_brief.or(project.default_story_creation_brief.as_deref()),
+        project
+            .chapter_count
+            .and_then(|value| usize::try_from(value).ok()),
+        usize::try_from(target_words)
+            .ok()
+            .filter(|value| *value > 0),
+    );
     params.insert(
         "requirements".into(),
-        requirements.unwrap_or("").to_string(),
+        build_wizard_outline_requirements(
+            requirements,
+            chapter_count,
+            creative_mode,
+            story_focus,
+            plot_stage,
+            story_creation_brief,
+            quality_preset,
+            quality_notes,
+            project_long_term_goal.as_deref(),
+            usize::try_from(target_words)
+                .ok()
+                .filter(|value| *value > 0),
+            Some(quality_guidance_bundle.quality_repair_guidance.as_str()),
+            Some(quality_guidance_bundle.quality_trend_guidance.as_str()),
+            compact_mode,
+        ),
     );
     params.insert("external_assets".into(), String::new());
     params.insert("reference_assets".into(), String::new());
@@ -2041,10 +2154,7 @@ pub async fn generate_outline(
         }
     };
 
-    let sys_prompt = format!(
-        "你是一位专业的小说大纲设计师。你需要为小说《{}》生成{}个大纲节点。请严格输出JSON格式。",
-        project.title, chapter_count
-    );
+    let sys_prompt = build_outline_create_system_prompt(&project, chapter_count);
 
     // --- Stream AI generation ---
     channel

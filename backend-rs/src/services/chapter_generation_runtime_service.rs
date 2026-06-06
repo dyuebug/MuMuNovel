@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::ai::service::AIService;
 use crate::ai::types::AIResponse;
 use crate::models::{chapter, generation_history, project};
-use crate::services::chapter_batch_generation_access_service::{
+use crate::services::chapter_generation_access_service::{
     load_accessible_chapter_for_generation, LoadAccessibleChapterForGenerationError,
 };
 use crate::services::chapter_generation_context_compaction_service::compact_generation_context;
@@ -20,6 +20,8 @@ use crate::services::chapter_generation_prompt_service::{
 };
 
 const CHAPTER_GENERATION_HISTORY_MODEL: &str = "chapter_generation_v1";
+const CHAPTER_GENERATION_HISTORY_LOG_TYPE: &str = "chapter_generation_quality_v1";
+const CHAPTER_GENERATION_HISTORY_PREVIEW_LENGTH: usize = 500;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LoadGenerationContextError {
@@ -55,6 +57,198 @@ pub(crate) struct GeneratedChapterResult {
     pub(crate) word_count: i32,
 }
 
+fn build_generated_history_preview(content: &str) -> String {
+    content
+        .chars()
+        .take(CHAPTER_GENERATION_HISTORY_PREVIEW_LENGTH)
+        .collect()
+}
+
+fn build_generated_history_story_runtime_snapshot_from_contract(
+    story_runtime_contract: &Value,
+) -> Option<Value> {
+    let guidance = story_runtime_contract
+        .get("guidance")
+        .and_then(Value::as_object);
+    let blueprint = story_runtime_contract
+        .get("blueprint")
+        .and_then(Value::as_object);
+    if guidance.is_none() && blueprint.is_none() {
+        return None;
+    }
+
+    let mut snapshot = serde_json::Map::new();
+    if let Some(guidance) = guidance {
+        for field_name in [
+            "creative_mode",
+            "story_focus",
+            "plot_stage",
+            "story_creation_brief",
+            "quality_preset",
+            "quality_notes",
+        ] {
+            if let Some(value) = guidance
+                .get(field_name)
+                .cloned()
+                .filter(|value| !value.is_null())
+            {
+                snapshot.insert(field_name.to_string(), value);
+            }
+        }
+    }
+
+    if let Some(blueprint) = blueprint {
+        snapshot.insert(
+            "story_long_term_goal".to_string(),
+            blueprint
+                .get("long_term_goal")
+                .cloned()
+                .unwrap_or_else(|| json!("")),
+        );
+        snapshot.insert(
+            "chapter_count".to_string(),
+            blueprint
+                .get("chapter_count")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        snapshot.insert(
+            "current_chapter_number".to_string(),
+            blueprint
+                .get("current_chapter_number")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        snapshot.insert(
+            "target_word_count".to_string(),
+            blueprint
+                .get("target_word_count")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+        snapshot.insert(
+            "character_focus".to_string(),
+            blueprint
+                .get("character_focus_names")
+                .cloned()
+                .filter(Value::is_array)
+                .unwrap_or_else(|| json!([])),
+        );
+        snapshot.insert(
+            "foreshadow_payoff_plan".to_string(),
+            blueprint
+                .get("foreshadow_payoff_plan")
+                .cloned()
+                .filter(Value::is_array)
+                .unwrap_or_else(|| json!([])),
+        );
+        snapshot.insert(
+            "character_state_ledger".to_string(),
+            blueprint
+                .get("character_state_ledger")
+                .cloned()
+                .filter(Value::is_array)
+                .unwrap_or_else(|| json!([])),
+        );
+        snapshot.insert(
+            "relationship_state_ledger".to_string(),
+            blueprint
+                .get("relationship_state_ledger")
+                .cloned()
+                .filter(Value::is_array)
+                .unwrap_or_else(|| json!([])),
+        );
+        snapshot.insert(
+            "foreshadow_state_ledger".to_string(),
+            blueprint
+                .get("foreshadow_state_ledger")
+                .cloned()
+                .filter(Value::is_array)
+                .unwrap_or_else(|| json!([])),
+        );
+        snapshot.insert(
+            "organization_state_ledger".to_string(),
+            blueprint
+                .get("organization_state_ledger")
+                .cloned()
+                .filter(Value::is_array)
+                .unwrap_or_else(|| json!([])),
+        );
+        snapshot.insert(
+            "career_state_ledger".to_string(),
+            blueprint
+                .get("career_state_ledger")
+                .cloned()
+                .filter(Value::is_array)
+                .unwrap_or_else(|| json!([])),
+        );
+    }
+
+    (!snapshot.is_empty()).then_some(Value::Object(snapshot))
+}
+
+fn generated_history_story_runtime_contract(quality_metrics: Option<&Value>) -> Option<Value> {
+    quality_metrics
+        .and_then(|metrics| metrics.get("story_runtime_contract"))
+        .filter(|payload| payload.is_object())
+        .cloned()
+}
+
+fn generated_history_story_runtime_snapshot(
+    quality_metrics: Option<&Value>,
+    story_runtime_contract: Option<&Value>,
+) -> Option<Value> {
+    quality_metrics
+        .and_then(|metrics| metrics.get("quality_runtime_context"))
+        .and_then(|payload| payload.as_object().filter(|payload| !payload.is_empty()))
+        .map(|payload| Value::Object(payload.clone()))
+        .or_else(|| {
+            story_runtime_contract
+                .and_then(build_generated_history_story_runtime_snapshot_from_contract)
+        })
+}
+
+fn build_generated_chapter_quality_history_payload(
+    content: &str,
+    quality_metrics: Option<&Value>,
+    created_at: chrono::NaiveDateTime,
+) -> Value {
+    let story_runtime_contract = generated_history_story_runtime_contract(quality_metrics);
+    let story_runtime_snapshot =
+        generated_history_story_runtime_snapshot(quality_metrics, story_runtime_contract.as_ref());
+
+    let mut payload = serde_json::Map::from_iter([
+        (
+            "log_type".to_string(),
+            json!(CHAPTER_GENERATION_HISTORY_LOG_TYPE),
+        ),
+        ("content".to_string(), json!(content)),
+        (
+            "preview".to_string(),
+            json!(build_generated_history_preview(content)),
+        ),
+        (
+            "quality_metrics".to_string(),
+            quality_metrics.cloned().unwrap_or(Value::Null),
+        ),
+        (
+            "generated_at".to_string(),
+            json!(created_at.format("%Y-%m-%dT%H:%M:%S").to_string()),
+        ),
+        ("content_applied".to_string(), json!(true)),
+        ("attempt_state".to_string(), json!("generated_from_runtime")),
+    ]);
+
+    if let Some(story_runtime_snapshot) = story_runtime_snapshot {
+        payload.insert("story_runtime_snapshot".to_string(), story_runtime_snapshot);
+    }
+    if let Some(story_runtime_contract) = story_runtime_contract {
+        payload.insert("story_runtime_contract".to_string(), story_runtime_contract);
+    }
+
+    Value::Object(payload)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct ChapterGenerationRuntimeContext {
     chapter_model: chapter::Model,
@@ -64,13 +258,11 @@ struct ChapterGenerationRuntimeContext {
 }
 
 impl ChapterGenerationRuntimeContext {
-    fn build_generated_history_payload(result: &GeneratedChapterResult) -> Value {
-        json!({
-            "content": result.content,
-            "quality_metrics": Value::Null,
-            "content_applied": true,
-            "attempt_state": "generated_from_runtime",
-        })
+    fn build_generated_history_payload(
+        result: &GeneratedChapterResult,
+        created_at: chrono::NaiveDateTime,
+    ) -> Value {
+        build_generated_chapter_quality_history_payload(&result.content, None, created_at)
     }
 
     fn build_generated_history_model(
@@ -85,7 +277,7 @@ impl ChapterGenerationRuntimeContext {
             chapter_id: Set(Some(self.chapter_model.id.clone())),
             prompt: Set(Some(prompt)),
             generated_content: Set(Some(
-                Self::build_generated_history_payload(result).to_string(),
+                Self::build_generated_history_payload(result, created_at).to_string(),
             )),
             model: Set(Some(CHAPTER_GENERATION_HISTORY_MODEL.to_string())),
             tokens_used: Set(None),
@@ -122,7 +314,10 @@ impl ChapterGenerationRuntimeContext {
         active.word_count = Set(result.word_count);
         active.status = Set("draft".to_string());
         active.updated_at = Set(Some(now));
-        active.update(&txn).await.map_err(|error| error.to_string())?;
+        active
+            .update(&txn)
+            .await
+            .map_err(|error| error.to_string())?;
 
         history
             .insert(&txn)
@@ -172,20 +367,17 @@ impl ChapterGenerationRuntimeContext {
             .map_err(|error| error.to_string())?;
 
         let generated_result = self.build_generated_result(response);
-        self.persist_generated_result(db, prompt, generated_result).await
+        self.persist_generated_result(db, prompt, generated_result)
+            .await
     }
 }
 
 pub(crate) fn build_generated_chapter_history_payload_with_quality_metrics(
     content: &str,
     quality_metrics: Option<&Value>,
+    created_at: chrono::NaiveDateTime,
 ) -> Value {
-    json!({
-        "content": content,
-        "quality_metrics": quality_metrics.cloned().unwrap_or(Value::Null),
-        "content_applied": true,
-        "attempt_state": "generated_from_runtime",
-    })
+    build_generated_chapter_quality_history_payload(content, quality_metrics, created_at)
 }
 
 pub(crate) async fn update_latest_generated_chapter_history_quality_metrics(
@@ -196,7 +388,10 @@ pub(crate) async fn update_latest_generated_chapter_history_quality_metrics(
 ) -> Result<(), String> {
     let Some(history_model) = generation_history::Entity::find()
         .filter(generation_history::Column::ChapterId.eq(Some(chapter_id.to_string())))
-        .filter(generation_history::Column::Model.eq(Some(CHAPTER_GENERATION_HISTORY_MODEL.to_string())))
+        .filter(
+            generation_history::Column::Model
+                .eq(Some(CHAPTER_GENERATION_HISTORY_MODEL.to_string())),
+        )
         .order_by_desc(generation_history::Column::CreatedAt)
         .one(db)
         .await
@@ -206,10 +401,17 @@ pub(crate) async fn update_latest_generated_chapter_history_quality_metrics(
     };
 
     let mut active: generation_history::ActiveModel = history_model.into();
+    let created_at = active
+        .created_at
+        .clone()
+        .take()
+        .flatten()
+        .unwrap_or_else(|| Utc::now().naive_utc());
     active.generated_content = Set(Some(
         build_generated_chapter_history_payload_with_quality_metrics(
             content,
             Some(quality_metrics),
+            created_at,
         )
         .to_string(),
     ));
@@ -278,12 +480,13 @@ mod tests {
         build_generated_chapter_history_payload_with_quality_metrics,
         build_previous_chapter_prompt_context, ChapterGenerationRuntimeContext,
         GeneratedChapterResult, LoadGenerationContextError, CHAPTER_GENERATION_HISTORY_MODEL,
+        CHAPTER_GENERATION_HISTORY_PREVIEW_LENGTH,
     };
     use crate::ai::types::AIResponse;
     use crate::models::{chapter, project};
-    use serde_json::json;
-    use crate::services::chapter_batch_generation_access_service::LoadAccessibleChapterForGenerationError;
+    use crate::services::chapter_generation_access_service::LoadAccessibleChapterForGenerationError;
     use chrono::Utc;
+    use serde_json::json;
 
     fn build_chapter() -> chapter::Model {
         chapter::Model {
@@ -310,6 +513,7 @@ mod tests {
             content: "  你好\n世界  ".to_string(),
             tool_calls: None,
             finish_reason: Some("stop".to_string()),
+            transport_diagnostics: None,
         };
         let context = ChapterGenerationRuntimeContext {
             chapter_model,
@@ -381,13 +585,18 @@ mod tests {
             word_count: 5,
         };
 
-        let payload = ChapterGenerationRuntimeContext::build_generated_history_payload(&result);
+        let created_at = Utc::now().naive_utc();
+        let payload =
+            ChapterGenerationRuntimeContext::build_generated_history_payload(&result, created_at);
 
         assert_eq!(
             payload,
             json!({
+                "log_type": "chapter_generation_quality_v1",
                 "content": "你好\n世界",
+                "preview": "你好\n世界",
                 "quality_metrics": null,
+                "generated_at": created_at.format("%Y-%m-%dT%H:%M:%S").to_string(),
                 "content_applied": true,
                 "attempt_state": "generated_from_runtime",
             })
@@ -401,6 +610,7 @@ mod tests {
 
     #[test]
     fn should_build_generated_history_payload_with_runtime_quality_metrics() {
+        let created_at = Utc::now().naive_utc();
         let payload = build_generated_chapter_history_payload_with_quality_metrics(
             "正文",
             Some(&json!({
@@ -412,9 +622,16 @@ mod tests {
                     "decision": "auto_repair"
                 }
             })),
+            created_at,
         );
 
+        assert_eq!(payload["log_type"], "chapter_generation_quality_v1");
         assert_eq!(payload["content"], "正文");
+        assert_eq!(payload["preview"], "正文");
+        assert_eq!(
+            payload["generated_at"],
+            created_at.format("%Y-%m-%dT%H:%M:%S").to_string()
+        );
         assert_eq!(payload["quality_metrics"]["overall_score"], 8.4);
         assert_eq!(
             payload["quality_metrics"]["repair_guidance"]["summary"],
@@ -425,6 +642,110 @@ mod tests {
             "auto_repair"
         );
         assert_eq!(payload["attempt_state"], "generated_from_runtime");
+    }
+
+    #[test]
+    fn should_keep_python_compat_runtime_history_metadata_when_contract_exists() {
+        let created_at = Utc::now().naive_utc();
+        let payload = build_generated_chapter_history_payload_with_quality_metrics(
+            "章节正文".repeat(260).as_str(),
+            Some(&json!({
+                "overall_score": 8.8,
+                "quality_runtime_context": {
+                    "scope": "chapter",
+                    "source": "plot_analysis"
+                },
+                "story_runtime_contract": {
+                    "guidance": {
+                        "creative_mode": "hook"
+                    },
+                    "blueprint": {
+                        "current_chapter_number": 6,
+                        "target_word_count": 2800
+                    }
+                }
+            })),
+            created_at,
+        );
+
+        assert_eq!(payload["log_type"], "chapter_generation_quality_v1");
+        assert_eq!(
+            payload["generated_at"],
+            created_at.format("%Y-%m-%dT%H:%M:%S").to_string()
+        );
+        assert_eq!(
+            payload["preview"]
+                .as_str()
+                .expect("preview text")
+                .chars()
+                .count(),
+            CHAPTER_GENERATION_HISTORY_PREVIEW_LENGTH
+        );
+        assert_eq!(
+            payload["story_runtime_snapshot"],
+            json!({
+                "scope": "chapter",
+                "source": "plot_analysis"
+            })
+        );
+        assert_eq!(
+            payload["story_runtime_contract"]["guidance"]["creative_mode"],
+            "hook"
+        );
+    }
+
+    #[test]
+    fn should_derive_story_runtime_snapshot_from_contract_when_metrics_context_missing() {
+        let payload = build_generated_chapter_history_payload_with_quality_metrics(
+            "正文",
+            Some(&json!({
+                "overall_score": 7.6,
+                "story_runtime_contract": {
+                    "guidance": {
+                        "story_focus": "advance_plot",
+                        "plot_stage": "climax"
+                    },
+                    "blueprint": {
+                        "long_term_goal": "追回失落线索",
+                        "chapter_count": 12,
+                        "current_chapter_number": 5,
+                        "target_word_count": 2600,
+                        "character_focus_names": ["沈砚"],
+                        "foreshadow_payoff_plan": ["回收暗号"],
+                        "character_state_ledger": [],
+                        "relationship_state_ledger": [],
+                        "foreshadow_state_ledger": [],
+                        "organization_state_ledger": [],
+                        "career_state_ledger": []
+                    }
+                }
+            })),
+            Utc::now().naive_utc(),
+        );
+
+        assert_eq!(
+            payload["story_runtime_snapshot"]["story_focus"],
+            "advance_plot"
+        );
+        assert_eq!(payload["story_runtime_snapshot"]["plot_stage"], "climax");
+        assert_eq!(
+            payload["story_runtime_snapshot"]["story_long_term_goal"],
+            "追回失落线索"
+        );
+        assert_eq!(payload["story_runtime_snapshot"]["chapter_count"], 12);
+        assert_eq!(
+            payload["story_runtime_snapshot"]["current_chapter_number"],
+            5
+        );
+        assert_eq!(payload["story_runtime_snapshot"]["target_word_count"], 2600);
+        assert_eq!(
+            payload["story_runtime_snapshot"]["character_focus"],
+            json!(["沈砚"])
+        );
+        assert_eq!(
+            payload["story_runtime_snapshot"]["foreshadow_payoff_plan"],
+            json!(["回收暗号"])
+        );
     }
 
     #[test]

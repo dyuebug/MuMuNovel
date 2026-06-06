@@ -17,6 +17,8 @@ use crate::services::settings_update_request_service::{
 const PLACEHOLDER_MASK: &str = "********";
 
 const WEB_RESEARCH_PREF_KEY: &str = "web_research";
+pub(crate) const SETTINGS_UPDATE_MISSING_DETAIL: &str = "设置不存在，请先创建设置";
+pub(crate) const SETTINGS_DELETE_MISSING_DETAIL: &str = "设置不存在";
 
 fn web_research_defaults() -> Value {
     json!({
@@ -117,6 +119,106 @@ fn normalize_non_empty_string(value: Option<&str>) -> Option<String> {
     value
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
+}
+
+fn resolve_settings_provider(
+    request: &SettingsUpdateRequest,
+    existing_provider: Option<&str>,
+) -> String {
+    request
+        .api_provider
+        .as_deref()
+        .or(request.provider_type.as_deref())
+        .or(existing_provider)
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(default_ai_provider)
+}
+
+fn resolve_updated_api_key(request: &SettingsUpdateRequest, existing_api_key: &str) -> String {
+    if request.clear_api_key {
+        return String::new();
+    }
+
+    match request.api_key.as_deref() {
+        Some(value) => {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() && !is_placeholder(trimmed) {
+                trimmed.to_string()
+            } else {
+                existing_api_key.to_string()
+            }
+        }
+        None => existing_api_key.to_string(),
+    }
+}
+
+fn resolve_updated_llm_model(
+    request: &SettingsUpdateRequest,
+    provider: &str,
+    existing_llm_model: &str,
+) -> String {
+    if request.llm_model.is_some() {
+        return normalize_non_empty_string(request.llm_model.as_deref())
+            .unwrap_or_else(|| default_model_for_provider(provider));
+    }
+
+    if request.provider_switch_requested {
+        return default_model_for_provider(provider);
+    }
+
+    existing_llm_model.to_string()
+}
+
+fn maybe_deactivate_changed_active_preset(
+    prefs_json: Option<&str>,
+    api_provider: &str,
+    api_key: &str,
+    api_base_url: &str,
+    llm_model: &str,
+    temperature: f64,
+    max_tokens: i32,
+) -> serde_json::Result<Option<String>> {
+    let mut prefs: Value = prefs_json
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or(json!({}));
+
+    let Some(presets) = prefs
+        .get_mut(API_PRESETS_KEY)
+        .and_then(|node| node.get_mut("presets"))
+        .and_then(Value::as_array_mut)
+    else {
+        return Ok(None);
+    };
+
+    let Some(active_preset) = presets.iter_mut().find(|preset| {
+        preset
+            .get("is_active")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }) else {
+        return Ok(None);
+    };
+
+    let preset_config = active_preset.get("config");
+    let config_changed = preset_config
+        .and_then(Value::as_object)
+        .map(|config| {
+            config.get("api_provider").and_then(Value::as_str) != Some(api_provider)
+                || config.get("api_key").and_then(Value::as_str) != Some(api_key)
+                || config.get("api_base_url").and_then(Value::as_str) != Some(api_base_url)
+                || config.get("llm_model").and_then(Value::as_str) != Some(llm_model)
+                || config.get("temperature").and_then(Value::as_f64) != Some(temperature)
+                || config.get("max_tokens").and_then(Value::as_i64) != Some(max_tokens as i64)
+        })
+        .unwrap_or(true);
+
+    if !config_changed {
+        return Ok(None);
+    }
+
+    active_preset["is_active"] = json!(false);
+    Ok(Some(serde_json::to_string(&prefs)?))
 }
 
 fn resolve_stored_model(value: &str, provider: &str) -> String {
@@ -226,6 +328,49 @@ fn resolve_base_url(provider: &str, stored_base_url: &str) -> String {
     }
 }
 
+async fn load_or_create_settings_model(
+    db: &DatabaseConnection,
+    user_id: &str,
+) -> Result<settings::Model, Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(existing) = settings::Entity::find()
+        .filter(settings::Column::UserId.eq(user_id))
+        .one(db)
+        .await?
+    {
+        return Ok(existing);
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().naive_utc();
+    let default_provider = default_ai_provider();
+    let default_key = env_api_key_for_provider(&default_provider).unwrap_or_default();
+    let default_base_url = resolve_base_url(&default_provider, "");
+    let prefs_str = serde_json::to_string(&json!({
+        "web_research": web_research_defaults()
+    }))?;
+
+    let model = settings::ActiveModel {
+        id: Set(id),
+        user_id: Set(user_id.to_string()),
+        api_provider: Set(default_provider.clone()),
+        api_key: Set(default_key),
+        api_base_url: Set(default_base_url),
+        api_backup_urls: Set(None),
+        provider_type: Set(default_provider.clone()),
+        fallback_strategy: Set("auto".into()),
+        azure_api_version: Set(None),
+        llm_model: Set(default_model_for_provider(&default_provider)),
+        temperature: Set(default_temperature()),
+        max_tokens: Set(default_max_tokens() as i32),
+        system_prompt: Set(None),
+        preferences: Set(Some(prefs_str)),
+        created_at: Set(now),
+        updated_at: Set(now),
+    };
+
+    Ok(model.insert(db).await?)
+}
+
 impl SettingsService {
     pub(crate) async fn resolve_web_research_settings(
         db: &DatabaseConnection,
@@ -257,53 +402,13 @@ impl SettingsService {
         db: &DatabaseConnection,
         user_id: &str,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let existing = settings::Entity::find()
-            .filter(settings::Column::UserId.eq(user_id))
-            .one(db)
-            .await?;
-
-        match existing {
-            Some(s) => {
-                let web_research = merge_web_research(s.preferences.as_deref());
-                let backup_urls = parse_api_backup_urls(s.api_backup_urls.as_deref());
-                Ok(build_response(&s, &web_research, &backup_urls))
-            }
-            None => {
-                let id = Uuid::new_v4().to_string();
-                let now = Utc::now().naive_utc();
-                let prefs_str =
-                    serde_json::to_string(&json!({"web_research": web_research_defaults()}))?;
-                let default_provider = default_ai_provider();
-                let default_key = env_api_key_for_provider(&default_provider).unwrap_or_default();
-                let default_base_url = resolve_base_url(&default_provider, "");
-
-                let model = settings::ActiveModel {
-                    id: Set(id.clone()),
-                    user_id: Set(user_id.to_string()),
-                    api_provider: Set(default_provider.clone()),
-                    api_key: Set(default_key),
-                    api_base_url: Set(default_base_url),
-                    api_backup_urls: Set(None),
-                    provider_type: Set(default_provider.clone()),
-                    fallback_strategy: Set("auto".into()),
-                    azure_api_version: Set(None),
-                    llm_model: Set(default_model_for_provider(&default_provider)),
-                    temperature: Set(default_temperature()),
-                    max_tokens: Set(default_max_tokens() as i32),
-                    system_prompt: Set(None),
-                    preferences: Set(Some(prefs_str)),
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                };
-                let saved = model.insert(db).await?;
-                let web_research = web_research_defaults();
-                let backup_urls: Vec<String> = vec![];
-                Ok(build_response(&saved, &web_research, &backup_urls))
-            }
-        }
+        let settings = load_or_create_settings_model(db, user_id).await?;
+        let web_research = merge_web_research(settings.preferences.as_deref());
+        let backup_urls = parse_api_backup_urls(settings.api_backup_urls.as_deref());
+        Ok(build_response(&settings, &web_research, &backup_urls))
     }
 
-    pub async fn update(
+    pub async fn create_or_update(
         db: &DatabaseConnection,
         user_id: &str,
         request: &SettingsUpdateRequest,
@@ -316,7 +421,8 @@ impl SettingsService {
         match existing {
             Some(s) => {
                 let current_prefs = s.preferences.clone().unwrap_or_default();
-                let existing_provider = s.provider_type.trim().to_lowercase();
+                let normalized_provider =
+                    resolve_settings_provider(request, Some(s.api_provider.as_str()));
                 let new_prefs = if request.web_research_patch.is_object()
                     && request
                         .web_research_patch
@@ -340,65 +446,55 @@ impl SettingsService {
                     }
                 };
 
+                let final_api_key = resolve_updated_api_key(request, &s.api_key);
+                let final_api_base_url = request
+                    .api_base_url
+                    .as_deref()
+                    .map(|value| value.trim().to_string())
+                    .unwrap_or_else(|| s.api_base_url.clone());
+                let final_llm_model =
+                    resolve_updated_llm_model(request, &normalized_provider, &s.llm_model);
+                let final_temperature = request.temperature.unwrap_or(s.temperature);
+                let final_max_tokens = request.max_tokens.unwrap_or(s.max_tokens as i64) as i32;
+
+                let mut final_preferences = request
+                    .preferences
+                    .clone()
+                    .or_else(|| s.preferences.clone());
+                if let Some(prefs) = new_prefs.clone() {
+                    final_preferences = Some(prefs);
+                }
+                if let Some(updated_prefs) = maybe_deactivate_changed_active_preset(
+                    final_preferences.as_deref(),
+                    &normalized_provider,
+                    &final_api_key,
+                    &final_api_base_url,
+                    &final_llm_model,
+                    final_temperature,
+                    final_max_tokens,
+                )? {
+                    final_preferences = Some(updated_prefs);
+                }
+
                 let mut active: settings::ActiveModel = s.into();
-                if let Some(v) = request.api_provider.as_ref() {
-                    active.api_provider = Set(v.clone());
-                }
-                if request.clear_api_key {
-                    active.api_key = Set(String::new());
-                }
-                if let Some(v) = request.api_key.as_ref() {
-                    let trimmed = v.trim();
-                    if !trimmed.is_empty() && !is_placeholder(trimmed) {
-                        active.api_key = Set(trimmed.to_string());
-                    }
-                }
-                if let Some(v) = request.api_base_url.as_ref() {
-                    active.api_base_url = Set(v.clone());
-                }
+                active.api_provider = Set(normalized_provider.clone());
+                active.provider_type = Set(normalized_provider.clone());
+                active.api_key = Set(final_api_key);
+                active.api_base_url = Set(final_api_base_url);
                 active.api_backup_urls = Set(serialize_api_backup_urls(&backup_urls));
-                if let Some(v) = request.provider_type.as_ref() {
-                    active.provider_type = Set(v.clone());
-                }
                 if let Some(v) = request.fallback_strategy.as_ref() {
                     active.fallback_strategy = Set(v.clone());
                 }
                 if let Some(v) = request.azure_api_version.as_ref() {
                     active.azure_api_version = Set(Some(v.clone()));
                 }
-                let target_provider = request
-                    .provider_type
-                    .as_deref()
-                    .or(request.api_provider.as_deref())
-                    .map(|v| v.trim().to_lowercase())
-                    .filter(|v| !v.is_empty())
-                    .unwrap_or_else(|| {
-                        if existing_provider.is_empty() {
-                            "openai".to_string()
-                        } else {
-                            existing_provider.clone()
-                        }
-                    });
-                if let Some(v) = normalize_non_empty_string(request.llm_model.as_deref()) {
-                    active.llm_model = Set(v);
-                } else if request.provider_switch_requested {
-                    active.llm_model = Set(default_model_for_provider(&target_provider));
-                }
-                if let Some(v) = request.temperature {
-                    active.temperature = Set(v);
-                }
-                if let Some(v) = request.max_tokens {
-                    active.max_tokens = Set(v as i32);
-                }
+                active.llm_model = Set(final_llm_model);
+                active.temperature = Set(final_temperature);
+                active.max_tokens = Set(final_max_tokens);
                 if let Some(v) = request.system_prompt.as_ref() {
                     active.system_prompt = Set(Some(v.clone()));
                 }
-                if let Some(v) = request.preferences.as_ref() {
-                    active.preferences = Set(Some(v.clone()));
-                }
-                if let Some(p) = new_prefs {
-                    active.preferences = Set(Some(p));
-                }
+                active.preferences = Set(final_preferences);
                 active.updated_at = Set(Utc::now().naive_utc());
 
                 let saved = active.update(db).await?;
@@ -411,7 +507,7 @@ impl SettingsService {
                 let now = Utc::now().naive_utc();
                 let default_prefs =
                     serde_json::to_string(&json!({"web_research": web_research_defaults()}))?;
-                let default_provider = default_ai_provider();
+                let normalized_provider = resolve_settings_provider(request, None);
                 let prefs = if request.web_research_patch.is_object()
                     && request
                         .web_research_patch
@@ -437,41 +533,28 @@ impl SettingsService {
                 let api_key =
                     normalize_api_key(request.api_key.as_ref().map(|v| v.trim().to_string()))
                         .unwrap_or_default();
+                let llm_model = normalize_non_empty_string(request.llm_model.as_deref())
+                    .unwrap_or_else(|| default_model_for_provider(&normalized_provider));
 
                 let model = settings::ActiveModel {
                     id: Set(id.clone()),
                     user_id: Set(user_id.to_string()),
-                    api_provider: Set(request
-                        .api_provider
-                        .as_deref()
-                        .unwrap_or(&default_provider)
-                        .to_string()),
+                    api_provider: Set(normalized_provider.clone()),
                     api_key: Set(api_key),
                     api_base_url: Set(request
                         .api_base_url
-                        .clone()
-                        .unwrap_or_else(|| resolve_base_url(&default_provider, ""))),
-                    api_backup_urls: Set(serialize_api_backup_urls(&backup_urls)),
-                    provider_type: Set(request
-                        .provider_type
                         .as_deref()
-                        .unwrap_or(&default_provider)
-                        .to_string()),
+                        .map(|value| value.trim().to_string())
+                        .unwrap_or_else(|| resolve_base_url(&normalized_provider, ""))),
+                    api_backup_urls: Set(serialize_api_backup_urls(&backup_urls)),
+                    provider_type: Set(normalized_provider.clone()),
                     fallback_strategy: Set(request
                         .fallback_strategy
                         .as_deref()
                         .unwrap_or("auto")
                         .to_string()),
                     azure_api_version: Set(request.azure_api_version.clone()),
-                    llm_model: Set(normalize_non_empty_string(request.llm_model.as_deref())
-                        .unwrap_or_else(|| {
-                            let provider = request
-                                .provider_type
-                                .as_deref()
-                                .or(request.api_provider.as_deref())
-                                .unwrap_or(&default_provider);
-                            default_model_for_provider(provider)
-                        })),
+                    llm_model: Set(llm_model),
                     temperature: Set(request.temperature.unwrap_or(default_temperature())),
                     max_tokens: Set(
                         request.max_tokens.unwrap_or(default_max_tokens() as i64) as i32
@@ -487,6 +570,109 @@ impl SettingsService {
                 let backup_urls = parse_api_backup_urls(saved.api_backup_urls.as_deref());
                 Ok(build_response(&saved, &web_research, &backup_urls))
             }
+        }
+    }
+
+    pub async fn update_existing(
+        db: &DatabaseConnection,
+        user_id: &str,
+        request: &SettingsUpdateRequest,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+        let existing = settings::Entity::find()
+            .filter(settings::Column::UserId.eq(user_id))
+            .one(db)
+            .await?;
+
+        if existing.is_none() {
+            return Err(SETTINGS_UPDATE_MISSING_DETAIL.into());
+        }
+
+        Self::update_existing_only(db, user_id, request).await
+    }
+
+    async fn update_existing_only(
+        db: &DatabaseConnection,
+        user_id: &str,
+        request: &SettingsUpdateRequest,
+    ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+        let existing = settings::Entity::find()
+            .filter(settings::Column::UserId.eq(user_id))
+            .one(db)
+            .await?;
+
+        match existing {
+            Some(s) => {
+                let current_prefs = s.preferences.clone().unwrap_or_default();
+                let normalized_provider =
+                    resolve_settings_provider(request, Some(s.api_provider.as_str()));
+                let new_prefs = if request.web_research_patch.is_object()
+                    && request
+                        .web_research_patch
+                        .as_object()
+                        .map(|o| o.len())
+                        .unwrap_or(0)
+                        > 0
+                {
+                    Some(set_web_research(
+                        Some(&current_prefs),
+                        &request.web_research_patch,
+                    )?)
+                } else {
+                    None
+                };
+
+                let backup_urls = match &request.api_backup_urls {
+                    SettingsApiBackupUrlsField::Provided(urls) => urls.clone(),
+                    SettingsApiBackupUrlsField::Missing | SettingsApiBackupUrlsField::Invalid => {
+                        parse_api_backup_urls(s.api_backup_urls.as_deref())
+                    }
+                };
+
+                let mut active: settings::ActiveModel = s.clone().into();
+                active.api_provider = Set(normalized_provider.clone());
+                active.provider_type = Set(normalized_provider.clone());
+                active.api_key = Set(resolve_updated_api_key(request, &s.api_key));
+                if let Some(value) = request.api_base_url.as_deref() {
+                    active.api_base_url = Set(value.trim().to_string());
+                }
+                active.api_backup_urls = Set(serialize_api_backup_urls(&backup_urls));
+                if let Some(v) = request.fallback_strategy.as_ref() {
+                    active.fallback_strategy = Set(v.clone());
+                }
+                if let Some(v) = request.azure_api_version.as_ref() {
+                    active.azure_api_version = Set(Some(v.clone()));
+                }
+                active.llm_model = Set(resolve_updated_llm_model(
+                    request,
+                    &normalized_provider,
+                    &s.llm_model,
+                ));
+                if let Some(v) = request.temperature {
+                    active.temperature = Set(v);
+                }
+                if let Some(v) = request.max_tokens {
+                    active.max_tokens = Set(v as i32);
+                }
+                if let Some(v) = request.system_prompt.as_ref() {
+                    active.system_prompt = Set(Some(v.clone()));
+                }
+
+                let mut final_preferences = request.preferences.clone();
+                if let Some(prefs) = new_prefs {
+                    final_preferences = Some(prefs);
+                }
+                if let Some(prefs) = final_preferences {
+                    active.preferences = Set(Some(prefs));
+                }
+
+                active.updated_at = Set(Utc::now().naive_utc());
+
+                let saved = active.update(db).await?;
+                let web_research = merge_web_research(saved.preferences.as_deref());
+                let backup_urls = parse_api_backup_urls(saved.api_backup_urls.as_deref());
+                Ok(build_response(&saved, &web_research, &backup_urls))
+            }
+            None => Err(SETTINGS_UPDATE_MISSING_DETAIL.into()),
         }
     }
 
@@ -536,16 +722,20 @@ impl SettingsService {
             provider,
             api_key,
             base_url,
+            backup_urls: Vec::new(),
             model,
             temperature: temperature_override.unwrap_or(s.temperature),
             max_tokens,
             system_prompt: s.system_prompt,
             max_retries: 3,
             request_delay_ms: 200,
+            prefer_normalized_v1_candidate: false,
+            read_timeout_secs: None,
+            transport_max_retries: None,
         })
     }
 
-    pub async fn delete(
+    pub async fn delete_existing(
         db: &DatabaseConnection,
         user_id: &str,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
@@ -559,8 +749,364 @@ impl SettingsService {
                 settings::Entity::delete_by_id(&s.id).exec(db).await?;
                 Ok(json!({"message": "settings deleted", "user_id": user_id}))
             }
-            None => Ok(json!({"message": "no settings to delete", "user_id": user_id})),
+            None => Err(SETTINGS_DELETE_MISSING_DETAIL.into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sea_orm::{
+        ColumnTrait, ConnectionTrait, Database, DbBackend, EntityTrait, QueryFilter, Schema,
+    };
+    use serde_json::{json, Value};
+
+    use super::*;
+    use crate::services::settings_preset_request_service::build_create_settings_preset_request_from_route_payload;
+    use crate::services::settings_update_request_service::build_settings_update_request_from_route_body;
+
+    async fn setup_settings_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite memory db");
+        let builder = DbBackend::Sqlite;
+        let schema = Schema::new(builder);
+        db.execute(builder.build(&schema.create_table_from_entity(settings::Entity)))
+            .await
+            .expect("create settings table");
+        db
+    }
+
+    async fn load_settings_for_user(
+        db: &DatabaseConnection,
+        user_id: &str,
+    ) -> Option<settings::Model> {
+        settings::Entity::find()
+            .filter(settings::Column::UserId.eq(user_id))
+            .one(db)
+            .await
+            .expect("load settings")
+    }
+
+    #[tokio::test]
+    async fn list_presets_auto_creates_settings_when_missing() {
+        let db = setup_settings_db().await;
+
+        let response = SettingsService::list_presets(&db, "user-1")
+            .await
+            .expect("list presets");
+
+        assert_eq!(response["presets"], json!([]));
+        assert_eq!(response["total"], json!(0));
+        assert_eq!(response["active_preset_id"], Value::Null);
+
+        let saved = load_settings_for_user(&db, "user-1").await;
+        assert!(saved.is_some());
+    }
+
+    #[tokio::test]
+    async fn create_preset_auto_creates_settings_when_missing() {
+        let db = setup_settings_db().await;
+        let request = build_create_settings_preset_request_from_route_payload(&json!({
+            "name": "Primary Preset",
+            "description": "preset description",
+            "config": {
+                "api_provider": "openai",
+                "api_key": "sk-test",
+                "api_base_url": "https://api.openai.com/v1",
+                "llm_model": "gpt-4o-mini",
+                "temperature": 0.4,
+                "max_tokens": 1024
+            }
+        }));
+
+        let created = SettingsService::create_preset(&db, "user-1", &request)
+            .await
+            .expect("create preset");
+
+        assert_eq!(created["name"], json!("Primary Preset"));
+        assert_eq!(created["is_active"], json!(false));
+
+        let listed = SettingsService::list_presets(&db, "user-1")
+            .await
+            .expect("list presets");
+        assert_eq!(listed["total"], json!(1));
+        assert_eq!(listed["presets"][0]["name"], json!("Primary Preset"));
+    }
+
+    #[tokio::test]
+    async fn delete_preset_rejects_active_preset() {
+        let db = setup_settings_db().await;
+        let request = build_create_settings_preset_request_from_route_payload(&json!({
+            "name": "Active Preset",
+            "description": "preset description",
+            "config": {
+                "api_provider": "openai",
+                "api_key": "sk-test",
+                "api_base_url": "https://api.openai.com/v1",
+                "llm_model": "gpt-4o-mini",
+                "temperature": 0.4,
+                "max_tokens": 1024
+            }
+        }));
+
+        let created = SettingsService::create_preset(&db, "user-1", &request)
+            .await
+            .expect("create preset");
+        let preset_id = created["id"]
+            .as_str()
+            .expect("preset id should be string")
+            .to_string();
+
+        SettingsService::activate_preset(&db, "user-1", &preset_id)
+            .await
+            .expect("activate preset");
+
+        let error = SettingsService::delete_preset(&db, "user-1", &preset_id)
+            .await
+            .expect_err("active preset delete should fail");
+
+        assert!(
+            format!("{}", error).contains("无法删除激活中的预设，请先激活其他预设"),
+            "unexpected error: {}",
+            error
+        );
+    }
+
+    #[tokio::test]
+    async fn create_or_update_deactivates_changed_active_preset() {
+        let db = setup_settings_db().await;
+        let seed_request = build_settings_update_request_from_route_body(&json!({
+            "api_provider": "openai",
+            "api_key": "sk-original",
+            "api_base_url": "https://api.openai.com/v1",
+            "llm_model": "gpt-4o-mini",
+            "temperature": 0.4,
+            "max_tokens": 1024
+        }));
+        SettingsService::create_or_update(&db, "user-1", &seed_request)
+            .await
+            .expect("seed settings");
+
+        let preset_request = build_create_settings_preset_request_from_route_payload(&json!({
+            "name": "Active Preset",
+            "description": "preset description",
+            "config": {
+                "api_provider": "openai",
+                "api_key": "sk-original",
+                "api_base_url": "https://api.openai.com/v1",
+                "llm_model": "gpt-4o-mini",
+                "temperature": 0.4,
+                "max_tokens": 1024
+            }
+        }));
+        let created = SettingsService::create_preset(&db, "user-1", &preset_request)
+            .await
+            .expect("create preset");
+        let preset_id = created["id"].as_str().expect("preset id").to_string();
+        SettingsService::activate_preset(&db, "user-1", &preset_id)
+            .await
+            .expect("activate preset");
+
+        let update_request = build_settings_update_request_from_route_body(&json!({
+            "llm_model": "gpt-4.1",
+            "api_key": "sk-updated"
+        }));
+        let updated = SettingsService::create_or_update(&db, "user-1", &update_request)
+            .await
+            .expect("update settings");
+
+        assert_eq!(updated["llm_model"], json!("gpt-4.1"));
+        let saved = load_settings_for_user(&db, "user-1")
+            .await
+            .expect("saved settings");
+        let prefs: Value = serde_json::from_str(saved.preferences.as_deref().unwrap_or("{}"))
+            .expect("parse prefs");
+        assert_eq!(
+            prefs["api_presets"]["presets"][0]["is_active"],
+            json!(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn update_existing_rejects_missing_settings() {
+        let db = setup_settings_db().await;
+        let request = build_settings_update_request_from_route_body(&json!({
+            "llm_model": "gpt-4.1"
+        }));
+
+        let error = SettingsService::update_existing(&db, "user-1", &request)
+            .await
+            .expect_err("missing settings should fail");
+
+        assert!(
+            format!("{}", error).contains(SETTINGS_UPDATE_MISSING_DETAIL),
+            "unexpected error: {}",
+            error
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_existing_rejects_missing_settings() {
+        let db = setup_settings_db().await;
+
+        let error = SettingsService::delete_existing(&db, "user-1")
+            .await
+            .expect_err("missing settings delete should fail");
+
+        assert!(
+            format!("{}", error).contains(SETTINGS_DELETE_MISSING_DETAIL),
+            "unexpected error: {}",
+            error
+        );
+    }
+
+    #[tokio::test]
+    async fn create_or_update_normalizes_provider_fields_and_default_model() {
+        let db = setup_settings_db().await;
+        let request = build_settings_update_request_from_route_body(&json!({
+            "provider_type": "Anthropic",
+            "api_provider": "OpenAI",
+            "api_key": "sk-provider",
+            "api_base_url": "https://provider.example.com",
+            "llm_model": "   "
+        }));
+
+        let response = SettingsService::create_or_update(&db, "user-1", &request)
+            .await
+            .expect("create settings");
+
+        assert_eq!(response["api_provider"], json!("openai"));
+        assert_eq!(response["provider_type"], json!("openai"));
+        assert_eq!(
+            response["llm_model"],
+            json!(default_model_for_provider("openai"))
+        );
+
+        let saved = load_settings_for_user(&db, "user-1")
+            .await
+            .expect("saved settings");
+        assert_eq!(saved.api_provider, "openai");
+        assert_eq!(saved.provider_type, "openai");
+        assert_eq!(saved.llm_model, default_model_for_provider("openai"));
+    }
+
+    #[tokio::test]
+    async fn activate_preset_only_applies_python_owned_main_fields() {
+        let db = setup_settings_db().await;
+        let seed_request = build_settings_update_request_from_route_body(&json!({
+            "api_provider": "openai",
+            "provider_type": "openai",
+            "api_key": "sk-before",
+            "api_base_url": "https://before.example.com/v1",
+            "api_backup_urls": ["https://before-backup.example.com/v1"],
+            "fallback_strategy": "manual",
+            "azure_api_version": "2024-10-21",
+            "llm_model": "before-model",
+            "temperature": 0.9,
+            "max_tokens": 512,
+            "system_prompt": "before-prompt"
+        }));
+        SettingsService::create_or_update(&db, "user-1", &seed_request)
+            .await
+            .expect("seed settings");
+
+        let preset_request = build_create_settings_preset_request_from_route_payload(&json!({
+            "name": "Preset With Extra Config",
+            "config": {
+                "api_provider": "anthropic",
+                "api_key": "",
+                "api_base_url": "https://preset.example.com/v1",
+                "api_backup_urls": ["https://preset-backup.example.com/v1"],
+                "provider_type": "anthropic",
+                "fallback_strategy": "auto",
+                "azure_api_version": "2025-01-01",
+                "llm_model": "",
+                "temperature": 0.2,
+                "max_tokens": 333,
+                "system_prompt": null
+            }
+        }));
+        let created = SettingsService::create_preset(&db, "user-1", &preset_request)
+            .await
+            .expect("create preset");
+        let preset_id = created["id"].as_str().expect("preset id").to_string();
+
+        SettingsService::activate_preset(&db, "user-1", &preset_id)
+            .await
+            .expect("activate preset");
+
+        let saved = load_settings_for_user(&db, "user-1")
+            .await
+            .expect("saved settings");
+        assert_eq!(saved.api_provider, "anthropic");
+        assert_eq!(saved.api_key, "");
+        assert_eq!(saved.api_base_url, "https://preset.example.com/v1");
+        assert_eq!(saved.llm_model, "");
+        assert_eq!(saved.temperature, 0.2);
+        assert_eq!(saved.max_tokens, 333);
+        assert_eq!(saved.system_prompt, None);
+
+        assert_eq!(
+            parse_api_backup_urls(saved.api_backup_urls.as_deref()),
+            vec!["https://before-backup.example.com/v1".to_string()]
+        );
+        assert_eq!(saved.provider_type, "openai");
+        assert_eq!(saved.fallback_strategy, "manual");
+        assert_eq!(saved.azure_api_version.as_deref(), Some("2024-10-21"));
+    }
+
+    #[tokio::test]
+    async fn create_preset_from_current_uses_python_snapshot_shape() {
+        let db = setup_settings_db().await;
+
+        let seeded = settings::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            user_id: Set("user-1".to_string()),
+            api_provider: Set("anthropic".to_string()),
+            api_key: Set("sk-current".to_string()),
+            api_base_url: Set("https://current.example.com/v1".to_string()),
+            api_backup_urls: Set(Some(
+                serde_json::to_string(&vec!["https://backup.example.com/v1"]).expect("backup urls"),
+            )),
+            provider_type: Set("anthropic".to_string()),
+            fallback_strategy: Set("manual".to_string()),
+            azure_api_version: Set(Some("2024-10-21".to_string())),
+            llm_model: Set(String::new()),
+            temperature: Set(0.5),
+            max_tokens: Set(2048),
+            system_prompt: Set(Some("current-prompt".to_string())),
+            preferences: Set(Some("{}".to_string())),
+            created_at: Set(Utc::now().naive_utc()),
+            updated_at: Set(Utc::now().naive_utc()),
+        };
+        seeded.insert(&db).await.expect("insert settings");
+
+        let created = SettingsService::create_preset_from_current(
+            &db,
+            "user-1",
+            "Snapshot Preset",
+            Some("snapshot description"),
+        )
+        .await
+        .expect("create preset from current");
+
+        assert_eq!(created["name"], json!("Snapshot Preset"));
+        assert_eq!(created["description"], json!("snapshot description"));
+        assert_eq!(created["config"]["api_provider"], json!("anthropic"));
+        assert_eq!(created["config"]["api_key"], json!("sk-current"));
+        assert_eq!(
+            created["config"]["api_base_url"],
+            json!("https://current.example.com/v1")
+        );
+        assert_eq!(created["config"]["api_backup_urls"], Value::Null);
+        assert_eq!(created["config"]["provider_type"], json!("openai"));
+        assert_eq!(created["config"]["fallback_strategy"], json!("auto"));
+        assert_eq!(created["config"]["azure_api_version"], Value::Null);
+        assert_eq!(created["config"]["llm_model"], json!(""));
+        assert_eq!(created["config"]["temperature"], json!(0.5));
+        assert_eq!(created["config"]["max_tokens"], json!(2048));
+        assert_eq!(created["config"]["system_prompt"], json!("current-prompt"));
     }
 }
 
@@ -630,13 +1176,9 @@ impl SettingsService {
         db: &DatabaseConnection,
         user_id: &str,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let settings = settings::Entity::find()
-            .filter(settings::Column::UserId.eq(user_id))
-            .one(db)
-            .await?;
+        let settings = load_or_create_settings_model(db, user_id).await?;
 
-        let (presets, _version) =
-            get_api_presets(settings.as_ref().and_then(|s| s.preferences.as_deref()));
+        let (presets, _version) = get_api_presets(settings.preferences.as_deref());
         let active_preset_id = presets
             .iter()
             .find(|p| {
@@ -659,11 +1201,7 @@ impl SettingsService {
         user_id: &str,
         request: &CreateSettingsPresetRequest,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let settings = settings::Entity::find()
-            .filter(settings::Column::UserId.eq(user_id))
-            .one(db)
-            .await?
-            .ok_or("settings not found")?;
+        let settings = load_or_create_settings_model(db, user_id).await?;
 
         let (mut presets, _version) = get_api_presets(settings.preferences.as_deref());
 
@@ -694,11 +1232,7 @@ impl SettingsService {
         preset_id: &str,
         request: &UpdateSettingsPresetRequest,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let settings = settings::Entity::find()
-            .filter(settings::Column::UserId.eq(user_id))
-            .one(db)
-            .await?
-            .ok_or("settings not found")?;
+        let settings = load_or_create_settings_model(db, user_id).await?;
 
         let (mut presets, _version) = get_api_presets(settings.preferences.as_deref());
 
@@ -734,13 +1268,21 @@ impl SettingsService {
         user_id: &str,
         preset_id: &str,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let settings = settings::Entity::find()
-            .filter(settings::Column::UserId.eq(user_id))
-            .one(db)
-            .await?
-            .ok_or("settings not found")?;
+        let settings = load_or_create_settings_model(db, user_id).await?;
 
         let (mut presets, _version) = get_api_presets(settings.preferences.as_deref());
+        let target_preset = presets
+            .iter()
+            .find(|p| p.get("id").and_then(|v| v.as_str()) == Some(preset_id))
+            .ok_or("preset not found")?;
+        let is_active = target_preset
+            .get("is_active")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if is_active {
+            return Err("无法删除激活中的预设，请先激活其他预设".into());
+        }
+
         presets.retain(|p| p.get("id").and_then(|v| v.as_str()) != Some(preset_id));
         let new_prefs = set_api_presets(settings.preferences.as_deref(), &presets)?;
 
@@ -749,7 +1291,7 @@ impl SettingsService {
         active.updated_at = Set(Utc::now().naive_utc());
         active.update(db).await?;
 
-        Ok(json!({"success": true, "message": "preset deleted"}))
+        Ok(json!({"message": "预设已删除", "preset_id": preset_id}))
     }
 
     pub async fn activate_preset(
@@ -757,11 +1299,7 @@ impl SettingsService {
         user_id: &str,
         preset_id: &str,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let settings = settings::Entity::find()
-            .filter(settings::Column::UserId.eq(user_id))
-            .one(db)
-            .await?
-            .ok_or("settings not found")?;
+        let settings = load_or_create_settings_model(db, user_id).await?;
 
         let (mut presets, _version) = get_api_presets(settings.preferences.as_deref());
 
@@ -786,38 +1324,13 @@ impl SettingsService {
                 active.api_provider = Set(v.to_string());
             }
             if let Some(v) = cfg.get("api_key").and_then(|v| v.as_str()) {
-                let trimmed = v.trim();
-                if !trimmed.is_empty() && !is_placeholder(trimmed) {
-                    active.api_key = Set(trimmed.to_string());
-                }
+                active.api_key = Set(v.to_string());
             }
-            if let Some(v) = cfg.get("api_base_url").and_then(|v| v.as_str()) {
-                active.api_base_url = Set(v.to_string());
+            if let Some(value) = cfg.get("api_base_url") {
+                active.api_base_url = Set(value.as_str().unwrap_or("").to_string());
             }
-            if let Some(v) = cfg.get("api_backup_urls") {
-                let urls: Vec<String> = v
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|u| u.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                active.api_backup_urls = Set(serialize_api_backup_urls(&urls));
-            }
-            if let Some(v) = cfg.get("provider_type").and_then(|v| v.as_str()) {
-                active.provider_type = Set(v.to_string());
-            }
-            if let Some(v) = cfg.get("fallback_strategy").and_then(|v| v.as_str()) {
-                active.fallback_strategy = Set(v.to_string());
-            }
-            if let Some(v) = cfg.get("azure_api_version").and_then(|v| v.as_str()) {
-                active.azure_api_version = Set(Some(v.to_string()));
-            }
-            if let Some(v) =
-                normalize_non_empty_string(cfg.get("llm_model").and_then(|v| v.as_str()))
-            {
-                active.llm_model = Set(v);
+            if let Some(value) = cfg.get("llm_model") {
+                active.llm_model = Set(value.as_str().unwrap_or("").to_string());
             }
             if let Some(v) = cfg.get("temperature").and_then(|v| v.as_f64()) {
                 active.temperature = Set(v);
@@ -825,15 +1338,19 @@ impl SettingsService {
             if let Some(v) = cfg.get("max_tokens").and_then(|v| v.as_i64()) {
                 active.max_tokens = Set(v as i32);
             }
-            if let Some(v) = cfg.get("system_prompt").and_then(|v| v.as_str()) {
-                active.system_prompt = Set(Some(v.to_string()));
+            if let Some(value) = cfg.get("system_prompt") {
+                active.system_prompt = Set(value.as_str().map(ToString::to_string));
             }
         }
         active.preferences = Set(Some(new_prefs));
         active.updated_at = Set(Utc::now().naive_utc());
         active.update(db).await?;
 
-        Ok(json!({"success": true, "message": "preset activated", "preset": result}))
+        Ok(json!({
+            "message": "预设已激活",
+            "preset_id": preset_id,
+            "preset_name": result.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+        }))
     }
 
     pub async fn create_preset_from_current(
@@ -842,22 +1359,17 @@ impl SettingsService {
         name: &str,
         description: Option<&str>,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let settings = settings::Entity::find()
-            .filter(settings::Column::UserId.eq(user_id))
-            .one(db)
-            .await?
-            .ok_or("settings not found")?;
+        let settings = load_or_create_settings_model(db, user_id).await?;
 
-        let backup_urls = parse_api_backup_urls(settings.api_backup_urls.as_deref());
         let config = json!({
             "api_provider": settings.api_provider,
             "api_key": settings.api_key,
             "api_base_url": settings.api_base_url,
-            "api_backup_urls": backup_urls,
-            "provider_type": settings.provider_type,
-            "fallback_strategy": settings.fallback_strategy,
-            "azure_api_version": settings.azure_api_version,
-            "llm_model": resolve_stored_model(&settings.llm_model, &settings.provider_type),
+            "api_backup_urls": Value::Null,
+            "provider_type": "openai",
+            "fallback_strategy": "auto",
+            "azure_api_version": Value::Null,
+            "llm_model": settings.llm_model,
             "temperature": settings.temperature,
             "max_tokens": settings.max_tokens,
             "system_prompt": settings.system_prompt,

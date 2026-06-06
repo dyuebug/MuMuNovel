@@ -4,6 +4,54 @@ use serde_json::{json, Value};
 
 use crate::models::batch_generation_task;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BatchGenerationTaskPersistenceSeed {
+    pub(crate) id: String,
+    pub(crate) project_id: String,
+    pub(crate) user_id: String,
+    pub(crate) start_chapter_number: i32,
+    pub(crate) chapter_count: i32,
+    pub(crate) chapter_ids: Value,
+    pub(crate) style_id: Option<i32>,
+    pub(crate) target_word_count: i32,
+    pub(crate) enable_analysis: bool,
+    pub(crate) total_chapters: i32,
+    pub(crate) current_chapter_id: Option<String>,
+    pub(crate) current_chapter_number: Option<i32>,
+    pub(crate) max_retries: i32,
+}
+
+impl BatchGenerationTaskPersistenceSeed {
+    pub(crate) fn into_active_model(
+        self,
+        now: NaiveDateTime,
+    ) -> batch_generation_task::ActiveModel {
+        batch_generation_task::ActiveModel {
+            id: Set(self.id),
+            project_id: Set(self.project_id),
+            user_id: Set(self.user_id),
+            start_chapter_number: Set(self.start_chapter_number),
+            chapter_count: Set(self.chapter_count),
+            chapter_ids: Set(self.chapter_ids),
+            style_id: Set(self.style_id),
+            target_word_count: Set(self.target_word_count),
+            enable_analysis: Set(self.enable_analysis),
+            status: Set("pending".to_string()),
+            total_chapters: Set(self.total_chapters),
+            completed_chapters: Set(0),
+            failed_chapters: Set(json!([])),
+            current_chapter_id: Set(self.current_chapter_id),
+            current_chapter_number: Set(self.current_chapter_number),
+            current_retry_count: Set(0),
+            max_retries: Set(self.max_retries),
+            created_at: Set(Some(now)),
+            started_at: Set(None),
+            completed_at: Set(None),
+            error_message: Set(None),
+        }
+    }
+}
+
 pub(crate) fn build_batch_generation_task_active_model(
     id: String,
     project_id: String,
@@ -20,29 +68,22 @@ pub(crate) fn build_batch_generation_task_active_model(
     max_retries: i32,
     now: NaiveDateTime,
 ) -> batch_generation_task::ActiveModel {
-    batch_generation_task::ActiveModel {
-        id: Set(id),
-        project_id: Set(project_id),
-        user_id: Set(user_id),
-        start_chapter_number: Set(start_chapter_number),
-        chapter_count: Set(chapter_count),
-        chapter_ids: Set(chapter_ids),
-        style_id: Set(style_id),
-        target_word_count: Set(target_word_count),
-        enable_analysis: Set(enable_analysis),
-        status: Set("pending".to_string()),
-        total_chapters: Set(total_chapters),
-        completed_chapters: Set(0),
-        failed_chapters: Set(json!([])),
-        current_chapter_id: Set(current_chapter_id),
-        current_chapter_number: Set(current_chapter_number),
-        current_retry_count: Set(0),
-        max_retries: Set(max_retries),
-        created_at: Set(Some(now)),
-        started_at: Set(None),
-        completed_at: Set(None),
-        error_message: Set(None),
+    BatchGenerationTaskPersistenceSeed {
+        id,
+        project_id,
+        user_id,
+        start_chapter_number,
+        chapter_count,
+        chapter_ids,
+        style_id,
+        target_word_count,
+        enable_analysis,
+        total_chapters,
+        current_chapter_id,
+        current_chapter_number,
+        max_retries,
     }
+    .into_active_model(now)
 }
 
 #[cfg(test)]
@@ -52,9 +93,7 @@ mod tests {
     use serde_json::json;
 
     use super::build_batch_generation_task_active_model;
-    use crate::services::chapter_batch_generation_write_workflow_service::{
-        BatchGenerationCreateChapterTarget,
-    };
+    use crate::services::chapter_batch_generation_write_workflow_service::BatchGenerationCreateChapterTarget;
 
     fn build_chapter_target(
         id: &str,

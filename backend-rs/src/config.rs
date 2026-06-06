@@ -36,6 +36,7 @@ impl AppRuntimeMode {
 pub enum ConfigError {
     MissingJwtSecret { mode: AppRuntimeMode },
     MissingDatabaseUrl { mode: AppRuntimeMode },
+    StartupSchemaSyncNotAllowed { mode: AppRuntimeMode },
 }
 
 impl fmt::Display for ConfigError {
@@ -49,6 +50,11 @@ impl fmt::Display for ConfigError {
             Self::MissingDatabaseUrl { mode } => write!(
                 f,
                 "DATABASE_URL is required when runtime mode is {}",
+                mode.as_str()
+            ),
+            Self::StartupSchemaSyncNotAllowed { mode } => write!(
+                f,
+                "ENABLE_STARTUP_SCHEMA_SYNC is not allowed when runtime mode is {}. Use the explicit migration step instead.",
                 mode.as_str()
             ),
         }
@@ -134,6 +140,21 @@ fn resolve_database_url(mode: AppRuntimeMode, database_url: String) -> Result<St
     }
 }
 
+fn resolve_startup_schema_sync(mode: AppRuntimeMode, enabled: bool) -> Result<bool, ConfigError> {
+    if !enabled {
+        return Ok(false);
+    }
+
+    if mode.is_development() {
+        warn!(
+            "ENABLE_STARTUP_SCHEMA_SYNC is enabled in development mode, but startup schema sync is disabled for strangler deployments. Ignoring the flag and expecting an explicit migration step."
+        );
+        Ok(false)
+    } else {
+        Err(ConfigError::StartupSchemaSyncNotAllowed { mode })
+    }
+}
+
 pub fn load() -> Result<AppConfig, ConfigError> {
     let _ = dotenvy::from_filename("../backend/.env").ok();
     let _ = dotenvy::from_filename(".env").ok();
@@ -149,6 +170,10 @@ pub fn load() -> Result<AppConfig, ConfigError> {
 
     let database_url = resolve_database_url(runtime_mode, env_or("DATABASE_URL", ""))?;
     let jwt_secret = resolve_jwt_secret(runtime_mode, env_or("JWT_SECRET", ""))?;
+    let enable_startup_schema_sync = resolve_startup_schema_sync(
+        runtime_mode,
+        env_or_bool("ENABLE_STARTUP_SCHEMA_SYNC", false),
+    )?;
 
     Ok(AppConfig {
         app_host: env_or("APP_HOST", "127.0.0.1"),
@@ -157,7 +182,7 @@ pub fn load() -> Result<AppConfig, ConfigError> {
         app_version: env_or("APP_VERSION", "0.1.0-rs"),
         database_url,
         database_pool_size: env_or_u32("DATABASE_POOL_SIZE", 50),
-        enable_startup_schema_sync: env_or_bool("ENABLE_STARTUP_SCHEMA_SYNC", false),
+        enable_startup_schema_sync,
         log_level: env_or("LOG_LEVEL", "info"),
         debug: debug_enabled,
         runtime_mode,
@@ -179,7 +204,10 @@ pub fn load() -> Result<AppConfig, ConfigError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_database_url, resolve_jwt_secret, AppRuntimeMode, ConfigError};
+    use super::{
+        resolve_database_url, resolve_jwt_secret, resolve_startup_schema_sync, AppRuntimeMode,
+        ConfigError,
+    };
 
     #[test]
     fn development_mode_allows_generated_jwt_secret() {
@@ -211,5 +239,24 @@ mod tests {
             .expect_err("non-development mode should reject empty database url");
 
         assert!(matches!(err, ConfigError::MissingDatabaseUrl { .. }));
+    }
+
+    #[test]
+    fn development_mode_ignores_startup_schema_sync_flag() {
+        let enabled = resolve_startup_schema_sync(AppRuntimeMode::Development, true)
+            .expect("development mode should not fail hard on startup schema sync flag");
+
+        assert!(!enabled);
+    }
+
+    #[test]
+    fn non_development_rejects_startup_schema_sync_flag() {
+        let err = resolve_startup_schema_sync(AppRuntimeMode::NonDevelopment, true)
+            .expect_err("non-development mode should reject startup schema sync flag");
+
+        assert!(matches!(
+            err,
+            ConfigError::StartupSchemaSyncNotAllowed { .. }
+        ));
     }
 }

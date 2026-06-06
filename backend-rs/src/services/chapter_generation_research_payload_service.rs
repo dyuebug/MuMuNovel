@@ -17,8 +17,8 @@ use crate::models::{career, chapter, character, character_career, foreshadow, st
 use crate::services::chapter_generation_prompt_context_provider_service::{
     build_placeholder_prompt_context_provider_payload, PromptContextProviderPayload,
 };
-use crate::services::settings_service::SettingsService;
 use crate::services::settings_runtime_config_service::normalize_openai_compatible_base_url;
+use crate::services::settings_service::SettingsService;
 use crate::services::story_memory_vector_index_service::{
     delete_story_memory_vector_records_by_types, search_story_memory_vector_records,
     upsert_story_memory_vector_record,
@@ -45,8 +45,13 @@ const GENERATION_MEMORY_TYPES: &[&str] = &[
     "world_detail",
     "chapter_summary",
 ];
-const GENERATION_MEMORY_TYPE_COVERAGE_PRIORITY: &[&str] =
-    &["plot_point", "character_event", "hook", "world_detail", "chapter_summary"];
+const GENERATION_MEMORY_TYPE_COVERAGE_PRIORITY: &[&str] = &[
+    "plot_point",
+    "character_event",
+    "hook",
+    "world_detail",
+    "chapter_summary",
+];
 const GENERATION_CHARACTER_LIMIT: u64 = 10;
 const GENERATION_FORESHADOW_LIMIT: usize = 3;
 const GENERATION_CHARACTER_ARC_LIMIT: usize = 5;
@@ -280,7 +285,10 @@ fn compose_single_chapter_generation_memory_query(
 }
 
 fn normalize_memory_content_key(content: &str, max_length: usize) -> String {
-    let raw_value = content.trim().to_lowercase().replace(char::is_whitespace, "");
+    let raw_value = content
+        .trim()
+        .to_lowercase()
+        .replace(char::is_whitespace, "");
     let normalized = raw_value
         .chars()
         .filter(|ch| ch.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(ch))
@@ -386,7 +394,10 @@ fn build_career_prompt_line(career: &career::Model, current_stage: Option<i32>) 
     parts.join("；")
 }
 
-fn story_memory_matches_character(memory: &story_memory::Model, character: &character::Model) -> bool {
+fn story_memory_matches_character(
+    memory: &story_memory::Model,
+    character: &character::Model,
+) -> bool {
     if let Some(related_characters) = memory.related_characters.as_ref() {
         if let Some(items) = related_characters.as_array() {
             if items
@@ -469,9 +480,8 @@ fn build_character_arc_snapshot(
     });
 
     let mut lines = Vec::new();
-    for (_, _, _, character, matched_memories) in ranked
-        .into_iter()
-        .take(GENERATION_CHARACTER_ARC_LIMIT)
+    for (_, _, _, character, matched_memories) in
+        ranked.into_iter().take(GENERATION_CHARACTER_ARC_LIMIT)
     {
         let mut summary_parts = Vec::new();
         let state_preview = character
@@ -524,7 +534,11 @@ fn build_character_arc_snapshot(
         }
 
         if !summary_parts.is_empty() {
-            lines.push(format!("- {}：{}", character.name, summary_parts.join("；")));
+            lines.push(format!(
+                "- {}：{}",
+                character.name,
+                summary_parts.join("；")
+            ));
         }
     }
 
@@ -581,12 +595,17 @@ async fn build_single_chapter_careers_payload(
         if let Some(career_id) = character.main_career_id.as_ref() {
             career_ids.insert(career_id.clone());
             if let Some(stage) = character.main_career_stage {
-                main_stage_by_career.entry(career_id.clone()).or_insert(stage);
+                main_stage_by_career
+                    .entry(career_id.clone())
+                    .or_insert(stage);
             }
         }
     }
 
-    let character_ids = characters.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+    let character_ids = characters
+        .iter()
+        .map(|item| item.id.clone())
+        .collect::<Vec<_>>();
     let career_relations = if character_ids.is_empty() {
         Vec::new()
     } else {
@@ -713,8 +732,10 @@ async fn build_single_chapter_recent_context_payload(
                     })
                     .unwrap_or_default();
                 if !plot_summary.is_empty() {
-                    let mut line =
-                        format!("第{}章《{}》：{}", chapter.chapter_number, chapter.title, plot_summary);
+                    let mut line = format!(
+                        "第{}章《{}》：{}",
+                        chapter.chapter_number, chapter.title, plot_summary
+                    );
                     if !key_events.is_empty() {
                         line.push_str(&format!("（关键事件：{}）", key_events.join("；")));
                     }
@@ -724,7 +745,11 @@ async fn build_single_chapter_recent_context_payload(
             }
         }
 
-        if let Some(summary) = chapter.summary.as_deref().filter(|value| !value.trim().is_empty()) {
+        if let Some(summary) = chapter
+            .summary
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
             lines.push(format!(
                 "第{}章《{}》：{}",
                 chapter.chapter_number,
@@ -1218,7 +1243,11 @@ struct ResearchArchiveBundle {
     assets: Vec<Value>,
 }
 
-async fn run_exa_search(query: &str, api_key: &str, base_url: &str) -> Result<ExaSearchResponse, String> {
+async fn run_exa_search(
+    query: &str,
+    api_key: &str,
+    base_url: &str,
+) -> Result<ExaSearchResponse, String> {
     let response = http_client()
         .post(format!("{}/search", base_url.trim_end_matches('/')))
         .header(AUTHORIZATION, format!("Bearer {}", api_key))
@@ -1250,8 +1279,13 @@ async fn run_exa_search(query: &str, api_key: &str, base_url: &str) -> Result<Ex
         .map_err(|error| format!("exa response decode failed: {}", error))
 }
 
-async fn run_grok_search(query: &str, api_key: &str, base_url: &str, model: &str) -> Result<Value, String> {
-    let client = OpenAIClient::new(api_key, base_url);
+async fn run_grok_search(
+    query: &str,
+    api_key: &str,
+    base_url: &str,
+    model: &str,
+) -> Result<Value, String> {
+    let client = OpenAIClient::new(api_key, base_url, Vec::new(), None, Some("openai"));
     let response = client
         .chat_completion(
             &[
@@ -1268,6 +1302,9 @@ async fn run_grok_search(query: &str, api_key: &str, base_url: &str, model: &str
             0.2,
             512,
             None,
+            None,
+            false,
+            None,
         )
         .await
         .map_err(|error| format!("grok request failed: {}", error))?;
@@ -1278,8 +1315,12 @@ async fn run_grok_search(query: &str, api_key: &str, base_url: &str, model: &str
     }
 
     let parsed = serde_json::from_str::<Value>(trimmed).or_else(|_| {
-        let start = trimmed.find('{').ok_or_else(|| "missing json object start".to_string())?;
-        let end = trimmed.rfind('}').ok_or_else(|| "missing json object end".to_string())?;
+        let start = trimmed
+            .find('{')
+            .ok_or_else(|| "missing json object start".to_string())?;
+        let end = trimmed
+            .rfind('}')
+            .ok_or_else(|| "missing json object end".to_string())?;
         serde_json::from_str::<Value>(&trimmed[start..=end]).map_err(|error| error.to_string())
     });
 
@@ -1327,21 +1368,22 @@ fn build_exa_assets(results: &[ExaSearchResult]) -> Vec<Value> {
 }
 
 fn build_grok_assets(payload: &Value) -> Vec<Value> {
-    let parsed = serde_json::from_value::<GrokResearchResponse>(payload.clone()).unwrap_or_else(|_| {
-        GrokResearchResponse {
-            content: payload
-                .get("content")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            summary: payload
-                .get("summary")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            sources: Vec::new(),
-        }
-    });
+    let parsed =
+        serde_json::from_value::<GrokResearchResponse>(payload.clone()).unwrap_or_else(|_| {
+            GrokResearchResponse {
+                content: payload
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                summary: payload
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                sources: Vec::new(),
+            }
+        });
 
     let mut assets = Vec::new();
     let summary = normalize_research_text(
@@ -1416,7 +1458,12 @@ fn build_grok_assets(payload: &Value) -> Vec<Value> {
 fn resolve_archive_root() -> PathBuf {
     load_app_config()
         .ok()
-        .map(|cfg| PathBuf::from(cfg.static_dir).join("..").join("data").join("web_research"))
+        .map(|cfg| {
+            PathBuf::from(cfg.static_dir)
+                .join("..")
+                .join("data")
+                .join("web_research")
+        })
         .unwrap_or_else(|| PathBuf::from("../backend/data/web_research"))
 }
 
@@ -1476,19 +1523,28 @@ async fn replace_chapter_research_memories(
             format!(
                 "外部资料 {}: {}",
                 index + 1,
-                asset.get("title").and_then(Value::as_str).unwrap_or("未命名资料")
+                asset
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("未命名资料")
             ),
             180,
         );
         let summary = normalize_research_text(
-            asset.get("summary").and_then(Value::as_str).unwrap_or_default(),
+            asset
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
             500,
         );
         let memory_content = normalize_research_text(
             format!(
                 "{} 来源：{} 摘要：{}",
                 title,
-                asset.get("source").and_then(Value::as_str).unwrap_or("未知来源"),
+                asset
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .unwrap_or("未知来源"),
                 summary
             ),
             600,
@@ -1516,7 +1572,13 @@ async fn replace_chapter_research_memories(
             full_context: Set(Some(full_context)),
             related_characters: Set(None),
             related_locations: Set(None),
-            tags: Set(Some(json!(["web_research", asset.get("asset_type").and_then(Value::as_str).unwrap_or("external_asset")]))),
+            tags: Set(Some(json!([
+                "web_research",
+                asset
+                    .get("asset_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("external_asset")
+            ]))),
             importance_score: Set(Some(0.62)),
             story_timeline: Set(chapter_target.chapter_number),
             chapter_position: Set(0),
@@ -1592,9 +1654,13 @@ pub(crate) async fn build_single_chapter_research_provider_payload(
         user_id,
         chapter_target,
         compat_options,
-        Some(payload.characters_info.as_str()).filter(|value| !value.trim().is_empty() && *value != "[]"),
-        Some(payload.chapter_careers.as_str()).filter(|value| !value.trim().is_empty() && *value != "[]"),
-        character_arc_snapshot.as_deref().filter(|value| !value.trim().is_empty()),
+        Some(payload.characters_info.as_str())
+            .filter(|value| !value.trim().is_empty() && *value != "[]"),
+        Some(payload.chapter_careers.as_str())
+            .filter(|value| !value.trim().is_empty() && *value != "[]"),
+        character_arc_snapshot
+            .as_deref()
+            .filter(|value| !value.trim().is_empty()),
         Some(payload.foreshadow_reminders.as_str())
             .filter(|value| !value.trim().is_empty() && *value != "[]"),
     )
@@ -2022,7 +2088,10 @@ mod tests {
 
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0]["asset_type"], "exa_search_result");
-        assert!(assets[0]["summary"].as_str().unwrap_or_default().contains("晚清漕运夜航"));
+        assert!(assets[0]["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("晚清漕运夜航"));
     }
 
     #[test]

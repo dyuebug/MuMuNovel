@@ -79,22 +79,27 @@ impl ResumeBatchGenerationCommandState {
         }
     }
 
-    pub(crate) fn resolve_execution_selection(&self) -> Option<ResumeExecutionSelection> {
+    pub(crate) fn resolve_execution_selection(
+        &self,
+    ) -> Result<ResumeExecutionSelection, ResolveResumeExecutionSelectionError> {
         match self.task_kind() {
             BatchGenerationTaskKind::SingleChapter => self
                 .current_chapter_id
                 .clone()
-                .map(|chapter_id| ResumeExecutionSelection::SingleChapter { chapter_id }),
+                .map(|chapter_id| ResumeExecutionSelection::SingleChapter { chapter_id })
+                .ok_or(ResolveResumeExecutionSelectionError::NoResumableChaptersFound),
             BatchGenerationTaskKind::Batch => self
                 .resolve_remaining_batch_chapter_ids()
                 .map(|chapter_ids| ResumeExecutionSelection::Batch { chapter_ids }),
         }
     }
 
-    fn resolve_remaining_batch_chapter_ids(&self) -> Option<Vec<String>> {
+    fn resolve_remaining_batch_chapter_ids(
+        &self,
+    ) -> Result<Vec<String>, ResolveResumeExecutionSelectionError> {
         let chapter_ids = self.parse_batch_chapter_ids();
         if chapter_ids.is_empty() {
-            return None;
+            return Err(ResolveResumeExecutionSelectionError::NoResumableChaptersFound);
         }
 
         let resume_start_index = self
@@ -107,8 +112,11 @@ impl ResumeBatchGenerationCommandState {
             })
             .unwrap_or_else(|| self.completed_chapters.max(0) as usize);
 
-        (resume_start_index < chapter_ids.len())
-            .then(|| chapter_ids[resume_start_index..].to_vec())
+        if resume_start_index >= chapter_ids.len() {
+            return Err(ResolveResumeExecutionSelectionError::NoChaptersLeftToResume);
+        }
+
+        Ok(chapter_ids[resume_start_index..].to_vec())
     }
 
     fn parse_batch_chapter_ids(&self) -> Vec<String> {
@@ -157,12 +165,32 @@ impl ResumeResetSemantics {
             total_chapters,
         )
     }
+
+    pub(crate) fn build_resume_checkpoint_with_seed(
+        &self,
+        total_chapters: i32,
+        runtime_state_seed: Option<Value>,
+    ) -> Value {
+        let mut checkpoint = self.build_resume_checkpoint(total_chapters);
+        if let (Some(checkpoint_object), Some(Value::Object(seed_object))) =
+            (checkpoint.as_object_mut(), runtime_state_seed)
+        {
+            checkpoint_object.extend(seed_object);
+        }
+        checkpoint
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResumeExecutionSelection {
     SingleChapter { chapter_id: String },
     Batch { chapter_ids: Vec<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ResolveResumeExecutionSelectionError {
+    NoResumableChaptersFound,
+    NoChaptersLeftToResume,
 }
 
 #[cfg(test)]
@@ -172,7 +200,8 @@ mod tests {
     use crate::models::batch_generation_task;
 
     use super::{
-        ResumeBatchGenerationCommandState, ResumeExecutionSelection, ResumeResetSemantics,
+        ResolveResumeExecutionSelectionError, ResumeBatchGenerationCommandState,
+        ResumeExecutionSelection, ResumeResetSemantics,
     };
 
     fn task(
@@ -393,6 +422,36 @@ mod tests {
     }
 
     #[test]
+    fn should_build_resume_checkpoint_with_seed_from_reset_semantics_owner() {
+        let checkpoint = ResumeResetSemantics {
+            status: "pending",
+            current_chapter_id: Some("chapter-2".to_string()),
+            current_chapter_number: Some(2),
+            include_progress_totals: false,
+            completed_chapters: 0,
+            failed_chapters: json!([]),
+            current_retry_count: 0,
+        }
+        .build_resume_checkpoint_with_seed(
+            5,
+            Some(json!({
+                "resume_from_batch_id": "task-1",
+                "current_retry_count": 0,
+                "max_retries": 3
+            })),
+        );
+
+        assert_eq!(checkpoint["phase"], "pending");
+        assert_eq!(checkpoint["status"], "pending");
+        assert_eq!(checkpoint["last_event"], "resume");
+        assert_eq!(checkpoint["current_chapter_id"], "chapter-2");
+        assert_eq!(checkpoint["current_chapter_number"], 2);
+        assert_eq!(checkpoint["resume_from_batch_id"], "task-1");
+        assert_eq!(checkpoint["current_retry_count"], 0);
+        assert_eq!(checkpoint["max_retries"], 3);
+    }
+
+    #[test]
     fn should_resolve_resume_execution_selection_for_resumable_targets_only() {
         let single = ResumeBatchGenerationCommandState::from_task(&task(
             1,
@@ -415,17 +474,20 @@ mod tests {
 
         assert_eq!(
             single.resolve_execution_selection(),
-            Some(ResumeExecutionSelection::SingleChapter {
+            Ok(ResumeExecutionSelection::SingleChapter {
                 chapter_id: "chapter-1".to_string(),
             })
         );
         assert_eq!(
             batch.resolve_execution_selection(),
-            Some(ResumeExecutionSelection::Batch {
+            Ok(ResumeExecutionSelection::Batch {
                 chapter_ids: vec!["chapter-1".to_string(), "chapter-2".to_string()],
             })
         );
-        assert_eq!(malformed_single.resolve_execution_selection(), None);
+        assert_eq!(
+            malformed_single.resolve_execution_selection(),
+            Err(ResolveResumeExecutionSelectionError::NoResumableChaptersFound)
+        );
     }
 
     #[test]
@@ -442,7 +504,7 @@ mod tests {
 
         assert_eq!(
             batch.resolve_execution_selection(),
-            Some(ResumeExecutionSelection::Batch {
+            Ok(ResumeExecutionSelection::Batch {
                 chapter_ids: vec!["chapter-3".to_string(), "chapter-4".to_string()],
             })
         );
@@ -462,7 +524,7 @@ mod tests {
 
         assert_eq!(
             batch.resolve_execution_selection(),
-            Some(ResumeExecutionSelection::Batch {
+            Ok(ResumeExecutionSelection::Batch {
                 chapter_ids: vec!["chapter-3".to_string(), "chapter-4".to_string()],
             })
         );
@@ -470,17 +532,15 @@ mod tests {
 
     #[test]
     fn should_fail_resume_execution_selection_when_no_batch_chapters_left() {
-        let mut task_model = task(
-            2,
-            json!(["chapter-1", "chapter-2"]),
-            None,
-            None,
-        );
+        let mut task_model = task(2, json!(["chapter-1", "chapter-2"]), None, None);
         task_model.completed_chapters = 2;
 
         let batch = ResumeBatchGenerationCommandState::from_task(&task_model);
 
-        assert_eq!(batch.resolve_execution_selection(), None);
+        assert_eq!(
+            batch.resolve_execution_selection(),
+            Err(ResolveResumeExecutionSelectionError::NoChaptersLeftToResume)
+        );
     }
 
     #[test]
@@ -498,11 +558,12 @@ mod tests {
             Some(1),
         ));
 
-        assert_eq!(single.resolve_execution_selection(), Some(
-            ResumeExecutionSelection::SingleChapter {
+        assert_eq!(
+            single.resolve_execution_selection(),
+            Ok(ResumeExecutionSelection::SingleChapter {
                 chapter_id: "chapter-1".to_string(),
-            }
-        ));
+            })
+        );
         assert_eq!(
             single.resolve_runtime_semantics(),
             super::ResumeRuntimeSemantics {
@@ -512,11 +573,12 @@ mod tests {
             }
         );
 
-        assert_eq!(batch.resolve_execution_selection(), Some(
-            ResumeExecutionSelection::Batch {
+        assert_eq!(
+            batch.resolve_execution_selection(),
+            Ok(ResumeExecutionSelection::Batch {
                 chapter_ids: vec!["chapter-1".to_string(), "chapter-2".to_string()],
-            }
-        ));
+            })
+        );
         assert_eq!(
             batch.resolve_runtime_semantics(),
             super::ResumeRuntimeSemantics {

@@ -122,6 +122,8 @@ pub async fn import_book_import_chapters(
             None,
             None,
             None,
+            None,
+            None,
         )
         .await;
     }

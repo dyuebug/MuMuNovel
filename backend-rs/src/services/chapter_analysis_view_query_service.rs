@@ -16,6 +16,21 @@ pub enum LoadChapterAnalysisViewPayloadError {
     AnalysisNotFound,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChapterAnalysisViewOptions {
+    include_full_draft: bool,
+}
+
+impl ChapterAnalysisViewOptions {
+    pub fn new(include_full_draft: bool) -> Self {
+        Self { include_full_draft }
+    }
+
+    fn include_full_draft(self) -> bool {
+        self.include_full_draft
+    }
+}
+
 pub struct ChapterAnalysisCheckerFragments {
     pub checker_result: Option<Value>,
     pub checker_created_at: Option<String>,
@@ -60,6 +75,14 @@ fn value_or_null(value: Option<Value>) -> Value {
     value.unwrap_or(Value::Null)
 }
 
+fn array_or_empty(value: Option<Value>) -> Value {
+    value.filter(Value::is_array).unwrap_or_else(|| json!([]))
+}
+
+fn f64_or_zero(value: Option<f64>) -> Value {
+    json!(value.unwrap_or(0.0))
+}
+
 fn build_chapter_analysis_view_payload(
     chapter: &chapter::Model,
     analysis: plot_analysis::Model,
@@ -78,30 +101,30 @@ fn build_chapter_analysis_view_payload(
             "chapter_id": analysis.chapter_id,
             "plot_stage": analysis.plot_stage,
             "conflict_level": analysis.conflict_level,
-            "conflict_types": value_or_null(analysis.conflict_types),
+            "conflict_types": array_or_empty(analysis.conflict_types),
             "emotional_tone": analysis.emotional_tone,
-            "emotional_intensity": analysis.emotional_intensity,
+            "emotional_intensity": f64_or_zero(analysis.emotional_intensity),
             "emotional_curve": value_or_null(analysis.emotional_curve),
-            "hooks": value_or_null(analysis.hooks),
+            "hooks": array_or_empty(analysis.hooks),
             "hooks_count": analysis.hooks_count,
             "hooks_avg_strength": analysis.hooks_avg_strength,
-            "foreshadows": value_or_null(analysis.foreshadows),
+            "foreshadows": array_or_empty(analysis.foreshadows),
             "foreshadows_planted": analysis.foreshadows_planted,
             "foreshadows_resolved": analysis.foreshadows_resolved,
-            "plot_points": value_or_null(analysis.plot_points),
+            "plot_points": array_or_empty(analysis.plot_points),
             "plot_points_count": analysis.plot_points_count,
-            "character_states": value_or_null(analysis.character_states),
-            "scenes": value_or_null(analysis.scenes),
+            "character_states": array_or_empty(analysis.character_states),
+            "scenes": array_or_empty(analysis.scenes),
             "pacing": analysis.pacing,
-            "overall_quality_score": analysis.overall_quality_score,
-            "pacing_score": analysis.pacing_score,
-            "engagement_score": analysis.engagement_score,
-            "coherence_score": analysis.coherence_score,
+            "overall_quality_score": f64_or_zero(analysis.overall_quality_score),
+            "pacing_score": f64_or_zero(analysis.pacing_score),
+            "engagement_score": f64_or_zero(analysis.engagement_score),
+            "coherence_score": f64_or_zero(analysis.coherence_score),
             "analysis_report": analysis.analysis_report,
-            "suggestions": value_or_null(analysis.suggestions),
+            "suggestions": array_or_empty(analysis.suggestions),
             "word_count": analysis.word_count,
-            "dialogue_ratio": analysis.dialogue_ratio,
-            "description_ratio": analysis.description_ratio,
+            "dialogue_ratio": f64_or_zero(analysis.dialogue_ratio),
+            "description_ratio": f64_or_zero(analysis.description_ratio),
             "created_at": analysis_created_at,
         },
         "memories": memories.into_iter().map(|memory| json!({
@@ -128,6 +151,7 @@ fn build_chapter_analysis_view_payload(
 pub async fn load_chapter_analysis_view_payload(
     db: &DatabaseConnection,
     chapter: &chapter::Model,
+    options: ChapterAnalysisViewOptions,
 ) -> Result<Value, LoadChapterAnalysisViewPayloadError> {
     let chapter_id = chapter.id.clone();
 
@@ -167,6 +191,7 @@ pub async fn load_chapter_analysis_view_payload(
         &read_context.histories,
         read_context.candidate_attempt.as_ref(),
         chapter.updated_at,
+        options.include_full_draft(),
     );
     let quality_fragments = build_chapter_analysis_quality_fragments(
         &read_context.histories,
@@ -194,6 +219,7 @@ pub async fn load_owned_chapter_analysis_view_payload(
     db: &DatabaseConnection,
     chapter_id: &str,
     user_id: &str,
+    options: ChapterAnalysisViewOptions,
 ) -> Result<Value, LoadChapterAnalysisViewPayloadError> {
     let chapter = load_accessible_chapter(db, chapter_id, user_id)
         .await
@@ -203,7 +229,7 @@ pub async fn load_owned_chapter_analysis_view_payload(
             ))
         })?;
 
-    load_chapter_analysis_view_payload(db, &chapter).await
+    load_chapter_analysis_view_payload(db, &chapter, options).await
 }
 
 #[cfg(test)]
@@ -216,7 +242,8 @@ mod tests {
     use crate::services::chapter_quality_metrics_query_service::ChapterAnalysisQualityFragments;
 
     use super::{
-        build_chapter_analysis_view_payload, value_or_null, ChapterAnalysisCheckerFragments,
+        array_or_empty, build_chapter_analysis_view_payload, f64_or_zero, value_or_null,
+        ChapterAnalysisCheckerFragments, ChapterAnalysisViewOptions,
     };
 
     fn test_datetime() -> NaiveDateTime {
@@ -324,6 +351,70 @@ mod tests {
     }
 
     #[test]
+    fn should_match_python_default_analysis_collections_and_scores() {
+        let chapter = chapter_model();
+        let mut analysis = plot_analysis_model();
+        analysis.conflict_types = None;
+        analysis.emotional_intensity = None;
+        analysis.hooks = None;
+        analysis.foreshadows = None;
+        analysis.plot_points = None;
+        analysis.character_states = None;
+        analysis.scenes = None;
+        analysis.overall_quality_score = None;
+        analysis.pacing_score = None;
+        analysis.engagement_score = None;
+        analysis.coherence_score = None;
+        analysis.suggestions = None;
+        analysis.dialogue_ratio = None;
+        analysis.description_ratio = None;
+
+        let payload = build_chapter_analysis_view_payload(
+            &chapter,
+            analysis,
+            vec![],
+            ChapterAnalysisCheckerFragments {
+                checker_result: None,
+                checker_created_at: None,
+            },
+            ChapterDraftAnalysisViewFragments {
+                auto_revision_draft: None,
+                candidate_draft: None,
+            },
+            ChapterAnalysisQualityFragments {
+                quality_metrics: None,
+                quality_metrics_summary: None,
+            },
+            "2026-05-17T12:30:45".to_string(),
+            Some("2026-05-17T12:30:45".to_string()),
+        );
+
+        assert_eq!(payload["analysis"]["conflict_types"], json!([]));
+        assert_eq!(payload["analysis"]["hooks"], json!([]));
+        assert_eq!(payload["analysis"]["foreshadows"], json!([]));
+        assert_eq!(payload["analysis"]["plot_points"], json!([]));
+        assert_eq!(payload["analysis"]["character_states"], json!([]));
+        assert_eq!(payload["analysis"]["scenes"], json!([]));
+        assert_eq!(payload["analysis"]["suggestions"], json!([]));
+        assert_eq!(payload["analysis"]["emotional_intensity"], json!(0.0));
+        assert_eq!(payload["analysis"]["overall_quality_score"], json!(0.0));
+        assert_eq!(payload["analysis"]["pacing_score"], json!(0.0));
+        assert_eq!(payload["analysis"]["engagement_score"], json!(0.0));
+        assert_eq!(payload["analysis"]["coherence_score"], json!(0.0));
+        assert_eq!(payload["analysis"]["dialogue_ratio"], json!(0.0));
+        assert_eq!(payload["analysis"]["description_ratio"], json!(0.0));
+    }
+
+    #[test]
+    fn should_normalize_analysis_default_helpers() {
+        assert_eq!(array_or_empty(None), json!([]));
+        assert_eq!(array_or_empty(Some(json!({"k": "v"}))), json!([]));
+        assert_eq!(array_or_empty(Some(json!(["x"]))), json!(["x"]));
+        assert_eq!(f64_or_zero(None), json!(0.0));
+        assert_eq!(f64_or_zero(Some(8.6)), json!(8.6));
+    }
+
+    #[test]
     fn should_build_chapter_analysis_view_payload_with_fragments_and_memories() {
         let chapter = chapter_model();
         let payload = build_chapter_analysis_view_payload(
@@ -359,6 +450,15 @@ mod tests {
         assert_eq!(payload["quality_metrics"], json!({"score": 88}));
         assert_eq!(payload["quality_metrics_summary"], json!({"summary": "ok"}));
         assert_eq!(payload["created_at"], "2026-05-17T12:30:45");
+    }
+
+    #[test]
+    fn should_build_chapter_analysis_view_options_with_include_full_draft_flag() {
+        let options = ChapterAnalysisViewOptions::new(true);
+        let default_options = ChapterAnalysisViewOptions::default();
+
+        assert_eq!(options, ChapterAnalysisViewOptions::new(true));
+        assert_ne!(options, default_options);
     }
 
     #[test]

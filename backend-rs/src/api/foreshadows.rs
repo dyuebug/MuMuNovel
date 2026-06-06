@@ -15,38 +15,14 @@ use crate::services::foreshadow_request_service::{
     build_resolve_foreshadow_request_from_route_payload,
     build_sync_foreshadow_from_analysis_request_from_route_payload,
     build_update_foreshadow_request_from_route_payload, CreateForeshadowRouteRequest,
-    PlantForeshadowRouteRequest, ResolveForeshadowRouteRequest,
-    SyncForeshadowFromAnalysisRouteRequest, UpdateForeshadowRouteRequest,
+    ForeshadowContextQueryRequest, ForeshadowContextRouteQuery, ForeshadowQueryRequestError,
+    ForeshadowStatsQueryRequest, ForeshadowStatsRouteQuery, ListForeshadowsQueryRequest,
+    ListForeshadowsRouteQuery, PendingResolveForeshadowsQueryRequest,
+    PendingResolveForeshadowsRouteQuery, PlantForeshadowRouteRequest,
+    ResolveForeshadowRouteRequest, SyncForeshadowFromAnalysisRouteRequest,
+    UpdateForeshadowRouteRequest,
 };
 use crate::services::foreshadow_service::ForeshadowService;
-
-#[derive(Deserialize, Default)]
-struct ListQuery {
-    status: Option<String>,
-    category: Option<String>,
-    source_type: Option<String>,
-    is_long_term: Option<bool>,
-    page: Option<u64>,
-    limit: Option<u64>,
-}
-
-#[derive(Deserialize, Default)]
-struct StatsQuery {
-    current_chapter: Option<i32>,
-}
-
-#[derive(Deserialize, Default)]
-struct ContextQuery {
-    include_pending: Option<bool>,
-    include_overdue: Option<bool>,
-    lookahead: Option<i32>,
-}
-
-#[derive(Deserialize, Default)]
-struct PendingResolveQuery {
-    current_chapter: Option<i32>,
-    lookahead: Option<i32>,
-}
 
 #[derive(Deserialize, Default)]
 struct AbandonQuery {
@@ -56,17 +32,20 @@ struct AbandonQuery {
 async fn list_project(
     Extension(db): Extension<DatabaseConnection>,
     Path(project_id): Path<String>,
-    Query(params): Query<ListQuery>,
+    Query(params): Query<ListForeshadowsRouteQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let request = ListForeshadowsQueryRequest::from_route_query(params)
+        .map_err(map_foreshadow_query_request_error)?;
+
     ForeshadowService::list_project(
         &db,
         &project_id,
-        params.status.as_deref(),
-        params.category.as_deref(),
-        params.source_type.as_deref(),
-        params.is_long_term,
-        params.page,
-        params.limit,
+        request.status(),
+        request.category(),
+        request.source_type(),
+        request.is_long_term(),
+        Some(request.page()),
+        Some(request.limit()),
     )
     .await
     .map(Json)
@@ -81,9 +60,12 @@ async fn list_project(
 async fn get_stats(
     Extension(db): Extension<DatabaseConnection>,
     Path(project_id): Path<String>,
-    Query(params): Query<StatsQuery>,
+    Query(params): Query<ForeshadowStatsRouteQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    ForeshadowService::get_stats(&db, &project_id, params.current_chapter)
+    let request = ForeshadowStatsQueryRequest::from_route_query(params)
+        .map_err(map_foreshadow_query_request_error)?;
+
+    ForeshadowService::get_stats(&db, &project_id, request.current_chapter())
         .await
         .map(Json)
         .map_err(|e| {
@@ -97,15 +79,18 @@ async fn get_stats(
 async fn get_context(
     Extension(db): Extension<DatabaseConnection>,
     Path((project_id, chapter_number)): Path<(String, i32)>,
-    Query(params): Query<ContextQuery>,
+    Query(params): Query<ForeshadowContextRouteQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let request = ForeshadowContextQueryRequest::from_route_query(params)
+        .map_err(map_foreshadow_query_request_error)?;
+
     ForeshadowService::get_context(
         &db,
         &project_id,
         chapter_number,
-        params.include_pending,
-        params.include_overdue,
-        params.lookahead,
+        request.include_pending(),
+        request.include_overdue(),
+        Some(request.lookahead()),
     )
     .await
     .map(Json)
@@ -120,13 +105,16 @@ async fn get_context(
 async fn list_pending_resolve(
     Extension(db): Extension<DatabaseConnection>,
     Path(project_id): Path<String>,
-    Query(params): Query<PendingResolveQuery>,
+    Query(params): Query<PendingResolveForeshadowsRouteQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let request = PendingResolveForeshadowsQueryRequest::from_route_query(params)
+        .map_err(map_foreshadow_query_request_error)?;
+
     ForeshadowService::list_pending_resolve(
         &db,
         &project_id,
-        params.current_chapter.unwrap_or(1),
-        params.lookahead,
+        request.current_chapter(),
+        Some(request.lookahead()),
     )
     .await
     .map(Json)
@@ -151,6 +139,78 @@ async fn get_one(
                 Json(json!({"detail": format!("{}", e)})),
             )
         })
+}
+
+fn map_foreshadow_query_request_error(
+    error: ForeshadowQueryRequestError,
+) -> (StatusCode, Json<Value>) {
+    let detail = match error {
+        ForeshadowQueryRequestError::PageTooSmall => "page must be greater than or equal to 1",
+        ForeshadowQueryRequestError::LimitTooSmall => "limit must be greater than or equal to 1",
+        ForeshadowQueryRequestError::LimitTooLarge => "limit must be less than or equal to 100",
+        ForeshadowQueryRequestError::CurrentChapterMissing => "current_chapter is required",
+        ForeshadowQueryRequestError::CurrentChapterTooSmall => {
+            "current_chapter must be greater than or equal to 1"
+        }
+        ForeshadowQueryRequestError::LookaheadTooSmall => {
+            "lookahead must be greater than or equal to 1"
+        }
+        ForeshadowQueryRequestError::LookaheadTooLarge => {
+            "lookahead must be less than or equal to 20"
+        }
+    };
+
+    (StatusCode::BAD_REQUEST, Json(json!({ "detail": detail })))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+
+    use crate::services::foreshadow_request_service::ForeshadowQueryRequestError;
+
+    use super::map_foreshadow_query_request_error;
+
+    #[test]
+    fn foreshadow_query_errors_match_python_query_bounds() {
+        let cases = [
+            (
+                ForeshadowQueryRequestError::PageTooSmall,
+                "page must be greater than or equal to 1",
+            ),
+            (
+                ForeshadowQueryRequestError::LimitTooSmall,
+                "limit must be greater than or equal to 1",
+            ),
+            (
+                ForeshadowQueryRequestError::LimitTooLarge,
+                "limit must be less than or equal to 100",
+            ),
+            (
+                ForeshadowQueryRequestError::CurrentChapterMissing,
+                "current_chapter is required",
+            ),
+            (
+                ForeshadowQueryRequestError::CurrentChapterTooSmall,
+                "current_chapter must be greater than or equal to 1",
+            ),
+            (
+                ForeshadowQueryRequestError::LookaheadTooSmall,
+                "lookahead must be greater than or equal to 1",
+            ),
+            (
+                ForeshadowQueryRequestError::LookaheadTooLarge,
+                "lookahead must be less than or equal to 20",
+            ),
+        ];
+
+        for (error, expected_detail) in cases {
+            let (status, body) = map_foreshadow_query_request_error(error);
+
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(body.0["detail"], expected_detail);
+        }
+    }
 }
 
 async fn create(

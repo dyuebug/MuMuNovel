@@ -7,7 +7,7 @@ use axum::{
 };
 use sea_orm::DatabaseConnection;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::api::memories_error_mapper::{
     map_analyze_chapter_memories_write_workflow_error, map_memories_project_write_context_error,
@@ -91,6 +91,30 @@ pub struct ForeshadowListRouteQuery {
     pub current_chapter: Option<i32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ForeshadowListRouteQueryError {
+    CurrentChapterMissing,
+}
+
+fn build_foreshadow_list_current_chapter_from_route_query(
+    route_query: ForeshadowListRouteQuery,
+) -> Result<i32, ForeshadowListRouteQueryError> {
+    route_query
+        .current_chapter
+        .ok_or(ForeshadowListRouteQueryError::CurrentChapterMissing)
+}
+
+fn map_foreshadow_list_route_query_error(
+    error: ForeshadowListRouteQueryError,
+) -> (StatusCode, Json<Value>) {
+    match error {
+        ForeshadowListRouteQueryError::CurrentChapterMissing => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "current_chapter is required"})),
+        ),
+    }
+}
+
 async fn get_project_memories(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
@@ -147,11 +171,16 @@ async fn get_unresolved_foreshadows(
     Path(project_id): Path<String>,
     Query(query): Query<ForeshadowListRouteQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let current_chapter = query.current_chapter;
-    let payload =
-        load_owned_unresolved_foreshadows_payload(&db, &project_id, &claims.sub, current_chapter)
-            .await
-            .map_err(map_owned_project_memories_query_error)?;
+    let current_chapter = build_foreshadow_list_current_chapter_from_route_query(query)
+        .map_err(map_foreshadow_list_route_query_error)?;
+    let payload = load_owned_unresolved_foreshadows_payload(
+        &db,
+        &project_id,
+        &claims.sub,
+        Some(current_chapter),
+    )
+    .await
+    .map_err(map_owned_project_memories_query_error)?;
     Ok(Json(payload))
 }
 
@@ -213,10 +242,14 @@ pub fn routes() -> Router {
 #[cfg(test)]
 mod tests {
     use super::{
+        build_foreshadow_list_current_chapter_from_route_query,
         build_memory_list_request_from_route_query,
-        build_search_memories_request_from_route_payload, ForeshadowListRouteQuery,
-        MemoryListRouteQuery, SearchMemoriesRouteRequest,
+        build_search_memories_request_from_route_payload, map_foreshadow_list_route_query_error,
+        ForeshadowListRouteQuery, ForeshadowListRouteQueryError, MemoryListRouteQuery,
+        SearchMemoriesRouteRequest,
     };
+    use axum::http::StatusCode;
+    use serde_json::json;
 
     #[test]
     fn should_build_memory_list_request_from_route_query() {
@@ -255,11 +288,32 @@ mod tests {
     }
 
     #[test]
-    fn should_keep_foreshadow_list_route_query_current_chapter() {
-        let query = ForeshadowListRouteQuery {
-            current_chapter: Some(12),
-        };
+    fn should_require_foreshadow_list_current_chapter_like_python_route() {
+        assert_eq!(
+            build_foreshadow_list_current_chapter_from_route_query(ForeshadowListRouteQuery {
+                current_chapter: Some(12),
+            }),
+            Ok(12)
+        );
 
-        assert_eq!(query.current_chapter, Some(12));
+        assert_eq!(
+            build_foreshadow_list_current_chapter_from_route_query(ForeshadowListRouteQuery {
+                current_chapter: None,
+            }),
+            Err(ForeshadowListRouteQueryError::CurrentChapterMissing)
+        );
+    }
+
+    #[test]
+    fn should_map_missing_foreshadow_current_chapter_to_bad_request() {
+        let response = map_foreshadow_list_route_query_error(
+            ForeshadowListRouteQueryError::CurrentChapterMissing,
+        );
+
+        assert_eq!(response.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.1 .0,
+            json!({ "detail": "current_chapter is required" })
+        );
     }
 }

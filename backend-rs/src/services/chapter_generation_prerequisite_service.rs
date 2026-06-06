@@ -44,10 +44,7 @@ pub(crate) async fn check_chapter_generation_prerequisites(
     if !incomplete_numbers.is_empty() {
         return Ok(ChapterGenerationPrerequisiteCheck {
             can_generate: false,
-            error_message: format!(
-                "前置章节尚未完成: {} 章",
-                incomplete_numbers.join(", ")
-            ),
+            error_message: format!("前置章节尚未完成: {} 章", incomplete_numbers.join(", ")),
             previous_chapters,
         });
     }
@@ -66,10 +63,7 @@ mod tests {
     use super::ChapterGenerationPrerequisiteCheck;
     use crate::models::chapter;
 
-    fn chapter_model(
-        chapter_number: i32,
-        content: Option<&str>,
-    ) -> chapter::Model {
+    fn chapter_model(chapter_number: i32, content: Option<&str>) -> chapter::Model {
         chapter::Model {
             id: format!("chapter-{chapter_number}"),
             project_id: "project-1".to_string(),
@@ -121,10 +115,7 @@ mod tests {
 
         let result = ChapterGenerationPrerequisiteCheck {
             can_generate: false,
-            error_message: format!(
-                "前置章节尚未完成: {} 章",
-                incomplete_numbers.join(", ")
-            ),
+            error_message: format!("前置章节尚未完成: {} 章", incomplete_numbers.join(", ")),
             previous_chapters,
         };
 

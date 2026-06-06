@@ -1,11 +1,18 @@
 use serde_json::Value;
 
 use crate::models::{batch_generation_snapshot, batch_generation_task};
+use crate::services::chapter_batch_generation_quality_runtime_context_service::{
+    resolve_batch_quality_runtime_context_from_snapshot_and_runtime_state,
+    BatchGenerationQualityRuntimeContext,
+};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BatchGenerationQualityStatusContext {
     pub latest_quality_metrics: Option<Value>,
+    pub quality_metrics_history: Option<Value>,
+    pub quality_metrics_summary_state: Option<Value>,
     pub quality_metrics_summary: Option<Value>,
+    pub quality_history_context: Option<Value>,
     pub active_story_repair_payload: Option<Value>,
 }
 
@@ -32,15 +39,16 @@ impl BatchGenerationQualityStatusContext {
     ) -> Self {
         let active_story_repair_payload =
             Self::active_story_repair_payload_from_runtime_state(workflow_runtime_state);
-        let latest_quality_metrics = snapshot.and_then(|item| item.latest_quality_metrics.clone());
-        let quality_metrics_summary =
-            snapshot.and_then(|item| item.quality_metrics_summary.clone());
+        let quality_runtime_context =
+            resolve_batch_quality_runtime_context_from_snapshot_and_runtime_state(
+                snapshot,
+                workflow_runtime_state,
+            );
 
-        Self {
-            latest_quality_metrics,
-            quality_metrics_summary,
-            active_story_repair_payload,
-        }
+        Self::from_runtime_quality_context_and_active_payload(
+            &quality_runtime_context,
+            active_story_repair_payload.as_ref(),
+        )
     }
 
     pub fn insert_into_payload(&self, payload: &mut serde_json::Map<String, Value>) {
@@ -49,13 +57,41 @@ impl BatchGenerationQualityStatusContext {
             serde_json::json!(self.latest_quality_metrics),
         );
         payload.insert(
+            "quality_metrics_history".to_string(),
+            serde_json::json!(self.quality_metrics_history),
+        );
+        payload.insert(
+            "quality_metrics_summary_state".to_string(),
+            serde_json::json!(self.quality_metrics_summary_state),
+        );
+        payload.insert(
             "quality_metrics_summary".to_string(),
             serde_json::json!(self.quality_metrics_summary),
+        );
+        payload.insert(
+            "quality_history_context".to_string(),
+            serde_json::json!(self.quality_history_context),
         );
         payload.insert(
             "active_story_repair_payload".to_string(),
             serde_json::json!(self.active_story_repair_payload),
         );
+    }
+
+    pub fn from_runtime_quality_context_and_active_payload(
+        quality_runtime_context: &BatchGenerationQualityRuntimeContext,
+        active_story_repair_payload: Option<&Value>,
+    ) -> Self {
+        Self {
+            latest_quality_metrics: quality_runtime_context.latest_quality_metrics.clone(),
+            quality_metrics_history: quality_runtime_context.quality_metrics_history.clone(),
+            quality_metrics_summary_state: quality_runtime_context
+                .quality_metrics_summary_state
+                .clone(),
+            quality_metrics_summary: quality_runtime_context.quality_metrics_summary.clone(),
+            quality_history_context: quality_runtime_context.quality_history_context.clone(),
+            active_story_repair_payload: active_story_repair_payload.cloned(),
+        }
     }
 
     fn active_story_repair_payload_from_runtime_state(
@@ -78,13 +114,17 @@ pub fn insert_batch_generation_terminal_status_payload(
     let (terminal_reason, terminal_label, review_required, can_resume) = if task.status == "failed"
     {
         resolve_failed_terminal_semantics(task, failed_chapters, quality_status_context)
-            .map(|semantics| {
-                (
+            .map(|semantics| match semantics.kind {
+                BatchGenerationFailedTerminalKind::ManualReview => (
                     Some(semantics.reason),
                     Some(semantics.label),
                     semantics.review_required,
                     semantics.can_resume,
-                )
+                ),
+                BatchGenerationFailedTerminalKind::Retry
+                | BatchGenerationFailedTerminalKind::Error => {
+                    (Some("error"), Some("执行失败".to_string()), false, true)
+                }
             })
             .unwrap_or((Some("error"), Some("执行失败".to_string()), false, true))
     } else {
@@ -181,8 +221,7 @@ pub(crate) fn resolve_failed_terminal_semantics_from_sources(
 }
 
 pub fn manual_review_label(failed_chapters: Option<&Value>) -> Option<String> {
-    failed_chapters
-        .and_then(first_failed_chapter_manual_review_label)
+    failed_chapters.and_then(latest_failed_chapter_manual_review_label)
 }
 
 pub fn retryable_repair_label(
@@ -191,7 +230,7 @@ pub fn retryable_repair_label(
     max_retries: i32,
 ) -> Option<String> {
     failed_chapters.and_then(|items| {
-        first_failed_chapter_retryable_repair_label(items, current_retry_count, max_retries)
+        latest_failed_chapter_retryable_repair_label(items, current_retry_count, max_retries)
     })
 }
 
@@ -261,11 +300,7 @@ pub fn retryable_repair_label_from_quality_context_with_retry_budget(
         quality_metrics_summary
             .and_then(|summary| summary.get("quality_gate"))
             .and_then(|payload| {
-                retryable_repair_label_from_payload(
-                    Some(payload),
-                    current_retry_count,
-                    max_retries,
-                )
+                retryable_repair_label_from_payload(Some(payload), current_retry_count, max_retries)
             })
     })
     .or_else(|| {
@@ -279,29 +314,25 @@ pub fn retryable_repair_label_from_quality_context_with_retry_budget(
         latest_quality_metrics
             .and_then(|metrics| metrics.get("quality_gate"))
             .and_then(|payload| {
-                retryable_repair_label_from_payload(
-                    Some(payload),
-                    current_retry_count,
-                    max_retries,
-                )
+                retryable_repair_label_from_payload(Some(payload), current_retry_count, max_retries)
             })
     })
 }
 
-fn first_failed_chapter_manual_review_label(failed_chapters: &Value) -> Option<String> {
+fn latest_failed_chapter_manual_review_label(failed_chapters: &Value) -> Option<String> {
     let items = failed_chapters.as_array()?;
-    let first = items.first()?;
-    manual_review_label_from_payload(Some(first))
+    let latest = items.iter().rev().find(|item| item.is_object())?;
+    manual_review_label_from_payload(Some(latest))
 }
 
-fn first_failed_chapter_retryable_repair_label(
+fn latest_failed_chapter_retryable_repair_label(
     failed_chapters: &Value,
     current_retry_count: i32,
     max_retries: i32,
 ) -> Option<String> {
     let items = failed_chapters.as_array()?;
-    let first = items.first()?;
-    retryable_repair_label_from_payload(Some(first), current_retry_count, max_retries)
+    let latest = items.iter().rev().find(|item| item.is_object())?;
+    retryable_repair_label_from_payload(Some(latest), current_retry_count, max_retries)
 }
 
 fn manual_review_label_from_payload(value: Option<&Value>) -> Option<String> {
@@ -311,11 +342,10 @@ fn manual_review_label_from_payload(value: Option<&Value>) -> Option<String> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let decision = payload.get("quality_gate_decision").and_then(Value::as_str).or_else(|| {
-        payload
-            .get("decision")
-            .and_then(Value::as_str)
-    });
+    let decision = payload
+        .get("quality_gate_decision")
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("decision").and_then(Value::as_str));
     let is_manual_review = decision
         .map(str::trim)
         .is_some_and(|value| value == "manual_review")
@@ -444,14 +474,14 @@ mod tests {
     use serde_json::{json, Value};
 
     use crate::models::{batch_generation_snapshot, batch_generation_task};
+    use crate::services::chapter_batch_generation_quality_runtime_context_service::BatchGenerationQualityRuntimeContext;
 
     use super::{
         insert_batch_generation_terminal_status_payload, manual_review_label,
         manual_review_label_from_quality_context,
         manual_review_label_from_quality_context_with_retry_budget,
         resolve_failed_terminal_semantics, resolve_failed_terminal_semantics_from_sources,
-        retryable_repair_label,
-        retryable_repair_label_from_quality_context_with_retry_budget,
+        retryable_repair_label, retryable_repair_label_from_quality_context_with_retry_budget,
         BatchGenerationFailedTerminalKind, BatchGenerationQualityStatusContext,
     };
 
@@ -521,9 +551,80 @@ mod tests {
 
         assert_eq!(context.latest_quality_metrics, Some(json!({"score": 91})));
         assert_eq!(
+            context.quality_metrics_history,
+            Some(json!([{"score": 90}]))
+        );
+        assert_eq!(
             context.quality_metrics_summary,
             Some(json!({"summary": "ok"}))
         );
+        assert_eq!(
+            context
+                .quality_metrics_summary_state
+                .as_ref()
+                .and_then(|value| value.get("scope")),
+            Some(&json!("batch"))
+        );
+        assert_eq!(
+            context
+                .quality_metrics_summary_state
+                .as_ref()
+                .and_then(|value| value.get("chapter_count")),
+            Some(&json!(1))
+        );
+        assert_eq!(context.quality_history_context, None);
+        assert_eq!(
+            context.active_story_repair_payload,
+            Some(json!({"mode": "repair"}))
+        );
+    }
+
+    #[test]
+    fn should_fallback_to_runtime_state_quality_fields_when_snapshot_missing_them() {
+        let mut snapshot = snapshot_with_quality_fields();
+        snapshot.latest_quality_metrics = None;
+        snapshot.quality_metrics_summary = None;
+        let runtime_state = json!({
+            "latest_quality_metrics": {
+                "score": 87
+            },
+            "quality_metrics_summary": {
+                "summary": "runtime"
+            },
+            "active_story_repair_payload": {
+                "mode": "repair"
+            }
+        });
+
+        let context = BatchGenerationQualityStatusContext::from_snapshot_and_runtime_state(
+            Some(&snapshot),
+            Some(&runtime_state),
+        );
+
+        assert_eq!(context.latest_quality_metrics, Some(json!({"score": 87})));
+        assert_eq!(
+            context.quality_metrics_history,
+            Some(json!([{"score": 90}]))
+        );
+        assert_eq!(
+            context.quality_metrics_summary,
+            Some(json!({"summary": "runtime"}))
+        );
+        assert_eq!(
+            context
+                .quality_metrics_summary_state
+                .as_ref()
+                .and_then(|value| value.get("scope")),
+            Some(&json!("batch"))
+        );
+        assert_eq!(
+            context
+                .quality_metrics_summary_state
+                .as_ref()
+                .and_then(|value| value.get("chapter_count")),
+            Some(&json!(1))
+        );
+        assert_eq!(context.quality_history_context, None);
         assert_eq!(
             context.active_story_repair_payload,
             Some(json!({"mode": "repair"}))
@@ -536,7 +637,10 @@ mod tests {
             BatchGenerationQualityStatusContext::from_snapshot_and_runtime_state(None, None);
 
         assert_eq!(context.latest_quality_metrics, None);
+        assert_eq!(context.quality_metrics_history, None);
+        assert_eq!(context.quality_metrics_summary_state, None);
         assert_eq!(context.quality_metrics_summary, None);
+        assert_eq!(context.quality_history_context, None);
         assert_eq!(context.active_story_repair_payload, None);
     }
 
@@ -544,7 +648,10 @@ mod tests {
     fn should_insert_quality_status_context_fields_into_payload() {
         let context = BatchGenerationQualityStatusContext {
             latest_quality_metrics: Some(json!({"score": 91})),
+            quality_metrics_history: Some(json!([{"score": 90}])),
+            quality_metrics_summary_state: Some(json!({"chapter_count": 1})),
             quality_metrics_summary: Some(json!({"summary": "ok"})),
+            quality_history_context: Some(json!({"scope": "batch"})),
             active_story_repair_payload: Some(json!({"mode": "repair"})),
         };
         let mut payload = serde_json::Map::new();
@@ -552,8 +659,49 @@ mod tests {
         context.insert_into_payload(&mut payload);
 
         assert_eq!(payload["latest_quality_metrics"]["score"], 91);
+        assert_eq!(payload["quality_metrics_history"][0]["score"], 90);
+        assert_eq!(payload["quality_metrics_summary_state"]["chapter_count"], 1);
         assert_eq!(payload["quality_metrics_summary"]["summary"], "ok");
+        assert_eq!(payload["quality_history_context"]["scope"], "batch");
         assert_eq!(payload["active_story_repair_payload"]["mode"], "repair");
+    }
+
+    #[test]
+    fn should_build_quality_status_context_from_runtime_quality_context_and_active_payload() {
+        let runtime_quality_context = BatchGenerationQualityRuntimeContext {
+            latest_quality_metrics: Some(json!({"score": 91})),
+            quality_metrics_history: Some(json!([{"score": 90}])),
+            quality_metrics_summary_state: Some(json!({"chapter_count": 1})),
+            quality_metrics_summary: Some(json!({"summary": "ok"})),
+            quality_history_context: Some(json!({"scope": "batch"})),
+        };
+        let context =
+            BatchGenerationQualityStatusContext::from_runtime_quality_context_and_active_payload(
+                &runtime_quality_context,
+                Some(&json!({"mode": "repair"})),
+            );
+
+        assert_eq!(context.latest_quality_metrics, Some(json!({"score": 91})));
+        assert_eq!(
+            context.quality_metrics_history,
+            Some(json!([{"score": 90}]))
+        );
+        assert_eq!(
+            context.quality_metrics_summary_state,
+            Some(json!({"chapter_count": 1}))
+        );
+        assert_eq!(
+            context.quality_metrics_summary,
+            Some(json!({"summary": "ok"}))
+        );
+        assert_eq!(
+            context.quality_history_context,
+            Some(json!({"scope": "batch"}))
+        );
+        assert_eq!(
+            context.active_story_repair_payload,
+            Some(json!({"mode": "repair"}))
+        );
     }
 
     #[test]
@@ -648,6 +796,44 @@ mod tests {
         );
         assert_eq!(manual_review_label(Some(&ignored_failed_chapters)), None);
         assert_eq!(manual_review_label(None), None);
+    }
+
+    #[test]
+    fn should_prefer_latest_failed_chapter_for_manual_review_label() {
+        let failed_chapters = json!([
+            {
+                "quality_gate_decision": "auto_repair",
+                "quality_gate_label": "旧的自动修复建议"
+            },
+            {
+                "quality_gate_decision": "manual_review",
+                "quality_gate_label": "新的人工复核标签"
+            }
+        ]);
+
+        assert_eq!(
+            manual_review_label(Some(&failed_chapters)),
+            Some("新的人工复核标签".to_string())
+        );
+    }
+
+    #[test]
+    fn should_prefer_latest_failed_chapter_for_retryable_repair_label() {
+        let failed_chapters = json!([
+            {
+                "quality_gate_decision": "manual_review",
+                "quality_gate_label": "旧的人工复核标签"
+            },
+            {
+                "quality_gate_decision": "auto_repair",
+                "quality_gate_label": "新的自动修复建议"
+            }
+        ]);
+
+        assert_eq!(
+            retryable_repair_label(Some(&failed_chapters), 1, 3),
+            Some("新的自动修复建议".to_string())
+        );
     }
 
     #[test]
@@ -976,7 +1162,10 @@ mod tests {
                     "label": "等待人工复核"
                 }
             })),
+            quality_metrics_history: None,
+            quality_metrics_summary_state: None,
             quality_metrics_summary: None,
+            quality_history_context: None,
             active_story_repair_payload: None,
         };
 
@@ -1026,7 +1215,10 @@ mod tests {
                     "label": "自动修复预算已耗尽"
                 }
             })),
+            quality_metrics_history: None,
+            quality_metrics_summary_state: None,
             quality_metrics_summary: None,
+            quality_history_context: None,
             active_story_repair_payload: None,
         };
 
@@ -1076,7 +1268,10 @@ mod tests {
                     "label": "自动修复后重试"
                 }
             })),
+            quality_metrics_history: None,
+            quality_metrics_summary_state: None,
             quality_metrics_summary: None,
+            quality_history_context: None,
             active_story_repair_payload: None,
         };
 
@@ -1088,8 +1283,8 @@ mod tests {
             Some(&quality_status_context),
         );
 
-        assert_eq!(payload["terminal_reason"], "retry");
-        assert_eq!(payload["terminal_label"], "自动修复后重试");
+        assert_eq!(payload["terminal_reason"], "error");
+        assert_eq!(payload["terminal_label"], "执行失败");
         assert_eq!(payload["review_required"], false);
         assert_eq!(payload["can_resume"], true);
     }
@@ -1126,7 +1321,10 @@ mod tests {
                     "label": "自动修复后重试"
                 }
             })),
+            quality_metrics_history: None,
+            quality_metrics_summary_state: None,
             quality_metrics_summary: None,
+            quality_history_context: None,
             active_story_repair_payload: None,
         };
 
@@ -1153,7 +1351,10 @@ mod tests {
                     "label": "等待人工复核"
                 }
             })),
+            quality_metrics_history: None,
+            quality_metrics_summary_state: None,
             quality_metrics_summary: None,
+            quality_history_context: None,
             active_story_repair_payload: None,
         };
 
@@ -1165,7 +1366,10 @@ mod tests {
         )
         .expect("failed terminal semantics");
 
-        assert_eq!(semantics.kind, BatchGenerationFailedTerminalKind::ManualReview);
+        assert_eq!(
+            semantics.kind,
+            BatchGenerationFailedTerminalKind::ManualReview
+        );
         assert_eq!(semantics.reason, "manual_review");
         assert_eq!(semantics.label, "等待人工复核");
         assert!(semantics.review_required);

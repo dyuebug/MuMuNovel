@@ -1,6 +1,273 @@
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
+const FORESHADOW_LIST_PAGE_DEFAULT: u64 = 1;
+const FORESHADOW_LIST_PAGE_MIN: i64 = 1;
+const FORESHADOW_LIST_LIMIT_DEFAULT: u64 = 50;
+const FORESHADOW_LIST_LIMIT_MIN: i64 = 1;
+const FORESHADOW_LIST_LIMIT_MAX: u64 = 100;
+const FORESHADOW_LOOKAHEAD_DEFAULT: i32 = 5;
+const FORESHADOW_LOOKAHEAD_MIN: i32 = 1;
+const FORESHADOW_LOOKAHEAD_MAX: i32 = 20;
+const FORESHADOW_CURRENT_CHAPTER_MIN: i32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ForeshadowQueryRequestError {
+    PageTooSmall,
+    LimitTooSmall,
+    LimitTooLarge,
+    CurrentChapterMissing,
+    CurrentChapterTooSmall,
+    LookaheadTooSmall,
+    LookaheadTooLarge,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(crate) struct ListForeshadowsRouteQuery {
+    status: Option<String>,
+    category: Option<String>,
+    source_type: Option<String>,
+    is_long_term: Option<bool>,
+    page: Option<i64>,
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(crate) struct ForeshadowStatsRouteQuery {
+    current_chapter: Option<i32>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(crate) struct ForeshadowContextRouteQuery {
+    include_pending: Option<bool>,
+    include_overdue: Option<bool>,
+    lookahead: Option<i32>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(crate) struct PendingResolveForeshadowsRouteQuery {
+    current_chapter: Option<i32>,
+    lookahead: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ListForeshadowsQueryRequest {
+    status: Option<String>,
+    category: Option<String>,
+    source_type: Option<String>,
+    is_long_term: Option<bool>,
+    page: u64,
+    limit: u64,
+}
+
+impl ListForeshadowsQueryRequest {
+    pub(crate) fn from_route_query(
+        query: ListForeshadowsRouteQuery,
+    ) -> Result<Self, ForeshadowQueryRequestError> {
+        Ok(Self {
+            status: query.status,
+            category: query.category,
+            source_type: query.source_type,
+            is_long_term: query.is_long_term,
+            page: validate_optional_min(
+                query.page,
+                FORESHADOW_LIST_PAGE_DEFAULT,
+                FORESHADOW_LIST_PAGE_MIN,
+                ForeshadowQueryRequestError::PageTooSmall,
+            )?,
+            limit: validate_optional_range(
+                query.limit,
+                FORESHADOW_LIST_LIMIT_DEFAULT,
+                FORESHADOW_LIST_LIMIT_MIN,
+                FORESHADOW_LIST_LIMIT_MAX,
+                ForeshadowQueryRequestError::LimitTooSmall,
+                ForeshadowQueryRequestError::LimitTooLarge,
+            )?,
+        })
+    }
+
+    pub(crate) fn status(&self) -> Option<&str> {
+        self.status.as_deref()
+    }
+
+    pub(crate) fn category(&self) -> Option<&str> {
+        self.category.as_deref()
+    }
+
+    pub(crate) fn source_type(&self) -> Option<&str> {
+        self.source_type.as_deref()
+    }
+
+    pub(crate) fn is_long_term(&self) -> Option<bool> {
+        self.is_long_term
+    }
+
+    pub(crate) fn page(&self) -> u64 {
+        self.page
+    }
+
+    pub(crate) fn limit(&self) -> u64 {
+        self.limit
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ForeshadowStatsQueryRequest {
+    current_chapter: Option<i32>,
+}
+
+impl ForeshadowStatsQueryRequest {
+    pub(crate) fn from_route_query(
+        query: ForeshadowStatsRouteQuery,
+    ) -> Result<Self, ForeshadowQueryRequestError> {
+        if let Some(current_chapter) = query.current_chapter {
+            if current_chapter < FORESHADOW_CURRENT_CHAPTER_MIN {
+                return Err(ForeshadowQueryRequestError::CurrentChapterTooSmall);
+            }
+        }
+
+        Ok(Self {
+            current_chapter: query.current_chapter,
+        })
+    }
+
+    pub(crate) fn current_chapter(&self) -> Option<i32> {
+        self.current_chapter
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ForeshadowContextQueryRequest {
+    include_pending: Option<bool>,
+    include_overdue: Option<bool>,
+    lookahead: i32,
+}
+
+impl ForeshadowContextQueryRequest {
+    pub(crate) fn from_route_query(
+        query: ForeshadowContextRouteQuery,
+    ) -> Result<Self, ForeshadowQueryRequestError> {
+        Ok(Self {
+            include_pending: query.include_pending,
+            include_overdue: query.include_overdue,
+            lookahead: validate_optional_i32_range(
+                query.lookahead,
+                FORESHADOW_LOOKAHEAD_DEFAULT,
+                FORESHADOW_LOOKAHEAD_MIN,
+                FORESHADOW_LOOKAHEAD_MAX,
+                ForeshadowQueryRequestError::LookaheadTooSmall,
+                ForeshadowQueryRequestError::LookaheadTooLarge,
+            )?,
+        })
+    }
+
+    pub(crate) fn include_pending(&self) -> Option<bool> {
+        self.include_pending
+    }
+
+    pub(crate) fn include_overdue(&self) -> Option<bool> {
+        self.include_overdue
+    }
+
+    pub(crate) fn lookahead(&self) -> i32 {
+        self.lookahead
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingResolveForeshadowsQueryRequest {
+    current_chapter: i32,
+    lookahead: i32,
+}
+
+impl PendingResolveForeshadowsQueryRequest {
+    pub(crate) fn from_route_query(
+        query: PendingResolveForeshadowsRouteQuery,
+    ) -> Result<Self, ForeshadowQueryRequestError> {
+        let Some(current_chapter) = query.current_chapter else {
+            return Err(ForeshadowQueryRequestError::CurrentChapterMissing);
+        };
+        if current_chapter < FORESHADOW_CURRENT_CHAPTER_MIN {
+            return Err(ForeshadowQueryRequestError::CurrentChapterTooSmall);
+        }
+
+        Ok(Self {
+            current_chapter,
+            lookahead: validate_optional_i32_range(
+                query.lookahead,
+                FORESHADOW_LOOKAHEAD_DEFAULT,
+                FORESHADOW_LOOKAHEAD_MIN,
+                FORESHADOW_LOOKAHEAD_MAX,
+                ForeshadowQueryRequestError::LookaheadTooSmall,
+                ForeshadowQueryRequestError::LookaheadTooLarge,
+            )?,
+        })
+    }
+
+    pub(crate) fn current_chapter(&self) -> i32 {
+        self.current_chapter
+    }
+
+    pub(crate) fn lookahead(&self) -> i32 {
+        self.lookahead
+    }
+}
+
+fn validate_optional_min(
+    value: Option<i64>,
+    default: u64,
+    min: i64,
+    too_small: ForeshadowQueryRequestError,
+) -> Result<u64, ForeshadowQueryRequestError> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    if value < min {
+        return Err(too_small);
+    }
+    Ok(value as u64)
+}
+
+fn validate_optional_range(
+    value: Option<i64>,
+    default: u64,
+    min: i64,
+    max: u64,
+    too_small: ForeshadowQueryRequestError,
+    too_large: ForeshadowQueryRequestError,
+) -> Result<u64, ForeshadowQueryRequestError> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    if value < min {
+        return Err(too_small);
+    }
+    if value > max as i64 {
+        return Err(too_large);
+    }
+    Ok(value as u64)
+}
+
+fn validate_optional_i32_range(
+    value: Option<i32>,
+    default: i32,
+    min: i32,
+    max: i32,
+    too_small: ForeshadowQueryRequestError,
+    too_large: ForeshadowQueryRequestError,
+) -> Result<i32, ForeshadowQueryRequestError> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    if value < min {
+        return Err(too_small);
+    }
+    if value > max {
+        return Err(too_large);
+    }
+    Ok(value)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum RouteValueField {
     Missing,
@@ -522,9 +789,167 @@ mod tests {
         build_resolve_foreshadow_request_from_route_payload,
         build_sync_foreshadow_from_analysis_request_from_route_payload,
         build_update_foreshadow_request_from_route_payload, CreateForeshadowRouteRequest,
-        PlantForeshadowRouteRequest, ResolveForeshadowRouteRequest, RouteValueField,
-        SyncForeshadowFromAnalysisRouteRequest, UpdateForeshadowRouteRequest,
+        ForeshadowContextQueryRequest, ForeshadowContextRouteQuery, ForeshadowQueryRequestError,
+        ForeshadowStatsQueryRequest, ForeshadowStatsRouteQuery, ListForeshadowsQueryRequest,
+        ListForeshadowsRouteQuery, PendingResolveForeshadowsQueryRequest,
+        PendingResolveForeshadowsRouteQuery, PlantForeshadowRouteRequest,
+        ResolveForeshadowRouteRequest, RouteValueField, SyncForeshadowFromAnalysisRouteRequest,
+        UpdateForeshadowRouteRequest,
     };
+
+    #[test]
+    fn list_foreshadows_query_request_validates_python_query_bounds() {
+        let default_request =
+            ListForeshadowsQueryRequest::from_route_query(ListForeshadowsRouteQuery::default())
+                .expect("python defaults should be valid");
+
+        assert_eq!(default_request.page(), 1);
+        assert_eq!(default_request.limit(), 50);
+
+        let explicit_request =
+            ListForeshadowsQueryRequest::from_route_query(ListForeshadowsRouteQuery {
+                status: Some("pending".to_string()),
+                category: Some("main".to_string()),
+                source_type: Some("analysis".to_string()),
+                is_long_term: Some(true),
+                page: Some(2),
+                limit: Some(100),
+            })
+            .expect("upper python bound should be valid");
+
+        assert_eq!(explicit_request.status(), Some("pending"));
+        assert_eq!(explicit_request.category(), Some("main"));
+        assert_eq!(explicit_request.source_type(), Some("analysis"));
+        assert_eq!(explicit_request.is_long_term(), Some(true));
+        assert_eq!(explicit_request.page(), 2);
+        assert_eq!(explicit_request.limit(), 100);
+
+        assert_eq!(
+            ListForeshadowsQueryRequest::from_route_query(ListForeshadowsRouteQuery {
+                page: Some(0),
+                ..ListForeshadowsRouteQuery::default()
+            }),
+            Err(ForeshadowQueryRequestError::PageTooSmall)
+        );
+        assert_eq!(
+            ListForeshadowsQueryRequest::from_route_query(ListForeshadowsRouteQuery {
+                limit: Some(0),
+                ..ListForeshadowsRouteQuery::default()
+            }),
+            Err(ForeshadowQueryRequestError::LimitTooSmall)
+        );
+        assert_eq!(
+            ListForeshadowsQueryRequest::from_route_query(ListForeshadowsRouteQuery {
+                limit: Some(101),
+                ..ListForeshadowsRouteQuery::default()
+            }),
+            Err(ForeshadowQueryRequestError::LimitTooLarge)
+        );
+    }
+
+    #[test]
+    fn foreshadow_stats_query_request_validates_current_chapter_like_python_query() {
+        assert_eq!(
+            ForeshadowStatsQueryRequest::from_route_query(ForeshadowStatsRouteQuery {
+                current_chapter: None,
+            })
+            .expect("optional current_chapter may be absent")
+            .current_chapter(),
+            None
+        );
+        assert_eq!(
+            ForeshadowStatsQueryRequest::from_route_query(ForeshadowStatsRouteQuery {
+                current_chapter: Some(1),
+            })
+            .expect("minimum current_chapter should be valid")
+            .current_chapter(),
+            Some(1)
+        );
+        assert_eq!(
+            ForeshadowStatsQueryRequest::from_route_query(ForeshadowStatsRouteQuery {
+                current_chapter: Some(0),
+            }),
+            Err(ForeshadowQueryRequestError::CurrentChapterTooSmall)
+        );
+    }
+
+    #[test]
+    fn foreshadow_context_query_request_validates_lookahead_like_python_query() {
+        let default_request =
+            ForeshadowContextQueryRequest::from_route_query(ForeshadowContextRouteQuery::default())
+                .expect("python defaults should be valid");
+
+        assert_eq!(default_request.include_pending(), None);
+        assert_eq!(default_request.include_overdue(), None);
+        assert_eq!(default_request.lookahead(), 5);
+
+        let explicit_request =
+            ForeshadowContextQueryRequest::from_route_query(ForeshadowContextRouteQuery {
+                include_pending: Some(false),
+                include_overdue: Some(true),
+                lookahead: Some(20),
+            })
+            .expect("upper python bound should be valid");
+
+        assert_eq!(explicit_request.include_pending(), Some(false));
+        assert_eq!(explicit_request.include_overdue(), Some(true));
+        assert_eq!(explicit_request.lookahead(), 20);
+
+        assert_eq!(
+            ForeshadowContextQueryRequest::from_route_query(ForeshadowContextRouteQuery {
+                lookahead: Some(0),
+                ..ForeshadowContextRouteQuery::default()
+            }),
+            Err(ForeshadowQueryRequestError::LookaheadTooSmall)
+        );
+        assert_eq!(
+            ForeshadowContextQueryRequest::from_route_query(ForeshadowContextRouteQuery {
+                lookahead: Some(21),
+                ..ForeshadowContextRouteQuery::default()
+            }),
+            Err(ForeshadowQueryRequestError::LookaheadTooLarge)
+        );
+    }
+
+    #[test]
+    fn pending_resolve_query_request_requires_current_chapter_and_validates_lookahead() {
+        assert_eq!(
+            PendingResolveForeshadowsQueryRequest::from_route_query(
+                PendingResolveForeshadowsRouteQuery::default()
+            ),
+            Err(ForeshadowQueryRequestError::CurrentChapterMissing)
+        );
+        assert_eq!(
+            PendingResolveForeshadowsQueryRequest::from_route_query(
+                PendingResolveForeshadowsRouteQuery {
+                    current_chapter: Some(0),
+                    lookahead: None,
+                }
+            ),
+            Err(ForeshadowQueryRequestError::CurrentChapterTooSmall)
+        );
+
+        let request = PendingResolveForeshadowsQueryRequest::from_route_query(
+            PendingResolveForeshadowsRouteQuery {
+                current_chapter: Some(3),
+                lookahead: None,
+            },
+        )
+        .expect("required current_chapter with default lookahead should be valid");
+
+        assert_eq!(request.current_chapter(), 3);
+        assert_eq!(request.lookahead(), 5);
+
+        assert_eq!(
+            PendingResolveForeshadowsQueryRequest::from_route_query(
+                PendingResolveForeshadowsRouteQuery {
+                    current_chapter: Some(3),
+                    lookahead: Some(21),
+                }
+            ),
+            Err(ForeshadowQueryRequestError::LookaheadTooLarge)
+        );
+    }
 
     #[test]
     fn build_create_foreshadow_request_from_route_payload_keeps_existing_defaults() {

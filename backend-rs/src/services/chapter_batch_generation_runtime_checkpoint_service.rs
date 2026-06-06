@@ -85,28 +85,25 @@ impl BatchGenerationSnapshotStage {
         total_chapters: i32,
         current_chapter_number: Option<i32>,
     ) -> Value {
-        let build_runtime_checkpoint = |phase: &str,
-                                        progress: i32,
-                                        status: &str,
-                                        last_event: &str,
-                                        last_message: &str| {
-            let mut checkpoint = json!({
-                "phase": phase,
-                "progress": progress.clamp(0, 100),
-                "status": status,
-                "last_event": last_event,
-                "last_message": last_message,
-                "chapter_id": chapter_id,
-                "current_chapter_id": chapter_id,
-                "current_chapter_number": current_chapter_number,
-                "updated_at": chrono::Utc::now().to_rfc3339(),
-            });
-            if let Some(object) = checkpoint.as_object_mut() {
-                object.insert("completed".to_string(), json!(completed_chapters.max(0)));
-                object.insert("total".to_string(), json!(total_chapters.max(0)));
-            }
-            checkpoint
-        };
+        let build_runtime_checkpoint =
+            |phase: &str, progress: i32, status: &str, last_event: &str, last_message: &str| {
+                let mut checkpoint = json!({
+                    "phase": phase,
+                    "progress": progress.clamp(0, 100),
+                    "status": status,
+                    "last_event": last_event,
+                    "last_message": last_message,
+                    "chapter_id": chapter_id,
+                    "current_chapter_id": chapter_id,
+                    "current_chapter_number": current_chapter_number,
+                    "updated_at": chrono::Utc::now().to_rfc3339(),
+                });
+                if let Some(object) = checkpoint.as_object_mut() {
+                    object.insert("completed".to_string(), json!(completed_chapters.max(0)));
+                    object.insert("total".to_string(), json!(total_chapters.max(0)));
+                }
+                checkpoint
+            };
 
         match self {
             BatchGenerationSnapshotStage::Queued => {

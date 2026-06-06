@@ -3,9 +3,11 @@ use crate::services::chapter_access_service::{
 };
 use crate::services::chapter_regeneration_prepare_service::{
     prepare_chapter_regeneration_stream, prepare_partial_regeneration_stream,
-    BuildRegenerationAiServiceError, FullChapterRegenerationStreamInput,
-    FullChapterRegenerationStreamRequest, PartialChapterRegenerationStreamInput,
-    PartialRegenerationStreamWorkflowRequest, PreparePartialRegenerationStreamError,
+    validate_full_chapter_regeneration_stream_request_bounds,
+    validate_partial_regeneration_stream_request_bounds, BuildRegenerationAiServiceError,
+    FullChapterRegenerationStreamInput, FullChapterRegenerationStreamRequest,
+    PartialChapterRegenerationStreamInput, PartialRegenerationStreamWorkflowRequest,
+    PreparePartialRegenerationStreamError,
 };
 use crate::services::chapter_regeneration_stream_launch_service::{
     build_owned_regeneration_stream, OwnedRegenerationInitialEvent, OwnedRegenerationStream,
@@ -150,6 +152,9 @@ pub async fn create_chapter_regeneration_stream_workflow(
     chapter_id: &str,
     request: FullChapterRegenerationStreamRequest,
 ) -> Result<OwnedRegenerationStream, CreateChapterRegenerationStreamWorkflowError> {
+    validate_full_chapter_regeneration_stream_request_bounds(&request)
+        .map_err(CreateChapterRegenerationStreamWorkflowError::Prepare)?;
+
     let chapter = load_accessible_chapter(db, chapter_id, user_id)
         .await
         .map_err(CreateChapterRegenerationStreamWorkflowError::Chapter)?;
@@ -166,6 +171,10 @@ pub async fn create_partial_regeneration_stream_workflow(
     chapter_id: &str,
     request: PartialRegenerationStreamWorkflowRequest,
 ) -> Result<OwnedRegenerationStream, CreatePartialRegenerationStreamWorkflowError> {
+    validate_partial_regeneration_stream_request_bounds(&request)
+        .map_err(PreparePartialRegenerationStreamError::Input)
+        .map_err(CreatePartialRegenerationStreamWorkflowError::Prepare)?;
+
     let chapter = load_accessible_chapter(db, chapter_id, user_id)
         .await
         .map_err(CreatePartialRegenerationStreamWorkflowError::Chapter)?;

@@ -1,11 +1,14 @@
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    Set,
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::models::{career, character, character_career, organization, organization_member, relationship};
+use crate::models::{
+    career, character, character_career, organization, organization_member, relationship,
+};
 
 const INTIMACY_ADJUSTMENTS: [(&str, i32); 30] = [
     ("改善", 10),
@@ -89,15 +92,14 @@ fn normalized_relationship_change_description(change_info: &Value) -> Option<Str
                 Some(trimmed.to_string())
             }
         }
-        Value::Object(_) => normalized_non_empty_string(change_info.get("change"))
-            .or_else(|| {
-                let rendered = change_info.to_string();
-                if rendered == "{}" {
-                    None
-                } else {
-                    Some(rendered)
-                }
-            }),
+        Value::Object(_) => normalized_non_empty_string(change_info.get("change")).or_else(|| {
+            let rendered = change_info.to_string();
+            if rendered == "{}" {
+                None
+            } else {
+                Some(rendered)
+            }
+        }),
         Value::Null => None,
         _ => Some(change_info.to_string()),
     }
@@ -241,7 +243,8 @@ pub async fn sync_character_states_from_analysis(
                     let status_desc = survival_status_description(status);
                     active.status = Set(status.clone());
                     active.status_changed_chapter = Set(Some(chapter_number));
-                    active.current_state = Set(Some(format!("{}（第{}章）", status_desc, chapter_number)));
+                    active.current_state =
+                        Set(Some(format!("{}（第{}章）", status_desc, chapter_number)));
                     active.state_updated_chapter = Set(Some(chapter_number));
                     active.updated_at = Set(Some(now));
                     status_updated_count += 1;
@@ -264,8 +267,7 @@ pub async fn sync_character_states_from_analysis(
                     for item in active_relationships {
                         let mut active_relationship: relationship::ActiveModel = item.into();
                         active_relationship.status = Set("past".to_string());
-                        active_relationship.ended_at =
-                            Set(Some(format!("第{}章", chapter_number)));
+                        active_relationship.ended_at = Set(Some(format!("第{}章", chapter_number)));
                         active_relationship.updated_at = Set(Some(now));
                         active_relationship.update(db).await?;
                     }
@@ -336,7 +338,8 @@ pub async fn sync_character_states_from_analysis(
             item.get("relationship_changes").and_then(Value::as_object)
         {
             for (target_name, change_info) in relationship_changes {
-                let Some(change_desc) = normalized_relationship_change_description(change_info) else {
+                let Some(change_desc) = normalized_relationship_change_description(change_info)
+                else {
                     continue;
                 };
                 if target_name.trim().is_empty() {
@@ -368,12 +371,12 @@ pub async fn sync_character_states_from_analysis(
                     .filter(
                         relationship::Column::CharacterFromId
                             .eq(existing.id.clone())
-                            .and(relationship::Column::CharacterToId.eq(target_character.id.clone()))
-                            .or(
-                                relationship::Column::CharacterFromId
-                                    .eq(target_character.id.clone())
-                                    .and(relationship::Column::CharacterToId.eq(existing.id.clone())),
-                            ),
+                            .and(
+                                relationship::Column::CharacterToId.eq(target_character.id.clone()),
+                            )
+                            .or(relationship::Column::CharacterFromId
+                                .eq(target_character.id.clone())
+                                .and(relationship::Column::CharacterToId.eq(existing.id.clone()))),
                     )
                     .one(db)
                     .await?;
@@ -415,10 +418,7 @@ pub async fn sync_character_states_from_analysis(
                         relationship_name: Set(Some(change_desc.clone())),
                         intimacy_level: Set(initial_intimacy),
                         status: Set("active".to_string()),
-                        description: Set(Some(format!(
-                            "[第{}章] {}",
-                            chapter_number, change_desc
-                        ))),
+                        description: Set(Some(format!("[第{}章] {}", chapter_number, change_desc))),
                         started_at: Set(Some(format!("第{}章", chapter_number))),
                         ended_at: Set(None),
                         source: Set("analysis".to_string()),
@@ -440,8 +440,9 @@ pub async fn sync_character_states_from_analysis(
         }
 
         if let Some(career_changes) = item.get("career_changes").and_then(Value::as_object) {
-            let main_career_stage_change = normalized_i32_value(career_changes.get("main_career_stage_change"))
-                .unwrap_or_default();
+            let main_career_stage_change =
+                normalized_i32_value(career_changes.get("main_career_stage_change"))
+                    .unwrap_or_default();
             let sub_career_changes = career_changes
                 .get("sub_career_changes")
                 .and_then(Value::as_array)
@@ -455,7 +456,10 @@ pub async fn sync_character_states_from_analysis(
             let career_breakthrough =
                 normalized_non_empty_string(career_changes.get("career_breakthrough"));
 
-            if main_career_stage_change != 0 || !sub_career_changes.is_empty() || !new_careers.is_empty() {
+            if main_career_stage_change != 0
+                || !sub_career_changes.is_empty()
+                || !new_careers.is_empty()
+            {
                 if main_career_stage_change != 0 {
                     if let Some(main_career_id) = existing.main_career_id.clone() {
                         if let Some(main_char_career) = character_career::Entity::find()
@@ -510,7 +514,8 @@ pub async fn sync_character_states_from_analysis(
                 }
 
                 if !sub_career_changes.is_empty() {
-                    let mut sub_careers_json = parse_sub_careers_json(existing.sub_careers.as_deref());
+                    let mut sub_careers_json =
+                        parse_sub_careers_json(existing.sub_careers.as_deref());
                     let mut sub_careers_json_changed = false;
 
                     for sub_change in sub_career_changes {
@@ -519,8 +524,8 @@ pub async fn sync_character_states_from_analysis(
                         else {
                             continue;
                         };
-                        let stage_change =
-                            normalized_i32_value(sub_change.get("stage_change")).unwrap_or_default();
+                        let stage_change = normalized_i32_value(sub_change.get("stage_change"))
+                            .unwrap_or_default();
                         if stage_change == 0 {
                             continue;
                         }
@@ -541,7 +546,9 @@ pub async fn sync_character_states_from_analysis(
 
                         let Some(sub_char_career) = character_career::Entity::find()
                             .filter(character_career::Column::CharacterId.eq(existing.id.clone()))
-                            .filter(character_career::Column::CareerId.eq(sub_career_model.id.clone()))
+                            .filter(
+                                character_career::Column::CareerId.eq(sub_career_model.id.clone()),
+                            )
                             .filter(character_career::Column::CareerType.eq("sub"))
                             .one(db)
                             .await?
@@ -566,9 +573,7 @@ pub async fn sync_character_states_from_analysis(
                         active_sub.update(db).await?;
 
                         for item in &mut sub_careers_json {
-                            if item
-                                .get("career_id")
-                                .and_then(Value::as_str)
+                            if item.get("career_id").and_then(Value::as_str)
                                 == Some(sub_career_model.id.as_str())
                             {
                                 if let Some(object) = item.as_object_mut() {
@@ -593,7 +598,8 @@ pub async fn sync_character_states_from_analysis(
                 }
 
                 if !new_careers.is_empty() {
-                    let mut sub_careers_json = parse_sub_careers_json(existing.sub_careers.as_deref());
+                    let mut sub_careers_json =
+                        parse_sub_careers_json(existing.sub_careers.as_deref());
                     let existing_sub_count = character_career::Entity::find()
                         .filter(character_career::Column::CharacterId.eq(existing.id.clone()))
                         .filter(character_career::Column::CareerType.eq("sub"))
@@ -603,7 +609,11 @@ pub async fn sync_character_states_from_analysis(
                     let mut sub_careers_json_changed = false;
 
                     for item in new_careers {
-                        let Some(career_name) = item.as_str().map(str::trim).filter(|value| !value.is_empty()) else {
+                        let Some(career_name) = item
+                            .as_str()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                        else {
                             continue;
                         };
 
@@ -646,7 +656,10 @@ pub async fn sync_character_states_from_analysis(
                                 current_stage: Set(1),
                                 stage_progress: Set(None),
                                 started_at: Set(Some(format!("第{}章", chapter_number))),
-                                reached_current_stage_at: Set(Some(format!("第{}章", chapter_number))),
+                                reached_current_stage_at: Set(Some(format!(
+                                    "第{}章",
+                                    chapter_number
+                                ))),
                                 notes: Set(None),
                                 created_at: Set(now),
                                 updated_at: Set(Some(now)),
@@ -679,7 +692,10 @@ pub async fn sync_character_states_from_analysis(
                                 current_stage: Set(1),
                                 stage_progress: Set(None),
                                 started_at: Set(Some(format!("第{}章", chapter_number))),
-                                reached_current_stage_at: Set(Some(format!("第{}章", chapter_number))),
+                                reached_current_stage_at: Set(Some(format!(
+                                    "第{}章",
+                                    chapter_number
+                                ))),
                                 notes: Set(None),
                                 created_at: Set(now),
                                 updated_at: Set(Some(now)),
@@ -713,12 +729,13 @@ pub async fn sync_character_states_from_analysis(
             item.get("organization_changes").and_then(Value::as_array)
         {
             for org_change in organization_changes {
-                let Some(org_name) = normalized_non_empty_string(org_change.get("organization_name"))
+                let Some(org_name) =
+                    normalized_non_empty_string(org_change.get("organization_name"))
                 else {
                     continue;
                 };
-                let change_type = normalized_non_empty_string(org_change.get("change_type"))
-                    .unwrap_or_default();
+                let change_type =
+                    normalized_non_empty_string(org_change.get("change_type")).unwrap_or_default();
                 let new_position = normalized_non_empty_string(org_change.get("new_position"));
                 let loyalty_change_desc =
                     normalized_non_empty_string(org_change.get("loyalty_change"))
@@ -778,8 +795,12 @@ pub async fn sync_character_states_from_analysis(
                                         Set((existing_loyalty + loyalty_delta).clamp(0, 100));
                                 }
                                 if let Some(description) = description.clone() {
-                                    let note = format!("[第{}章] 重新加入: {}", chapter_number, description);
-                                    active_member.notes = Set(append_note(existing_notes.as_deref(), note));
+                                    let note = format!(
+                                        "[第{}章] 重新加入: {}",
+                                        chapter_number, description
+                                    );
+                                    active_member.notes =
+                                        Set(append_note(existing_notes.as_deref(), note));
                                 }
                                 active_member.updated_at = Set(Some(now));
                                 active_member.update(db).await?;
@@ -836,15 +857,19 @@ pub async fn sync_character_states_from_analysis(
                                     "expelled"
                                 };
                                 active_member.status = Set(next_status.to_string());
-                                active_member.left_at = Set(Some(format!("第{}章", chapter_number)));
+                                active_member.left_at =
+                                    Set(Some(format!("第{}章", chapter_number)));
                                 if loyalty_delta != 0 {
                                     active_member.loyalty =
                                         Set((existing_loyalty + loyalty_delta).clamp(0, 100));
                                 }
                                 if let Some(description) = description.clone() {
-                                    let note =
-                                        format!("[第{}章] {}: {}", chapter_number, change_type, description);
-                                    active_member.notes = Set(append_note(existing_notes.as_deref(), note));
+                                    let note = format!(
+                                        "[第{}章] {}: {}",
+                                        chapter_number, change_type, description
+                                    );
+                                    active_member.notes =
+                                        Set(append_note(existing_notes.as_deref(), note));
                                 }
                                 active_member.updated_at = Set(Some(now));
                                 active_member.update(db).await?;
@@ -885,12 +910,17 @@ pub async fn sync_character_states_from_analysis(
                                 let note = format!(
                                     "[第{}章] {}: {} → {}: {}",
                                     chapter_number,
-                                    if change_type == "promoted" { "晋升" } else { "降级" },
+                                    if change_type == "promoted" {
+                                        "晋升"
+                                    } else {
+                                        "降级"
+                                    },
                                     old_position,
                                     active_member.position.clone().unwrap(),
                                     description
                                 );
-                                active_member.notes = Set(append_note(existing_notes.as_deref(), note));
+                                active_member.notes =
+                                    Set(append_note(existing_notes.as_deref(), note));
                             }
                             active_member.updated_at = Set(Some(now));
                             active_member.update(db).await?;
@@ -920,7 +950,8 @@ pub async fn sync_character_states_from_analysis(
                                         "[第{}章] {}: {}",
                                         chapter_number, change_type, description
                                     );
-                                    active_member.notes = Set(append_note(existing_notes.as_deref(), note));
+                                    active_member.notes =
+                                        Set(append_note(existing_notes.as_deref(), note));
                                 }
                                 active_member.updated_at = Set(Some(now));
                                 active_member.update(db).await?;
@@ -1014,7 +1045,8 @@ pub async fn sync_organization_states_from_analysis(
         if normalized_bool_value(item.get("is_destroyed")) {
             org_character_active.status = Set("destroyed".to_string());
             org_character_active.status_changed_chapter = Set(Some(chapter_number));
-            org_character_active.current_state = Set(Some(format!("覆灭（第{}章）", chapter_number)));
+            org_character_active.current_state =
+                Set(Some(format!("覆灭（第{}章）", chapter_number)));
             org_character_active.state_updated_chapter = Set(Some(chapter_number));
             org_character_active.updated_at = Set(Some(now));
             org_character_changed = true;
@@ -1097,7 +1129,8 @@ pub async fn sync_organization_states_from_analysis(
             }
         }
 
-        if let Some(status_description) = normalized_non_empty_string(item.get("status_description"))
+        if let Some(status_description) =
+            normalized_non_empty_string(item.get("status_description"))
         {
             if !should_skip_state_update(org_character.state_updated_chapter, chapter_number)
                 && (org_character.current_state.as_deref() != Some(status_description.as_str())
@@ -1204,7 +1237,10 @@ mod tests {
             normalized_relationship_change_description(&json!({"note": "缺少change"})),
             Some("{\"note\":\"缺少change\"}".to_string())
         );
-        assert_eq!(normalized_relationship_change_description(&Value::Null), None);
+        assert_eq!(
+            normalized_relationship_change_description(&Value::Null),
+            None
+        );
     }
 
     #[test]
@@ -1249,7 +1285,10 @@ mod tests {
     fn should_parse_and_serialize_sub_careers_json() {
         let items = parse_sub_careers_json(Some("[{\"career_id\":\"c1\",\"stage\":2}]"));
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].get("career_id").and_then(Value::as_str), Some("c1"));
+        assert_eq!(
+            items[0].get("career_id").and_then(Value::as_str),
+            Some("c1")
+        );
         assert_eq!(
             serialize_sub_careers_json(&items),
             Some("[{\"career_id\":\"c1\",\"stage\":2}]".to_string())

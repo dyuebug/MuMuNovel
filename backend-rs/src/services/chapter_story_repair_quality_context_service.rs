@@ -1,20 +1,17 @@
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
+use crate::services::chapter_batch_generation_quality_status_service::manual_review_label_from_quality_context;
 use crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions;
 
 const MANUAL_REQUEST_SOURCE: &str = "manual_request";
 const MANUAL_REQUEST_SOURCE_LABEL: &str = "Manual request";
 const CURRENT_CHAPTER_QUALITY_SOURCE: &str = "current_chapter_quality";
 const CURRENT_CHAPTER_QUALITY_SOURCE_LABEL: &str = "Current chapter quality";
-const MANUAL_PLUS_CURRENT_CHAPTER_QUALITY_SOURCE: &str =
-    "manual_plus_current_chapter_quality";
-const MANUAL_PLUS_CURRENT_CHAPTER_QUALITY_SOURCE_LABEL: &str =
-    "Manual + current chapter quality";
-const MANUAL_PLUS_RECENT_HISTORY_SUMMARY_SOURCE: &str =
-    "manual_plus_recent_history_summary";
-const MANUAL_PLUS_RECENT_HISTORY_SUMMARY_SOURCE_LABEL: &str =
-    "Manual + recent history summary";
+const MANUAL_PLUS_CURRENT_CHAPTER_QUALITY_SOURCE: &str = "manual_plus_current_chapter_quality";
+const MANUAL_PLUS_CURRENT_CHAPTER_QUALITY_SOURCE_LABEL: &str = "Manual + current chapter quality";
+const MANUAL_PLUS_RECENT_HISTORY_SUMMARY_SOURCE: &str = "manual_plus_recent_history_summary";
+const MANUAL_PLUS_RECENT_HISTORY_SUMMARY_SOURCE_LABEL: &str = "Manual + recent history summary";
 
 pub(crate) fn has_explicit_story_repair_input(
     compat_options: &SingleChapterGenerationCompatOptions,
@@ -76,21 +73,33 @@ pub(crate) fn restore_story_repair_payload_from_quality_context(
     quality_metrics_summary: Option<&Value>,
     latest_quality_metrics: Option<&Value>,
 ) -> Option<serde_json::Map<String, Value>> {
-    quality_repair_guidance_from_quality_context(quality_metrics_summary, latest_quality_metrics)
-        .map(|guidance| {
-            let mut payload = serde_json::Map::new();
-            if let Some(summary) = guidance.get("summary").cloned() {
-                payload.insert("summary".to_string(), summary);
-            }
-            if let Some(repair_targets) = guidance.get("repair_targets").cloned() {
-                payload.insert("repair_targets".to_string(), repair_targets);
-            }
-            if let Some(preserve_strengths) = guidance.get("preserve_strengths").cloned() {
-                payload.insert("preserve_strengths".to_string(), preserve_strengths);
-            }
-            payload
-        })
-        .filter(|payload| !payload.is_empty())
+    let guidance = quality_repair_guidance_from_quality_context(
+        quality_metrics_summary,
+        latest_quality_metrics,
+    )?;
+    let merged_guidance = merged_story_repair_guidance_from_quality_context(
+        quality_metrics_summary,
+        latest_quality_metrics,
+    );
+
+    let mut payload = serde_json::Map::new();
+    if let Some(summary) = guidance.get("summary").cloned() {
+        payload.insert("summary".to_string(), summary);
+    }
+    if let Some(repair_targets) = merged_guidance
+        .as_ref()
+        .and_then(|guidance| guidance.get("repair_targets").cloned())
+    {
+        payload.insert("repair_targets".to_string(), repair_targets);
+    }
+    if let Some(preserve_strengths) = merged_guidance
+        .as_ref()
+        .and_then(|guidance| guidance.get("preserve_strengths").cloned())
+    {
+        payload.insert("preserve_strengths".to_string(), preserve_strengths);
+    }
+
+    (!payload.is_empty()).then_some(payload)
 }
 
 pub(crate) fn restore_active_story_repair_payload_from_quality_context(
@@ -100,13 +109,22 @@ pub(crate) fn restore_active_story_repair_payload_from_quality_context(
     source: &str,
     source_label: &str,
 ) -> Option<Value> {
-    let guidance =
-        quality_repair_guidance_from_quality_context(quality_metrics_summary, latest_quality_metrics)?;
+    let guidance = quality_repair_guidance_from_quality_context(
+        quality_metrics_summary,
+        latest_quality_metrics,
+    )?;
+    let merged_guidance = merged_story_repair_guidance_from_quality_context(
+        quality_metrics_summary,
+        latest_quality_metrics,
+    );
     let payload = restore_story_repair_payload_from_quality_context(
         quality_metrics_summary,
         latest_quality_metrics,
     )?;
-    let quality_gate = quality_gate_from_quality_context(quality_metrics_summary, latest_quality_metrics);
+    let quality_gate = reconciled_quality_gate_from_quality_context(
+        quality_metrics_summary,
+        latest_quality_metrics,
+    );
 
     let summary = payload.get("summary").cloned().unwrap_or(Value::Null);
     let repair_targets = payload
@@ -118,8 +136,10 @@ pub(crate) fn restore_active_story_repair_payload_from_quality_context(
         .cloned()
         .unwrap_or_else(|| json!([]));
 
-    let focus_areas = guidance
-        .get("focus_areas")
+    let focus_areas = merged_guidance
+        .as_ref()
+        .and_then(|guidance| guidance.get("focus_areas"))
+        .or_else(|| guidance.get("focus_areas"))
         .and_then(Value::as_array)
         .map(|items| normalize_guidance_items(items, 4))
         .unwrap_or_default();
@@ -160,13 +180,25 @@ pub(crate) fn restore_active_story_repair_payload_from_quality_context(
         .and_then(|gate| gate.get("failed_metrics"))
         .and_then(Value::as_array)
         .map(|items| {
-            items.iter()
-                .filter_map(Value::as_object)
-                .filter_map(|item| item.get("label"))
-                .filter_map(Value::as_str)
-                .map(str::trim)
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.as_str().map(str::to_string).or_else(|| {
+                        item.as_object()
+                            .and_then(|entry| entry.get("label"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                })
+                .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
-                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .map(|items| {
+            let mut seen = HashSet::new();
+            items
+                .into_iter()
+                .filter(|value| seen.insert(value.clone()))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -190,6 +222,61 @@ pub(crate) fn restore_active_story_repair_payload_from_quality_context(
         "scope": scope,
         "updated_at": Value::Null,
     }))
+}
+
+pub(crate) fn resolve_active_story_repair_payload_with_quality_fallback(
+    explicit_payload: Option<&Value>,
+    quality_metrics_summary: Option<&Value>,
+    latest_quality_metrics: Option<&Value>,
+    scope: &str,
+    quality_source: &str,
+    quality_source_label: &str,
+) -> Option<Value> {
+    let derived_payload = restore_active_story_repair_payload_from_quality_context(
+        quality_metrics_summary,
+        latest_quality_metrics,
+        scope,
+        quality_source,
+        quality_source_label,
+    );
+
+    merge_active_story_repair_payloads(
+        explicit_payload,
+        derived_payload.as_ref(),
+        scope,
+        quality_source,
+        quality_source_label,
+    )
+}
+
+pub(crate) fn resolve_resumed_active_story_repair_payload(
+    runtime_payload: Option<&Value>,
+    quality_metrics_summary: Option<&Value>,
+    latest_quality_metrics: Option<&Value>,
+    request_payload: Option<&Value>,
+    scope: &str,
+    quality_source: &str,
+    quality_source_label: &str,
+) -> Option<Value> {
+    normalize_active_story_repair_payload_value(runtime_payload)
+        .or_else(|| {
+            restore_active_story_repair_payload_from_quality_context(
+                quality_metrics_summary,
+                latest_quality_metrics,
+                scope,
+                quality_source,
+                quality_source_label,
+            )
+        })
+        .or_else(|| {
+            merge_active_story_repair_payloads(
+                request_payload,
+                None,
+                scope,
+                quality_source,
+                quality_source_label,
+            )
+        })
 }
 
 pub(crate) fn merge_active_story_repair_payloads(
@@ -267,11 +354,1379 @@ pub(crate) fn extract_quality_history_context(
         })
 }
 
-const QUALITY_SUMMARY_METRIC_FIELDS: [(&str, &str); 3] = [
+#[derive(Clone, Copy)]
+struct QualityMetricDescriptor {
+    metric_key: &'static str,
+    focus_area: &'static str,
+    label: &'static str,
+    weak_threshold: f64,
+    repair_target: &'static str,
+    preserve_hint: &'static str,
+}
+
+#[derive(Clone, Copy)]
+struct QualityMetricSignal {
+    descriptor: QualityMetricDescriptor,
+    value: f64,
+    normalized_value: f64,
+}
+
+const QUALITY_SUMMARY_METRIC_FIELDS: [(&str, &str); 10] = [
     ("overall_score", "avg_overall_score"),
     ("engagement_score", "avg_engagement_score"),
     ("coherence_score", "avg_coherence_score"),
+    ("conflict_chain_hit_rate", "avg_conflict_chain_hit_rate"),
+    ("rule_grounding_hit_rate", "avg_rule_grounding_hit_rate"),
+    ("outline_alignment_rate", "avg_outline_alignment_rate"),
+    ("dialogue_naturalness_rate", "avg_dialogue_naturalness_rate"),
+    ("opening_hook_rate", "avg_opening_hook_rate"),
+    ("payoff_chain_rate", "avg_payoff_chain_rate"),
+    ("cliffhanger_rate", "avg_cliffhanger_rate"),
 ];
+
+const QUALITY_METRIC_DESCRIPTORS: [QualityMetricDescriptor; 8] = [
+    QualityMetricDescriptor {
+        metric_key: "conflict_chain_hit_rate",
+        focus_area: "conflict",
+        label: "冲突推进",
+        weak_threshold: 72.0,
+        repair_target: "本章至少推进 1 个主线矛盾，并明确新的阻力或代价。",
+        preserve_hint: "主线冲突推进",
+    },
+    QualityMetricDescriptor {
+        metric_key: "rule_grounding_hit_rate",
+        focus_area: "rule_grounding",
+        label: "规则落地",
+        weak_threshold: 72.0,
+        repair_target: "把世界规则、代价或限制写进具体动作与结果，避免只停留在说明层。",
+        preserve_hint: "世界规则落地",
+    },
+    QualityMetricDescriptor {
+        metric_key: "outline_alignment_rate",
+        focus_area: "outline",
+        label: "大纲贴合",
+        weak_threshold: 72.0,
+        repair_target: "把本章大纲任务拆成可见动作与结果，不要只做解释性铺陈。",
+        preserve_hint: "大纲任务清晰",
+    },
+    QualityMetricDescriptor {
+        metric_key: "dialogue_naturalness_rate",
+        focus_area: "dialogue",
+        label: "对白自然度",
+        weak_threshold: 74.0,
+        repair_target: "收紧对白解释，改成更符合角色立场与情绪的对抗式表达。",
+        preserve_hint: "对白辨识度",
+    },
+    QualityMetricDescriptor {
+        metric_key: "opening_hook_rate",
+        focus_area: "opening",
+        label: "开场钩子",
+        weak_threshold: 72.0,
+        repair_target: "开篇更早抛出异常、目标或风险，避免长铺垫后才进入主事件。",
+        preserve_hint: "开场牵引",
+    },
+    QualityMetricDescriptor {
+        metric_key: "payoff_chain_rate",
+        focus_area: "payoff",
+        label: "回报兑现",
+        weak_threshold: 72.0,
+        repair_target: "优先回收至少一个既有伏笔、承诺或情绪账，形成阶段性结果。",
+        preserve_hint: "阶段兑现",
+    },
+    QualityMetricDescriptor {
+        metric_key: "cliffhanger_rate",
+        focus_area: "cliffhanger",
+        label: "章尾牵引",
+        weak_threshold: 74.0,
+        repair_target: "在章尾保留明确未决问题、危险或选择压力，增强追读拉力。",
+        preserve_hint: "章尾牵引",
+    },
+    QualityMetricDescriptor {
+        metric_key: "pacing_score",
+        focus_area: "pacing",
+        label: "节奏稳定度",
+        weak_threshold: 7.2,
+        repair_target: "压缩解释段并前置冲突触发，让节拍保持目标—受阻—反制推进。",
+        preserve_hint: "节奏稳定",
+    },
+];
+
+fn quality_stage_label(stage: &str) -> &'static str {
+    match stage {
+        "opening" => "开篇",
+        "development" => "发展",
+        "ending" => "收束",
+        _ => "",
+    }
+}
+
+fn focus_area_label(focus_area: &str) -> String {
+    match focus_area {
+        "conflict" => "冲突推进".to_string(),
+        "outline" => "大纲贴合".to_string(),
+        "pacing" => "节奏稳定度".to_string(),
+        "payoff" => "回报兑现".to_string(),
+        "cliffhanger" => "章尾牵引".to_string(),
+        "dialogue" => "对白自然度".to_string(),
+        "rule_grounding" => "规则落地".to_string(),
+        "opening" => "开场钩子".to_string(),
+        "foreshadow_continuity" => "伏笔连续性".to_string(),
+        "relationship_continuity" => "关系连续性".to_string(),
+        "character_continuity" => "角色连续性".to_string(),
+        "organization_continuity" => "组织连续性".to_string(),
+        "career_continuity" => "职业连续性".to_string(),
+        _ => focus_area.to_string(),
+    }
+}
+
+fn repair_effectiveness_metric_spec(focus_area: &str) -> Option<(&'static str, f64, f64)> {
+    match focus_area {
+        "conflict" => Some(("conflict_chain_hit_rate", 72.0, 3.0)),
+        "outline" => Some(("outline_alignment_rate", 72.0, 3.0)),
+        "pacing" => Some(("pacing_score", 7.2, 0.4)),
+        "payoff" => Some(("payoff_chain_rate", 72.0, 3.0)),
+        "cliffhanger" => Some(("cliffhanger_rate", 74.0, 3.0)),
+        "dialogue" => Some(("dialogue_naturalness_rate", 74.0, 3.0)),
+        "rule_grounding" => Some(("rule_grounding_hit_rate", 72.0, 3.0)),
+        "opening" => Some(("opening_hook_rate", 72.0, 3.0)),
+        "foreshadow_continuity" => Some(("payoff_chain_rate", 72.0, 3.0)),
+        "relationship_continuity" => Some(("dialogue_naturalness_rate", 74.0, 3.0)),
+        "character_continuity" => Some(("dialogue_naturalness_rate", 74.0, 3.0)),
+        "organization_continuity" => Some(("rule_grounding_hit_rate", 72.0, 3.0)),
+        "career_continuity" => Some(("rule_grounding_hit_rate", 72.0, 3.0)),
+        _ => None,
+    }
+}
+
+fn metric_value_as_f64(metrics: &serde_json::Map<String, Value>, metric_key: &str) -> Option<f64> {
+    metrics.get(metric_key).and_then(Value::as_f64)
+}
+
+fn normalized_metric_value(metric_key: &str, value: f64) -> f64 {
+    if metric_key == "pacing_score" {
+        value * 10.0
+    } else {
+        value
+    }
+}
+
+fn normalize_runtime_context_item_texts(value: Option<&Value>, limit: usize) -> Vec<String> {
+    let Some(items) = value.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+    for item in items {
+        let text = if let Some(text) = item.as_str() {
+            text.trim().to_string()
+        } else if let Some(object) = item.as_object() {
+            let keys = [
+                "setup",
+                "payoff",
+                "summary",
+                "trigger",
+                "resolution",
+                "content",
+                "title",
+                "name",
+                "label",
+            ];
+            keys.iter()
+                .filter_map(|key| object.get(*key))
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            String::new()
+        };
+        if text.is_empty() || !seen.insert(text.clone()) {
+            continue;
+        }
+        normalized.push(text);
+        if normalized.len() >= limit {
+            break;
+        }
+    }
+
+    normalized
+}
+
+fn extract_quality_runtime_context_object(
+    value: Option<&Value>,
+) -> Option<serde_json::Map<String, Value>> {
+    value
+        .and_then(|metrics| metrics.get("quality_runtime_context"))
+        .and_then(Value::as_object)
+        .filter(|context| !context.is_empty())
+        .cloned()
+}
+
+fn resolve_quality_stage(
+    runtime_context: Option<&serde_json::Map<String, Value>>,
+) -> Option<String> {
+    let runtime_context = runtime_context?;
+    if let Some(stage) = runtime_context
+        .get("plot_stage")
+        .or_else(|| runtime_context.get("quality_stage"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| matches!(*value, "opening" | "development" | "ending"))
+    {
+        return Some(stage.to_string());
+    }
+
+    let current = runtime_context
+        .get("current_chapter_number")
+        .and_then(Value::as_f64);
+    let total = runtime_context.get("chapter_count").and_then(Value::as_f64);
+    match (current, total) {
+        (Some(current), Some(total)) if total > 0.0 => {
+            let progress = current / total;
+            if progress <= 0.22 {
+                Some("opening".to_string())
+            } else if progress >= 0.78 {
+                Some("ending".to_string())
+            } else {
+                Some("development".to_string())
+            }
+        }
+        _ => None,
+    }
+}
+
+fn build_quality_runtime_pressure(
+    runtime_context: Option<&serde_json::Map<String, Value>>,
+) -> Value {
+    let Some(runtime_context) = runtime_context else {
+        return json!({
+            "foreshadow_plan_count": 0,
+            "foreshadow_state_count": 0,
+            "chapter_progress_ratio": Value::Null,
+        });
+    };
+
+    let foreshadow_plan_count = normalize_runtime_context_item_texts(
+        runtime_context.get("foreshadow_payoff_plan"),
+        8,
+    )
+    .len() as i64;
+    let foreshadow_state_count =
+        normalize_runtime_context_item_texts(runtime_context.get("foreshadow_state_ledger"), 8)
+            .len() as i64;
+    let chapter_progress_ratio = match (
+        runtime_context
+            .get("current_chapter_number")
+            .and_then(Value::as_f64),
+        runtime_context.get("chapter_count").and_then(Value::as_f64),
+    ) {
+        (Some(current), Some(total)) if total > 0.0 => {
+            Some(round_quality_metric(current / total * 100.0) / 100.0)
+        }
+        _ => None,
+    };
+
+    json!({
+        "foreshadow_plan_count": foreshadow_plan_count,
+        "foreshadow_state_count": foreshadow_state_count,
+        "chapter_progress_ratio": chapter_progress_ratio.map(Value::from).unwrap_or(Value::Null),
+    })
+}
+
+fn collect_quality_metric_signals(
+    metrics: &serde_json::Map<String, Value>,
+) -> Vec<QualityMetricSignal> {
+    QUALITY_METRIC_DESCRIPTORS
+        .iter()
+        .filter_map(|descriptor| {
+            let value = metric_value_as_f64(metrics, descriptor.metric_key)?;
+            Some(QualityMetricSignal {
+                descriptor: *descriptor,
+                value,
+                normalized_value: normalized_metric_value(descriptor.metric_key, value),
+            })
+        })
+        .collect()
+}
+
+fn has_quality_metric_signal(metrics: &serde_json::Map<String, Value>) -> bool {
+    QUALITY_SUMMARY_METRIC_FIELDS
+        .iter()
+        .any(|(metric_key, _)| metrics.contains_key(*metric_key))
+        || metrics
+            .get("quality_runtime_context")
+            .is_some_and(Value::is_object)
+        || metrics
+            .get("story_runtime_contract")
+            .is_some_and(Value::is_object)
+}
+
+fn derive_story_repair_guidance_from_metrics_object(
+    metrics: &serde_json::Map<String, Value>,
+    _scope: &str,
+) -> Value {
+    let runtime_context =
+        extract_quality_runtime_context_object(Some(&Value::Object(metrics.clone())));
+    let stage = resolve_quality_stage(runtime_context.as_ref());
+    let stage_label = stage
+        .as_deref()
+        .map(quality_stage_label)
+        .unwrap_or_default()
+        .to_string();
+    let quality_runtime_pressure = build_quality_runtime_pressure(runtime_context.as_ref());
+    let metric_signals = collect_quality_metric_signals(metrics);
+
+    if metric_signals.is_empty() {
+        return json!({
+            "summary": "当前质量指标不足，暂时无法生成修复指引。",
+            "repair_targets": [],
+            "preserve_strengths": [],
+            "focus_areas": [],
+            "weakest_metric_key": Value::Null,
+            "weakest_metric_label": Value::Null,
+            "weakest_metric_value": Value::Null,
+            "quality_stage": stage.unwrap_or_default(),
+            "quality_stage_label": stage_label,
+            "quality_runtime_pressure": quality_runtime_pressure,
+        });
+    }
+
+    let weakest_metric = metric_signals
+        .iter()
+        .min_by(|left, right| left.normalized_value.total_cmp(&right.normalized_value));
+    let low_items = metric_signals
+        .iter()
+        .filter(|item| item.value < item.descriptor.weak_threshold)
+        .copied()
+        .collect::<Vec<_>>();
+    let strength_items = metric_signals
+        .iter()
+        .filter(|item| {
+            item.value
+                >= if item.descriptor.metric_key == "pacing_score" {
+                    8.3
+                } else {
+                    item.descriptor.weak_threshold + 8.0
+                }
+        })
+        .copied()
+        .collect::<Vec<_>>();
+
+    let weakest_metric = weakest_metric.expect("metric_signals should not be empty");
+    let mut repair_targets = low_items
+        .iter()
+        .map(|item| item.descriptor.repair_target.to_string())
+        .collect::<Vec<_>>();
+    if repair_targets.is_empty() {
+        repair_targets.push("当前章节质量走势基本稳定，继续保持既有推进与兑现节拍。".to_string());
+    }
+
+    let mut preserve_strengths = strength_items
+        .iter()
+        .map(|item| item.descriptor.preserve_hint.to_string())
+        .collect::<Vec<_>>();
+    if preserve_strengths.is_empty() {
+        preserve_strengths.push("保留当前已成立的章节优势与角色辨识度。".to_string());
+    }
+
+    let mut focus_areas = low_items
+        .iter()
+        .map(|item| item.descriptor.focus_area.to_string())
+        .collect::<Vec<_>>();
+    if focus_areas.is_empty() {
+        focus_areas.push(weakest_metric.descriptor.focus_area.to_string());
+    }
+
+    let weakest_metric_label = weakest_metric.descriptor.label;
+    let summary = if low_items.is_empty() {
+        if stage_label.is_empty() {
+            "当前章节质量走势基本稳定，可继续保持既有长板。".to_string()
+        } else {
+            format!("当前章节在{stage_label}阶段整体稳定，可继续保持既有长板。")
+        }
+    } else if stage_label.is_empty() {
+        format!("当前章节需优先补强{weakest_metric_label}，并同步修复近期暴露的短板。")
+    } else {
+        format!("当前章节在{stage_label}阶段需优先补强{weakest_metric_label}，并同步修复近期暴露的短板。")
+    };
+
+    json!({
+        "summary": summary,
+        "repair_targets": repair_targets,
+        "preserve_strengths": preserve_strengths,
+        "focus_areas": focus_areas,
+        "weakest_metric_key": weakest_metric.descriptor.focus_area,
+        "weakest_metric_label": weakest_metric.descriptor.label,
+        "weakest_metric_value": round_quality_metric(weakest_metric.value),
+        "quality_stage": stage.unwrap_or_default(),
+        "quality_stage_label": stage_label,
+        "quality_runtime_pressure": quality_runtime_pressure,
+    })
+}
+
+fn derive_quality_gate_from_metrics_object(
+    metrics: &serde_json::Map<String, Value>,
+    scope: &str,
+) -> Value {
+    let runtime_context =
+        extract_quality_runtime_context_object(Some(&Value::Object(metrics.clone())));
+    let stage = resolve_quality_stage(runtime_context.as_ref()).unwrap_or_default();
+    let stage_label = quality_stage_label(&stage).to_string();
+    let pressure = build_quality_runtime_pressure(runtime_context.as_ref());
+    let overall_score = metric_value_as_f64(metrics, "overall_score");
+    let low_items = collect_quality_metric_signals(metrics)
+        .into_iter()
+        .filter(|item| item.value < item.descriptor.weak_threshold)
+        .collect::<Vec<_>>();
+    let weakest_metric = low_items
+        .iter()
+        .min_by(|left, right| left.normalized_value.total_cmp(&right.normalized_value))
+        .copied()
+        .or_else(|| {
+            collect_quality_metric_signals(metrics)
+                .into_iter()
+                .min_by(|left, right| left.normalized_value.total_cmp(&right.normalized_value))
+        });
+    let weak_metric_count = low_items.len() as i64;
+    let failed_metrics = low_items
+        .iter()
+        .map(|item| {
+            json!({
+                "key": item.descriptor.metric_key,
+                "label": item.descriptor.label,
+                "value": round_quality_metric(item.value),
+                "threshold": item.descriptor.weak_threshold,
+                "gap": round_quality_metric((item.descriptor.weak_threshold - item.value).max(0.0)),
+                "focus_area": item.descriptor.focus_area,
+                "repair_target": item.descriptor.repair_target,
+            })
+        })
+        .collect::<Vec<_>>();
+    let focus_areas = low_items
+        .iter()
+        .map(|item| item.descriptor.focus_area.to_string())
+        .collect::<Vec<_>>();
+    let repair_targets = low_items
+        .iter()
+        .map(|item| item.descriptor.repair_target.to_string())
+        .collect::<Vec<_>>();
+    let scope_label = if scope == "batch" {
+        "最近章节"
+    } else {
+        "当前章节"
+    };
+
+    let (status, decision, label, reason, summary) = match (overall_score, weak_metric_count) {
+        (Some(score), count) if score < 68.0 || count >= 4 => {
+            let summary = if stage_label.is_empty() {
+                format!("{scope_label}暂不建议直接保存，建议先人工复核再决定是否重写。")
+            } else {
+                format!("{scope_label}在{stage_label}阶段暂不建议直接保存，建议先人工复核再决定是否重写。")
+            };
+            (
+                "blocked",
+                "manual_review",
+                "需复核",
+                format!("总分 {:.1} 或弱项数量已触发人工复核阈值", score),
+                summary,
+            )
+        }
+        (Some(score), count) if score < 80.0 || count > 1 => {
+            let summary = if stage_label.is_empty() {
+                format!("{scope_label}仍有明显短板，建议先按修复指引补强后再保存。")
+            } else {
+                format!(
+                    "{scope_label}在{stage_label}阶段仍有明显短板，建议先按修复指引补强后再保存。"
+                )
+            };
+            (
+                "repairable",
+                "auto_repair",
+                "可修复",
+                if count > 0 {
+                    format!("存在 {count} 个待修复弱项")
+                } else {
+                    "综合分未达直接保存阈值".to_string()
+                },
+                summary,
+            )
+        }
+        _ => {
+            let summary = if stage_label.is_empty() {
+                format!("{scope_label}已通过质量闸门，可继续保存或进入下一步。")
+            } else {
+                format!("{scope_label}在{stage_label}阶段通过质量闸门，可继续保存或进入下一步。")
+            };
+            (
+                "pass",
+                "allow_save",
+                "可保存",
+                "质量指标达到保存要求".to_string(),
+                summary,
+            )
+        }
+    };
+
+    json!({
+        "status": status,
+        "decision": decision,
+        "label": label,
+        "summary": summary,
+        "reason": reason,
+        "overall_score": overall_score.map(Value::from).unwrap_or(Value::Null),
+        "weak_metric_count": weak_metric_count,
+        "failed_metrics": failed_metrics,
+        "focus_areas": focus_areas,
+        "repair_targets": repair_targets,
+        "allow_save": status == "pass",
+        "can_auto_repair": status == "repairable",
+        "requires_manual_review": status == "blocked",
+        "weakest_metric_key": weakest_metric
+            .map(|item| Value::String(item.descriptor.focus_area.to_string()))
+            .unwrap_or(Value::Null),
+        "weakest_metric_label": weakest_metric
+            .map(|item| Value::String(item.descriptor.label.to_string()))
+            .unwrap_or(Value::Null),
+        "weakest_metric_value": weakest_metric
+            .map(|item| Value::from(round_quality_metric(item.value)))
+            .unwrap_or(Value::Null),
+        "quality_stage": stage,
+        "quality_stage_label": stage_label,
+        "quality_runtime_pressure": pressure,
+    })
+}
+
+pub(crate) fn normalize_quality_metrics_history_item(value: &Value, scope: &str) -> Option<Value> {
+    let mut normalized = value.as_object()?.clone();
+    if !has_quality_metric_signal(&normalized) {
+        return Some(Value::Object(normalized));
+    }
+
+    if normalized
+        .get("repair_guidance")
+        .is_none_or(|entry| !entry.is_object())
+    {
+        normalized.insert(
+            "repair_guidance".to_string(),
+            derive_story_repair_guidance_from_metrics_object(&normalized, scope),
+        );
+    }
+
+    if normalized
+        .get("quality_gate")
+        .is_none_or(|entry| !entry.is_object())
+    {
+        normalized.insert(
+            "quality_gate".to_string(),
+            derive_quality_gate_from_metrics_object(&normalized, scope),
+        );
+    }
+
+    Some(Value::Object(normalized))
+}
+
+fn average_quality_values(values: &[f64]) -> Option<f64> {
+    (!values.is_empty())
+        .then(|| round_quality_metric(values.iter().sum::<f64>() / values.len() as f64))
+}
+
+fn extract_recent_metric_average(history: &[Value], metric_keys: &[&str]) -> Option<f64> {
+    let values = history
+        .iter()
+        .filter_map(Value::as_object)
+        .filter_map(|item| {
+            let current_values = metric_keys
+                .iter()
+                .filter_map(|metric_key| item.get(*metric_key).and_then(Value::as_f64))
+                .collect::<Vec<_>>();
+            (!current_values.is_empty())
+                .then_some(current_values.iter().sum::<f64>() / current_values.len() as f64)
+        })
+        .collect::<Vec<_>>();
+    average_quality_values(&values)
+}
+
+fn build_pacing_imbalance_summary(history: &[Value]) -> Option<Value> {
+    let recent_history = history
+        .iter()
+        .filter_map(Value::as_object)
+        .cloned()
+        .collect::<Vec<_>>();
+    if recent_history.len() < 2 {
+        return None;
+    }
+
+    let recent_history_values = recent_history
+        .iter()
+        .cloned()
+        .map(Value::Object)
+        .collect::<Vec<_>>();
+    let recent_progression_density = extract_recent_metric_average(
+        &recent_history_values,
+        &[
+            "conflict_chain_hit_rate",
+            "outline_alignment_rate",
+            "payoff_chain_rate",
+        ],
+    );
+    let recent_payoff_momentum = extract_recent_metric_average(
+        &recent_history_values,
+        &["payoff_chain_rate", "cliffhanger_rate"],
+    );
+    let recent_payoff_rate = average_quality_values(
+        &recent_history
+            .iter()
+            .filter_map(|item| item.get("payoff_chain_rate").and_then(Value::as_f64))
+            .collect::<Vec<_>>(),
+    );
+    let recent_cliffhanger_pull = average_quality_values(
+        &recent_history
+            .iter()
+            .filter_map(|item| item.get("cliffhanger_rate").and_then(Value::as_f64))
+            .collect::<Vec<_>>(),
+    );
+
+    let mut tension_variation_samples: Vec<f64> = Vec::new();
+    let mut previous_overall_score: Option<f64> = None;
+    let mut previous_cliffhanger_rate: Option<f64> = None;
+    for item in &recent_history {
+        let overall_score = item.get("overall_score").and_then(Value::as_f64);
+        let cliffhanger_rate = item.get("cliffhanger_rate").and_then(Value::as_f64);
+        if let (Some(previous), Some(current)) = (previous_overall_score, overall_score) {
+            tension_variation_samples.push((current - previous).abs());
+        }
+        if let (Some(previous), Some(current)) = (previous_cliffhanger_rate, cliffhanger_rate) {
+            tension_variation_samples.push((current - previous).abs());
+        }
+        if overall_score.is_some() {
+            previous_overall_score = overall_score;
+        }
+        if cliffhanger_rate.is_some() {
+            previous_cliffhanger_rate = cliffhanger_rate;
+        }
+    }
+    let recent_tension_variation = average_quality_values(&tension_variation_samples);
+
+    if recent_progression_density.is_none()
+        && recent_payoff_momentum.is_none()
+        && recent_tension_variation.is_none()
+    {
+        return None;
+    }
+
+    let mut signals = Vec::new();
+    let mut focus_areas = Vec::new();
+    let mut repair_targets = Vec::new();
+    let mut status = "stable";
+
+    let mut push_signal = |key: &str,
+                           label: &str,
+                           severity: &str,
+                           summary: &str,
+                           metric: Option<f64>,
+                           current_focus_areas: &[&str],
+                           current_repair_targets: &[&str]| {
+        signals.push(json!({
+            "key": key,
+            "label": label,
+            "severity": severity,
+            "summary": summary,
+            "metric": metric.map(Value::from).unwrap_or(Value::Null),
+        }));
+        focus_areas.extend(current_focus_areas.iter().map(|value| value.to_string()));
+        repair_targets.extend(current_repair_targets.iter().map(|value| value.to_string()));
+        if severity == "warning" {
+            status = "warning";
+        } else if severity == "watch" && status == "stable" {
+            status = "watch";
+        }
+    };
+
+    if recent_progression_density.is_some_and(|value| value < 68.0)
+        && recent_tension_variation.is_some_and(|value| value < 6.5)
+    {
+        push_signal(
+            "middle_drag",
+            "中段拖滞",
+            if recent_progression_density.is_some_and(|value| value < 64.0) {
+                "warning"
+            } else {
+                "watch"
+            },
+            "最近数章推进密度与张力波动都偏低，容易出现连续铺陈但有效事件不足。",
+            recent_progression_density,
+            &["conflict", "outline", "pacing"],
+            &[
+                "本章至少推进 1 个主线矛盾，并写出新的代价、反制或局势变化。",
+                "把当前章节的大纲任务拆成可见动作，不要只做解释性铺陈。",
+            ],
+        );
+    }
+
+    if recent_cliffhanger_pull.is_some_and(|value| value >= 80.0)
+        && recent_payoff_rate.is_some_and(|value| value < 70.0)
+    {
+        push_signal(
+            "overstretched_suspense",
+            "悬念透支",
+            if recent_payoff_rate.is_some_and(|value| value < 66.0) {
+                "warning"
+            } else {
+                "watch"
+            },
+            "章尾牵引持续偏强，但兑现率偏低，容易形成只吊胃口、不回收承诺的拖尾。",
+            recent_payoff_rate,
+            &["payoff", "cliffhanger"],
+            &[
+                "本章必须回收至少 1 个既有伏笔、承诺或情绪账。",
+                "新增悬念前，先让已有悬念落地成结果、损失或关系变化。",
+            ],
+        );
+    }
+
+    if recent_payoff_rate.is_some_and(|value| value < 66.0) {
+        push_signal(
+            "payoff_fatigue",
+            "回报疲劳",
+            if recent_payoff_rate.is_some_and(|value| value < 62.0) {
+                "warning"
+            } else {
+                "watch"
+            },
+            "最近几章兑现动作持续偏弱，读者获得感和阶段闭环不足。",
+            recent_payoff_rate,
+            &["payoff", "pacing"],
+            &["让本章出现一个阶段性结果、关系改写或资源转移，形成明确小闭环。"],
+        );
+    }
+
+    if recent_tension_variation.is_some_and(|value| value > 16.0) {
+        push_signal(
+            "rhythm_whiplash",
+            "节奏摆荡",
+            if recent_tension_variation.is_some_and(|value| value > 20.0) {
+                "warning"
+            } else {
+                "watch"
+            },
+            "最近张力波动过大，容易出现忽强忽弱、节拍断裂的阅读体验。",
+            recent_tension_variation,
+            &["pacing"],
+            &["把本章张力曲线收束为“目标—受阻—反制—余波”，避免无序跳档。"],
+        );
+    }
+
+    let leading_labels = signals
+        .iter()
+        .take(2)
+        .filter_map(|signal| signal.get("label"))
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    let summary = if leading_labels.is_empty() {
+        "最近数章推进密度、兑现节拍与张力波动整体可控，可继续维持当前节奏并放大优势。".to_string()
+    } else {
+        format!(
+            "最近 {} 章出现{}风险，需优先修复推进密度、兑现节拍与张力接力。",
+            recent_history.len(),
+            leading_labels.join("、")
+        )
+    };
+
+    Some(json!({
+        "status": status,
+        "window_size": recent_history.len(),
+        "signal_count": signals.len(),
+        "recent_progression_density": recent_progression_density.map(Value::from).unwrap_or(Value::Null),
+        "recent_payoff_momentum": recent_payoff_momentum.map(Value::from).unwrap_or(Value::Null),
+        "recent_payoff_rate": recent_payoff_rate.map(Value::from).unwrap_or(Value::Null),
+        "recent_cliffhanger_pull": recent_cliffhanger_pull.map(Value::from).unwrap_or(Value::Null),
+        "recent_tension_variation": recent_tension_variation.map(Value::from).unwrap_or(Value::Null),
+        "signals": signals.into_iter().take(4).collect::<Vec<_>>(),
+        "focus_areas": normalize_guidance_items(
+            &focus_areas.into_iter().map(Value::String).collect::<Vec<_>>(),
+            4,
+        ),
+        "repair_targets": normalize_guidance_items(
+            &repair_targets.into_iter().map(Value::String).collect::<Vec<_>>(),
+            4,
+        ),
+        "summary": summary,
+    }))
+}
+
+fn aggregate_quality_runtime_context(history: &[Value], scope: &str) -> Value {
+    let latest_context = history
+        .iter()
+        .rev()
+        .find_map(|item| extract_quality_runtime_context_object(Some(item)))
+        .unwrap_or_default();
+    let recent_metrics = history
+        .iter()
+        .enumerate()
+        .rev()
+        .map(|(index, item)| {
+            json!({
+                "history_index": index,
+                "overall_score": item.get("overall_score").cloned().unwrap_or(Value::Null),
+                "repair_guidance": item.get("repair_guidance").cloned().unwrap_or(Value::Null),
+                "quality_gate": item.get("quality_gate").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut context = latest_context;
+    context.insert("scope".to_string(), json!(scope));
+    context.insert("recent_metrics".to_string(), Value::Array(recent_metrics));
+    Value::Object(context)
+}
+
+fn build_volume_goal_completion_summary(summary: &Value) -> Option<Value> {
+    let summary_object = summary.as_object()?;
+    let runtime_context = summary_object
+        .get("quality_runtime_context")
+        .and_then(Value::as_object)?;
+    let expected_stage = resolve_quality_stage(Some(runtime_context))?;
+    let current_stage = runtime_context
+        .get("plot_stage")
+        .or_else(|| runtime_context.get("quality_stage"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| matches!(*value, "opening" | "development" | "ending"))
+        .unwrap_or(expected_stage.as_str())
+        .to_string();
+
+    let (metric_keys, stage_goal, default_targets, profile_summary) = match expected_stage.as_str()
+    {
+        "opening" => (
+            vec![
+                "avg_opening_hook_rate",
+                "avg_outline_alignment_rate",
+                "avg_conflict_chain_hit_rate",
+            ],
+            "开篇阶段需要把主目标、异常与初始阻力快速立起来。",
+            vec![
+                "尽快抛出主线目标或异常，不要用整章解释背景。",
+                "让主角在本章就遭遇第一次明确受阻或代价。",
+            ],
+            "当前按开篇阶段权重评估卷级目标完成度。",
+        ),
+        "ending" => (
+            vec![
+                "avg_payoff_chain_rate",
+                "avg_outline_alignment_rate",
+                "avg_cliffhanger_rate",
+                "avg_conflict_chain_hit_rate",
+            ],
+            "收束阶段需要完成阶段兑现、冲突回收与下一步牵引。",
+            vec![
+                "优先回收已经承诺的结果、伏笔或关系变化，不要继续横向开新坑。",
+                "让阶段冲突形成结果、损失或站队变化，并保留下一步牵引。",
+            ],
+            "当前按收束阶段权重评估卷级目标完成度。",
+        ),
+        _ => (
+            vec![
+                "avg_conflict_chain_hit_rate",
+                "avg_outline_alignment_rate",
+                "avg_pacing_score",
+                "avg_payoff_chain_rate",
+            ],
+            "发展阶段需要把卷内任务拆成可见动作、反制和局势位移。",
+            vec![
+                "把当前卷的阶段目标拆成可见动作，不要只做解释性铺陈。",
+                "至少推进一条主线矛盾，并让角色因此付出新代价。",
+            ],
+            "当前按发展阶段权重评估卷级目标完成度。",
+        ),
+    };
+
+    let metric_values = metric_keys
+        .iter()
+        .filter_map(|metric_key| {
+            let value = summary_object.get(*metric_key).and_then(Value::as_f64)?;
+            Some(if *metric_key == "avg_pacing_score" {
+                value * 10.0
+            } else {
+                value
+            })
+        })
+        .collect::<Vec<_>>();
+    if metric_values.is_empty() {
+        return None;
+    }
+
+    let completion_rate =
+        round_quality_metric(metric_values.iter().sum::<f64>() / metric_values.len() as f64);
+    let current_label = quality_stage_label(&current_stage);
+    let expected_label = quality_stage_label(&expected_stage);
+    let stage_alignment = if current_stage == expected_stage {
+        100.0
+    } else {
+        65.0
+    };
+    let status = if completion_rate < 68.0 {
+        "warning"
+    } else if completion_rate < 78.0 {
+        "watch"
+    } else {
+        "stable"
+    };
+    let summary_text = if current_stage == expected_stage {
+        format!("卷级目标达成率约 {completion_rate:.1}%，{stage_goal}")
+    } else {
+        format!(
+            "卷级目标达成率约 {completion_rate:.1}%，按章节进度应处于{expected_label}，但当前质量信号更接近{current_label}。"
+        )
+    };
+
+    Some(json!({
+        "status": status,
+        "completion_rate": completion_rate,
+        "expected_stage": expected_stage,
+        "expected_stage_label": expected_label,
+        "current_stage": current_stage,
+        "current_stage_label": current_label,
+        "stage_alignment": stage_alignment,
+        "summary": summary_text,
+        "focus_areas": [],
+        "repair_targets": default_targets,
+        "profile_summary": profile_summary,
+        "profile_focuses": [],
+        "style_profile": runtime_context
+            .get("story_focus")
+            .cloned()
+            .unwrap_or_else(|| json!("")),
+        "genre_profiles": runtime_context
+            .get("character_focus")
+            .cloned()
+            .filter(Value::is_array)
+            .unwrap_or_else(|| json!([])),
+        "quality_preset": runtime_context
+            .get("quality_preset")
+            .cloned()
+            .unwrap_or_else(|| json!("")),
+    }))
+}
+
+fn build_foreshadow_payoff_delay_summary(summary: &Value) -> Option<Value> {
+    let summary_object = summary.as_object()?;
+    let runtime_context = summary_object
+        .get("quality_runtime_context")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let foreshadow_payoff_plan =
+        normalize_runtime_context_item_texts(runtime_context.get("foreshadow_payoff_plan"), 6);
+    let foreshadow_state_ledger =
+        normalize_runtime_context_item_texts(runtime_context.get("foreshadow_state_ledger"), 6);
+    let recent_payoff_rate = summary_object
+        .get("avg_payoff_chain_rate")
+        .and_then(Value::as_f64);
+    let recent_payoff_momentum = summary_object
+        .get("pacing_imbalance")
+        .and_then(|payload| payload.get("recent_payoff_momentum"))
+        .and_then(Value::as_f64);
+
+    if foreshadow_payoff_plan.is_empty()
+        && foreshadow_state_ledger.is_empty()
+        && recent_payoff_rate.is_none()
+    {
+        return None;
+    }
+
+    let outstanding_count = foreshadow_payoff_plan
+        .len()
+        .max(foreshadow_state_ledger.len()) as f64;
+    let progress_ratio = match (
+        runtime_context
+            .get("current_chapter_number")
+            .and_then(Value::as_f64),
+        runtime_context.get("chapter_count").and_then(Value::as_f64),
+    ) {
+        (Some(current), Some(total)) if total > 0.0 => Some(current / total),
+        _ => None,
+    };
+    let backlog_pressure = (outstanding_count * 18.0).min(100.0);
+    let payoff_gap = recent_payoff_rate
+        .map(|value| (78.0 - value).max(0.0))
+        .unwrap_or_else(|| if outstanding_count > 0.0 { 18.0 } else { 0.0 });
+    let momentum_gap = recent_payoff_momentum
+        .map(|value| (76.0 - value).max(0.0))
+        .unwrap_or_else(|| if outstanding_count > 1.0 { 10.0 } else { 0.0 });
+    let progress_multiplier = if progress_ratio.is_some_and(|value| value >= 0.75) {
+        1.15
+    } else if progress_ratio.is_some_and(|value| value >= 0.55) {
+        1.05
+    } else {
+        1.0
+    };
+    let delay_index = round_quality_metric(
+        (backlog_pressure * 0.45 + payoff_gap * 0.35 + momentum_gap * 0.20) * progress_multiplier,
+    )
+    .min(100.0);
+
+    let status = if delay_index >= 55.0
+        || (progress_ratio.unwrap_or_default() >= 0.7 && outstanding_count >= 3.0)
+    {
+        "warning"
+    } else if delay_index >= 35.0 || outstanding_count >= 2.0 {
+        "watch"
+    } else {
+        "stable"
+    };
+
+    let mut repair_targets = Vec::new();
+    if !foreshadow_payoff_plan.is_empty() {
+        repair_targets.push(format!(
+            "优先兑现伏笔计划中的至少 1 条：{}。",
+            foreshadow_payoff_plan
+                .iter()
+                .take(2)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" / ")
+        ));
+    }
+    if outstanding_count >= 3.0 {
+        repair_targets.push("减少新增悬念，把已有伏笔写成结果、损失或信息揭示。".to_string());
+    }
+    if progress_ratio.unwrap_or_default() >= 0.72 {
+        repair_targets
+            .push("临近收束阶段，未兑现伏笔必须与主线结果绑定，避免尾部堆积。".to_string());
+    }
+    if repair_targets.is_empty() && recent_payoff_rate.is_some_and(|value| value < 72.0) {
+        repair_targets
+            .push("本章至少回收一个既有伏笔、承诺或情绪账，避免继续透支悬念。".to_string());
+    }
+
+    let summary_text = if foreshadow_state_ledger.is_empty() {
+        format!(
+            "伏笔兑现延迟指数 {delay_index:.1}，当前仍有 {} 项伏笔/承诺需要清偿。",
+            outstanding_count as i64
+        )
+    } else {
+        format!(
+            "伏笔兑现延迟指数 {delay_index:.1}，待清偿重点包括 {}。",
+            foreshadow_state_ledger
+                .iter()
+                .take(2)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" / ")
+        )
+    };
+
+    Some(json!({
+        "status": status,
+        "delay_index": delay_index,
+        "plan_count": foreshadow_payoff_plan.len(),
+        "backlog_count": foreshadow_state_ledger.len(),
+        "recent_payoff_rate": recent_payoff_rate.map(Value::from).unwrap_or(Value::Null),
+        "recent_payoff_momentum": recent_payoff_momentum.map(Value::from).unwrap_or(Value::Null),
+        "summary": summary_text,
+        "focus_areas": if progress_ratio.unwrap_or_default() >= 0.72 {
+            json!(["payoff", "cliffhanger", "outline"])
+        } else {
+            json!(["payoff", "cliffhanger"])
+        },
+        "repair_targets": repair_targets,
+    }))
+}
+
+fn build_repair_effectiveness_summary(history: &[Value], scope: &str) -> Option<Value> {
+    if history.len() < 2 {
+        return None;
+    }
+
+    let normalized_history = history
+        .iter()
+        .filter_map(|item| normalize_quality_metrics_history_item(item, scope))
+        .collect::<Vec<_>>();
+    if normalized_history.len() < 2 {
+        return None;
+    }
+
+    let mut evaluated_pairs = 0_i64;
+    let mut successful_pairs = 0_i64;
+    let mut focus_area_state = serde_json::Map::new();
+
+    for window in normalized_history.windows(2) {
+        let current_item = window[0]
+            .as_object()
+            .expect("normalized history should be objects");
+        let next_item = window[1]
+            .as_object()
+            .expect("normalized history should be objects");
+        let focus_areas = current_item
+            .get("repair_guidance")
+            .and_then(Value::as_object)
+            .and_then(|guidance| guidance.get("focus_areas"))
+            .and_then(Value::as_array)
+            .map(|areas| normalize_guidance_items(areas, 4))
+            .unwrap_or_default();
+
+        let mut pair_evaluations = Vec::new();
+        for focus_area in focus_areas {
+            let Some((metric_key, safe_threshold, improvement_threshold)) =
+                repair_effectiveness_metric_spec(&focus_area)
+            else {
+                continue;
+            };
+            let Some(current_value) = current_item.get(metric_key).and_then(Value::as_f64) else {
+                continue;
+            };
+            let Some(next_value) = next_item.get(metric_key).and_then(Value::as_f64) else {
+                continue;
+            };
+
+            let delta = round_quality_metric(next_value - current_value);
+            let success = next_value >= current_value + improvement_threshold
+                || (current_value < safe_threshold && next_value >= safe_threshold);
+            pair_evaluations.push((focus_area.clone(), metric_key.to_string(), delta, success));
+
+            let entry = focus_area_state
+                .entry(focus_area.clone())
+                .or_insert_with(|| {
+                    json!({
+                        "focus_area": focus_area,
+                        "label": focus_area_label(&focus_area),
+                        "metric_key": metric_key,
+                        "evaluated_pairs": 0,
+                        "successful_pairs": 0,
+                        "delta_total": 0.0,
+                    })
+                });
+            if let Some(entry_object) = entry.as_object_mut() {
+                let current_pairs = entry_object
+                    .get("evaluated_pairs")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let current_successful_pairs = entry_object
+                    .get("successful_pairs")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let current_delta_total = entry_object
+                    .get("delta_total")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
+                entry_object.insert("evaluated_pairs".to_string(), json!(current_pairs + 1));
+                entry_object.insert(
+                    "successful_pairs".to_string(),
+                    json!(current_successful_pairs + i64::from(success)),
+                );
+                entry_object.insert(
+                    "delta_total".to_string(),
+                    json!(round_quality_metric(current_delta_total + delta)),
+                );
+            }
+        }
+
+        if pair_evaluations.is_empty() {
+            continue;
+        }
+
+        evaluated_pairs += 1;
+        let pair_success_count = pair_evaluations
+            .iter()
+            .filter(|(_, _, _, success)| *success)
+            .count() as i64;
+        if pair_success_count >= ((pair_evaluations.len() as i64 + 1) / 2).max(1) {
+            successful_pairs += 1;
+        }
+    }
+
+    if evaluated_pairs <= 0 {
+        return None;
+    }
+
+    let success_rate =
+        round_quality_metric(successful_pairs as f64 / evaluated_pairs as f64 * 100.0);
+    let mut focus_area_stats = focus_area_state
+        .into_values()
+        .filter_map(|state| {
+            let state = state.as_object()?;
+            let evaluated_pairs = state.get("evaluated_pairs").and_then(Value::as_i64).unwrap_or(0);
+            if evaluated_pairs <= 0 {
+                return None;
+            }
+            let successful_pairs = state
+                .get("successful_pairs")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let delta_total = state.get("delta_total").and_then(Value::as_f64).unwrap_or(0.0);
+            Some(json!({
+                "focus_area": state.get("focus_area").cloned().unwrap_or(Value::Null),
+                "label": state.get("label").cloned().unwrap_or(Value::Null),
+                "metric_key": state.get("metric_key").cloned().unwrap_or(Value::Null),
+                "evaluated_pairs": evaluated_pairs,
+                "successful_pairs": successful_pairs,
+                "success_rate": round_quality_metric(successful_pairs as f64 / evaluated_pairs as f64 * 100.0),
+                "avg_delta": round_quality_metric(delta_total / evaluated_pairs as f64),
+            }))
+        })
+        .collect::<Vec<_>>();
+    focus_area_stats.sort_by(|left, right| {
+        let left_success_rate = left
+            .get("success_rate")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let right_success_rate = right
+            .get("success_rate")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        left_success_rate
+            .total_cmp(&right_success_rate)
+            .then_with(|| {
+                right
+                    .get("evaluated_pairs")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0)
+                    .cmp(
+                        &left
+                            .get("evaluated_pairs")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0),
+                    )
+            })
+            .then_with(|| {
+                left.get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .cmp(
+                        right
+                            .get("label")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                    )
+            })
+    });
+
+    let recovered_focus_areas = focus_area_stats
+        .iter()
+        .filter_map(|item| {
+            let success_rate = item
+                .get("success_rate")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            let avg_delta = item.get("avg_delta").and_then(Value::as_f64).unwrap_or(0.0);
+            (success_rate >= 60.0 && avg_delta > 0.0).then(|| {
+                item.get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            })
+        })
+        .take(3)
+        .collect::<Vec<_>>();
+    let unresolved_focus_areas = focus_area_stats
+        .iter()
+        .filter_map(|item| {
+            let success_rate = item
+                .get("success_rate")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            (success_rate < 50.0).then(|| {
+                item.get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            })
+        })
+        .take(3)
+        .collect::<Vec<_>>();
+    let summary_text = format!(
+        "最近 {evaluated_pairs} 组相邻章节中，修复成效率约 {success_rate:.1}%。{}{}",
+        if recovered_focus_areas.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " 已开始回收：{}。",
+                recovered_focus_areas
+                    .iter()
+                    .take(2)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            )
+        },
+        if unresolved_focus_areas.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " 仍需盯住：{}。",
+                unresolved_focus_areas
+                    .iter()
+                    .take(2)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            )
+        }
+    );
+    let status = if success_rate < 40.0 {
+        "warning"
+    } else if success_rate < 65.0 {
+        "watch"
+    } else {
+        "stable"
+    };
+
+    Some(json!({
+        "status": status,
+        "success_rate": success_rate,
+        "evaluated_pairs": evaluated_pairs,
+        "successful_pairs": successful_pairs,
+        "recovered_focus_areas": recovered_focus_areas,
+        "unresolved_focus_areas": unresolved_focus_areas,
+        "focus_area_stats": focus_area_stats,
+        "summary": summary_text,
+    }))
+}
+
+fn insert_quality_summary_advanced_fields(
+    payload: &mut serde_json::Map<String, Value>,
+    history: &[Value],
+    scope: &str,
+) {
+    let normalized_history = history
+        .iter()
+        .filter_map(|item| normalize_quality_metrics_history_item(item, scope))
+        .collect::<Vec<_>>();
+    if normalized_history.is_empty() {
+        return;
+    }
+
+    payload.insert(
+        "quality_runtime_context".to_string(),
+        aggregate_quality_runtime_context(&normalized_history, scope),
+    );
+
+    if let Some(pacing_imbalance) = build_pacing_imbalance_summary(&normalized_history) {
+        payload.insert("pacing_imbalance".to_string(), pacing_imbalance);
+    }
+
+    let summary_snapshot = Value::Object(payload.clone());
+    if let Some(volume_goal_completion) = build_volume_goal_completion_summary(&summary_snapshot) {
+        payload.insert("volume_goal_completion".to_string(), volume_goal_completion);
+    }
+
+    let summary_snapshot = Value::Object(payload.clone());
+    if let Some(foreshadow_payoff_delay) = build_foreshadow_payoff_delay_summary(&summary_snapshot)
+    {
+        payload.insert(
+            "foreshadow_payoff_delay".to_string(),
+            foreshadow_payoff_delay,
+        );
+    }
+
+    if let Some(repair_effectiveness) =
+        build_repair_effectiveness_summary(&normalized_history, scope)
+    {
+        payload.insert("repair_effectiveness".to_string(), repair_effectiveness);
+    }
+}
 
 pub(crate) fn build_quality_metrics_summary_state_from_history(
     history: &[Value],
@@ -279,8 +1734,7 @@ pub(crate) fn build_quality_metrics_summary_state_from_history(
 ) -> Option<Value> {
     let normalized_history = history
         .iter()
-        .filter(|item| item.is_object())
-        .cloned()
+        .filter_map(|item| normalize_quality_metrics_history_item(item, scope))
         .collect::<Vec<_>>();
     if normalized_history.is_empty() {
         return None;
@@ -312,7 +1766,10 @@ pub(crate) fn build_quality_metrics_summary_state_from_history(
             "chapter_count".to_string(),
             json!(normalized_history.len() as i64),
         ),
-        ("first_overall_score".to_string(), json!(first_overall_score)),
+        (
+            "first_overall_score".to_string(),
+            json!(first_overall_score),
+        ),
         ("last_overall_score".to_string(), json!(last_overall_score)),
         ("recent_history".to_string(), Value::Array(recent_history)),
         ("pacing_score_total".to_string(), json!(0.0)),
@@ -382,12 +1839,10 @@ pub(crate) fn advance_quality_metrics_summary_state(
     state.insert("chapter_count".to_string(), json!(chapter_count));
     state.insert(
         "first_overall_score".to_string(),
-        json!(
-            first_history_event
-                .get("overall_score")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0)
-        ),
+        json!(first_history_event
+            .get("overall_score")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)),
     );
     state.insert(
         "last_overall_score".to_string(),
@@ -429,8 +1884,7 @@ pub(crate) fn advance_quality_metrics_summary_state(
         .unwrap_or(0);
     let next_pacing_total =
         current_pacing_total + appended_pacing.unwrap_or(0.0) - dropped_pacing.unwrap_or(0.0);
-    let next_pacing_count = current_pacing_count
-        + i64::from(appended_pacing.is_some())
+    let next_pacing_count = current_pacing_count + i64::from(appended_pacing.is_some())
         - i64::from(dropped_pacing.is_some());
     state.insert(
         "pacing_score_total".to_string(),
@@ -467,16 +1921,26 @@ pub(crate) fn build_quality_metrics_summary_from_state(
     let recent_history = state
         .get("recent_history")
         .and_then(Value::as_array)
-        .cloned()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| normalize_quality_metrics_history_item(item, scope))
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
-    let mut fallback_summary =
-        aggregate_story_repair_quality_summaries(&fallback_history.iter().rev().cloned().collect::<Vec<_>>(), scope)?;
+    let mut fallback_summary = aggregate_story_repair_quality_summaries(
+        &fallback_history.iter().rev().cloned().collect::<Vec<_>>(),
+        scope,
+    )?;
     let fallback_object = fallback_summary.as_object_mut()?;
 
     fallback_object.insert("chapter_count".to_string(), json!(chapter_count));
     fallback_object.insert(
         "overall_score".to_string(),
-        state.get("last_overall_score").cloned().unwrap_or(Value::Null),
+        state
+            .get("last_overall_score")
+            .cloned()
+            .unwrap_or(Value::Null),
     );
 
     let first_overall_score = state
@@ -524,24 +1988,7 @@ pub(crate) fn build_quality_metrics_summary_from_state(
         "avg_pacing_score".to_string(),
         avg_pacing_score.map(Value::from).unwrap_or(Value::Null),
     );
-    fallback_object.insert(
-        "quality_runtime_context".to_string(),
-        json!({
-            "scope": scope,
-            "recent_metrics": recent_history
-                .iter()
-                .enumerate()
-                .map(|(index, item)| {
-                    json!({
-                        "history_index": index,
-                        "overall_score": item.get("overall_score").cloned().unwrap_or(Value::Null),
-                        "repair_guidance": item.get("repair_guidance").cloned().unwrap_or(Value::Null),
-                        "quality_gate": item.get("quality_gate").cloned().unwrap_or(Value::Null),
-                    })
-                })
-                .collect::<Vec<_>>()
-        }),
-    );
+    insert_quality_summary_advanced_fields(fallback_object, &recent_history, scope);
 
     Some(Value::Object(fallback_object.clone()))
 }
@@ -552,7 +1999,7 @@ pub(crate) fn aggregate_story_repair_quality_summaries(
 ) -> Option<Value> {
     let normalized_summaries = summaries
         .iter()
-        .filter(|summary| summary.is_object())
+        .filter_map(|summary| normalize_quality_metrics_history_item(summary, scope))
         .collect::<Vec<_>>();
     if normalized_summaries.is_empty() {
         return None;
@@ -617,10 +2064,7 @@ pub(crate) fn aggregate_story_repair_quality_summaries(
             "summary".to_string(),
             guidance.get("summary").cloned().unwrap_or(Value::Null),
         );
-        payload.insert(
-            "repair_targets".to_string(),
-            json!(merged_repair_targets),
-        );
+        payload.insert("repair_targets".to_string(), json!(merged_repair_targets));
         payload.insert(
             "preserve_strengths".to_string(),
             json!(merged_preserve_strengths),
@@ -683,19 +2127,6 @@ pub(crate) fn aggregate_story_repair_quality_summaries(
         }
     }
 
-    let recent_metrics = normalized_summaries
-        .iter()
-        .enumerate()
-        .map(|(index, summary)| {
-            json!({
-                "history_index": index,
-                "overall_score": summary.get("overall_score").cloned().unwrap_or(Value::Null),
-                "repair_guidance": summary.get("repair_guidance").cloned().unwrap_or(Value::Null),
-                "quality_gate": summary.get("quality_gate").cloned().unwrap_or(Value::Null),
-            })
-        })
-        .collect::<Vec<_>>();
-
     let mut payload = serde_json::Map::new();
     payload.insert("chapter_count".to_string(), json!(chapter_count));
     payload.insert(
@@ -725,13 +2156,12 @@ pub(crate) fn aggregate_story_repair_quality_summaries(
         "recent_auto_repair_count".to_string(),
         json!(recent_auto_repair_count),
     );
-    payload.insert(
-        "quality_runtime_context".to_string(),
-        json!({
-            "scope": scope,
-            "recent_metrics": recent_metrics,
-        }),
-    );
+    let chronological_history = normalized_summaries
+        .iter()
+        .rev()
+        .cloned()
+        .collect::<Vec<_>>();
+    insert_quality_summary_advanced_fields(&mut payload, &chronological_history, scope);
     if let Some(repair_guidance) = repair_guidance {
         payload.insert("repair_guidance".to_string(), repair_guidance);
     }
@@ -746,16 +2176,120 @@ pub(crate) fn quality_repair_guidance_from_quality_context(
     quality_metrics_summary: Option<&Value>,
     latest_quality_metrics: Option<&Value>,
 ) -> Option<serde_json::Map<String, Value>> {
-    extract_repair_guidance_object(quality_metrics_summary)
-        .or_else(|| extract_repair_guidance_object(latest_quality_metrics))
+    extract_repair_guidance_object(latest_quality_metrics)
+        .or_else(|| extract_repair_guidance_object(quality_metrics_summary))
+}
+
+pub(crate) fn merged_story_repair_guidance_from_quality_context(
+    quality_metrics_summary: Option<&Value>,
+    latest_quality_metrics: Option<&Value>,
+) -> Option<serde_json::Map<String, Value>> {
+    let latest_guidance = extract_repair_guidance_object(latest_quality_metrics);
+    let summary_guidance = extract_repair_guidance_object(quality_metrics_summary);
+
+    match (latest_guidance, summary_guidance) {
+        (None, None) => None,
+        (Some(guidance), None) | (None, Some(guidance)) => Some(guidance),
+        (Some(mut latest_guidance), Some(summary_guidance)) => {
+            let repair_targets = merge_guidance_value_lists(
+                latest_guidance.get("repair_targets"),
+                summary_guidance.get("repair_targets"),
+                4,
+            );
+            let preserve_strengths = merge_guidance_value_lists(
+                latest_guidance.get("preserve_strengths"),
+                summary_guidance.get("preserve_strengths"),
+                2,
+            );
+            let focus_areas = merge_guidance_value_lists(
+                latest_guidance.get("focus_areas"),
+                summary_guidance.get("focus_areas"),
+                4,
+            );
+
+            if !repair_targets.is_empty() {
+                latest_guidance.insert("repair_targets".to_string(), json!(repair_targets));
+            }
+            if !preserve_strengths.is_empty() {
+                latest_guidance.insert("preserve_strengths".to_string(), json!(preserve_strengths));
+            }
+            if !focus_areas.is_empty() {
+                latest_guidance.insert("focus_areas".to_string(), json!(focus_areas));
+            }
+
+            Some(latest_guidance)
+        }
+    }
 }
 
 pub(crate) fn quality_gate_from_quality_context(
     quality_metrics_summary: Option<&Value>,
     latest_quality_metrics: Option<&Value>,
 ) -> Option<Value> {
-    extract_quality_gate_object(quality_metrics_summary)
-        .or_else(|| extract_quality_gate_object(latest_quality_metrics))
+    extract_quality_gate_object(latest_quality_metrics)
+        .or_else(|| extract_quality_gate_object(quality_metrics_summary))
+}
+
+pub(crate) fn merged_quality_gate_from_quality_context(
+    quality_metrics_summary: Option<&Value>,
+    latest_quality_metrics: Option<&Value>,
+) -> Option<Value> {
+    let latest_quality_gate = extract_quality_gate_object(latest_quality_metrics);
+    let summary_quality_gate = extract_quality_gate_object(quality_metrics_summary);
+
+    match (latest_quality_gate, summary_quality_gate) {
+        (None, None) => None,
+        (Some(gate), None) | (None, Some(gate)) => Some(gate),
+        (Some(mut latest_gate), Some(summary_gate)) => {
+            let Some(latest_object) = latest_gate.as_object_mut() else {
+                return Some(latest_gate);
+            };
+            let summary_object = summary_gate.as_object();
+
+            for key in ["status", "decision", "label", "summary"] {
+                if !latest_object.contains_key(key) {
+                    if let Some(value) = summary_object.and_then(|gate| gate.get(key)).cloned() {
+                        latest_object.insert(key.to_string(), value);
+                    }
+                }
+            }
+
+            let failed_metrics = merge_failed_quality_gate_metrics(
+                latest_object.get("failed_metrics"),
+                summary_object.and_then(|gate| gate.get("failed_metrics")),
+            );
+            if !failed_metrics.is_empty() {
+                latest_object.insert("failed_metrics".to_string(), json!(failed_metrics));
+            }
+
+            Some(latest_gate)
+        }
+    }
+}
+
+pub(crate) fn reconciled_quality_gate_from_quality_context(
+    quality_metrics_summary: Option<&Value>,
+    latest_quality_metrics: Option<&Value>,
+) -> Option<Value> {
+    let mut quality_gate =
+        merged_quality_gate_from_quality_context(quality_metrics_summary, latest_quality_metrics)?;
+    let Some(manual_review_label) = manual_review_label_from_quality_context(
+        None,
+        quality_metrics_summary,
+        latest_quality_metrics,
+    ) else {
+        return Some(quality_gate);
+    };
+
+    let Some(gate_object) = quality_gate.as_object_mut() else {
+        return Some(quality_gate);
+    };
+
+    gate_object.insert("status".to_string(), json!("failed"));
+    gate_object.insert("decision".to_string(), json!("manual_review"));
+    gate_object.insert("label".to_string(), json!(manual_review_label));
+
+    Some(quality_gate)
 }
 
 pub(crate) fn extract_repair_guidance_object(
@@ -779,7 +2313,10 @@ pub(crate) fn extract_quality_gate_object(value: Option<&Value>) -> Option<Value
         return Some(quality_gate.clone());
     }
 
-    value.get("raw").and_then(|raw| raw.get("quality_gate")).cloned()
+    value
+        .get("raw")
+        .and_then(|raw| raw.get("quality_gate"))
+        .cloned()
 }
 
 pub(crate) fn normalize_guidance_items(values: &[Value], limit: usize) -> Vec<String> {
@@ -832,6 +2369,12 @@ fn normalize_active_story_repair_payload(
     Some(normalized)
 }
 
+fn normalize_active_story_repair_payload_value(payload: Option<&Value>) -> Option<Value> {
+    payload
+        .and_then(normalize_active_story_repair_payload)
+        .map(Value::Object)
+}
+
 fn merge_guidance_value_lists(
     primary: Option<&Value>,
     fallback: Option<&Value>,
@@ -856,6 +2399,36 @@ fn merge_guidance_value_lists(
             }
         }
     }
+    merged
+}
+
+fn merge_failed_quality_gate_metrics(
+    primary: Option<&Value>,
+    fallback: Option<&Value>,
+) -> Vec<String> {
+    let mut merged = Vec::new();
+    let mut seen = HashSet::new();
+
+    for value in [primary, fallback].into_iter().flatten() {
+        let Some(items) = value.as_array() else {
+            continue;
+        };
+        for item in items {
+            let label = item
+                .as_object()
+                .and_then(|entry| entry.get("label"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let Some(label) = label else {
+                continue;
+            };
+            if seen.insert(label.to_string()) {
+                merged.push(label.to_string());
+            }
+        }
+    }
+
     merged
 }
 
@@ -944,7 +2517,10 @@ mod tests {
 
     use super::{
         aggregate_story_repair_quality_summaries, extract_quality_history_context,
-        merge_active_story_repair_payloads,
+        merge_active_story_repair_payloads, merged_quality_gate_from_quality_context,
+        merged_story_repair_guidance_from_quality_context,
+        reconciled_quality_gate_from_quality_context,
+        restore_active_story_repair_payload_from_quality_context,
     };
 
     #[test]
@@ -977,19 +2553,157 @@ mod tests {
         .expect("merged payload");
 
         assert_eq!(merged["summary"], "手工摘要");
-        assert_eq!(merged["repair_targets"], json!(["手工目标", "共同目标", "历史目标"]));
-        assert_eq!(merged["preserve_strengths"], json!(["手工优点", "历史优点"]));
+        assert_eq!(
+            merged["repair_targets"],
+            json!(["手工目标", "共同目标", "历史目标"])
+        );
+        assert_eq!(
+            merged["preserve_strengths"],
+            json!(["手工优点", "历史优点"])
+        );
         assert_eq!(merged["focus_areas"], json!(["手工焦点", "历史焦点"]));
         assert_eq!(merged["quality_gate_status"], "warning");
-        assert_eq!(
-            merged["source"],
-            "manual_plus_recent_history_summary"
-        );
-        assert_eq!(
-            merged["source_label"],
-            "Manual + recent history summary"
-        );
+        assert_eq!(merged["source"], "manual_plus_recent_history_summary");
+        assert_eq!(merged["source_label"], "Manual + recent history summary");
         assert_eq!(merged["scope"], "batch");
+    }
+
+    #[test]
+    fn should_merge_latest_and_summary_quality_guidance_with_latest_priority() {
+        let latest = json!({
+            "repair_guidance": {
+                "summary": "来自 latest",
+                "repair_targets": ["latest target"],
+                "preserve_strengths": ["latest strength"],
+                "focus_areas": ["latest focus"]
+            }
+        });
+        let summary = json!({
+            "repair_guidance": {
+                "summary": "来自 summary",
+                "repair_targets": ["summary target"],
+                "preserve_strengths": ["summary strength"],
+                "focus_areas": ["summary focus"]
+            }
+        });
+
+        let guidance =
+            merged_story_repair_guidance_from_quality_context(Some(&summary), Some(&latest))
+                .expect("merged guidance");
+
+        assert_eq!(guidance.get("summary"), Some(&json!("来自 latest")));
+        assert_eq!(
+            guidance.get("repair_targets"),
+            Some(&json!(["latest target", "summary target"]))
+        );
+        assert_eq!(
+            guidance.get("preserve_strengths"),
+            Some(&json!(["latest strength", "summary strength"]))
+        );
+        assert_eq!(
+            guidance.get("focus_areas"),
+            Some(&json!(["latest focus", "summary focus"]))
+        );
+    }
+
+    #[test]
+    fn should_merge_latest_and_summary_quality_gate_with_latest_priority() {
+        let latest = json!({
+            "quality_gate": {
+                "decision": "auto_repair",
+                "label": "来自 latest",
+                "failed_metrics": [{"label": "节奏"}]
+            }
+        });
+        let summary = json!({
+            "quality_gate": {
+                "status": "failed",
+                "decision": "manual_review",
+                "label": "来自 summary",
+                "summary": "需要人工复核",
+                "failed_metrics": [{"label": "节奏"}, {"label": "信息密度"}]
+            }
+        });
+
+        let gate = merged_quality_gate_from_quality_context(Some(&summary), Some(&latest))
+            .expect("merged quality gate");
+
+        assert_eq!(gate["status"], "failed");
+        assert_eq!(gate["decision"], "auto_repair");
+        assert_eq!(gate["label"], "来自 latest");
+        assert_eq!(gate["summary"], "需要人工复核");
+        assert_eq!(gate["failed_metrics"], json!(["节奏", "信息密度"]));
+    }
+
+    #[test]
+    fn should_reconcile_quality_gate_to_manual_review_when_summary_is_terminal() {
+        let latest = json!({
+            "quality_gate": {
+                "decision": "auto_repair",
+                "label": "来自 latest",
+                "failed_metrics": [{"label": "节奏"}]
+            }
+        });
+        let summary = json!({
+            "quality_gate": {
+                "status": "failed",
+                "decision": "manual_review",
+                "label": "来自 summary",
+                "summary": "需要人工复核",
+                "failed_metrics": [{"label": "信息密度"}]
+            }
+        });
+
+        let gate = reconciled_quality_gate_from_quality_context(Some(&summary), Some(&latest))
+            .expect("reconciled quality gate");
+
+        assert_eq!(gate["status"], "failed");
+        assert_eq!(gate["decision"], "manual_review");
+        assert_eq!(gate["label"], "来自 summary");
+        assert_eq!(gate["summary"], "需要人工复核");
+        assert_eq!(gate["failed_metrics"], json!(["节奏", "信息密度"]));
+    }
+
+    #[test]
+    fn should_restore_active_payload_with_reconciled_manual_review_gate() {
+        let latest = json!({
+            "repair_guidance": {
+                "summary": "先修正文节奏",
+                "repair_targets": ["压缩说明段"],
+                "preserve_strengths": ["人物口吻"]
+            },
+            "quality_gate": {
+                "decision": "auto_repair",
+                "label": "继续自动修复",
+                "failed_metrics": [{"label": "节奏"}]
+            }
+        });
+        let summary = json!({
+            "quality_gate": {
+                "status": "failed",
+                "decision": "manual_review",
+                "label": "自动修复预算已耗尽",
+                "summary": "需要人工复核",
+                "failed_metrics": [{"label": "信息密度"}]
+            }
+        });
+
+        let payload = restore_active_story_repair_payload_from_quality_context(
+            Some(&summary),
+            Some(&latest),
+            "batch",
+            "recent_history_summary",
+            "Recent history summary",
+        )
+        .expect("active story repair payload");
+
+        assert_eq!(payload["quality_gate_status"], "failed");
+        assert_eq!(payload["quality_gate_decision"], "manual_review");
+        assert_eq!(payload["quality_gate_label"], "自动修复预算已耗尽");
+        assert_eq!(
+            payload["quality_gate_failed_metrics"],
+            json!(["节奏", "信息密度"])
+        );
     }
 
     #[test]
@@ -1045,11 +2759,9 @@ mod tests {
             }
         });
 
-        let aggregated = aggregate_story_repair_quality_summaries(
-            &[latest.clone(), previous.clone()],
-            "batch",
-        )
-        .expect("aggregated summary");
+        let aggregated =
+            aggregate_story_repair_quality_summaries(&[latest.clone(), previous.clone()], "batch")
+                .expect("aggregated summary");
 
         assert_eq!(aggregated["chapter_count"], 2);
         assert_eq!(aggregated["overall_score"], 88.0);
@@ -1078,6 +2790,14 @@ mod tests {
                 .as_array()
                 .map(|items| items.len()),
             Some(2)
+        );
+        assert_eq!(
+            aggregated["quality_runtime_context"]["recent_metrics"][0]["overall_score"],
+            88
+        );
+        assert_eq!(
+            aggregated["quality_runtime_context"]["recent_metrics"][1]["overall_score"],
+            82
         );
     }
 }

@@ -8,28 +8,31 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::ai::service::AIService;
-use crate::models::{chapter, character, foreshadow, plot_analysis, project, story_memory};
-use crate::services::chapter_generation_runtime_service::GeneratedChapterResult;
-use crate::services::chapter_generation_runtime_service::update_latest_generated_chapter_history_quality_metrics;
+use crate::models::{
+    analysis_task, chapter, character, foreshadow, plot_analysis, project, story_memory,
+};
 use crate::services::chapter_access_service::{
     load_accessible_chapter, LoadAccessibleChapterError,
 };
-use crate::services::chapter_analysis_service::CreateChapterAnalysisTaskError;
 use crate::services::chapter_analysis_character_state_service::{
     sync_character_states_from_analysis, sync_organization_states_from_analysis,
 };
+use crate::services::chapter_analysis_query_service::analysis_task_status_payload;
+use crate::services::chapter_analysis_service::CreateChapterAnalysisTaskError;
 use crate::services::chapter_analysis_task_state_service::{
     apply_analysis_task_state_by_id, build_analysis_task_active_model, AnalysisTaskStage,
 };
+use crate::services::chapter_generation_runtime_service::update_latest_generated_chapter_history_quality_metrics;
+use crate::services::chapter_generation_runtime_service::GeneratedChapterResult;
 use crate::services::chapter_service::ChapterService;
 use crate::services::foreshadow_request_service::build_sync_foreshadow_from_analysis_request_from_route_payload;
 use crate::services::foreshadow_request_service::SyncForeshadowFromAnalysisRouteRequest;
 use crate::services::foreshadow_service::ForeshadowService;
+use crate::services::prompt_template_service::PromptTemplateService;
+use crate::services::settings_service::SettingsService;
 use crate::services::story_memory_vector_index_service::{
     delete_story_memory_vector_records_by_chapter, upsert_story_memory_vector_record,
 };
-use crate::services::prompt_template_service::PromptTemplateService;
-use crate::services::settings_service::SettingsService;
 use crate::services::wizard_service::clean_json_response;
 
 fn json_i32(value: Option<i64>) -> i32 {
@@ -79,11 +82,25 @@ fn filtered_string_array(value: Option<&Value>) -> Vec<String> {
 
 fn sanitize_search_text(text: &str) -> String {
     text.chars()
-        .filter(|ch| !matches!(
-            ch,
-            '，' | '。' | '！' | '？' | '、' | '；' | '：' | '"' | '\'' | '（' | '）' | '《'
-                | '》' | '【' | '】'
-        ))
+        .filter(|ch| {
+            !matches!(
+                ch,
+                '，' | '。'
+                    | '！'
+                    | '？'
+                    | '、'
+                    | '；'
+                    | '：'
+                    | '"'
+                    | '\''
+                    | '（'
+                    | '）'
+                    | '《'
+                    | '》'
+                    | '【'
+                    | '】'
+            )
+        })
         .collect()
 }
 
@@ -222,7 +239,8 @@ fn extract_analysis_memories(
             }
             let keyword = normalized_string(hook.get("keyword")).unwrap_or_default();
             let (position, length) = find_text_position(&chapter_content, &keyword);
-            let hook_type = normalized_string(hook.get("type")).unwrap_or_else(|| "未知".to_string());
+            let hook_type =
+                normalized_string(hook.get("type")).unwrap_or_else(|| "未知".to_string());
             let hook_position = normalized_string(hook.get("position")).unwrap_or_default();
             push_analysis_memory(
                 &mut drafts,
@@ -255,7 +273,10 @@ fn extract_analysis_memories(
                 normalized_string(foreshadow.get("type")).unwrap_or_else(|| "planted".to_string());
             let keyword = normalized_string(foreshadow.get("keyword")).unwrap_or_default();
             let (position, length) = find_text_position(&chapter_content, &keyword);
-            let strength = foreshadow.get("strength").and_then(Value::as_f64).unwrap_or(5.0);
+            let strength = foreshadow
+                .get("strength")
+                .and_then(Value::as_f64)
+                .unwrap_or(5.0);
             push_analysis_memory(
                 &mut drafts,
                 "foreshadow",
@@ -355,7 +376,11 @@ fn extract_analysis_memories(
             let content = if parties.is_empty() {
                 format!("重要冲突: {}", description)
             } else {
-                format!("重要冲突: {}。冲突各方: {}", description, parties.join(", "))
+                format!(
+                    "重要冲突: {}。冲突各方: {}",
+                    description,
+                    parties.join(", ")
+                )
             };
             let mut tags = vec!["冲突".to_string()];
             tags.extend(types.clone());
@@ -465,29 +490,26 @@ async fn replace_analysis_memories_after_persist(
             title: Set(draft.title.clone()),
             content: Set(draft.content.clone()),
             full_context: Set(None),
-            related_characters: Set(
-                draft
-                    .metadata
-                    .get("related_characters")
-                    .cloned()
-                    .filter(|value| value.is_array()),
-            ),
-            related_locations: Set(
-                draft
-                    .metadata
-                    .get("related_locations")
-                    .cloned()
-                    .filter(|value| value.is_array()),
-            ),
-            tags: Set(
-                draft
-                    .metadata
-                    .get("tags")
-                    .cloned()
-                    .filter(|value| value.is_array()),
-            ),
+            related_characters: Set(draft
+                .metadata
+                .get("related_characters")
+                .cloned()
+                .filter(|value| value.is_array())),
+            related_locations: Set(draft
+                .metadata
+                .get("related_locations")
+                .cloned()
+                .filter(|value| value.is_array())),
+            tags: Set(draft
+                .metadata
+                .get("tags")
+                .cloned()
+                .filter(|value| value.is_array())),
             importance_score: Set(json_f64(
-                draft.metadata.get("importance_score").and_then(Value::as_f64),
+                draft
+                    .metadata
+                    .get("importance_score")
+                    .and_then(Value::as_f64),
             )),
             story_timeline: Set(chapter_model.chapter_number),
             chapter_position: Set(json_i32(
@@ -496,14 +518,12 @@ async fn replace_analysis_memories_after_persist(
             text_length: Set(json_i32(
                 draft.metadata.get("text_length").and_then(Value::as_i64),
             )),
-            is_foreshadow: Set(
-                draft
-                    .metadata
-                    .get("is_foreshadow")
-                    .and_then(Value::as_i64)
-                    .map(|value| value as i32)
-                    .unwrap_or_else(|| json_bool_as_i32(draft.metadata.get("is_foreshadow"))),
-            ),
+            is_foreshadow: Set(draft
+                .metadata
+                .get("is_foreshadow")
+                .and_then(Value::as_i64)
+                .map(|value| value as i32)
+                .unwrap_or_else(|| json_bool_as_i32(draft.metadata.get("is_foreshadow")))),
             foreshadow_resolved_at: Set(None),
             foreshadow_strength: Set(json_f64(
                 draft.metadata.get("strength").and_then(Value::as_f64),
@@ -517,8 +537,14 @@ async fn replace_analysis_memories_after_persist(
         .await
         .map_err(|error| error.to_string())?;
 
-        upsert_story_memory_vector_record(db, user_id, &saved, &draft.content, draft.metadata.clone())
-            .await?;
+        upsert_story_memory_vector_record(
+            db,
+            user_id,
+            &saved,
+            &draft.content,
+            draft.metadata.clone(),
+        )
+        .await?;
     }
 
     Ok(saved_count)
@@ -587,10 +613,10 @@ fn build_analysis_foreshadow_sync_route_request(
     }
 
     Some(SyncForeshadowFromAnalysisRouteRequest::new(json!({
-            "chapter_id": chapter_model.id,
-            "chapter_number": chapter_model.chapter_number,
-            "analysis_foreshadows": foreshadows,
-        })))
+        "chapter_id": chapter_model.id,
+        "chapter_number": chapter_model.chapter_number,
+        "analysis_foreshadows": foreshadows,
+    })))
 }
 
 fn build_chapter_analysis_quality_metrics_payload(payload: &Value) -> Option<Value> {
@@ -609,7 +635,8 @@ fn build_chapter_analysis_quality_metrics_payload(payload: &Value) -> Option<Val
         .get("suggestions")
         .and_then(Value::as_array)
         .map(|items| {
-            items.iter()
+            items
+                .iter()
                 .filter_map(Value::as_str)
                 .map(str::trim)
                 .filter(|item| !item.is_empty())
@@ -810,7 +837,11 @@ impl ChapterAnalysisTaskCreateState {
         }
     }
 
-    fn into_payload(&self) -> Value {
+    pub(crate) fn task_id(&self) -> &str {
+        &self.task_id
+    }
+
+    pub(crate) fn compatibility_payload(&self) -> Value {
         json!({
             "task_id": self.task_id,
             "chapter_id": self.chapter_id,
@@ -818,6 +849,64 @@ impl ChapterAnalysisTaskCreateState {
             "message": "章节分析任务已创建",
         })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PreparedChapterAnalysisTriggerExecution {
+    create_state: ChapterAnalysisTaskCreateState,
+}
+
+impl PreparedChapterAnalysisTriggerExecution {
+    fn new(create_state: ChapterAnalysisTaskCreateState) -> Self {
+        Self { create_state }
+    }
+
+    pub(crate) fn task_id(&self) -> &str {
+        self.create_state.task_id()
+    }
+
+    pub(crate) async fn execute(
+        self,
+        db: &DatabaseConnection,
+        user_id: &str,
+    ) -> Result<Value, String> {
+        execute_prepared_chapter_analysis_trigger(db, user_id, &self.create_state).await
+    }
+
+    #[cfg(test)]
+    fn from_create_state(create_state: ChapterAnalysisTaskCreateState) -> Self {
+        Self::new(create_state)
+    }
+}
+
+async fn load_created_analysis_task_payload(
+    db: &DatabaseConnection,
+    create_state: &ChapterAnalysisTaskCreateState,
+) -> Result<Value, String> {
+    let task = analysis_task::Entity::find_by_id(create_state.task_id())
+        .one(db)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    analysis_task_status_payload(db, &create_state.chapter_id, task)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn build_chapter_analysis_task_create_response_payload(
+    status_payload: Value,
+    create_state: &ChapterAnalysisTaskCreateState,
+) -> Value {
+    let mut payload = match status_payload {
+        Value::Object(payload) => payload,
+        _ => serde_json::Map::new(),
+    };
+
+    if let Value::Object(summary_fields) = create_state.compatibility_payload() {
+        payload.extend(summary_fields);
+    }
+
+    Value::Object(payload)
 }
 
 async fn build_chapter_analysis_prompt(
@@ -1136,6 +1225,16 @@ pub(crate) async fn prepare_chapter_analysis_trigger(
         .map_err(PrepareChapterAnalysisTriggerError::Create)
 }
 
+pub(crate) async fn prepare_chapter_analysis_execution(
+    db: &DatabaseConnection,
+    chapter_id: &str,
+    user_id: &str,
+) -> Result<PreparedChapterAnalysisTriggerExecution, PrepareChapterAnalysisTriggerError> {
+    let create_state = prepare_chapter_analysis_trigger(db, chapter_id, user_id).await?;
+
+    Ok(PreparedChapterAnalysisTriggerExecution::new(create_state))
+}
+
 pub(crate) fn dispatch_prepared_chapter_analysis_trigger(
     db: DatabaseConnection,
     user_id: String,
@@ -1152,11 +1251,24 @@ pub async fn trigger_chapter_analysis_write_workflow(
     user_id: &str,
 ) -> Result<Value, PrepareChapterAnalysisTriggerError> {
     let create_state = prepare_chapter_analysis_trigger(db, chapter_id, user_id).await?;
-    let payload = create_state.into_payload();
+    let payload = load_created_analysis_task_payload(db, &create_state)
+        .await
+        .map_err(|error| {
+            PrepareChapterAnalysisTriggerError::Create(CreateChapterAnalysisTaskError::Internal(
+                error,
+            ))
+        })?;
 
-    dispatch_prepared_chapter_analysis_trigger(db.clone(), user_id.to_string(), create_state);
+    dispatch_prepared_chapter_analysis_trigger(
+        db.clone(),
+        user_id.to_string(),
+        create_state.clone(),
+    );
 
-    Ok(payload)
+    Ok(build_chapter_analysis_task_create_response_payload(
+        payload,
+        &create_state,
+    ))
 }
 
 pub async fn enqueue_chapter_analysis_task(
@@ -1170,8 +1282,14 @@ pub async fn enqueue_chapter_analysis_task(
         .ok_or(CreateChapterAnalysisTaskError::ProjectMissing)?;
 
     let create_state = create_chapter_analysis_task(db, user_id, &chapter_model).await?;
+    let payload = load_created_analysis_task_payload(db, &create_state)
+        .await
+        .map_err(CreateChapterAnalysisTaskError::Internal)?;
 
-    Ok(create_state.into_payload())
+    Ok(build_chapter_analysis_task_create_response_payload(
+        payload,
+        &create_state,
+    ))
 }
 
 pub async fn analyze_chapter_now(
@@ -1227,12 +1345,13 @@ pub async fn analyze_chapter_now_with_overrides(
         .map_err(|error| CreateChapterAnalysisTaskError::Internal(error.to_string()))?;
 
     let cleaned = clean_json_response(&response.content);
-    let parsed: Value = serde_json::from_str(&cleaned)
-        .map_err(|error| CreateChapterAnalysisTaskError::Internal(format!("JSON解析失败: {}", error)))?;
+    let parsed: Value = serde_json::from_str(&cleaned).map_err(|error| {
+        CreateChapterAnalysisTaskError::Internal(format!("JSON解析失败: {}", error))
+    })?;
     let persisted =
         persist_chapter_analysis_result(db, user_id, &effective_chapter_model, "", &parsed)
-        .await
-        .map_err(CreateChapterAnalysisTaskError::Internal)?;
+            .await
+            .map_err(CreateChapterAnalysisTaskError::Internal)?;
 
     Ok(json!({
         "success": true,
@@ -1337,10 +1456,11 @@ mod tests {
 
     use super::{
         build_analysis_foreshadow_sync_route_request, build_analysis_runtime_chapter_model,
-        build_chapter_analysis_quality_metrics_payload, build_chapter_analysis_report, build_generated_chapter_analysis_overrides,
-        extract_analysis_memories, find_text_position, json_f64, json_i32,
-        ChapterAnalysisRuntimeOverrides, ChapterAnalysisTaskCreateState,
-        PrepareChapterAnalysisTriggerError,
+        build_chapter_analysis_quality_metrics_payload, build_chapter_analysis_report,
+        build_chapter_analysis_task_create_response_payload,
+        build_generated_chapter_analysis_overrides, extract_analysis_memories, find_text_position,
+        json_f64, json_i32, ChapterAnalysisRuntimeOverrides, ChapterAnalysisTaskCreateState,
+        PrepareChapterAnalysisTriggerError, PreparedChapterAnalysisTriggerExecution,
     };
     use crate::models::chapter;
     use crate::services::chapter_generation_runtime_service::GeneratedChapterResult;
@@ -1400,7 +1520,7 @@ mod tests {
     fn should_build_chapter_analysis_task_create_payload() {
         let payload =
             ChapterAnalysisTaskCreateState::new("task-123".to_string(), "chapter-456".to_string())
-                .into_payload();
+                .compatibility_payload();
 
         assert_eq!(
             payload,
@@ -1420,7 +1540,47 @@ mod tests {
 
         assert_eq!(create_state.task_id, "task-1");
         assert_eq!(create_state.chapter_id, "chapter-1");
-        assert_eq!(create_state.into_payload()["task_id"], "task-1");
+        assert_eq!(create_state.compatibility_payload()["task_id"], "task-1");
+        assert_eq!(create_state.task_id(), "task-1");
+    }
+
+    #[test]
+    fn should_build_chapter_analysis_task_create_response_payload_from_status_owner() {
+        let create_state =
+            ChapterAnalysisTaskCreateState::new("task-10".to_string(), "chapter-20".to_string());
+        let payload = build_chapter_analysis_task_create_response_payload(
+            json!({
+                "has_task": true,
+                "task_id": "task-10",
+                "chapter_id": "chapter-20",
+                "status": "pending",
+                "progress": 0,
+                "error_message": null,
+                "error_code": null,
+                "auto_recovered": false,
+                "created_at": "2026-06-02T12:00:00",
+                "started_at": null,
+                "completed_at": null,
+            }),
+            &create_state,
+        );
+
+        assert_eq!(payload["has_task"], true);
+        assert_eq!(payload["task_id"], "task-10");
+        assert_eq!(payload["chapter_id"], "chapter-20");
+        assert_eq!(payload["status"], "pending");
+        assert_eq!(payload["progress"], 0);
+        assert_eq!(payload["auto_recovered"], false);
+        assert_eq!(payload["message"], "章节分析任务已创建");
+    }
+
+    #[test]
+    fn should_keep_prepared_chapter_analysis_trigger_execution_task_identity() {
+        let prepared = PreparedChapterAnalysisTriggerExecution::from_create_state(
+            ChapterAnalysisTaskCreateState::new("task-2".to_string(), "chapter-2".to_string()),
+        );
+
+        assert_eq!(prepared.task_id(), "task-2");
     }
 
     #[test]
@@ -1523,7 +1683,10 @@ mod tests {
 
     #[test]
     fn should_find_text_position_with_exact_match() {
-        assert_eq!(find_text_position("主角看见旧纹章钥匙。", "旧纹章钥匙"), (4, 5));
+        assert_eq!(
+            find_text_position("主角看见旧纹章钥匙。", "旧纹章钥匙"),
+            (4, 5)
+        );
     }
 
     #[test]
@@ -1639,10 +1802,7 @@ mod tests {
 
         let effective = build_analysis_runtime_chapter_model(
             &chapter_model,
-            &ChapterAnalysisRuntimeOverrides::new(
-                Some(" 新正文 ".to_string()),
-                Some(4321),
-            ),
+            &ChapterAnalysisRuntimeOverrides::new(Some(" 新正文 ".to_string()), Some(4321)),
         );
 
         assert_eq!(effective.content.as_deref(), Some("新正文"));

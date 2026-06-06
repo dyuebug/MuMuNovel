@@ -1,11 +1,12 @@
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder, Set,
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::models::foreshadow;
+use crate::models::{foreshadow, plot_analysis};
 use crate::services::foreshadow_request_service::{
     CreateForeshadowRequest, PlantForeshadowRequest, ResolveForeshadowRequest,
     SyncForeshadowFromAnalysisRequest, UpdateForeshadowRequest,
@@ -127,6 +128,25 @@ fn analysis_item_title(item: &Value) -> String {
         })
 }
 
+fn chapter_analysis_foreshadow_delete_condition(
+    project_id: &str,
+    chapter_id: &str,
+    analysis_ids: &[String],
+) -> Condition {
+    let mut related_chapter_condition = Condition::any()
+        .add(foreshadow::Column::PlantChapterId.eq(chapter_id))
+        .add(foreshadow::Column::ActualResolveChapterId.eq(chapter_id));
+    if !analysis_ids.is_empty() {
+        related_chapter_condition = related_chapter_condition
+            .add(foreshadow::Column::SourceAnalysisId.is_in(analysis_ids.to_vec()));
+    }
+
+    Condition::all()
+        .add(foreshadow::Column::ProjectId.eq(project_id))
+        .add(foreshadow::Column::SourceType.eq("analysis"))
+        .add(related_chapter_condition)
+}
+
 async fn sync_foreshadows_from_analysis_payload(
     db: &DatabaseConnection,
     project_id: &str,
@@ -198,13 +218,12 @@ async fn sync_foreshadows_from_analysis_payload(
                 active.status = Set("resolved".to_string());
                 active.actual_resolve_chapter_id = Set(Some(chapter_id.to_string()));
                 active.actual_resolve_chapter_number = Set(Some(chapter_number));
-                active.resolution_text = Set(
-                    item.get("content")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(ToString::to_string),
-                );
+                active.resolution_text = Set(item
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string));
                 active.resolved_at = Set(Some(now));
                 active.updated_at = Set(now);
                 let saved = active.update(db).await?;
@@ -222,7 +241,8 @@ async fn sync_foreshadows_from_analysis_payload(
                     continue;
                 };
 
-                let stable_source_memory_id = normalize_analysis_foreshadow_key(chapter_id, content);
+                let stable_source_memory_id =
+                    normalize_analysis_foreshadow_key(chapter_id, content);
                 let title = analysis_item_title(item);
                 let existing = foreshadow::Entity::find()
                     .filter(foreshadow::Column::ProjectId.eq(project_id))
@@ -230,11 +250,9 @@ async fn sync_foreshadows_from_analysis_payload(
                     .filter(
                         foreshadow::Column::SourceMemoryId
                             .eq(stable_source_memory_id.clone())
-                            .or(
-                                foreshadow::Column::PlantChapterId
-                                    .eq(chapter_id)
-                                    .and(foreshadow::Column::Title.eq(title.clone())),
-                            ),
+                            .or(foreshadow::Column::PlantChapterId
+                                .eq(chapter_id)
+                                .and(foreshadow::Column::Title.eq(title.clone()))),
                     )
                     .one(db)
                     .await?;
@@ -243,41 +261,40 @@ async fn sync_foreshadows_from_analysis_payload(
                     let mut active: foreshadow::ActiveModel = existing.into();
                     active.title = Set(title.clone());
                     active.content = Set(content.to_string());
-                    active.hint_text = Set(
-                        item.get("keyword")
-                            .and_then(Value::as_str)
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(ToString::to_string),
-                    );
+                    active.hint_text = Set(item
+                        .get("keyword")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToString::to_string));
                     active.source_memory_id = Set(Some(stable_source_memory_id));
-                    active.strength = Set(
-                        item.get("strength")
-                            .and_then(Value::as_i64)
-                            .unwrap_or(5)
-                            .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-                    );
-                    active.subtlety = Set(
-                        item.get("subtlety")
-                            .and_then(Value::as_i64)
-                            .unwrap_or(5)
-                            .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-                    );
-                    active.category = Set(
-                        item.get("category")
-                            .and_then(Value::as_str)
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(ToString::to_string),
-                    );
+                    active.strength = Set(item
+                        .get("strength")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(5)
+                        .clamp(i32::MIN as i64, i32::MAX as i64)
+                        as i32);
+                    active.subtlety = Set(item
+                        .get("subtlety")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(5)
+                        .clamp(i32::MIN as i64, i32::MAX as i64)
+                        as i32);
+                    active.category = Set(item
+                        .get("category")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToString::to_string));
                     active.related_characters = Set(item.get("related_characters").cloned());
-                    active.is_long_term =
-                        Set(item.get("is_long_term").and_then(Value::as_bool).unwrap_or(false));
-                    active.target_resolve_chapter_number = Set(
-                        item.get("estimated_resolve_chapter")
-                            .and_then(Value::as_i64)
-                            .map(|value| value.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
-                    );
+                    active.is_long_term = Set(item
+                        .get("is_long_term")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false));
+                    active.target_resolve_chapter_number = Set(item
+                        .get("estimated_resolve_chapter")
+                        .and_then(Value::as_i64)
+                        .map(|value| value.clamp(i32::MIN as i64, i32::MAX as i64) as i32));
                     active.updated_at = Set(now);
                     let saved = active.update(db).await?;
                     updated_ids.push(saved.id);
@@ -288,13 +305,12 @@ async fn sync_foreshadows_from_analysis_payload(
                         project_id: Set(project_id.to_string()),
                         title: Set(title),
                         content: Set(content.to_string()),
-                        hint_text: Set(
-                            item.get("keyword")
-                                .and_then(Value::as_str)
-                                .map(str::trim)
-                                .filter(|value| !value.is_empty())
-                                .map(ToString::to_string),
-                        ),
+                        hint_text: Set(item
+                            .get("keyword")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToString::to_string)),
                         resolution_text: Set(None),
                         source_type: Set("analysis".to_string()),
                         source_memory_id: Set(Some(stable_source_memory_id)),
@@ -302,44 +318,45 @@ async fn sync_foreshadows_from_analysis_payload(
                         plant_chapter_id: Set(Some(chapter_id.to_string())),
                         plant_chapter_number: Set(Some(chapter_number)),
                         target_resolve_chapter_id: Set(None),
-                        target_resolve_chapter_number: Set(
-                            item.get("estimated_resolve_chapter")
-                                .and_then(Value::as_i64)
-                                .map(|value| value.clamp(i32::MIN as i64, i32::MAX as i64) as i32),
-                        ),
+                        target_resolve_chapter_number: Set(item
+                            .get("estimated_resolve_chapter")
+                            .and_then(Value::as_i64)
+                            .map(|value| value.clamp(i32::MIN as i64, i32::MAX as i64) as i32)),
                         actual_resolve_chapter_id: Set(None),
                         actual_resolve_chapter_number: Set(None),
                         status: Set("planted".to_string()),
-                        is_long_term: Set(
-                            item.get("is_long_term").and_then(Value::as_bool).unwrap_or(false),
-                        ),
-                        importance: Set(
-                            (item.get("strength").and_then(Value::as_f64).unwrap_or(5.0) / 10.0)
-                                .min(1.0),
-                        ),
-                        strength: Set(
-                            item.get("strength")
-                                .and_then(Value::as_i64)
-                                .unwrap_or(5)
-                                .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-                        ),
-                        subtlety: Set(
-                            item.get("subtlety")
-                                .and_then(Value::as_i64)
-                                .unwrap_or(5)
-                                .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
-                        ),
+                        is_long_term: Set(item
+                            .get("is_long_term")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)),
+                        importance: Set((item
+                            .get("strength")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(5.0)
+                            / 10.0)
+                            .min(1.0)),
+                        strength: Set(item
+                            .get("strength")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(5)
+                            .clamp(i32::MIN as i64, i32::MAX as i64)
+                            as i32),
+                        subtlety: Set(item
+                            .get("subtlety")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(5)
+                            .clamp(i32::MIN as i64, i32::MAX as i64)
+                            as i32),
                         urgency: Set(0),
                         related_characters: Set(item.get("related_characters").cloned()),
                         related_foreshadow_ids: Set(None),
                         tags: Set(None),
-                        category: Set(
-                            item.get("category")
-                                .and_then(Value::as_str)
-                                .map(str::trim)
-                                .filter(|value| !value.is_empty())
-                                .map(ToString::to_string),
-                        ),
+                        category: Set(item
+                            .get("category")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToString::to_string)),
                         notes: Set(None),
                         resolution_notes: Set(None),
                         auto_remind: Set(true),
@@ -380,6 +397,31 @@ async fn sync_foreshadows_from_analysis_payload(
 pub struct ForeshadowService;
 
 impl ForeshadowService {
+    pub async fn delete_chapter_analysis_foreshadows(
+        db: &DatabaseConnection,
+        project_id: &str,
+        chapter_id: &str,
+    ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        let analysis_ids = plot_analysis::Entity::find()
+            .filter(plot_analysis::Column::ChapterId.eq(chapter_id))
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|analysis| analysis.id)
+            .collect::<Vec<_>>();
+
+        let result = foreshadow::Entity::delete_many()
+            .filter(chapter_analysis_foreshadow_delete_condition(
+                project_id,
+                chapter_id,
+                &analysis_ids,
+            ))
+            .exec(db)
+            .await?;
+
+        Ok(result.rows_affected)
+    }
+
     pub async fn list_project(
         db: &DatabaseConnection,
         project_id: &str,
@@ -827,5 +869,47 @@ impl ForeshadowService {
             &foreshadows,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sea_orm::{DbBackend, EntityTrait, QueryFilter, QueryTrait};
+
+    use super::chapter_analysis_foreshadow_delete_condition;
+    use crate::models::foreshadow;
+
+    #[test]
+    fn should_build_python_parity_chapter_analysis_foreshadow_delete_scope() {
+        let condition = chapter_analysis_foreshadow_delete_condition(
+            "project-1",
+            "chapter-1",
+            &[String::from("analysis-1")],
+        );
+        let statement = foreshadow::Entity::delete_many()
+            .filter(condition)
+            .build(DbBackend::Postgres)
+            .to_string();
+
+        assert!(statement.contains("\"foreshadows\".\"project_id\" = 'project-1'"));
+        assert!(statement.contains("\"foreshadows\".\"source_type\" = 'analysis'"));
+        assert!(statement.contains("\"foreshadows\".\"plant_chapter_id\" = 'chapter-1'"));
+        assert!(statement.contains("\"foreshadows\".\"actual_resolve_chapter_id\" = 'chapter-1'"));
+        assert!(statement.contains("\"foreshadows\".\"source_analysis_id\" IN ('analysis-1')"));
+    }
+
+    #[test]
+    fn should_skip_source_analysis_condition_without_analysis_ids() {
+        let condition = chapter_analysis_foreshadow_delete_condition("project-1", "chapter-1", &[]);
+        let statement = foreshadow::Entity::delete_many()
+            .filter(condition)
+            .build(DbBackend::Postgres)
+            .to_string();
+
+        assert!(statement.contains("\"foreshadows\".\"project_id\" = 'project-1'"));
+        assert!(statement.contains("\"foreshadows\".\"source_type\" = 'analysis'"));
+        assert!(statement.contains("\"foreshadows\".\"plant_chapter_id\" = 'chapter-1'"));
+        assert!(statement.contains("\"foreshadows\".\"actual_resolve_chapter_id\" = 'chapter-1'"));
+        assert!(!statement.contains("\"foreshadows\".\"source_analysis_id\" IN"));
     }
 }

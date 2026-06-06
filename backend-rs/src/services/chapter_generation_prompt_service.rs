@@ -84,7 +84,8 @@ fn build_optional_instruction_block(label: &str, value: &str) -> String {
 }
 
 fn normalize_prompt_list(items: &[String]) -> Vec<String> {
-    items.iter()
+    items
+        .iter()
         .map(|item| item.trim())
         .filter(|item| !item.is_empty())
         .map(str::to_string)
@@ -145,8 +146,15 @@ fn build_web_research_block(enabled: bool, query: Option<&str>) -> String {
     let note = query
         .map(str::trim)
         .filter(|query| !query.is_empty())
-        .map(|query| format!("已请求联网检索，优先吸收与以下问题直接相关的资料：{}", query))
-        .unwrap_or_else(|| "已请求联网检索，可适度补充与本章设定、背景、职业、场景相关的外部事实参考。".to_string());
+        .map(|query| {
+            format!(
+                "已请求联网检索，优先吸收与以下问题直接相关的资料：{}",
+                query
+            )
+        })
+        .unwrap_or_else(|| {
+            "已请求联网检索，可适度补充与本章设定、背景、职业、场景相关的外部事实参考。".to_string()
+        });
 
     format!("【联网检索说明】\n{}\n", note)
 }
@@ -234,11 +242,14 @@ fn build_prompt_params_with_provider_payload(
         .map(str::trim)
         .filter(|query| !query.is_empty())
         .map(str::to_string);
-    let story_repair_summary =
-        overrides.story_repair_summary.as_deref().unwrap_or_default().trim().to_string();
+    let story_repair_summary = overrides
+        .story_repair_summary
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     let story_repair_targets = normalize_prompt_list(&overrides.story_repair_targets);
-    let story_preserve_strengths =
-        normalize_prompt_list(&overrides.story_preserve_strengths);
+    let story_preserve_strengths = normalize_prompt_list(&overrides.story_preserve_strengths);
     let external_assets_block = build_external_assets_block(
         &provider_payload.external_assets,
         &provider_payload.reference_assets,
@@ -321,10 +332,7 @@ fn build_prompt_params_with_provider_payload(
         "web_research_query".to_string(),
         web_research_query.clone().unwrap_or_default(),
     );
-    params.insert(
-        "web_research_block".to_string(),
-        web_research_block,
-    );
+    params.insert("web_research_block".to_string(), web_research_block);
     params.insert("quality_preset".to_string(), quality_preset);
     params.insert("quality_notes".to_string(), quality_notes);
     params.insert(
@@ -398,8 +406,7 @@ mod tests {
 
     use super::{
         build_previous_chapter_prompt_context, build_prompt_params_with_provider_payload,
-        build_prompt_with_provider_payload, chapter_template_key,
-        ChapterGenerationPromptOverrides,
+        build_prompt_with_provider_payload, chapter_template_key, ChapterGenerationPromptOverrides,
     };
     use crate::models::{chapter, project};
     use crate::services::chapter_generation_prompt_context_provider_service::{
@@ -628,7 +635,10 @@ mod tests {
             params.get("previous_chapter_summary").map(String::as_str),
             Some("上一章总结")
         );
-        assert_eq!(params.get("external_assets").map(String::as_str), Some("[]"));
+        assert_eq!(
+            params.get("external_assets").map(String::as_str),
+            Some("[]")
+        );
     }
 
     #[test]
@@ -692,9 +702,7 @@ mod tests {
             Some("压缩解释，强化临场感")
         );
         assert!(params["creative_mode_block"].contains("创作模式"));
-        assert!(
-            params["story_creation_brief_block"].contains("本章主打谜团揭晓前夜")
-        );
+        assert!(params["story_creation_brief_block"].contains("本章主打谜团揭晓前夜"));
     }
 
     #[test]
@@ -722,7 +730,10 @@ mod tests {
             params.get("narrative_perspective").map(String::as_str),
             Some("全知视角")
         );
-        assert_eq!(params.get("creative_mode").map(String::as_str), Some("hook"));
+        assert_eq!(
+            params.get("creative_mode").map(String::as_str),
+            Some("hook")
+        );
         assert_eq!(
             params.get("story_focus").map(String::as_str),
             Some("escalate_conflict")
@@ -773,7 +784,9 @@ mod tests {
             Some("")
         );
         assert_eq!(
-            params.get("story_repair_diagnostic_block").map(String::as_str),
+            params
+                .get("story_repair_diagnostic_block")
+                .map(String::as_str),
             Some("")
         );
     }
@@ -801,10 +814,7 @@ mod tests {
                 web_research_enabled: false,
                 web_research_query: None,
                 story_repair_summary: Some("上一章中段节奏拖慢，需要重新压缩".to_string()),
-                story_repair_targets: vec![
-                    "缩短铺垫".to_string(),
-                    "提前冲突触发".to_string(),
-                ],
+                story_repair_targets: vec!["缩短铺垫".to_string(), "提前冲突触发".to_string()],
                 story_preserve_strengths: vec!["角色声音".to_string(), "悬念尾钩".to_string()],
             },
         );
@@ -821,20 +831,15 @@ mod tests {
             params.get("story_preserve_strengths").map(String::as_str),
             Some("角色声音；悬念尾钩")
         );
-        assert!(
-            params["story_repair_target_block"].contains("需要修复：缩短铺垫；提前冲突触发")
-        );
+        assert!(params["story_repair_target_block"].contains("需要修复：缩短铺垫；提前冲突触发"));
         assert!(params["story_repair_target_block"].contains("必须保留：角色声音；悬念尾钩"));
         assert!(
-            params["story_repair_diagnostic_block"]
-                .contains("上一章中段节奏拖慢，需要重新压缩")
+            params["story_repair_diagnostic_block"].contains("上一章中段节奏拖慢，需要重新压缩")
         );
         assert!(
             params["story_repair_diagnostic_block"].contains("本章修复项：缩短铺垫；提前冲突触发")
         );
-        assert!(
-            params["story_repair_diagnostic_block"].contains("保留优势：角色声音；悬念尾钩")
-        );
+        assert!(params["story_repair_diagnostic_block"].contains("保留优势：角色声音；悬念尾钩"));
     }
 
     #[test]
@@ -856,7 +861,10 @@ mod tests {
             params.get("web_research_query").map(String::as_str),
             Some("")
         );
-        assert_eq!(params.get("web_research_block").map(String::as_str), Some(""));
+        assert_eq!(
+            params.get("web_research_block").map(String::as_str),
+            Some("")
+        );
         assert_eq!(
             params.get("story_creation_brief_block").map(String::as_str),
             Some("")
@@ -895,15 +903,9 @@ mod tests {
             params.get("web_research_query").map(String::as_str),
             Some("晚清漕运与江南水路行会")
         );
-        assert!(
-            params["web_research_block"].contains("已请求联网检索")
-        );
-        assert!(
-            params["web_research_block"].contains("晚清漕运与江南水路行会")
-        );
-        assert!(
-            params["story_creation_brief_block"].contains("晚清漕运与江南水路行会")
-        );
+        assert!(params["web_research_block"].contains("已请求联网检索"));
+        assert!(params["web_research_block"].contains("晚清漕运与江南水路行会"));
+        assert!(params["story_creation_brief_block"].contains("晚清漕运与江南水路行会"));
     }
 
     #[test]
@@ -941,9 +943,7 @@ mod tests {
             params.get("research_query").map(String::as_str),
             Some("晚清漕运夜航避税路线")
         );
-        assert!(
-            params["quality_external_assets_block"].contains("晚清漕运夜航避税路线")
-        );
+        assert!(params["quality_external_assets_block"].contains("晚清漕运夜航避税路线"));
         assert!(params["reference_assets"].contains("web_research_query"));
     }
 }

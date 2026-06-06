@@ -1,5 +1,6 @@
 use chrono::NaiveDateTime;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::models::regeneration_task;
@@ -9,25 +10,56 @@ use crate::services::chapter_access_service::{
 
 pub type LoadRegenerationTasksPayloadError = LoadAccessibleChapterError;
 const REGENERATION_TASKS_LIMIT_DEFAULT: u64 = 10;
+const REGENERATION_TASKS_LIMIT_MIN: i64 = 1;
 const REGENERATION_TASKS_LIMIT_MAX: u64 = 50;
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct RegenerationTasksRouteQuery {
+    pub limit: Option<i64>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegenerationTasksQueryRequest {
     limit: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegenerationTasksQueryRequestError {
+    LimitTooSmall,
+    LimitTooLarge,
+}
+
 impl RegenerationTasksQueryRequest {
-    pub fn from_route_limit(limit: Option<u64>) -> Self {
-        Self {
-            limit: limit
-                .unwrap_or(REGENERATION_TASKS_LIMIT_DEFAULT)
-                .clamp(1, REGENERATION_TASKS_LIMIT_MAX),
+    fn from_route_query(
+        route_query: RegenerationTasksRouteQuery,
+    ) -> Result<Self, RegenerationTasksQueryRequestError> {
+        let Some(limit) = route_query.limit else {
+            return Ok(Self {
+                limit: REGENERATION_TASKS_LIMIT_DEFAULT,
+            });
+        };
+
+        if limit < REGENERATION_TASKS_LIMIT_MIN {
+            return Err(RegenerationTasksQueryRequestError::LimitTooSmall);
         }
+        if limit > REGENERATION_TASKS_LIMIT_MAX as i64 {
+            return Err(RegenerationTasksQueryRequestError::LimitTooLarge);
+        }
+
+        Ok(Self {
+            limit: limit as u64,
+        })
     }
 
     pub fn limit(&self) -> u64 {
         self.limit
     }
+}
+
+pub fn build_regeneration_tasks_query_request_from_route_query(
+    route_query: RegenerationTasksRouteQuery,
+) -> Result<RegenerationTasksQueryRequest, RegenerationTasksQueryRequestError> {
+    RegenerationTasksQueryRequest::from_route_query(route_query)
 }
 
 pub fn datetime_to_string(value: Option<NaiveDateTime>) -> Option<String> {
@@ -90,7 +122,9 @@ mod tests {
     use crate::services::chapter_access_service::LoadAccessibleChapterError;
 
     use super::{
-        datetime_to_string, LoadRegenerationTasksPayloadError, RegenerationTasksQueryRequest,
+        build_regeneration_tasks_query_request_from_route_query, datetime_to_string,
+        LoadRegenerationTasksPayloadError, RegenerationTasksQueryRequestError,
+        RegenerationTasksRouteQuery,
     };
 
     #[test]
@@ -125,22 +159,40 @@ mod tests {
     }
 
     #[test]
-    fn should_normalize_regeneration_tasks_query_request_limit() {
+    fn should_validate_regeneration_tasks_query_request_limit_like_python_query() {
         assert_eq!(
-            RegenerationTasksQueryRequest::from_route_limit(None).limit(),
+            build_regeneration_tasks_query_request_from_route_query(RegenerationTasksRouteQuery {
+                limit: None
+            })
+            .expect("default limit should be valid")
+            .limit(),
             10
         );
         assert_eq!(
-            RegenerationTasksQueryRequest::from_route_limit(Some(0)).limit(),
-            1
-        );
-        assert_eq!(
-            RegenerationTasksQueryRequest::from_route_limit(Some(25)).limit(),
+            build_regeneration_tasks_query_request_from_route_query(RegenerationTasksRouteQuery {
+                limit: Some(25)
+            })
+            .expect("explicit in-range limit should be valid")
+            .limit(),
             25
         );
         assert_eq!(
-            RegenerationTasksQueryRequest::from_route_limit(Some(99)).limit(),
-            50
+            build_regeneration_tasks_query_request_from_route_query(RegenerationTasksRouteQuery {
+                limit: Some(0)
+            }),
+            Err(RegenerationTasksQueryRequestError::LimitTooSmall)
+        );
+        assert_eq!(
+            build_regeneration_tasks_query_request_from_route_query(RegenerationTasksRouteQuery {
+                limit: Some(-1)
+            }),
+            Err(RegenerationTasksQueryRequestError::LimitTooSmall)
+        );
+        assert_eq!(
+            build_regeneration_tasks_query_request_from_route_query(RegenerationTasksRouteQuery {
+                limit: Some(99)
+            }),
+            Err(RegenerationTasksQueryRequestError::LimitTooLarge)
         );
     }
 }

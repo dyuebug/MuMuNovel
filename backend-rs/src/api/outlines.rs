@@ -21,10 +21,10 @@ use crate::services::outline_expansion_request_service::{
     execute_outline_batch_expand_request, execute_outline_expand_request,
     OutlineBatchExpandRouteRequest, OutlineExpandRouteRequest,
 };
-use crate::services::outline_service::OutlineService;
-use crate::services::wizard_request_service::{
-    execute_outline_request, outline_generate_request_to_wizard_request,
+use crate::services::outline_generation_request_service::{
+    execute_outline_generate_route_request, OutlineGenerateRouteRequest,
 };
+use crate::services::outline_service::OutlineService;
 use crate::utils::sse::SseChannel;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -52,33 +52,6 @@ struct ListQuery {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
-struct GenerateRequest {
-    project_id: String,
-    #[serde(default = "default_outline_count")]
-    chapter_count: usize,
-    narrative_perspective: Option<String>,
-    #[serde(default = "default_target_words")]
-    target_words: i32,
-    requirements: Option<String>,
-    creative_mode: Option<String>,
-    story_focus: Option<String>,
-    plot_stage: Option<String>,
-    story_creation_brief: Option<String>,
-    quality_preset: Option<String>,
-    quality_notes: Option<String>,
-    provider: Option<String>,
-    model: Option<String>,
-    theme: Option<String>,
-    genre: Option<String>,
-    mode: Option<String>,
-    story_direction: Option<String>,
-    keep_existing: Option<bool>,
-    world_context: Option<Value>,
-    characters_context: Option<Vec<Value>>,
-}
-
-#[derive(Deserialize)]
 struct OutlineReorderItem {
     id: String,
     order_index: i32,
@@ -87,14 +60,6 @@ struct OutlineReorderItem {
 #[derive(Deserialize)]
 struct ReorderRequest {
     orders: Vec<OutlineReorderItem>,
-}
-
-fn default_outline_count() -> usize {
-    3
-}
-
-fn default_target_words() -> i32 {
-    100000
 }
 
 fn compatible_outline_payload(outline: outline::Model) -> Value {
@@ -115,55 +80,19 @@ fn compatible_outline_payload(outline: outline::Model) -> Value {
 async fn generate_outlines(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
-    Json(body): Json<GenerateRequest>,
+    Json(body): Json<OutlineGenerateRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let Some(project) = project::Entity::find_by_id(&body.project_id)
-        .one(&db)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"success": false, "message": e.to_string()})),
-            )
-        })?
-    else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "?????"})),
-        ));
-    };
-    if project.user_id != claims.sub {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({"success": false, "message": "?????????"})),
-        ));
-    }
-
     let (tx, mut rx) =
         mpsc::channel::<Result<axum::response::sse::Event, std::convert::Infallible>>(256);
     let result_capture: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
     let channel = SseChannel::with_result_capture(tx, result_capture.clone());
     let db_for_task = db.clone();
     let user_id = claims.sub.clone();
-    let request = outline_generate_request_to_wizard_request(
-        body.project_id.clone(),
-        body.chapter_count,
-        body.narrative_perspective.clone(),
-        body.target_words,
-        body.requirements.clone(),
-        body.creative_mode.clone(),
-        body.story_focus.clone(),
-        body.plot_stage.clone(),
-        body.story_creation_brief.clone(),
-        body.quality_preset.clone(),
-        body.quality_notes.clone(),
-        body.provider.clone(),
-        body.model.clone(),
-    );
+    let request = body.clone();
 
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
-    execute_outline_request(&db_for_task, &channel, &user_id, request).await;
+    execute_outline_generate_route_request(&db_for_task, &channel, &user_id, &request).await;
 
     let _ = drain_handle.await;
     let result = result_capture.lock().await.clone().ok_or_else(|| {

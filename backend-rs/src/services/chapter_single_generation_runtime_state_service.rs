@@ -1,22 +1,19 @@
 use chrono::Utc;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
+use sea_orm::DatabaseConnection;
 
 use crate::ai::service::AIService;
-use crate::models::batch_generation_task;
-use crate::services::chapter_batch_generation_snapshot_service::upsert_batch_generation_runtime_snapshot;
 use crate::services::chapter_analysis_runtime_service::analyze_generated_chapter_follow_up;
-use crate::services::chapter_batch_generation_quality_status_service::manual_review_label_from_quality_context;
+use crate::services::chapter_generation_prompt_service::ChapterGenerationPromptOverrides;
 use crate::services::chapter_generation_runtime_service::{
     generate_and_persist_chapter_content_with_provider_payload, GeneratedChapterResult,
-};
-use crate::services::chapter_generation_prompt_service::ChapterGenerationPromptOverrides;
-use crate::services::chapter_single_generation_runtime_checkpoint_service::{
-    build_single_generation_runtime_checkpoint_for_stage, SingleGenerationSnapshotStage,
 };
 
 use super::chapter_single_generation_prepare_service::{
     SingleChapterGenerationCompatOptions, SingleChapterGenerationExecutionInput,
 };
+use super::chapter_single_generation_quality_status_service::manual_review_label_from_single_generation_quality_context;
+use super::chapter_single_generation_snapshot_service::upsert_single_generation_runtime_snapshot;
+use super::chapter_single_generation_task_model_service::SingleGenerationTaskStage;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SingleGenerationRuntimeLaunchInput {
@@ -25,103 +22,58 @@ pub(crate) struct SingleGenerationRuntimeLaunchInput {
     pub(crate) execution_input: SingleChapterGenerationExecutionInput,
 }
 
+impl SingleGenerationRuntimeLaunchInput {
+    pub(crate) async fn execute_generation(
+        self,
+        db: &DatabaseConnection,
+    ) -> Result<GeneratedChapterResult, String> {
+        let Self {
+            chapter_id,
+            user_id,
+            execution_input,
+        } = self;
+        let SingleChapterGenerationExecutionInput {
+            target_word_count,
+            compat_options,
+            execution_config,
+        } = execution_input;
+        let crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
+            ai_config,
+            provider_payload,
+        } = execution_config;
+
+        let ai_service = AIService::new(ai_config);
+        let prompt_overrides = build_prompt_overrides_from_compat_options(&compat_options);
+        generate_and_persist_chapter_content_with_provider_payload(
+            db,
+            &ai_service,
+            &user_id,
+            &chapter_id,
+            target_word_count,
+            provider_payload,
+            &prompt_overrides,
+        )
+        .await
+    }
+}
+
 pub(crate) fn dispatch_single_chapter_generation_runtime(
     db: DatabaseConnection,
     task_id: String,
     runtime_input: SingleGenerationRuntimeLaunchInput,
 ) {
-    tokio::spawn(async move {
-        execute_single_generation_runtime(&db, &task_id, runtime_input).await;
-    });
-}
-
-pub(crate) async fn execute_owned_single_chapter_generation(
-    db: &DatabaseConnection,
-    runtime_input: SingleGenerationRuntimeLaunchInput,
-) -> Result<GeneratedChapterResult, String> {
-    let SingleGenerationRuntimeLaunchInput {
-        chapter_id,
-        user_id,
-        execution_input,
-    } = runtime_input;
-    let SingleChapterGenerationExecutionInput {
-        target_word_count,
-        compat_options,
-        execution_config,
-    } = execution_input;
-    let crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
-        ai_config,
-        provider_payload,
-    } = execution_config;
-
-    let ai_service = AIService::new(ai_config);
-    let prompt_overrides = build_prompt_overrides_from_compat_options(&compat_options);
-    generate_and_persist_chapter_content_with_provider_payload(
-        db,
-        &ai_service,
-        &user_id,
-        &chapter_id,
-        target_word_count,
-        provider_payload,
-        &prompt_overrides,
-    )
-    .await
-}
-
-async fn run_single_generation_follow_up_analysis(
-    db: &DatabaseConnection,
-    user_id: &str,
-    enable_analysis: bool,
-    generated: &GeneratedChapterResult,
-) -> Option<String> {
-    if !enable_analysis {
-        return None;
-    }
-
-    analyze_generated_chapter_follow_up(db, user_id, generated)
-        .await
-        .ok()
-        .and_then(|payload| resolve_single_generation_manual_review_label_from_analysis_payload(&payload))
+    SingleGenerationRuntimeLifecyclePlan::from_runtime_launch(task_id, runtime_input).spawn(db);
 }
 
 fn resolve_single_generation_manual_review_label_from_analysis_payload(
     payload: &serde_json::Value,
 ) -> Option<String> {
     let quality_metrics = payload.get("quality_metrics");
-    manual_review_label_from_quality_context(None, quality_metrics, quality_metrics)
-}
-
-async fn maybe_fail_single_generation_for_quality_gate_manual_review(
-    db: &DatabaseConnection,
-    task_id: &str,
-    generated: &GeneratedChapterResult,
-    manual_review_label: &str,
-) -> Result<(), String> {
-    upsert_batch_generation_runtime_snapshot(
-        db,
-        task_id,
-        serde_json::json!({
-            "analysis_task_message": "单章生成触发质量门禁，需人工复核",
-            "analysis_task_progress": 100,
-            "analysis_last_error": serde_json::Value::Null,
-            "quality_gate_decision": "manual_review",
-            "quality_gate_label": manual_review_label,
-            "phase": "quality_blocked",
-        }),
+    manual_review_label_from_single_generation_quality_context(
+        None,
+        quality_metrics,
+        quality_metrics,
     )
-    .await?;
-
-    SingleGenerationTaskStage::Failed
-        .persist_with_checkpoint(
-            db,
-            task_id,
-            SingleGenerationSnapshotStage::Failed,
-            &generated.chapter_id,
-            Some(generated.chapter_number),
-            Some(generated.word_count),
-            Some(format!("章节触发质量门禁，需人工复核: {}", manual_review_label)),
-        )
-        .await
 }
 
 fn option_from_non_empty(value: &str) -> Option<String> {
@@ -153,164 +105,85 @@ pub(crate) fn build_prompt_overrides_from_compat_options(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModelFieldUpdate<T> {
-    Keep,
-    Set(T),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TaskTimestampUpdate {
-    Keep,
-    Clear,
-    Now,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SingleGenerationTaskStage {
+pub(crate) enum SingleGenerationSnapshotStage {
+    Pending,
     Preparing,
+    Generating,
+    Finalizing,
     Completed,
     Failed,
 }
 
-impl SingleGenerationTaskStage {
-    fn status(self) -> &'static str {
-        match self {
-            SingleGenerationTaskStage::Preparing => "running",
-            SingleGenerationTaskStage::Completed => "completed",
-            SingleGenerationTaskStage::Failed => "failed",
-        }
-    }
-
-    fn started_at_update(self) -> TaskTimestampUpdate {
-        match self {
-            SingleGenerationTaskStage::Preparing => TaskTimestampUpdate::Now,
-            SingleGenerationTaskStage::Completed | SingleGenerationTaskStage::Failed => {
-                TaskTimestampUpdate::Keep
-            }
-        }
-    }
-
-    fn completed_at_update(self) -> TaskTimestampUpdate {
-        match self {
-            SingleGenerationTaskStage::Preparing => TaskTimestampUpdate::Clear,
-            SingleGenerationTaskStage::Completed | SingleGenerationTaskStage::Failed => {
-                TaskTimestampUpdate::Now
-            }
-        }
-    }
-
-    fn completed_chapters_update(self) -> ModelFieldUpdate<i32> {
-        match self {
-            SingleGenerationTaskStage::Preparing | SingleGenerationTaskStage::Failed => {
-                ModelFieldUpdate::Keep
-            }
-            SingleGenerationTaskStage::Completed => ModelFieldUpdate::Set(1),
-        }
-    }
-
-    fn current_retry_count_update(self) -> ModelFieldUpdate<i32> {
-        match self {
-            SingleGenerationTaskStage::Preparing => ModelFieldUpdate::Set(0),
-            SingleGenerationTaskStage::Completed | SingleGenerationTaskStage::Failed => {
-                ModelFieldUpdate::Keep
-            }
-        }
-    }
-
-    fn current_chapter_id_update(self, chapter_id: &str) -> ModelFieldUpdate<Option<String>> {
-        match self {
-            SingleGenerationTaskStage::Preparing | SingleGenerationTaskStage::Completed => {
-                ModelFieldUpdate::Set(Some(chapter_id.to_string()))
-            }
-            SingleGenerationTaskStage::Failed => ModelFieldUpdate::Keep,
-        }
-    }
-
-    fn current_chapter_number_update(self, chapter_number: Option<i32>) -> ModelFieldUpdate<Option<i32>> {
-        match self {
-            SingleGenerationTaskStage::Preparing | SingleGenerationTaskStage::Failed => {
-                ModelFieldUpdate::Keep
-            }
-            SingleGenerationTaskStage::Completed => ModelFieldUpdate::Set(chapter_number),
-        }
-    }
-
-    async fn persist_for_task(
+impl SingleGenerationSnapshotStage {
+    fn build_checkpoint(
         self,
-        db: &DatabaseConnection,
-        task_id: &str,
         chapter_id: &str,
-        chapter_number: Option<i32>,
-        error_message: Option<String>,
-        now: chrono::NaiveDateTime,
-    ) -> Result<(), String> {
-        if let Some(task_model) = batch_generation_task::Entity::find_by_id(task_id)
-            .one(db)
-            .await
-            .map_err(|error| error.to_string())?
-        {
-            let mut active: batch_generation_task::ActiveModel = task_model.into();
-            self.apply_to_active_model(
-                &mut active,
-                chapter_id,
-                chapter_number,
-                error_message,
-                now,
-            );
-            active.update(db).await.map_err(|error| error.to_string())?;
-        }
-
-        Ok(())
-    }
-
-    fn apply_to_active_model(
-        self,
-        active: &mut batch_generation_task::ActiveModel,
-        chapter_id: &str,
-        chapter_number: Option<i32>,
-        error_message: Option<String>,
-        now: chrono::NaiveDateTime,
-    ) {
-        active.status = Set(self.status().to_string());
-
-        match self.started_at_update() {
-            TaskTimestampUpdate::Keep => {}
-            TaskTimestampUpdate::Clear => active.started_at = Set(None),
-            TaskTimestampUpdate::Now => active.started_at = Set(Some(now)),
-        }
-
-        match self.completed_at_update() {
-            TaskTimestampUpdate::Keep => {}
-            TaskTimestampUpdate::Clear => active.completed_at = Set(None),
-            TaskTimestampUpdate::Now => active.completed_at = Set(Some(now)),
-        }
-
-        active.error_message = Set(match self {
-            SingleGenerationTaskStage::Preparing | SingleGenerationTaskStage::Completed => None,
-            SingleGenerationTaskStage::Failed => error_message,
+        current_chapter_number: Option<i32>,
+        word_count: Option<i32>,
+    ) -> serde_json::Value {
+        let (phase, progress, status, last_event, last_message) = match self {
+            SingleGenerationSnapshotStage::Pending => (
+                "pending",
+                0,
+                "pending",
+                "queued",
+                "单章生成任务已创建，等待开始...",
+            ),
+            SingleGenerationSnapshotStage::Preparing => (
+                "generating",
+                15,
+                "running",
+                "chapter_start",
+                "正在准备章节生成...",
+            ),
+            SingleGenerationSnapshotStage::Generating => {
+                ("generating", 65, "running", "progress", "正在生成正文...")
+            }
+            SingleGenerationSnapshotStage::Finalizing => (
+                "finalizing",
+                95,
+                "running",
+                "progress",
+                "正在整理生成结果...",
+            ),
+            SingleGenerationSnapshotStage::Completed => {
+                ("completed", 100, "completed", "done", "章节生成完成")
+            }
+            SingleGenerationSnapshotStage::Failed => {
+                ("failed", 100, "failed", "error", "章节生成失败")
+            }
+        };
+        let mut checkpoint = serde_json::json!({
+            "phase": phase,
+            "progress": progress.clamp(0, 100),
+            "status": status,
+            "last_event": last_event,
+            "last_message": last_message,
+            "chapter_id": chapter_id,
+            "current_chapter_id": chapter_id,
+            "current_chapter_number": current_chapter_number,
+            "updated_at": Utc::now().to_rfc3339(),
         });
-
-        match self.completed_chapters_update() {
-            ModelFieldUpdate::Keep => {}
-            ModelFieldUpdate::Set(value) => active.completed_chapters = Set(value),
+        if let Some(object) = checkpoint.as_object_mut() {
+            if let Some(value) = word_count {
+                object.insert("word_count".to_string(), serde_json::json!(value.max(0)));
+            }
         }
 
-        match self.current_retry_count_update() {
-            ModelFieldUpdate::Keep => {}
-            ModelFieldUpdate::Set(value) => active.current_retry_count = Set(value),
-        }
-
-        match self.current_chapter_id_update(chapter_id) {
-            ModelFieldUpdate::Keep => {}
-            ModelFieldUpdate::Set(value) => active.current_chapter_id = Set(value),
-        }
-
-        match self.current_chapter_number_update(chapter_number) {
-            ModelFieldUpdate::Keep => {}
-            ModelFieldUpdate::Set(value) => active.current_chapter_number = Set(value),
-        }
+        checkpoint
     }
+}
 
+pub(crate) fn build_single_generation_runtime_checkpoint_for_stage(
+    stage: SingleGenerationSnapshotStage,
+    chapter_id: &str,
+    current_chapter_number: Option<i32>,
+    word_count: Option<i32>,
+) -> serde_json::Value {
+    stage.build_checkpoint(chapter_id, current_chapter_number, word_count)
+}
+
+impl SingleGenerationTaskStage {
     async fn persist_runtime_preparation(
         db: &DatabaseConnection,
         task_id: &str,
@@ -321,7 +194,7 @@ impl SingleGenerationTaskStage {
             .persist_for_task(db, task_id, chapter_id, None, None, now)
             .await?;
 
-        upsert_batch_generation_runtime_snapshot(
+        upsert_single_generation_runtime_snapshot(
             db,
             task_id,
             build_single_generation_runtime_checkpoint_for_stage(
@@ -332,7 +205,7 @@ impl SingleGenerationTaskStage {
             ),
         )
         .await?;
-        upsert_batch_generation_runtime_snapshot(
+        upsert_single_generation_runtime_snapshot(
             db,
             task_id,
             build_single_generation_runtime_checkpoint_for_stage(
@@ -366,7 +239,7 @@ impl SingleGenerationTaskStage {
         )
         .await?;
 
-        upsert_batch_generation_runtime_snapshot(
+        upsert_single_generation_runtime_snapshot(
             db,
             task_id,
             build_single_generation_runtime_checkpoint_for_stage(
@@ -380,120 +253,185 @@ impl SingleGenerationTaskStage {
     }
 }
 
-pub(crate) async fn execute_single_generation_runtime(
-    db: &DatabaseConnection,
-    task_id: &str,
+#[derive(Debug, Clone)]
+struct SingleGenerationRuntimeLifecyclePlan {
+    task_id: String,
+    chapter_id: String,
+    runtime_user_id: String,
+    enable_analysis: bool,
     runtime_input: SingleGenerationRuntimeLaunchInput,
-) {
-    let chapter_id = runtime_input.chapter_id.clone();
-    let should_run_analysis = runtime_input.execution_input.compat_options.enable_analysis();
-    let runtime_user_id = runtime_input.user_id.clone();
-    let _ =
-        SingleGenerationTaskStage::persist_runtime_preparation(db, task_id, &chapter_id).await;
+}
 
-    let _ = match execute_owned_single_chapter_generation(db, runtime_input).await {
-        Ok(generated_result) => {
-            if should_run_analysis {
-                if let Some(manual_review_label) = run_single_generation_follow_up_analysis(
-                    db,
-                    &runtime_user_id,
-                    should_run_analysis,
-                    &generated_result,
-                )
-                .await
-                {
-                    maybe_fail_single_generation_for_quality_gate_manual_review(
-                        db,
-                        task_id,
-                        &generated_result,
-                        &manual_review_label,
-                    )
-                    .await
-                } else {
-                    let GeneratedChapterResult {
-                        chapter_id: resolved_chapter_id,
-                        chapter_number,
-                        word_count,
-                        ..
-                    } = generated_result;
-                    match SingleGenerationTaskStage::Completed
-                        .persist_with_checkpoint(
-                            db,
-                            task_id,
-                            SingleGenerationSnapshotStage::Finalizing,
-                            &resolved_chapter_id,
-                            Some(chapter_number),
-                            Some(word_count),
-                            None,
-                        )
-                        .await
-                    {
-                        Ok(()) => {
-                            SingleGenerationTaskStage::Completed
-                                .persist_with_checkpoint(
-                                    db,
-                                    task_id,
-                                    SingleGenerationSnapshotStage::Completed,
-                                    &resolved_chapter_id,
-                                    Some(chapter_number),
-                                    Some(word_count),
-                                    None,
-                                )
-                                .await
-                        }
-                        Err(error) => Err(error),
-                    }
-                }
-            } else {
-                let GeneratedChapterResult {
-                    chapter_id: resolved_chapter_id,
-                    chapter_number,
-                    word_count,
-                    ..
-                } = generated_result;
-                match SingleGenerationTaskStage::Completed
-                    .persist_with_checkpoint(
-                        db,
-                        task_id,
-                        SingleGenerationSnapshotStage::Finalizing,
-                        &resolved_chapter_id,
-                        Some(chapter_number),
-                        Some(word_count),
-                        None,
-                    )
-                    .await
-                {
-                    Ok(()) => {
-                        SingleGenerationTaskStage::Completed
-                            .persist_with_checkpoint(
-                                db,
-                                task_id,
-                                SingleGenerationSnapshotStage::Completed,
-                                &resolved_chapter_id,
-                                Some(chapter_number),
-                                Some(word_count),
-                                None,
-                            )
-                            .await
-                    }
-                    Err(error) => Err(error),
-                }
-            }
+impl SingleGenerationRuntimeLifecyclePlan {
+    fn from_runtime_launch(
+        task_id: String,
+        runtime_input: SingleGenerationRuntimeLaunchInput,
+    ) -> Self {
+        let chapter_id = runtime_input.chapter_id.clone();
+        let runtime_user_id = runtime_input.user_id.clone();
+        let enable_analysis = runtime_input
+            .execution_input
+            .compat_options
+            .enable_analysis();
+
+        Self {
+            task_id,
+            chapter_id,
+            runtime_user_id,
+            enable_analysis,
+            runtime_input,
         }
-        Err(error) => {
-            SingleGenerationTaskStage::Failed
-                .persist_with_checkpoint(
-                    db,
-                    task_id,
-                    SingleGenerationSnapshotStage::Failed,
-                    &chapter_id,
-                    None,
-                    None,
-                    Some(error),
-                )
-                .await
+    }
+
+    fn spawn(self, db: DatabaseConnection) {
+        tokio::spawn(async move {
+            self.execute(&db).await;
+        });
+    }
+
+    async fn execute(self, db: &DatabaseConnection) {
+        let _ = SingleGenerationTaskStage::persist_runtime_preparation(
+            db,
+            &self.task_id,
+            &self.chapter_id,
+        )
+        .await;
+
+        let _ = match self.execute_generation(db).await {
+            Ok(generated_result) => self.handle_generated_result(db, &generated_result).await,
+            Err(error) => self.persist_failed_generation(db, error).await,
+        };
+    }
+
+    async fn execute_generation(
+        &self,
+        db: &DatabaseConnection,
+    ) -> Result<GeneratedChapterResult, String> {
+        self.runtime_input.clone().execute_generation(db).await
+    }
+
+    async fn handle_generated_result(
+        &self,
+        db: &DatabaseConnection,
+        generated_result: &GeneratedChapterResult,
+    ) -> Result<(), String> {
+        if let Some(manual_review_label) = self.run_follow_up_analysis(db, generated_result).await {
+            return self
+                .persist_manual_review_generation(db, generated_result, &manual_review_label)
+                .await;
         }
-    };
+
+        self.persist_completed_generation(db, generated_result)
+            .await
+    }
+
+    async fn run_follow_up_analysis(
+        &self,
+        db: &DatabaseConnection,
+        generated_result: &GeneratedChapterResult,
+    ) -> Option<String> {
+        if !self.enable_analysis {
+            return None;
+        }
+
+        analyze_generated_chapter_follow_up(db, &self.runtime_user_id, generated_result)
+            .await
+            .ok()
+            .and_then(|payload| {
+                resolve_single_generation_manual_review_label_from_analysis_payload(&payload)
+            })
+    }
+
+    async fn persist_manual_review_generation(
+        &self,
+        db: &DatabaseConnection,
+        generated_result: &GeneratedChapterResult,
+        manual_review_label: &str,
+    ) -> Result<(), String> {
+        upsert_single_generation_runtime_snapshot(
+            db,
+            &self.task_id,
+            serde_json::json!({
+                "analysis_task_message": "单章生成触发质量门禁，需人工复核",
+                "analysis_task_progress": 100,
+                "analysis_last_error": serde_json::Value::Null,
+                "quality_gate_decision": "manual_review",
+                "quality_gate_label": manual_review_label,
+                "phase": "quality_blocked",
+            }),
+        )
+        .await?;
+
+        SingleGenerationTaskStage::Failed
+            .persist_with_checkpoint(
+                db,
+                &self.task_id,
+                SingleGenerationSnapshotStage::Failed,
+                &generated_result.chapter_id,
+                Some(generated_result.chapter_number),
+                Some(generated_result.word_count),
+                Some(format!(
+                    "章节触发质量门禁，需人工复核: {}",
+                    manual_review_label
+                )),
+            )
+            .await
+    }
+
+    async fn persist_completed_generation(
+        &self,
+        db: &DatabaseConnection,
+        generated_result: &GeneratedChapterResult,
+    ) -> Result<(), String> {
+        let GeneratedChapterResult {
+            chapter_id,
+            chapter_number,
+            word_count,
+            ..
+        } = generated_result;
+
+        SingleGenerationTaskStage::Completed
+            .persist_with_checkpoint(
+                db,
+                &self.task_id,
+                SingleGenerationSnapshotStage::Finalizing,
+                chapter_id,
+                Some(*chapter_number),
+                Some(*word_count),
+                None,
+            )
+            .await?;
+
+        SingleGenerationTaskStage::Completed
+            .persist_with_checkpoint(
+                db,
+                &self.task_id,
+                SingleGenerationSnapshotStage::Completed,
+                chapter_id,
+                Some(*chapter_number),
+                Some(*word_count),
+                None,
+            )
+            .await
+    }
+
+    async fn persist_failed_generation(
+        &self,
+        db: &DatabaseConnection,
+        error: String,
+    ) -> Result<(), String> {
+        SingleGenerationTaskStage::Failed
+            .persist_with_checkpoint(
+                db,
+                &self.task_id,
+                SingleGenerationSnapshotStage::Failed,
+                &self.chapter_id,
+                None,
+                None,
+                Some(error),
+            )
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -504,10 +442,12 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        build_prompt_overrides_from_compat_options, dispatch_single_chapter_generation_runtime,
+        build_prompt_overrides_from_compat_options,
+        build_single_generation_runtime_checkpoint_for_stage,
+        dispatch_single_chapter_generation_runtime,
         resolve_single_generation_manual_review_label_from_analysis_payload,
-        run_single_generation_follow_up_analysis, ModelFieldUpdate,
-        SingleGenerationRuntimeLaunchInput, SingleGenerationTaskStage, TaskTimestampUpdate,
+        SingleGenerationRuntimeLaunchInput, SingleGenerationRuntimeLifecyclePlan,
+        SingleGenerationSnapshotStage,
     };
     use crate::models::batch_generation_task;
     use crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload;
@@ -515,8 +455,8 @@ mod tests {
     use crate::services::chapter_single_generation_prepare_service::{
         SingleChapterGenerationCompatOptions, SingleChapterGenerationExecutionInput,
     };
-    use crate::services::chapter_single_generation_runtime_checkpoint_service::{
-        build_single_generation_runtime_checkpoint_for_stage, SingleGenerationSnapshotStage,
+    use crate::services::chapter_single_generation_task_model_service::{
+        ModelFieldUpdate, SingleGenerationTaskStage, TaskTimestampUpdate,
     };
 
     fn empty_compat_options() -> SingleChapterGenerationCompatOptions {
@@ -569,7 +509,10 @@ mod tests {
     fn should_resolve_single_generation_task_stage_mutation_contracts() {
         let preparing = SingleGenerationTaskStage::Preparing;
         assert_eq!(preparing.status(), "running");
-        assert!(matches!(preparing.started_at_update(), TaskTimestampUpdate::Now));
+        assert!(matches!(
+            preparing.started_at_update(),
+            TaskTimestampUpdate::Now
+        ));
         assert!(matches!(
             preparing.completed_at_update(),
             TaskTimestampUpdate::Clear
@@ -667,7 +610,10 @@ mod tests {
         assert_eq!(runtime_input.chapter_id, "chapter-7");
         assert_eq!(runtime_input.user_id, "user-7");
         assert_eq!(runtime_input.execution_input.target_word_count, 2400);
-        assert!(runtime_input.execution_input.compat_options.enable_analysis());
+        assert!(runtime_input
+            .execution_input
+            .compat_options
+            .enable_analysis());
         assert_eq!(
             runtime_input
                 .execution_input
@@ -824,6 +770,61 @@ mod tests {
     }
 
     #[test]
+    fn should_build_single_generation_runtime_lifecycle_plan_from_runtime_launch() {
+        let runtime_input = SingleGenerationRuntimeLaunchInput {
+            chapter_id: "chapter-runtime".to_string(),
+            user_id: "user-runtime".to_string(),
+            execution_input: SingleChapterGenerationExecutionInput {
+                target_word_count: 2800,
+                compat_options: SingleChapterGenerationCompatOptions {
+                    style_id: None,
+                    enable_analysis: false,
+                    enable_mcp: true,
+                    web_research_enabled: false,
+                    web_research_query: None,
+                    narrative_perspective: None,
+                    creative_mode: None,
+                    story_focus: None,
+                    plot_stage: None,
+                    story_creation_brief: None,
+                    quality_preset: None,
+                    quality_notes: None,
+                    story_repair_summary: None,
+                    story_repair_targets: Vec::new(),
+                    story_preserve_strengths: Vec::new(),
+                },
+                execution_config: crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
+                    ai_config: AIConfig::default(),
+                    provider_payload: PromptContextProviderPayload {
+                        recent_chapters_context: String::new(),
+                        previous_chapter_summary: String::new(),
+                        chapter_careers: "[]".to_string(),
+                        characters_info: "[]".to_string(),
+                        foreshadow_reminders: "[]".to_string(),
+                        relevant_memories: "[]".to_string(),
+                        research_query: String::new(),
+                        research_assets: "[]".to_string(),
+                        external_assets: "[]".to_string(),
+                        reference_assets: "[]".to_string(),
+                        mcp_references: String::new(),
+                    },
+                },
+            },
+        };
+
+        let plan = SingleGenerationRuntimeLifecyclePlan::from_runtime_launch(
+            "task-runtime".to_string(),
+            runtime_input.clone(),
+        );
+
+        assert_eq!(plan.task_id, "task-runtime");
+        assert_eq!(plan.chapter_id, "chapter-runtime");
+        assert_eq!(plan.runtime_user_id, "user-runtime");
+        assert!(!plan.enable_analysis);
+        assert_eq!(plan.runtime_input.chapter_id, runtime_input.chapter_id);
+    }
+
+    #[test]
     fn should_build_prompt_overrides_from_single_generation_compat_options() {
         let compat = SingleChapterGenerationCompatOptions {
             style_id: Some(5),
@@ -890,10 +891,7 @@ mod tests {
             quality_preset: None,
             quality_notes: None,
             story_repair_summary: Some("上一章后段信息重复，需要压缩".to_string()),
-            story_repair_targets: vec![
-                "收紧中段说明".to_string(),
-                "让冲突更早落地".to_string(),
-            ],
+            story_repair_targets: vec!["收紧中段说明".to_string(), "让冲突更早落地".to_string()],
             story_preserve_strengths: vec!["角色张力".to_string(), "章节结尾钩子".to_string()],
         };
 
@@ -944,19 +942,49 @@ mod tests {
 
     #[tokio::test]
     async fn should_skip_single_generation_follow_up_analysis_when_disabled() {
-        let result = run_single_generation_follow_up_analysis(
-            &sea_orm::DatabaseConnection::Disconnected,
-            "user-1",
-            false,
-            &GeneratedChapterResult {
-                chapter_id: "chapter-1".to_string(),
-                chapter_number: 1,
-                title: "第一章".to_string(),
-                content: "正文".to_string(),
-                word_count: 2,
+        let runtime_input = SingleGenerationRuntimeLaunchInput {
+            chapter_id: "chapter-1".to_string(),
+            user_id: "user-1".to_string(),
+            execution_input: SingleChapterGenerationExecutionInput {
+                target_word_count: 2000,
+                compat_options: SingleChapterGenerationCompatOptions {
+                    enable_analysis: false,
+                    ..empty_compat_options()
+                },
+                execution_config: crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
+                    ai_config: AIConfig::default(),
+                    provider_payload: PromptContextProviderPayload {
+                        recent_chapters_context: String::new(),
+                        previous_chapter_summary: String::new(),
+                        chapter_careers: "[]".to_string(),
+                        characters_info: "[]".to_string(),
+                        foreshadow_reminders: "[]".to_string(),
+                        relevant_memories: "[]".to_string(),
+                        research_query: String::new(),
+                        research_assets: "[]".to_string(),
+                        external_assets: "[]".to_string(),
+                        reference_assets: "[]".to_string(),
+                        mcp_references: String::new(),
+                    },
+                },
             },
-        )
-        .await;
+        };
+        let lifecycle = SingleGenerationRuntimeLifecyclePlan::from_runtime_launch(
+            "task-1".to_string(),
+            runtime_input,
+        );
+        let result = lifecycle
+            .run_follow_up_analysis(
+                &sea_orm::DatabaseConnection::Disconnected,
+                &GeneratedChapterResult {
+                    chapter_id: "chapter-1".to_string(),
+                    chapter_number: 1,
+                    title: "第一章".to_string(),
+                    content: "正文".to_string(),
+                    word_count: 2,
+                },
+            )
+            .await;
 
         assert_eq!(result, None);
     }

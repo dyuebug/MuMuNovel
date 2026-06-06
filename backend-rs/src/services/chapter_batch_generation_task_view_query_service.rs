@@ -1,9 +1,13 @@
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::models::batch_generation_task;
+#[cfg(test)]
+use crate::services::chapter_batch_generation_read_context_service::batch_generation_task_contains_chapter;
 use crate::services::chapter_batch_generation_read_context_service::{
-    load_batch_generation_read_context_for_task,
+    load_active_batch_generation_task_list_item_payloads_for_tasks,
+    load_active_project_batch_generation_task_payload_for_tasks,
 };
 use crate::services::chapter_batch_generation_status_semantics_service::active_batch_generation_statuses;
 use crate::services::project_access_query_service::{
@@ -11,20 +15,56 @@ use crate::services::project_access_query_service::{
 };
 
 const ACTIVE_BATCH_GENERATION_TASK_LIST_LIMIT_DEFAULT: u64 = 20;
+const ACTIVE_BATCH_GENERATION_TASK_LIST_LIMIT_MIN: i64 = 1;
 const ACTIVE_BATCH_GENERATION_TASK_LIST_LIMIT_MAX: u64 = 100;
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub(crate) struct ActiveBatchGenerationTaskListRouteQuery {
+    pub(crate) limit: Option<i64>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ActiveBatchGenerationTaskListQueryRequest {
     limit: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ActiveBatchGenerationTaskListQueryRequestError {
+    LimitTooSmall,
+    LimitTooLarge,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ActiveBatchGenerationTaskListRouteQueryError {
+    Request(ActiveBatchGenerationTaskListQueryRequestError),
+    Query(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ActiveProjectBatchGenerationRouteError {
+    Query(ProjectAccessQueryError),
+}
+
 impl ActiveBatchGenerationTaskListQueryRequest {
-    pub(crate) fn from_route_limit(limit: Option<u64>) -> Self {
-        Self {
-            limit: limit
-                .unwrap_or(ACTIVE_BATCH_GENERATION_TASK_LIST_LIMIT_DEFAULT)
-                .clamp(1, ACTIVE_BATCH_GENERATION_TASK_LIST_LIMIT_MAX),
+    fn from_route_query(
+        route_query: ActiveBatchGenerationTaskListRouteQuery,
+    ) -> Result<Self, ActiveBatchGenerationTaskListQueryRequestError> {
+        let Some(limit) = route_query.limit else {
+            return Ok(Self {
+                limit: ACTIVE_BATCH_GENERATION_TASK_LIST_LIMIT_DEFAULT,
+            });
+        };
+
+        if limit < ACTIVE_BATCH_GENERATION_TASK_LIST_LIMIT_MIN {
+            return Err(ActiveBatchGenerationTaskListQueryRequestError::LimitTooSmall);
         }
+        if limit > ACTIVE_BATCH_GENERATION_TASK_LIST_LIMIT_MAX as i64 {
+            return Err(ActiveBatchGenerationTaskListQueryRequestError::LimitTooLarge);
+        }
+
+        Ok(Self {
+            limit: limit as u64,
+        })
     }
 
     pub(crate) fn limit(&self) -> u64 {
@@ -32,33 +72,74 @@ impl ActiveBatchGenerationTaskListQueryRequest {
     }
 }
 
+pub(crate) fn build_active_batch_generation_task_list_query_request_from_route_query(
+    route_query: ActiveBatchGenerationTaskListRouteQuery,
+) -> Result<ActiveBatchGenerationTaskListQueryRequest, ActiveBatchGenerationTaskListQueryRequestError>
+{
+    ActiveBatchGenerationTaskListQueryRequest::from_route_query(route_query)
+}
+
+async fn load_active_batch_generation_tasks(
+    db: &DatabaseConnection,
+    user_id: &str,
+    project_id: Option<&str>,
+    limit: Option<u64>,
+) -> Result<Vec<batch_generation_task::Model>, String> {
+    let mut query = batch_generation_task::Entity::find()
+        .filter(batch_generation_task::Column::UserId.eq(user_id))
+        .filter(batch_generation_task::Column::Status.is_in(active_batch_generation_statuses()))
+        .order_by_desc(batch_generation_task::Column::CreatedAt);
+
+    if let Some(project_id) = project_id {
+        query = query.filter(batch_generation_task::Column::ProjectId.eq(project_id));
+    }
+    if let Some(limit) = limit {
+        query = query.limit(limit);
+    }
+
+    query.all(db).await.map_err(|error| error.to_string())
+}
+
+fn build_active_batch_generation_task_list_view_payload(items: Vec<Value>) -> Value {
+    json!({
+        "total": items.len(),
+        "items": items,
+    })
+}
+
+fn build_active_project_batch_generation_view_payload(task_payload: Option<Value>) -> Value {
+    let has_active_task = task_payload.is_some();
+
+    json!({
+        "has_active_task": has_active_task,
+        "task": task_payload,
+    })
+}
+
 pub(crate) async fn load_active_user_batch_generation_task_list_view(
     db: &DatabaseConnection,
     user_id: &str,
     request: ActiveBatchGenerationTaskListQueryRequest,
 ) -> Result<Value, String> {
-    let tasks = batch_generation_task::Entity::find()
-        .filter(batch_generation_task::Column::UserId.eq(user_id))
-        .filter(batch_generation_task::Column::Status.is_in(active_batch_generation_statuses()))
-        .order_by_desc(batch_generation_task::Column::CreatedAt)
-        .limit(request.limit())
-        .all(db)
+    let tasks =
+        load_active_batch_generation_tasks(db, user_id, None, Some(request.limit())).await?;
+    let items = load_active_batch_generation_task_list_item_payloads_for_tasks(db, tasks).await?;
+
+    Ok(build_active_batch_generation_task_list_view_payload(items))
+}
+
+pub(crate) async fn load_active_user_batch_generation_task_list_view_from_route_query(
+    db: &DatabaseConnection,
+    user_id: &str,
+    route_query: ActiveBatchGenerationTaskListRouteQuery,
+) -> Result<Value, ActiveBatchGenerationTaskListRouteQueryError> {
+    let request =
+        build_active_batch_generation_task_list_query_request_from_route_query(route_query)
+            .map_err(ActiveBatchGenerationTaskListRouteQueryError::Request)?;
+
+    load_active_user_batch_generation_task_list_view(db, user_id, request)
         .await
-        .map_err(|error| error.to_string())?;
-
-    let mut items = Vec::with_capacity(tasks.len());
-    for task in tasks {
-        items.push(
-            load_batch_generation_read_context_for_task(db, task)
-                .await?
-                .into_active_task_payload(),
-        );
-    }
-
-    Ok(json!({
-        "total": items.len(),
-        "items": items,
-    }))
+        .map_err(ActiveBatchGenerationTaskListRouteQueryError::Query)
 }
 
 pub(crate) async fn load_active_batch_generation_query(
@@ -68,39 +149,43 @@ pub(crate) async fn load_active_batch_generation_query(
 ) -> Result<Value, ProjectAccessQueryError> {
     ensure_owned_project_access(db, project_id, user_id).await?;
 
-    let task = batch_generation_task::Entity::find()
-        .filter(batch_generation_task::Column::UserId.eq(user_id))
-        .filter(batch_generation_task::Column::Status.is_in(active_batch_generation_statuses()))
-        .order_by_desc(batch_generation_task::Column::CreatedAt)
-        .filter(batch_generation_task::Column::ProjectId.eq(project_id))
-        .one(db)
+    let tasks = load_active_batch_generation_tasks(db, user_id, Some(project_id), None)
         .await
-        .map_err(|error| ProjectAccessQueryError::Internal(error.to_string()))?;
+        .map_err(ProjectAccessQueryError::Internal)?;
+    let task_payload = load_active_project_batch_generation_task_payload_for_tasks(db, tasks)
+        .await
+        .map_err(ProjectAccessQueryError::Internal)?;
 
-    let task_payload = match task {
-        Some(task) => Some(
-            load_batch_generation_read_context_for_task(db, task)
-                .await
-                .map(|context| context.into_active_task_payload())
-                .map_err(ProjectAccessQueryError::Internal)?,
-        ),
-        None => None,
-    };
+    Ok(build_active_project_batch_generation_view_payload(
+        task_payload,
+    ))
+}
 
-    Ok(json!({
-        "has_active_task": task_payload.is_some(),
-        "task": task_payload,
-    }))
+pub(crate) async fn load_active_batch_generation_view_from_route_project(
+    db: &DatabaseConnection,
+    user_id: &str,
+    project_id: String,
+) -> Result<Value, ActiveProjectBatchGenerationRouteError> {
+    load_active_batch_generation_query(db, &project_id, user_id)
+        .await
+        .map_err(ActiveProjectBatchGenerationRouteError::Query)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        build_active_batch_generation_task_list_query_request_from_route_query,
+        build_active_batch_generation_task_list_view_payload,
+        build_active_project_batch_generation_view_payload,
+        ActiveBatchGenerationTaskListQueryRequestError, ActiveBatchGenerationTaskListRouteQuery,
+        ActiveBatchGenerationTaskListRouteQueryError, ActiveProjectBatchGenerationRouteError,
+    };
     use crate::models::batch_generation_task;
     use crate::services::chapter_batch_generation_quality_status_service::BatchGenerationQualityStatusContext;
+    use crate::services::chapter_batch_generation_read_context_service::build_batch_generation_status_task_payload_with_quality_context;
     use crate::services::chapter_batch_generation_read_context_service::BatchGenerationReadContext;
     use crate::services::project_access_query_service::ProjectAccessQueryError;
     use serde_json::{json, Value};
-    use super::ActiveBatchGenerationTaskListQueryRequest;
 
     fn build_task(status: &str) -> batch_generation_task::Model {
         batch_generation_task::Model {
@@ -130,20 +215,25 @@ mod tests {
 
     #[test]
     fn should_build_task_status_payload_with_terminal_fields() {
-        let payload = BatchGenerationReadContext {
-            task: build_task("completed"),
-            workflow_runtime_state: Some(json!({"progress": 80})),
-            quality_status_context: BatchGenerationQualityStatusContext {
-                latest_quality_metrics: Some(json!({"score": 91})),
-                quality_metrics_summary: Some(json!({"summary": "ok"})),
-                active_story_repair_payload: Some(json!({"mode": "repair"})),
-            },
-        }
-        .into_status_task_payload();
+        let task = build_task("completed");
+        let workflow_runtime_state = json!({"progress": 80});
+        let quality_status_context = BatchGenerationQualityStatusContext {
+            latest_quality_metrics: Some(json!({"score": 91})),
+            quality_metrics_history: None,
+            quality_metrics_summary_state: None,
+            quality_metrics_summary: Some(json!({"summary": "ok"})),
+            quality_history_context: None,
+            active_story_repair_payload: Some(json!({"mode": "repair"})),
+        };
+        let payload = build_batch_generation_status_task_payload_with_quality_context(
+            &task,
+            Some(&workflow_runtime_state),
+            &quality_status_context,
+        );
 
         assert_eq!(payload["batch_id"], "task-1");
         assert_eq!(payload["checkpoint"]["progress"], 80);
-        assert_eq!(payload["checkpoint"]["stage_code"], "6.writing.completed");
+        assert_eq!(payload["checkpoint"]["stage_code"], "6.writing.complete");
         assert_eq!(payload["current_retry_count"], 2);
         assert_eq!(payload["max_retries"], 3);
         assert_eq!(payload["terminal_reason"], "completed");
@@ -161,12 +251,17 @@ mod tests {
             workflow_runtime_state: Some(json!({"progress": 42})),
             quality_status_context: BatchGenerationQualityStatusContext {
                 latest_quality_metrics: Some(json!({"score": 88})),
+                quality_metrics_history: None,
+                quality_metrics_summary_state: None,
                 quality_metrics_summary: Some(json!({"summary": "good"})),
+                quality_history_context: None,
                 active_story_repair_payload: Some(json!({"mode": "repair"})),
             },
         }
-        .into_active_task_payload();
+        .into_active_task_list_item_payload();
 
+        assert_eq!(payload["task_type"], "chapter_single_generate");
+        assert_eq!(payload["project_id"], "project-1");
         assert_eq!(payload["batch_id"], "task-1");
         assert_eq!(payload["checkpoint"]["progress"], 42);
         assert_eq!(payload["checkpoint"]["stage_code"], "6.writing.generating");
@@ -199,7 +294,7 @@ mod tests {
         ];
         let items: Vec<Value> = contexts
             .into_iter()
-            .map(BatchGenerationReadContext::into_active_task_payload)
+            .map(BatchGenerationReadContext::into_active_task_list_item_payload)
             .collect();
         let payload = json!({
             "total": items.len(),
@@ -214,17 +309,48 @@ mod tests {
     }
 
     #[test]
+    fn should_match_chapter_id_from_string_or_object_entries() {
+        let mut task = build_task("running");
+        task.chapter_ids = json!([
+            "chapter-1",
+            {"id": "chapter-2", "title": "第二章"},
+            {"id": "chapter-3"}
+        ]);
+
+        assert!(super::batch_generation_task_contains_chapter(
+            &task,
+            "chapter-1"
+        ));
+        assert!(super::batch_generation_task_contains_chapter(
+            &task,
+            "chapter-2"
+        ));
+        assert!(super::batch_generation_task_contains_chapter(
+            &task,
+            "chapter-3"
+        ));
+        assert!(!super::batch_generation_task_contains_chapter(
+            &task,
+            "chapter-9"
+        ));
+    }
+
+    #[test]
     fn should_keep_active_task_payload_loader_projection_contract() {
         let payload = BatchGenerationReadContext {
             task: build_task("running"),
             workflow_runtime_state: Some(json!({"progress": 42})),
             quality_status_context: BatchGenerationQualityStatusContext::default(),
         }
-        .into_active_task_payload();
+        .into_active_project_task_payload();
 
         assert_eq!(payload["batch_id"], "task-1");
         assert_eq!(payload["status"], "running");
         assert_eq!(payload["checkpoint"]["progress"], 42);
+        assert!(payload.get("task_type").is_none());
+        assert!(payload.get("project_id").is_none());
+        assert!(payload.get("completed_at").is_none());
+        assert!(payload.get("error_message").is_none());
     }
 
     #[test]
@@ -267,22 +393,87 @@ mod tests {
     }
 
     #[test]
-    fn should_normalize_active_batch_generation_task_list_query_request_limit() {
+    fn should_validate_active_batch_generation_task_list_query_request_limit_like_python_query() {
         assert_eq!(
-            ActiveBatchGenerationTaskListQueryRequest::from_route_limit(None).limit(),
+            build_active_batch_generation_task_list_query_request_from_route_query(
+                ActiveBatchGenerationTaskListRouteQuery { limit: None }
+            )
+            .expect("default limit should be valid")
+            .limit(),
             20
         );
         assert_eq!(
-            ActiveBatchGenerationTaskListQueryRequest::from_route_limit(Some(0)).limit(),
-            1
-        );
-        assert_eq!(
-            ActiveBatchGenerationTaskListQueryRequest::from_route_limit(Some(25)).limit(),
+            build_active_batch_generation_task_list_query_request_from_route_query(
+                ActiveBatchGenerationTaskListRouteQuery { limit: Some(25) }
+            )
+            .expect("explicit in-range limit should be valid")
+            .limit(),
             25
         );
         assert_eq!(
-            ActiveBatchGenerationTaskListQueryRequest::from_route_limit(Some(500)).limit(),
-            100
+            build_active_batch_generation_task_list_query_request_from_route_query(
+                ActiveBatchGenerationTaskListRouteQuery { limit: Some(0) }
+            ),
+            Err(ActiveBatchGenerationTaskListQueryRequestError::LimitTooSmall)
+        );
+        assert_eq!(
+            build_active_batch_generation_task_list_query_request_from_route_query(
+                ActiveBatchGenerationTaskListRouteQuery { limit: Some(-1) }
+            ),
+            Err(ActiveBatchGenerationTaskListQueryRequestError::LimitTooSmall)
+        );
+        assert_eq!(
+            build_active_batch_generation_task_list_query_request_from_route_query(
+                ActiveBatchGenerationTaskListRouteQuery { limit: Some(500) }
+            ),
+            Err(ActiveBatchGenerationTaskListQueryRequestError::LimitTooLarge)
+        );
+    }
+
+    #[test]
+    fn should_keep_active_batch_generation_task_list_route_query_contract() {
+        let request = build_active_batch_generation_task_list_query_request_from_route_query(
+            ActiveBatchGenerationTaskListRouteQuery { limit: Some(25) },
+        )
+        .expect("in-range limit should build query request");
+
+        assert_eq!(request.limit(), 25);
+    }
+
+    #[test]
+    fn should_keep_active_batch_generation_task_list_route_query_error_shape() {
+        let error = build_active_batch_generation_task_list_query_request_from_route_query(
+            ActiveBatchGenerationTaskListRouteQuery { limit: Some(0) },
+        )
+        .map_err(ActiveBatchGenerationTaskListRouteQueryError::Request)
+        .expect_err("out-of-range limit should fail before query execution");
+
+        assert_eq!(
+            error,
+            ActiveBatchGenerationTaskListRouteQueryError::Request(
+                ActiveBatchGenerationTaskListQueryRequestError::LimitTooSmall,
+            )
+        );
+    }
+
+    #[test]
+    fn should_keep_active_project_batch_generation_route_project_contract() {
+        let project_id = "project-42".to_string();
+
+        assert_eq!(project_id, "project-42");
+    }
+
+    #[test]
+    fn should_keep_active_project_batch_generation_route_error_shape() {
+        let error = ActiveProjectBatchGenerationRouteError::Query(
+            ProjectAccessQueryError::NotFoundOrAccessDenied,
+        );
+
+        assert_eq!(
+            error,
+            ActiveProjectBatchGenerationRouteError::Query(
+                ProjectAccessQueryError::NotFoundOrAccessDenied,
+            )
         );
     }
 
@@ -301,11 +492,14 @@ mod tests {
                 workflow_runtime_state: Some(json!({"progress": 40})),
                 quality_status_context: BatchGenerationQualityStatusContext {
                     latest_quality_metrics: Some(json!({"score": 88})),
+                    quality_metrics_history: None,
+                    quality_metrics_summary_state: None,
                     quality_metrics_summary: Some(json!({"summary": "good"})),
+                    quality_history_context: None,
                     active_story_repair_payload: Some(json!({"mode": "repair"})),
                 },
             }
-            .into_active_task_payload(),
+            .into_active_project_task_payload(),
         });
 
         assert_eq!(payload["has_active_task"], true);
@@ -325,6 +519,8 @@ mod tests {
             payload["task"]["active_story_repair_payload"]["mode"],
             "repair"
         );
+        assert!(payload["task"].get("task_type").is_none());
+        assert!(payload["task"].get("project_id").is_none());
         assert!(payload["task"].get("current_retry_count").is_none());
         assert!(payload["task"].get("terminal_reason").is_none());
     }
@@ -342,10 +538,9 @@ mod tests {
 
     #[test]
     fn should_keep_active_batch_generation_task_list_view_owner_contract() {
-        let payload = json!({
-            "total": 1,
-            "items": [json!({"batch_id": "task-1"})],
-        });
+        let payload = build_active_batch_generation_task_list_view_payload(vec![json!({
+            "batch_id": "task-1"
+        })]);
 
         assert_eq!(payload["total"], 1);
         assert_eq!(payload["items"][0]["batch_id"], "task-1");
@@ -353,12 +548,23 @@ mod tests {
 
     #[test]
     fn should_keep_active_batch_generation_query_view_owner_contract() {
-        let payload = json!({
-            "has_active_task": true,
-            "task": json!({"batch_id": "task-2"}),
-        });
+        let payload = build_active_project_batch_generation_view_payload(Some(json!({
+            "batch_id": "task-2"
+        })));
 
         assert_eq!(payload["has_active_task"], true);
         assert_eq!(payload["task"]["batch_id"], "task-2");
+    }
+
+    #[test]
+    fn should_keep_existing_single_generation_background_payload_query_owner_contract() {
+        let payload = Some(json!({
+            "batch_id": "task-3",
+            "task_type": "chapter_single_generate"
+        }))
+        .expect("payload");
+
+        assert_eq!(payload["batch_id"], "task-3");
+        assert_eq!(payload["task_type"], "chapter_single_generate");
     }
 }

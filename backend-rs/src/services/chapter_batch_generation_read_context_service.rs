@@ -1,15 +1,21 @@
-use sea_orm::DatabaseConnection;
-use serde_json::{json, Value};
+use std::collections::HashMap;
 
-use crate::models::batch_generation_task;
+use sea_orm::DatabaseConnection;
+use serde_json::Value;
+
+use crate::models::{batch_generation_snapshot, batch_generation_task};
 use crate::services::chapter_batch_generation_owned_task_query_service::{
-    load_owned_task, LoadOwnedBatchGenerationTaskError,
+    load_owned_batch_generation_task_read_state, LoadOwnedBatchGenerationTaskError,
+    OwnedBatchGenerationTaskReadState,
 };
-use crate::services::chapter_batch_generation_quality_status_service::{
-    insert_batch_generation_terminal_status_payload, BatchGenerationQualityStatusContext,
+use crate::services::chapter_batch_generation_quality_status_service::BatchGenerationQualityStatusContext;
+use crate::services::chapter_batch_generation_status_semantics_service::active_batch_generation_statuses;
+use crate::services::chapter_batch_generation_task_payload_base_service::{
+    build_batch_generation_task_view_payload_with_quality_context,
+    BatchGenerationTaskViewPayloadVariant,
 };
-use crate::services::chapter_batch_generation_snapshot_service::load_batch_generation_snapshot;
-use crate::services::chapter_batch_generation_task_payload_base_service::build_batch_generation_task_view_payload_from_task_state;
+use crate::services::chapter_generation_snapshot_query_service::load_chapter_generation_snapshot_map;
+use crate::services::chapter_generation_task_recovery_service::recover_generation_task_if_needed;
 
 #[derive(Debug, Clone)]
 pub(crate) struct BatchGenerationReadContext {
@@ -19,19 +25,60 @@ pub(crate) struct BatchGenerationReadContext {
 }
 
 impl BatchGenerationReadContext {
+    pub(crate) fn from_task_and_snapshot_projection(
+        task: batch_generation_task::Model,
+        snapshot: Option<&batch_generation_snapshot::Model>,
+        workflow_runtime_state: Option<Value>,
+    ) -> Self {
+        let quality_status_context =
+            BatchGenerationQualityStatusContext::from_snapshot_and_runtime_state(
+                snapshot,
+                workflow_runtime_state.as_ref(),
+            );
+
+        Self {
+            task,
+            workflow_runtime_state,
+            quality_status_context,
+        }
+    }
+
     fn into_payload_parts(self) -> (batch_generation_task::Model, serde_json::Map<String, Value>) {
         let BatchGenerationReadContext {
             task,
             workflow_runtime_state,
             quality_status_context,
         } = self;
-        let mut payload = build_batch_generation_task_view_payload_from_task_state(
+        let payload = build_batch_generation_task_view_payload_with_quality_context(
             &task,
             workflow_runtime_state.as_ref(),
+            Some(&quality_status_context),
+            BatchGenerationTaskViewPayloadVariant::ActiveTaskListItem,
         );
-        quality_status_context.insert_into_payload(&mut payload);
 
         (task, payload)
+    }
+
+    pub(crate) fn into_active_project_task_payload(self) -> Value {
+        let BatchGenerationReadContext {
+            task,
+            workflow_runtime_state,
+            quality_status_context,
+        } = self;
+
+        Value::Object(
+            build_batch_generation_task_view_payload_with_quality_context(
+                &task,
+                workflow_runtime_state.as_ref(),
+                Some(&quality_status_context),
+                BatchGenerationTaskViewPayloadVariant::ActiveProjectTask,
+            ),
+        )
+    }
+
+    pub(crate) fn into_active_task_list_item_payload(self) -> Value {
+        let (_, payload) = self.into_payload_parts();
+        Value::Object(payload)
     }
 
     pub(crate) fn into_status_task_payload(self) -> Value {
@@ -40,68 +87,165 @@ impl BatchGenerationReadContext {
             workflow_runtime_state,
             quality_status_context,
         } = self;
-        let mut payload =
-            build_batch_generation_task_view_payload_from_task_state(&task, workflow_runtime_state.as_ref());
-        quality_status_context.insert_into_payload(&mut payload);
 
-        payload.insert(
-            "current_retry_count".to_string(),
-            json!(task.current_retry_count),
-        );
-        payload.insert("max_retries".to_string(), json!(task.max_retries));
-        payload.insert(
-            "failed_chapters".to_string(),
-            task.failed_chapters.clone(),
-        );
-        insert_batch_generation_terminal_status_payload(
-            &mut payload,
-            &task,
-            Some(&task.failed_chapters),
-            Some(&quality_status_context),
-        );
-
-        Value::Object(payload)
-    }
-
-    pub(crate) fn into_active_task_payload(self) -> Value {
-        let (_, payload) = self.into_payload_parts();
-        Value::Object(payload)
+        Value::Object(
+            build_batch_generation_task_view_payload_with_quality_context(
+                &task,
+                workflow_runtime_state.as_ref(),
+                Some(&quality_status_context),
+                BatchGenerationTaskViewPayloadVariant::StatusTask,
+            ),
+        )
     }
 }
 
-pub(crate) async fn load_batch_generation_read_context_for_task(
-    db: &DatabaseConnection,
+fn build_batch_generation_read_context_for_task_and_snapshot(
     task: batch_generation_task::Model,
-) -> Result<BatchGenerationReadContext, String> {
-    let snapshot = load_batch_generation_snapshot(db, &task.id).await?;
+    snapshot: Option<batch_generation_snapshot::Model>,
+) -> BatchGenerationReadContext {
     let workflow_runtime_state = snapshot
         .as_ref()
         .and_then(|item| item.workflow_runtime_state.clone());
-    let quality_context = BatchGenerationQualityStatusContext::from_snapshot_and_runtime_state(
-        snapshot.as_ref(),
-        workflow_runtime_state.as_ref(),
-    );
 
-    Ok(BatchGenerationReadContext {
+    BatchGenerationReadContext::from_task_and_snapshot_projection(
         task,
+        snapshot.as_ref(),
         workflow_runtime_state,
-        quality_status_context: quality_context,
-    })
+    )
 }
 
-pub(crate) async fn load_owned_batch_generation_read_context(
-    db: &DatabaseConnection,
-    batch_id: &str,
-    user_id: &str,
-) -> Result<BatchGenerationReadContext, LoadOwnedBatchGenerationTaskError> {
-    let task = load_owned_task(db, batch_id, user_id)
-        .await
-        .map_err(LoadOwnedBatchGenerationTaskError::Internal)?
-        .ok_or(LoadOwnedBatchGenerationTaskError::TaskNotFound)?;
+pub(crate) fn batch_generation_task_contains_chapter(
+    task: &batch_generation_task::Model,
+    chapter_id: &str,
+) -> bool {
+    task.chapter_ids
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|item| {
+            item.as_str() == Some(chapter_id)
+                || item.get("id").and_then(Value::as_str) == Some(chapter_id)
+        })
+}
 
-    load_batch_generation_read_context_for_task(db, task)
-        .await
-        .map_err(LoadOwnedBatchGenerationTaskError::Internal)
+fn build_batch_generation_read_contexts_from_snapshot_owner_map(
+    tasks: Vec<batch_generation_task::Model>,
+    mut snapshots_by_task_id: HashMap<String, batch_generation_snapshot::Model>,
+) -> Vec<BatchGenerationReadContext> {
+    tasks
+        .into_iter()
+        .map(|task| {
+            let snapshot = snapshots_by_task_id.remove(&task.id);
+            build_batch_generation_read_context_for_task_and_snapshot(task, snapshot)
+        })
+        .collect()
+}
+
+pub(crate) fn is_active_batch_generation_task_status(status: &str) -> bool {
+    active_batch_generation_statuses().contains(&status)
+}
+
+pub(crate) async fn load_batch_generation_read_contexts_for_tasks(
+    db: &DatabaseConnection,
+    tasks: Vec<batch_generation_task::Model>,
+) -> Result<Vec<BatchGenerationReadContext>, String> {
+    let task_ids: Vec<String> = tasks.iter().map(|task| task.id.clone()).collect();
+    let snapshots_by_task_id = load_chapter_generation_snapshot_map(db, &task_ids).await?;
+
+    Ok(build_batch_generation_read_contexts_from_snapshot_owner_map(tasks, snapshots_by_task_id))
+}
+
+pub(crate) async fn load_active_batch_generation_read_contexts_for_tasks(
+    db: &DatabaseConnection,
+    tasks: Vec<batch_generation_task::Model>,
+) -> Result<Vec<BatchGenerationReadContext>, String> {
+    let mut active_tasks = Vec::with_capacity(tasks.len());
+
+    for task in tasks {
+        let (task, _) = recover_generation_task_if_needed(db, task).await?;
+        if !is_active_batch_generation_task_status(&task.status) {
+            continue;
+        }
+
+        active_tasks.push(task);
+    }
+
+    load_batch_generation_read_contexts_for_tasks(db, active_tasks).await
+}
+
+pub(crate) async fn load_active_batch_generation_task_list_item_payloads_for_tasks(
+    db: &DatabaseConnection,
+    tasks: Vec<batch_generation_task::Model>,
+) -> Result<Vec<Value>, String> {
+    Ok(
+        load_active_batch_generation_read_contexts_for_tasks(db, tasks)
+            .await?
+            .into_iter()
+            .map(BatchGenerationReadContext::into_active_task_list_item_payload)
+            .collect(),
+    )
+}
+
+pub(crate) async fn load_active_project_batch_generation_task_payload_for_tasks(
+    db: &DatabaseConnection,
+    tasks: Vec<batch_generation_task::Model>,
+) -> Result<Option<Value>, String> {
+    Ok(
+        load_active_batch_generation_read_contexts_for_tasks(db, tasks)
+            .await?
+            .into_iter()
+            .next()
+            .map(BatchGenerationReadContext::into_active_project_task_payload),
+    )
+}
+
+pub(crate) fn build_batch_generation_status_task_payload_with_quality_context(
+    task: &batch_generation_task::Model,
+    workflow_runtime_state: Option<&Value>,
+    quality_status_context: &BatchGenerationQualityStatusContext,
+) -> Value {
+    Value::Object(
+        build_batch_generation_task_view_payload_with_quality_context(
+            task,
+            workflow_runtime_state,
+            Some(quality_status_context),
+            BatchGenerationTaskViewPayloadVariant::StatusTask,
+        ),
+    )
+}
+
+pub(crate) fn build_batch_generation_status_task_payload_from_task_and_snapshot_projection(
+    task: &batch_generation_task::Model,
+    snapshot: Option<&batch_generation_snapshot::Model>,
+    workflow_runtime_state: Option<&Value>,
+) -> Value {
+    let quality_status_context =
+        BatchGenerationQualityStatusContext::from_snapshot_and_runtime_state(
+            snapshot,
+            workflow_runtime_state,
+        );
+
+    build_batch_generation_status_task_payload_with_quality_context(
+        task,
+        workflow_runtime_state,
+        &quality_status_context,
+    )
+}
+
+fn build_owned_batch_generation_status_payload_from_read_state(
+    read_state: OwnedBatchGenerationTaskReadState,
+) -> Value {
+    let (task, snapshot) = read_state.into_parts();
+    let workflow_runtime_state = snapshot
+        .as_ref()
+        .and_then(|item| item.workflow_runtime_state.clone());
+
+    BatchGenerationReadContext::from_task_and_snapshot_projection(
+        task,
+        snapshot.as_ref(),
+        workflow_runtime_state,
+    )
+    .into_status_task_payload()
 }
 
 pub(crate) async fn load_owned_batch_generation_status_payload(
@@ -109,23 +253,23 @@ pub(crate) async fn load_owned_batch_generation_status_payload(
     batch_id: &str,
     user_id: &str,
 ) -> Result<Value, LoadOwnedBatchGenerationTaskError> {
-    load_owned_batch_generation_read_context(db, batch_id, user_id)
-        .await
-        .map(BatchGenerationReadContext::into_status_task_payload)
+    Ok(build_owned_batch_generation_status_payload_from_read_state(
+        load_owned_batch_generation_task_read_state(db, batch_id, user_id).await?,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use serde_json::json;
 
-    use crate::models::{batch_generation_snapshot, batch_generation_task};
-    use crate::services::chapter_batch_generation_owned_task_query_service::LoadOwnedBatchGenerationTaskError;
-    use crate::services::chapter_batch_generation_quality_status_service::BatchGenerationQualityStatusContext;
-    use crate::services::chapter_batch_generation_stream_semantics_service::{
-        BatchGenerationStreamState, BatchGenerationStreamTerminalKind,
-    };
     use super::BatchGenerationReadContext;
-
+    use crate::models::{batch_generation_snapshot, batch_generation_task};
+    use crate::services::chapter_batch_generation_owned_task_query_service::{
+        LoadOwnedBatchGenerationTaskError, OwnedBatchGenerationTaskReadState,
+    };
+    use crate::services::chapter_batch_generation_quality_status_service::BatchGenerationQualityStatusContext;
     fn build_task(status: &str) -> batch_generation_task::Model {
         batch_generation_task::Model {
             id: "task-1".to_string(),
@@ -203,9 +347,30 @@ mod tests {
             Some(json!({"score": 91}))
         );
         assert_eq!(
+            context.quality_status_context.quality_metrics_history,
+            Some(json!([{"score": 90}]))
+        );
+        assert_eq!(
             context.quality_status_context.quality_metrics_summary,
             Some(json!({"summary": "ok"}))
         );
+        assert_eq!(
+            context
+                .quality_status_context
+                .quality_metrics_summary_state
+                .as_ref()
+                .and_then(|value| value.get("scope")),
+            Some(&json!("batch"))
+        );
+        assert_eq!(
+            context
+                .quality_status_context
+                .quality_metrics_summary_state
+                .as_ref()
+                .and_then(|value| value.get("chapter_count")),
+            Some(&json!(1))
+        );
+        assert_eq!(context.quality_status_context.quality_history_context, None);
         assert_eq!(
             context.quality_status_context.active_story_repair_payload,
             Some(json!({"mode": "repair"}))
@@ -226,6 +391,46 @@ mod tests {
             context.quality_status_context,
             BatchGenerationQualityStatusContext::default()
         );
+    }
+
+    #[test]
+    fn should_build_batch_generation_read_contexts_from_snapshot_owner_map() {
+        let mut first_task = build_task("running");
+        first_task.id = "task-1".to_string();
+        let mut second_task = build_task("pending");
+        second_task.id = "task-2".to_string();
+
+        let mut second_snapshot = build_snapshot();
+        second_snapshot.batch_task_id = "task-2".to_string();
+        second_snapshot.workflow_runtime_state = Some(json!({
+            "progress": 25,
+            "last_message": "等待中"
+        }));
+
+        let contexts = super::build_batch_generation_read_contexts_from_snapshot_owner_map(
+            vec![first_task, second_task],
+            HashMap::from([(String::from("task-2"), second_snapshot)]),
+        );
+
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(contexts[0].task.id, "task-1");
+        assert_eq!(contexts[0].workflow_runtime_state, None);
+        assert_eq!(contexts[1].task.id, "task-2");
+        assert_eq!(
+            contexts[1].workflow_runtime_state,
+            Some(json!({
+                "progress": 25,
+                "last_message": "等待中"
+            }))
+        );
+    }
+
+    #[test]
+    fn should_classify_active_batch_generation_task_status() {
+        assert!(super::is_active_batch_generation_task_status("pending"));
+        assert!(super::is_active_batch_generation_task_status("running"));
+        assert!(!super::is_active_batch_generation_task_status("failed"));
+        assert!(!super::is_active_batch_generation_task_status("completed"));
     }
 
     #[test]
@@ -251,94 +456,16 @@ mod tests {
         assert_eq!(payload["batch_id"], "task-1");
         assert_eq!(payload["checkpoint"]["progress"], 60);
         assert_eq!(payload["latest_quality_metrics"]["score"], 91);
+        assert_eq!(payload["quality_metrics_history"][0]["score"], 90);
         assert_eq!(payload["quality_metrics_summary"]["summary"], "ok");
+        assert_eq!(payload["quality_metrics_summary_state"]["scope"], "batch");
+        assert_eq!(payload["quality_metrics_summary_state"]["chapter_count"], 1);
+        assert!(payload["quality_history_context"].is_null());
         assert_eq!(payload["active_story_repair_payload"]["mode"], "repair");
     }
 
     #[test]
-    fn should_build_stream_state_from_read_context_owner() {
-        let snapshot = build_snapshot();
-        let workflow_runtime_state = snapshot
-            .workflow_runtime_state
-            .clone()
-            .expect("snapshot runtime state");
-        let quality_status_context =
-            BatchGenerationQualityStatusContext::from_snapshot_and_runtime_state(
-                Some(&snapshot),
-                Some(&workflow_runtime_state),
-            );
-        let context = BatchGenerationReadContext {
-            task: build_task("running"),
-            workflow_runtime_state: Some(workflow_runtime_state),
-            quality_status_context,
-        };
-        let state = BatchGenerationStreamState::from_task_state(
-            context.task,
-            context.workflow_runtime_state.as_ref(),
-        );
-
-        assert_eq!(state.status, "running");
-        assert_eq!(state.completed, 1);
-        assert_eq!(state.progress, 60);
-        assert_eq!(state.message, "正在生成正文...");
-        assert_eq!(state.event_status, "processing");
-        assert_eq!(state.terminal_kind, None);
-    }
-
-    #[test]
-    fn should_build_terminal_stream_state_from_read_context_owner() {
-        let context = BatchGenerationReadContext {
-            task: build_task("completed"),
-            workflow_runtime_state: None,
-            quality_status_context: BatchGenerationQualityStatusContext::default(),
-        };
-        let state = BatchGenerationStreamState::from_task_state(
-            context.task,
-            context.workflow_runtime_state.as_ref(),
-        );
-
-        assert_eq!(state.progress, 100);
-        assert_eq!(state.message, "生成完成");
-        assert_eq!(state.event_status, "success");
-        assert_eq!(
-            state.terminal_kind,
-            Some(BatchGenerationStreamTerminalKind::Completed)
-        );
-    }
-
-    #[test]
-    fn should_build_status_task_payload_from_read_context() {
-        let snapshot = build_snapshot();
-        let workflow_runtime_state = snapshot
-            .workflow_runtime_state
-            .clone()
-            .expect("snapshot runtime state");
-        let quality_status_context =
-            BatchGenerationQualityStatusContext::from_snapshot_and_runtime_state(
-                Some(&snapshot),
-                Some(&workflow_runtime_state),
-            );
-        let payload = BatchGenerationReadContext {
-            task: build_task("completed"),
-            workflow_runtime_state: Some(workflow_runtime_state),
-            quality_status_context,
-        }
-        .into_status_task_payload();
-
-        assert_eq!(payload["batch_id"], "task-1");
-        assert_eq!(payload["checkpoint"]["progress"], 60);
-        assert_eq!(payload["current_retry_count"], 0);
-        assert_eq!(payload["max_retries"], 3);
-        assert_eq!(payload["terminal_reason"], "completed");
-        assert_eq!(payload["review_required"], false);
-        assert_eq!(payload["can_resume"], false);
-        assert_eq!(payload["latest_quality_metrics"]["score"], 91);
-        assert_eq!(payload["quality_metrics_summary"]["summary"], "ok");
-        assert_eq!(payload["active_story_repair_payload"]["mode"], "repair");
-    }
-
-    #[test]
-    fn should_build_active_task_payload_from_read_context() {
+    fn should_build_active_project_task_payload_from_read_context() {
         let snapshot = build_snapshot();
         let workflow_runtime_state = snapshot
             .workflow_runtime_state
@@ -354,46 +481,24 @@ mod tests {
             workflow_runtime_state: Some(workflow_runtime_state),
             quality_status_context,
         }
-        .into_active_task_payload();
+        .into_active_project_task_payload();
 
         assert_eq!(payload["batch_id"], "task-1");
         assert_eq!(payload["checkpoint"]["progress"], 60);
         assert_eq!(payload["latest_quality_metrics"]["score"], 91);
         assert_eq!(payload["quality_metrics_summary"]["summary"], "ok");
         assert_eq!(payload["active_story_repair_payload"]["mode"], "repair");
+        assert!(payload.get("task_type").is_none());
+        assert!(payload.get("project_id").is_none());
         assert!(payload.get("current_retry_count").is_none());
+        assert!(payload.get("completed_at").is_none());
+        assert!(payload.get("error_message").is_none());
         assert!(payload.get("terminal_reason").is_none());
         assert!(payload.get("can_resume").is_none());
     }
 
     #[test]
-    fn should_build_status_task_payload_with_terminal_fields() {
-        let snapshot = build_snapshot();
-        let workflow_runtime_state = snapshot
-            .workflow_runtime_state
-            .clone()
-            .expect("snapshot runtime state");
-        let quality_status_context =
-            BatchGenerationQualityStatusContext::from_snapshot_and_runtime_state(
-                Some(&snapshot),
-                Some(&workflow_runtime_state),
-            );
-        let payload = BatchGenerationReadContext {
-            task: build_task("completed"),
-            workflow_runtime_state: Some(workflow_runtime_state),
-            quality_status_context,
-        }
-        .into_status_task_payload();
-
-        assert_eq!(payload["current_retry_count"], 0);
-        assert_eq!(payload["max_retries"], 3);
-        assert_eq!(payload["terminal_reason"], "completed");
-        assert_eq!(payload["review_required"], false);
-        assert_eq!(payload["can_resume"], false);
-    }
-
-    #[test]
-    fn should_build_active_task_payload_without_terminal_fields() {
+    fn should_build_active_task_list_item_payload_without_terminal_fields() {
         let snapshot = build_snapshot();
         let workflow_runtime_state = snapshot
             .workflow_runtime_state
@@ -409,71 +514,14 @@ mod tests {
             workflow_runtime_state: Some(workflow_runtime_state),
             quality_status_context,
         }
-        .into_active_task_payload();
+        .into_active_task_list_item_payload();
 
+        assert_eq!(payload["task_type"], "chapters_batch_generate");
+        assert_eq!(payload["project_id"], "project-1");
         assert_eq!(payload["latest_quality_metrics"]["score"], 91);
         assert!(payload.get("current_retry_count").is_none());
         assert!(payload.get("failed_chapters").is_none());
         assert!(payload.get("terminal_reason").is_none());
-    }
-
-    #[test]
-    fn should_convert_owned_read_context_value_into_optional_context() {
-        let snapshot = build_snapshot();
-        let workflow_runtime_state = snapshot
-            .workflow_runtime_state
-            .clone()
-            .expect("snapshot runtime state");
-        let quality_status_context =
-            BatchGenerationQualityStatusContext::from_snapshot_and_runtime_state(
-                Some(&snapshot),
-                Some(&workflow_runtime_state),
-            );
-        let context = Some(BatchGenerationReadContext {
-            task: build_task("running"),
-            workflow_runtime_state: Some(workflow_runtime_state),
-            quality_status_context,
-        })
-        .expect("context");
-
-        assert_eq!(context.task.id, "task-1");
-        assert_eq!(
-            context.quality_status_context.latest_quality_metrics,
-            Some(json!({"score": 91}))
-        );
-    }
-
-    #[test]
-    fn should_convert_missing_owned_read_context_value_into_required_error() {
-        let error: Result<BatchGenerationReadContext, LoadOwnedBatchGenerationTaskError> =
-            None.ok_or(LoadOwnedBatchGenerationTaskError::TaskNotFound);
-        let error = error.expect_err("missing should become task not found");
-
-        assert_eq!(error, LoadOwnedBatchGenerationTaskError::TaskNotFound);
-    }
-
-    #[test]
-    fn should_keep_owned_read_context_loader_error_contract() {
-        let missing = LoadOwnedBatchGenerationTaskError::TaskNotFound;
-        let internal = LoadOwnedBatchGenerationTaskError::Internal("boom".to_string());
-
-        assert_eq!(missing, LoadOwnedBatchGenerationTaskError::TaskNotFound);
-        assert_eq!(
-            internal,
-            LoadOwnedBatchGenerationTaskError::Internal("boom".to_string())
-        );
-    }
-
-    #[test]
-    fn should_keep_owned_status_payload_loader_error_contract() {
-        let missing = LoadOwnedBatchGenerationTaskError::TaskNotFound;
-        let internal = LoadOwnedBatchGenerationTaskError::Internal("boom".to_string());
-
-        assert_eq!(missing, LoadOwnedBatchGenerationTaskError::TaskNotFound);
-        assert_eq!(
-            internal,
-            LoadOwnedBatchGenerationTaskError::Internal("boom".to_string())
-        );
     }
 
     #[test]
@@ -488,5 +536,82 @@ mod tests {
         assert_eq!(task.failed_chapters, json!([]));
         assert_eq!(payload["batch_id"], "task-1");
         assert_eq!(payload["status"], "running");
+    }
+
+    #[test]
+    fn should_build_status_task_payload_from_task_and_snapshot_projection_owner_inside_read_context_service(
+    ) {
+        let snapshot = build_snapshot();
+        let workflow_runtime_state = snapshot
+            .workflow_runtime_state
+            .as_ref()
+            .expect("snapshot runtime state");
+        let payload =
+            super::build_batch_generation_status_task_payload_from_task_and_snapshot_projection(
+                &build_task("completed"),
+                Some(&snapshot),
+                Some(workflow_runtime_state),
+            );
+
+        assert_eq!(payload["batch_id"], "task-1");
+        assert_eq!(payload["checkpoint"]["progress"], 60);
+        assert_eq!(payload["current_retry_count"], 0);
+        assert_eq!(payload["max_retries"], 3);
+        assert_eq!(payload["terminal_reason"], "completed");
+        assert_eq!(payload["review_required"], false);
+        assert_eq!(payload["can_resume"], false);
+        assert_eq!(payload["latest_quality_metrics"]["score"], 91);
+        assert_eq!(payload["quality_metrics_summary"]["summary"], "ok");
+        assert_eq!(payload["active_story_repair_payload"]["mode"], "repair");
+    }
+
+    #[test]
+    fn should_build_status_task_payload_from_quality_context_owner_inside_read_context_service() {
+        let payload = super::build_batch_generation_status_task_payload_with_quality_context(
+            &build_task("failed"),
+            Some(&json!({"progress": 80})),
+            &BatchGenerationQualityStatusContext {
+                latest_quality_metrics: Some(json!({"score": 88})),
+                quality_metrics_history: None,
+                quality_metrics_summary_state: None,
+                quality_metrics_summary: Some(json!({"summary": "good"})),
+                quality_history_context: None,
+                active_story_repair_payload: Some(json!({"mode": "repair"})),
+            },
+        );
+
+        assert_eq!(payload["batch_id"], "task-1");
+        assert_eq!(payload["checkpoint"]["progress"], 80);
+        assert_eq!(payload["checkpoint"]["stage_code"], "6.writing.failed");
+        assert_eq!(payload["current_retry_count"], 0);
+        assert_eq!(payload["max_retries"], 3);
+        assert_eq!(payload["latest_quality_metrics"]["score"], 88);
+        assert_eq!(payload["quality_metrics_summary"]["summary"], "good");
+        assert_eq!(payload["active_story_repair_payload"]["mode"], "repair");
+    }
+
+    #[test]
+    fn should_keep_owned_status_payload_loader_error_contract_inside_read_context_service() {
+        let missing = LoadOwnedBatchGenerationTaskError::TaskNotFound;
+        let internal = LoadOwnedBatchGenerationTaskError::Internal("boom".to_string());
+
+        assert_eq!(missing, LoadOwnedBatchGenerationTaskError::TaskNotFound);
+        assert_eq!(
+            internal,
+            LoadOwnedBatchGenerationTaskError::Internal("boom".to_string())
+        );
+    }
+
+    #[test]
+    fn should_keep_owned_status_payload_read_state_projection_contract_inside_read_context_service()
+    {
+        let mut task = build_task("running");
+        task.id = "task-owned-status-1".to_string();
+        let payload = super::build_owned_batch_generation_status_payload_from_read_state(
+            OwnedBatchGenerationTaskReadState::from_parts(task, Some(build_snapshot())),
+        );
+        assert_eq!(payload["batch_id"], "task-owned-status-1");
+        assert_eq!(payload["checkpoint"]["progress"], 60);
+        assert_eq!(payload["active_story_repair_payload"]["mode"], "repair");
     }
 }

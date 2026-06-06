@@ -95,11 +95,14 @@ async fn request_openai_embedding(
         .await
         .map_err(|error| format!("embedding response read failed: {}", error))?;
     if !status.is_success() {
-        return Err(format!("embedding request failed with status {}: {}", status, body));
+        return Err(format!(
+            "embedding request failed with status {}: {}",
+            status, body
+        ));
     }
 
-    let payload: Value =
-        serde_json::from_str(&body).map_err(|error| format!("decode embedding failed: {}", error))?;
+    let payload: Value = serde_json::from_str(&body)
+        .map_err(|error| format!("decode embedding failed: {}", error))?;
     let data = payload
         .get("data")
         .and_then(Value::as_array)
@@ -145,7 +148,10 @@ async fn build_embedding_for_memory(
         }
     }
 
-    Ok((fallback_embedding(content), "fallback-hash-embedding".to_string()))
+    Ok((
+        fallback_embedding(content),
+        "fallback-hash-embedding".to_string(),
+    ))
 }
 
 fn cosine_similarity(left: &[f32], right: &[f32]) -> f64 {
@@ -192,7 +198,8 @@ pub(crate) async fn upsert_story_memory_vector_record(
     let _guard = PROJECT_INDEX_LOCK.lock().await;
     let mut records = load_project_records(&memory.project_id).await?;
     records.retain(|item| item.id != memory.id);
-    let (embedding, embedding_model) = build_embedding_for_memory(db, user_id, content_for_embedding).await?;
+    let (embedding, embedding_model) =
+        build_embedding_for_memory(db, user_id, content_for_embedding).await?;
     records.push(StoredVectorMemoryRecord {
         id: memory.id.clone(),
         project_id: memory.project_id.clone(),
@@ -255,11 +262,14 @@ pub(crate) async fn search_story_memory_vector_records(
 
     let _guard = PROJECT_INDEX_LOCK.lock().await;
     let records = load_project_records(project_id).await?;
-    let (query_embedding, _embedding_model) = build_embedding_for_memory(db, user_id, query).await?;
+    let (query_embedding, _embedding_model) =
+        build_embedding_for_memory(db, user_id, query).await?;
 
     let mut hits = records
         .into_iter()
-        .filter(|record| memory_types.is_empty() || memory_types.iter().any(|item| item == &record.memory_type))
+        .filter(|record| {
+            memory_types.is_empty() || memory_types.iter().any(|item| item == &record.memory_type)
+        })
         .filter(|record| {
             record
                 .metadata
@@ -287,7 +297,9 @@ pub(crate) async fn search_story_memory_vector_records(
 
 #[cfg(test)]
 mod tests {
-    use super::{cosine_similarity, fallback_embedding, record_matches_types, StoredVectorMemoryRecord};
+    use super::{
+        cosine_similarity, fallback_embedding, record_matches_types, StoredVectorMemoryRecord,
+    };
     use serde_json::json;
 
     #[test]

@@ -6,7 +6,6 @@ use axum::{
     Router,
 };
 use sea_orm::DatabaseConnection;
-use serde::Deserialize;
 use serde_json::Value;
 
 use crate::api::chapter_crud_error_mapper::{
@@ -16,64 +15,30 @@ use crate::api::chapter_crud_error_mapper::{
 use crate::api::chapters_error_mapper::{
     map_load_annotations_payload_error, map_load_can_generate_payload_error,
     map_load_navigation_payload_error, map_load_quality_trend_payload_error,
+    map_quality_trend_query_request_error,
 };
 use crate::services::auth::Claims;
 use crate::services::chapter_crud_workflow_service::{
-    create_chapter_payload, delete_chapter_payload, get_chapter_payload,
-    list_chapters_by_project_path_payload, list_chapters_payload, update_chapter_payload,
-    update_expansion_plan_payload, CreateChapterRequest, ListChaptersRequest,
-    UpdateChapterRequest, UpdateExpansionPlanRequest,
+    build_create_chapter_request_from_route_payload, build_list_chapters_request_from_route_query,
+    build_update_chapter_request_from_route_payload,
+    build_update_expansion_plan_request_from_route_payload, create_chapter_payload,
+    delete_chapter_payload, get_chapter_payload, list_chapters_by_project_path_payload,
+    list_chapters_payload, update_chapter_payload, update_expansion_plan_payload,
+    CreateChapterRouteRequest, ListChaptersRouteQuery, UpdateChapterRouteRequest,
+    UpdateExpansionPlanRouteRequest,
 };
 use crate::services::chapter_query_service::{
-    load_annotations_payload, load_can_generate_payload, load_navigation_payload,
-    load_quality_trend_payload,
+    build_quality_trend_query_request_from_route_query, load_annotations_payload,
+    load_can_generate_payload, load_navigation_payload, load_quality_trend_payload,
+    QualityTrendRouteQuery,
 };
-
-#[derive(Deserialize)]
-struct ListQuery {
-    project_id: String,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-struct CreateChapterRouteRequest {
-    project_id: String,
-    title: String,
-    chapter_number: i32,
-    content: Option<String>,
-    summary: Option<String>,
-    outline_id: Option<String>,
-    sub_index: Option<i32>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-struct UpdateChapterRouteRequest {
-    title: Option<String>,
-    content: Option<String>,
-    summary: Option<String>,
-    status: Option<String>,
-    chapter_number: Option<i32>,
-    expansion_plan: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-struct UpdateExpansionPlanRouteRequest {
-    plan: String,
-}
 
 async fn create_chapter(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
     Json(body): Json<CreateChapterRouteRequest>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    let request = CreateChapterRequest::from_route_payload(
-        body.project_id,
-        body.title,
-        body.chapter_number,
-        body.content,
-        body.summary,
-        body.outline_id,
-        body.sub_index,
-    );
+    let request = build_create_chapter_request_from_route_payload(body);
     let payload = create_chapter_payload(&db, &claims.sub, &request)
         .await
         .map_err(map_project_crud_success_message_error)?;
@@ -83,9 +48,9 @@ async fn create_chapter(
 async fn list_chapters(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
-    Query(query): Query<ListQuery>,
+    Query(query): Query<ListChaptersRouteQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let request = ListChaptersRequest::from_route_payload(query.project_id);
+    let request = build_list_chapters_request_from_route_query(query);
     let payload = list_chapters_payload(&db, &request, &claims.sub)
         .await
         .map_err(map_project_crud_success_message_error)?;
@@ -120,14 +85,7 @@ async fn update_chapter(
     Path(chapter_id): Path<String>,
     Json(body): Json<UpdateChapterRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let request = UpdateChapterRequest::from_route_payload(
-        body.title,
-        body.content,
-        body.summary,
-        body.status,
-        body.chapter_number,
-        body.expansion_plan,
-    );
+    let request = build_update_chapter_request_from_route_payload(body);
     let payload = update_chapter_payload(&db, &chapter_id, &claims.sub, &request)
         .await
         .map_err(map_chapter_crud_success_message_error)?;
@@ -162,7 +120,7 @@ async fn update_expansion_plan(
     Path(chapter_id): Path<String>,
     Json(body): Json<UpdateExpansionPlanRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let request = UpdateExpansionPlanRequest::from_route_payload(body.plan);
+    let request = build_update_expansion_plan_request_from_route_payload(body);
     let payload = update_expansion_plan_payload(&db, &chapter_id, &claims.sub, &request)
         .await
         .map_err(map_chapter_crud_success_message_error)?;
@@ -184,8 +142,11 @@ async fn get_quality_trend(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
     Path(project_id): Path<String>,
+    Query(query): Query<QualityTrendRouteQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let payload = load_quality_trend_payload(&db, &project_id, &claims.sub)
+    let request = build_quality_trend_query_request_from_route_query(query)
+        .map_err(map_quality_trend_query_request_error)?;
+    let payload = load_quality_trend_payload(&db, &project_id, &claims.sub, request)
         .await
         .map_err(map_load_quality_trend_payload_error)?;
     Ok(Json(payload))
@@ -231,70 +192,64 @@ pub(crate) fn routes() -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        CreateChapterRouteRequest, ListQuery, UpdateExpansionPlanRouteRequest,
-    };
     use crate::services::chapter_crud_workflow_service::{
-        CreateChapterRequest, ListChaptersRequest, UpdateChapterRequest,
-        UpdateExpansionPlanRequest,
+        build_create_chapter_request_from_route_payload,
+        build_list_chapters_request_from_route_query,
+        build_update_chapter_request_from_route_payload,
+        build_update_expansion_plan_request_from_route_payload, CreateChapterRouteRequest,
+        ListChaptersRouteQuery, UpdateChapterRouteRequest, UpdateExpansionPlanRouteRequest,
+    };
+    use crate::services::chapter_query_service::{
+        build_quality_trend_query_request_from_route_query, QualityTrendQueryRequestError,
+        QualityTrendRouteQuery,
     };
 
     #[test]
     fn should_build_create_chapter_request_from_route_payload() {
-        let request = CreateChapterRequest::from_route_payload(
-            CreateChapterRouteRequest {
-                project_id: "project-1".to_string(),
-                title: "第一章".to_string(),
-                chapter_number: 1,
-                content: Some("正文".to_string()),
-                summary: Some("摘要".to_string()),
-                outline_id: Some("outline-1".to_string()),
-                sub_index: Some(2),
-            }
-            .project_id,
-            "第一章".to_string(),
-            1,
-            Some("正文".to_string()),
-            Some("摘要".to_string()),
-            Some("outline-1".to_string()),
-            Some(2),
-        );
+        let request = build_create_chapter_request_from_route_payload(CreateChapterRouteRequest {
+            project_id: "project-1".to_string(),
+            title: "第一章".to_string(),
+            chapter_number: 1,
+            content: Some("正文".to_string()),
+            summary: Some("摘要".to_string()),
+            status: Some("writing".to_string()),
+            outline_id: Some("outline-1".to_string()),
+            sub_index: Some(2),
+            expansion_plan: Some("{\"key_events\":[]}".to_string()),
+        });
 
         assert_eq!(request.project_id(), "project-1");
         assert_eq!(request.title(), "第一章");
         assert_eq!(request.chapter_number(), 1);
         assert_eq!(request.content(), Some("正文"));
         assert_eq!(request.summary(), Some("摘要"));
+        assert_eq!(request.status(), Some("writing"));
         assert_eq!(request.outline_id(), Some("outline-1"));
         assert_eq!(request.sub_index(), Some(2));
+        assert_eq!(request.expansion_plan(), Some("{\"key_events\":[]}"));
     }
 
     #[test]
     fn should_build_update_chapter_request_from_route_payload() {
-        let request = UpdateChapterRequest::from_route_payload(
-            Some("新标题".to_string()),
-            None,
-            Some("新摘要".to_string()),
-            Some("draft".to_string()),
-            Some(3),
-            Some("扩写计划".to_string()),
-        );
+        let request = build_update_chapter_request_from_route_payload(UpdateChapterRouteRequest {
+            title: Some("新标题".to_string()),
+            content: None,
+            summary: Some("新摘要".to_string()),
+            status: Some("draft".to_string()),
+        });
 
         assert_eq!(request.title(), Some("新标题"));
         assert_eq!(request.content(), None);
         assert_eq!(request.summary(), Some("新摘要"));
         assert_eq!(request.status(), Some("draft"));
-        assert_eq!(request.chapter_number(), Some(3));
-        assert_eq!(request.expansion_plan(), Some("扩写计划"));
     }
 
     #[test]
     fn should_build_update_expansion_plan_request_from_route_payload() {
-        let request = UpdateExpansionPlanRequest::from_route_payload(
+        let request = build_update_expansion_plan_request_from_route_payload(
             UpdateExpansionPlanRouteRequest {
                 plan: "保持节奏，补足冲突".to_string(),
-            }
-            .plan,
+            },
         );
 
         assert_eq!(request.plan(), "保持节奏，补足冲突");
@@ -302,9 +257,39 @@ mod tests {
 
     #[test]
     fn should_build_list_chapters_request_from_route_query() {
-        let request =
-            ListChaptersRequest::from_route_payload(ListQuery { project_id: "project-1".to_string() }.project_id);
+        let request = build_list_chapters_request_from_route_query(ListChaptersRouteQuery {
+            project_id: "project-1".to_string(),
+        });
 
         assert_eq!(request.project_id(), "project-1");
+    }
+
+    #[test]
+    fn should_build_quality_trend_request_from_route_query_like_python_route() {
+        let default_request =
+            build_quality_trend_query_request_from_route_query(QualityTrendRouteQuery {
+                limit: None,
+            })
+            .expect("default limit should match Python route");
+        let explicit_request =
+            build_quality_trend_query_request_from_route_query(QualityTrendRouteQuery {
+                limit: Some(50),
+            })
+            .expect("upper bound should be accepted");
+
+        assert_eq!(default_request.limit(), 12);
+        assert_eq!(explicit_request.limit(), 50);
+        assert_eq!(
+            build_quality_trend_query_request_from_route_query(QualityTrendRouteQuery {
+                limit: Some(0),
+            }),
+            Err(QualityTrendQueryRequestError::LimitTooSmall)
+        );
+        assert_eq!(
+            build_quality_trend_query_request_from_route_query(QualityTrendRouteQuery {
+                limit: Some(51),
+            }),
+            Err(QualityTrendQueryRequestError::LimitTooLarge)
+        );
     }
 }

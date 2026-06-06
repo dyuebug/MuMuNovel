@@ -1,5 +1,6 @@
 use chrono::{Duration, NaiveDateTime, Utc};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use crate::models::analysis_task;
@@ -12,15 +13,21 @@ use crate::services::chapter_service::ChapterService;
 
 const BATCH_ANALYSIS_STATUS_CHAPTER_LIMIT: usize = 200;
 
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub(crate) struct BatchAnalysisStatusRouteRequest {
+    pub(crate) chapter_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct BatchAnalysisStatusRequest {
     chapter_ids: Vec<String>,
 }
 
 impl BatchAnalysisStatusRequest {
-    pub(crate) fn from_route_chapter_ids(chapter_ids: Vec<String>) -> Self {
+    fn from_route_request(route_request: BatchAnalysisStatusRouteRequest) -> Self {
         let mut normalized = Vec::new();
-        for raw_id in chapter_ids
+        for raw_id in route_request
+            .chapter_ids
             .into_iter()
             .take(BATCH_ANALYSIS_STATUS_CHAPTER_LIMIT)
         {
@@ -38,6 +45,12 @@ impl BatchAnalysisStatusRequest {
     fn into_chapter_ids(self) -> Vec<String> {
         self.chapter_ids
     }
+}
+
+pub(crate) fn build_batch_analysis_status_request_from_route_payload(
+    route_request: BatchAnalysisStatusRouteRequest,
+) -> BatchAnalysisStatusRequest {
+    BatchAnalysisStatusRequest::from_route_request(route_request)
 }
 
 fn format_datetime(value: Option<NaiveDateTime>) -> Option<String> {
@@ -253,8 +266,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        build_batch_analysis_task_status_payload, classify_analysis_error_code, BatchAnalysisStatusRequest,
+        build_batch_analysis_status_request_from_route_payload,
+        build_batch_analysis_task_status_payload, classify_analysis_error_code,
         empty_batch_analysis_task_status_payload, resolve_analysis_task_auto_recovery_error,
+        BatchAnalysisStatusRouteRequest,
     };
     use crate::models::analysis_task;
 
@@ -352,13 +367,17 @@ mod tests {
 
     #[test]
     fn should_normalize_batch_analysis_status_request_from_route_ids() {
-        let request = BatchAnalysisStatusRequest::from_route_chapter_ids(vec![
-            " chapter-1 ".to_string(),
-            "".to_string(),
-            "chapter-2".to_string(),
-            "chapter-1".to_string(),
-            "   ".to_string(),
-        ]);
+        let request = build_batch_analysis_status_request_from_route_payload(
+            BatchAnalysisStatusRouteRequest {
+                chapter_ids: vec![
+                    " chapter-1 ".to_string(),
+                    "".to_string(),
+                    "chapter-2".to_string(),
+                    "chapter-1".to_string(),
+                    "   ".to_string(),
+                ],
+            },
+        );
 
         assert_eq!(
             request.into_chapter_ids(),
