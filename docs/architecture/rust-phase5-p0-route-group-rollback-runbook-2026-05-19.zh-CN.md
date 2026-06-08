@@ -146,7 +146,7 @@ python backend/tools/run_strangler_gateway_smoke.py `
 
 #### `projects` 专用 shrink-readiness profile
 
-`projects` 现在已固化为独立的一键 smoke 包，避免每次依赖
+`projects` 历史上也曾固化为独立的一键 smoke 包，避免每次依赖
 `--profile phase5-p0 --route-group projects` 组合参数：
 
 ```powershell
@@ -156,17 +156,19 @@ python backend/tools/run_strangler_gateway_smoke.py `
   --base-url http://127.0.0.1:8005
 ```
 
-```powershell
-python backend/tools/run_strangler_gateway_smoke.py `
-  --manifest deploy/strangler-gateway-probes.json `
-  --profile phase5-projects-fallback `
-  --base-url http://127.0.0.1:8005
-```
+当前 `phase5-projects-owner` 仍覆盖 12 条 Rust owner probe。
+2026-06-07 起，随着 gateway `/api/projects` exact-root + shared-prefix 已直接切到
+Rust，active `phase5-projects-fallback` 已退役；它的历史 Python 线索
+（`validate-import` public-success、`import` / `export-data` / CRUD /
+维护修复入口的 `401 {"detail":"未登录"}`）仅在显式 gateway rollback 后作为
+手工或临时 probe 校验复用。
 
-这两个 profile 当前各包含 12 条同路径 probe，覆盖基础 CRUD、列表/详情、
-public import validation、multipart import、TXT/JSON 两类导出，以及维护修复
-入口。它们仍主要证明 owner/fallback 边界；登录态项目生命周期、导出内容、
-级联清理和 shared-table 副作用需要后续 business smoke。
+当前 active `projects` 证据主要回答：
+
+- Rust owner 是否仍稳定覆盖当前 `/api/projects*` 入口
+- 是否仍保留 public/business 样本，可支撑后续 stronger smoke 扩展
+- readiness 当前主要卡在 stronger business smoke，而不是卡在 same-path
+  fallback 证据缺失
 
 从 2026-06-02 开始，建议在人工阅读 owner/fallback runbook 之前，先输出
 `projects` route-group readiness 摘要：
@@ -181,14 +183,13 @@ python backend/tools/run_strangler_gateway_smoke.py `
 
 这一步的作用不是替代 owner/fallback smoke，而是先快速回答：
 
-- 当前是否同时具备 Rust owner 与 Python fallback 双侧证据
-- 是否已有 dedicated owner / fallback profile
-- 是否已经存在 `business` 样本，可支撑后续 stronger smoke 扩展
-- 当前 readiness 仍卡在“证据缺失”，还是卡在“业务 smoke 不够强”
+- 当前 `projects` 是否仍拥有稳定 Rust owner 与 public/business 样本
+- 当前是否已有 dedicated owner profile
+- 当前 readiness 仍主要缺登录态 stronger smoke，还是缺 route-group 基础证据
 
 #### `settings` 专用 shrink-readiness profile
 
-`settings` 现在也已固化为独立 smoke 包，并额外拆出非对称 models 入口：
+`settings` 历史上也曾固化为独立 smoke 包，并额外拆出非对称 models 入口：
 
 ```powershell
 python backend/tools/run_strangler_gateway_smoke.py `
@@ -198,24 +199,11 @@ python backend/tools/run_strangler_gateway_smoke.py `
 ```
 
 ```powershell
-python backend/tools/run_strangler_gateway_smoke.py `
-  --manifest deploy/strangler-gateway-probes.json `
-  --profile phase5-settings-fallback `
-  --base-url http://127.0.0.1:8005
-```
-
-```powershell
-python backend/tools/run_strangler_gateway_smoke.py `
-  --manifest deploy/strangler-gateway-probes.json `
-  --profile phase5-settings-asymmetric `
-  --base-url http://127.0.0.1:8005
-```
-
-当前 `phase5-settings-owner` 覆盖 13 条 Rust owner probe，
-`phase5-settings-fallback` 覆盖 12 条 Python fallback probe，
-`phase5-settings-asymmetric` 覆盖 2 条 models 非对称 probe。`settings/models`
-不能混入普通 fallback profile，因为 Rust owner 是鉴权边界，而 Python fallback
-是 public network-error 分支。
+当前 `phase5-settings-owner` 仍覆盖 13 条 Rust owner probe。
+2026-06-07 起，随着 gateway `/api/settings` exact-root + shared-prefix 已直接切到
+Rust，active `phase5-settings-fallback` 与 `phase5-settings-asymmetric`
+已退役；它们的历史 Python 线索与 `settings/models` public network-error clue
+仅在显式 gateway rollback 后作为手工或临时 probe 校验复用。
 
 从 2026-06-02 开始，也建议先输出 `settings` route-group readiness 摘要：
 
@@ -227,11 +215,12 @@ python backend/tools/run_strangler_gateway_smoke.py `
   --output tmp/smoke/settings-readiness-summary.json
 ```
 
-这一步可用于在进入 owner/fallback/asymmetric 细读前先快速确认：
+这一步可用于在进入 owner 细读前先快速确认：
 
-- 当前 `settings` 是否已同时具备 owner / fallback / asymmetric 三类证据
-- 当前是否已有 dedicated owner / fallback / asymmetric profiles
-- 当前 readiness 仍主要缺 business smoke，还是缺 route-group 基础证据
+- 当前 `settings` 是否仍拥有稳定 Rust owner 与登录态 business smoke
+- 当前是否已有 dedicated owner profiles
+- 当前 readiness 仍主要缺 provider-success / transport stronger smoke，
+  还是缺 route-group 基础证据
 
 如需执行当前第一版 `settings` 登录态 business smoke，可使用：
 
@@ -243,39 +232,22 @@ python backend/tools/run_strangler_gateway_smoke.py `
   --base-url http://127.0.0.1:8005
 ```
 
-```powershell
-python backend/tools/run_strangler_gateway_smoke.py `
-  --manifest deploy/strangler-gateway-probes.json `
-  --profile business `
-  --probe-name settings-get-business-python-fallback `
-  --base-url http://127.0.0.1:8005
-```
-
 说明：
 
-- 这两条 probe 依赖本地登录凭据。runner 会优先读取 CLI 参数、
+- 这类 owner probes 依赖本地登录凭据。runner 会优先读取 CLI 参数、
   环境变量或 `.env` 中的 `LOCAL_AUTH_USERNAME / LOCAL_AUTH_PASSWORD`。
 - 如果当前环境缺少这两个值，probe 会显式失败并提示环境前提缺口；
   这表示登录态 smoke 的执行条件未满足，不表示 runner 代码路径未打通。
 
-### 5.4A 再跑 P0 非对称接口 smoke
+### 5.4A `settings` 历史非对称线索
 
-当前 `phase5-p0-asymmetric` 用来承载“同路径存在，但 Rust owner 与 Python fallback
-不是同一类入口语义”的接口证据，避免把它们误写成 auth-boundary fallback：
+`settings/models` 曾作为同路径但不同 owner 语义的非对称样本存在：
 
-```powershell
-python backend/tools/run_strangler_gateway_smoke.py `
-  --manifest deploy/strangler-gateway-probes.json `
-  --profile phase5-p0-asymmetric `
-  --route-group "<route-group>" `
-  --base-url http://127.0.0.1:8005
-```
+1. Rust owner：共享鉴权 `401 {"detail":"未登录，请先登录"}`
+2. Python 线索：public model fetch 进入 network-error `400`
 
-当前 `phase5-p0-asymmetric` 第一版覆盖：
-
-1. `GET /api/settings/models?provider=openai&api_key=test-key&api_base_url=http://127.0.0.1:9/v1`
-2. `GET /api/chapters/batch-generate/{batch_id}/status`
-3. `POST /api/chapters/batch-generate/{batch_id}/cancel`
+2026-06-07 起，该线索不再作为 active profile 参与日常 smoke；只有在显式
+gateway rollback 后，才建议将它作为定向手工或临时 probe clue 复用。
 
 ### 5.5 再跑全量 P0 smoke
 
@@ -326,10 +298,10 @@ Python 后，短期更适合先用“稳定差异线索”判断 owner 是否真
 | `chapters` | `POST /api/chapters/batch-generate/{batch_id}/resume` | `401 {"detail":"Not logged in"}` | Python batch-generation resume 入口先检查 `request.state.user_id`，未登录直接返回英文 `Not logged in`，因此可作为同路径恢复写侧入口的 fallback 线索 |
 | `chapters` | `POST /api/chapters/{chapter_id}/generate-background` | `401 {"detail":"未登录"}` | Python 单章后台生成入口走 `require_authenticated_user_id()`，未登录直接返回 `未登录`，因此可作为同路径单章生成写侧入口的 fallback 线索 |
 | `chapters` | `GET /api/chapters/{id}/regeneration/tasks` | `401 {"detail":"未登录"}` | Python regeneration query 路由走 `require_authenticated_user_id()` |
-| `wizard-stream` | `POST /api/wizard-stream/outline` | `401 {"detail":"需要登录"}` | Python `wizard_stream` 在进入 SSE handler 前就会先经过 `get_user_ai_service -> require_login()` |
-| `wizard-stream` | `POST /api/wizard-stream/world-building/{project_id}/regenerate` | `401 {"detail":"需要登录"}` | 这是最小合法 JSON body 为 `{}` 的 SSE 重生成入口；Python 同样先经过 `get_user_ai_service -> require_login()`，适合作为第二条同组 fallback 线索 |
-| `wizard-stream` | `POST /api/wizard-stream/career-system` | `401 {"detail":"需要登录"}` | 这是最小合法 JSON body 为 `{"projectId":"test-project-id"}` 的 SSE 职业体系入口；Python 同样先经过 `get_user_ai_service -> require_login()`，可作为第三条同组 fallback 线索 |
-| `wizard-stream` | `POST /api/wizard-stream/characters` | `401 {"detail":"需要登录"}` | 这是最小合法 JSON body 为 `{"projectId":"test-project-id"}` 的 SSE 角色入口；Python 同样先经过 `get_user_ai_service -> require_login()`，可作为第四条同组 fallback 线索 |
+| `wizard-stream` | `POST /api/wizard-stream/outline` | `401 {"detail":"需要登录"}` | 这些线索仅在临时恢复 Python `wizard-stream` prefix 后适用；Python `wizard_stream` 在进入 SSE handler 前就会先经过 `get_user_ai_service -> require_login()` |
+| `wizard-stream` | `POST /api/wizard-stream/world-building/{project_id}/regenerate` | `401 {"detail":"需要登录"}` | 这是最小合法 JSON body 为 `{}` 的 SSE 重生成入口；恢复 Python prefix 后，Python 同样先经过 `get_user_ai_service -> require_login()` |
+| `wizard-stream` | `POST /api/wizard-stream/career-system` | `401 {"detail":"需要登录"}` | 这是最小合法 JSON body 为 `{"projectId":"test-project-id"}` 的 SSE 职业体系入口；恢复 Python prefix 后可继续作为同组手工回切线索 |
+| `wizard-stream` | `POST /api/wizard-stream/characters` | `401 {"detail":"需要登录"}` | 这是最小合法 JSON body 为 `{"projectId":"test-project-id"}` 的 SSE 角色入口；恢复 Python prefix 后可继续作为同组手工回切线索 |
 | `memories` | `GET /api/memories/projects/{project_id}/stats` | `401 {"detail":"未登录"}` | Python `memories` 走 `verify_project_access()`，未登录优先返回 `未登录` |
 | `memories` | `GET /api/memories/projects/{project_id}/memories` | `401 {"detail":"未登录"}` | Python 记忆列表入口先走 `verify_project_access()`，未登录稳定返回 `未登录` |
 | `memories` | `GET /api/memories/projects/{project_id}/analysis/{chapter_id}` | `401 {"detail":"未登录"}` | Python 章节分析读取入口先走 `verify_project_access()`，未登录稳定返回 `未登录` |
@@ -407,13 +379,7 @@ Python 后，短期更适合先用“稳定差异线索”判断 owner 是否真
 当前 Rust owner location：
 
 - `/api/settings`
-- `/api/settings/api-key`
-- `/api/settings/models`
-- `/api/settings/presets`
-- `/api/settings/test`
-- `/api/settings/fetch-models`
-- `/api/settings/check-function-calling`
-- `presets` 相关路径
+- `/api/settings/`
 
 当前 P0 治理资产：
 
@@ -431,16 +397,18 @@ Python 后，短期更适合先用“稳定差异线索”判断 owner 是否真
 - `POST /api/settings/test`
 - `POST /api/settings/check-function-calling`
 
-当前 P0 非对称资产：
+历史非对称线索：
 
 - `GET /api/settings/models?provider=openai&api_key=test-key&api_base_url=http://127.0.0.1:9/v1`
 
 回滚原则：
 
 - 优先整组回切 `/api/settings*`
+- 先删除或改写 Rust `/api/settings/` 前缀与 root 规则，再让 Python `/api/`
+  catch-all 或临时 Python prefix 接管
 - 不建议只回切某一个 `preset` 子路径，除非已经明确是单子路径回归
-- 当前 `settings/presets` 只证明读取入口的 owner/fallback 鉴权边界；
-  preset 创建、激活、测试仍需后续 stronger smoke 才能支持更激进的 fallback 收缩。
+- 历史 `settings` Python fallback / business-fallback / models asymmetric 线索
+  只应在上述显式 gateway rollback 动作之后复用，不再对应 active same-path probes
 
 ### 6.2 `projects`
 
@@ -501,12 +469,15 @@ Python 后，短期更适合先用“稳定差异线索”判断 owner 是否真
 
 ### 6.4 `wizard-stream`
 
-当前 Rust owner 仅覆盖显式 SSE 子路径，仍存在 `/api/wizard-stream/` Python catch-all。
+当前 Rust owner 已覆盖 `/api/wizard-stream/` 前缀，same-path Python fallback
+已从 gateway 收口。
 
 回滚原则：
 
-- 回滚最小动作通常是删除目标 Rust 显式 location，让 residual catch-all 生效
-- 这组是最接近“删规则即可回退”的 P0 组
+- 回滚最小动作通常是删除或改写 Rust `/api/wizard-stream/` 前缀 location，
+  让 `/api/` catch-all 或临时 Python prefix 接管
+- `wizard-stream` 的旧 Python fallback 线索现在主要作为“回滚后手工验证”保留，
+  不再对应 active `phase5-p0-fallback` probes
 
 ### 6.5 `memories`
 
@@ -514,6 +485,8 @@ Python 后，短期更适合先用“稳定差异线索”判断 owner 是否真
 
 - API 路径 `/api/memories/*` 走 Rust
 - 页面/非 API 路径 `/memories/*` 仍走 Python
+- 2026-06-07 起，active same-path Python fallback probes 已退役；以下线索仅在
+  显式 gateway rollback `/api/memories*` 后复用
 
 当前 P0 治理资产：
 

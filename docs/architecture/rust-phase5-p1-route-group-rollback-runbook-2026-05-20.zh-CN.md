@@ -15,6 +15,15 @@ smoke，但缺少回切纪律”推进到可直接执行的操作步骤。
 
 1. `auth`
 2. `users`
+3. `background_tasks`
+4. `prompt_templates`
+5. `mcp_plugins`
+6. `relationships`
+7. `foreshadows`
+8. `writing_styles`
+9. `organizations`
+10. `careers`
+11. `inspiration`
 
 ---
 
@@ -23,8 +32,8 @@ smoke，但缺少回切纪律”推进到可直接执行的操作步骤。
 适用场景：
 
 - strangler 部署后，`phase5-p1` owner smoke 失败
-- `auth` 或 `users` 的 Rust owner 侧出现明确回归
-- 需要临时把 `auth` / `users` 的 through-gateway 默认流量切回 Python
+- `auth`、`users`、`background_tasks`、`prompt_templates`、`mcp_plugins`、`relationships`、`foreshadows`、`writing_styles`、`organizations`、`careers` 或 `inspiration` 的 Rust owner 侧出现明确回归
+- 需要临时把 `auth` / `users` / `background_tasks` / `prompt_templates` / `mcp_plugins` / `relationships` / `foreshadows` / `writing_styles` / `organizations` / `careers` / `inspiration` 的 through-gateway 默认流量切回 Python
 
 不适用场景：
 
@@ -37,7 +46,7 @@ smoke，但缺少回切纪律”推进到可直接执行的操作步骤。
 ## 3. 总体原则
 
 1. 先改 gateway owner，再看服务日志；不要先改代码重发版。
-2. `auth` 与 `users` 分组回切，不要一次性扩大到所有 Rust-owned 组。
+2. `auth`、`users`、`background_tasks`、`prompt_templates`、`mcp_plugins`、`relationships`、`foreshadows`、`writing_styles`、`organizations`、`careers` 与 `inspiration` 分组回切，不要一次性扩大到所有 Rust-owned 组。
 3. 保持 shared DB 不变，不做 schema rollback。
 4. 每次回滚后都要执行“定向 smoke + fallback smoke + 全量 P1 smoke”。
 5. `users` 的 Python fallback 不能机械复用 Rust probe；必须先区分路径语义。
@@ -163,6 +172,8 @@ python backend/tools/run_strangler_gateway_smoke.py `
 28. `POST /api/book-import/tasks/{task_id}/apply`
 29. `POST /api/book-import/tasks/{task_id}/retry-stream`
 30. `POST /api/book-import/tasks/{task_id}/apply-stream`
+31. `GET /api/background-tasks`
+32. `POST /api/background-tasks`
 
 ### 5.5A 再跑 P1 非对称接口 smoke
 
@@ -266,6 +277,244 @@ python backend/tools/run_strangler_gateway_smoke.py `
   的登录边界，但它们同样不等于管理员写侧业务语义完全等价。
 - 因此 `users` 的 fallback smoke 现阶段应解释为“same-path auth-boundary
   ownership clue”，而不是“full business parity proof”。
+
+### 6.2A `background_tasks`
+
+`background_tasks` 的回切线索当前也只应解释为“same-path auth-boundary owner
+已回到 Python”，不代表任务生命周期或 SSE 语义已经自动验证：
+
+| 路径 | Rust owner 成功线索 | Python fallback 成功线索 |
+|---|---|---|
+| `GET /api/background-tasks` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"Unauthorized"}` |
+| `POST /api/background-tasks` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"Unauthorized"}` |
+
+说明：
+
+- Python 侧 list/create 两条路径都在读取请求用户上下文前直接停在
+  `401 {"detail":"Unauthorized"}`。
+- Rust 侧同路径则统一停在共享鉴权中间件
+  `401 {"detail":"未登录，请先登录"}`。
+- 这两条 probe 适合验证“gateway owner 是否已切回 Python”，但不证明
+  `/{task_id}`、`/{task_id}/stream`、`/{task_id}/cancel`、
+  `/{task_id}/workflow-state` 的任务缺失、SSE、取消、状态更新语义完全等价。
+
+### 6.2B `prompt_templates`
+
+`prompt_templates` 自 2026-06-07 起也不再保留 active same-path Python fallback
+probe；当前应解释为“Rust 已成为默认 API owner，如需回到 Python 必须显式改
+gateway”，而不是“manifest 里仍持续保留同路径 Python 旁路”：
+
+| 路径 | Rust owner 成功线索 | Python rollback 后历史线索 |
+|---|---|---|
+| `GET /api/prompt-templates` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"未登录"}` |
+| `GET /api/prompt-templates/system-defaults` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"未登录"}` |
+
+说明：
+
+- 这两条路径目前只保留 Rust owner probe，用于确认默认 gateway owner 仍命中 Rust。
+- 若 `prompt_templates` 发生线上回归，需要先把 `/api/prompt-templates` root/prefix
+  显式切回 Python，再用上述历史 Python `401 {"detail":"未登录"}` 作为回切后 smoke 线索。
+- 当前剩余工作不再是“同路径 Python fallback 是否仍活着”，而是 categories、
+  sync-status、保存/删除/导入/预览、managed template sync 与 prompt formatting
+  stronger smoke。
+
+### 6.2C `mcp_plugins`
+
+`mcp_plugins` 自 2026-06-07 起也不再保留 active same-path Python fallback
+probe；当前应解释为“Rust 已成为默认 API owner，如需回到 Python 必须显式改
+gateway”，而不是“manifest 里仍持续保留同路径 Python 旁路”：
+
+| 路径 | Rust owner 成功线索 | Python rollback 后历史线索 |
+|---|---|---|
+| `GET /api/mcp/plugins` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"需要登录"}` |
+| `POST /api/mcp/plugins/simple` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"需要登录"}` |
+
+说明：
+
+- 这两条路径目前只保留 Rust owner probe，用于确认默认 gateway owner 仍命中 Rust。
+- 若 `mcp_plugins` 发生线上回归，需要先把 `/api/mcp` root/prefix 显式切回 Python，
+  再用上述历史 Python `401 {"detail":"需要登录"}` 作为回切后 smoke 线索。
+- 当前剩余工作不再是“同路径 Python fallback 是否仍活着”，而是插件详情、
+  toggle/status/tools/test/call、MCP session 注册/断开与后台任务 stronger smoke。
+
+### 6.2D `relationships`
+
+`relationships` 自 2026-06-07 起也不再保留 active same-path Python fallback
+probe；当前应解释为“Rust 已成为默认 API owner，如需回到 Python 必须显式改
+gateway”，而不是“manifest 里仍持续保留同路径 Python 旁路”：
+
+| 路径 | Rust owner 成功线索 | Python rollback 后历史线索 |
+|---|---|---|
+| `GET /api/relationships/project/{project_id}` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"未登录"}` |
+| `GET /api/relationships/graph/{project_id}` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"未登录"}` |
+
+说明：
+
+- 这两条路径目前只保留 Rust owner probe，用于确认默认 gateway owner 仍命中 Rust。
+- 若 `relationships` 发生线上回归，需要先把 `/api/relationships` root/prefix
+  显式切回 Python，再用上述历史 Python `401 {"detail":"未登录"}` 作为回切后 smoke 线索。
+- 当前剩余工作不再是“同路径 Python fallback 是否仍活着”，而是类型列表 public 读取、
+  创建/更新/删除成功态、关系图谱聚合与组织成员边 stronger smoke。
+
+### 6.2E `foreshadows`
+
+`foreshadows` 自 2026-06-07 起也不再保留 active same-path Python fallback
+probe；当前应解释为“Rust 已成为默认 API owner，如需回到 Python 必须显式改
+gateway”，而不是“manifest 里仍持续保留同路径 Python 旁路”：
+
+| 路径 | Rust owner 成功线索 | Python rollback 后历史线索 |
+|---|---|---|
+| `GET /api/foreshadows/projects/{project_id}` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"未登录"}` |
+| `GET /api/foreshadows/projects/{project_id}/stats` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"未登录"}` |
+
+说明：
+
+- 这两条路径目前只保留 Rust owner probe，用于确认默认 gateway owner 仍命中 Rust。
+- 若 `foreshadows` 发生线上回归，需要先把 `/api/foreshadows` root/prefix
+  显式切回 Python，再用上述历史 Python `401 {"detail":"未登录"}` 作为回切后 smoke 线索。
+- 当前剩余工作不再是“同路径 Python fallback 是否仍活着”，而是 context、
+  pending-resolve、plant/resolve/abandon 写侧与登录态伏笔业务 stronger smoke。
+
+### 6.2F `writing_styles`
+
+`writing_styles` 自 2026-06-07 起也不再保留 active same-path Python fallback
+probe；当前应解释为“Rust 已成为默认 API owner，如需回到 Python 必须显式改
+gateway”，而不是“manifest 里仍持续保留同路径 Python 旁路”：
+
+| 路径 | Rust owner 成功线索 | Python rollback 后历史线索 |
+|---|---|---|
+| `GET /api/writing-styles/user` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"未登录"}` |
+| `GET /api/writing-styles/project/{project_id}` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"未登录"}` |
+
+说明：
+
+- 这两条路径目前只保留 Rust owner probe，用于确认默认 gateway owner 仍命中 Rust。
+- 若 `writing_styles` 发生线上回归，需要先把 `/api/writing-styles` root/prefix
+  显式切回 Python，再用上述历史 Python `401 {"detail":"未登录"}` 作为回切后 smoke 线索。
+- 当前剩余工作不再是“同路径 Python fallback 是否仍活着”，而是 presets public list、
+  自定义风格 CRUD、set-default、initialize / init-defaults，以及
+  `project_default_styles` 侧效应 stronger smoke。
+
+### 6.2G `organizations`
+
+`organizations` 自 2026-06-07 起也不再保留 active same-path Python fallback
+probe；当前应解释为“Rust 已成为默认 API owner，如需回到 Python 必须显式改
+gateway”，而不是“manifest 里仍持续保留同路径 Python 旁路”：
+
+| 路径 | Rust owner 成功线索 | Python rollback 后历史线索 |
+|---|---|---|
+| `GET /api/organizations/project/{project_id}` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"未登录"}` |
+| `POST /api/organizations/generate-stream` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"需要登录"}` |
+
+说明：
+
+- 这两条路径目前只保留 Rust owner probe，用于确认默认 gateway owner 仍命中 Rust。
+- 若 `organizations` 发生线上回归，需要先把 `/api/organizations` root/prefix
+  显式切回 Python，再用上述历史 Python `401 {"detail":"未登录"}` /
+  `401 {"detail":"需要登录"}` 作为回切后 smoke 线索。
+- 当前剩余工作不再是“同路径 Python fallback 是否仍活着”，而是组织详情、
+  成员列表、成员增删改、生成成功态、成员计数，以及 `organization_members`
+  / `generation_history` 侧效应 stronger smoke。
+
+### 6.2H `careers`
+
+`careers` 自 2026-06-07 起也不再保留 active same-path Python fallback
+probe；当前应解释为“Rust 已成为默认 API owner，如需回到 Python 必须显式改
+gateway”，而不是“manifest 里仍持续保留同路径 Python 旁路”：
+
+| 路径 | Rust owner 成功线索 | Python rollback 后历史线索 |
+|---|---|---|
+| `GET /api/careers?project_id={project_id}` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"未登录"}` |
+| `GET /api/careers/generate-system?project_id={project_id}` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"需要登录"}` |
+
+说明：
+
+- 这两条路径目前只保留 Rust owner probe，用于确认默认 gateway owner 仍命中 Rust。
+- 若 `careers` 发生线上回归，需要先把 `/api/careers` root/prefix
+  显式切回 Python，再用上述历史 Python `401 {"detail":"未登录"}` /
+  `401 {"detail":"需要登录"}` 作为回切后 smoke 线索。
+- 当前剩余工作不再是“同路径 Python fallback 是否仍活着”，而是职业 CRUD、
+  角色职业绑定、生成成功态、职业阶段进度，以及 `character_careers`
+  关联语义 stronger smoke。
+
+### 6.2I `inspiration`
+
+`inspiration` 自 2026-06-07 起也不再保留 active same-path Python fallback
+probe；当前应解释为“Rust 已成为默认 API owner，如需回到 Python 必须显式改
+gateway”，而不是“manifest 里仍持续保留同路径 Python 旁路”：
+
+| 路径 | Rust owner 成功线索 | Python rollback 后历史线索 |
+|---|---|---|
+| `POST /api/inspiration/generate-options` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"需要登录"}` |
+| `POST /api/inspiration/quick-generate` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"需要登录"}` |
+
+说明：
+
+- 这两条路径目前只保留 Rust owner probe，用于确认默认 gateway owner 仍命中 Rust。
+- 若 `inspiration` 发生线上回归，需要先把 `/api/inspiration` root/prefix
+  显式切回 Python，再用上述历史 Python `401 {"detail":"需要登录"}`
+  作为回切后 smoke 线索。
+- 当前剩余工作不再是“同路径 Python fallback 是否仍活着”，而是 refine-options、
+  登录态 AI 生成成功/失败分支、web research、retry/validation 与完整灵感工作流 stronger smoke。
+
+### 6.2J `prompt_workshop`
+
+`prompt_workshop` 自 2026-06-07 起也不再保留 active same-path Python fallback
+probe；当前应解释为“Rust 已成为默认 API owner，如需回到 Python 必须显式改
+gateway”，而不是“manifest 里仍持续保留同路径 Python 旁路”：
+
+| 路径 | Rust owner 成功线索 | Python rollback 后历史线索 |
+|---|---|---|
+| `POST /api/prompt-workshop/submit` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"未登录或用户ID缺失"}` |
+| `POST /api/prompt-workshop/items/{item_id}/like` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"未登录或用户ID缺失"}` |
+
+说明：
+
+- 这两条路径目前只保留 Rust owner probe，用于确认默认 gateway owner 仍命中 Rust。
+- 若 `prompt_workshop` 发生线上回归，需要先把 `/api/prompt-workshop` root/prefix
+  显式切回 Python，再用上述历史 Python `401 {"detail":"未登录或用户ID缺失"}`
+  作为回切后 smoke 线索。
+- 当前剩余工作不再是“同路径 Python fallback 是否仍活着”，而是公开
+  items/status、import/download、my-submissions、admin 审核，以及登录态
+  prompt workshop 业务 stronger smoke。
+
+### 6.2K `polish`
+
+`polish` 自 2026-06-07 起也不再保留 active same-path Python fallback
+probe；当前应解释为“Rust 已成为默认 API owner，如需回到 Python 必须显式改
+gateway”，而不是“manifest 里仍持续保留同路径 Python 旁路”：
+
+| 路径 | Rust owner 成功线索 | Python rollback 后历史线索 |
+|---|---|---|
+| `POST /api/polish` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"需要登录"}` |
+| `POST /api/polish/batch` | `401 {"detail":"未登录，请先登录"}` | `401 {"detail":"需要登录"}` |
+
+说明：
+
+- 这两条路径目前只保留 Rust owner probe，用于确认默认 gateway owner 仍命中 Rust。
+- 若 `polish` 发生线上回归，需要先把 `/api/polish` root/prefix 显式切回 Python，
+  再用上述历史 Python `401 {"detail":"需要登录"}` 作为回切后 smoke 线索。
+- 当前剩余工作不再是“同路径 Python fallback 是否仍活着”，而是登录态 provider
+  调用、PromptService 模板、generation_history 写入与批量结果 stronger smoke。
+
+### 6.2L `changelog`
+
+`changelog` 自 2026-06-07 起也不再保留 active same-path Python fallback
+probe；当前应解释为“Rust 已成为默认 API owner，如需回到 Python 必须显式改
+gateway”，而不是“manifest 里仍持续保留同路径 Python 旁路”：
+
+| 路径 | Rust owner 成功线索 | Python rollback 后历史线索 |
+|---|---|---|
+| `GET /api/changelog` | `200` + JSON keys `commits`, `cached`, `cache_time` | `200` + JSON keys `commits`, `cached`, `cache_time` |
+| `POST /api/changelog/refresh` | `200` + JSON keys `success`, `message`, `commit_count`, `cache_time` | `200` + JSON keys `success`, `message`, `commit_count`, `cache_time` |
+
+说明：
+
+- 这两条路径目前只保留 Rust owner probe，用于确认默认 gateway owner 仍命中 Rust。
+- 若 `changelog` 发生线上回归，需要先把 `/api/changelog` root/prefix 显式切回 Python，
+  再复用上述历史 Python public JSON shell 作为回切后 smoke 线索。
+- 这两条路径不适合按本地 auth-boundary 稳定度解读；真实 smoke 仍受 GitHub API
+  网络可用性、缓存与限流波动影响。
 
 ### 6.3 `characters`
 
@@ -409,5 +658,46 @@ python backend/tools/run_strangler_gateway_smoke.py `
 
 1. `auth` 已具备第一版可执行 Python fallback smoke
 2. `characters`、`outlines` 与 `book_import` 也已具备第一版同路径 Python fallback smoke
-3. `users` 的 fallback 风险已被明确文档化，不再假设它和 Rust 路径一一对应
-4. P1 仍未达到可移除 Python fallback 的程度，但已经具备更像运维资产的回滚纪律
+3. `background_tasks` 也已具备第一版同路径 Python fallback smoke，并在 2026-06-07
+   完成 active same-path probe 退役，后续仅在显式 gateway rollback 后复用
+4. `prompt_templates` 同样在 2026-06-07 完成 same-path fallback 收口：
+   manifest 不再保留 active Python fallback probe，回切时改为显式 gateway
+   切换后再复用历史 Python 401 壳层
+5. `mcp_plugins` 同样在 2026-06-07 完成 same-path fallback 收口：
+   manifest 不再保留 active Python fallback probe，回切时改为显式 gateway
+   切换后再复用历史 Python 401 壳层
+6. `relationships` 同样在 2026-06-07 完成 same-path fallback 收口：
+   manifest 不再保留 active Python fallback probe，回切时改为显式 gateway
+   切换后再复用历史 Python 401 壳层
+7. `foreshadows` 同样在 2026-06-07 完成 same-path fallback 收口：
+   manifest 不再保留 active Python fallback probe，回切时改为显式 gateway
+   切换后再复用历史 Python 401 壳层
+8. `writing_styles` 同样在 2026-06-07 完成 same-path fallback 收口：
+   manifest 不再保留 active Python fallback probe，回切时改为显式 gateway
+   切换后再复用历史 Python 401 壳层
+9. `organizations` 同样在 2026-06-07 完成 same-path fallback 收口：
+   manifest 不再保留 active Python fallback probe，回切时改为显式 gateway
+   切换后再复用历史 Python 401 壳层
+10. `careers` 同样在 2026-06-07 完成 same-path fallback 收口：
+    manifest 不再保留 active Python fallback probe，回切时改为显式 gateway
+    切换后再复用历史 Python 401 壳层
+11. `inspiration` 同样在 2026-06-07 完成 same-path fallback 收口：
+    manifest 不再保留 active Python fallback probe，回切时改为显式 gateway
+    切换后再复用历史 Python 401 壳层
+12. `prompt_workshop` 同样在 2026-06-07 完成 same-path fallback 收口：
+    manifest 不再保留 active Python fallback probe，回切时改为显式 gateway
+    切换后再复用历史 Python `401 {"detail":"未登录或用户ID缺失"}` 壳层
+13. `polish` 同样在 2026-06-07 完成 same-path fallback 收口：
+    manifest 不再保留 active Python fallback probe，回切时改为显式 gateway
+    切换后再复用历史 Python `401 {"detail":"需要登录"}` 壳层
+14. `changelog` 同样在 2026-06-07 完成 same-path fallback 收口：
+    manifest 不再保留 active Python fallback probe，回切时改为显式 gateway
+    切换后再复用历史 Python public JSON shell
+10. `careers` 同样在 2026-06-07 完成 same-path fallback 收口：
+    manifest 不再保留 active Python fallback probe，回切时改为显式 gateway
+    切换后再复用历史 Python 401 壳层
+11. `inspiration` 同样在 2026-06-07 完成 same-path fallback 收口：
+    manifest 不再保留 active Python fallback probe，回切时改为显式 gateway
+    切换后再复用历史 Python 401 壳层
+8. `users` 的 fallback 风险已被明确文档化，不再假设它和 Rust 路径一一对应
+9. P1 仍未达到可移除 Python fallback 的程度，但已经具备更像运维资产的回滚纪律
