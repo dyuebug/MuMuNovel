@@ -68,14 +68,24 @@ packages instead of accumulating more micro-seams. A new implementation round
 must first choose one package and then migrate the whole file, function group,
 or module boundary that belongs to that package.
 
-Default package order:
+2026-06-07 Rust-first reset:
 
-1. `chapter_generation` shared owner package:
-   move shared lower-level generation owners out of batch-named files when
-   batch/single/resume flows all consume the same semantics.
-2. `chapter_single_generation` whole module package:
+The next execution rounds must start from `backend-rs` owner work, not from
+Python compatibility shell cleanup. Python edits are allowed only as companion
+fallback shrink, route wiring, or test patch-surface updates after the Rust
+owner and validation boundary are explicit. A round that mostly moves Python
+compat helpers without adding or tightening Rust owner evidence should not be
+reported as primary migration progress.
+
+Default package order after the reset:
+
+1. `chapter_single_generation` whole module package:
    migrate prepare, write, stream, runtime, snapshot, task-model, and quality
    owners as coherent single-chapter generation files.
+2. `chapter_generation` shared owner package:
+   move shared lower-level generation owners out of Python compatibility shells
+   and batch-named Rust files when batch/single/resume flows all consume the
+   same semantics.
 3. `chapter_batch_generation` whole module package:
    migrate read, write, resume, cancel, runtime, status, stream, and task-view
    owners as one batch-generation capability family.
@@ -104,6 +114,11 @@ of the selected package and helps that package reach cutover readiness. If the
 next edit only shortens a helper without retiring Python ownership, fallback
 dependency, smoke gap, rollback ambiguity, or schema assumption, it should be
 deferred.
+
+Rust-first acceptance rule: before any new Python fallback shrink is counted,
+the selected package must identify the Rust route/service owner, focused Rust
+tests or `cargo check` command, and the exact Python fallback branch that will
+be frozen, repointed, or removed only after that Rust owner is validated.
 
 ## Acceptance Criteria
 

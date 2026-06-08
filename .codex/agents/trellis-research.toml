@@ -68,6 +68,4 @@ If the user asks you to edit code, decline and tell them to spawn the
 # transcript via Codex's default `fork_turns="all"` (#240 follow-up, #241).
 [features]
 multi_agent = false
-
-[features.multi_agent_v2]
-enabled = false
+multi_agent_v2 = false

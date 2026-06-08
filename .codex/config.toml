@@ -19,17 +19,8 @@ project_doc_fallback_filenames = ["AGENTS.md"]
 # Codex 0.129+ additionally gates each installed hook behind a one-time
 # `/hooks` TUI review; until the user approves it, the hook stays inactive.
 
-# multi_agent_v2 forces structured subagent orchestration with the
-# `wait` tool — parent must block on terminal status before acting,
-# instead of cancelling / re-spawning. Incompatible with
-# [agents].max_threads (codex will reject the combination).
-# `enabled = true` is required inside the table — the table form does
-# NOT auto-enable the feature without it.
-# - max_concurrent_threads_per_session: bumps default 4 → 6.
-# - min_wait_timeout_ms: 480000 ms = 8 min. Codex default is 10 s, too
-#   short for Trellis subagents that routinely take 2-10 min. Hard
-#   ceiling is 3,600,000 (1 h).
-[features.multi_agent_v2]
-enabled = true
-max_concurrent_threads_per_session = 6
-min_wait_timeout_ms = 480000
+# `@cometix/codex 0.135.0` still parses `multi_agent_v2` as a simple
+# feature flag here. Newer table-form keys like wait timeout tuning are
+# not recognized yet and will fail config loading with `FeatureToml`.
+[features]
+multi_agent_v2 = true

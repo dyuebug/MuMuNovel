@@ -28,12 +28,65 @@ follow-up task exists to:
 
 ## Current Technical Direction
 
+### 2026-06-07 Rust-first reset
+
+The next planning unit must begin in `backend-rs`. Recent Python compatibility
+cleanup successfully removed several obsolete route compat owners, but that
+work should now be treated as fallback shrink evidence, not as the primary
+migration lane. The primary lane is Rust owner completion.
+
+The reset changes the package order:
+
+1. `chapter_single_generation` whole-module Rust owner package.
+2. `chapter_generation` shared owner package.
+3. `chapter_batch_generation` whole-module Rust owner package.
+4. `chapters` / Python compatibility shell shrink only after matching Rust
+   owner evidence exists.
+5. `schema / migration owner` when route packages expose table or field
+   ownership pressure.
+
+Package start criteria after the reset:
+
+- name the Rust route/service files that will gain or tighten ownership
+- name the Python fallback shell that will remain frozen until Rust validation
+  passes
+- define the preserved HTTP/SSE/task/checkpoint/error contract
+- define the focused Rust tests and `cargo check` command up front
+- define the Python fallback shrink step as a follow-up, not the lead change
+
+This means the surviving
+`backend/app/services/compat/chapter_generation_route_compat_service.py`
+should not simply be moved into another Python route module. It should be used
+as the source map for a Rust-first package, primarily
+`chapter_single_generation` plus adjacent shared `chapter_generation` owners.
+
 ### Primary migration package
 
-`chapter_batch_generation` remains the highest-signal area because it still
-contains behavior-sensitive runtime, read-side, resume, stream, and write
-workflow semantics. Future work should treat it as a module package, not as an
-unbounded sequence of tiny ownership moves.
+`chapter_single_generation` is now the first Rust-first package because it is
+the closest match for the remaining active generation compatibility shell and
+it gives the next round visible Rust ownership progress. The package should
+cover prepare, write, stream, runtime, snapshot, task model, and quality-status
+owners as a coherent module.
+
+Current target files include:
+
+- `backend-rs/src/api/chapter_generation_routes.rs`
+- `backend-rs/src/services/chapter_single_generation_prepare_service.rs`
+- `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+- `backend-rs/src/services/chapter_single_generation_stream_entry_service.rs`
+- `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+- `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+
+The surviving Python source map for this package includes:
+
+- `backend/app/api/chapter_generation_routes.py`
+- `backend/app/api/chapters.py`
+- `backend/app/services/compat/chapter_generation_route_compat_service.py`
+- `backend/app/services/chapter_generation/stream/entry_service.py`
+
+`chapter_batch_generation` remains a high-value package, but it should follow
+the single-generation Rust-first pass unless direct dependency pressure makes
+batch work the safer next owner.
 
 Current checkpoint:
 
