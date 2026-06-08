@@ -1,4 +1,8 @@
-from app.services.chapter_generated_text_service import trim_text_to_sentence_boundary
+from app.services.chapter_generated_text_service import (
+    contains_chapter_workflow_meta_text,
+    sanitize_generated_narrative_text,
+    trim_text_to_sentence_boundary,
+)
 
 
 def test_should_trim_to_recent_sentence_boundary_within_lookback_window():
@@ -23,3 +27,25 @@ def test_should_return_original_text_when_under_limit():
     trimmed = trim_text_to_sentence_boundary(text, hard_limit=20)
 
     assert trimmed == "\u77ed\u53e5\u3002"
+
+
+def test_should_detect_workflow_meta_text():
+    text = "step 1: draft conflict\nHe pushed the door open and stepped inside."
+    assert contains_chapter_workflow_meta_text(text) is True
+
+
+def test_should_sanitize_generated_narrative_text():
+    raw_text = "\n".join([
+        "step 1: describe conflict",
+        "The wind outside kept rising, but he still lit the lamp.",
+        "step 2: invoke agent",
+        "She said nothing and folded the letter into a smaller square.",
+    ])
+
+    cleaned, removed_count = sanitize_generated_narrative_text(raw_text)
+
+    assert removed_count == 2
+    assert "step 1" not in cleaned
+    assert "step 2" not in cleaned
+    assert "The wind outside kept rising" in cleaned
+    assert "She said nothing" in cleaned

@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+use crate::models::batch_generation_snapshot;
 use crate::services::chapter_quality_metrics_query_service::build_quality_metrics_summary_from_metrics;
 use crate::services::chapter_story_repair_quality_context_service::{
     advance_quality_metrics_summary_state, build_quality_metrics_summary_from_state,
@@ -13,6 +14,16 @@ pub(crate) struct GenerationQualityRuntimeContext {
     pub(crate) quality_metrics_summary_state: Option<Value>,
     pub(crate) quality_metrics_summary: Option<Value>,
     pub(crate) quality_history_context: Option<Value>,
+}
+
+pub(crate) type BatchGenerationQualityRuntimeContext = GenerationQualityRuntimeContext;
+
+const DEFAULT_MAX_BATCH_QUALITY_METRICS_HISTORY: usize = 20;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatchQualitySummaryResolutionMode {
+    PreferRebuilt,
+    PreferExplicit,
 }
 
 pub(crate) fn append_generation_quality_metrics_history_event(
@@ -37,7 +48,7 @@ pub(crate) fn append_generation_quality_metrics_history_event(
     (Value::Array(history), dropped_event)
 }
 
-fn build_generation_quality_summary_from_state_or_history(
+pub(crate) fn build_generation_quality_summary_from_state_or_history(
     quality_metrics_summary_state: Option<&Value>,
     quality_metrics_history: &Value,
     fallback_quality_summary: &Value,
@@ -51,9 +62,10 @@ fn build_generation_quality_summary_from_state_or_history(
         .unwrap_or_else(|| fallback_quality_summary.clone())
 }
 
-pub(crate) fn merge_generation_quality_history_context(
+fn merge_generation_quality_history_context_impl(
     derived_quality_summary: &Value,
     fallback_quality_summary: Option<&Value>,
+    merge_recent_metric_fallback_fields: bool,
 ) -> Value {
     let mut merged_context =
         extract_quality_history_context(Some(derived_quality_summary)).unwrap_or(Value::Null);
@@ -68,6 +80,31 @@ pub(crate) fn merge_generation_quality_history_context(
                 .entry(key.clone())
                 .or_insert_with(|| value.clone());
         }
+
+        if merge_recent_metric_fallback_fields {
+            if let (Some(merged_metrics), Some(fallback_metrics)) = (
+                merged_object
+                    .get_mut("recent_metrics")
+                    .and_then(Value::as_array_mut),
+                fallback_object
+                    .get("recent_metrics")
+                    .and_then(Value::as_array),
+            ) {
+                for (merged_metric, fallback_metric) in
+                    merged_metrics.iter_mut().zip(fallback_metrics.iter())
+                {
+                    if let (Some(merged_metric), Some(fallback_metric)) =
+                        (merged_metric.as_object_mut(), fallback_metric.as_object())
+                    {
+                        for (key, value) in fallback_metric {
+                            merged_metric
+                                .entry(key.clone())
+                                .or_insert_with(|| value.clone());
+                        }
+                    }
+                }
+            }
+        }
     } else if merged_context.is_null() {
         merged_context = fallback_context.unwrap_or(Value::Null);
     }
@@ -75,7 +112,29 @@ pub(crate) fn merge_generation_quality_history_context(
     merged_context
 }
 
-fn build_generation_quality_metrics_history_from_summary(
+pub(crate) fn merge_generation_quality_history_context(
+    derived_quality_summary: &Value,
+    fallback_quality_summary: Option<&Value>,
+) -> Value {
+    merge_generation_quality_history_context_impl(
+        derived_quality_summary,
+        fallback_quality_summary,
+        false,
+    )
+}
+
+pub(crate) fn merge_generation_quality_history_context_with_recent_metric_fallback(
+    derived_quality_summary: &Value,
+    fallback_quality_summary: Option<&Value>,
+) -> Value {
+    merge_generation_quality_history_context_impl(
+        derived_quality_summary,
+        fallback_quality_summary,
+        true,
+    )
+}
+
+pub(crate) fn build_generation_quality_metrics_history_from_summary(
     quality_summary: Option<&Value>,
 ) -> Option<Value> {
     let summary_repair_guidance =
@@ -440,6 +499,398 @@ pub(crate) fn resolve_generation_quality_runtime_context_from_persisted_sources(
 
     GenerationQualityRuntimeContext {
         latest_quality_metrics,
+        quality_metrics_history,
+        quality_metrics_summary_state,
+        quality_metrics_summary,
+        quality_history_context,
+    }
+}
+
+pub(crate) fn build_batch_quality_metrics_history_from_summary(
+    quality_summary: Option<&Value>,
+) -> Option<Value> {
+    build_generation_quality_metrics_history_from_summary(quality_summary)
+}
+
+fn batch_resolve_quality_metrics_summary_state(
+    explicit_quality_metrics_summary_state: Option<&Value>,
+    quality_metrics_history: Option<&Value>,
+) -> Option<Value> {
+    explicit_quality_metrics_summary_state
+        .cloned()
+        .filter(Value::is_object)
+        .or_else(|| {
+            quality_metrics_history
+                .and_then(Value::as_array)
+                .and_then(|history| {
+                    build_quality_metrics_summary_state_from_history(history, "batch")
+                })
+        })
+}
+
+fn batch_resolve_latest_quality_metrics(
+    explicit_latest_quality_metrics: Option<&Value>,
+    quality_metrics_history: Option<&Value>,
+) -> Option<Value> {
+    explicit_latest_quality_metrics.cloned().or_else(|| {
+        quality_metrics_history
+            .and_then(Value::as_array)
+            .and_then(|history| history.last().cloned())
+    })
+}
+
+fn batch_latest_quality_metrics_from_snapshot_or_runtime_state(
+    snapshot: Option<&batch_generation_snapshot::Model>,
+    workflow_runtime_state: Option<&Value>,
+) -> Option<Value> {
+    snapshot
+        .and_then(|item| item.latest_quality_metrics.clone())
+        .or_else(|| {
+            workflow_runtime_state
+                .and_then(Value::as_object)
+                .and_then(|state| state.get("latest_quality_metrics"))
+                .cloned()
+        })
+}
+
+fn batch_quality_metrics_summary_from_snapshot_or_runtime_state(
+    snapshot: Option<&batch_generation_snapshot::Model>,
+    workflow_runtime_state: Option<&Value>,
+) -> Option<Value> {
+    snapshot
+        .and_then(|item| item.quality_metrics_summary.clone())
+        .or_else(|| {
+            workflow_runtime_state
+                .and_then(Value::as_object)
+                .and_then(|state| state.get("quality_metrics_summary"))
+                .cloned()
+        })
+}
+
+fn batch_quality_metrics_history_from_snapshot_or_runtime_state(
+    snapshot: Option<&batch_generation_snapshot::Model>,
+    workflow_runtime_state: Option<&Value>,
+) -> Option<Value> {
+    snapshot
+        .and_then(|item| item.quality_metrics_history.clone())
+        .or_else(|| {
+            workflow_runtime_state
+                .and_then(Value::as_object)
+                .and_then(|state| state.get("quality_metrics_history"))
+                .cloned()
+        })
+}
+
+fn batch_quality_metrics_summary_state_from_runtime_state_or_history(
+    workflow_runtime_state: Option<&Value>,
+    quality_metrics_history: Option<&Value>,
+) -> Option<Value> {
+    workflow_runtime_state
+        .and_then(Value::as_object)
+        .and_then(|state| state.get("quality_metrics_summary_state"))
+        .cloned()
+        .or_else(|| {
+            quality_metrics_history
+                .and_then(Value::as_array)
+                .and_then(|history| {
+                    build_quality_metrics_summary_state_from_history(history, "batch")
+                })
+        })
+}
+
+fn batch_rebuild_quality_metrics_summary_from_history(
+    quality_metrics_summary_state: Option<&Value>,
+    quality_metrics_history: Option<&Value>,
+) -> Option<Value> {
+    quality_metrics_history.and_then(|history| {
+        let rebuilt = build_generation_quality_summary_from_state_or_history(
+            quality_metrics_summary_state,
+            history,
+            &Value::Null,
+            "batch",
+        );
+        (!rebuilt.is_null()).then_some(rebuilt)
+    })
+}
+
+fn batch_resolve_quality_runtime_context(
+    explicit_latest_quality_metrics: Option<&Value>,
+    explicit_quality_metrics_history: Option<&Value>,
+    explicit_quality_metrics_summary_state: Option<&Value>,
+    explicit_quality_metrics_summary: Option<&Value>,
+    summary_resolution_mode: BatchQualitySummaryResolutionMode,
+    merge_fallback_history_context: bool,
+) -> BatchGenerationQualityRuntimeContext {
+    let quality_metrics_history = explicit_quality_metrics_history
+        .cloned()
+        .filter(Value::is_array)
+        .or_else(|| {
+            build_batch_quality_metrics_history_from_summary(explicit_quality_metrics_summary)
+        });
+    let quality_metrics_summary_state = batch_resolve_quality_metrics_summary_state(
+        explicit_quality_metrics_summary_state,
+        quality_metrics_history.as_ref(),
+    );
+    let rebuilt_quality_metrics_summary = batch_rebuild_quality_metrics_summary_from_history(
+        quality_metrics_summary_state.as_ref(),
+        quality_metrics_history.as_ref(),
+    );
+    let quality_metrics_summary = match summary_resolution_mode {
+        BatchQualitySummaryResolutionMode::PreferRebuilt => {
+            rebuilt_quality_metrics_summary.or_else(|| explicit_quality_metrics_summary.cloned())
+        }
+        BatchQualitySummaryResolutionMode::PreferExplicit => explicit_quality_metrics_summary
+            .cloned()
+            .or(rebuilt_quality_metrics_summary),
+    };
+    let latest_quality_metrics = batch_resolve_latest_quality_metrics(
+        explicit_latest_quality_metrics,
+        quality_metrics_history.as_ref(),
+    );
+    let quality_history_context = quality_metrics_summary
+        .as_ref()
+        .map(|summary| {
+            if merge_fallback_history_context {
+                merge_generation_quality_history_context_with_recent_metric_fallback(
+                    summary,
+                    explicit_quality_metrics_summary,
+                )
+            } else {
+                extract_quality_history_context(Some(summary)).unwrap_or(Value::Null)
+            }
+        })
+        .filter(|context| !context.is_null());
+
+    BatchGenerationQualityRuntimeContext {
+        latest_quality_metrics,
+        quality_metrics_history,
+        quality_metrics_summary_state,
+        quality_metrics_summary,
+        quality_history_context,
+    }
+}
+
+pub(crate) fn resolve_batch_quality_runtime_context_for_startup_seed(
+    quality_metrics_summary: Option<&Value>,
+    latest_quality_metrics: Option<&Value>,
+) -> BatchGenerationQualityRuntimeContext {
+    batch_resolve_quality_runtime_context(
+        latest_quality_metrics,
+        None,
+        None,
+        quality_metrics_summary,
+        BatchQualitySummaryResolutionMode::PreferRebuilt,
+        true,
+    )
+}
+
+pub(crate) fn resolve_batch_quality_runtime_context_from_persisted_sources(
+    latest_quality_metrics: Option<&Value>,
+    quality_metrics_history: Option<&Value>,
+    quality_metrics_summary_state: Option<&Value>,
+    quality_metrics_summary: Option<&Value>,
+) -> BatchGenerationQualityRuntimeContext {
+    batch_resolve_quality_runtime_context(
+        latest_quality_metrics,
+        quality_metrics_history,
+        quality_metrics_summary_state,
+        quality_metrics_summary,
+        BatchQualitySummaryResolutionMode::PreferExplicit,
+        false,
+    )
+}
+
+pub(crate) fn resolve_batch_quality_runtime_context_from_snapshot_and_runtime_state(
+    snapshot: Option<&batch_generation_snapshot::Model>,
+    workflow_runtime_state: Option<&Value>,
+) -> BatchGenerationQualityRuntimeContext {
+    let latest_quality_metrics = batch_latest_quality_metrics_from_snapshot_or_runtime_state(
+        snapshot,
+        workflow_runtime_state,
+    );
+    let quality_metrics_history = batch_quality_metrics_history_from_snapshot_or_runtime_state(
+        snapshot,
+        workflow_runtime_state,
+    );
+    let quality_metrics_summary_state =
+        batch_quality_metrics_summary_state_from_runtime_state_or_history(
+            workflow_runtime_state,
+            quality_metrics_history.as_ref(),
+        );
+    let quality_metrics_summary = batch_quality_metrics_summary_from_snapshot_or_runtime_state(
+        snapshot,
+        workflow_runtime_state,
+    );
+
+    resolve_batch_quality_runtime_context_from_persisted_sources(
+        latest_quality_metrics.as_ref(),
+        quality_metrics_history.as_ref(),
+        quality_metrics_summary_state.as_ref(),
+        quality_metrics_summary.as_ref(),
+    )
+}
+
+pub(crate) fn apply_batch_quality_runtime_context_to_payload(
+    payload: &mut serde_json::Map<String, Value>,
+    quality_runtime_context: BatchGenerationQualityRuntimeContext,
+    quality_summary_fallback: Option<Value>,
+) {
+    payload.insert(
+        "quality_metrics_summary".to_string(),
+        quality_runtime_context
+            .quality_metrics_summary
+            .or(quality_summary_fallback)
+            .unwrap_or(Value::Null),
+    );
+    if let Some(latest_quality_metrics) = quality_runtime_context.latest_quality_metrics {
+        payload.insert("latest_quality_metrics".to_string(), latest_quality_metrics);
+    }
+    if let Some(quality_metrics_history) = quality_runtime_context.quality_metrics_history {
+        payload.insert(
+            "quality_metrics_history".to_string(),
+            quality_metrics_history,
+        );
+    }
+    if let Some(quality_metrics_summary_state) =
+        quality_runtime_context.quality_metrics_summary_state
+    {
+        payload.insert(
+            "quality_metrics_summary_state".to_string(),
+            quality_metrics_summary_state,
+        );
+    }
+    payload.insert(
+        "quality_history_context".to_string(),
+        quality_runtime_context
+            .quality_history_context
+            .unwrap_or(Value::Null),
+    );
+}
+
+pub(crate) fn append_batch_quality_metrics_history_event(
+    existing_quality_metrics_history: Option<&Value>,
+    latest_quality_metrics: &Value,
+    max_history: usize,
+) -> (Value, Option<Value>) {
+    append_generation_quality_metrics_history_event(
+        existing_quality_metrics_history,
+        latest_quality_metrics,
+        max_history,
+    )
+}
+
+fn build_batch_quality_summary_from_state_or_history(
+    quality_metrics_summary_state: Option<&Value>,
+    quality_metrics_history: &Value,
+    fallback_quality_summary: &Value,
+) -> Value {
+    build_generation_quality_summary_from_state_or_history(
+        quality_metrics_summary_state,
+        quality_metrics_history,
+        fallback_quality_summary,
+        "batch",
+    )
+}
+
+pub(crate) fn resolve_batch_quality_runtime_context_preserving_existing_quality_state(
+    existing_quality_metrics_summary_state: Option<&Value>,
+    existing_quality_metrics_history: Option<&Value>,
+    existing_quality_summary: Option<&Value>,
+    refreshed_quality_summary: Option<&Value>,
+    latest_quality_metrics: Option<&Value>,
+) -> BatchGenerationQualityRuntimeContext {
+    let quality_metrics_history = existing_quality_metrics_history
+        .cloned()
+        .filter(Value::is_array);
+    let quality_metrics_summary_state = existing_quality_metrics_summary_state
+        .cloned()
+        .filter(Value::is_object)
+        .or_else(|| {
+            quality_metrics_history
+                .as_ref()
+                .and_then(Value::as_array)
+                .map(|items| items.to_vec())
+                .and_then(|history| {
+                    build_quality_metrics_summary_state_from_history(&history, "batch")
+                })
+        });
+    let fallback_quality_summary = refreshed_quality_summary
+        .or(existing_quality_summary)
+        .cloned()
+        .unwrap_or(Value::Null);
+    let quality_metrics_summary = quality_metrics_history
+        .as_ref()
+        .map(|history| {
+            build_batch_quality_summary_from_state_or_history(
+                quality_metrics_summary_state.as_ref(),
+                history,
+                &fallback_quality_summary,
+            )
+        })
+        .or_else(|| refreshed_quality_summary.cloned())
+        .or_else(|| existing_quality_summary.cloned());
+    let quality_history_context = quality_metrics_summary
+        .as_ref()
+        .and_then(|summary| extract_quality_history_context(Some(summary)));
+
+    BatchGenerationQualityRuntimeContext {
+        latest_quality_metrics: latest_quality_metrics.cloned(),
+        quality_metrics_history,
+        quality_metrics_summary_state,
+        quality_metrics_summary,
+        quality_history_context,
+    }
+}
+
+pub(crate) fn resolve_batch_quality_runtime_context_from_current_quality(
+    existing_quality_metrics_summary_state: Option<&Value>,
+    existing_quality_metrics_history: Option<&Value>,
+    quality_summary: &Value,
+    latest_quality_metrics: Option<&Value>,
+) -> BatchGenerationQualityRuntimeContext {
+    let quality_metrics_history_with_drop = latest_quality_metrics.map(|latest_quality_metrics| {
+        append_batch_quality_metrics_history_event(
+            existing_quality_metrics_history,
+            latest_quality_metrics,
+            DEFAULT_MAX_BATCH_QUALITY_METRICS_HISTORY,
+        )
+    });
+    let quality_metrics_summary_state = latest_quality_metrics.and_then(|latest_quality_metrics| {
+        let history = quality_metrics_history_with_drop
+            .as_ref()
+            .and_then(|(history, _)| history.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let dropped_event = quality_metrics_history_with_drop
+            .as_ref()
+            .and_then(|(_, dropped_event)| dropped_event.as_ref());
+        advance_quality_metrics_summary_state(
+            existing_quality_metrics_summary_state,
+            latest_quality_metrics,
+            &history,
+            dropped_event,
+            "batch",
+        )
+        .or_else(|| build_quality_metrics_summary_state_from_history(&history, "batch"))
+    });
+    let quality_metrics_summary = quality_metrics_history_with_drop
+        .as_ref()
+        .map(|(history, _)| {
+            build_batch_quality_summary_from_state_or_history(
+                quality_metrics_summary_state.as_ref(),
+                history,
+                quality_summary,
+            )
+        })
+        .or_else(|| Some(quality_summary.clone()));
+    let quality_metrics_history = quality_metrics_history_with_drop
+        .map(|(quality_metrics_history, _)| quality_metrics_history);
+    let quality_history_context = quality_metrics_summary
+        .as_ref()
+        .and_then(|summary| extract_quality_history_context(Some(summary)));
+
+    BatchGenerationQualityRuntimeContext {
+        latest_quality_metrics: latest_quality_metrics.cloned(),
         quality_metrics_history,
         quality_metrics_summary_state,
         quality_metrics_summary,

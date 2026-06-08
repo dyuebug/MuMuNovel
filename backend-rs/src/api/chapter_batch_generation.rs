@@ -15,17 +15,15 @@ use crate::api::chapter_batch_generation_error_mapper::{
     map_resume_batch_generation_task_command_config_route_error,
 };
 use crate::services::auth::Claims;
-use crate::services::chapter_batch_generation_read_context_service::load_owned_batch_generation_status_payload;
-use crate::services::chapter_batch_generation_status_stream_service::load_owned_batch_generation_status_stream;
-use crate::services::chapter_batch_generation_task_view_query_service::{
+use crate::services::chapter_batch_generation_read_context_service::{
     load_active_batch_generation_view_from_route_project,
     load_active_user_batch_generation_task_list_view_from_route_query,
-    ActiveBatchGenerationTaskListRouteQuery,
+    load_owned_batch_generation_status_payload, ActiveBatchGenerationTaskListRouteQuery,
 };
+use crate::services::chapter_batch_generation_status_stream_service::load_owned_batch_generation_status_stream;
 use crate::services::chapter_batch_generation_write_workflow_service::{
     cancel_owned_batch_generation_write_workflow, resume_owned_batch_generation_write_workflow,
-    start_owned_batch_generation_write_workflow_from_route_payload,
-    BatchGenerationCreateRouteRequest,
+    start_owned_batch_generation_write_workflow, BatchGenerationCreateRouteRequest,
 };
 use crate::utils::sse::named_sse_keep_alive;
 
@@ -35,14 +33,9 @@ async fn create_batch_generate(
     Path(project_id): Path<String>,
     Json(body): Json<BatchGenerationCreateRouteRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let result = start_owned_batch_generation_write_workflow_from_route_payload(
-        &db,
-        &project_id,
-        &claims.sub,
-        body,
-    )
-    .await
-    .map_err(map_create_batch_generation_workflow_error)?;
+    let result = start_owned_batch_generation_write_workflow(&db, &project_id, &claims.sub, body)
+        .await
+        .map_err(map_create_batch_generation_workflow_error)?;
 
     Ok(Json(result))
 }
@@ -157,7 +150,7 @@ pub(crate) fn routes() -> Router {
 
 #[cfg(test)]
 mod tests {
-    use crate::services::chapter_batch_generation_task_view_query_service::{
+    use crate::services::chapter_batch_generation_read_context_service::{
         build_active_batch_generation_task_list_query_request_from_route_query,
         ActiveBatchGenerationTaskListRouteQuery,
     };

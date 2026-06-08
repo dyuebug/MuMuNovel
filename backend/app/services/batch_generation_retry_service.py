@@ -27,7 +27,7 @@ from app.services.batch_generation_chapter_success_state_service import (
     finalize_successful_batch_generation_chapter,
     handle_batch_generation_quality_gate_retry,
 )
-from app.services.chapter_generation_prerequisite_service import check_chapter_generation_prerequisites
+from app.services.chapter_generation.prerequisite_service import check_chapter_generation_prerequisites
 from app.services.chapter_quality_context_service import StoryPacket, clone_chapter_quality_profile
 from app.services.story_repair_payload_service import (
     StoryRepairPayload,
@@ -375,4 +375,3 @@ async def execute_batch_generation_chapter_with_retries(
         active_story_repair_payload=current_active_story_repair_payload,
         last_generated_summary=current_last_generated_summary,
     )
-

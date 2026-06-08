@@ -2,10 +2,11 @@ use chrono::NaiveDateTime;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use serde_json::{json, Value};
 
-use crate::models::{chapter, generation_history, plot_analysis, story_memory};
+use crate::models::{chapter, plot_analysis, story_memory};
 use crate::services::chapter_access_service::load_accessible_chapter;
 use crate::services::chapter_analysis_read_context_service::load_chapter_analysis_read_context;
 use crate::services::chapter_analysis_service::ChapterAnalysisQueryContextError;
+use crate::services::chapter_draft_history_service::ChapterAnalysisCheckerFragments;
 use crate::services::chapter_draft_view_payload_service::build_chapter_draft_analysis_view_fragments;
 use crate::services::chapter_draft_view_payload_service::ChapterDraftAnalysisViewFragments;
 use crate::services::chapter_quality_metrics_query_service::build_chapter_analysis_quality_fragments;
@@ -28,42 +29,6 @@ impl ChapterAnalysisViewOptions {
 
     fn include_full_draft(self) -> bool {
         self.include_full_draft
-    }
-}
-
-pub struct ChapterAnalysisCheckerFragments {
-    pub checker_result: Option<Value>,
-    pub checker_created_at: Option<String>,
-}
-
-impl ChapterAnalysisCheckerFragments {
-    fn from_histories(histories: &[generation_history::Model]) -> Self {
-        let checker_result = histories.iter().find_map(Self::parse_result);
-        let checker_created_at = histories.iter().find_map(|history| {
-            Self::parse_result(history)?;
-            format_datetime(history.created_at)
-        });
-
-        Self {
-            checker_result,
-            checker_created_at,
-        }
-    }
-
-    fn parse_result(history: &generation_history::Model) -> Option<Value> {
-        history.generated_content.as_ref().and_then(|content| {
-            serde_json::from_str::<Value>(content)
-                .ok()
-                .and_then(|payload| {
-                    if payload.get("log_type").and_then(Value::as_str)
-                        == Some("chapter_text_checker_v1")
-                    {
-                        payload.get("checker_result").cloned()
-                    } else {
-                        None
-                    }
-                })
-        })
     }
 }
 
@@ -237,13 +202,14 @@ mod tests {
     use chrono::NaiveDateTime;
     use serde_json::{json, Value};
 
-    use crate::models::{chapter, generation_history, plot_analysis, story_memory};
+    use crate::models::{chapter, plot_analysis, story_memory};
+    use crate::services::chapter_draft_history_service::ChapterAnalysisCheckerFragments;
     use crate::services::chapter_draft_view_payload_service::ChapterDraftAnalysisViewFragments;
     use crate::services::chapter_quality_metrics_query_service::ChapterAnalysisQualityFragments;
 
     use super::{
         array_or_empty, build_chapter_analysis_view_payload, f64_or_zero, value_or_null,
-        ChapterAnalysisCheckerFragments, ChapterAnalysisViewOptions,
+        ChapterAnalysisViewOptions,
     };
 
     fn test_datetime() -> NaiveDateTime {
@@ -327,20 +293,6 @@ mod tests {
             embedding_model: None,
             created_at: Some(test_datetime()),
             updated_at: Some(test_datetime()),
-        }
-    }
-
-    fn history(id: &str, generated_content: Option<String>) -> generation_history::Model {
-        generation_history::Model {
-            id: id.to_string(),
-            project_id: "project-1".to_string(),
-            chapter_id: Some("chapter-1".to_string()),
-            prompt: None,
-            generated_content,
-            model: None,
-            tokens_used: None,
-            generation_time: None,
-            created_at: Some(test_datetime()),
         }
     }
 
@@ -459,77 +411,5 @@ mod tests {
 
         assert_eq!(options, ChapterAnalysisViewOptions::new(true));
         assert_ne!(options, default_options);
-    }
-
-    #[test]
-    fn should_build_checker_fragments_from_first_matching_history() {
-        let histories = vec![
-            history(
-                "unrelated",
-                Some(json!({"log_type": "other", "checker_result": {"score": 1}}).to_string()),
-            ),
-            history(
-                "checker",
-                Some(
-                    json!({
-                        "log_type": "chapter_text_checker_v1",
-                        "checker_result": {
-                            "score": 91,
-                            "status": "passed"
-                        }
-                    })
-                    .to_string(),
-                ),
-            ),
-        ];
-
-        let fragments = ChapterAnalysisCheckerFragments::from_histories(&histories);
-
-        assert_eq!(
-            fragments.checker_result,
-            Some(json!({"score": 91, "status": "passed"}))
-        );
-        assert_eq!(
-            fragments.checker_created_at,
-            Some("2026-05-17T12:30:45".to_string())
-        );
-    }
-
-    #[test]
-    fn should_ignore_invalid_or_non_checker_histories() {
-        let histories = vec![
-            history("invalid-json", Some("{not-json".to_string())),
-            history(
-                "missing-result",
-                Some(json!({"log_type": "chapter_text_checker_v1"}).to_string()),
-            ),
-        ];
-
-        let fragments = ChapterAnalysisCheckerFragments::from_histories(&histories);
-
-        assert_eq!(fragments.checker_result, None);
-        assert_eq!(fragments.checker_created_at, None);
-    }
-
-    #[test]
-    fn should_skip_checker_created_at_when_matching_history_has_no_created_at() {
-        let mut item = history(
-            "checker",
-            Some(
-                json!({
-                    "log_type": "chapter_text_checker_v1",
-                    "checker_result": {
-                        "score": 88
-                    }
-                })
-                .to_string(),
-            ),
-        );
-        item.created_at = None;
-
-        let fragments = ChapterAnalysisCheckerFragments::from_histories(&[item]);
-
-        assert_eq!(fragments.checker_result, Some(json!({"score": 88})));
-        assert_eq!(fragments.checker_created_at, None);
     }
 }

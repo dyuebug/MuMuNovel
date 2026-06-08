@@ -10,9 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.api import chapters as chapters_api
-from app.services import batch_generation_entry_compat_service
-from app.services import chapter_generation_route_compat_service
-from app.services import chapter_analysis_task_route_compat_service
+from app.services.compat import chapter_generation_route_compat_service
 from app.api import chapter_analysis_routes as chapter_analysis_routes_api
 from app.api import chapter_analysis_task_routes as chapter_analysis_task_routes_api
 from app.api import chapter_annotation_routes as chapter_annotation_routes_api
@@ -24,7 +22,6 @@ from app.api import chapter_quality_routes as chapter_quality_routes_api
 from app.api import chapter_expansion_plan_routes as chapter_expansion_plan_routes_api
 from app.api import chapter_partial_regeneration_routes as chapter_partial_regeneration_routes_api
 from app.api import chapter_regeneration_routes as chapter_regeneration_routes_api
-from app.services import chapter_regeneration_route_compat_service
 from app.database import Base, get_db as app_get_db
 from app.models.chapter import Chapter
 from app.models.outline import Outline
@@ -105,17 +102,12 @@ def mock_side_effect_services(monkeypatch):
         fake_analyze_chapter_background,
     )
     monkeypatch.setattr(
-        chapter_analysis_task_route_compat_service,
+        chapter_analysis_task_routes_api,
         "execute_chapter_analysis_background",
         fake_analyze_chapter_background,
     )
     monkeypatch.setattr(
         chapters_api,
-        "execute_batch_generation_in_order",
-        fake_execute_batch_generation,
-    )
-    monkeypatch.setattr(
-        batch_generation_entry_compat_service,
         "execute_batch_generation_in_order",
         fake_execute_batch_generation,
     )
@@ -208,7 +200,6 @@ async def chapters_client(chapters_session_factory, fake_ai_service, mock_user, 
 
     monkeypatch.setattr(chapters_api, "get_db", override_get_db)
     monkeypatch.setattr(chapter_regeneration_routes_api, "get_db", override_get_db)
-    monkeypatch.setattr(chapter_regeneration_route_compat_service, "get_db", override_get_db)
     monkeypatch.setattr(chapter_generation_route_compat_service, "get_db", override_get_db)
 
     transport = ASGITransport(app=app)

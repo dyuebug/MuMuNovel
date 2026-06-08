@@ -3,7 +3,6 @@ from typing import Any
 import pytest
 
 from app.api import chapters as chapters_api
-from app.services import batch_generation_entry_compat_service
 from app.models.batch_generation_snapshot import BatchGenerationSnapshot
 from app.models.batch_generation_task import BatchGenerationTask
 from tests.test_api.chapters_test_support import (
@@ -313,7 +312,6 @@ async def test_should_resume_failed_batch_task_with_persisted_story_repair_paylo
         return None
 
     monkeypatch.setattr(chapters_api, "execute_batch_generation_in_order", fake_execute_batch_generation)
-    monkeypatch.setattr(batch_generation_entry_compat_service, "execute_batch_generation_in_order", fake_execute_batch_generation)
 
     project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
     await create_chapter(

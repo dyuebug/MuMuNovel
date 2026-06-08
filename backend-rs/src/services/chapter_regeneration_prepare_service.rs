@@ -6,12 +6,11 @@ use serde_json::Value;
 use crate::ai::service::AIService;
 use crate::models::chapter;
 use crate::services::chapter_generation_context_compaction_service::compact_generation_context;
+use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
 use crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload;
 use crate::services::chapter_generation_prompt_service::PreviousChapterPromptContext;
 use crate::services::chapter_generation_research_payload_service::build_single_chapter_research_provider_payload;
-use crate::services::chapter_single_generation_prepare_service::{
-    SingleChapterGenerationCompatOptions, SingleChapterGenerationTarget,
-};
+use crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationTarget;
 use crate::services::settings_service::SettingsService;
 use crate::services::writing_style_service::WritingStyleService;
 

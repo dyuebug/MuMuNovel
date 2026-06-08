@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 import app.database as app_database
 from app.api import chapters as chapters_api
-from app.services import chapter_generation_route_compat_service
+from app.services.compat import chapter_generation_route_compat_service
 from app.models.batch_generation_task import BatchGenerationTask
 from app.models.chapter import Chapter
 from app.models.chapter_draft_attempt import ChapterDraftAttempt

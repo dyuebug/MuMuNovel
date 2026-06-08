@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Callable, Dict, List, Optional
 
 from app.logger import get_logger
@@ -119,6 +120,26 @@ def build_chapter_candidate_executor_dependencies(
         finalize_dependencies=finalize_dependencies,
         should_apply_targeted_final_repair_fn=should_apply_targeted_final_repair_fn,
         select_targeted_final_repair_seed_candidate_fn=select_targeted_final_repair_seed_candidate_fn,
+    )
+
+
+@lru_cache(maxsize=8)
+def get_chapter_candidate_executor_dependencies(
+    *,
+    resolve_generation_attempt_labels_fn: Callable[..., Any],
+    sync_generation_runtime_state_fn: Callable[..., Any],
+    collect_generation_candidate_output_fn: Callable[..., Any],
+    build_generation_candidate_record_fn: Callable[..., Any],
+):
+    from app.services.chapter_candidate_executor_wiring_service import (
+        build_default_chapter_candidate_executor_dependencies,
+    )
+
+    return build_default_chapter_candidate_executor_dependencies(
+        resolve_generation_attempt_labels_fn=resolve_generation_attempt_labels_fn,
+        sync_generation_runtime_state_fn=sync_generation_runtime_state_fn,
+        collect_generation_candidate_output_fn=collect_generation_candidate_output_fn,
+        build_generation_candidate_record_fn=build_generation_candidate_record_fn,
     )
 
 
@@ -305,4 +326,40 @@ async def generate_best_ranked_candidate_workflow(
         request=finalize_request,
         state=final_state,
         dependencies=finalize_dependencies,
+    )
+
+
+async def generate_best_ranked_candidate(
+    *,
+    ai_service: AIService,
+    base_generate_kwargs: Dict[str, Any],
+    target_word_count: int,
+    source: str,
+    generation_label: str,
+    quality_evaluator: Callable[[str], Dict[str, Any]],
+    quality_gate_plan_builder: Callable[[Dict[str, Any], int], Dict[str, Any]],
+    max_candidates: int,
+    runtime_state: Optional[Dict[str, Any]] = None,
+    resolve_generation_attempt_labels_fn: Callable[..., Any],
+    sync_generation_runtime_state_fn: Callable[..., Any],
+    collect_generation_candidate_output_fn: Callable[..., Any],
+    build_generation_candidate_record_fn: Callable[..., Any],
+) -> Dict[str, Any]:
+    dependencies = get_chapter_candidate_executor_dependencies(
+        resolve_generation_attempt_labels_fn=resolve_generation_attempt_labels_fn,
+        sync_generation_runtime_state_fn=sync_generation_runtime_state_fn,
+        collect_generation_candidate_output_fn=collect_generation_candidate_output_fn,
+        build_generation_candidate_record_fn=build_generation_candidate_record_fn,
+    )
+    return await generate_best_ranked_candidate_workflow(
+        ai_service=ai_service,
+        base_generate_kwargs=base_generate_kwargs,
+        target_word_count=target_word_count,
+        source=source,
+        generation_label=generation_label,
+        quality_evaluator=quality_evaluator,
+        quality_gate_plan_builder=quality_gate_plan_builder,
+        max_candidates=max_candidates,
+        runtime_state=runtime_state,
+        dependencies=dependencies,
     )

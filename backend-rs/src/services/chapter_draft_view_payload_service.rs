@@ -2,9 +2,10 @@ use chrono::NaiveDateTime;
 use serde_json::{json, Value};
 
 use crate::models::{chapter_draft_attempt, generation_history};
+use crate::services::chapter_draft_history_service::parse_reviser_result_from_history;
 use crate::services::chapter_draft_source_service::{
     extract_candidate_draft_full_content, format_datetime, is_draft_stale, json_i64,
-    parse_reviser_result_from_history, python_truthy_json_i64, python_truthy_scalar_text,
+    python_truthy_json_i64, python_truthy_scalar_text,
 };
 
 pub struct ChapterDraftAnalysisViewFragments {
@@ -618,9 +619,9 @@ mod tests {
     use serde_json::{json, Value};
 
     use crate::models::{chapter_draft_attempt, generation_history};
+    use crate::services::chapter_draft_history_service::parse_reviser_result_from_history;
     use crate::services::chapter_draft_source_service::{
         extract_candidate_draft_full_content, format_datetime, is_draft_stale,
-        parse_reviser_result_from_history,
     };
 
     use super::{

@@ -103,14 +103,20 @@
 ### 8. 兼容层
 常见命名：`*_compat_service.py`
 例如：
-- `chapter_prompt_quality_compat_service.py`
-- `project_quality_trend_compat_service.py`
-- `batch_generation_entry_compat_service.py`
-- `batch_generation_run_compat_service.py`
-- `chapter_candidate_executor_compat_service.py`
-- `task_workflow_runtime_compat_service.py`
+- `chapter_generation_route_compat_service.py`
 
 这些文件通常只是转发到新服务，不应继续堆积新业务逻辑，除非正在做过渡封装。
+
+已退场示例：
+- `project_quality_trend_compat_service.py` 的默认 route wiring 已回收到 `project_quality_trend_service.py`
+- `batch_generation_entry_compat_service.py` 的批量执行入口已回收到 batch generation wiring services
+- `batch_generation_route_compat_service.py` 的 batch route default wiring 已回收到 `chapter_batch_generation_routes.py`
+- `chapter_analysis_task_route_compat_service.py` 的 analysis task route default wiring 已回收到 `chapter_analysis_task_routes.py`
+- `chapter_analysis_route_compat_service.py` 的 analysis route default wiring 已回收到 `chapter_analysis_routes.py`
+- `chapter_annotation_route_compat_service.py` 的 annotation route default wiring 已回收到 `chapter_annotation_routes.py`
+- `chapter_expansion_plan_route_compat_service.py` 的 expansion-plan route default wiring 已回收到 `chapter_expansion_plan_routes.py`
+- `chapter_partial_regeneration_route_compat_service.py` 的 partial regeneration route default wiring 已回收到 `chapter_partial_regeneration_routes.py`
+- `chapter_regeneration_route_compat_service.py` 的 regeneration route default wiring 已回收到 `chapter_regeneration_routes.py`
 
 ---
 
@@ -149,7 +155,7 @@
 2. `backend/app/services/background_task_manager.py`
 3. `backend/app/services/chapter_generation_stream_entry_service.py`
 4. `backend/app/services/batch_generation_execution_service.py`
-5. `backend/app/services/chapter_prompt_quality_compat_service.py`
+5. `backend/app/services/chapter_generation/runtime/prompt_service.py`
 6. 当前任务相关命名族的真实实现文件
 
 ---

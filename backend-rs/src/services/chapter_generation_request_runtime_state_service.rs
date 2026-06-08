@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions;
+use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
 
 const BATCH_REQUEST_RUNTIME_STATE_KEY: &str = "batch_request_runtime_state";
 
@@ -114,7 +114,7 @@ mod tests {
         batch_generation_request_runtime_state_payload,
         parse_batch_generation_request_runtime_state, BatchGenerationRequestRuntimeState,
     };
-    use crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions;
+    use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
 
     fn empty_compat_options() -> SingleChapterGenerationCompatOptions {
         SingleChapterGenerationCompatOptions {

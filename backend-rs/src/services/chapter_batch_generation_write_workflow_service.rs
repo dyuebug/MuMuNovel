@@ -1,4 +1,5 @@
-use chrono::Utc;
+use chrono::{NaiveDateTime, Utc};
+use sea_orm::Set;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect,
@@ -7,28 +8,31 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::models::batch_generation_task;
 use crate::models::chapter;
 use crate::models::generation_history;
 use crate::models::project_default_style;
 use crate::services::chapter_batch_generation_owned_task_query_service::LoadOwnedBatchGenerationTaskError;
-use crate::services::chapter_batch_generation_quality_runtime_context_service::{
-    apply_batch_quality_runtime_context_to_payload,
-    resolve_batch_quality_runtime_context_for_startup_seed,
-};
-use crate::services::chapter_batch_generation_snapshot_service::BatchGenerationQueuedSnapshotPlan;
-use crate::services::chapter_batch_generation_task_model_service::BatchGenerationTaskPersistenceSeed;
 use crate::services::chapter_batch_generation_task_payload_base_service::{
     build_batch_generation_task_response_payload_from_runtime_parts, estimated_task_minutes,
     BatchGenerationTaskResponsePayloadOptions, BatchGenerationTaskResponseQualityPayload,
 };
 use crate::services::chapter_generation_execution_config_service::prepare_generation_execution_config;
+use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
 use crate::services::chapter_generation_prerequisite_service::check_chapter_generation_prerequisites;
+use crate::services::chapter_generation_quality_runtime_context_service::{
+    apply_batch_quality_runtime_context_to_payload,
+    resolve_batch_quality_runtime_context_for_startup_seed,
+};
 #[cfg(test)]
 use crate::services::chapter_generation_request_runtime_state_service::parse_batch_generation_request_runtime_state;
 use crate::services::chapter_generation_request_runtime_state_service::{
     batch_generation_request_runtime_state_payload, BatchGenerationRequestRuntimeState,
 };
 use crate::services::chapter_generation_target_word_count_service::normalize_chapter_generation_target_word_count;
+use crate::services::chapter_generation_task_semantics_service::{
+    batch_generation_task_type, BatchGenerationTaskKind,
+};
 use crate::services::chapter_story_repair_quality_context_service::{
     aggregate_story_repair_quality_summaries,
     resolve_active_story_repair_payload_with_quality_fallback,
@@ -39,26 +43,104 @@ use crate::services::project_access_query_service::{
 use crate::services::route_request_deserialize_service::deserialize_optional_non_null;
 use crate::services::settings_service::SettingsService;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BatchGenerationTaskPersistenceSeed {
+    pub(crate) id: String,
+    pub(crate) project_id: String,
+    pub(crate) user_id: String,
+    pub(crate) start_chapter_number: i32,
+    pub(crate) chapter_count: i32,
+    pub(crate) chapter_ids: Value,
+    pub(crate) style_id: Option<i32>,
+    pub(crate) target_word_count: i32,
+    pub(crate) enable_analysis: bool,
+    pub(crate) total_chapters: i32,
+    pub(crate) current_chapter_id: Option<String>,
+    pub(crate) current_chapter_number: Option<i32>,
+    pub(crate) max_retries: i32,
+}
+
+impl BatchGenerationTaskPersistenceSeed {
+    pub(crate) fn into_active_model(
+        self,
+        now: NaiveDateTime,
+    ) -> batch_generation_task::ActiveModel {
+        batch_generation_task::ActiveModel {
+            id: Set(self.id),
+            project_id: Set(self.project_id),
+            user_id: Set(self.user_id),
+            start_chapter_number: Set(self.start_chapter_number),
+            chapter_count: Set(self.chapter_count),
+            chapter_ids: Set(self.chapter_ids),
+            style_id: Set(self.style_id),
+            target_word_count: Set(self.target_word_count),
+            enable_analysis: Set(self.enable_analysis),
+            status: Set("pending".to_string()),
+            total_chapters: Set(self.total_chapters),
+            completed_chapters: Set(0),
+            failed_chapters: Set(json!([])),
+            current_chapter_id: Set(self.current_chapter_id),
+            current_chapter_number: Set(self.current_chapter_number),
+            current_retry_count: Set(0),
+            max_retries: Set(self.max_retries),
+            created_at: Set(Some(now)),
+            started_at: Set(None),
+            completed_at: Set(None),
+            error_message: Set(None),
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn build_batch_generation_task_active_model(
+    id: String,
+    project_id: String,
+    user_id: String,
+    start_chapter_number: i32,
+    chapter_count: i32,
+    chapter_ids: Value,
+    style_id: Option<i32>,
+    target_word_count: i32,
+    enable_analysis: bool,
+    total_chapters: i32,
+    current_chapter_id: Option<String>,
+    current_chapter_number: Option<i32>,
+    max_retries: i32,
+    now: NaiveDateTime,
+) -> batch_generation_task::ActiveModel {
+    BatchGenerationTaskPersistenceSeed {
+        id,
+        project_id,
+        user_id,
+        start_chapter_number,
+        chapter_count,
+        chapter_ids,
+        style_id,
+        target_word_count,
+        enable_analysis,
+        total_chapters,
+        current_chapter_id,
+        current_chapter_number,
+        max_retries,
+    }
+    .into_active_model(now)
+}
+
 use super::chapter_batch_generation_owned_task_query_service::{
     load_owned_batch_generation_task_sources, LoadOwnedBatchGenerationTaskSourcesError,
 };
 use super::chapter_batch_generation_resume_task_command_service::{
-    prepare_owned_batch_generation_resume, BatchGenerationResumeLaunchPersistencePlan,
-    PrepareOwnedBatchGenerationResumeError, ResumeBatchGenerationDomainError,
+    prepare_owned_batch_generation_resume, PrepareOwnedBatchGenerationResumeError,
+    ResumeBatchGenerationDomainError,
 };
 #[cfg(test)]
 use super::chapter_batch_generation_runtime_state_service::restore_batch_generation_runtime_compat_options_from_runtime_state_seed;
 use super::chapter_batch_generation_runtime_state_service::{
     build_batch_generation_startup_snapshot_and_runtime_launch_input_from_runtime_state_seed,
     dispatch_batch_generation_runtime, BatchGenerationCancelledPersistencePlan,
-    BatchGenerationExecutionInput,
-};
-use super::chapter_batch_generation_status_semantics_service::{
-    batch_generation_task_type, BatchGenerationTaskKind,
+    BatchGenerationExecutionInput, BatchGenerationQueuedSnapshotPlan,
 };
 use super::chapter_quality_metrics_query_service::build_chapter_analysis_quality_fragments;
-use super::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions;
-
 const MAX_BATCH_GENERATION_CREATE_COUNT: i32 = 20;
 const MIN_BATCH_GENERATION_CREATE_TARGET_WORD_COUNT: i32 = 500;
 const MAX_BATCH_GENERATION_CREATE_TARGET_WORD_COUNT: i32 = 10_000;
@@ -806,28 +888,10 @@ struct BatchGenerationCreateLaunchPersistencePlan {
 }
 
 #[derive(Debug, Clone)]
-struct PreparedBatchGenerationResumeWorkflowLaunch {
-    persistence_plan: BatchGenerationResumeLaunchPersistencePlan,
-}
-
-#[derive(Debug, Clone)]
-struct PreparedBatchGenerationCancelWorkflowLaunch {
-    persistence_plan: crate::services::chapter_batch_generation_runtime_state_service::BatchGenerationCancelledPersistencePlan,
-}
-
-#[derive(Debug, Clone)]
 struct PreparedBatchGenerationCreateWorkflowLaunch {
     task_spec: BatchGenerationCreateTaskSpec,
     chapters_to_generate: Vec<BatchGenerationCreateChapterTarget>,
     startup_snapshot_plan: BatchGenerationQueuedSnapshotPlan,
-    runtime_input: BatchGenerationExecutionInput,
-}
-
-#[derive(Debug, Clone)]
-struct PreparedBatchGenerationCreateWorkflowPersistenceParts {
-    task_seed: BatchGenerationTaskPersistenceSeed,
-    startup_snapshot_plan: BatchGenerationQueuedSnapshotPlan,
-    response_payload: Value,
     runtime_input: BatchGenerationExecutionInput,
 }
 
@@ -904,73 +968,6 @@ impl PreparedBatchGenerationCreateWorkflowLaunch {
             runtime_input,
         }
     }
-
-    async fn prepare_persistence_plan(
-        db: &DatabaseConnection,
-        project_id: &str,
-        user_id: &str,
-        request: BatchGenerationCreateWorkflowRequest,
-        task_id: String,
-    ) -> Result<BatchGenerationCreateLaunchPersistencePlan, CreateBatchGenerationWriteWorkflowError>
-    {
-        Ok(Self::prepare(db, project_id, user_id, request)
-            .await?
-            .into_persistence_plan(task_id, project_id.to_string()))
-    }
-
-    fn into_persistence_plan(
-        self,
-        task_id: String,
-        project_id: String,
-    ) -> BatchGenerationCreateLaunchPersistencePlan {
-        BatchGenerationCreateLaunchPersistencePlan::from_workflow_persistence_parts(
-            self.into_persistence_parts(task_id, project_id),
-        )
-    }
-
-    fn into_persistence_parts(
-        self,
-        task_id: String,
-        project_id: String,
-    ) -> PreparedBatchGenerationCreateWorkflowPersistenceParts {
-        let total_chapters = self.chapters_to_generate.len() as i32;
-        let response_payload = batch_generation_create_response_payload(
-            &task_id,
-            &project_id,
-            &self.chapters_to_generate,
-            self.runtime_input.target_word_count,
-            self.task_spec.enable_analysis,
-            &self.startup_snapshot_plan,
-        );
-        let task_seed = BatchGenerationTaskPersistenceSeed {
-            id: task_id,
-            project_id,
-            user_id: self.runtime_input.user_id.clone(),
-            start_chapter_number: self.task_spec.start_chapter_number,
-            chapter_count: total_chapters,
-            chapter_ids: Value::Array(
-                self.runtime_input
-                    .chapter_ids
-                    .iter()
-                    .map(|chapter_id| json!(chapter_id))
-                    .collect(),
-            ),
-            style_id: self.task_spec.style_id,
-            target_word_count: self.runtime_input.target_word_count,
-            enable_analysis: self.task_spec.enable_analysis,
-            total_chapters,
-            current_chapter_id: None,
-            current_chapter_number: None,
-            max_retries: self.task_spec.max_retries,
-        };
-
-        PreparedBatchGenerationCreateWorkflowPersistenceParts {
-            task_seed,
-            startup_snapshot_plan: self.startup_snapshot_plan,
-            response_payload,
-            runtime_input: self.runtime_input,
-        }
-    }
 }
 
 impl BatchGenerationCreateLaunchPersistencePlan {
@@ -993,36 +990,57 @@ impl BatchGenerationCreateLaunchPersistencePlan {
         user_id: &str,
         request: BatchGenerationCreateWorkflowRequest,
     ) -> Result<Self, CreateBatchGenerationWriteWorkflowError> {
-        PreparedBatchGenerationCreateWorkflowLaunch::prepare_persistence_plan(
-            db,
-            project_id,
-            user_id,
-            request,
+        let workflow_launch =
+            PreparedBatchGenerationCreateWorkflowLaunch::prepare(db, project_id, user_id, request)
+                .await?;
+        Ok(Self::from_workflow_launch(
             Uuid::new_v4().to_string(),
-        )
-        .await
+            project_id.to_string(),
+            workflow_launch,
+        ))
     }
 
-    #[cfg(test)]
     fn from_workflow_launch(
         task_id: String,
         project_id: String,
         workflow_launch: PreparedBatchGenerationCreateWorkflowLaunch,
     ) -> Self {
-        Self::from_workflow_persistence_parts(
-            workflow_launch.into_persistence_parts(task_id, project_id),
-        )
-    }
-
-    fn from_workflow_persistence_parts(
-        persistence_parts: PreparedBatchGenerationCreateWorkflowPersistenceParts,
-    ) -> Self {
-        let PreparedBatchGenerationCreateWorkflowPersistenceParts {
-            task_seed,
+        let PreparedBatchGenerationCreateWorkflowLaunch {
+            task_spec,
+            chapters_to_generate,
             startup_snapshot_plan,
-            response_payload,
             runtime_input,
-        } = persistence_parts;
+        } = workflow_launch;
+        let total_chapters = chapters_to_generate.len() as i32;
+        let response_payload = batch_generation_create_response_payload(
+            &task_id,
+            &project_id,
+            &chapters_to_generate,
+            runtime_input.target_word_count,
+            task_spec.enable_analysis,
+            &startup_snapshot_plan,
+        );
+        let task_seed = BatchGenerationTaskPersistenceSeed {
+            id: task_id,
+            project_id,
+            user_id: runtime_input.user_id.clone(),
+            start_chapter_number: task_spec.start_chapter_number,
+            chapter_count: total_chapters,
+            chapter_ids: Value::Array(
+                runtime_input
+                    .chapter_ids
+                    .iter()
+                    .map(|chapter_id| json!(chapter_id))
+                    .collect(),
+            ),
+            style_id: task_spec.style_id,
+            target_word_count: runtime_input.target_word_count,
+            enable_analysis: task_spec.enable_analysis,
+            total_chapters,
+            current_chapter_id: None,
+            current_chapter_number: None,
+            max_retries: task_spec.max_retries,
+        };
 
         Self {
             task_seed,
@@ -1069,100 +1087,6 @@ impl BatchGenerationCreateLaunchPersistencePlan {
         dispatch_batch_generation_runtime(db.clone(), task_id, runtime_input);
 
         Ok(response_payload)
-    }
-}
-
-impl PreparedBatchGenerationResumeWorkflowLaunch {
-    async fn start(
-        db: &DatabaseConnection,
-        batch_id: &str,
-        user_id: &str,
-    ) -> Result<Value, ResumeBatchGenerationWriteWorkflowError> {
-        Self::prepare(db, batch_id, user_id)
-            .await?
-            .persist_and_dispatch(db)
-            .await
-    }
-
-    async fn prepare(
-        db: &DatabaseConnection,
-        batch_id: &str,
-        user_id: &str,
-    ) -> Result<Self, ResumeBatchGenerationWriteWorkflowError> {
-        Ok(Self {
-            persistence_plan: prepare_owned_batch_generation_resume(db, batch_id, user_id)
-                .await
-                .map_err(ResumeBatchGenerationWriteWorkflowError::from)?,
-        })
-    }
-
-    async fn persist_and_dispatch(
-        self,
-        db: &DatabaseConnection,
-    ) -> Result<Value, ResumeBatchGenerationWriteWorkflowError> {
-        self.persistence_plan
-            .persist_and_dispatch(db)
-            .await
-            .map_err(ResumeBatchGenerationWriteWorkflowError::Config)
-    }
-
-    #[cfg(test)]
-    fn from_persistence_plan(persistence_plan: BatchGenerationResumeLaunchPersistencePlan) -> Self {
-        Self { persistence_plan }
-    }
-
-    #[cfg(test)]
-    fn persistence_plan(&self) -> &BatchGenerationResumeLaunchPersistencePlan {
-        &self.persistence_plan
-    }
-}
-
-impl PreparedBatchGenerationCancelWorkflowLaunch {
-    async fn start(
-        db: &DatabaseConnection,
-        batch_id: &str,
-        user_id: &str,
-    ) -> Result<Value, CancelBatchGenerationWriteWorkflowError> {
-        Self::prepare(db, batch_id, user_id)
-            .await?
-            .persist_and_dispatch(db)
-            .await
-    }
-
-    async fn prepare(
-        db: &DatabaseConnection,
-        batch_id: &str,
-        user_id: &str,
-    ) -> Result<Self, CancelBatchGenerationWriteWorkflowError> {
-        Ok(Self {
-            persistence_plan: prepare_owned_batch_generation_cancel_workflow(db, batch_id, user_id)
-                .await
-                .map_err(CancelBatchGenerationWriteWorkflowError::from)?,
-        })
-    }
-
-    async fn persist_and_dispatch(
-        self,
-        db: &DatabaseConnection,
-    ) -> Result<Value, CancelBatchGenerationWriteWorkflowError> {
-        self.persistence_plan
-            .persist(db)
-            .await
-            .map_err(CancelBatchGenerationWriteWorkflowError::Domain)
-    }
-
-    #[cfg(test)]
-    fn from_persistence_plan(
-        persistence_plan: crate::services::chapter_batch_generation_runtime_state_service::BatchGenerationCancelledPersistencePlan,
-    ) -> Self {
-        Self { persistence_plan }
-    }
-
-    #[cfg(test)]
-    fn persistence_plan(
-        &self,
-    ) -> &crate::services::chapter_batch_generation_runtime_state_service::BatchGenerationCancelledPersistencePlan{
-        &self.persistence_plan
     }
 }
 
@@ -1251,7 +1175,7 @@ pub(crate) async fn start_owned_batch_generation_write_workflow(
     db: &DatabaseConnection,
     project_id: &str,
     user_id: &str,
-    request: BatchGenerationCreateWorkflowRequest,
+    route_request: BatchGenerationCreateRouteRequest,
 ) -> Result<Value, CreateBatchGenerationWriteWorkflowError> {
     ensure_owned_project_access(db, project_id, user_id)
         .await
@@ -1260,23 +1184,8 @@ pub(crate) async fn start_owned_batch_generation_write_workflow(
         db,
         project_id,
         user_id,
-        request,
-        Utc::now().naive_utc(),
-    )
-    .await
-}
-
-pub(crate) async fn start_owned_batch_generation_write_workflow_from_route_payload(
-    db: &DatabaseConnection,
-    project_id: &str,
-    user_id: &str,
-    route_request: BatchGenerationCreateRouteRequest,
-) -> Result<Value, CreateBatchGenerationWriteWorkflowError> {
-    start_owned_batch_generation_write_workflow(
-        db,
-        project_id,
-        user_id,
         build_batch_generation_create_workflow_request_from_route_payload(route_request),
+        Utc::now().naive_utc(),
     )
     .await
 }
@@ -1286,7 +1195,12 @@ pub(crate) async fn resume_owned_batch_generation_write_workflow(
     batch_id: &str,
     user_id: &str,
 ) -> Result<Value, ResumeBatchGenerationWriteWorkflowError> {
-    PreparedBatchGenerationResumeWorkflowLaunch::start(db, batch_id, user_id).await
+    prepare_owned_batch_generation_resume(db, batch_id, user_id)
+        .await
+        .map_err(ResumeBatchGenerationWriteWorkflowError::from)?
+        .persist_and_dispatch(db)
+        .await
+        .map_err(ResumeBatchGenerationWriteWorkflowError::Config)
 }
 
 pub(crate) async fn cancel_owned_batch_generation_write_workflow(
@@ -1294,7 +1208,11 @@ pub(crate) async fn cancel_owned_batch_generation_write_workflow(
     batch_id: &str,
     user_id: &str,
 ) -> Result<Value, CancelBatchGenerationWriteWorkflowError> {
-    PreparedBatchGenerationCancelWorkflowLaunch::start(db, batch_id, user_id).await
+    prepare_owned_batch_generation_cancel_workflow(db, batch_id, user_id)
+        .await?
+        .persist(db)
+        .await
+        .map_err(CancelBatchGenerationWriteWorkflowError::Domain)
 }
 
 #[cfg(test)]
@@ -1310,28 +1228,26 @@ mod tests {
         BatchGenerationCreateRouteRequest, BatchGenerationCreateRuntimeSeed,
         BatchGenerationCreateStartupRuntimeState, BatchGenerationCreateStartupSeedSource,
         BatchGenerationCreateTaskSpec, BatchGenerationCreateWorkflowRequest,
-        CancelBatchGenerationWriteWorkflowError, CreateBatchGenerationWriteWorkflowError,
-        PrepareBatchGenerationCreateRequestError, PreparedBatchGenerationCancelWorkflowLaunch,
-        PreparedBatchGenerationCreateWorkflowLaunch, PreparedBatchGenerationResumeWorkflowLaunch,
+        BatchGenerationTaskPersistenceSeed, CancelBatchGenerationWriteWorkflowError,
+        CreateBatchGenerationWriteWorkflowError, PrepareBatchGenerationCreateRequestError,
+        PreparedBatchGenerationCreateWorkflowLaunch,
     };
     use crate::models::chapter;
     use crate::models::{batch_generation_snapshot, batch_generation_task};
     use crate::services::chapter_batch_generation_owned_task_query_service::LoadOwnedBatchGenerationTaskError;
-    use crate::services::chapter_batch_generation_resume_semantics_service::ResumeBatchGenerationCommandState;
     use crate::services::chapter_batch_generation_resume_task_command_service::{
         BatchGenerationResumeLaunchPersistencePlan, ResumeExecutionDispatchPlan,
     };
     use crate::services::chapter_batch_generation_runtime_state_service::{
         build_batch_generation_execution_input, BatchGenerationCancelledPersistencePlan,
-        BatchGenerationResumeResetPersistencePlan,
+        BatchGenerationResumeResetPersistencePlan, ResumeBatchGenerationCommandState,
     };
-    use crate::services::chapter_batch_generation_task_model_service::BatchGenerationTaskPersistenceSeed;
     use crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig;
+    use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
     use crate::services::chapter_generation_request_runtime_state_service::{
         batch_generation_request_runtime_state_payload, BatchGenerationRequestRuntimeState,
     };
     use crate::services::chapter_generation_target_word_count_service::normalize_chapter_generation_target_word_count;
-    use crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions;
     use crate::services::chapter_story_repair_quality_context_service::aggregate_story_repair_quality_summaries;
     use crate::services::project_access_query_service::ProjectAccessQueryError;
 
@@ -1458,12 +1374,12 @@ mod tests {
         )
     }
 
-    fn build_test_batch_generation_resume_workflow_launch(
+    fn build_test_batch_generation_resume_persistence_plan(
         command_state: ResumeBatchGenerationCommandState,
         user_id: &str,
         chapter_ids: Vec<String>,
         enable_analysis: bool,
-    ) -> PreparedBatchGenerationResumeWorkflowLaunch {
+    ) -> BatchGenerationResumeLaunchPersistencePlan {
         let dispatch_plan = ResumeExecutionDispatchPlan::Batch {
             runtime_input: build_batch_generation_execution_input(
                 user_id.to_string(),
@@ -1479,12 +1395,10 @@ mod tests {
         let reset_persistence_plan =
             BatchGenerationResumeResetPersistencePlan::from_resume_task(&command_state, None);
 
-        PreparedBatchGenerationResumeWorkflowLaunch::from_persistence_plan(
-            BatchGenerationResumeLaunchPersistencePlan::from_contract_for_test(
-                command_state,
-                dispatch_plan,
-                reset_persistence_plan,
-            ),
+        BatchGenerationResumeLaunchPersistencePlan::from_contract_for_test(
+            command_state,
+            dispatch_plan,
+            reset_persistence_plan,
         )
     }
 
@@ -2311,7 +2225,7 @@ mod tests {
     }
 
     #[test]
-    fn should_keep_batch_generation_resume_workflow_launch_owner_contract() {
+    fn should_keep_batch_generation_resume_persistence_owner_contract() {
         let mut task = build_resume_task("failed");
         task.user_id = "user-7".to_string();
         task.target_word_count = 3100;
@@ -2319,14 +2233,14 @@ mod tests {
         task.chapter_ids = json!(["chapter-1", "chapter-2"]);
 
         let command_state = ResumeBatchGenerationCommandState::from_task(&task);
-        let workflow_launch = build_test_batch_generation_resume_workflow_launch(
+        let persistence_plan = build_test_batch_generation_resume_persistence_plan(
             command_state.clone(),
             "user-7",
             vec!["chapter-1".to_string(), "chapter-2".to_string()],
             true,
         );
 
-        match workflow_launch.persistence_plan().dispatch_plan() {
+        match persistence_plan.dispatch_plan() {
             ResumeExecutionDispatchPlan::Batch { runtime_input } => {
                 assert_eq!(runtime_input.user_id, "user-7");
                 assert_eq!(
@@ -2342,27 +2256,25 @@ mod tests {
         }
 
         assert_eq!(
-            workflow_launch.persistence_plan().response_payload()["batch_id"],
+            persistence_plan.response_payload()["batch_id"],
             command_state.batch_id
         );
     }
 
     #[test]
-    fn should_keep_batch_generation_resume_workflow_launch_persistence_owner_contract() {
+    fn should_keep_batch_generation_resume_response_payload_owner_contract() {
         let mut task = build_resume_task("cancelled");
         task.chapter_count = 2;
         task.total_chapters = 2;
         task.target_word_count = 2800;
         task.chapter_ids = json!(["chapter-3", "chapter-4"]);
 
-        let command_state = ResumeBatchGenerationCommandState::from_task(&task);
-        let workflow_launch = build_test_batch_generation_resume_workflow_launch(
-            command_state,
+        let persistence_plan = build_test_batch_generation_resume_persistence_plan(
+            ResumeBatchGenerationCommandState::from_task(&task),
             "user-1",
             vec!["chapter-3".to_string(), "chapter-4".to_string()],
             false,
         );
-        let persistence_plan = workflow_launch.persistence_plan();
 
         assert_eq!(persistence_plan.response_payload()["status"], "pending");
         assert_eq!(
@@ -2530,7 +2442,7 @@ mod tests {
         };
         let normalized_target_word_count = 2800;
         let request_runtime_state = BatchGenerationRequestRuntimeState::new(
-            crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions::default(),
+            crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions::default(),
             Some("gpt-4.1".to_string()),
         );
         let runtime_state_payload = json!({
@@ -2887,14 +2799,12 @@ mod tests {
         task.target_word_count = 2900;
         task.chapter_ids = json!(["chapter-41", "chapter-42"]);
 
-        let workflow_launch = build_test_batch_generation_resume_workflow_launch(
+        let persistence_plan = build_test_batch_generation_resume_persistence_plan(
             ResumeBatchGenerationCommandState::from_task(&task),
             "user-41",
             vec!["chapter-41".to_string(), "chapter-42".to_string()],
             true,
         );
-
-        let persistence_plan = workflow_launch.persistence_plan();
 
         match persistence_plan.dispatch_plan() {
             ResumeExecutionDispatchPlan::Batch { runtime_input } => {
@@ -2955,11 +2865,8 @@ mod tests {
             updated_at: None,
         };
 
-        let workflow_launch = PreparedBatchGenerationCancelWorkflowLaunch::from_persistence_plan(
-            BatchGenerationCancelledPersistencePlan::from_sources(&task, Some(&snapshot)),
-        );
-
-        let persistence_plan = workflow_launch.persistence_plan();
+        let persistence_plan =
+            BatchGenerationCancelledPersistencePlan::from_sources(&task, Some(&snapshot));
         let payload = persistence_plan.response_payload_for_test(batch_generation_task::Model {
             status: "cancelled".to_string(),
             ..task
@@ -2974,10 +2881,10 @@ mod tests {
     #[test]
     fn should_keep_batch_generation_create_runtime_seed_contract() {
         let request_runtime_state = BatchGenerationRequestRuntimeState::new(
-            crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions {
+            crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions {
                 story_repair_summary: Some("沿用历史修复建议".to_string()),
                 story_repair_targets: vec!["压缩说明".to_string()],
-                ..crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions::default()
+                ..crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions::default()
             },
             Some("gpt-4.1".to_string()),
         );
@@ -3022,10 +2929,10 @@ mod tests {
             build_chapter_target("chapter-2", 2, "Second"),
         ];
         let request_runtime_state = BatchGenerationRequestRuntimeState::new(
-            crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions {
+            crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions {
                 story_repair_summary: Some("沿用历史修复建议".to_string()),
                 story_repair_targets: vec!["压缩说明".to_string()],
-                ..crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions::default()
+                ..crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions::default()
             },
             Some("gpt-4.1".to_string()),
         );
@@ -3149,8 +3056,11 @@ mod tests {
             ),
         );
 
-        let plan =
-            workflow_launch.into_persistence_plan("task-1".to_string(), "project-1".to_string());
+        let plan = BatchGenerationCreateLaunchPersistencePlan::from_workflow_launch(
+            "task-1".to_string(),
+            "project-1".to_string(),
+            workflow_launch,
+        );
 
         assert_eq!(plan.task_seed.id, "task-1");
         assert_eq!(plan.task_seed.project_id, "project-1");
@@ -3165,7 +3075,8 @@ mod tests {
     }
 
     #[test]
-    fn should_materialize_batch_generation_create_persistence_parts_inside_workflow_launch_owner() {
+    fn should_materialize_batch_generation_create_persistence_payload_inside_persistence_plan_owner(
+    ) {
         let chapters_to_generate = vec![
             build_chapter_target("chapter-1", 1, "First"),
             build_chapter_target("chapter-2", 2, "Second"),
@@ -3190,37 +3101,39 @@ mod tests {
             })),
         );
 
-        let persistence_parts =
-            workflow_launch.into_persistence_parts("task-1".to_string(), "project-1".to_string());
+        let plan = BatchGenerationCreateLaunchPersistencePlan::from_workflow_launch(
+            "task-1".to_string(),
+            "project-1".to_string(),
+            workflow_launch,
+        );
 
-        assert_eq!(persistence_parts.task_seed.id, "task-1");
-        assert_eq!(persistence_parts.task_seed.project_id, "project-1");
-        assert_eq!(persistence_parts.task_seed.start_chapter_number, 1);
-        assert_eq!(persistence_parts.task_seed.total_chapters, 2);
-        assert_eq!(persistence_parts.response_payload["batch_id"], "task-1");
+        assert_eq!(plan.task_seed.id, "task-1");
+        assert_eq!(plan.task_seed.project_id, "project-1");
+        assert_eq!(plan.task_seed.start_chapter_number, 1);
+        assert_eq!(plan.task_seed.total_chapters, 2);
+        assert_eq!(plan.response_payload()["batch_id"], "task-1");
         assert_eq!(
-            persistence_parts.response_payload["message"],
+            plan.response_payload()["message"],
             "已创建批量生成任务，共 2 章"
         );
         assert_eq!(
-            persistence_parts.response_payload["quality_metrics_summary"]["overall_score"],
+            plan.response_payload()["quality_metrics_summary"]["overall_score"],
             86
         );
-        assert_eq!(persistence_parts.runtime_input.user_id, "user-1");
-        assert_eq!(persistence_parts.runtime_input.target_word_count, 2800);
+        assert_eq!(plan.runtime_input.user_id, "user-1");
+        assert_eq!(plan.runtime_input.target_word_count, 2800);
         assert_eq!(
-            persistence_parts.runtime_input.chapter_ids,
+            plan.runtime_input.chapter_ids,
             vec!["chapter-1".to_string(), "chapter-2".to_string()]
         );
         assert_eq!(
-            persistence_parts.startup_snapshot_plan.runtime_state()["quality_metrics_summary"]
-                ["overall_score"],
+            plan.startup_snapshot_plan.runtime_state()["quality_metrics_summary"]["overall_score"],
             86
         );
     }
 
     #[test]
-    fn should_materialize_batch_generation_create_task_seed_inside_workflow_launch_owner() {
+    fn should_materialize_batch_generation_create_task_seed_inside_persistence_plan_owner() {
         let workflow_launch = build_test_batch_generation_create_workflow_launch(
             BatchGenerationCreateTaskSpec {
                 start_chapter_number: 3,
@@ -3239,11 +3152,14 @@ mod tests {
             ),
         );
 
-        let persistence_parts =
-            workflow_launch.into_persistence_parts("task-3".to_string(), "project-3".to_string());
+        let plan = BatchGenerationCreateLaunchPersistencePlan::from_workflow_launch(
+            "task-3".to_string(),
+            "project-3".to_string(),
+            workflow_launch,
+        );
 
         assert_eq!(
-            persistence_parts.task_seed,
+            plan.task_seed,
             BatchGenerationTaskPersistenceSeed {
                 id: "task-3".to_string(),
                 project_id: "project-3".to_string(),
@@ -3436,7 +3352,7 @@ mod tests {
     #[test]
     fn should_build_batch_generation_create_startup_runtime_state_from_recent_history_summary() {
         let request_runtime_state = BatchGenerationRequestRuntimeState::new(
-            crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions::default(),
+            crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions::default(),
             None,
         );
         let recent_history_summary = json!({
@@ -3485,10 +3401,10 @@ mod tests {
     #[test]
     fn should_build_batch_generation_create_startup_runtime_state_from_request_only() {
         let request_runtime_state = BatchGenerationRequestRuntimeState::new(
-            crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions {
+            crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions {
                 story_repair_summary: Some("保留手工修复目标".to_string()),
                 story_repair_targets: vec!["补强动机".to_string()],
-                ..crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions::default()
+                ..crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions::default()
             },
             Some("gpt-4.1".to_string()),
         );
@@ -3522,10 +3438,10 @@ mod tests {
     #[test]
     fn should_build_batch_generation_create_runtime_seed_inside_startup_owner() {
         let request_runtime_state = BatchGenerationRequestRuntimeState::new(
-            crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions {
+            crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions {
                 story_repair_summary: Some("沿用最近三章修复建议".to_string()),
                 story_repair_targets: vec!["压缩说明".to_string()],
-                ..crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions::default()
+                ..crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions::default()
             },
             Some("gpt-4.1".to_string()),
         );
@@ -3639,7 +3555,7 @@ mod tests {
     #[test]
     fn should_seed_manual_story_repair_payload_into_batch_runtime_state() {
         let runtime_state = BatchGenerationRequestRuntimeState::new(
-            crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions {
+            crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions {
                 style_id: None,
                 enable_analysis: true,
                 enable_mcp: true,
@@ -3688,7 +3604,7 @@ mod tests {
     fn should_skip_empty_manual_story_repair_payload_in_batch_runtime_state() {
         let payload = batch_generation_request_runtime_state_payload(
             &BatchGenerationRequestRuntimeState::new(
-                crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions::default(),
+                crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions::default(),
                 None,
             ),
         );
@@ -3699,7 +3615,7 @@ mod tests {
     #[test]
     fn should_merge_manual_and_recent_history_story_repair_state_into_create_runtime_seed() {
         let runtime_state = BatchGenerationRequestRuntimeState::new(
-            crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions {
+            crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions {
                 style_id: None,
                 enable_analysis: true,
                 enable_mcp: true,
@@ -3822,7 +3738,7 @@ mod tests {
 
         let payload = build_batch_generation_runtime_state_payload_from_parts(
             &BatchGenerationRequestRuntimeState::new(
-                crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions::default(),
+                crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions::default(),
                 None,
             ),
             Some(&quality_summary),
@@ -3962,7 +3878,7 @@ mod tests {
 
         let payload = build_batch_generation_runtime_state_payload_from_parts(
             &BatchGenerationRequestRuntimeState::new(
-                crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions::default(),
+                crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions::default(),
                 None,
             ),
             Some(&aggregated),
@@ -4018,7 +3934,7 @@ mod tests {
     #[test]
     fn should_restore_batch_runtime_compat_options_from_seeded_story_repair_payload() {
         let runtime_state = BatchGenerationRequestRuntimeState::new(
-            crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions::default(),
+            crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions::default(),
             None,
         );
         let quality_summary = json!({
@@ -4068,7 +3984,7 @@ mod tests {
             user_id: "user-1".to_string(),
             chapter_ids: vec!["chapter-1".to_string(), "chapter-2".to_string()],
             target_word_count: 2800,
-            compat_options: crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions::default(),
+            compat_options: crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions::default(),
             ai_config: crate::ai::AIConfig::default(),
         };
 

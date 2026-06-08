@@ -49,7 +49,9 @@ from app.schemas.generation_payload import (
     build_chapter_regeneration_stream_result_payload,
 )
 from app.services.ai_service import AIService
-from app.services import chapter_generation_route_compat_service
+from app.services.compat import (
+    chapter_generation_route_compat_service,
+)
 from app.services.prompt_service import (
     prompt_service,
     PromptService,
@@ -66,7 +68,7 @@ from app.services.chapter_quality_context_service import (
     clone_chapter_quality_profile,
     resolve_chapter_quality_profile,
 )
-from app.services.chapter_generation_runtime_service import (
+from app.services.chapter_generation.runtime.service import (
     build_chapter_generation_runtime_bundle as _build_chapter_generation_runtime_bundle,
     build_chapter_prompt_quality_kwargs_from_runtime as _build_chapter_prompt_quality_kwargs,
     build_chapter_quality_runtime_context as _build_chapter_quality_runtime_context,
@@ -79,29 +81,34 @@ from app.services.foreshadow_service import foreshadow_service
 from app.services.chapter_regenerator import ChapterRegenerator
 from app.services.chapter_candidate_runtime_state_service import (
     snapshot_chapter_candidate_runtime_state,
+    sync_chapter_candidate_runtime_state as _sync_chapter_candidate_runtime_state_service,
 )
-from app.services.chapter_candidate_entry_compat_service import (
-    generate_best_ranked_candidate as _generate_best_ranked_candidate_compat_service,
-    get_chapter_candidate_executor_dependencies as _get_chapter_candidate_executor_dependencies_compat_service,
+from app.services.chapter_candidate_executor_service import (
+    get_chapter_candidate_executor_dependencies as _get_chapter_candidate_executor_dependencies_service,
+    generate_best_ranked_candidate as _generate_best_ranked_candidate_service,
 )
-from app.services.chapter_candidate_executor_compat_service import (
-    build_generation_candidate_record as _build_generation_candidate_record_compat_service,
-    collect_generation_candidate_output as _collect_generation_candidate_output_compat_service,
-    resolve_generation_attempt_labels as _resolve_generation_attempt_labels_compat_service,
-    sync_generation_runtime_state as _sync_generation_runtime_state_compat_service,
+from app.services.chapter_candidate_generation_service import (
+    resolve_generation_attempt_labels as _resolve_generation_attempt_labels_service,
 )
-from app.services.chapter_generated_text_compat_service import (
-    contains_chapter_workflow_meta_text as _contains_chapter_workflow_meta_text_compat_service,
-    is_likely_chapter_meta_line as _is_likely_chapter_meta_line_compat_service,
-    lightly_polish_template_phrases as _lightly_polish_template_phrases_compat_service,
-    sanitize_generated_narrative_text as _sanitize_generated_narrative_text_compat_service,
-    trim_text_to_sentence_boundary as _trim_text_to_sentence_boundary_compat_service,
+from app.services.chapter_candidate_output_service import (
+    ChapterCandidateOutputRequest,
+    collect_generation_candidate_output as _collect_generation_candidate_output_service,
 )
-from app.services.chapter_prompt_quality_compat_service import (
-    build_chapter_runtime_system_prompt as _build_chapter_runtime_system_prompt_compat_service,
-    compute_story_quality_metrics as _compute_story_quality_metrics_compat_service,
-    detect_style_profile as _detect_style_profile_compat_service,
-    resolve_generation_temperature as _resolve_generation_temperature_compat_service,
+from app.services.chapter_candidate_record_service import (
+    ChapterCandidateRecordRequest,
+    build_generation_candidate_record as _build_generation_candidate_record_service,
+)
+from app.services.chapter_generated_text_service import (
+    contains_chapter_workflow_meta_text as _contains_chapter_workflow_meta_text_service,
+    is_likely_chapter_meta_line as _is_likely_chapter_meta_line_service,
+    lightly_polish_template_phrases as _lightly_polish_template_phrases_service,
+    sanitize_generated_narrative_text as _sanitize_generated_narrative_text_service,
+    trim_text_to_sentence_boundary as _trim_text_to_sentence_boundary_service,
+)
+from app.services.chapter_generation.runtime.prompt_service import (
+    build_chapter_runtime_system_prompt as _build_chapter_runtime_system_prompt_service,
+    detect_style_profile as _detect_style_profile_service,
+    resolve_generation_temperature as _resolve_generation_temperature_service,
 )
 from app.services.story_quality_feedback_service import (
     _calc_cliffhanger_rate,
@@ -175,25 +182,20 @@ from app.services.chapter_candidate_rerank_service import (
     should_prefer_word_budget_repair_candidate,
     should_generate_additional_candidate,
 )
-from app.services.project_quality_trend_snapshot_store import (
-    load_project_quality_trend_snapshot,
-    persist_project_quality_trend_snapshot,
-)
-from app.services.batch_generation_run_compat_service import (
-    await_cancelable_batch_generation_result as _await_cancelable_batch_generation_result_compat_service,
-    get_db_write_lock as _get_db_write_lock_compat_service,
-)
-from app.services.project_quality_trend_compat_service import (
-    get_project_quality_trend_snapshot as _get_project_quality_trend_snapshot_compat_service,
+from app.services.batch_generation_run_service import (
+    await_cancelable_batch_generation_result as _await_cancelable_batch_generation_result_service,
+    get_db_write_lock as _get_db_write_lock_service,
 )
 from app.services.project_quality_trend_service import (
     build_project_quality_trend_response_payload,
+    get_project_quality_trend_snapshot_with_default_wiring as _get_project_quality_trend_snapshot_service,
     project_quality_trend_cache,
     project_quality_trend_lock,
 )
 from app.services.chapter_analysis_response_service import build_chapter_analysis_payload
 
-# 保持别名兼容：让测试可通过 monkeypatch chapter_generation_route_compat_service.execute_chapter_analysis_background 生效
+# 保持兼容模块对象可 patch：测试仍会 monkeypatch
+# app.services.chapter_generation_route_compat_service
 async def analyze_chapter_background(**kwargs):
     return await chapter_generation_route_compat_service.execute_chapter_analysis_background(**kwargs)
 from app.services.chapter_analysis_support_service import (
@@ -229,16 +231,18 @@ from app.services.batch_generation_orchestration_service import (
     orchestrate_batch_generation_create,
     orchestrate_batch_generation_resume,
 )
-from app.services.batch_generation_entry_compat_service import (
-    execute_batch_generation_in_order as _execute_batch_generation_in_order_compat_service,
-    generate_single_chapter_for_batch as _generate_single_chapter_for_batch_compat_service,
+from app.services.batch_generation_run_wiring_service import (
+    execute_batch_generation_in_order_with_default_wiring as _execute_batch_generation_in_order_service,
+)
+from app.services.batch_generation_single_chapter_wiring_service import (
+    generate_single_chapter_for_batch_with_default_wiring as _generate_single_chapter_for_batch_service,
 )
 from app.services.batch_generation_stream_service import (
     build_batch_generation_event_stream,
     validate_batch_generation_stream_access,
 )
 from app.services.analysis_task_service import create_analysis_task_safely as _create_analysis_task_safely
-from app.services.chapter_generation_prerequisite_service import (
+from app.services.chapter_generation.prerequisite_service import (
     check_chapter_generation_prerequisites as check_prerequisites,
 )
 from app.services.regeneration_task_service import (
@@ -246,7 +250,7 @@ from app.services.regeneration_task_service import (
     load_latest_regeneration_analysis,
     mark_latest_regeneration_task_failed,
 )
-from app.services.chapter_generation_stream_request_policy_service import (
+from app.services.chapter_generation.stream.request_policy_service import (
     _build_chapter_generation_request_options,
     _calculate_chapter_generation_max_tokens,
 )
@@ -294,14 +298,14 @@ from app.services.task_workflow_runtime_service import (
     task_workflow_lock,
     task_workflow_state_cache,
 )
-from app.services.task_workflow_runtime_compat_service import (
-    SNAPSHOT_UNSET as _SNAPSHOT_UNSET_COMPAT_SERVICE,
-    batch_task_exists as _batch_task_exists_compat_service,
-    clear_task_runtime_caches as _clear_task_runtime_caches_compat_service,
-    get_task_workflow_runtime_snapshot as _get_task_workflow_runtime_snapshot_compat_service,
-    load_persisted_batch_generation_snapshot as _load_persisted_batch_generation_snapshot_compat_service,
-    persist_task_workflow_runtime_snapshot as _persist_task_workflow_runtime_snapshot_compat_service,
-    upsert_batch_generation_snapshot as _upsert_batch_generation_snapshot_compat_service,
+from app.services.task_workflow_runtime_service import (
+    SNAPSHOT_UNSET as _SNAPSHOT_UNSET_SERVICE,
+    batch_task_exists as _batch_task_exists_service,
+    clear_task_runtime_caches as _clear_task_runtime_caches_service,
+    get_task_workflow_runtime_snapshot as _get_task_workflow_runtime_snapshot_service,
+    load_persisted_batch_generation_snapshot as _load_persisted_batch_generation_snapshot_service,
+    persist_task_workflow_runtime_snapshot as _persist_task_workflow_runtime_snapshot_service,
+    upsert_batch_generation_snapshot as _upsert_batch_generation_snapshot_service,
 )
 from app.services.task_quality_snapshot_service import (
     record_task_quality_metrics as _record_task_quality_metrics,
@@ -332,10 +336,10 @@ logger = get_logger(__name__)
 # ==================== Batch / Runtime seam ====================
 
 async def get_db_write_lock(user_id: str) -> Lock:
-    return await _get_db_write_lock_compat_service(user_id)
+    return await _get_db_write_lock_service(user_id)
 
 
-_SNAPSHOT_UNSET = _SNAPSHOT_UNSET_COMPAT_SERVICE
+_SNAPSHOT_UNSET = _SNAPSHOT_UNSET_SERVICE
 
 
 async def _await_cancelable_batch_generation_result(
@@ -347,7 +351,7 @@ async def _await_cancelable_batch_generation_result(
 ):
     if poll_interval_seconds is None:
         poll_interval_seconds = CHAPTER_STREAM_HEARTBEAT_INTERVAL_SECONDS
-    return await _await_cancelable_batch_generation_result_compat_service(
+    return await _await_cancelable_batch_generation_result_service(
         generation_coro=generation_coro,
         task=task,
         db_session=db_session,
@@ -369,7 +373,7 @@ async def _get_project_quality_trend_snapshot(
     analyzed_chapters: int,
     last_generated_at: Optional[datetime],
 ) -> Dict[str, Any]:
-    return await _get_project_quality_trend_snapshot_compat_service(
+    return await _get_project_quality_trend_snapshot_service(
         project_id=project_id,
         limit=limit,
         items=items,
@@ -377,11 +381,6 @@ async def _get_project_quality_trend_snapshot(
         total_chapters=total_chapters,
         analyzed_chapters=analyzed_chapters,
         last_generated_at=last_generated_at,
-        build_summary_state_fn=build_quality_metrics_summary_state,
-        advance_summary_state_fn=advance_quality_metrics_summary_state,
-        summary_from_state_fn=build_quality_metrics_summary_from_state,
-        load_snapshot_fn=load_project_quality_trend_snapshot,
-        persist_snapshot_fn=persist_project_quality_trend_snapshot,
     )
 
 
@@ -396,12 +395,14 @@ async def _collect_generation_candidate_output(
     max_output_chars: Optional[int] = None,
     runtime_state: Optional[Dict[str, Any]] = None,
 ) -> tuple[str, List[str]]:
-    return await _collect_generation_candidate_output_compat_service(
-        ai_service=ai_service,
-        generate_kwargs=generate_kwargs,
-        candidate_index=candidate_index,
-        max_output_chars=max_output_chars,
-        runtime_state=runtime_state,
+    return await _collect_generation_candidate_output_service(
+        request=ChapterCandidateOutputRequest(
+            ai_service=ai_service,
+            generate_kwargs=generate_kwargs,
+            candidate_index=candidate_index,
+            max_output_chars=max_output_chars,
+            runtime_state=runtime_state,
+        ),
     )
 
 
@@ -410,7 +411,7 @@ def _resolve_generation_attempt_labels(
     *,
     is_word_budget_repair: bool = False,
 ) -> tuple[str, str]:
-    return _resolve_generation_attempt_labels_compat_service(
+    return _resolve_generation_attempt_labels_service(
         candidate_index,
         is_word_budget_repair=is_word_budget_repair,
     )
@@ -429,7 +430,7 @@ def _sync_generation_runtime_state(
     word_budget_repair_used: Optional[bool] = None,
     winner_candidate_index: Optional[int] = None,
 ) -> None:
-    _sync_generation_runtime_state_compat_service(
+    _sync_chapter_candidate_runtime_state_service(
         runtime_state,
         candidate_index=candidate_index,
         candidate_total=candidate_total,
@@ -456,22 +457,24 @@ def _build_generation_candidate_record(
     generation_path: str,
     attempt_kind: str,
 ) -> Dict[str, Any]:
-    return _build_generation_candidate_record_compat_service(
-        full_content=full_content,
-        candidate_chunks=candidate_chunks,
-        target_word_count=target_word_count,
-        source=source,
-        generation_label=generation_label,
-        candidate_index=candidate_index,
-        candidate_offset=candidate_offset,
-        quality_evaluator=quality_evaluator,
-        quality_gate_plan_builder=quality_gate_plan_builder,
-        generation_path=generation_path,
-        attempt_kind=attempt_kind,
+    return _build_generation_candidate_record_service(
+        request=ChapterCandidateRecordRequest(
+            full_content=full_content,
+            candidate_chunks=candidate_chunks,
+            target_word_count=target_word_count,
+            source=source,
+            generation_label=generation_label,
+            candidate_index=candidate_index,
+            candidate_offset=candidate_offset,
+            quality_evaluator=quality_evaluator,
+            quality_gate_plan_builder=quality_gate_plan_builder,
+            generation_path=generation_path,
+            attempt_kind=attempt_kind,
+        ),
         log_warning_fn=logger.warning,
     )
 def _get_chapter_candidate_executor_dependencies():
-    return _get_chapter_candidate_executor_dependencies_compat_service(
+    return _get_chapter_candidate_executor_dependencies_service(
         resolve_generation_attempt_labels_fn=_resolve_generation_attempt_labels,
         sync_generation_runtime_state_fn=_sync_generation_runtime_state,
         collect_generation_candidate_output_fn=_collect_generation_candidate_output,
@@ -491,7 +494,7 @@ async def _generate_best_ranked_candidate(
     max_candidates: int = CHAPTER_CANDIDATE_RERANK_LIMIT,
     runtime_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    return await _generate_best_ranked_candidate_compat_service(
+    return await _generate_best_ranked_candidate_service(
         ai_service=ai_service,
         base_generate_kwargs=base_generate_kwargs,
         target_word_count=target_word_count,
@@ -510,11 +513,11 @@ async def _generate_best_ranked_candidate(
 # ==================== Runtime Snapshot / Cache seam ====================
 
 async def _clear_task_runtime_caches(task_id: str) -> None:
-    await _clear_task_runtime_caches_compat_service(task_id)
+    await _clear_task_runtime_caches_service(task_id)
 
 
 async def _batch_task_exists(db_session: AsyncSession, task_id: str) -> bool:
-    return await _batch_task_exists_compat_service(db_session, task_id)
+    return await _batch_task_exists_service(db_session, task_id)
 
 
 async def _upsert_batch_generation_snapshot(
@@ -526,7 +529,7 @@ async def _upsert_batch_generation_snapshot(
     quality_metrics_summary: Any = _SNAPSHOT_UNSET,
     workflow_runtime_state: Any = _SNAPSHOT_UNSET,
 ) -> Optional[BatchGenerationSnapshot]:
-    return await _upsert_batch_generation_snapshot_compat_service(
+    return await _upsert_batch_generation_snapshot_service(
         db_session,
         task_id,
         latest_quality_metrics=latest_quality_metrics,
@@ -540,7 +543,7 @@ async def _load_persisted_batch_generation_snapshot(
     db_session: AsyncSession,
     task_id: str,
 ) -> Optional[BatchGenerationSnapshot]:
-    return await _load_persisted_batch_generation_snapshot_compat_service(db_session, task_id)
+    return await _load_persisted_batch_generation_snapshot_service(db_session, task_id)
 
 
 async def _persist_task_workflow_runtime_snapshot(
@@ -548,7 +551,7 @@ async def _persist_task_workflow_runtime_snapshot(
     task_id: str,
     runtime_snapshot: Dict[str, Any],
 ) -> None:
-    await _persist_task_workflow_runtime_snapshot_compat_service(
+    await _persist_task_workflow_runtime_snapshot_service(
         db_session,
         task_id,
         runtime_snapshot,
@@ -559,7 +562,7 @@ async def _get_task_workflow_runtime_snapshot(
     task_id: str,
     db_session: Optional[AsyncSession] = None,
 ) -> Dict[str, Any]:
-    return await _get_task_workflow_runtime_snapshot_compat_service(
+    return await _get_task_workflow_runtime_snapshot_service(
         task_id,
         db_session,
     )
@@ -568,7 +571,7 @@ async def _get_task_workflow_runtime_snapshot(
 # ==================== Text / Prompt seam ====================
 
 def _trim_text_to_sentence_boundary(text: str, *, hard_limit: int, lookback_chars: int = 220) -> str:
-    return _trim_text_to_sentence_boundary_compat_service(
+    return _trim_text_to_sentence_boundary_service(
         text,
         hard_limit=hard_limit,
         lookback_chars=lookback_chars,
@@ -576,27 +579,27 @@ def _trim_text_to_sentence_boundary(text: str, *, hard_limit: int, lookback_char
 
 
 def _is_likely_chapter_meta_line(line: str) -> bool:
-    return _is_likely_chapter_meta_line_compat_service(line)
+    return _is_likely_chapter_meta_line_service(line)
 
 
 def _contains_chapter_workflow_meta_text(text: str) -> bool:
-    return _contains_chapter_workflow_meta_text_compat_service(text)
+    return _contains_chapter_workflow_meta_text_service(text)
 
 
 def _lightly_polish_template_phrases(text: str) -> str:
-    return _lightly_polish_template_phrases_compat_service(text)
+    return _lightly_polish_template_phrases_service(text)
 
 
 
 def _sanitize_generated_narrative_text(text: str) -> tuple[str, int]:
-    return _sanitize_generated_narrative_text_compat_service(text)
+    return _sanitize_generated_narrative_text_service(text)
 def compute_story_quality_metrics(
     content: str,
     chapter_outline: Optional[str],
     world_rules: Optional[str],
     quality_runtime_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    return _compute_story_quality_metrics_compat_service(
+    return _compute_story_quality_metrics(
         content=content,
         chapter_outline=chapter_outline,
         world_rules=world_rules,
@@ -607,7 +610,7 @@ def _detect_style_profile(
     style_preset_id: Optional[str],
     style_content: Optional[str] = None,
 ) -> str:
-    return _detect_style_profile_compat_service(
+    return _detect_style_profile_service(
         style_name=style_name,
         style_preset_id=style_preset_id,
         style_content=style_content,
@@ -615,7 +618,7 @@ def _detect_style_profile(
 
 
 def _resolve_generation_temperature(style_profile: str) -> float:
-    return _resolve_generation_temperature_compat_service(style_profile)
+    return _resolve_generation_temperature_service(style_profile)
 
 
 def _build_chapter_runtime_system_prompt(
@@ -629,7 +632,7 @@ def _build_chapter_runtime_system_prompt(
     story_runtime_contract: Optional[Dict[str, Any]] = None,
     web_research_grounding_block: Optional[str] = None,
 ) -> str:
-    return _build_chapter_runtime_system_prompt_compat_service(
+    return _build_chapter_runtime_system_prompt_service(
         project=project,
         style_content=style_content,
         chapter_outline=chapter_outline,
@@ -709,7 +712,7 @@ async def execute_batch_generation_in_order(
     base_quality_profile: Optional[Dict[str, Any]] = None,
 ):
     """执行兼容层批量生成流程。"""
-    return await _execute_batch_generation_in_order_compat_service(
+    return await _execute_batch_generation_in_order_service(
         batch_id=batch_id,
         user_id=user_id,
         ai_service=ai_service,
@@ -770,7 +773,7 @@ async def generate_single_chapter_for_batch(
     retry_count: int = 0,
     max_retries: int = 1,
 ) -> Dict[str, Any]:
-    return await _generate_single_chapter_for_batch_compat_service(
+    return await _generate_single_chapter_for_batch_service(
         db_session=db_session,
         chapter=chapter,
         user_id=user_id,

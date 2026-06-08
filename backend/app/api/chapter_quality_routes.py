@@ -10,7 +10,7 @@ from app.schemas.chapter import ProjectChapterQualityTrendResponse
 from app.services.project_quality_trend_query_service import (
     load_project_quality_trend_query_context,
 )
-from app.services import project_quality_trend_compat_service
+from app.services import project_quality_trend_service
 from app.services.project_quality_trend_service import (
     build_project_quality_trend_response_payload,
 )
@@ -43,5 +43,5 @@ async def get_project_chapter_quality_trend(
         chapters=list(query_context.chapters),
         records_by_chapter=dict(query_context.records_by_chapter),
         limit=limit,
-        resolve_snapshot_fn=project_quality_trend_compat_service.get_project_quality_trend_snapshot_with_default_wiring,
+        resolve_snapshot_fn=project_quality_trend_service.get_project_quality_trend_snapshot_with_default_wiring,
     )

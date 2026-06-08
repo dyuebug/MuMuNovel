@@ -48,6 +48,8 @@ const EXACT_PUBLIC_PATHS: &[&str] = &[
     "/livez",
     "/readyz",
     "/health/db-sessions",
+    "/health/chapter-candidate-route-gateway-smoke",
+    "/health/chapter-single-generation-active-gateway-smoke",
     "/docs",
     "/redoc",
     "/openapi.json",
@@ -155,6 +157,8 @@ mod tests {
         for path in [
             "/health",
             "/readyz",
+            "/health/chapter-candidate-route-gateway-smoke",
+            "/health/chapter-single-generation-active-gateway-smoke",
             "/api/auth/login",
             "/api/auth/callback",
             "/api/changelog/refresh",

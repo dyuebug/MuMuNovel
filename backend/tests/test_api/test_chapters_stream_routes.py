@@ -2,10 +2,9 @@ import pytest
 from typing import Any
 from sqlalchemy import select
 
-from app.services import batch_generation_route_compat_service
-from app.services import chapter_generation_route_compat_service
-from app.services import chapter_regeneration_route_compat_service
-from app.services import chapter_partial_regeneration_route_compat_service
+from app.services.compat import chapter_generation_route_compat_service
+from app.api import chapter_batch_generation_routes as chapter_batch_generation_routes_api
+from app.api import chapter_regeneration_routes as chapter_regeneration_routes_api
 from app.models.batch_generation_task import BatchGenerationTask
 from app.models.chapter import Chapter
 from app.models.chapter_draft_attempt import ChapterDraftAttempt
@@ -381,12 +380,12 @@ async def test_should_stream_batch_generation_events_via_route_compat(
         yield await SSEResponse.send_done()
 
     monkeypatch.setattr(
-        batch_generation_route_compat_service,
+        chapter_batch_generation_routes_api,
         "validate_batch_generation_stream_access",
         fake_validate_access,
     )
     monkeypatch.setattr(
-        batch_generation_route_compat_service,
+        chapter_batch_generation_routes_api,
         "build_batch_generation_event_stream",
         fake_build_stream,
     )
@@ -462,7 +461,11 @@ async def test_should_regenerate_chapter_stream_and_persist_regeneration_task(
         def calculate_content_diff(self, original_content, new_content):
             return {"similarity": 12.5, "difference": 87.5}
 
-    monkeypatch.setattr(chapter_regeneration_route_compat_service, "REGENERATOR_FACTORY", FakeRegenerator)
+    monkeypatch.setattr(
+        chapter_regeneration_routes_api,
+        "REGENERATOR_FACTORY",
+        FakeRegenerator,
+    )
 
     response = await chapters_client.post(
         f"/api/chapters/{chapter.id}/regenerate-stream",

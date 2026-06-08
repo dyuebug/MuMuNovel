@@ -1,7 +1,7 @@
 use sea_orm::{DatabaseConnection, EntityTrait};
 
 use crate::models::{batch_generation_snapshot, batch_generation_task};
-use crate::services::chapter_generation_snapshot_query_service::load_chapter_generation_snapshot;
+use crate::services::chapter_generation_snapshot_service::load_chapter_generation_snapshot;
 use crate::services::chapter_generation_task_recovery_service::recover_generation_task_if_needed;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

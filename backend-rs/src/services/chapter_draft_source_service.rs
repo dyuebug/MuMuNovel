@@ -2,20 +2,10 @@ use chrono::NaiveDateTime;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde_json::Value;
 
-use crate::models::{chapter_draft_attempt, generation_history};
+use crate::models::chapter_draft_attempt;
 
 pub(crate) fn format_datetime(value: Option<NaiveDateTime>) -> Option<String> {
     value.map(|datetime| datetime.format("%Y-%m-%dT%H:%M:%S").to_string())
-}
-
-pub(crate) fn parse_reviser_result_from_history(generated_content: Option<&str>) -> Option<Value> {
-    let generated_content = generated_content?;
-    let payload: Value = serde_json::from_str(generated_content).ok()?;
-    if payload.get("log_type").and_then(Value::as_str) != Some("chapter_text_reviser_v1") {
-        return None;
-    }
-    let reviser_result = payload.get("reviser_result")?;
-    reviser_result.is_object().then(|| reviser_result.clone())
 }
 
 pub(crate) fn is_draft_stale(
@@ -135,35 +125,6 @@ pub(crate) async fn load_candidate_draft_attempt(
     query.one(db).await
 }
 
-pub(crate) async fn load_latest_reviser_history(
-    db: &DatabaseConnection,
-    chapter_id: &str,
-    history_id: Option<&str>,
-) -> Result<Option<(generation_history::Model, Value)>, sea_orm::DbErr> {
-    if let Some(history_id) = history_id.filter(|value| !value.trim().is_empty()) {
-        let history = generation_history::Entity::find_by_id(history_id)
-            .filter(generation_history::Column::ChapterId.eq(Some(chapter_id.to_string())))
-            .one(db)
-            .await?;
-        return Ok(history.and_then(|model| {
-            parse_reviser_result_from_history(model.generated_content.as_deref())
-                .map(|reviser_result| (model, reviser_result))
-        }));
-    }
-
-    let histories = generation_history::Entity::find()
-        .filter(generation_history::Column::ChapterId.eq(Some(chapter_id.to_string())))
-        .order_by_desc(generation_history::Column::CreatedAt)
-        .limit(60)
-        .all(db)
-        .await?;
-
-    Ok(histories.into_iter().find_map(|history| {
-        parse_reviser_result_from_history(history.generated_content.as_deref())
-            .map(|reviser_result| (history, reviser_result))
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
@@ -171,10 +132,7 @@ mod tests {
 
     use crate::models::chapter_draft_attempt;
 
-    use super::{
-        extract_candidate_draft_full_content, format_datetime, is_draft_stale,
-        parse_reviser_result_from_history,
-    };
+    use super::{extract_candidate_draft_full_content, format_datetime, is_draft_stale};
 
     fn naive_datetime(
         year: i32,
@@ -235,25 +193,6 @@ mod tests {
         ));
         assert!(!is_draft_stale(None, Some(draft_created_at)));
         assert!(!is_draft_stale(Some(draft_created_at), None));
-    }
-
-    #[test]
-    fn should_parse_reviser_result_from_matching_history_payload() {
-        let generated_content = json!({
-            "log_type": "chapter_text_reviser_v1",
-            "reviser_result": {
-                "revised_text": "修订正文",
-                "critical_count": 1
-            }
-        })
-        .to_string();
-
-        let parsed = parse_reviser_result_from_history(Some(&generated_content));
-
-        assert_eq!(
-            parsed.and_then(|value| value.get("revised_text").cloned()),
-            Some(json!("修订正文"))
-        );
     }
 
     #[test]

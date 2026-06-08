@@ -1,8 +1,12 @@
 use serde_json::{json, Value};
 use std::collections::HashSet;
 
-use crate::services::chapter_batch_generation_quality_status_service::manual_review_label_from_quality_context;
-use crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions;
+use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
+use crate::services::chapter_generation_quality_gate_semantics_service::manual_review_label_from_quality_context;
+use crate::services::novel_quality_profile_service::{
+    resolve_adaptive_quality_gate_profile, resolve_metric_threshold_adjustments,
+    resolve_quality_weight_profile,
+};
 
 const MANUAL_REQUEST_SOURCE: &str = "manual_request";
 const MANUAL_REQUEST_SOURCE_LABEL: &str = "Manual request";
@@ -369,6 +373,7 @@ struct QualityMetricSignal {
     descriptor: QualityMetricDescriptor,
     value: f64,
     normalized_value: f64,
+    weak_threshold: f64,
 }
 
 const QUALITY_SUMMARY_METRIC_FIELDS: [(&str, &str); 10] = [
@@ -511,10 +516,15 @@ fn normalized_metric_value(metric_key: &str, value: f64) -> f64 {
 }
 
 fn normalize_runtime_context_item_texts(value: Option<&Value>, limit: usize) -> Vec<String> {
-    let Some(items) = value.and_then(Value::as_array) else {
+    let Some(value) = value else {
         return Vec::new();
     };
 
+    let items = match value {
+        Value::Array(items) => items.iter().collect::<Vec<_>>(),
+        Value::Null => Vec::new(),
+        _ => vec![value],
+    };
     let mut normalized = Vec::new();
     let mut seen = HashSet::new();
     for item in items {
@@ -528,9 +538,12 @@ fn normalize_runtime_context_item_texts(value: Option<&Value>, limit: usize) -> 
                 "trigger",
                 "resolution",
                 "content",
+                "item",
+                "value",
                 "title",
                 "name",
                 "label",
+                "status",
             ];
             keys.iter()
                 .filter_map(|key| object.get(*key))
@@ -540,7 +553,7 @@ fn normalize_runtime_context_item_texts(value: Option<&Value>, limit: usize) -> 
                 .collect::<Vec<_>>()
                 .join(" ")
         } else {
-            String::new()
+            item.to_string()
         };
         if text.is_empty() || !seen.insert(text.clone()) {
             continue;
@@ -602,20 +615,36 @@ fn build_quality_runtime_pressure(
 ) -> Value {
     let Some(runtime_context) = runtime_context else {
         return json!({
+            "character_state_count": 0,
+            "relationship_state_count": 0,
             "foreshadow_plan_count": 0,
             "foreshadow_state_count": 0,
+            "organization_state_count": 0,
+            "career_state_count": 0,
             "chapter_progress_ratio": Value::Null,
+            "character_state_items": [],
+            "relationship_state_items": [],
+            "foreshadow_state_items": [],
+            "organization_state_items": [],
+            "career_state_items": [],
         });
     };
 
+    let character_state_items =
+        normalize_runtime_context_item_texts(runtime_context.get("character_state_ledger"), 6);
+    let relationship_state_items =
+        normalize_runtime_context_item_texts(runtime_context.get("relationship_state_ledger"), 6);
     let foreshadow_plan_count = normalize_runtime_context_item_texts(
         runtime_context.get("foreshadow_payoff_plan"),
         8,
     )
     .len() as i64;
-    let foreshadow_state_count =
-        normalize_runtime_context_item_texts(runtime_context.get("foreshadow_state_ledger"), 8)
-            .len() as i64;
+    let foreshadow_state_items =
+        normalize_runtime_context_item_texts(runtime_context.get("foreshadow_state_ledger"), 8);
+    let organization_state_items =
+        normalize_runtime_context_item_texts(runtime_context.get("organization_state_ledger"), 6);
+    let career_state_items =
+        normalize_runtime_context_item_texts(runtime_context.get("career_state_ledger"), 6);
     let chapter_progress_ratio = match (
         runtime_context
             .get("current_chapter_number")
@@ -629,26 +658,103 @@ fn build_quality_runtime_pressure(
     };
 
     json!({
+        "character_state_count": character_state_items.len() as i64,
+        "relationship_state_count": relationship_state_items.len() as i64,
         "foreshadow_plan_count": foreshadow_plan_count,
-        "foreshadow_state_count": foreshadow_state_count,
+        "foreshadow_state_count": foreshadow_state_items.len() as i64,
+        "organization_state_count": organization_state_items.len() as i64,
+        "career_state_count": career_state_items.len() as i64,
         "chapter_progress_ratio": chapter_progress_ratio.map(Value::from).unwrap_or(Value::Null),
+        "character_state_items": character_state_items.into_iter().take(3).collect::<Vec<_>>(),
+        "relationship_state_items": relationship_state_items.into_iter().take(3).collect::<Vec<_>>(),
+        "foreshadow_state_items": foreshadow_state_items.into_iter().take(3).collect::<Vec<_>>(),
+        "organization_state_items": organization_state_items.into_iter().take(3).collect::<Vec<_>>(),
+        "career_state_items": career_state_items.into_iter().take(3).collect::<Vec<_>>(),
     })
 }
 
 fn collect_quality_metric_signals(
     metrics: &serde_json::Map<String, Value>,
+    runtime_context: Option<&serde_json::Map<String, Value>>,
 ) -> Vec<QualityMetricSignal> {
     QUALITY_METRIC_DESCRIPTORS
         .iter()
         .filter_map(|descriptor| {
             let value = metric_value_as_f64(metrics, descriptor.metric_key)?;
+            let weak_threshold =
+                adjusted_quality_metric_weak_threshold(*descriptor, runtime_context);
             Some(QualityMetricSignal {
                 descriptor: *descriptor,
                 value,
                 normalized_value: normalized_metric_value(descriptor.metric_key, value),
+                weak_threshold,
             })
         })
         .collect()
+}
+
+fn adjusted_quality_metric_weak_threshold(
+    descriptor: QualityMetricDescriptor,
+    runtime_context: Option<&serde_json::Map<String, Value>>,
+) -> f64 {
+    let Some(runtime_context) = runtime_context else {
+        return descriptor.weak_threshold;
+    };
+    let stage = resolve_quality_stage(Some(runtime_context));
+    let profile_adjustments =
+        resolve_metric_threshold_adjustments(Some(runtime_context), stage.as_deref());
+    let pressure = build_quality_runtime_pressure(Some(runtime_context));
+    let pressure_count = |key: &str| {
+        pressure
+            .get(key)
+            .and_then(Value::as_i64)
+            .unwrap_or_default()
+    };
+
+    let mut adjustment = 0.0;
+    if descriptor.metric_key == "payoff_chain_rate" && pressure_count("foreshadow_state_count") >= 3
+    {
+        adjustment += 2.0;
+    }
+    if descriptor.metric_key == "dialogue_naturalness_rate"
+        && pressure_count("relationship_state_count") >= 2
+    {
+        adjustment += 1.0;
+    }
+    if descriptor.metric_key == "conflict_chain_hit_rate"
+        && pressure_count("relationship_state_count") >= 2
+    {
+        adjustment += 1.0;
+    }
+    if descriptor.metric_key == "outline_alignment_rate"
+        && pressure_count("character_state_count") >= 3
+    {
+        adjustment += 1.0;
+    }
+    if descriptor.metric_key == "rule_grounding_hit_rate"
+        && pressure_count("organization_state_count") >= 2
+    {
+        adjustment += 1.0;
+    }
+    if descriptor.metric_key == "conflict_chain_hit_rate"
+        && pressure_count("organization_state_count") >= 2
+    {
+        adjustment += 1.0;
+    }
+    if descriptor.metric_key == "outline_alignment_rate"
+        && pressure_count("career_state_count") >= 2
+    {
+        adjustment += 1.0;
+    }
+    if descriptor.metric_key == "payoff_chain_rate" && pressure_count("career_state_count") >= 2 {
+        adjustment += 1.0;
+    }
+
+    let profile_adjustment = profile_adjustments
+        .get(descriptor.metric_key)
+        .copied()
+        .unwrap_or_default();
+    round_quality_metric((descriptor.weak_threshold + profile_adjustment + adjustment).max(0.0))
 }
 
 fn has_quality_metric_signal(metrics: &serde_json::Map<String, Value>) -> bool {
@@ -675,8 +781,10 @@ fn derive_story_repair_guidance_from_metrics_object(
         .map(quality_stage_label)
         .unwrap_or_default()
         .to_string();
+    let adaptive_quality_profile =
+        resolve_adaptive_quality_gate_profile(runtime_context.as_ref(), stage.as_deref());
     let quality_runtime_pressure = build_quality_runtime_pressure(runtime_context.as_ref());
-    let metric_signals = collect_quality_metric_signals(metrics);
+    let metric_signals = collect_quality_metric_signals(metrics, runtime_context.as_ref());
 
     if metric_signals.is_empty() {
         return json!({
@@ -689,6 +797,7 @@ fn derive_story_repair_guidance_from_metrics_object(
             "weakest_metric_value": Value::Null,
             "quality_stage": stage.unwrap_or_default(),
             "quality_stage_label": stage_label,
+            "adaptive_quality_profile": adaptive_quality_profile,
             "quality_runtime_pressure": quality_runtime_pressure,
         });
     }
@@ -698,7 +807,7 @@ fn derive_story_repair_guidance_from_metrics_object(
         .min_by(|left, right| left.normalized_value.total_cmp(&right.normalized_value));
     let low_items = metric_signals
         .iter()
-        .filter(|item| item.value < item.descriptor.weak_threshold)
+        .filter(|item| item.value < item.weak_threshold)
         .copied()
         .collect::<Vec<_>>();
     let strength_items = metric_signals
@@ -708,7 +817,7 @@ fn derive_story_repair_guidance_from_metrics_object(
                 >= if item.descriptor.metric_key == "pacing_score" {
                     8.3
                 } else {
-                    item.descriptor.weak_threshold + 8.0
+                    item.weak_threshold + 8.0
                 }
         })
         .copied()
@@ -762,6 +871,7 @@ fn derive_story_repair_guidance_from_metrics_object(
         "weakest_metric_value": round_quality_metric(weakest_metric.value),
         "quality_stage": stage.unwrap_or_default(),
         "quality_stage_label": stage_label,
+        "adaptive_quality_profile": adaptive_quality_profile,
         "quality_runtime_pressure": quality_runtime_pressure,
     })
 }
@@ -774,18 +884,20 @@ fn derive_quality_gate_from_metrics_object(
         extract_quality_runtime_context_object(Some(&Value::Object(metrics.clone())));
     let stage = resolve_quality_stage(runtime_context.as_ref()).unwrap_or_default();
     let stage_label = quality_stage_label(&stage).to_string();
+    let adaptive_profile =
+        resolve_adaptive_quality_gate_profile(runtime_context.as_ref(), Some(stage.as_str()));
     let pressure = build_quality_runtime_pressure(runtime_context.as_ref());
     let overall_score = metric_value_as_f64(metrics, "overall_score");
-    let low_items = collect_quality_metric_signals(metrics)
+    let low_items = collect_quality_metric_signals(metrics, runtime_context.as_ref())
         .into_iter()
-        .filter(|item| item.value < item.descriptor.weak_threshold)
+        .filter(|item| item.value < item.weak_threshold)
         .collect::<Vec<_>>();
     let weakest_metric = low_items
         .iter()
         .min_by(|left, right| left.normalized_value.total_cmp(&right.normalized_value))
         .copied()
         .or_else(|| {
-            collect_quality_metric_signals(metrics)
+            collect_quality_metric_signals(metrics, runtime_context.as_ref())
                 .into_iter()
                 .min_by(|left, right| left.normalized_value.total_cmp(&right.normalized_value))
         });
@@ -797,8 +909,8 @@ fn derive_quality_gate_from_metrics_object(
                 "key": item.descriptor.metric_key,
                 "label": item.descriptor.label,
                 "value": round_quality_metric(item.value),
-                "threshold": item.descriptor.weak_threshold,
-                "gap": round_quality_metric((item.descriptor.weak_threshold - item.value).max(0.0)),
+                "threshold": item.weak_threshold,
+                "gap": round_quality_metric((item.weak_threshold - item.value).max(0.0)),
                 "focus_area": item.descriptor.focus_area,
                 "repair_target": item.descriptor.repair_target,
             })
@@ -894,6 +1006,7 @@ fn derive_quality_gate_from_metrics_object(
             .unwrap_or(Value::Null),
         "quality_stage": stage,
         "quality_stage_label": stage_label,
+        "adaptive_quality_profile": adaptive_profile,
         "quality_runtime_pressure": pressure,
     })
 }
@@ -1188,6 +1301,8 @@ fn build_volume_goal_completion_summary(summary: &Value) -> Option<Value> {
         .get("quality_runtime_context")
         .and_then(Value::as_object)?;
     let expected_stage = resolve_quality_stage(Some(runtime_context))?;
+    let weight_profile =
+        resolve_quality_weight_profile(Some(runtime_context), Some(expected_stage.as_str()));
     let current_stage = runtime_context
         .get("plot_stage")
         .or_else(|| runtime_context.get("quality_stage"))
@@ -1293,20 +1408,23 @@ fn build_volume_goal_completion_summary(summary: &Value) -> Option<Value> {
         "focus_areas": [],
         "repair_targets": default_targets,
         "profile_summary": profile_summary,
-        "profile_focuses": [],
-        "style_profile": runtime_context
-            .get("story_focus")
+        "profile_focuses": weight_profile
+            .get("focus_areas")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+        "style_profile": weight_profile
+            .get("style_profile")
             .cloned()
             .unwrap_or_else(|| json!("")),
-        "genre_profiles": runtime_context
-            .get("character_focus")
+        "genre_profiles": weight_profile
+            .get("genre_profiles")
             .cloned()
-            .filter(Value::is_array)
             .unwrap_or_else(|| json!([])),
-        "quality_preset": runtime_context
+        "quality_preset": weight_profile
             .get("quality_preset")
             .cloned()
             .unwrap_or_else(|| json!("")),
+        "quality_weight_profile": weight_profile,
     }))
 }
 
@@ -2518,7 +2636,7 @@ mod tests {
     use super::{
         aggregate_story_repair_quality_summaries, extract_quality_history_context,
         merge_active_story_repair_payloads, merged_quality_gate_from_quality_context,
-        merged_story_repair_guidance_from_quality_context,
+        merged_story_repair_guidance_from_quality_context, normalize_quality_metrics_history_item,
         reconciled_quality_gate_from_quality_context,
         restore_active_story_repair_payload_from_quality_context,
     };
@@ -2724,6 +2842,97 @@ mod tests {
                 "recent_metrics": [{"score": 91}],
                 "trend": "up"
             })
+        );
+    }
+
+    #[test]
+    fn should_surface_extended_runtime_pressure_ledgers_in_repair_guidance() {
+        let metrics = json!({
+            "overall_score": 86,
+            "rule_grounding_hit_rate": 82,
+            "outline_alignment_rate": 81,
+            "dialogue_naturalness_rate": 80,
+            "quality_runtime_context": {
+                "character_state_ledger": [
+                    {"label": "主角", "summary": "压制副作用"},
+                    {"label": "盟友", "summary": "信任摇摆"},
+                    {"label": "反派", "summary": "掌握证据"}
+                ],
+                "relationship_state_ledger": [
+                    {"label": "主角/盟友", "summary": "暂时结盟"},
+                    {"label": "主角/导师", "summary": "理念冲突"}
+                ],
+                "organization_state_ledger": [
+                    {"label": "商会", "summary": "断供"},
+                    {"label": "学院", "summary": "追责"}
+                ],
+                "career_state_ledger": [
+                    {"label": "炼器师", "summary": "瓶颈"},
+                    {"label": "调查员", "summary": "权限代价"}
+                ]
+            }
+        });
+
+        let normalized = normalize_quality_metrics_history_item(&metrics, "chapter")
+            .expect("normalized metrics");
+
+        assert_eq!(
+            normalized["repair_guidance"]["quality_runtime_pressure"]["character_state_count"],
+            3
+        );
+        assert_eq!(
+            normalized["repair_guidance"]["quality_runtime_pressure"]["relationship_state_count"],
+            2
+        );
+        assert_eq!(
+            normalized["repair_guidance"]["quality_runtime_pressure"]["organization_state_count"],
+            2
+        );
+        assert_eq!(
+            normalized["repair_guidance"]["quality_runtime_pressure"]["career_state_count"],
+            2
+        );
+        assert_eq!(
+            normalized["repair_guidance"]["quality_runtime_pressure"]["organization_state_items"],
+            json!(["断供 商会", "追责 学院"])
+        );
+    }
+
+    #[test]
+    fn should_apply_runtime_pressure_to_quality_gate_thresholds() {
+        let metrics = json!({
+            "overall_score": 86,
+            "rule_grounding_hit_rate": 72.5,
+            "conflict_chain_hit_rate": 72.5,
+            "outline_alignment_rate": 72.5,
+            "payoff_chain_rate": 72.5,
+            "quality_runtime_context": {
+                "organization_state_ledger": [
+                    {"label": "商会", "summary": "断供"},
+                    {"label": "学院", "summary": "追责"}
+                ],
+                "career_state_ledger": [
+                    {"label": "炼器师", "summary": "瓶颈"},
+                    {"label": "调查员", "summary": "权限代价"}
+                ]
+            }
+        });
+
+        let normalized = normalize_quality_metrics_history_item(&metrics, "chapter")
+            .expect("normalized metrics");
+        let failed_metrics = normalized["quality_gate"]["failed_metrics"]
+            .as_array()
+            .expect("failed metrics");
+
+        assert!(failed_metrics.iter().any(|metric| {
+            metric["key"] == "rule_grounding_hit_rate" && metric["threshold"] == 73.0
+        }));
+        assert!(failed_metrics
+            .iter()
+            .any(|metric| metric["key"] == "payoff_chain_rate" && metric["threshold"] == 73.0));
+        assert_eq!(
+            normalized["quality_gate"]["quality_runtime_pressure"]["career_state_count"],
+            2
         );
     }
 

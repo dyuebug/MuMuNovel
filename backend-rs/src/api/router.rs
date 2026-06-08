@@ -369,6 +369,11 @@ mod tests {
             frontend_url: "http://localhost".to_string(),
             session_expire_minutes: 120,
             session_refresh_threshold_minutes: 30,
+            chapter_candidate_rust_executor_enabled: true,
+            chapter_candidate_rust_executor_fallback_on_error: true,
+            chapter_candidate_rust_executor_disabled_reason: String::new(),
+            chapter_candidate_rust_executor_rollback_boundary: "python_candidate_executor_fallback"
+                .to_string(),
         }
     }
 

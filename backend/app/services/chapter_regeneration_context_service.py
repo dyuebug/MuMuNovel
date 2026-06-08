@@ -15,7 +15,7 @@ from app.models.outline import Outline
 from app.models.project import Project
 from app.schemas.regeneration import ChapterRegenerateRequest
 from app.services.chapter_web_research_service import chapter_web_research_service
-from app.services.chapter_generation_runtime_service import build_chapter_generation_runtime_bundle
+from app.services.chapter_generation.runtime.service import build_chapter_generation_runtime_bundle
 from app.services.chapter_quality_context_service import (
     build_story_generation_packet_with_project_continuity,
     resolve_chapter_quality_profile,

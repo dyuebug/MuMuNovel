@@ -9,93 +9,151 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::services::chapter_analysis_runtime_service::{
     analyze_generated_chapter_follow_up, prepare_chapter_analysis_execution,
 };
+use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
 use crate::services::chapter_generation_quality_runtime_context_service::apply_generation_quality_runtime_context_from_current_quality;
-use crate::services::chapter_generation_runtime_service::update_latest_generated_chapter_history_quality_metrics;
+use crate::services::chapter_generation_runtime_service::{
+    update_latest_generated_chapter_history_quality_metrics, GeneratedChapterResult,
+};
 use crate::services::chapter_story_repair_quality_context_service::resolve_active_story_repair_payload_with_quality_fallback;
 use crate::utils::sse::{sse_done, sse_error, sse_json, sse_result, SseProgress};
 
+use super::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
 use super::chapter_single_generation_prepare_service::{
-    build_single_chapter_generation_request_from_route_payload,
-    PrepareSingleChapterGenerationRequestError,
-    PreparedSingleChapterGenerationRestoredRuntimeLaunch, SingleChapterGenerationCompatOptions,
-    SingleChapterGenerationRequest, SingleChapterGenerationRouteRequest,
+    PrepareSingleChapterGenerationRequestError, SingleChapterGenerationRouteRequest,
 };
+use super::chapter_single_generation_runtime_restore_service::PreparedSingleChapterGenerationRestoredRuntimeLaunch;
 use super::chapter_single_generation_runtime_state_service::SingleGenerationRuntimeLaunchInput;
 
 pub(crate) type SingleChapterGenerationStream = ReceiverStream<Result<Event, Infallible>>;
 
-#[derive(Debug, Clone)]
-struct SingleGenerationStreamWorkflowStart {
-    lifecycle: SingleGenerationStreamLifecyclePlan,
-}
-
-pub(crate) async fn create_single_generation_stream_workflow(
-    db: DatabaseConnection,
-    user_id: String,
-    chapter_id: String,
-    request: SingleChapterGenerationRequest,
-) -> Result<
-    tokio_stream::wrappers::ReceiverStream<
-        Result<axum::response::sse::Event, std::convert::Infallible>,
-    >,
-    PrepareSingleChapterGenerationRequestError,
-> {
-    Ok(
-        SingleGenerationStreamWorkflowStart::prepare(&db, &user_id, &chapter_id, &request)
-            .await?
-            .spawn(db),
-    )
-}
-
-pub(crate) async fn create_single_generation_stream_workflow_from_route_payload(
+pub(crate) async fn create_owned_single_generation_stream(
     db: DatabaseConnection,
     user_id: String,
     chapter_id: String,
     route_request: SingleChapterGenerationRouteRequest,
+    candidate_gateway_config: ChapterCandidateRouteGatewayConfig,
 ) -> Result<SingleChapterGenerationStream, PrepareSingleChapterGenerationRequestError> {
-    create_single_generation_stream_workflow(
-        db,
-        user_id,
-        chapter_id,
-        build_single_chapter_generation_request_from_route_payload(route_request),
+    let runtime_input = prepare_owned_single_generation_stream_runtime_launch(
+        &db,
+        &user_id,
+        &chapter_id,
+        route_request,
+    )
+    .await?;
+
+    Ok(
+        SingleGenerationStreamLifecyclePlan::from_runtime_launch_with_gateway_config(
+            runtime_input,
+            candidate_gateway_config,
+        )
+        .spawn(db),
+    )
+}
+
+async fn prepare_owned_single_generation_stream_runtime_launch(
+    db: &DatabaseConnection,
+    user_id: &str,
+    chapter_id: &str,
+    route_request: SingleChapterGenerationRouteRequest,
+) -> Result<SingleGenerationRuntimeLaunchInput, PrepareSingleChapterGenerationRequestError> {
+    let request = route_request.into_generation_request();
+    PreparedSingleChapterGenerationRestoredRuntimeLaunch::prepare_runtime_launch_input(
+        db, chapter_id, user_id, &request,
     )
     .await
 }
 
-impl SingleGenerationStreamWorkflowStart {
-    async fn prepare(
-        db: &DatabaseConnection,
-        user_id: &str,
-        chapter_id: &str,
-        request: &SingleChapterGenerationRequest,
-    ) -> Result<Self, PrepareSingleChapterGenerationRequestError> {
-        let runtime_input =
-            PreparedSingleChapterGenerationRestoredRuntimeLaunch::prepare_runtime_launch_input(
-                db, chapter_id, user_id, request,
-            )
-            .await?;
+#[derive(Debug, Clone)]
+pub(crate) struct SingleGenerationStreamLifecyclePlan {
+    target_word_count: i32,
+    compat_options: SingleChapterGenerationCompatOptions,
+    enable_analysis: bool,
+    runtime_user_id: String,
+    candidate_gateway_config: ChapterCandidateRouteGatewayConfig,
+    runtime_input: SingleGenerationRuntimeLaunchInput,
+}
 
-        Ok(Self::from_runtime_launch(runtime_input))
+impl SingleGenerationStreamLifecyclePlan {
+    #[cfg(test)]
+    pub(crate) fn from_runtime_launch(runtime_input: SingleGenerationRuntimeLaunchInput) -> Self {
+        Self::from_runtime_launch_with_gateway_config(
+            runtime_input,
+            crate::services::chapter_single_generation_runtime_state_service::default_single_generation_candidate_gateway_config(),
+        )
     }
 
-    fn spawn(self, db: DatabaseConnection) -> SingleChapterGenerationStream {
-        self.lifecycle.spawn(db)
-    }
+    pub(crate) fn from_runtime_launch_with_gateway_config(
+        runtime_input: SingleGenerationRuntimeLaunchInput,
+        candidate_gateway_config: ChapterCandidateRouteGatewayConfig,
+    ) -> Self {
+        let target_word_count = runtime_input.execution_input.target_word_count;
+        let compat_options = runtime_input.execution_input.compat_options.clone();
+        let enable_analysis = compat_options.enable_analysis();
+        let runtime_user_id = runtime_input.user_id.clone();
 
-    fn from_runtime_launch(runtime_input: SingleGenerationRuntimeLaunchInput) -> Self {
         Self {
-            lifecycle: SingleGenerationStreamLifecyclePlan::from_runtime_launch(runtime_input),
+            target_word_count,
+            compat_options,
+            enable_analysis,
+            runtime_user_id,
+            candidate_gateway_config,
+            runtime_input,
         }
     }
 
-    #[cfg(test)]
-    fn lifecycle(&self) -> &SingleGenerationStreamLifecyclePlan {
-        &self.lifecycle
+    pub(crate) fn spawn(self, db: DatabaseConnection) -> SingleChapterGenerationStream {
+        let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(32);
+
+        tokio::spawn(async move {
+            self.run(db, tx).await;
+        });
+
+        ReceiverStream::new(rx)
+    }
+
+    async fn run(self, db: DatabaseConnection, tx: mpsc::Sender<Result<Event, Infallible>>) {
+        let mut tracker = SseProgress::new("Chapter Generation");
+        let _ = tx.send(Ok(tracker.start())).await;
+        let _ = tx
+            .send(Ok(
+                tracker.preparing(Some("Preparing chapter generation..."))
+            ))
+            .await;
+        let _ = tx
+            .send(Ok(tracker.generating(
+                Some("Generating chapter content..."),
+                (15, 95),
+                self.target_word_count as usize,
+                None,
+            )))
+            .await;
+
+        match self
+            .runtime_input
+            .execute_generation_with_gateway_config(&db, self.candidate_gateway_config)
+            .await
+        {
+            Ok(result) => {
+                let analysis = SingleGenerationStreamSuccessArtifacts::from_generated_result(
+                    &db,
+                    &self.runtime_user_id,
+                    self.target_word_count,
+                    &self.compat_options,
+                    self.enable_analysis,
+                    &result,
+                )
+                .await;
+                analysis.emit_success(&result, &tx, &mut tracker).await;
+            }
+            Err(error_message) => {
+                let _ = tx.send(Ok(sse_error(&error_message, 500))).await;
+            }
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct SingleGenerationStreamAnalysisOutcome {
+pub(crate) struct SingleGenerationStreamSuccessArtifacts {
     analysis_task_id: Option<String>,
     quality_metrics: Option<Value>,
     quality_gate_action: Option<String>,
@@ -103,32 +161,93 @@ struct SingleGenerationStreamAnalysisOutcome {
     quality_gate_snapshot: Option<Value>,
     hard_gate_blocked: bool,
     story_runtime_contract: Option<Value>,
+    followup_plan: SingleGenerationStreamAnalysisFollowupPlan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SingleGenerationStreamAnalysisFollowupPlan {
     completion_message: String,
     analysis_started_message: Option<String>,
 }
 
-impl SingleGenerationStreamAnalysisOutcome {
-    async fn from_generated_result(
+impl SingleGenerationStreamAnalysisFollowupPlan {
+    fn from_quality_gate(
+        analysis_task_id: Option<&String>,
+        quality_gate_action: Option<&str>,
+    ) -> Self {
+        let completion_message = match quality_gate_action {
+            Some("retry") => "章节生成完成，已转入质量修复",
+            Some("manual_review") => "章节生成完成，已转入人工复核",
+            _ => "章节生成完成",
+        }
+        .to_string();
+        let analysis_started_message = analysis_task_id.map(|_| {
+            match quality_gate_action {
+                Some("retry") => "质量修复分析任务已启动",
+                Some("manual_review") => "人工复核分析任务已启动",
+                _ => "章节分析任务已启动",
+            }
+            .to_string()
+        });
+
+        Self {
+            completion_message,
+            analysis_started_message,
+        }
+    }
+
+    fn without_analysis() -> Self {
+        Self {
+            completion_message: "章节生成完成".to_string(),
+            analysis_started_message: None,
+        }
+    }
+
+    pub(crate) fn completion_message(&self) -> &str {
+        self.completion_message.as_str()
+    }
+
+    pub(crate) fn analysis_started_message(&self) -> Option<&str> {
+        self.analysis_started_message.as_deref()
+    }
+}
+
+impl SingleGenerationStreamSuccessArtifacts {
+    pub(crate) async fn from_generated_result(
         db: &DatabaseConnection,
         runtime_user_id: &str,
         target_word_count: i32,
         compat_options: &SingleChapterGenerationCompatOptions,
         enable_analysis: bool,
-        result: &crate::services::chapter_generation_runtime_service::GeneratedChapterResult,
+        result: &GeneratedChapterResult,
     ) -> Self {
         let story_runtime_contract = build_single_generation_stream_story_runtime_contract(
             result.chapter_number,
             target_word_count,
             compat_options,
         );
-        let analysis = Self::run_follow_up_analysis(
+        let mut analysis = Self::from_quality_metrics(
+            None,
+            result.quality_metrics.clone(),
+            story_runtime_contract.clone(),
+        );
+        let follow_up_analysis = Self::run_follow_up_analysis(
             db,
             runtime_user_id,
             result,
             enable_analysis,
-            story_runtime_contract,
+            story_runtime_contract.clone(),
         )
         .await;
+        if follow_up_analysis.quality_metrics.is_some() {
+            analysis = follow_up_analysis;
+        } else if follow_up_analysis.analysis_task_id.is_some() {
+            analysis.analysis_task_id = follow_up_analysis.analysis_task_id;
+            analysis.followup_plan = SingleGenerationStreamAnalysisFollowupPlan::from_quality_gate(
+                analysis.analysis_task_id.as_ref(),
+                analysis.quality_gate_action.as_deref(),
+            );
+        }
         if let Some(quality_metrics) = analysis.quality_metrics.as_ref() {
             let _ = update_latest_generated_chapter_history_quality_metrics(
                 db,
@@ -142,21 +261,7 @@ impl SingleGenerationStreamAnalysisOutcome {
         analysis
     }
 
-    fn without_analysis(story_runtime_contract: Option<Value>) -> Self {
-        Self {
-            analysis_task_id: None,
-            quality_metrics: None,
-            quality_gate_action: None,
-            quality_gate_message: None,
-            quality_gate_snapshot: None,
-            hard_gate_blocked: false,
-            story_runtime_contract,
-            completion_message: "章节生成完成".to_string(),
-            analysis_started_message: None,
-        }
-    }
-
-    fn from_quality_metrics(
+    pub(crate) fn from_quality_metrics(
         analysis_task_id: Option<String>,
         quality_metrics: Option<Value>,
         story_runtime_contract: Option<Value>,
@@ -178,20 +283,10 @@ impl SingleGenerationStreamAnalysisOutcome {
             quality_gate_action.as_deref(),
             Some("retry") | Some("manual_review")
         );
-        let completion_message = match quality_gate_action.as_deref() {
-            Some("retry") => "章节生成完成，已转入质量修复",
-            Some("manual_review") => "章节生成完成，已转入人工复核",
-            _ => "章节生成完成",
-        }
-        .to_string();
-        let analysis_started_message = analysis_task_id.as_ref().map(|_| {
-            match quality_gate_action.as_deref() {
-                Some("retry") => "质量修复分析任务已启动",
-                Some("manual_review") => "人工复核分析任务已启动",
-                _ => "章节分析任务已启动",
-            }
-            .to_string()
-        });
+        let followup_plan = SingleGenerationStreamAnalysisFollowupPlan::from_quality_gate(
+            analysis_task_id.as_ref(),
+            quality_gate_action.as_deref(),
+        );
 
         Self {
             analysis_task_id,
@@ -201,15 +296,234 @@ impl SingleGenerationStreamAnalysisOutcome {
             quality_gate_snapshot,
             hard_gate_blocked,
             story_runtime_contract,
-            completion_message,
-            analysis_started_message,
+            followup_plan,
         }
+    }
+
+    pub(crate) fn quality_metrics_event(&self, result: &GeneratedChapterResult) -> Option<Value> {
+        let metrics = self.quality_metrics.as_ref()?.as_object()?.clone();
+        let mut payload = serde_json::Map::from_iter([
+            ("type".to_string(), json!("quality_metrics")),
+            ("chapter_id".to_string(), json!(result.chapter_id)),
+            ("chapter_number".to_string(), json!(result.chapter_number)),
+        ]);
+        payload.extend(metrics);
+        Some(Value::Object(payload))
+    }
+
+    pub(crate) fn quality_gate_event(&self, result: &GeneratedChapterResult) -> Option<Value> {
+        if !self.hard_gate_blocked {
+            return None;
+        }
+
+        Some(json!({
+            "type": if matches!(self.quality_gate_action.as_deref(), Some("retry")) {
+                "quality_gate_retry"
+            } else {
+                "quality_gate_blocked"
+            },
+            "chapter_id": result.chapter_id,
+            "chapter_number": result.chapter_number,
+            "message": self.quality_gate_message,
+            "progress": if matches!(self.quality_gate_action.as_deref(), Some("retry")) {
+                88
+            } else {
+                95
+            },
+            "quality_gate": self.quality_gate_snapshot,
+        }))
+    }
+
+    pub(crate) fn analysis_started_event(&self) -> Option<Value> {
+        let task_id = self.analysis_task_id.as_deref()?;
+        let message = self.followup_plan.analysis_started_message()?;
+
+        Some(json!({
+            "type": "analysis_started",
+            "task_id": task_id,
+            "message": message,
+        }))
+    }
+
+    pub(crate) fn completion_message(&self) -> &str {
+        self.followup_plan.completion_message()
+    }
+
+    pub(crate) fn response_payload(&self, result: &GeneratedChapterResult) -> Value {
+        let saved_word_count = if result.saved_word_count > 0 {
+            result.saved_word_count
+        } else {
+            result.word_count
+        };
+        let chapter_status = if result.chapter_status.trim().is_empty() {
+            if result.content_applied {
+                "completed"
+            } else {
+                "draft"
+            }
+        } else {
+            result.chapter_status.as_str()
+        };
+        let mut payload = serde_json::Map::from_iter([
+            ("chapter_id".to_string(), json!(result.chapter_id)),
+            ("chapter_number".to_string(), json!(result.chapter_number)),
+            ("title".to_string(), json!(result.title)),
+            ("content".to_string(), json!(result.content)),
+            ("word_count".to_string(), json!(result.word_count)),
+            ("saved_word_count".to_string(), json!(saved_word_count)),
+            ("chapter_status".to_string(), json!(chapter_status)),
+            ("content_applied".to_string(), json!(result.content_applied)),
+            ("content_source".to_string(), json!("chapter")),
+            ("analysis_task_id".to_string(), json!(self.analysis_task_id)),
+            ("quality_metrics".to_string(), json!(self.quality_metrics)),
+            (
+                "quality_gate_action".to_string(),
+                json!(self.quality_gate_action),
+            ),
+            (
+                "quality_gate_message".to_string(),
+                json!(self.quality_gate_message),
+            ),
+            (
+                "hard_gate_blocked".to_string(),
+                json!(self.hard_gate_blocked),
+            ),
+            (
+                "story_runtime_contract".to_string(),
+                json!(self.story_runtime_contract),
+            ),
+        ]);
+        if let Some(candidate_draft) = result.candidate_draft.as_ref() {
+            payload.insert("candidate_draft".to_string(), candidate_draft.clone());
+        }
+        if let Some(candidate_gateway_metadata) = result.candidate_gateway_metadata.as_ref() {
+            payload.insert(
+                "candidate_gateway".to_string(),
+                candidate_gateway_metadata.clone(),
+            );
+        }
+
+        if let Some(latest_quality_metrics) = self.quality_metrics.as_ref() {
+            apply_generation_quality_runtime_context_from_current_quality(
+                &mut payload,
+                "chapter",
+                None,
+                None,
+                latest_quality_metrics,
+                20,
+            );
+            let active_story_repair_payload =
+                resolve_active_story_repair_payload_with_quality_fallback(
+                    None,
+                    payload.get("quality_metrics_summary"),
+                    Some(latest_quality_metrics),
+                    "chapter",
+                    "plot_analysis",
+                    "Plot analysis",
+                );
+            payload.insert(
+                "active_story_repair_payload".to_string(),
+                json!(active_story_repair_payload),
+            );
+        }
+
+        Value::Object(payload)
+    }
+
+    pub(crate) fn ordered_success_event_payloads(
+        &self,
+        result: &GeneratedChapterResult,
+    ) -> Vec<SingleGenerationStreamSuccessEventPayload> {
+        let mut payloads = Vec::new();
+
+        if let Some(quality_metrics_event) = self.quality_metrics_event(result) {
+            payloads.push(SingleGenerationStreamSuccessEventPayload::Json(
+                quality_metrics_event,
+            ));
+        }
+
+        if let Some(quality_gate_event) = self.quality_gate_event(result) {
+            payloads.push(SingleGenerationStreamSuccessEventPayload::Json(
+                quality_gate_event,
+            ));
+        }
+
+        payloads.push(SingleGenerationStreamSuccessEventPayload::Result(
+            self.response_payload(result),
+        ));
+
+        if let Some(analysis_started_event) = self.analysis_started_event() {
+            payloads.push(SingleGenerationStreamSuccessEventPayload::Json(
+                analysis_started_event,
+            ));
+        }
+
+        payloads
+    }
+
+    pub(crate) async fn emit_success(
+        &self,
+        result: &GeneratedChapterResult,
+        tx: &mpsc::Sender<Result<Event, Infallible>>,
+        tracker: &mut SseProgress,
+    ) {
+        for step in self.build_success_emission_plan(result) {
+            match step {
+                SingleGenerationStreamEmissionStep::Complete(message) => {
+                    let _ = tx.send(Ok(tracker.complete(Some(&message)))).await;
+                }
+                SingleGenerationStreamEmissionStep::Payload(payload) => {
+                    let event = match payload {
+                        SingleGenerationStreamSuccessEventPayload::Json(payload) => {
+                            sse_json(&payload)
+                        }
+                        SingleGenerationStreamSuccessEventPayload::Result(payload) => {
+                            sse_result(&payload)
+                        }
+                    };
+                    let _ = tx.send(Ok(event)).await;
+                }
+                SingleGenerationStreamEmissionStep::Done => {
+                    let _ = tx.send(Ok(sse_done())).await;
+                }
+            };
+        }
+    }
+
+    fn without_analysis(story_runtime_contract: Option<Value>) -> Self {
+        Self {
+            analysis_task_id: None,
+            quality_metrics: None,
+            quality_gate_action: None,
+            quality_gate_message: None,
+            quality_gate_snapshot: None,
+            hard_gate_blocked: false,
+            story_runtime_contract,
+            followup_plan: SingleGenerationStreamAnalysisFollowupPlan::without_analysis(),
+        }
+    }
+
+    pub(crate) fn build_success_emission_plan(
+        &self,
+        result: &GeneratedChapterResult,
+    ) -> Vec<SingleGenerationStreamEmissionStep> {
+        let mut steps = Vec::new();
+        steps.push(SingleGenerationStreamEmissionStep::Complete(
+            self.completion_message().to_string(),
+        ));
+        steps.extend(
+            self.ordered_success_event_payloads(result)
+                .into_iter()
+                .map(SingleGenerationStreamEmissionStep::Payload),
+        );
+        steps.push(SingleGenerationStreamEmissionStep::Done);
+        steps
     }
 
     async fn run_follow_up_analysis(
         db: &DatabaseConnection,
         runtime_user_id: &str,
-        generated: &crate::services::chapter_generation_runtime_service::GeneratedChapterResult,
+        generated: &GeneratedChapterResult,
         enable_analysis: bool,
         story_runtime_contract: Option<Value>,
     ) -> Self {
@@ -239,263 +553,22 @@ impl SingleGenerationStreamAnalysisOutcome {
 
         Self::from_quality_metrics(analysis_task_id, quality_metrics, story_runtime_contract)
     }
-
-    fn quality_metrics_event(
-        &self,
-        result: &crate::services::chapter_generation_runtime_service::GeneratedChapterResult,
-    ) -> Option<Value> {
-        let metrics = self.quality_metrics.as_ref()?.as_object()?.clone();
-        let mut payload = serde_json::Map::from_iter([
-            ("type".to_string(), json!("quality_metrics")),
-            ("chapter_id".to_string(), json!(result.chapter_id)),
-            ("chapter_number".to_string(), json!(result.chapter_number)),
-        ]);
-        payload.extend(metrics);
-        Some(Value::Object(payload))
-    }
-
-    fn quality_gate_event(
-        &self,
-        result: &crate::services::chapter_generation_runtime_service::GeneratedChapterResult,
-    ) -> Option<Value> {
-        if !self.hard_gate_blocked {
-            return None;
-        }
-
-        Some(json!({
-            "type": if matches!(self.quality_gate_action.as_deref(), Some("retry")) {
-                "quality_gate_retry"
-            } else {
-                "quality_gate_blocked"
-            },
-            "chapter_id": result.chapter_id,
-            "chapter_number": result.chapter_number,
-            "message": self.quality_gate_message,
-            "progress": if matches!(self.quality_gate_action.as_deref(), Some("retry")) {
-                88
-            } else {
-                95
-            },
-            "quality_gate": self.quality_gate_snapshot,
-        }))
-    }
-
-    fn analysis_started_event(&self) -> Option<Value> {
-        let task_id = self.analysis_task_id.as_deref()?;
-        let message = self.analysis_started_message.as_deref()?;
-
-        Some(json!({
-            "type": "analysis_started",
-            "task_id": task_id,
-            "message": message,
-        }))
-    }
-
-    fn completion_message(&self) -> &str {
-        self.completion_message.as_str()
-    }
-
-    fn response_payload(
-        &self,
-        result: &crate::services::chapter_generation_runtime_service::GeneratedChapterResult,
-    ) -> Value {
-        let mut payload = serde_json::Map::from_iter([
-            ("chapter_id".to_string(), json!(result.chapter_id)),
-            ("chapter_number".to_string(), json!(result.chapter_number)),
-            ("title".to_string(), json!(result.title)),
-            ("content".to_string(), json!(result.content)),
-            ("word_count".to_string(), json!(result.word_count)),
-            ("saved_word_count".to_string(), json!(result.word_count)),
-            ("chapter_status".to_string(), json!("draft")),
-            ("content_applied".to_string(), json!(true)),
-            ("content_source".to_string(), json!("chapter")),
-            ("analysis_task_id".to_string(), json!(self.analysis_task_id)),
-            ("quality_metrics".to_string(), json!(self.quality_metrics)),
-            (
-                "quality_gate_action".to_string(),
-                json!(self.quality_gate_action),
-            ),
-            (
-                "quality_gate_message".to_string(),
-                json!(self.quality_gate_message),
-            ),
-            (
-                "hard_gate_blocked".to_string(),
-                json!(self.hard_gate_blocked),
-            ),
-            (
-                "story_runtime_contract".to_string(),
-                json!(self.story_runtime_contract),
-            ),
-        ]);
-
-        if let Some(latest_quality_metrics) = self.quality_metrics.as_ref() {
-            apply_generation_quality_runtime_context_from_current_quality(
-                &mut payload,
-                "chapter",
-                None,
-                None,
-                latest_quality_metrics,
-                20,
-            );
-            let active_story_repair_payload =
-                resolve_active_story_repair_payload_with_quality_fallback(
-                    None,
-                    payload.get("quality_metrics_summary"),
-                    Some(latest_quality_metrics),
-                    "chapter",
-                    "plot_analysis",
-                    "Plot analysis",
-                );
-            payload.insert(
-                "active_story_repair_payload".to_string(),
-                json!(active_story_repair_payload),
-            );
-        }
-
-        Value::Object(payload)
-    }
-
-    fn ordered_success_event_payloads(
-        &self,
-        result: &crate::services::chapter_generation_runtime_service::GeneratedChapterResult,
-    ) -> Vec<SingleGenerationStreamSuccessEventPayload> {
-        let mut payloads = Vec::new();
-
-        if let Some(quality_metrics_event) = self.quality_metrics_event(result) {
-            payloads.push(SingleGenerationStreamSuccessEventPayload::Json(
-                quality_metrics_event,
-            ));
-        }
-
-        if let Some(quality_gate_event) = self.quality_gate_event(result) {
-            payloads.push(SingleGenerationStreamSuccessEventPayload::Json(
-                quality_gate_event,
-            ));
-        }
-
-        payloads.push(SingleGenerationStreamSuccessEventPayload::Result(
-            self.response_payload(result),
-        ));
-
-        if let Some(analysis_started_event) = self.analysis_started_event() {
-            payloads.push(SingleGenerationStreamSuccessEventPayload::Json(
-                analysis_started_event,
-            ));
-        }
-
-        payloads
-    }
-
-    async fn emit_success(
-        &self,
-        result: &crate::services::chapter_generation_runtime_service::GeneratedChapterResult,
-        tx: &mpsc::Sender<Result<Event, Infallible>>,
-        tracker: &mut SseProgress,
-    ) {
-        let _ = tx
-            .send(Ok(tracker.complete(Some(self.completion_message()))))
-            .await;
-
-        for payload in self.ordered_success_event_payloads(result) {
-            let event = match payload {
-                SingleGenerationStreamSuccessEventPayload::Json(payload) => sse_json(&payload),
-                SingleGenerationStreamSuccessEventPayload::Result(payload) => sse_result(&payload),
-            };
-            let _ = tx.send(Ok(event)).await;
-        }
-
-        let _ = tx.send(Ok(sse_done())).await;
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum SingleGenerationStreamSuccessEventPayload {
+pub(crate) enum SingleGenerationStreamSuccessEventPayload {
     Json(Value),
     Result(Value),
 }
 
-#[derive(Debug, Clone)]
-struct SingleGenerationStreamLifecyclePlan {
-    target_word_count: i32,
-    compat_options: SingleChapterGenerationCompatOptions,
-    enable_analysis: bool,
-    runtime_user_id: String,
-    runtime_input: SingleGenerationRuntimeLaunchInput,
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum SingleGenerationStreamEmissionStep {
+    Complete(String),
+    Payload(SingleGenerationStreamSuccessEventPayload),
+    Done,
 }
 
-impl SingleGenerationStreamLifecyclePlan {
-    fn from_runtime_launch(runtime_input: SingleGenerationRuntimeLaunchInput) -> Self {
-        let target_word_count = runtime_input.execution_input.target_word_count;
-        let compat_options = runtime_input.execution_input.compat_options.clone();
-        let enable_analysis = compat_options.enable_analysis();
-        let runtime_user_id = runtime_input.user_id.clone();
-
-        Self {
-            target_word_count,
-            compat_options,
-            enable_analysis,
-            runtime_user_id,
-            runtime_input,
-        }
-    }
-
-    fn spawn(self, db: DatabaseConnection) -> SingleChapterGenerationStream {
-        let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(32);
-
-        tokio::spawn(async move {
-            self.run(db, tx).await;
-        });
-
-        ReceiverStream::new(rx)
-    }
-
-    async fn run(self, db: DatabaseConnection, tx: mpsc::Sender<Result<Event, Infallible>>) {
-        let mut tracker = SseProgress::new("Chapter Generation");
-        let _ = tx.send(Ok(tracker.start())).await;
-        let _ = tx
-            .send(Ok(
-                tracker.preparing(Some("Preparing chapter generation..."))
-            ))
-            .await;
-        let _ = tx
-            .send(Ok(tracker.generating(
-                Some("Generating chapter content..."),
-                (15, 95),
-                self.target_word_count as usize,
-                None,
-            )))
-            .await;
-
-        match self.runtime_input.execute_generation(&db).await {
-            Ok(result) => {
-                let analysis = SingleGenerationStreamAnalysisOutcome::from_generated_result(
-                    &db,
-                    &self.runtime_user_id,
-                    self.target_word_count,
-                    &self.compat_options,
-                    self.enable_analysis,
-                    &result,
-                )
-                .await;
-                analysis.emit_success(&result, &tx, &mut tracker).await;
-            }
-            Err(error_message) => {
-                let _ = tx.send(Ok(sse_error(&error_message, 500))).await;
-            }
-        }
-    }
-}
-
-fn normalized_non_empty_string(value: Option<&Value>) -> Option<String> {
-    value
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn map_single_generation_stream_quality_gate_action(
+pub(crate) fn map_single_generation_stream_quality_gate_action(
     quality_gate_snapshot: Option<&Value>,
 ) -> Option<String> {
     let decision = normalized_non_empty_string(
@@ -510,41 +583,10 @@ fn map_single_generation_stream_quality_gate_action(
     })
 }
 
-fn extract_single_generation_stream_quality_gate_message(
-    quality_gate_snapshot: Option<&Value>,
-) -> Option<String> {
-    normalized_non_empty_string(quality_gate_snapshot.and_then(|payload| payload.get("summary")))
-        .or_else(|| {
-            normalized_non_empty_string(
-                quality_gate_snapshot.and_then(|payload| payload.get("label")),
-            )
-        })
-}
-
-fn single_generation_story_runtime_contract_text_value(value: &str) -> Value {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        Value::Null
-    } else {
-        json!(trimmed)
-    }
-}
-
-fn insert_single_generation_story_runtime_override(
-    overrides: &mut serde_json::Map<String, Value>,
-    key: &str,
-    value: &str,
-) {
-    let trimmed = value.trim();
-    if !trimmed.is_empty() {
-        overrides.insert(key.to_string(), json!(trimmed));
-    }
-}
-
-fn build_single_generation_stream_story_runtime_contract(
+pub(crate) fn build_single_generation_stream_story_runtime_contract(
     chapter_number: i32,
     target_word_count: i32,
-    compat_options: &super::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions,
+    compat_options: &SingleChapterGenerationCompatOptions,
 ) -> Option<Value> {
     let mut request_overrides = serde_json::Map::new();
     insert_single_generation_story_runtime_override(
@@ -606,7 +648,7 @@ fn build_single_generation_stream_story_runtime_contract(
     }))
 }
 
-fn attach_single_generation_stream_story_runtime_contract(
+pub(crate) fn attach_single_generation_stream_story_runtime_contract(
     quality_metrics: Option<Value>,
     story_runtime_contract: Option<&Value>,
 ) -> Option<Value> {
@@ -623,25 +665,68 @@ fn attach_single_generation_stream_story_runtime_contract(
     }
 }
 
+fn normalized_non_empty_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn extract_single_generation_stream_quality_gate_message(
+    quality_gate_snapshot: Option<&Value>,
+) -> Option<String> {
+    normalized_non_empty_string(quality_gate_snapshot.and_then(|payload| payload.get("summary")))
+        .or_else(|| {
+            normalized_non_empty_string(
+                quality_gate_snapshot.and_then(|payload| payload.get("label")),
+            )
+        })
+}
+
+fn single_generation_story_runtime_contract_text_value(value: &str) -> Value {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        Value::Null
+    } else {
+        json!(trimmed)
+    }
+}
+
+fn insert_single_generation_story_runtime_override(
+    overrides: &mut serde_json::Map<String, Value>,
+    key: &str,
+    value: &str,
+) {
+    let trimmed = value.trim();
+    if !trimmed.is_empty() {
+        overrides.insert(key.to_string(), json!(trimmed));
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use sea_orm::Database;
     use sea_orm::Set;
     use serde_json::json;
 
     use super::{
         attach_single_generation_stream_story_runtime_contract,
         build_single_generation_stream_story_runtime_contract,
-        map_single_generation_stream_quality_gate_action, SingleChapterGenerationRequest,
-        SingleGenerationStreamAnalysisOutcome, SingleGenerationStreamLifecyclePlan,
-        SingleGenerationStreamSuccessEventPayload, SingleGenerationStreamWorkflowStart,
+        map_single_generation_stream_quality_gate_action,
+        prepare_owned_single_generation_stream_runtime_launch, SingleGenerationStreamEmissionStep,
+        SingleGenerationStreamLifecyclePlan, SingleGenerationStreamSuccessArtifacts,
+        SingleGenerationStreamSuccessEventPayload,
     };
     use crate::ai::AIConfig;
-    use crate::services::chapter_batch_generation_task_model_service::build_batch_generation_task_active_model;
+    use crate::services::chapter_batch_generation_write_workflow_service::build_batch_generation_task_active_model;
     use crate::services::chapter_generation_access_service::LoadAccessibleChapterForGenerationError;
+    use crate::services::chapter_generation_execution_contract_service::{
+        SingleChapterGenerationCompatOptions, SingleChapterGenerationExecutionInput,
+    };
     use crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload;
     use crate::services::chapter_single_generation_prepare_service::{
-        PrepareSingleChapterGenerationRequestError, SingleChapterGenerationCompatOptions,
-        SingleChapterGenerationExecutionInput, SingleChapterGenerationTarget,
+        PrepareSingleChapterGenerationRequestError, SingleChapterGenerationRouteRequest,
     };
     use crate::services::chapter_single_generation_runtime_state_service::SingleGenerationRuntimeLaunchInput;
 
@@ -767,113 +852,7 @@ mod tests {
     }
 
     #[test]
-    fn should_build_single_generation_stream_launch_input_from_runtime_parts() {
-        let chapter_target = SingleChapterGenerationTarget {
-            chapter_id: "chapter-7".to_string(),
-            project_id: "project-1".to_string(),
-            chapter_number: 7,
-            title: "第七章".to_string(),
-        };
-        let execution_input = SingleChapterGenerationExecutionInput {
-            target_word_count: 2600,
-            compat_options: empty_compat_options(),
-            execution_config: crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
-                ai_config: AIConfig::default(),
-                provider_payload: PromptContextProviderPayload {
-                    recent_chapters_context: String::new(),
-                    previous_chapter_summary: String::new(),
-                    chapter_careers: "[]".to_string(),
-                    characters_info: "[]".to_string(),
-                    foreshadow_reminders: "[]".to_string(),
-                    relevant_memories: "[]".to_string(),
-                    research_query: String::new(),
-                    research_assets: "[]".to_string(),
-                    external_assets: "[]".to_string(),
-                    reference_assets: "[]".to_string(),
-                    mcp_references: String::new(),
-                },
-            },
-        };
-
-        let chapter_id = chapter_target.chapter_id.clone();
-        let launch = SingleGenerationRuntimeLaunchInput {
-            chapter_id: chapter_target.chapter_id,
-            user_id: "user-1".to_string(),
-            execution_input,
-        };
-
-        assert_eq!(launch.chapter_id, "chapter-7");
-        assert_eq!(launch.user_id, "user-1");
-        assert_eq!(launch.execution_input.target_word_count, 2600);
-        assert_eq!(chapter_id, "chapter-7");
-    }
-
-    #[test]
-    fn should_build_single_generation_stream_runtime_input_contract() {
-        let runtime_input = SingleGenerationRuntimeLaunchInput {
-            chapter_id: "chapter-11".to_string(),
-            user_id: "user-77".to_string(),
-            execution_input: SingleChapterGenerationExecutionInput {
-                target_word_count: 1800,
-                compat_options: empty_compat_options(),
-                execution_config: crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
-                    ai_config: AIConfig::default(),
-                    provider_payload: PromptContextProviderPayload {
-                        recent_chapters_context: String::new(),
-                        previous_chapter_summary: String::new(),
-                        chapter_careers: "[]".to_string(),
-                        characters_info: "[]".to_string(),
-                        foreshadow_reminders: "[]".to_string(),
-                        relevant_memories: "[]".to_string(),
-                        research_query: String::new(),
-                        research_assets: "[]".to_string(),
-                        external_assets: "[]".to_string(),
-                        reference_assets: "[]".to_string(),
-                        mcp_references: String::new(),
-                    },
-                },
-            },
-        };
-
-        assert_eq!(runtime_input.chapter_id, "chapter-11");
-        assert_eq!(runtime_input.user_id, "user-77");
-        assert_eq!(runtime_input.execution_input.target_word_count, 1800);
-    }
-
-    #[test]
-    fn should_keep_single_generation_stream_launch_input_contract() {
-        let launch = SingleGenerationRuntimeLaunchInput {
-            chapter_id: "chapter-9".to_string(),
-            user_id: "user-42".to_string(),
-            execution_input: SingleChapterGenerationExecutionInput {
-                target_word_count: 2400,
-                compat_options: empty_compat_options(),
-                execution_config: crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
-                    ai_config: AIConfig::default(),
-                    provider_payload: PromptContextProviderPayload {
-                        recent_chapters_context: String::new(),
-                        previous_chapter_summary: String::new(),
-                        chapter_careers: "[]".to_string(),
-                        characters_info: "[]".to_string(),
-                        foreshadow_reminders: "[]".to_string(),
-                        relevant_memories: "[]".to_string(),
-                        research_query: String::new(),
-                        research_assets: "[]".to_string(),
-                        external_assets: "[]".to_string(),
-                        reference_assets: "[]".to_string(),
-                        mcp_references: String::new(),
-                    },
-                },
-            },
-        };
-
-        assert_eq!(launch.chapter_id, "chapter-9");
-        assert_eq!(launch.user_id, "user-42");
-        assert_eq!(launch.execution_input.target_word_count, 2400);
-    }
-
-    #[test]
-    fn should_keep_single_generation_stream_workflow_start_owner_contract() {
+    fn should_keep_single_generation_stream_lifecycle_owner_contract() {
         let launch = SingleGenerationRuntimeLaunchInput {
             chapter_id: "chapter-stream".to_string(),
             user_id: "user-stream".to_string(),
@@ -902,19 +881,12 @@ mod tests {
             },
         };
 
-        let workflow_start =
-            SingleGenerationStreamWorkflowStart::from_runtime_launch(launch.clone());
+        let lifecycle = SingleGenerationStreamLifecyclePlan::from_runtime_launch(launch.clone());
 
-        assert_eq!(
-            workflow_start.lifecycle().runtime_input.chapter_id,
-            launch.chapter_id
-        );
-        assert_eq!(
-            workflow_start.lifecycle().runtime_input.user_id,
-            launch.user_id
-        );
-        assert_eq!(workflow_start.lifecycle().target_word_count, 2500);
-        assert!(!workflow_start.lifecycle().enable_analysis);
+        assert_eq!(lifecycle.runtime_input.chapter_id, launch.chapter_id);
+        assert_eq!(lifecycle.runtime_input.user_id, launch.user_id);
+        assert_eq!(lifecycle.target_word_count, 2500);
+        assert!(!lifecycle.enable_analysis);
     }
 
     #[test]
@@ -925,9 +897,18 @@ mod tests {
             title: "第七章".to_string(),
             content: "content".to_string(),
             word_count: 2600,
+            saved_word_count: 2600,
+            chapter_status: "completed".to_string(),
+            content_applied: true,
+            candidate_gateway_metadata: Some(json!({
+                "execution_path": "rust_candidate_executor",
+                "fallback_applied": false,
+                "rollback_boundary": "python_candidate_executor_fallback"
+            })),
+            ..Default::default()
         };
 
-        let analysis = SingleGenerationStreamAnalysisOutcome::from_quality_metrics(
+        let analysis = SingleGenerationStreamSuccessArtifacts::from_quality_metrics(
             Some("analysis-task-1".to_string()),
             Some(json!({
                 "overall_score": 9.1,
@@ -953,9 +934,17 @@ mod tests {
         assert_eq!(response_payload["chapter_number"], 7);
         assert_eq!(response_payload["word_count"], 2600);
         assert_eq!(response_payload["saved_word_count"], 2600);
-        assert_eq!(response_payload["chapter_status"], "draft");
+        assert_eq!(response_payload["chapter_status"], "completed");
         assert_eq!(response_payload["content_applied"], true);
         assert_eq!(response_payload["content_source"], "chapter");
+        assert_eq!(
+            response_payload["candidate_gateway"]["execution_path"],
+            "rust_candidate_executor"
+        );
+        assert_eq!(
+            response_payload["candidate_gateway"]["fallback_applied"],
+            false
+        );
         assert_eq!(response_payload["analysis_task_id"], "analysis-task-1");
         assert_eq!(response_payload["quality_gate_action"], "continue");
         assert_eq!(response_payload["quality_gate_message"], "当前章节通过");
@@ -1027,8 +1016,14 @@ mod tests {
             title: "第八章".to_string(),
             content: "content".to_string(),
             word_count: 2800,
+            saved_word_count: 2800,
+            chapter_status: "draft".to_string(),
+            content_applied: false,
+            provisional_draft_saved: true,
+            attempt_state: "retry".to_string(),
+            ..Default::default()
         };
-        let analysis = SingleGenerationStreamAnalysisOutcome::from_quality_metrics(
+        let analysis = SingleGenerationStreamSuccessArtifacts::from_quality_metrics(
             Some("analysis-task-8".to_string()),
             Some(json!({
                 "overall_score": 7.2,
@@ -1116,8 +1111,14 @@ mod tests {
             title: "第十章".to_string(),
             content: "content".to_string(),
             word_count: 3100,
+            saved_word_count: 3100,
+            chapter_status: "draft".to_string(),
+            content_applied: false,
+            provisional_draft_saved: true,
+            attempt_state: "retry".to_string(),
+            ..Default::default()
         };
-        let analysis = SingleGenerationStreamAnalysisOutcome::from_quality_metrics(
+        let analysis = SingleGenerationStreamSuccessArtifacts::from_quality_metrics(
             Some("analysis-task-10".to_string()),
             Some(json!({
                 "overall_score": 6.4,
@@ -1191,8 +1192,14 @@ mod tests {
             title: "第十二章".to_string(),
             content: "content".to_string(),
             word_count: 3300,
+            saved_word_count: 3300,
+            chapter_status: "draft".to_string(),
+            content_applied: false,
+            provisional_draft_saved: true,
+            attempt_state: "retry".to_string(),
+            ..Default::default()
         };
-        let analysis = SingleGenerationStreamAnalysisOutcome::from_quality_metrics(
+        let analysis = SingleGenerationStreamSuccessArtifacts::from_quality_metrics(
             Some("analysis-task-12".to_string()),
             Some(json!({
                 "overall_score": 6.9,
@@ -1252,8 +1259,13 @@ mod tests {
             title: "第十三章".to_string(),
             content: "content".to_string(),
             word_count: 3500,
+            saved_word_count: 3500,
+            chapter_status: "completed".to_string(),
+            content_applied: true,
+            attempt_state: "applied".to_string(),
+            ..Default::default()
         };
-        let analysis = SingleGenerationStreamAnalysisOutcome::from_quality_metrics(
+        let analysis = SingleGenerationStreamSuccessArtifacts::from_quality_metrics(
             Some("analysis-task-13".to_string()),
             Some(json!({
                 "overall_score": 7.6,
@@ -1306,8 +1318,12 @@ mod tests {
             title: "第十四章".to_string(),
             content: "content".to_string(),
             word_count: 3600,
+            chapter_status: "draft".to_string(),
+            content_applied: false,
+            attempt_state: "manual_review".to_string(),
+            ..Default::default()
         };
-        let analysis = SingleGenerationStreamAnalysisOutcome::from_quality_metrics(
+        let analysis = SingleGenerationStreamSuccessArtifacts::from_quality_metrics(
             Some("analysis-task-14".to_string()),
             Some(json!({
                 "overall_score": 6.8,
@@ -1386,6 +1402,74 @@ mod tests {
     }
 
     #[test]
+    fn should_build_single_generation_stream_emission_plan_from_finalize_owner() {
+        let result = crate::services::chapter_generation_runtime_service::GeneratedChapterResult {
+            chapter_id: "chapter-15".to_string(),
+            chapter_number: 15,
+            title: "第十五章".to_string(),
+            content: "content".to_string(),
+            word_count: 3700,
+            saved_word_count: 3700,
+            chapter_status: "draft".to_string(),
+            content_applied: false,
+            provisional_draft_saved: true,
+            attempt_state: "retry".to_string(),
+            ..Default::default()
+        };
+        let analysis = SingleGenerationStreamSuccessArtifacts::from_quality_metrics(
+            Some("analysis-task-15".to_string()),
+            Some(json!({
+                "overall_score": 6.5,
+                "quality_gate": {
+                    "decision": "auto_repair",
+                    "summary": "建议自动修复"
+                }
+            })),
+            Some(json!({
+                "guidance": {
+                    "story_focus": "escalate_conflict"
+                }
+            })),
+        );
+
+        let plan = analysis.build_success_emission_plan(&result);
+
+        assert_eq!(plan.len(), 6);
+        assert!(matches!(
+            &plan[0],
+            SingleGenerationStreamEmissionStep::Complete(message)
+                if message == "章节生成完成，已转入质量修复"
+        ));
+        assert!(matches!(
+            &plan[1],
+            SingleGenerationStreamEmissionStep::Payload(
+                SingleGenerationStreamSuccessEventPayload::Json(payload)
+            ) if payload["type"] == "quality_metrics"
+        ));
+        assert!(matches!(
+            &plan[2],
+            SingleGenerationStreamEmissionStep::Payload(
+                SingleGenerationStreamSuccessEventPayload::Json(payload)
+            ) if payload["type"] == "quality_gate_retry"
+        ));
+        assert!(matches!(
+            &plan[3],
+            SingleGenerationStreamEmissionStep::Payload(
+                SingleGenerationStreamSuccessEventPayload::Result(payload)
+            ) if payload["chapter_id"] == "chapter-15"
+                && payload["quality_gate_action"] == "retry"
+        ));
+        assert!(matches!(
+            &plan[4],
+            SingleGenerationStreamEmissionStep::Payload(
+                SingleGenerationStreamSuccessEventPayload::Json(payload)
+            ) if payload["type"] == "analysis_started"
+                && payload["message"] == "质量修复分析任务已启动"
+        ));
+        assert!(matches!(&plan[5], SingleGenerationStreamEmissionStep::Done));
+    }
+
+    #[test]
     fn should_build_minimal_single_generation_stream_story_runtime_contract() {
         let contract = build_single_generation_stream_story_runtime_contract(
             9,
@@ -1441,6 +1525,80 @@ mod tests {
             "development"
         );
         assert_eq!(metrics["quality_gate"]["decision"], "passed");
+    }
+
+    #[test]
+    fn should_map_single_generation_stream_quality_gate_actions_to_runtime_contract() {
+        assert_eq!(
+            map_single_generation_stream_quality_gate_action(Some(&json!({
+                "decision": "passed"
+            })))
+            .as_deref(),
+            Some("continue")
+        );
+        assert_eq!(
+            map_single_generation_stream_quality_gate_action(Some(&json!({
+                "decision": "retry"
+            })))
+            .as_deref(),
+            Some("retry")
+        );
+        assert_eq!(
+            map_single_generation_stream_quality_gate_action(Some(&json!({
+                "decision": "manual_review"
+            })))
+            .as_deref(),
+            Some("manual_review")
+        );
+    }
+
+    #[test]
+    fn should_attach_single_generation_stream_story_runtime_contract_when_quality_metrics_exist() {
+        let payload = attach_single_generation_stream_story_runtime_contract(
+            Some(json!({
+                "overall_score": 92
+            })),
+            Some(&json!({
+                "version": 1,
+                "source": "chapter-generation-intent"
+            })),
+        )
+        .expect("attached payload");
+
+        assert_eq!(payload["overall_score"], 92);
+        assert_eq!(payload["story_runtime_contract"]["version"], 1);
+        assert_eq!(
+            payload["story_runtime_contract"]["source"],
+            "chapter-generation-intent"
+        );
+    }
+
+    #[test]
+    fn should_build_single_generation_stream_story_runtime_contract_from_compat_options() {
+        let compat = SingleChapterGenerationCompatOptions {
+            creative_mode: Some("suspense".to_string()),
+            story_focus: Some("advance_plot".to_string()),
+            plot_stage: Some("climax".to_string()),
+            story_creation_brief: Some("让冲突快速升级".to_string()),
+            quality_preset: Some("immersive".to_string()),
+            quality_notes: Some("减少旁白解释".to_string()),
+            ..empty_compat_options()
+        };
+
+        let contract = build_single_generation_stream_story_runtime_contract(8, 3200, &compat)
+            .expect("story runtime contract");
+
+        assert_eq!(contract["version"], 1);
+        assert_eq!(contract["blueprint"]["current_chapter_number"], 8);
+        assert_eq!(contract["blueprint"]["target_word_count"], 3200);
+        assert_eq!(contract["guidance"]["creative_mode"], "suspense");
+        assert_eq!(contract["guidance"]["story_focus"], "advance_plot");
+        assert_eq!(contract["guidance"]["plot_stage"], "climax");
+        assert_eq!(contract["request_overrides"]["quality_preset"], "immersive");
+        assert_eq!(
+            contract["request_overrides"]["quality_notes"],
+            "减少旁白解释"
+        );
     }
 
     #[test]
@@ -1524,30 +1682,71 @@ mod tests {
         let _stream = SingleGenerationStreamLifecyclePlan::from_runtime_launch(launch).spawn(db);
     }
 
-    #[test]
-    fn should_keep_single_chapter_generation_request_contract_minimal() {
-        let request = SingleChapterGenerationRequest {
-            style_id: None,
-            target_word_count: Some(2200),
-            model: Some("gpt-test".to_string()),
-            enable_analysis: None,
-            enable_mcp: None,
-            enable_web_research: None,
-            web_research_query: None,
-            narrative_perspective: None,
-            creative_mode: None,
-            story_focus: None,
-            plot_stage: None,
-            story_creation_brief: None,
-            quality_preset: None,
-            quality_notes: None,
-            story_repair_summary: None,
-            story_repair_targets: None,
-            story_preserve_strengths: None,
+    #[tokio::test]
+    async fn should_keep_single_generation_stream_lifecycle_spawn_owner_contract() {
+        let launch = SingleGenerationRuntimeLaunchInput {
+            chapter_id: "chapter-3".to_string(),
+            user_id: "user-3".to_string(),
+            execution_input: SingleChapterGenerationExecutionInput {
+                target_word_count: 1900,
+                compat_options: empty_compat_options(),
+                execution_config: crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
+                    ai_config: AIConfig::default(),
+                    provider_payload: PromptContextProviderPayload {
+                        recent_chapters_context: String::new(),
+                        previous_chapter_summary: String::new(),
+                        chapter_careers: "[]".to_string(),
+                        characters_info: "[]".to_string(),
+                        foreshadow_reminders: "[]".to_string(),
+                        relevant_memories: "[]".to_string(),
+                        research_query: String::new(),
+                        research_assets: "[]".to_string(),
+                        external_assets: "[]".to_string(),
+                        reference_assets: "[]".to_string(),
+                        mcp_references: String::new(),
+                    },
+                },
+            },
         };
+        let db = sea_orm::Database::connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite memory db");
 
-        assert_eq!(request.style_id, None);
-        assert_eq!(request.target_word_count, Some(2200));
-        assert_eq!(request.model.as_deref(), Some("gpt-test"));
+        let _stream = SingleGenerationStreamLifecyclePlan::from_runtime_launch(launch).spawn(db);
+    }
+
+    #[tokio::test]
+    async fn should_preserve_single_generation_stream_route_request_error_boundary() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite memory db");
+
+        let result = prepare_owned_single_generation_stream_runtime_launch(
+            &db,
+            "user-route",
+            "missing-chapter",
+            SingleChapterGenerationRouteRequest {
+                target_word_count: Some(1800),
+                model: Some("gpt-test".to_string()),
+                enable_analysis: Some(true),
+                enable_mcp: Some(true),
+                enable_web_research: Some(false),
+                web_research_query: None,
+                style_id: None,
+                narrative_perspective: None,
+                creative_mode: None,
+                story_focus: None,
+                plot_stage: None,
+                story_creation_brief: None,
+                quality_preset: None,
+                quality_notes: None,
+                story_repair_summary: None,
+                story_repair_targets: Some(vec!["target-a".to_string()]),
+                story_preserve_strengths: Some(vec!["strength-a".to_string()]),
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
     }
 }

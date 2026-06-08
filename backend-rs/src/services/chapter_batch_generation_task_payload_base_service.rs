@@ -1,19 +1,247 @@
 use chrono::NaiveDateTime;
 use serde_json::{json, Map, Value};
 
-use crate::models::batch_generation_task;
-use crate::services::chapter_batch_generation_quality_runtime_context_service::{
-    apply_batch_quality_runtime_context_to_payload, BatchGenerationQualityRuntimeContext,
-};
-use crate::services::chapter_batch_generation_quality_status_service::{
-    insert_batch_generation_terminal_status_payload, BatchGenerationQualityStatusContext,
-};
-use crate::services::chapter_batch_generation_status_semantics_service::{
-    batch_generation_stage_code, task_execution_mode, task_type,
+use crate::models::{batch_generation_snapshot, batch_generation_task};
+use crate::services::chapter_candidate_runtime_state_service::insert_python_query_snapshot_candidate_runtime_fields;
+use crate::services::chapter_generation_quality_gate_semantics_service::{
+    manual_review_label, manual_review_label_from_quality_context_with_retry_budget,
+    retryable_repair_label, retryable_repair_label_from_quality_context_with_retry_budget,
 };
 use crate::services::chapter_generation_quality_runtime_context_service::{
-    apply_generation_quality_runtime_context_to_payload, GenerationQualityRuntimeContext,
+    apply_batch_quality_runtime_context_to_payload,
+    apply_generation_quality_runtime_context_to_payload,
+    resolve_batch_quality_runtime_context_from_snapshot_and_runtime_state,
+    BatchGenerationQualityRuntimeContext, GenerationQualityRuntimeContext,
 };
+use crate::services::chapter_generation_task_semantics_service::task_type;
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BatchGenerationQualityStatusContext {
+    pub latest_quality_metrics: Option<Value>,
+    pub quality_metrics_history: Option<Value>,
+    pub quality_metrics_summary_state: Option<Value>,
+    pub quality_metrics_summary: Option<Value>,
+    pub quality_history_context: Option<Value>,
+    pub active_story_repair_payload: Option<Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BatchGenerationFailedTerminalKind {
+    ManualReview,
+    Retry,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BatchGenerationFailedTerminalSemantics {
+    pub(crate) kind: BatchGenerationFailedTerminalKind,
+    pub(crate) reason: &'static str,
+    pub(crate) label: String,
+    pub(crate) review_required: bool,
+    pub(crate) can_resume: bool,
+}
+
+impl BatchGenerationQualityStatusContext {
+    pub fn from_snapshot_and_runtime_state(
+        snapshot: Option<&batch_generation_snapshot::Model>,
+        workflow_runtime_state: Option<&Value>,
+    ) -> Self {
+        let active_story_repair_payload =
+            Self::active_story_repair_payload_from_runtime_state(workflow_runtime_state);
+        let quality_runtime_context =
+            resolve_batch_quality_runtime_context_from_snapshot_and_runtime_state(
+                snapshot,
+                workflow_runtime_state,
+            );
+
+        Self::from_runtime_quality_context_and_active_payload(
+            &quality_runtime_context,
+            active_story_repair_payload.as_ref(),
+        )
+    }
+
+    pub fn insert_into_payload(&self, payload: &mut Map<String, Value>) {
+        payload.insert(
+            "latest_quality_metrics".to_string(),
+            serde_json::json!(self.latest_quality_metrics),
+        );
+        payload.insert(
+            "quality_metrics_history".to_string(),
+            serde_json::json!(self.quality_metrics_history),
+        );
+        payload.insert(
+            "quality_metrics_summary_state".to_string(),
+            serde_json::json!(self.quality_metrics_summary_state),
+        );
+        payload.insert(
+            "quality_metrics_summary".to_string(),
+            serde_json::json!(self.quality_metrics_summary),
+        );
+        payload.insert(
+            "quality_history_context".to_string(),
+            serde_json::json!(self.quality_history_context),
+        );
+        payload.insert(
+            "active_story_repair_payload".to_string(),
+            serde_json::json!(self.active_story_repair_payload),
+        );
+    }
+
+    pub fn from_runtime_quality_context_and_active_payload(
+        quality_runtime_context: &BatchGenerationQualityRuntimeContext,
+        active_story_repair_payload: Option<&Value>,
+    ) -> Self {
+        Self {
+            latest_quality_metrics: quality_runtime_context.latest_quality_metrics.clone(),
+            quality_metrics_history: quality_runtime_context.quality_metrics_history.clone(),
+            quality_metrics_summary_state: quality_runtime_context
+                .quality_metrics_summary_state
+                .clone(),
+            quality_metrics_summary: quality_runtime_context.quality_metrics_summary.clone(),
+            quality_history_context: quality_runtime_context.quality_history_context.clone(),
+            active_story_repair_payload: active_story_repair_payload.cloned(),
+        }
+    }
+
+    fn active_story_repair_payload_from_runtime_state(
+        workflow_runtime_state: Option<&Value>,
+    ) -> Option<Value> {
+        workflow_runtime_state
+            .and_then(Value::as_object)
+            .and_then(|state| state.get("active_story_repair_payload"))
+            .filter(|payload| payload.is_object())
+            .cloned()
+    }
+}
+
+pub(crate) fn insert_batch_generation_terminal_status_payload(
+    payload: &mut Map<String, Value>,
+    task: &batch_generation_task::Model,
+    failed_chapters: Option<&Value>,
+    quality_status_context: Option<&BatchGenerationQualityStatusContext>,
+) {
+    let (terminal_reason, terminal_label, review_required, can_resume) = if task.status == "failed"
+    {
+        resolve_failed_terminal_semantics(task, failed_chapters, quality_status_context)
+            .map(|semantics| match semantics.kind {
+                BatchGenerationFailedTerminalKind::ManualReview => (
+                    Some(semantics.reason),
+                    Some(semantics.label),
+                    semantics.review_required,
+                    semantics.can_resume,
+                ),
+                BatchGenerationFailedTerminalKind::Retry
+                | BatchGenerationFailedTerminalKind::Error => {
+                    (Some("error"), Some("执行失败".to_string()), false, true)
+                }
+            })
+            .unwrap_or((Some("error"), Some("执行失败".to_string()), false, true))
+    } else {
+        match task.status.as_str() {
+            "completed" => (Some("completed"), Some("已完成".to_string()), false, false),
+            "cancelled" => (Some("cancelled"), Some("已取消".to_string()), false, true),
+            _ => (None, None, false, false),
+        }
+    };
+
+    payload.insert(
+        "terminal_reason".to_string(),
+        serde_json::json!(terminal_reason),
+    );
+    payload.insert(
+        "terminal_label".to_string(),
+        serde_json::json!(terminal_label),
+    );
+    payload.insert(
+        "review_required".to_string(),
+        serde_json::json!(review_required),
+    );
+    payload.insert("can_resume".to_string(), serde_json::json!(can_resume));
+}
+
+pub(crate) fn resolve_failed_terminal_semantics(
+    task: &batch_generation_task::Model,
+    failed_chapters: Option<&Value>,
+    quality_status_context: Option<&BatchGenerationQualityStatusContext>,
+) -> Option<BatchGenerationFailedTerminalSemantics> {
+    resolve_failed_terminal_semantics_from_sources(
+        failed_chapters,
+        quality_status_context,
+        task.current_retry_count,
+        task.max_retries,
+    )
+}
+
+pub(crate) fn resolve_failed_terminal_semantics_from_sources(
+    failed_chapters: Option<&Value>,
+    quality_status_context: Option<&BatchGenerationQualityStatusContext>,
+    current_retry_count: i32,
+    max_retries: i32,
+) -> Option<BatchGenerationFailedTerminalSemantics> {
+    if let Some(label) = manual_review_label(failed_chapters).or_else(|| {
+        quality_status_context.and_then(|context| {
+            manual_review_label_from_quality_context_with_retry_budget(
+                context.active_story_repair_payload.as_ref(),
+                context.quality_metrics_summary.as_ref(),
+                context.latest_quality_metrics.as_ref(),
+                current_retry_count,
+                max_retries,
+            )
+        })
+    }) {
+        return Some(BatchGenerationFailedTerminalSemantics {
+            kind: BatchGenerationFailedTerminalKind::ManualReview,
+            reason: "manual_review",
+            label,
+            review_required: true,
+            can_resume: false,
+        });
+    }
+
+    if let Some(label) = retryable_repair_label(failed_chapters, current_retry_count, max_retries)
+        .or_else(|| {
+            quality_status_context.and_then(|context| {
+                retryable_repair_label_from_quality_context_with_retry_budget(
+                    context.active_story_repair_payload.as_ref(),
+                    context.quality_metrics_summary.as_ref(),
+                    context.latest_quality_metrics.as_ref(),
+                    current_retry_count,
+                    max_retries,
+                )
+            })
+        })
+    {
+        return Some(BatchGenerationFailedTerminalSemantics {
+            kind: BatchGenerationFailedTerminalKind::Retry,
+            reason: "retry",
+            label,
+            review_required: false,
+            can_resume: true,
+        });
+    }
+
+    Some(BatchGenerationFailedTerminalSemantics {
+        kind: BatchGenerationFailedTerminalKind::Error,
+        reason: "error",
+        label: "执行失败".to_string(),
+        review_required: false,
+        can_resume: true,
+    })
+}
+
+pub(crate) fn batch_generation_stage_code(status: &str) -> &'static str {
+    match status {
+        "completed" => "6.writing.completed",
+        "failed" => "6.writing.failed",
+        "cancelled" => "6.writing.cancelled",
+        "running" => "6.writing.generating",
+        _ => "6.writing.pending",
+    }
+}
+
+pub(crate) fn task_execution_mode() -> &'static str {
+    "interactive"
+}
 
 pub(crate) fn to_iso(value: Option<NaiveDateTime>) -> Option<String> {
     value.map(|datetime| datetime.and_utc().to_rfc3339())
@@ -121,23 +349,15 @@ fn fallback_batch_checkpoint_progress(task: &batch_generation_task::Model) -> i3
 }
 
 fn insert_python_query_snapshot_runtime_fields(checkpoint: &mut Map<String, Value>) {
-    const RAW_FIELDS: [&str; 10] = [
+    const RAW_FIELDS: [&str; 4] = [
         "last_event",
         "last_message",
-        "candidate_index",
-        "candidate_count",
-        "word_count",
-        "generation_path",
-        "attempt_kind",
-        "winner_candidate_index",
         "pre_compaction_total_length",
         "context_budget_limit",
     ];
-    const BOOL_FIELDS: [&str; 3] = [
-        "rerank_used",
-        "word_budget_repair_used",
-        "compaction_applied",
-    ];
+    const BOOL_FIELDS: [&str; 1] = ["compaction_applied"];
+
+    insert_python_query_snapshot_candidate_runtime_fields(checkpoint);
 
     for key in RAW_FIELDS {
         checkpoint
@@ -477,7 +697,7 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::{
-        apply_batch_generation_loading_stage_fields,
+        apply_batch_generation_loading_stage_fields, batch_generation_stage_code,
         build_batch_generation_command_summary_payload,
         build_batch_generation_task_response_payload_from_runtime_parts,
         build_batch_generation_task_runtime_payload,
@@ -485,28 +705,35 @@ mod tests {
         build_batch_generation_task_runtime_payload_from_task_state,
         build_batch_generation_task_view_payload_from_task_state,
         build_batch_generation_task_view_payload_with_quality_context,
-        checkpoint_with_runtime_metadata, BatchGenerationCommandProgressSummary,
+        checkpoint_with_runtime_metadata, insert_batch_generation_terminal_status_payload,
+        resolve_failed_terminal_semantics, resolve_failed_terminal_semantics_from_sources,
+        task_execution_mode, BatchGenerationCommandProgressSummary,
+        BatchGenerationFailedTerminalKind, BatchGenerationQualityStatusContext,
         BatchGenerationTaskResponsePayloadOptions, BatchGenerationTaskResponseQualityPayload,
         BatchGenerationTaskViewPayloadVariant,
     };
-    use crate::models::batch_generation_task;
-    use crate::services::chapter_batch_generation_quality_runtime_context_service::BatchGenerationQualityRuntimeContext;
-    use crate::services::chapter_batch_generation_quality_status_service::BatchGenerationQualityStatusContext;
-    use crate::services::chapter_batch_generation_status_semantics_service::task_type;
+    use crate::models::{batch_generation_snapshot, batch_generation_task};
+    use crate::services::chapter_generation_quality_runtime_context_service::BatchGenerationQualityRuntimeContext;
+    use crate::services::chapter_generation_task_semantics_service::task_type;
 
-    fn build_task(status: &str) -> batch_generation_task::Model {
+    fn build_task_shape(
+        status: &str,
+        chapter_count: i32,
+        chapter_ids: Value,
+        total_chapters: i32,
+    ) -> batch_generation_task::Model {
         batch_generation_task::Model {
             id: "task-1".to_string(),
             project_id: "project-1".to_string(),
             user_id: "user-1".to_string(),
             start_chapter_number: 1,
-            chapter_count: 1,
-            chapter_ids: json!(["chapter-1"]),
+            chapter_count,
+            chapter_ids,
             style_id: None,
             target_word_count: 3000,
             enable_analysis: false,
             status: status.to_string(),
-            total_chapters: 2,
+            total_chapters,
             completed_chapters: 1,
             failed_chapters: json!([]),
             current_chapter_id: Some("chapter-1".to_string()),
@@ -518,6 +745,55 @@ mod tests {
             completed_at: None,
             error_message: None,
         }
+    }
+
+    fn build_task(status: &str) -> batch_generation_task::Model {
+        build_task_shape(status, 1, json!(["chapter-1"]), 2)
+    }
+
+    fn snapshot_with_quality_fields() -> batch_generation_snapshot::Model {
+        batch_generation_snapshot::Model {
+            id: "snapshot-1".to_string(),
+            batch_task_id: "task-1".to_string(),
+            latest_quality_metrics: Some(json!({"score": 91})),
+            quality_metrics_history: Some(json!([{"score": 90}])),
+            quality_metrics_summary: Some(json!({"summary": "ok"})),
+            workflow_runtime_state: None,
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn should_resolve_batch_generation_stage_code() {
+        let cases = [
+            ("completed", "6.writing.completed"),
+            ("failed", "6.writing.failed"),
+            ("cancelled", "6.writing.cancelled"),
+            ("running", "6.writing.generating"),
+            ("pending", "6.writing.pending"),
+            ("unknown", "6.writing.pending"),
+        ];
+
+        for (status, expected) in cases {
+            assert_eq!(batch_generation_stage_code(status), expected);
+        }
+    }
+
+    #[test]
+    fn should_keep_batch_generation_execution_mode_interactive() {
+        let single = build_task_shape("running", 1, json!(["chapter-1"]), 1);
+        let batch = build_task_shape("running", 2, json!(["chapter-1", "chapter-2"]), 2);
+        let malformed_single =
+            build_task_shape("running", 1, json!({"chapter_id": "chapter-1"}), 1);
+
+        assert_eq!(task_execution_mode(), "interactive");
+        assert_eq!(task_execution_mode(), "interactive");
+        assert_eq!(task_execution_mode(), "interactive");
+
+        assert_eq!(single.chapter_count, 1);
+        assert_eq!(batch.chapter_count, 2);
+        assert_eq!(malformed_single.chapter_count, 1);
     }
 
     #[test]
@@ -1020,5 +1296,302 @@ mod tests {
         assert_eq!(payload["stage_code"], "6.writing.loading");
         assert_eq!(payload["checkpoint"]["stage_code"], "6.writing.loading");
         assert_eq!(payload["checkpoint"]["progress_phase"], "loading");
+    }
+
+    #[test]
+    fn should_extract_active_story_repair_payload_from_runtime_state() {
+        let runtime_state = json!({
+            "active_story_repair_payload": {
+                "mode": "repair",
+                "attempt": 2
+            }
+        });
+
+        let payload =
+            BatchGenerationQualityStatusContext::active_story_repair_payload_from_runtime_state(
+                Some(&runtime_state),
+            );
+
+        assert_eq!(payload, Some(json!({"mode": "repair", "attempt": 2})));
+    }
+
+    #[test]
+    fn should_ignore_non_object_active_story_repair_payload() {
+        let runtime_state = json!({
+            "active_story_repair_payload": "not-an-object"
+        });
+
+        assert_eq!(
+            BatchGenerationQualityStatusContext::active_story_repair_payload_from_runtime_state(
+                Some(&runtime_state),
+            ),
+            None
+        );
+        assert_eq!(
+            BatchGenerationQualityStatusContext::active_story_repair_payload_from_runtime_state(
+                None
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn should_build_quality_status_context_from_snapshot_and_runtime_state() {
+        let snapshot = snapshot_with_quality_fields();
+        let runtime_state = json!({
+            "active_story_repair_payload": {
+                "mode": "repair"
+            }
+        });
+
+        let context = BatchGenerationQualityStatusContext::from_snapshot_and_runtime_state(
+            Some(&snapshot),
+            Some(&runtime_state),
+        );
+
+        assert_eq!(context.latest_quality_metrics, Some(json!({"score": 91})));
+        assert_eq!(
+            context.quality_metrics_history,
+            Some(json!([{"score": 90}]))
+        );
+        assert_eq!(
+            context.quality_metrics_summary,
+            Some(json!({"summary": "ok"}))
+        );
+        assert_eq!(
+            context
+                .quality_metrics_summary_state
+                .as_ref()
+                .and_then(|value| value.get("scope")),
+            Some(&json!("batch"))
+        );
+        assert_eq!(
+            context
+                .quality_metrics_summary_state
+                .as_ref()
+                .and_then(|value| value.get("chapter_count")),
+            Some(&json!(1))
+        );
+        assert_eq!(context.quality_history_context, None);
+        assert_eq!(
+            context.active_story_repair_payload,
+            Some(json!({"mode": "repair"}))
+        );
+    }
+
+    #[test]
+    fn should_build_terminal_status_payload_for_completed_cancelled_and_default_tasks() {
+        let mut completed = batch_generation_task::Model {
+            id: "task-1".to_string(),
+            project_id: "project-1".to_string(),
+            user_id: "user-1".to_string(),
+            start_chapter_number: 1,
+            chapter_count: 2,
+            chapter_ids: json!(["chapter-1", "chapter-2"]),
+            style_id: None,
+            target_word_count: 3000,
+            enable_analysis: false,
+            status: "completed".to_string(),
+            total_chapters: 2,
+            completed_chapters: 2,
+            failed_chapters: json!([]),
+            current_chapter_id: None,
+            current_chapter_number: None,
+            current_retry_count: 0,
+            max_retries: 3,
+            created_at: None,
+            started_at: None,
+            completed_at: None,
+            error_message: None,
+        };
+        let cancelled = batch_generation_task::Model {
+            status: "cancelled".to_string(),
+            ..completed.clone()
+        };
+        let pending = batch_generation_task::Model {
+            status: "pending".to_string(),
+            ..completed.clone()
+        };
+
+        let mut completed_payload = serde_json::Map::new();
+        insert_batch_generation_terminal_status_payload(
+            &mut completed_payload,
+            &completed,
+            None,
+            None,
+        );
+        assert_eq!(completed_payload["terminal_reason"], "completed");
+        assert_eq!(completed_payload["terminal_label"], "已完成");
+        assert_eq!(completed_payload["review_required"], false);
+        assert_eq!(completed_payload["can_resume"], false);
+
+        let mut cancelled_payload = serde_json::Map::new();
+        insert_batch_generation_terminal_status_payload(
+            &mut cancelled_payload,
+            &cancelled,
+            None,
+            None,
+        );
+        assert_eq!(cancelled_payload["terminal_reason"], "cancelled");
+        assert_eq!(cancelled_payload["terminal_label"], "已取消");
+        assert_eq!(cancelled_payload["review_required"], false);
+        assert_eq!(cancelled_payload["can_resume"], true);
+
+        let mut pending_payload = serde_json::Map::new();
+        insert_batch_generation_terminal_status_payload(&mut pending_payload, &pending, None, None);
+        assert_eq!(pending_payload["terminal_reason"], Value::Null);
+        assert_eq!(pending_payload["terminal_label"], Value::Null);
+        assert_eq!(pending_payload["review_required"], false);
+        assert_eq!(pending_payload["can_resume"], false);
+
+        completed.status = "failed".to_string();
+        completed.failed_chapters = json!([{
+            "quality_gate_decision": "manual_review",
+            "quality_gate_label": "待补充"
+        }]);
+        let mut manual_review_payload = serde_json::Map::new();
+        insert_batch_generation_terminal_status_payload(
+            &mut manual_review_payload,
+            &completed,
+            Some(&completed.failed_chapters),
+            None,
+        );
+        assert_eq!(manual_review_payload["terminal_reason"], "manual_review");
+        assert_eq!(manual_review_payload["terminal_label"], "待补充");
+        assert_eq!(manual_review_payload["review_required"], true);
+        assert_eq!(manual_review_payload["can_resume"], false);
+    }
+
+    #[test]
+    fn should_resolve_terminal_semantics_for_manual_review_failed_task() {
+        let task = batch_generation_task::Model {
+            id: "task-1".to_string(),
+            project_id: "project-1".to_string(),
+            user_id: "user-1".to_string(),
+            start_chapter_number: 1,
+            chapter_count: 2,
+            chapter_ids: json!(["chapter-1", "chapter-2"]),
+            style_id: None,
+            target_word_count: 3000,
+            enable_analysis: false,
+            status: "failed".to_string(),
+            total_chapters: 2,
+            completed_chapters: 1,
+            failed_chapters: json!([{
+                "quality_gate_decision": "manual_review",
+                "quality_gate_label": "待补充"
+            }]),
+            current_chapter_id: None,
+            current_chapter_number: None,
+            current_retry_count: 0,
+            max_retries: 3,
+            created_at: None,
+            started_at: None,
+            completed_at: None,
+            error_message: None,
+        };
+
+        let semantics = resolve_failed_terminal_semantics(&task, Some(&task.failed_chapters), None)
+            .expect("failed terminal semantics");
+
+        assert_eq!(
+            semantics.kind,
+            BatchGenerationFailedTerminalKind::ManualReview
+        );
+        assert_eq!(semantics.reason, "manual_review");
+        assert_eq!(semantics.label, "待补充");
+        assert!(semantics.review_required);
+        assert!(!semantics.can_resume);
+    }
+
+    #[test]
+    fn should_resolve_terminal_semantics_from_quality_context_and_retry_budget() {
+        let manual_review_context = BatchGenerationQualityStatusContext {
+            latest_quality_metrics: Some(json!({
+                "quality_gate": {
+                    "decision": "manual_review",
+                    "label": "等待人工复核"
+                }
+            })),
+            quality_metrics_history: None,
+            quality_metrics_summary_state: None,
+            quality_metrics_summary: None,
+            quality_history_context: None,
+            active_story_repair_payload: None,
+        };
+        let retry_context = BatchGenerationQualityStatusContext {
+            latest_quality_metrics: Some(json!({
+                "quality_gate": {
+                    "decision": "auto_repair",
+                    "label": "自动修复后重试"
+                }
+            })),
+            quality_metrics_history: None,
+            quality_metrics_summary_state: None,
+            quality_metrics_summary: None,
+            quality_history_context: None,
+            active_story_repair_payload: None,
+        };
+        let exhausted_context = BatchGenerationQualityStatusContext {
+            latest_quality_metrics: Some(json!({
+                "quality_gate": {
+                    "decision": "auto_repair",
+                    "label": "自动修复预算已耗尽"
+                }
+            })),
+            quality_metrics_history: None,
+            quality_metrics_summary_state: None,
+            quality_metrics_summary: None,
+            quality_history_context: None,
+            active_story_repair_payload: None,
+        };
+
+        let manual_review_semantics = resolve_failed_terminal_semantics_from_sources(
+            Some(&json!([])),
+            Some(&manual_review_context),
+            0,
+            3,
+        )
+        .expect("manual review semantics");
+        assert_eq!(
+            manual_review_semantics.kind,
+            BatchGenerationFailedTerminalKind::ManualReview
+        );
+        assert_eq!(manual_review_semantics.reason, "manual_review");
+        assert_eq!(manual_review_semantics.label, "等待人工复核");
+        assert!(manual_review_semantics.review_required);
+        assert!(!manual_review_semantics.can_resume);
+
+        let retry_semantics = resolve_failed_terminal_semantics_from_sources(
+            Some(&json!([])),
+            Some(&retry_context),
+            1,
+            3,
+        )
+        .expect("retry semantics");
+        assert_eq!(
+            retry_semantics.kind,
+            BatchGenerationFailedTerminalKind::Retry
+        );
+        assert_eq!(retry_semantics.reason, "retry");
+        assert_eq!(retry_semantics.label, "自动修复后重试");
+        assert!(!retry_semantics.review_required);
+        assert!(retry_semantics.can_resume);
+
+        let exhausted_semantics = resolve_failed_terminal_semantics_from_sources(
+            Some(&json!([])),
+            Some(&exhausted_context),
+            3,
+            3,
+        )
+        .expect("exhausted semantics");
+        assert_eq!(
+            exhausted_semantics.kind,
+            BatchGenerationFailedTerminalKind::ManualReview
+        );
+        assert_eq!(exhausted_semantics.reason, "manual_review");
+        assert_eq!(exhausted_semantics.label, "自动修复预算已耗尽");
+        assert!(exhausted_semantics.review_required);
+        assert!(!exhausted_semantics.can_resume);
     }
 }

@@ -18,16 +18,16 @@ from app.services.batch_generation_single_chapter_service import (
     generate_single_chapter_for_batch_workflow,
 )
 from app.services.chapter_context_service import OneToManyContextBuilder, OneToOneContextBuilder
-from app.services.chapter_generation_runtime_prompt_service import (
+from app.services.chapter_generation.runtime.prompt_service import (
     build_chapter_runtime_system_prompt,
     detect_style_profile,
     resolve_generation_temperature,
 )
-from app.services.chapter_generation_runtime_service import (
+from app.services.chapter_generation.runtime.service import (
     build_chapter_generation_runtime_bundle,
     build_chapter_quality_runtime_context,
 )
-from app.services.chapter_generation_stream_request_policy_service import (
+from app.services.chapter_generation.stream.request_policy_service import (
     _build_chapter_generation_request_options,
     _calculate_chapter_generation_max_tokens,
 )

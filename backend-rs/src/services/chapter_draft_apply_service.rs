@@ -5,10 +5,10 @@ use uuid::Uuid;
 
 use crate::models::{chapter, chapter_draft_attempt, generation_history};
 use crate::services::chapter_analysis_service::{AutoRevisionDraftError, CandidateDraftError};
+use crate::services::chapter_draft_history_service::load_latest_reviser_history;
 use crate::services::chapter_draft_source_service::{
     extract_candidate_draft_full_content, format_datetime, is_draft_stale, json_i64,
-    load_candidate_draft_attempt, load_latest_reviser_history, python_truthy_json_i64,
-    python_truthy_scalar_text,
+    load_candidate_draft_attempt, python_truthy_json_i64, python_truthy_scalar_text,
 };
 use crate::services::chapter_narrative_cleaner_service::{
     contains_chapter_workflow_meta_text, sanitize_generated_narrative_text,

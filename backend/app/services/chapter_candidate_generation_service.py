@@ -66,6 +66,19 @@ def build_chapter_candidate_generation_dependencies(
     )
 
 
+def resolve_generation_attempt_labels(
+    candidate_index: int,
+    *,
+    is_word_budget_repair: bool = False,
+) -> tuple[str, str]:
+    normalized_candidate_index = max(int(candidate_index or 1), 1)
+    if is_word_budget_repair:
+        return "word_budget_repair", "word_budget_repair"
+    if normalized_candidate_index > 1:
+        return "rerank_retry", "rerank_candidate"
+    return "single_pass", "initial_candidate"
+
+
 async def generate_candidate_pool_workflow(
     *,
     request: ChapterCandidateGenerationRequest,

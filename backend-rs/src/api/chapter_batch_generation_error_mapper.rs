@@ -7,7 +7,7 @@ use crate::api::chapters_error_mapper::{
 };
 
 use crate::services::chapter_batch_generation_owned_task_query_service::LoadOwnedBatchGenerationTaskError;
-use crate::services::chapter_batch_generation_task_view_query_service::{
+use crate::services::chapter_batch_generation_read_context_service::{
     ActiveBatchGenerationTaskListQueryRequestError, ActiveBatchGenerationTaskListRouteQueryError,
     ActiveProjectBatchGenerationRouteError,
 };
@@ -205,11 +205,11 @@ mod tests {
         map_resume_batch_generation_task_command_config_route_error,
     };
     use crate::services::chapter_batch_generation_owned_task_query_service::LoadOwnedBatchGenerationTaskError;
-    use crate::services::chapter_batch_generation_resume_task_command_service::ResumeBatchGenerationDomainError;
-    use crate::services::chapter_batch_generation_task_view_query_service::{
+    use crate::services::chapter_batch_generation_read_context_service::{
         ActiveBatchGenerationTaskListQueryRequestError,
         ActiveBatchGenerationTaskListRouteQueryError, ActiveProjectBatchGenerationRouteError,
     };
+    use crate::services::chapter_batch_generation_resume_task_command_service::ResumeBatchGenerationDomainError;
     use crate::services::chapter_batch_generation_write_workflow_service::{
         CancelBatchGenerationWriteWorkflowError, CreateBatchGenerationWriteWorkflowError,
         PrepareBatchGenerationCreateRequestError, ResumeBatchGenerationWriteWorkflowError,

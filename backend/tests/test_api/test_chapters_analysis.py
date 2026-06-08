@@ -7,7 +7,6 @@ import pytest
 
 from app.api import chapters as chapters_api
 from app.api import chapter_analysis_task_routes as chapter_analysis_task_routes_api
-from app.services import chapter_analysis_task_route_compat_service
 from app.services.chapter_quality_context_service import StoryPacket
 from tests.test_api.chapters_test_support import (
     chapters_client,
@@ -60,7 +59,7 @@ async def test_should_trigger_manual_analysis_task_creation(
         return None
 
     monkeypatch.setattr(
-        chapter_analysis_task_route_compat_service,
+        chapter_analysis_task_routes_api,
         "execute_chapter_analysis_background",
         fake_analyze_chapter_background,
     )

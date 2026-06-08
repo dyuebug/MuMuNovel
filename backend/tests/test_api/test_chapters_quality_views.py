@@ -4,7 +4,6 @@ from typing import Any
 
 import pytest
 
-from app.services import project_quality_trend_compat_service
 from app.services import project_quality_trend_service
 from app.models.generation_history import GenerationHistory
 from app.models.memory import PlotAnalysis, StoryMemory
@@ -280,8 +279,8 @@ async def test_should_reuse_project_quality_trend_cached_summary_state(
         )
         await session.commit()
 
-    original_build_state = project_quality_trend_compat_service.build_quality_metrics_summary_state
-    original_advance_state = project_quality_trend_compat_service.advance_quality_metrics_summary_state
+    original_build_state = project_quality_trend_service.build_quality_metrics_summary_state
+    original_advance_state = project_quality_trend_service.advance_quality_metrics_summary_state
     calls = {"build": 0, "advance": 0}
 
     def counting_build_state(*args, **kwargs):
@@ -292,8 +291,8 @@ async def test_should_reuse_project_quality_trend_cached_summary_state(
         calls["advance"] += 1
         return original_advance_state(*args, **kwargs)
 
-    monkeypatch.setattr(project_quality_trend_compat_service, "build_quality_metrics_summary_state", counting_build_state)
-    monkeypatch.setattr(project_quality_trend_compat_service, "advance_quality_metrics_summary_state", counting_advance_state)
+    monkeypatch.setattr(project_quality_trend_service, "build_quality_metrics_summary_state", counting_build_state)
+    monkeypatch.setattr(project_quality_trend_service, "advance_quality_metrics_summary_state", counting_advance_state)
 
     first_response = await chapters_client.get(
         f"/api/chapters/project/{project.id}/quality-trend",
@@ -387,8 +386,8 @@ async def test_should_incrementally_slide_project_quality_trend_cache_when_windo
         )
         await session.commit()
 
-    original_build_state = project_quality_trend_compat_service.build_quality_metrics_summary_state
-    original_advance_state = project_quality_trend_compat_service.advance_quality_metrics_summary_state
+    original_build_state = project_quality_trend_service.build_quality_metrics_summary_state
+    original_advance_state = project_quality_trend_service.advance_quality_metrics_summary_state
     calls = {"build": 0, "advance": 0}
 
     def counting_build_state(*args, **kwargs):
@@ -399,8 +398,8 @@ async def test_should_incrementally_slide_project_quality_trend_cache_when_windo
         calls["advance"] += 1
         return original_advance_state(*args, **kwargs)
 
-    monkeypatch.setattr(project_quality_trend_compat_service, "build_quality_metrics_summary_state", counting_build_state)
-    monkeypatch.setattr(project_quality_trend_compat_service, "advance_quality_metrics_summary_state", counting_advance_state)
+    monkeypatch.setattr(project_quality_trend_service, "build_quality_metrics_summary_state", counting_build_state)
+    monkeypatch.setattr(project_quality_trend_service, "advance_quality_metrics_summary_state", counting_advance_state)
 
     first_response = await chapters_client.get(
         f"/api/chapters/project/{project.id}/quality-trend",
@@ -624,7 +623,7 @@ async def test_should_restore_project_quality_trend_from_persisted_snapshot_afte
         )
         await session.commit()
 
-    original_build_state = project_quality_trend_compat_service.build_quality_metrics_summary_state
+    original_build_state = project_quality_trend_service.build_quality_metrics_summary_state
     persisted_snapshots: dict[tuple[str, int], dict[str, Any]] = {}
     calls = {"build": 0, "load": 0, "persist": 0}
 
@@ -641,9 +640,9 @@ async def test_should_restore_project_quality_trend_from_persisted_snapshot_afte
         snapshot = persisted_snapshots.get((project_id, limit))
         return json.loads(json.dumps(snapshot, ensure_ascii=False)) if snapshot is not None else None
 
-    monkeypatch.setattr(project_quality_trend_compat_service, "build_quality_metrics_summary_state", counting_build_state)
-    monkeypatch.setattr(project_quality_trend_compat_service, "persist_project_quality_trend_snapshot", fake_persist_snapshot)
-    monkeypatch.setattr(project_quality_trend_compat_service, "load_project_quality_trend_snapshot", fake_load_snapshot)
+    monkeypatch.setattr(project_quality_trend_service, "build_quality_metrics_summary_state", counting_build_state)
+    monkeypatch.setattr(project_quality_trend_service, "persist_project_quality_trend_snapshot", fake_persist_snapshot)
+    monkeypatch.setattr(project_quality_trend_service, "load_project_quality_trend_snapshot", fake_load_snapshot)
 
     first_response = await chapters_client.get(
         f"/api/chapters/project/{project.id}/quality-trend",

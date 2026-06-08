@@ -60,6 +60,13 @@ async def clear_task_workflow_runtime_cache(task_id: str) -> None:
     await workflow_runtime_state_store.clear(task_id)
 
 
+async def clear_task_runtime_caches(task_id: str) -> None:
+    from app.services import task_quality_snapshot_service
+
+    await task_quality_snapshot_service.clear_task_quality_metrics_cache(task_id)
+    await clear_task_workflow_runtime_cache(task_id)
+
+
 async def set_task_workflow_runtime_snapshot(task_id: str, snapshot: Dict[str, Any]) -> None:
     await workflow_runtime_state_store.set(task_id, snapshot)
 

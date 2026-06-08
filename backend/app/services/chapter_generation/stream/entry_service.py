@@ -24,6 +24,7 @@ from app.services.chapter_generation.stream.service import (
 from app.services.chapter_generation.stream.wiring_service import (
     build_default_chapter_generation_stream_dependencies,
 )
+from app.services.compat import chapter_generation_route_compat_service
 from app.utils.sse_response import create_sse_response
 
 
@@ -91,11 +92,10 @@ async def generate_chapter_content_stream_with_default_wiring(
         resolve_generation_temperature_fn=resolve_generation_temperature_fn,
         compute_story_quality_metrics_fn=compute_story_quality_metrics_fn,
         resolve_quality_gate_execution_plan_fn=resolve_quality_gate_execution_plan_fn,
-        # Keep compat monkeypatch reachable from tests by resolving at call time.
-        analyze_chapter_background_fn=__import__(
-            "app.services.chapter_generation_route_compat_service",
-            fromlist=["execute_chapter_analysis_background"],
-        ).execute_chapter_analysis_background,
+        # Keep compat monkeypatch reachable from tests via the shared module object.
+        analyze_chapter_background_fn=(
+            chapter_generation_route_compat_service.execute_chapter_analysis_background
+        ),
     )
 
     current_user_id = getattr(request.state, 'user_id', 'system')

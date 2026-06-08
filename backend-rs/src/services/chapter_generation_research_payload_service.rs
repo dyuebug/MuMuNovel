@@ -14,6 +14,7 @@ use crate::ai::clients::openai::OpenAIClient;
 use crate::ai::types::ChatMessage;
 use crate::config::load as load_app_config;
 use crate::models::{career, chapter, character, character_career, foreshadow, story_memory};
+use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
 use crate::services::chapter_generation_prompt_context_provider_service::{
     build_placeholder_prompt_context_provider_payload, PromptContextProviderPayload,
 };
@@ -24,9 +25,7 @@ use crate::services::story_memory_vector_index_service::{
     upsert_story_memory_vector_record,
 };
 
-use super::chapter_single_generation_prepare_service::{
-    SingleChapterGenerationCompatOptions, SingleChapterGenerationTarget,
-};
+use super::chapter_single_generation_prepare_service::SingleChapterGenerationTarget;
 
 const DEFAULT_EXA_BASE_URL: &str = "https://api.exa.ai";
 const DEFAULT_GROK_BASE_URL: &str = "https://api.x.ai/v1";

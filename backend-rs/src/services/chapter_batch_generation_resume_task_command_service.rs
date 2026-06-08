@@ -6,35 +6,34 @@ use crate::services::chapter_batch_generation_owned_task_query_service::{
     load_owned_batch_generation_task_sources, LoadOwnedBatchGenerationTaskError,
     LoadOwnedBatchGenerationTaskSourcesError,
 };
-#[cfg(test)]
-use crate::services::chapter_batch_generation_quality_runtime_context_service::BatchGenerationQualityRuntimeContext;
-use crate::services::chapter_batch_generation_resume_semantics_service::{
-    ResolveResumeExecutionSelectionError, ResumeBatchGenerationCommandState,
-    ResumeExecutionSelection,
-};
 use crate::services::chapter_batch_generation_runtime_state_service::{
     dispatch_batch_generation_runtime, reset_batch_generation_task_for_resume,
     BatchGenerationExecutionInput, BatchGenerationPersistedRuntimeContext,
     BatchGenerationResumeResetPersistencePlan, PreparedBatchGenerationResumeRuntimeLaunch,
-    PreparedSingleChapterResumeRuntimeLaunch, RestoredResumeRuntimeStateProjection,
+    PreparedSingleChapterResumeRuntimeLaunch, ResolveResumeExecutionSelectionError,
+    RestoredResumeRuntimeStateProjection, ResumeBatchGenerationCommandState,
+    ResumeExecutionSelection,
 };
-#[cfg(test)]
-use crate::services::chapter_batch_generation_status_semantics_service::BatchGenerationTaskKind;
 use crate::services::chapter_generation_access_service::{
     load_accessible_chapters_for_generation, LoadAccessibleChapterForGenerationError,
 };
+#[cfg(test)]
+use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
 use crate::services::chapter_generation_prerequisite_service::check_chapter_generation_prerequisites;
+#[cfg(test)]
+use crate::services::chapter_generation_quality_runtime_context_service::BatchGenerationQualityRuntimeContext;
 #[cfg(test)]
 use crate::services::chapter_generation_request_runtime_state_service::BatchGenerationRequestRuntimeState;
 use crate::services::chapter_generation_target_word_count_service::normalize_chapter_generation_target_word_count;
 #[cfg(test)]
-use crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationCompatOptions;
+use crate::services::chapter_generation_task_semantics_service::BatchGenerationTaskKind;
 use crate::services::chapter_single_generation_prepare_service::{
     load_single_chapter_generation_target, PrepareSingleChapterGenerationRequestError,
     SingleChapterGenerationTarget,
 };
-use crate::services::chapter_single_generation_runtime_state_service::dispatch_single_chapter_generation_runtime;
-use crate::services::chapter_single_generation_runtime_state_service::SingleGenerationRuntimeLaunchInput;
+use crate::services::chapter_single_generation_runtime_state_service::{
+    SingleGenerationRuntimeLaunchInput, SingleGenerationRuntimeLifecyclePlan,
+};
 #[cfg(test)]
 use crate::services::chapter_story_repair_quality_context_service::{
     resolve_resumed_active_story_repair_payload,
@@ -434,7 +433,8 @@ impl ResumeExecutionDispatchPlan {
     fn dispatch(self, db: DatabaseConnection, task_id: String) {
         match self {
             ResumeExecutionDispatchPlan::SingleChapter { runtime_input } => {
-                dispatch_single_chapter_generation_runtime(db, task_id, runtime_input)
+                SingleGenerationRuntimeLifecyclePlan::from_runtime_launch(task_id, runtime_input)
+                    .spawn(db)
             }
             ResumeExecutionDispatchPlan::Batch { runtime_input } => {
                 dispatch_batch_generation_runtime(db, task_id, runtime_input)
@@ -602,27 +602,25 @@ mod tests {
     use crate::models::project;
     use crate::models::settings;
     use crate::models::story_memory;
-    use crate::services::chapter_batch_generation_quality_status_service::{
-        manual_review_label, BatchGenerationQualityStatusContext,
-    };
-    use crate::services::chapter_batch_generation_resume_semantics_service::{
+    use crate::services::chapter_batch_generation_runtime_state_service::{
+        build_batch_generation_execution_input, build_pending_batch_generation_runtime_checkpoint,
+        BatchGenerationResumeResetPersistencePlan, RestoredResumeRuntimeStateProjection,
         ResumeBatchGenerationCommandState, ResumeExecutionSelection, ResumeResetSemantics,
     };
-    use crate::services::chapter_batch_generation_runtime_checkpoint_service::build_pending_batch_generation_runtime_checkpoint;
-    use crate::services::chapter_batch_generation_runtime_state_service::{
-        build_batch_generation_execution_input, BatchGenerationResumeResetPersistencePlan,
-        RestoredResumeRuntimeStateProjection,
-    };
-    use crate::services::chapter_batch_generation_status_semantics_service::BatchGenerationTaskKind;
     use crate::services::chapter_batch_generation_task_payload_base_service::{
         build_batch_generation_command_summary_payload, BatchGenerationCommandProgressSummary,
+        BatchGenerationQualityStatusContext,
     };
     use crate::services::chapter_generation_access_service::LoadAccessibleChapterForGenerationError;
+    use crate::services::chapter_generation_execution_contract_service::{
+        SingleChapterGenerationCompatOptions, SingleChapterGenerationExecutionInput,
+    };
+    use crate::services::chapter_generation_quality_gate_semantics_service::manual_review_label;
     use crate::services::chapter_generation_request_runtime_state_service::BatchGenerationRequestRuntimeState;
     use crate::services::chapter_generation_target_word_count_service::normalize_chapter_generation_target_word_count;
+    use crate::services::chapter_generation_task_semantics_service::BatchGenerationTaskKind;
     use crate::services::chapter_single_generation_prepare_service::{
-        PrepareSingleChapterGenerationRequestError, SingleChapterGenerationCompatOptions,
-        SingleChapterGenerationExecutionInput, SingleChapterGenerationTarget,
+        PrepareSingleChapterGenerationRequestError, SingleChapterGenerationTarget,
     };
     use crate::services::chapter_single_generation_runtime_state_service::SingleGenerationRuntimeLaunchInput;
     use crate::services::chapter_story_repair_quality_context_service::{
@@ -824,7 +822,7 @@ mod tests {
             .expect("single selection should exist");
         assert!(matches!(
             single_selection,
-            crate::services::chapter_batch_generation_resume_semantics_service::ResumeExecutionSelection::SingleChapter {
+            crate::services::chapter_batch_generation_runtime_state_service::ResumeExecutionSelection::SingleChapter {
                 chapter_id,
             } if chapter_id == "chapter-1"
         ));
@@ -840,7 +838,7 @@ mod tests {
             .expect("batch selection should exist");
         assert!(matches!(
             batch_selection,
-            crate::services::chapter_batch_generation_resume_semantics_service::ResumeExecutionSelection::Batch {
+            crate::services::chapter_batch_generation_runtime_state_service::ResumeExecutionSelection::Batch {
                 chapter_ids,
             } if chapter_ids == vec!["chapter-1".to_string(), "chapter-2".to_string()]
         ));
@@ -859,7 +857,7 @@ mod tests {
     #[test]
     fn should_detect_exhausted_auto_repair_quality_context_as_manual_review_blocker() {
         assert_eq!(
-            crate::services::chapter_batch_generation_quality_status_service::manual_review_label_from_quality_context_with_retry_budget(
+            crate::services::chapter_generation_quality_gate_semantics_service::manual_review_label_from_quality_context_with_retry_budget(
                 None,
                 Some(&json!({
                     "quality_gate": {

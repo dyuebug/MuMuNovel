@@ -1819,6 +1819,7 @@ mod tests {
             title: "风雪夜".to_string(),
             content: " 新生成正文 ".to_string(),
             word_count: 4321,
+            ..Default::default()
         });
 
         let chapter_model = chapter::Model {

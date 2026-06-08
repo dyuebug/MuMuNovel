@@ -9,9 +9,8 @@ use crate::services::chapter_analysis_service::{AutoRevisionDraftError, Candidat
 use crate::services::chapter_draft_apply_service::{
     apply_auto_revision_draft_payload, apply_candidate_draft_payload,
 };
-use crate::services::chapter_draft_source_service::{
-    load_candidate_draft_attempt, load_latest_reviser_history,
-};
+use crate::services::chapter_draft_history_service::load_latest_reviser_history;
+use crate::services::chapter_draft_source_service::load_candidate_draft_attempt;
 use crate::services::chapter_draft_view_payload_service::{
     build_auto_revision_draft_payload, build_candidate_draft_payload,
 };

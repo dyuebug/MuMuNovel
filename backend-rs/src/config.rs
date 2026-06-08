@@ -88,6 +88,10 @@ pub struct AppConfig {
     pub frontend_url: String,
     pub session_expire_minutes: u32,
     pub session_refresh_threshold_minutes: u32,
+    pub chapter_candidate_rust_executor_enabled: bool,
+    pub chapter_candidate_rust_executor_fallback_on_error: bool,
+    pub chapter_candidate_rust_executor_disabled_reason: String,
+    pub chapter_candidate_rust_executor_rollback_boundary: String,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -199,6 +203,22 @@ pub fn load() -> Result<AppConfig, ConfigError> {
         frontend_url: env_or("FRONTEND_URL", "http://localhost"),
         session_expire_minutes: env_or_u32("SESSION_EXPIRE_MINUTES", 120),
         session_refresh_threshold_minutes: env_or_u32("SESSION_REFRESH_THRESHOLD_MINUTES", 30),
+        chapter_candidate_rust_executor_enabled: env_or_bool(
+            "CHAPTER_CANDIDATE_RUST_EXECUTOR_ENABLED",
+            true,
+        ),
+        chapter_candidate_rust_executor_fallback_on_error: env_or_bool(
+            "CHAPTER_CANDIDATE_RUST_EXECUTOR_FALLBACK_ON_ERROR",
+            true,
+        ),
+        chapter_candidate_rust_executor_disabled_reason: env_or(
+            "CHAPTER_CANDIDATE_RUST_EXECUTOR_DISABLED_REASON",
+            "",
+        ),
+        chapter_candidate_rust_executor_rollback_boundary: env_or(
+            "CHAPTER_CANDIDATE_RUST_EXECUTOR_ROLLBACK_BOUNDARY",
+            "python_candidate_executor_fallback",
+        ),
     })
 }
 

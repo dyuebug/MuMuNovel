@@ -724,24 +724,6 @@ def test_summarize_route_group_readiness_rolls_up_owner_profile_and_business_fla
             'profiles': ['route-groups', 'phase5-p0', 'phase5-settings-owner'],
         },
         {
-            'name': 'settings-auth-guard-python-fallback',
-            'owner': 'python-fallback',
-            'method': 'GET',
-            'path': '/api/settings',
-            'expected_status': 401,
-            'route_group': 'settings',
-            'profiles': ['phase5-p0-fallback', 'phase5-settings-fallback'],
-        },
-        {
-            'name': 'settings-models-public-network-error-python-fallback',
-            'owner': 'python-fallback',
-            'method': 'GET',
-            'path': '/api/settings/models?provider=openai',
-            'expected_status': 400,
-            'route_group': 'settings',
-            'profiles': ['phase5-p0-asymmetric', 'phase5-settings-asymmetric'],
-        },
-        {
             'name': 'settings-presets-get-business-rust',
             'owner': 'rust',
             'method': 'GET',
@@ -783,41 +765,66 @@ def test_summarize_route_group_readiness_rolls_up_owner_profile_and_business_fla
             'profiles': ['route-groups', 'phase5-p0', 'phase5-projects-owner', 'business'],
         },
         {
-            'name': 'projects-list-auth-guard-python-fallback',
-            'owner': 'python-fallback',
+            'name': 'projects-list-auth-guard-rust',
+            'owner': 'rust',
             'method': 'GET',
             'path': '/api/projects',
             'expected_status': 401,
             'route_group': 'projects',
-            'profiles': ['phase5-p0-fallback', 'phase5-projects-fallback'],
+            'profiles': ['route-groups', 'phase5-p0', 'phase5-projects-owner'],
+        },
+        {
+            'name': 'memories-list-auth-guard-rust',
+            'owner': 'rust',
+            'method': 'GET',
+            'path': '/api/memories/projects/test-project-id/memories',
+            'expected_status': 401,
+            'route_group': 'memories',
+            'profiles': ['route-groups', 'phase5-p0'],
+        },
+        {
+            'name': 'memories-search-auth-guard-rust',
+            'owner': 'rust',
+            'method': 'POST',
+            'path': '/api/memories/projects/test-project-id/search?query=test',
+            'expected_status': 401,
+            'route_group': 'memories',
+            'profiles': ['route-groups', 'phase5-p0'],
         },
     ]
 
     summary = smoke.summarize_route_group_readiness(probes)
 
-    assert summary['settings']['probe_count'] == 5
-    assert summary['settings']['owner_counts'] == {'rust': 3, 'python-fallback': 2}
+    assert summary['settings']['probe_count'] == 3
+    assert summary['settings']['owner_counts'] == {'rust': 3}
     assert summary['settings']['dedicated_profiles'] == {
         'owner': ['phase5-settings-owner', 'phase5-settings-business-owner'],
-        'fallback': ['phase5-p0-fallback', 'phase5-settings-fallback'],
-        'asymmetric': ['phase5-p0-asymmetric', 'phase5-settings-asymmetric'],
+        'fallback': [],
+        'asymmetric': [],
     }
     assert summary['settings']['readiness_flags'] == {
         'has_rust_owner': True,
-        'has_python_fallback': True,
+        'has_python_fallback': False,
         'has_business_smoke': True,
-        'has_asymmetric_evidence': True,
+        'has_asymmetric_evidence': False,
         'has_dedicated_owner_profile': True,
-        'has_dedicated_fallback_profile': True,
-        'has_dedicated_asymmetric_profile': True,
+        'has_dedicated_fallback_profile': False,
+        'has_dedicated_asymmetric_profile': False,
     }
 
     assert summary['projects']['probe_count'] == 2
-    assert summary['projects']['owner_counts'] == {'rust': 1, 'python-fallback': 1}
+    assert summary['projects']['owner_counts'] == {'rust': 2}
     assert summary['projects']['readiness_flags']['has_business_smoke'] is True
     assert summary['projects']['readiness_flags']['has_dedicated_owner_profile'] is True
-    assert summary['projects']['readiness_flags']['has_dedicated_fallback_profile'] is True
+    assert summary['projects']['readiness_flags']['has_dedicated_fallback_profile'] is False
     assert summary['projects']['readiness_flags']['has_dedicated_asymmetric_profile'] is False
+
+    assert summary['memories']['probe_count'] == 2
+    assert summary['memories']['owner_counts'] == {'rust': 2}
+    assert summary['memories']['readiness_flags']['has_business_smoke'] is False
+    assert summary['memories']['readiness_flags']['has_dedicated_owner_profile'] is False
+    assert summary['memories']['readiness_flags']['has_dedicated_fallback_profile'] is False
+    assert summary['memories']['readiness_flags']['has_dedicated_asymmetric_profile'] is False
 
 
 def test_build_readiness_summary_includes_inventory_rollups():
@@ -833,28 +840,55 @@ def test_build_readiness_summary_includes_inventory_rollups():
             'profiles': ['phase5-projects-owner', 'business'],
         },
         {
-            'name': 'projects-list-auth-guard-python-fallback',
-            'owner': 'python-fallback',
+            'name': 'projects-list-auth-guard-rust',
+            'owner': 'rust',
             'method': 'GET',
             'path': '/api/projects',
             'expected_status': 401,
             'route_group': 'projects',
-            'profiles': ['phase5-projects-fallback'],
+            'profiles': ['phase5-projects-owner'],
+        },
+        {
+            'name': 'memories-list-auth-guard-rust',
+            'owner': 'rust',
+            'method': 'GET',
+            'path': '/api/memories/projects/test-project-id/memories',
+            'expected_status': 401,
+            'route_group': 'memories',
+            'profiles': ['route-groups', 'phase5-p0'],
+        },
+        {
+            'name': 'memories-search-auth-guard-rust',
+            'owner': 'rust',
+            'method': 'POST',
+            'path': '/api/memories/projects/test-project-id/search?query=test',
+            'expected_status': 401,
+            'route_group': 'memories',
+            'profiles': ['route-groups', 'phase5-p0'],
         },
     ]
 
     summary = smoke.build_readiness_summary(probes)
 
-    assert summary['probe_count'] == 2
-    assert summary['owner_counts'] == {'rust': 1, 'python-fallback': 1}
-    assert summary['route_group_counts'] == {'projects': 2}
+    assert summary['probe_count'] == 4
+    assert summary['owner_counts'] == {'rust': 4}
+    assert summary['route_group_counts'] == {'projects': 2, 'memories': 2}
     assert summary['route_group_readiness']['projects']['readiness_flags'] == {
         'has_rust_owner': True,
-        'has_python_fallback': True,
+        'has_python_fallback': False,
         'has_business_smoke': True,
         'has_asymmetric_evidence': False,
         'has_dedicated_owner_profile': True,
-        'has_dedicated_fallback_profile': True,
+        'has_dedicated_fallback_profile': False,
+        'has_dedicated_asymmetric_profile': False,
+    }
+    assert summary['route_group_readiness']['memories']['readiness_flags'] == {
+        'has_rust_owner': True,
+        'has_python_fallback': False,
+        'has_business_smoke': False,
+        'has_asymmetric_evidence': False,
+        'has_dedicated_owner_profile': False,
+        'has_dedicated_fallback_profile': False,
         'has_dedicated_asymmetric_profile': False,
     }
 
@@ -1266,6 +1300,14 @@ def test_select_probes_by_profile_supports_phase5_p0_profile():
                 'profiles': ['route-groups', 'phase5-p0'],
             },
             {
+                'name': 'chapters-generate-stream-auth-guard-rust',
+                'owner': 'rust',
+                'method': 'POST',
+                'path': '/api/chapters/test-chapter-id/generate-stream',
+                'expected_status': 401,
+                'profiles': ['route-groups', 'phase5-p0'],
+            },
+            {
                 'name': 'auth-config-public-rust',
                 'owner': 'rust',
                 'method': 'GET',
@@ -1293,6 +1335,7 @@ def test_select_probes_by_profile_supports_phase5_p0_profile():
         'chapters-batch-stream-auth-guard-rust',
         'chapters-batch-resume-auth-guard-rust',
         'chapters-generate-background-auth-guard-rust',
+        'chapters-generate-stream-auth-guard-rust',
     ]
 
 
@@ -1311,15 +1354,6 @@ def test_select_probes_by_profile_supports_phase5_p0_fallback_profile():
                 'profiles': ['route-groups', 'phase5-p0'],
             },
             {
-                'name': 'settings-auth-guard-python-fallback',
-                'owner': 'python-fallback',
-                'method': 'GET',
-                'path': '/api/settings',
-                'expected_status': 401,
-                'route_group': 'settings',
-                'profiles': ['phase5-p0-fallback'],
-            },
-            {
                 'name': 'chapters-batch-active-tasks-auth-guard-python-fallback',
                 'owner': 'python-fallback',
                 'method': 'GET',
@@ -1335,24 +1369,6 @@ def test_select_probes_by_profile_supports_phase5_p0_fallback_profile():
                 'path': '/api/chapters/project/test-project-id',
                 'expected_status': 401,
                 'route_group': 'chapters',
-                'profiles': ['phase5-p0-fallback'],
-            },
-            {
-                'name': 'wizard-stream-career-system-auth-guard-python-fallback',
-                'owner': 'python-fallback',
-                'method': 'POST',
-                'path': '/api/wizard-stream/career-system',
-                'expected_status': 401,
-                'route_group': 'wizard-stream',
-                'profiles': ['phase5-p0-fallback'],
-            },
-            {
-                'name': 'wizard-stream-characters-auth-guard-python-fallback',
-                'owner': 'python-fallback',
-                'method': 'POST',
-                'path': '/api/wizard-stream/characters',
-                'expected_status': 401,
-                'route_group': 'wizard-stream',
                 'profiles': ['phase5-p0-fallback'],
             },
             {
@@ -1383,6 +1399,15 @@ def test_select_probes_by_profile_supports_phase5_p0_fallback_profile():
                 'profiles': ['phase5-p0-fallback'],
             },
             {
+                'name': 'chapters-generate-stream-auth-guard-python-fallback',
+                'owner': 'python-fallback',
+                'method': 'POST',
+                'path': '/api/chapters/test-chapter-id/generate-stream',
+                'expected_status': 401,
+                'route_group': 'chapters',
+                'profiles': ['phase5-p0-fallback'],
+            },
+            {
                 'name': 'python-fallback-root',
                 'owner': 'python-fallback',
                 'method': 'GET',
@@ -1397,14 +1422,12 @@ def test_select_probes_by_profile_supports_phase5_p0_fallback_profile():
     phase5_p0_fallback = smoke.select_probes_by_profile(validated, profile='phase5-p0-fallback')
 
     assert [probe['name'] for probe in phase5_p0_fallback['probes']] == [
-        'settings-auth-guard-python-fallback',
         'chapters-batch-active-tasks-auth-guard-python-fallback',
         'chapters-project-list-auth-guard-python-fallback',
-        'wizard-stream-career-system-auth-guard-python-fallback',
-        'wizard-stream-characters-auth-guard-python-fallback',
         'chapters-batch-stream-auth-guard-python-fallback',
         'chapters-batch-resume-auth-guard-python-fallback',
         'chapters-generate-background-auth-guard-python-fallback',
+        'chapters-generate-stream-auth-guard-python-fallback',
     ]
 
 
@@ -1413,24 +1436,6 @@ def test_select_probes_by_profile_supports_phase5_p0_asymmetric_profile():
     manifest = {
         'manifest_version': 1,
         'probes': [
-            {
-                'name': 'settings-models-auth-guard-rust-asymmetric',
-                'owner': 'rust',
-                'method': 'GET',
-                'path': '/api/settings/models?provider=openai',
-                'route_group': 'settings',
-                'expected_status': 401,
-                'profiles': ['phase5-p0-asymmetric'],
-            },
-            {
-                'name': 'settings-models-public-network-error-python-fallback',
-                'owner': 'python-fallback',
-                'method': 'GET',
-                'path': '/api/settings/models?provider=openai',
-                'route_group': 'settings',
-                'expected_status': 400,
-                'profiles': ['phase5-p0-asymmetric'],
-            },
             {
                 'name': 'chapters-batch-status-auth-guard-rust-asymmetric',
                 'owner': 'rust',
@@ -1482,8 +1487,6 @@ def test_select_probes_by_profile_supports_phase5_p0_asymmetric_profile():
     phase5_p0_asymmetric = smoke.select_probes_by_profile(validated, profile='phase5-p0-asymmetric')
 
     assert [probe['name'] for probe in phase5_p0_asymmetric['probes']] == [
-        'settings-models-auth-guard-rust-asymmetric',
-        'settings-models-public-network-error-python-fallback',
         'chapters-batch-status-auth-guard-rust-asymmetric',
         'chapters-batch-status-task-not-found-python-fallback',
         'chapters-batch-cancel-auth-guard-rust-asymmetric',
@@ -1560,6 +1563,24 @@ def test_select_probes_by_profile_supports_phase5_p1_profile():
                 'profiles': ['route-groups', 'phase5-p1'],
             },
             {
+                'name': 'background-tasks-list-auth-guard-rust',
+                'owner': 'rust',
+                'method': 'GET',
+                'path': '/api/background-tasks',
+                'expected_status': 401,
+                'route_group': 'background_tasks',
+                'profiles': ['route-groups', 'phase5-p1'],
+            },
+            {
+                'name': 'background-tasks-create-auth-guard-rust',
+                'owner': 'rust',
+                'method': 'POST',
+                'path': '/api/background-tasks',
+                'expected_status': 401,
+                'route_group': 'background_tasks',
+                'profiles': ['route-groups', 'phase5-p1'],
+            },
+            {
                 'name': 'settings-auth-guard-rust',
                 'owner': 'rust',
                 'method': 'GET',
@@ -1582,6 +1603,8 @@ def test_select_probes_by_profile_supports_phase5_p1_profile():
         'auth-user-auth-guard-rust',
         'users-list-auth-guard-rust',
         'auth-password-status-auth-guard-rust',
+        'background-tasks-list-auth-guard-rust',
+        'background-tasks-create-auth-guard-rust',
     ]
 
 

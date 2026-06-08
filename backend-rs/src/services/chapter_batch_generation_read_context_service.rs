@@ -1,21 +1,110 @@
 use std::collections::HashMap;
 
-use sea_orm::DatabaseConnection;
-use serde_json::Value;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use serde::Deserialize;
+use serde_json::{json, Value};
 
 use crate::models::{batch_generation_snapshot, batch_generation_task};
 use crate::services::chapter_batch_generation_owned_task_query_service::{
     load_owned_batch_generation_task_read_state, LoadOwnedBatchGenerationTaskError,
     OwnedBatchGenerationTaskReadState,
 };
-use crate::services::chapter_batch_generation_quality_status_service::BatchGenerationQualityStatusContext;
-use crate::services::chapter_batch_generation_status_semantics_service::active_batch_generation_statuses;
 use crate::services::chapter_batch_generation_task_payload_base_service::{
     build_batch_generation_task_view_payload_with_quality_context,
-    BatchGenerationTaskViewPayloadVariant,
+    BatchGenerationQualityStatusContext, BatchGenerationTaskViewPayloadVariant,
 };
-use crate::services::chapter_generation_snapshot_query_service::load_chapter_generation_snapshot_map;
+use crate::services::chapter_generation_snapshot_service::load_chapter_generation_snapshot_map;
 use crate::services::chapter_generation_task_recovery_service::recover_generation_task_if_needed;
+use crate::services::chapter_generation_task_semantics_service::active_batch_generation_statuses;
+use crate::services::project_access_query_service::{
+    ensure_owned_project_access, ProjectAccessQueryError,
+};
+
+const ACTIVE_BATCH_GENERATION_TASK_LIST_LIMIT_DEFAULT: u64 = 20;
+const ACTIVE_BATCH_GENERATION_TASK_LIST_LIMIT_MIN: i64 = 1;
+const ACTIVE_BATCH_GENERATION_TASK_LIST_LIMIT_MAX: u64 = 100;
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub(crate) struct ActiveBatchGenerationTaskListRouteQuery {
+    pub(crate) limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ActiveBatchGenerationTaskListQueryRequest {
+    limit: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ActiveBatchGenerationTaskListQueryRequestError {
+    LimitTooSmall,
+    LimitTooLarge,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ActiveBatchGenerationTaskListRouteQueryError {
+    Request(ActiveBatchGenerationTaskListQueryRequestError),
+    Query(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ActiveProjectBatchGenerationRouteError {
+    Query(ProjectAccessQueryError),
+}
+
+impl ActiveBatchGenerationTaskListQueryRequest {
+    fn from_route_query(
+        route_query: ActiveBatchGenerationTaskListRouteQuery,
+    ) -> Result<Self, ActiveBatchGenerationTaskListQueryRequestError> {
+        let Some(limit) = route_query.limit else {
+            return Ok(Self {
+                limit: ACTIVE_BATCH_GENERATION_TASK_LIST_LIMIT_DEFAULT,
+            });
+        };
+
+        if limit < ACTIVE_BATCH_GENERATION_TASK_LIST_LIMIT_MIN {
+            return Err(ActiveBatchGenerationTaskListQueryRequestError::LimitTooSmall);
+        }
+        if limit > ACTIVE_BATCH_GENERATION_TASK_LIST_LIMIT_MAX as i64 {
+            return Err(ActiveBatchGenerationTaskListQueryRequestError::LimitTooLarge);
+        }
+
+        Ok(Self {
+            limit: limit as u64,
+        })
+    }
+
+    pub(crate) fn limit(&self) -> u64 {
+        self.limit
+    }
+}
+
+pub(crate) fn build_active_batch_generation_task_list_query_request_from_route_query(
+    route_query: ActiveBatchGenerationTaskListRouteQuery,
+) -> Result<ActiveBatchGenerationTaskListQueryRequest, ActiveBatchGenerationTaskListQueryRequestError>
+{
+    ActiveBatchGenerationTaskListQueryRequest::from_route_query(route_query)
+}
+
+async fn load_active_batch_generation_tasks(
+    db: &DatabaseConnection,
+    user_id: &str,
+    project_id: Option<&str>,
+    limit: Option<u64>,
+) -> Result<Vec<batch_generation_task::Model>, String> {
+    let mut query = batch_generation_task::Entity::find()
+        .filter(batch_generation_task::Column::UserId.eq(user_id))
+        .filter(batch_generation_task::Column::Status.is_in(active_batch_generation_statuses()))
+        .order_by_desc(batch_generation_task::Column::CreatedAt);
+
+    if let Some(project_id) = project_id {
+        query = query.filter(batch_generation_task::Column::ProjectId.eq(project_id));
+    }
+    if let Some(limit) = limit {
+        query = query.limit(limit);
+    }
+
+    query.all(db).await.map_err(|error| error.to_string())
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct BatchGenerationReadContext {
@@ -199,6 +288,77 @@ pub(crate) async fn load_active_project_batch_generation_task_payload_for_tasks(
     )
 }
 
+fn build_active_batch_generation_task_list_view_payload(items: Vec<Value>) -> Value {
+    json!({
+        "total": items.len(),
+        "items": items,
+    })
+}
+
+fn build_active_project_batch_generation_view_payload(task_payload: Option<Value>) -> Value {
+    let has_active_task = task_payload.is_some();
+
+    json!({
+        "has_active_task": has_active_task,
+        "task": task_payload,
+    })
+}
+
+pub(crate) async fn load_active_user_batch_generation_task_list_view(
+    db: &DatabaseConnection,
+    user_id: &str,
+    request: ActiveBatchGenerationTaskListQueryRequest,
+) -> Result<Value, String> {
+    let tasks =
+        load_active_batch_generation_tasks(db, user_id, None, Some(request.limit())).await?;
+    let items = load_active_batch_generation_task_list_item_payloads_for_tasks(db, tasks).await?;
+
+    Ok(build_active_batch_generation_task_list_view_payload(items))
+}
+
+pub(crate) async fn load_active_user_batch_generation_task_list_view_from_route_query(
+    db: &DatabaseConnection,
+    user_id: &str,
+    route_query: ActiveBatchGenerationTaskListRouteQuery,
+) -> Result<Value, ActiveBatchGenerationTaskListRouteQueryError> {
+    let request =
+        build_active_batch_generation_task_list_query_request_from_route_query(route_query)
+            .map_err(ActiveBatchGenerationTaskListRouteQueryError::Request)?;
+
+    load_active_user_batch_generation_task_list_view(db, user_id, request)
+        .await
+        .map_err(ActiveBatchGenerationTaskListRouteQueryError::Query)
+}
+
+pub(crate) async fn load_active_batch_generation_query(
+    db: &DatabaseConnection,
+    project_id: &str,
+    user_id: &str,
+) -> Result<Value, ProjectAccessQueryError> {
+    ensure_owned_project_access(db, project_id, user_id).await?;
+
+    let tasks = load_active_batch_generation_tasks(db, user_id, Some(project_id), None)
+        .await
+        .map_err(ProjectAccessQueryError::Internal)?;
+    let task_payload = load_active_project_batch_generation_task_payload_for_tasks(db, tasks)
+        .await
+        .map_err(ProjectAccessQueryError::Internal)?;
+
+    Ok(build_active_project_batch_generation_view_payload(
+        task_payload,
+    ))
+}
+
+pub(crate) async fn load_active_batch_generation_view_from_route_project(
+    db: &DatabaseConnection,
+    user_id: &str,
+    project_id: String,
+) -> Result<Value, ActiveProjectBatchGenerationRouteError> {
+    load_active_batch_generation_query(db, &project_id, user_id)
+        .await
+        .map_err(ActiveProjectBatchGenerationRouteError::Query)
+}
+
 pub(crate) fn build_batch_generation_status_task_payload_with_quality_context(
     task: &batch_generation_task::Model,
     workflow_runtime_state: Option<&Value>,
@@ -269,7 +429,7 @@ mod tests {
     use crate::services::chapter_batch_generation_owned_task_query_service::{
         LoadOwnedBatchGenerationTaskError, OwnedBatchGenerationTaskReadState,
     };
-    use crate::services::chapter_batch_generation_quality_status_service::BatchGenerationQualityStatusContext;
+    use crate::services::chapter_batch_generation_task_payload_base_service::BatchGenerationQualityStatusContext;
     fn build_task(status: &str) -> batch_generation_task::Model {
         batch_generation_task::Model {
             id: "task-1".to_string(),
@@ -613,5 +773,114 @@ mod tests {
         assert_eq!(payload["batch_id"], "task-owned-status-1");
         assert_eq!(payload["checkpoint"]["progress"], 60);
         assert_eq!(payload["active_story_repair_payload"]["mode"], "repair");
+    }
+}
+
+#[cfg(test)]
+mod active_query_owner_tests {
+    use super::{
+        build_active_batch_generation_task_list_query_request_from_route_query,
+        build_active_batch_generation_task_list_view_payload,
+        build_active_project_batch_generation_view_payload,
+        ActiveBatchGenerationTaskListQueryRequestError, ActiveBatchGenerationTaskListRouteQuery,
+        ActiveBatchGenerationTaskListRouteQueryError, ActiveProjectBatchGenerationRouteError,
+    };
+    use crate::services::project_access_query_service::ProjectAccessQueryError;
+    use serde_json::json;
+
+    #[test]
+    fn should_validate_active_batch_generation_task_list_query_request_limit_like_python_query() {
+        assert_eq!(
+            build_active_batch_generation_task_list_query_request_from_route_query(
+                ActiveBatchGenerationTaskListRouteQuery { limit: None }
+            )
+            .expect("default limit should be valid")
+            .limit(),
+            20
+        );
+        assert_eq!(
+            build_active_batch_generation_task_list_query_request_from_route_query(
+                ActiveBatchGenerationTaskListRouteQuery { limit: Some(25) }
+            )
+            .expect("explicit in-range limit should be valid")
+            .limit(),
+            25
+        );
+        assert_eq!(
+            build_active_batch_generation_task_list_query_request_from_route_query(
+                ActiveBatchGenerationTaskListRouteQuery { limit: Some(0) }
+            ),
+            Err(ActiveBatchGenerationTaskListQueryRequestError::LimitTooSmall)
+        );
+        assert_eq!(
+            build_active_batch_generation_task_list_query_request_from_route_query(
+                ActiveBatchGenerationTaskListRouteQuery { limit: Some(-1) }
+            ),
+            Err(ActiveBatchGenerationTaskListQueryRequestError::LimitTooSmall)
+        );
+        assert_eq!(
+            build_active_batch_generation_task_list_query_request_from_route_query(
+                ActiveBatchGenerationTaskListRouteQuery { limit: Some(500) }
+            ),
+            Err(ActiveBatchGenerationTaskListQueryRequestError::LimitTooLarge)
+        );
+    }
+
+    #[test]
+    fn should_keep_active_batch_generation_task_list_route_query_error_shape() {
+        let error = build_active_batch_generation_task_list_query_request_from_route_query(
+            ActiveBatchGenerationTaskListRouteQuery { limit: Some(0) },
+        )
+        .map_err(ActiveBatchGenerationTaskListRouteQueryError::Request)
+        .expect_err("out-of-range limit should fail before query execution");
+
+        assert_eq!(
+            error,
+            ActiveBatchGenerationTaskListRouteQueryError::Request(
+                ActiveBatchGenerationTaskListQueryRequestError::LimitTooSmall,
+            )
+        );
+    }
+
+    #[test]
+    fn should_keep_active_project_batch_generation_route_error_shape() {
+        let error = ActiveProjectBatchGenerationRouteError::Query(
+            ProjectAccessQueryError::NotFoundOrAccessDenied,
+        );
+
+        assert_eq!(
+            error,
+            ActiveProjectBatchGenerationRouteError::Query(
+                ProjectAccessQueryError::NotFoundOrAccessDenied,
+            )
+        );
+    }
+
+    #[test]
+    fn should_keep_active_batch_generation_task_list_view_owner_contract() {
+        let payload = build_active_batch_generation_task_list_view_payload(vec![json!({
+            "batch_id": "task-1"
+        })]);
+
+        assert_eq!(payload["total"], 1);
+        assert_eq!(payload["items"][0]["batch_id"], "task-1");
+    }
+
+    #[test]
+    fn should_keep_active_batch_generation_query_view_owner_contract() {
+        let payload = build_active_project_batch_generation_view_payload(Some(json!({
+            "batch_id": "task-2"
+        })));
+
+        assert_eq!(payload["has_active_task"], true);
+        assert_eq!(payload["task"]["batch_id"], "task-2");
+    }
+
+    #[test]
+    fn should_build_empty_active_batch_generation_query_response() {
+        let payload = build_active_project_batch_generation_view_payload(None);
+
+        assert_eq!(payload["has_active_task"], false);
+        assert!(payload["task"].is_null());
     }
 }

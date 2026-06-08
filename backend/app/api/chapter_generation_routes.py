@@ -7,7 +7,7 @@ from app.api.settings import get_user_ai_service
 from app.database import get_db
 from app.schemas.chapter import ChapterGenerateRequest
 from app.services.ai_service import AIService
-from app.services.chapter_generation_route_compat_service import (
+from app.services.compat.chapter_generation_route_compat_service import (
     generate_chapter_content_background_with_default_route_wiring,
     generate_chapter_content_stream_with_default_route_wiring,
 )

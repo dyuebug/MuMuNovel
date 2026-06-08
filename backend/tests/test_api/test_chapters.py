@@ -21,7 +21,6 @@ from app.api import chapter_draft_routes as chapter_draft_routes_api
 from app.api import chapter_expansion_plan_routes as chapter_expansion_plan_routes_api
 from app.api import chapter_partial_regeneration_routes as chapter_partial_regeneration_routes_api
 from app.api import chapter_regeneration_routes as chapter_regeneration_routes_api
-from app.services import chapter_regeneration_route_compat_service
 import app.database as app_database
 from app.database import Base, get_db as app_get_db
 from app.models.analysis_task import AnalysisTask
@@ -1981,7 +1980,11 @@ async def test_should_apply_project_story_packet_defaults_in_regeneration_prompt
         def calculate_content_diff(self, original_content, new_content):
             return {"similarity": 8.0, "difference": 92.0}
 
-    monkeypatch.setattr(chapter_regeneration_route_compat_service, "REGENERATOR_FACTORY", FakeRegenerator)
+    monkeypatch.setattr(
+        chapter_regeneration_routes_api,
+        "REGENERATOR_FACTORY",
+        FakeRegenerator,
+    )
 
     response = await chapters_client.post(
         f"/api/chapters/{chapter.id}/regenerate-stream",
@@ -2059,7 +2062,11 @@ async def test_should_include_web_research_assets_in_regeneration_prompt_context
 
     from app.services import chapter_regeneration_context_service as chapter_regeneration_context_service
 
-    monkeypatch.setattr(chapter_regeneration_route_compat_service, "REGENERATOR_FACTORY", FakeRegenerator)
+    monkeypatch.setattr(
+        chapter_regeneration_routes_api,
+        "REGENERATOR_FACTORY",
+        FakeRegenerator,
+    )
     monkeypatch.setattr(
         chapter_regeneration_context_service.chapter_web_research_service,
         "collect_for_chapter",
@@ -2140,7 +2147,11 @@ async def test_should_merge_quality_gate_snapshot_into_regeneration_prompt_conte
         def calculate_content_diff(self, original_content, new_content):
             return {"similarity": 8.0, "difference": 92.0}
 
-    monkeypatch.setattr(chapter_regeneration_route_compat_service, "REGENERATOR_FACTORY", FakeRegenerator)
+    monkeypatch.setattr(
+        chapter_regeneration_routes_api,
+        "REGENERATOR_FACTORY",
+        FakeRegenerator,
+    )
 
     response = await chapters_client.post(
         f"/api/chapters/{chapter.id}/regenerate-stream",
@@ -2233,7 +2244,11 @@ async def test_should_reuse_quality_history_context_in_regeneration_prompt(
         def calculate_content_diff(self, original_content, new_content):
             return {"similarity": 8.0, "difference": 92.0}
 
-    monkeypatch.setattr(chapter_regeneration_route_compat_service, "REGENERATOR_FACTORY", FakeRegenerator)
+    monkeypatch.setattr(
+        chapter_regeneration_routes_api,
+        "REGENERATOR_FACTORY",
+        FakeRegenerator,
+    )
 
     response = await chapters_client.post(
         f"/api/chapters/{chapter.id}/regenerate-stream",
@@ -2296,7 +2311,11 @@ async def test_should_sanitize_regenerated_content_before_persisting_task(
         def calculate_content_diff(self, original_content, new_content):
             return {"similarity": 10.0, "difference": 90.0}
 
-    monkeypatch.setattr(chapter_regeneration_route_compat_service, "REGENERATOR_FACTORY", FakeRegenerator)
+    monkeypatch.setattr(
+        chapter_regeneration_routes_api,
+        "REGENERATOR_FACTORY",
+        FakeRegenerator,
+    )
 
     response = await chapters_client.post(
         f"/api/chapters/{chapter.id}/regenerate-stream",
@@ -3462,5 +3481,3 @@ def test_should_include_story_runtime_contract_in_generation_history_payload():
     assert payload["story_runtime_snapshot"]["plot_stage"] == "development"
     assert payload["story_runtime_snapshot"]["current_chapter_number"] == 5
     assert payload["story_runtime_snapshot"]["character_focus"] == ["Lin", "Su"]
-
-

@@ -91,6 +91,62 @@ pub fn lightly_polish_template_phrases(text: &str) -> String {
     result
 }
 
+fn is_sentence_boundary(ch: char) -> bool {
+    matches!(ch, '。' | '！' | '？' | '!' | '?' | '；' | ';' | '\n')
+}
+
+pub fn trim_text_to_sentence_boundary(text: &str, hard_limit: usize) -> String {
+    trim_text_to_sentence_boundary_with_lookback(text, hard_limit, 220)
+}
+
+pub fn trim_text_to_sentence_boundary_with_lookback(
+    text: &str,
+    hard_limit: usize,
+    lookback_chars: usize,
+) -> String {
+    let normalized_text = text.to_string();
+    let char_count = normalized_text.chars().count();
+    if hard_limit == 0 || char_count <= hard_limit {
+        return normalized_text.trim().to_string();
+    }
+
+    let search_start = hard_limit.saturating_sub(lookback_chars.max(80));
+    let mut best_boundary_index = None;
+    for (char_index, ch) in normalized_text.chars().enumerate() {
+        if char_index < search_start {
+            continue;
+        }
+        if char_index > hard_limit {
+            break;
+        }
+        if is_sentence_boundary(ch) {
+            best_boundary_index = Some(char_index);
+        }
+    }
+
+    if let Some(boundary_index) = best_boundary_index.filter(|index| *index >= search_start) {
+        return normalized_text
+            .chars()
+            .take(boundary_index + 1)
+            .collect::<String>()
+            .trim()
+            .to_string();
+    }
+
+    let mut trimmed_text = normalized_text
+        .chars()
+        .take(hard_limit)
+        .collect::<String>()
+        .trim_end_matches(['，', ',', '、', ' '])
+        .to_string();
+    if let Some(last_char) = trimmed_text.chars().last() {
+        if !is_sentence_boundary(last_char) {
+            trimmed_text.push('。');
+        }
+    }
+    trimmed_text.trim().to_string()
+}
+
 pub fn sanitize_generated_narrative_text(text: &str) -> (String, usize) {
     let original = text.replace("\r\n", "\n").trim().to_string();
     if original.is_empty() {
@@ -132,6 +188,7 @@ mod tests {
     use super::{
         contains_chapter_workflow_meta_text, is_likely_chapter_meta_line,
         lightly_polish_template_phrases, sanitize_generated_narrative_text,
+        trim_text_to_sentence_boundary, trim_text_to_sentence_boundary_with_lookback,
     };
 
     #[test]
@@ -175,5 +232,32 @@ mod tests {
         let (cleaned, removed_count) = sanitize_generated_narrative_text(meta_only);
         assert_eq!(cleaned, "");
         assert_eq!(removed_count, 3);
+    }
+
+    #[test]
+    fn should_trim_generated_text_to_recent_sentence_boundary_like_python_owner() {
+        let input = "第一句还在铺垫。第二句推进冲突！第三句继续延展到更长内容";
+
+        let trimmed = trim_text_to_sentence_boundary_with_lookback(input, 17, 80);
+
+        assert_eq!(trimmed, "第一句还在铺垫。第二句推进冲突！");
+    }
+
+    #[test]
+    fn should_trim_generated_text_with_sentence_fallback_when_no_boundary_is_nearby() {
+        let input = "没有句界的连续正文内容";
+
+        let trimmed = trim_text_to_sentence_boundary(input, 5);
+
+        assert_eq!(trimmed, "没有句界的。");
+    }
+
+    #[test]
+    fn should_count_unicode_characters_when_trimming_to_sentence_boundary() {
+        let input = "甲乙丙丁，戊己庚辛。壬癸";
+
+        let trimmed = trim_text_to_sentence_boundary(input, 9);
+
+        assert_eq!(trimmed, "甲乙丙丁，戊己庚辛。");
     }
 }

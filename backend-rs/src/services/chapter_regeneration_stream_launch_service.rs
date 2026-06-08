@@ -1,12 +1,15 @@
 use std::convert::Infallible;
 
 use axum::response::sse::Event;
-use futures::StreamExt;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::ai::service::AIService;
+use crate::services::chapter_candidate_output_service::{
+    collect_generation_candidate_output, ChapterCandidateOutputProgress,
+    ChapterCandidateOutputRequest,
+};
 use crate::services::chapter_regeneration_text_service::FinalizePartialRegenerationError;
 use crate::utils::sse::{sse_chunk, sse_done, sse_error, sse_result, SseProgress};
 
@@ -15,6 +18,15 @@ pub type OwnedRegenerationStream = ReceiverStream<Result<Event, Infallible>>;
 pub struct RegenerationChunkProgress {
     pub chunk_count: u32,
     pub full_content_len: usize,
+}
+
+impl From<ChapterCandidateOutputProgress> for RegenerationChunkProgress {
+    fn from(progress: ChapterCandidateOutputProgress) -> Self {
+        Self {
+            chunk_count: progress.chunk_count as u32,
+            full_content_len: progress.current_chars,
+        }
+    }
 }
 
 pub fn describe_regeneration_finalize_error(
@@ -51,34 +63,36 @@ async fn execute_regeneration_text_stream<F>(
 where
     F: FnMut(RegenerationChunkProgress) -> Option<Event>,
 {
-    let mut full_content = String::new();
-    let mut chunk_count = 0u32;
-    let mut rx_stream = ai_service.generate_text_stream(prompt, None, None);
-
-    while let Some(chunk) = rx_stream.next().await {
-        match chunk {
-            Ok(chunk) => {
-                let chunk_content = chunk.content.unwrap_or_default();
-                full_content.push_str(&chunk_content);
-                chunk_count += 1;
-
+    match collect_generation_candidate_output(
+        ChapterCandidateOutputRequest {
+            ai_service,
+            prompt,
+            system_prompt: None,
+            tools: None,
+            candidate_index: 1,
+            max_output_chars: None,
+            runtime_state: None,
+        },
+        |chunk_content, progress| {
+            let event = build_progress_event(progress.into());
+            let tx = tx.clone();
+            async move {
                 let _ = tx.send(Ok(sse_chunk(&chunk_content))).await;
-
-                if let Some(event) = build_progress_event(RegenerationChunkProgress {
-                    chunk_count,
-                    full_content_len: full_content.len(),
-                }) {
+                if let Some(event) = event {
                     let _ = tx.send(Ok(event)).await;
                 }
+                Ok(())
             }
-            Err(error) => {
-                let _ = tx.send(Ok(sse_error(&error, 500))).await;
-                return Err(());
-            }
+        },
+    )
+    .await
+    {
+        Ok(output) => Ok(output.full_content),
+        Err(error) => {
+            let _ = tx.send(Ok(sse_error(&error, 500))).await;
+            Err(())
         }
     }
-
-    Ok(full_content)
 }
 
 pub enum OwnedRegenerationInitialEvent {
