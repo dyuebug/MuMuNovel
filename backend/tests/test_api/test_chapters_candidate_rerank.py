@@ -6,6 +6,7 @@ from sqlalchemy import select
 from app.api import chapters as chapters_api
 from app.models.chapter import Chapter
 from app.models.generation_history import GenerationHistory
+from app.services import batch_generation_single_chapter_entry_service
 from tests.test_api.chapters_test_support import (
     chapters_client,
     chapters_session_factory,
@@ -1676,7 +1677,7 @@ async def test_generate_single_chapter_for_batch_should_rerank_candidates_before
         db_chapter = await session.get(Chapter, chapter.id)
         assert db_chapter is not None
 
-        result = await chapters_api.generate_single_chapter_for_batch(
+        result = await batch_generation_single_chapter_entry_service.generate_single_chapter_for_batch(
             db_session=session,
             chapter=db_chapter,
             user_id=mock_user.user_id,

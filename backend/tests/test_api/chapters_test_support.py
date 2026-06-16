@@ -1,4 +1,5 @@
 import json
+import importlib
 from types import SimpleNamespace
 from typing import Any
 
@@ -10,25 +11,70 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.api import chapters as chapters_api
-from app.services.compat import chapter_generation_route_compat_service
 from app.api import chapter_analysis_routes as chapter_analysis_routes_api
 from app.api import chapter_analysis_task_routes as chapter_analysis_task_routes_api
 from app.api import chapter_annotation_routes as chapter_annotation_routes_api
 from app.api import chapter_crud_routes as chapter_crud_routes_api
-from app.api import chapter_batch_generation_routes as chapter_batch_generation_routes_api
 from app.api import chapter_draft_routes as chapter_draft_routes_api
-from app.api import chapter_generation_routes as chapter_generation_routes_api
 from app.api import chapter_quality_routes as chapter_quality_routes_api
 from app.api import chapter_expansion_plan_routes as chapter_expansion_plan_routes_api
 from app.api import chapter_partial_regeneration_routes as chapter_partial_regeneration_routes_api
 from app.api import chapter_regeneration_routes as chapter_regeneration_routes_api
+from app.api.common import verify_project_access
 from app.database import Base, get_db as app_get_db
 from app.models.chapter import Chapter
 from app.models.outline import Outline
 from app.models.project import Project
 from app.services import manual_chapter_analysis_execution_service
 
-REAL_EXECUTE_BATCH_GENERATION_IN_ORDER = chapters_api.execute_batch_generation_in_order
+async def REAL_EXECUTE_BATCH_GENERATION_IN_ORDER(*args, **kwargs):
+    from app.services.batch_generation_run_wiring_service import (
+        await_cancelable_batch_generation_result_with_default_poll_interval,
+        execute_batch_generation_in_order_with_default_wiring,
+        get_db_write_lock,
+        publish_task_stream_event_service,
+        resolve_story_repair_state_for_batch,
+        run_batch_chapter_analysis_with_background_seam,
+        run_single_chapter_generation_with_default_entry_seam,
+        sync_task_story_repair_state,
+    )
+
+    return await execute_batch_generation_in_order_with_default_wiring(
+        *args,
+        **kwargs,
+        get_db_write_lock_fn=get_db_write_lock,
+        run_generation_fn=run_single_chapter_generation_with_default_entry_seam,
+        await_generation_result_fn=await_cancelable_batch_generation_result_with_default_poll_interval,
+        run_batch_analysis_fn=run_batch_chapter_analysis_with_background_seam,
+        resolve_story_repair_state_fn=resolve_story_repair_state_for_batch,
+        sync_task_story_repair_state_fn=sync_task_story_repair_state,
+        publish_task_stream_event_fn=publish_task_stream_event_service,
+    )
+
+
+def load_single_generation_rollback_modules():
+    """Load legacy Python single-generation modules only for rollback-route tests."""
+    chapter_generation_routes_api = importlib.import_module(
+        "app.api.chapter_generation_routes"
+    )
+    chapter_generation_route_wiring_service = importlib.import_module(
+        "app.services.chapter_generation.route_wiring_service"
+    )
+
+    return chapter_generation_routes_api, chapter_generation_route_wiring_service
+
+
+def load_batch_generation_rollback_modules():
+    """Load legacy Python batch-generation route only for rollback-route tests."""
+    chapter_batch_generation_routes_api = importlib.import_module(
+        "app.api.chapter_batch_generation_routes"
+    )
+    batch_generation_route_wiring_service = importlib.import_module(
+        "app.services.batch_generation.route_wiring_service"
+    )
+
+    return chapter_batch_generation_routes_api, batch_generation_route_wiring_service
+
 
 class FakeAIService:
     def __init__(self):
@@ -61,6 +107,11 @@ def mock_side_effect_services(monkeypatch):
     async def fake_execute_batch_generation(*args, **kwargs):
         return None
 
+    batch_generation_run_wiring_service = __import__(
+        "app.services",
+        fromlist=["batch_generation_run_wiring_service"],
+    ).batch_generation_run_wiring_service
+
     monkeypatch.setattr(
         chapters_api.memory_service,
         "delete_chapter_memories",
@@ -87,17 +138,7 @@ def mock_side_effect_services(monkeypatch):
         fake_auto_plant_pending_foreshadows,
     )
     monkeypatch.setattr(
-        chapters_api,
-        "analyze_chapter_background",
-        fake_analyze_chapter_background,
-    )
-    monkeypatch.setattr(
         manual_chapter_analysis_execution_service,
-        "execute_chapter_analysis_background",
-        fake_analyze_chapter_background,
-    )
-    monkeypatch.setattr(
-        chapter_generation_route_compat_service,
         "execute_chapter_analysis_background",
         fake_analyze_chapter_background,
     )
@@ -107,8 +148,8 @@ def mock_side_effect_services(monkeypatch):
         fake_analyze_chapter_background,
     )
     monkeypatch.setattr(
-        chapters_api,
-        "execute_batch_generation_in_order",
+        batch_generation_run_wiring_service,
+        "execute_batch_generation_in_order_with_entry_service_seams",
         fake_execute_batch_generation,
     )
 
@@ -151,6 +192,14 @@ async def chapters_session_factory():
 
 @pytest_asyncio.fixture
 async def chapters_client(chapters_session_factory, fake_ai_service, mock_user, monkeypatch):
+    (
+        chapter_generation_routes_api,
+        chapter_generation_route_wiring_service,
+    ) = load_single_generation_rollback_modules()
+    (
+        chapter_batch_generation_routes_api,
+        batch_generation_route_wiring_service,
+    ) = load_batch_generation_rollback_modules()
     app = FastAPI()
     app.include_router(chapter_crud_routes_api.router, prefix="/api")
     app.include_router(chapter_analysis_routes_api.router, prefix="/api")
@@ -197,10 +246,24 @@ async def chapters_client(chapters_session_factory, fake_ai_service, mock_user, 
 
     app.dependency_overrides[app_get_db] = override_get_db
     app.dependency_overrides[chapters_api.get_user_ai_service] = override_get_user_ai_service
+    app.dependency_overrides[chapter_generation_routes_api.get_db] = override_get_db
+    app.dependency_overrides[
+        chapter_generation_routes_api.get_user_ai_service
+    ] = override_get_user_ai_service
+    app.dependency_overrides[chapter_batch_generation_routes_api.get_db] = override_get_db
+    app.dependency_overrides[
+        chapter_batch_generation_routes_api.get_user_ai_service
+    ] = override_get_user_ai_service
 
     monkeypatch.setattr(chapters_api, "get_db", override_get_db)
     monkeypatch.setattr(chapter_regeneration_routes_api, "get_db", override_get_db)
-    monkeypatch.setattr(chapter_generation_route_compat_service, "get_db", override_get_db)
+    monkeypatch.setattr(chapter_generation_route_wiring_service, "get_db", override_get_db)
+    monkeypatch.setattr(batch_generation_route_wiring_service, "verify_project_access", verify_project_access)
+    monkeypatch.setattr(
+        chapter_generation_route_wiring_service,
+        "execute_chapter_analysis_background",
+        manual_chapter_analysis_execution_service.execute_chapter_analysis_background,
+    )
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:

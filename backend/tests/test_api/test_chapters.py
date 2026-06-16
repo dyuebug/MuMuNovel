@@ -33,6 +33,8 @@ from app.models.memory import PlotAnalysis, StoryMemory
 from app.models.outline import Outline
 from app.models.project import Project
 from app.models.regeneration_task import RegenerationTask
+from app.services import batch_generation_run_wiring_service
+from app.services import batch_generation_single_chapter_entry_service
 from app.services.chapter_quality_context_service import StoryPacket
 
 from tests.test_api.chapters_test_support import (
@@ -715,13 +717,41 @@ async def test_generate_single_chapter_for_batch_should_build_runtime_context_wi
             "quality_runtime_context": kwargs.get("quality_runtime_context"),
         }
 
-    monkeypatch.setattr(chapters_api.chapter_web_research_service, "is_enabled", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(chapters_api, "OneToManyContextBuilder", FakeOneToManyBuilder)
-    monkeypatch.setattr(chapters_api, "resolve_chapter_quality_profile", fake_resolve_chapter_quality_profile)
-    monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(chapters_api.PromptService, "format_prompt", fake_format_prompt)
-    monkeypatch.setattr(chapters_api, "_build_chapter_runtime_system_prompt", fake_build_chapter_runtime_system_prompt)
-    monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service.chapter_web_research_service,
+        "is_enabled",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service,
+        "OneToManyContextBuilder",
+        FakeOneToManyBuilder,
+    )
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service,
+        "resolve_chapter_quality_profile",
+        fake_resolve_chapter_quality_profile,
+    )
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service.PromptService,
+        "get_template",
+        fake_get_template,
+    )
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service.PromptService,
+        "format_prompt",
+        fake_format_prompt,
+    )
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service,
+        "build_chapter_runtime_system_prompt",
+        fake_build_chapter_runtime_system_prompt,
+    )
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service,
+        "compute_story_quality_metrics",
+        fake_compute_story_quality_metrics,
+    )
 
     fake_ai_service.calls.clear()
     fake_ai_service.chunks = ["批量", "正文"]
@@ -732,7 +762,7 @@ async def test_generate_single_chapter_for_batch_should_build_runtime_context_wi
         assert db_chapter is not None
         assert db_project is not None
 
-        result = await chapters_api.generate_single_chapter_for_batch(
+        result = await batch_generation_single_chapter_entry_service.generate_single_chapter_for_batch(
             db_session=session,
             chapter=db_chapter,
             user_id=mock_user.user_id,
@@ -854,15 +884,51 @@ async def test_generate_single_chapter_for_batch_should_inject_web_research_grou
         replace_memory_calls.append(kwargs)
         return ["memory-1"]
 
-    monkeypatch.setattr(chapters_api.chapter_web_research_service, "is_enabled", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(chapters_api.chapter_web_research_service, "collect_for_chapter", fake_collect_for_chapter)
-    monkeypatch.setattr(chapters_api.chapter_web_research_service, "replace_chapter_memories", fake_replace_chapter_memories)
-    monkeypatch.setattr(chapters_api, "OneToManyContextBuilder", FakeOneToManyBuilder)
-    monkeypatch.setattr(chapters_api, "resolve_chapter_quality_profile", fake_resolve_chapter_quality_profile)
-    monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(chapters_api.PromptService, "format_prompt", fake_format_prompt)
-    monkeypatch.setattr(chapters_api, "_build_chapter_runtime_system_prompt", fake_build_chapter_runtime_system_prompt)
-    monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service.chapter_web_research_service,
+        "is_enabled",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service.chapter_web_research_service,
+        "collect_for_chapter",
+        fake_collect_for_chapter,
+    )
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service.chapter_web_research_service,
+        "replace_chapter_memories",
+        fake_replace_chapter_memories,
+    )
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service,
+        "OneToManyContextBuilder",
+        FakeOneToManyBuilder,
+    )
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service,
+        "resolve_chapter_quality_profile",
+        fake_resolve_chapter_quality_profile,
+    )
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service.PromptService,
+        "get_template",
+        fake_get_template,
+    )
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service.PromptService,
+        "format_prompt",
+        fake_format_prompt,
+    )
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service,
+        "build_chapter_runtime_system_prompt",
+        fake_build_chapter_runtime_system_prompt,
+    )
+    monkeypatch.setattr(
+        batch_generation_single_chapter_entry_service,
+        "compute_story_quality_metrics",
+        fake_compute_story_quality_metrics,
+    )
 
     fake_ai_service.calls.clear()
     fake_ai_service.chunks = ["draft ", "text"]
@@ -871,7 +937,7 @@ async def test_generate_single_chapter_for_batch_should_inject_web_research_grou
         db_chapter = await session.get(Chapter, chapter.id)
         assert db_chapter is not None
 
-        result = await chapters_api.generate_single_chapter_for_batch(
+        result = await batch_generation_single_chapter_entry_service.generate_single_chapter_for_batch(
             db_session=session,
             chapter=db_chapter,
             user_id=mock_user.user_id,
@@ -953,8 +1019,8 @@ async def test_should_forward_creative_mode_to_batch_background_generation(
         return None
 
     monkeypatch.setattr(
-        chapters_api,
-        "execute_batch_generation_in_order",
+        batch_generation_run_wiring_service,
+        "execute_batch_generation_in_order_with_entry_service_seams",
         fake_execute_batch_generation,
     )
 
@@ -1018,8 +1084,8 @@ async def test_should_forward_web_research_settings_for_batch_background_generat
         return None
 
     monkeypatch.setattr(
-        chapters_api,
-        "execute_batch_generation_in_order",
+        batch_generation_run_wiring_service,
+        "execute_batch_generation_in_order_with_entry_service_seams",
         fake_execute_batch_generation,
     )
 
@@ -1073,8 +1139,8 @@ async def test_should_fallback_to_project_generation_defaults_for_batch_backgrou
         return None
 
     monkeypatch.setattr(
-        chapters_api,
-        "execute_batch_generation_in_order",
+        batch_generation_run_wiring_service,
+        "execute_batch_generation_in_order_with_entry_service_seams",
         fake_execute_batch_generation,
     )
 
@@ -1481,8 +1547,8 @@ async def test_should_forward_creative_mode_to_single_background_generation(
         return None
 
     monkeypatch.setattr(
-        chapters_api,
-        "execute_batch_generation_in_order",
+        batch_generation_run_wiring_service,
+        "execute_batch_generation_in_order_with_entry_service_seams",
         fake_execute_batch_generation,
     )
 
@@ -1542,8 +1608,8 @@ async def test_should_forward_web_research_settings_to_single_background_generat
         return None
 
     monkeypatch.setattr(
-        chapters_api,
-        "execute_batch_generation_in_order",
+        batch_generation_run_wiring_service,
+        "execute_batch_generation_in_order_with_entry_service_seams",
         fake_execute_batch_generation,
     )
 
@@ -1589,8 +1655,8 @@ async def test_should_auto_fill_story_repair_payload_from_chapter_quality_histor
         return None
 
     monkeypatch.setattr(
-        chapters_api,
-        "execute_batch_generation_in_order",
+        batch_generation_run_wiring_service,
+        "execute_batch_generation_in_order_with_entry_service_seams",
         fake_execute_batch_generation,
     )
 
@@ -1670,8 +1736,8 @@ async def test_should_merge_manual_story_repair_summary_with_history_fallback_fo
         return None
 
     monkeypatch.setattr(
-        chapters_api,
-        "execute_batch_generation_in_order",
+        batch_generation_run_wiring_service,
+        "execute_batch_generation_in_order_with_entry_service_seams",
         fake_execute_batch_generation,
     )
 
@@ -1745,8 +1811,8 @@ async def test_should_auto_fill_story_repair_payload_from_previous_chapter_histo
         return None
 
     monkeypatch.setattr(
-        chapters_api,
-        "execute_batch_generation_in_order",
+        batch_generation_run_wiring_service,
+        "execute_batch_generation_in_order_with_entry_service_seams",
         fake_execute_batch_generation,
     )
 
@@ -1850,8 +1916,8 @@ async def test_should_fallback_to_project_generation_defaults_for_single_backgro
         return None
 
     monkeypatch.setattr(
-        chapters_api,
-        "execute_batch_generation_in_order",
+        batch_generation_run_wiring_service,
+        "execute_batch_generation_in_order_with_entry_service_seams",
         fake_execute_batch_generation,
     )
 

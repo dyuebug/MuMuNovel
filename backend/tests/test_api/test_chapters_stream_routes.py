@@ -2,8 +2,6 @@ import pytest
 from typing import Any
 from sqlalchemy import select
 
-from app.services.compat import chapter_generation_route_compat_service
-from app.api import chapter_batch_generation_routes as chapter_batch_generation_routes_api
 from app.api import chapter_regeneration_routes as chapter_regeneration_routes_api
 from app.models.batch_generation_task import BatchGenerationTask
 from app.models.chapter import Chapter
@@ -17,6 +15,8 @@ from tests.test_api.chapters_test_support import (
     create_chapter,
     create_project,
     fake_ai_service,
+    load_batch_generation_rollback_modules,
+    load_single_generation_rollback_modules,
     mock_side_effect_services,
     parse_sse_data,
     reset_chapters_runtime_caches,
@@ -118,13 +118,14 @@ async def test_should_build_context_with_expected_builder_during_generate_stream
             },
         }
 
-    monkeypatch.setattr(chapter_generation_route_compat_service, "get_template", fake_get_template)
-    monkeypatch.setattr(chapter_generation_route_compat_service, "format_prompt", fake_format_prompt)
-    monkeypatch.setattr(chapter_generation_route_compat_service, "OneToManyContextBuilder", FakeOneToManyBuilder)
-    monkeypatch.setattr(chapter_generation_route_compat_service, "OneToOneContextBuilder", FakeOneToOneBuilder)
-    monkeypatch.setattr(chapter_generation_route_compat_service, "build_chapter_runtime_system_prompt", fake_build_runtime_system_prompt)
-    monkeypatch.setattr(chapter_generation_route_compat_service, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
-    monkeypatch.setattr(chapter_generation_route_compat_service, "resolve_quality_gate_execution_plan", fake_resolve_quality_gate_execution_plan)
+    _, chapter_generation_route_wiring_service = load_single_generation_rollback_modules()
+    monkeypatch.setattr(chapter_generation_route_wiring_service, "get_template", fake_get_template)
+    monkeypatch.setattr(chapter_generation_route_wiring_service, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(chapter_generation_route_wiring_service, "OneToManyContextBuilder", FakeOneToManyBuilder)
+    monkeypatch.setattr(chapter_generation_route_wiring_service, "OneToOneContextBuilder", FakeOneToOneBuilder)
+    monkeypatch.setattr(chapter_generation_route_wiring_service, "build_chapter_runtime_system_prompt", fake_build_runtime_system_prompt)
+    monkeypatch.setattr(chapter_generation_route_wiring_service, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
+    monkeypatch.setattr(chapter_generation_route_wiring_service, "resolve_quality_gate_execution_plan", fake_resolve_quality_gate_execution_plan)
 
     fake_ai_service.calls.clear()
     fake_ai_service.chunks = ["段落甲", "段落乙"]
@@ -369,6 +370,11 @@ async def test_should_stream_batch_generation_events_via_route_compat(
     chapters_client,
     monkeypatch,
 ):
+    (
+        chapter_batch_generation_routes_api,
+        _batch_generation_route_wiring_service,
+    ) = load_batch_generation_rollback_modules()
+
     async def fake_validate_access(db_session, *, batch_id, user_id):
         assert batch_id == "batch-1"
         assert user_id is not None

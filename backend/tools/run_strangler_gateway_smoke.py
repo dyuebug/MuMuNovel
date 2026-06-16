@@ -9,12 +9,15 @@ from __future__ import annotations
 
 
 import argparse
+import contextlib
 import copy
+import http.server
 import http.cookiejar
 import json
 import os
 import re
 import sys
+import threading
 import time
 import uuid
 import urllib.error
@@ -32,6 +35,35 @@ DEFAULT_BASE_URL = 'http://127.0.0.1:8005'
 DEFAULT_HTTP_TIMEOUT = 10.0
 DEFAULT_PROFILE = 'deploy'
 DEFAULT_LOGIN_PATH = '/api/auth/local/login'
+MOCK_OPENAI_BASE_URL_PLACEHOLDER = 'mock_openai_base_url'
+MOCK_OPENAI_MODEL_ID = 'smoke-model'
+MOCK_OPENAI_STREAM_CHUNKS = ('烟测改写成功。', '第二段继续推进。')
+MOCK_OPENAI_ORGANIZATION_STREAM_CHUNKS = (
+    '{"name":"烟测组织","is_organization":true,"organization_type":"情报结社",',
+    '"personality":"行事隐秘，擅长用互惠和情报交换维持影响力。",',
+    '"background":"由边境商路上的旧情报网络演化而来，长期为各方势力提供灰色消息服务。",',
+    '"appearance":"总部藏在旧港仓库区，以黑金徽记和无声守卫闻名。",',
+    '"organization_purpose":"垄断边境情报与秘密交易通道。","power_level":67,',
+    '"location":"北境旧港","motto":"消息即筹码","traits":["隐秘","渗透","交易"],',
+    '"color":"黑金","organization_members":["烟测首领","烟测联络人"]}',
+)
+MOCK_OPENAI_INSPIRATION_OPTIONS_CHUNKS = (
+    '{"prompt":"我先给你6个命名方向，挑一个最有爆点的：",',
+    '"options":["雾钟封港","旧塔来信","边境夜雾","钟声未停","封锁前夜","失钟之城"]}',
+)
+MOCK_OPENAI_INSPIRATION_REFINE_CHUNKS = (
+    '{"prompt":"选择更贴合反馈的新方向：",',
+    '"options":["她刚想带母亲逃出旧港，钟声却先一步暴露了她的名字，整座边境城开始在雾里追她。",',
+    '"边境封锁令落下那晚，她在旧塔脚下捡到失踪父亲的徽章，可真相每近一步，母亲就离危险更近一步。",',
+    '"她以为查的是旧塔怪响，结果每一次钟声都在替某个人点名，而下一个被点到的偏偏是她唯一想保住的人。"]}',
+)
+MOCK_OPENAI_INSPIRATION_QUICK_CHUNKS = (
+    '{"title":"雾钟封港",',
+    '"description":"边境旧港突遭封锁那夜，废塔钟声一遍遍穿过浓雾，失踪多年的父亲名字竟出现在通缉广播里。她想带母亲逃离，却必须先查清钟声背后那张吃人的情报网，否则天亮前她们都会被送进黑名单。",',
+    '"theme":"所谓真相，从来不是查到了就能说出口，而是你敢不敢为了保住最在乎的人，先把自己推上代价最高的位置。",',
+    '"genre":["悬疑","都市","情报博弈"],',
+    '"narrative_perspective":"第三人称"}',
+)
 PLACEHOLDER_PATTERN = re.compile(r'\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}')
 
 
@@ -408,6 +440,17 @@ def validate_manifest(raw_manifest: Any, *, manifest_path: Path) -> Dict[str, An
 
             raise SmokeFailure(f'manifest.probes[{index}].expected_status must be an integer')
 
+        expected_statuses = probe.get('expected_statuses')
+        if expected_statuses is not None:
+            if (
+                not isinstance(expected_statuses, list)
+                or not expected_statuses
+                or any(not isinstance(item, int) for item in expected_statuses)
+            ):
+                raise SmokeFailure(
+                    f'manifest.probes[{index}].expected_statuses must be a non-empty integer array'
+                )
+            probe['expected_statuses'] = expected_statuses
 
 
         expected_json = probe.get('expected_json')
@@ -415,6 +458,18 @@ def validate_manifest(raw_manifest: Any, *, manifest_path: Path) -> Dict[str, An
             raise SmokeFailure(
                 f'manifest.probes[{index}].expected_json must be an object when present'
             )
+
+        expected_json_one_of = probe.get('expected_json_one_of')
+        if expected_json_one_of is not None:
+            if not isinstance(expected_json_one_of, list) or not expected_json_one_of:
+                raise SmokeFailure(
+                    f'manifest.probes[{index}].expected_json_one_of must be a non-empty array'
+                )
+            for option_index, option in enumerate(expected_json_one_of):
+                if not isinstance(option, dict):
+                    raise SmokeFailure(
+                        f'manifest.probes[{index}].expected_json_one_of[{option_index}] must be an object'
+                    )
 
         expected_json_has_keys = probe.get('expected_json_has_keys')
         if expected_json_has_keys is not None:
@@ -557,6 +612,149 @@ def body_preview(body: Any, *, limit: int = 400) -> str:
     return text[:limit]
 
 
+class MockOpenAIServer:
+    """Small OpenAI-compatible SSE server used by deterministic smoke probes."""
+
+    def __init__(self) -> None:
+        self._server = http.server.ThreadingHTTPServer(
+            ('127.0.0.1', 0),
+            _MockOpenAIRequestHandler,
+        )
+        self._thread = threading.Thread(
+            target=self._server.serve_forever,
+            name='strangler-smoke-mock-openai',
+            daemon=True,
+        )
+
+    @property
+    def base_url(self) -> str:
+        host, port = self._server.server_address
+        return f'http://{host}:{port}/v1'
+
+    def __enter__(self) -> 'MockOpenAIServer':
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=2.0)
+
+
+class _MockOpenAIRequestHandler(http.server.BaseHTTPRequestHandler):
+    server_version = 'StranglerSmokeMockOpenAI/1.0'
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        return
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path.rstrip('/') == '/v1/models':
+            self._write_json({
+                'object': 'list',
+                'data': [
+                    {
+                        'id': MOCK_OPENAI_MODEL_ID,
+                        'object': 'model',
+                        'owned_by': 'strangler-smoke',
+                    }
+                ],
+            })
+            return
+        self.send_error(404)
+
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path.rstrip('/') not in ('/v1/chat/completions', '/chat/completions'):
+            self.send_error(404)
+            return
+
+        content_length = int(self.headers.get('Content-Length') or '0')
+        request_body = b''
+        if content_length > 0:
+            request_body = self.rfile.read(content_length)
+
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+        self.send_header('Cache-Control', 'no-cache')
+        self.end_headers()
+        for chunk in self._pick_stream_chunks(request_body):
+            payload = {
+                'choices': [
+                    {
+                        'delta': {
+                            'content': chunk,
+                        }
+                    }
+                ]
+            }
+            self.wfile.write(f'data: {json.dumps(payload, ensure_ascii=False)}\n\n'.encode('utf-8'))
+        self.wfile.write(b'data: [DONE]\n\n')
+
+    def _pick_stream_chunks(self, request_body: bytes) -> tuple[str, ...]:
+        if not request_body:
+            return MOCK_OPENAI_STREAM_CHUNKS
+        try:
+            payload = json.loads(request_body.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return MOCK_OPENAI_STREAM_CHUNKS
+
+        messages = payload.get('messages')
+        if not isinstance(messages, list):
+            return MOCK_OPENAI_STREAM_CHUNKS
+
+        joined_content = '\n'.join(
+            str(item.get('content', ''))
+            for item in messages
+            if isinstance(item, dict)
+        )
+        if 'SINGLE_ORGANIZATION_GENERATION' in joined_content:
+            return MOCK_OPENAI_ORGANIZATION_STREAM_CHUNKS
+        if 'INSPIRATION_TITLE_SYSTEM' in joined_content or 'INSPIRATION_TITLE_USER' in joined_content:
+            return MOCK_OPENAI_INSPIRATION_OPTIONS_CHUNKS
+        if 'INSPIRATION_THEME_SYSTEM' in joined_content or 'INSPIRATION_THEME_USER' in joined_content:
+            return MOCK_OPENAI_INSPIRATION_REFINE_CHUNKS
+        if (
+            'INSPIRATION_QUICK_COMPLETE' in joined_content
+            or '请在不偏离现有信息的前提下补全缺失字段，只返回JSON。' in joined_content
+        ):
+            return MOCK_OPENAI_INSPIRATION_QUICK_CHUNKS
+
+        return MOCK_OPENAI_STREAM_CHUNKS
+
+    def _write_json(self, payload: Mapping[str, Any]) -> None:
+        encoded = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+
+def start_mock_openai_server() -> MockOpenAIServer:
+    return MockOpenAIServer()
+
+
+def manifest_uses_placeholder(manifest: Mapping[str, Any], placeholder: str) -> bool:
+    marker = f'{{{{{placeholder}}}}}'
+    compact_marker = f'{{{{ {placeholder} }}}}'
+    return any(
+        _value_contains_placeholder(probe, marker, compact_marker)
+        for probe in manifest.get('probes', [])
+    )
+
+
+def _value_contains_placeholder(value: Any, *markers: str) -> bool:
+    if isinstance(value, str):
+        return any(marker in value for marker in markers)
+    if isinstance(value, list):
+        return any(_value_contains_placeholder(item, *markers) for item in value)
+    if isinstance(value, dict):
+        return any(_value_contains_placeholder(item, *markers) for item in value.values())
+    return False
+
+
 def render_template_string(value: str, state: Mapping[str, Any], *, label: str) -> str:
     def replace(match: re.Match[str]) -> str:
         key = match.group(1).strip()
@@ -616,6 +814,7 @@ def resolve_probe_templates(probe: Mapping[str, Any], state: Mapping[str, Any]) 
         'json_body',
         'multipart_form',
         'expected_json',
+        'expected_json_one_of',
         'expected_header_contains',
         'expected_text_contains',
         'expected_content_type_contains',
@@ -826,6 +1025,21 @@ def subset_matches(actual: Any, expected: Any, *, path: str = '$') -> None:
         raise SmokeFailure(f'{path} expected {expected!r} but got {actual!r}')
 
 
+def subset_matches_one_of(actual: Any, expected_options: Sequence[Any], *, label: str) -> None:
+    failures: List[str] = []
+    for index, expected in enumerate(expected_options):
+        try:
+            subset_matches(actual, expected)
+            return
+        except SmokeFailure as exc:
+            failures.append(f'option[{index}]: {exc}')
+
+    raise SmokeFailure(
+        f'JSON one-of assertion failed for {label}: '
+        f'none matched; failures={failures!r} body_preview={body_preview(actual)}'
+    )
+
+
 
 
 
@@ -962,16 +1176,17 @@ def bootstrap_local_login_session(
 def ensure_probe_expectations(probe: Mapping[str, Any], response: Mapping[str, Any]) -> None:
 
     expected_status = probe['expected_status']
+    expected_statuses = probe.get('expected_statuses') or [expected_status]
 
     actual_status = response['status_code']
 
-    if actual_status != expected_status:
+    if actual_status not in expected_statuses:
 
         raise SmokeFailure(
 
             f'status mismatch for {probe["name"]}: '
 
-            f'expected={expected_status} actual={actual_status} '
+            f'expected={expected_statuses} actual={actual_status} '
 
             f'body_preview={body_preview(response.get("body"))}'
 
@@ -988,6 +1203,16 @@ def ensure_probe_expectations(probe: Mapping[str, Any], response: Mapping[str, A
                 f'content_type={response.get("content_type")} body_preview={body_preview(actual_body)}'
             )
         subset_matches(actual_body, expected_json)
+
+    expected_json_one_of = probe.get('expected_json_one_of') or []
+    if expected_json_one_of:
+        actual_body = response.get('body')
+        if not isinstance(actual_body, dict):
+            raise SmokeFailure(
+                f'JSON one-of assertion failed for {probe["name"]}: body is not an object; '
+                f'content_type={response.get("content_type")} body_preview={body_preview(actual_body)}'
+            )
+        subset_matches_one_of(actual_body, expected_json_one_of, label=str(probe["name"]))
 
     expected_json_has_keys = probe.get('expected_json_has_keys') or []
     if expected_json_has_keys:
@@ -1067,9 +1292,10 @@ def run_probes(
     base_url: str,
     timeout: float,
     opener: urllib.request.OpenerDirector | None = None,
+    initial_state: Mapping[str, Any] | None = None,
 ) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
-    state: Dict[str, Any] = {}
+    state: Dict[str, Any] = dict(initial_state or {})
 
     for probe in manifest['probes']:
 
@@ -1239,6 +1465,21 @@ def write_summary(path: Path, summary: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + '\n', encoding='utf-8', newline='\n')
+
+
+def emit_summary_json(summary: Mapping[str, Any], *, stream: Any) -> None:
+
+    payload = json.dumps(summary, ensure_ascii=False, indent=2)
+    try:
+        print(payload, file=stream)
+        return
+    except UnicodeEncodeError:
+        buffer = getattr(stream, 'buffer', None)
+        if buffer is None:
+            print(payload.encode('utf-8', errors='replace').decode('utf-8'), file=stream)
+            return
+        buffer.write((payload + '\n').encode('utf-8', errors='replace'))
+        buffer.flush()
 
 
 
@@ -1453,33 +1694,44 @@ def main() -> int:
 
             return 0
 
-        opener = None
-        if selected_probes_require_login(manifest['probes']):
-            local_auth_username, local_auth_password, used_env_file = resolve_local_auth_credentials(
-                username=args.local_auth_username,
-                password=args.local_auth_password,
-                env_file=args.env_file,
-            )
-            opener, login_summary = bootstrap_local_login_session(
+        initial_state: Dict[str, Any] = {}
+        with contextlib.ExitStack() as stack:
+            if manifest_uses_placeholder(manifest, MOCK_OPENAI_BASE_URL_PLACEHOLDER):
+                mock_openai = stack.enter_context(start_mock_openai_server())
+                initial_state[MOCK_OPENAI_BASE_URL_PLACEHOLDER] = mock_openai.base_url
+                summary['mock_openai'] = {
+                    'base_url': mock_openai.base_url,
+                    'model': MOCK_OPENAI_MODEL_ID,
+                }
+
+            opener = None
+            if selected_probes_require_login(manifest['probes']):
+                local_auth_username, local_auth_password, used_env_file = resolve_local_auth_credentials(
+                    username=args.local_auth_username,
+                    password=args.local_auth_password,
+                    env_file=args.env_file,
+                )
+                opener, login_summary = bootstrap_local_login_session(
+                    base_url=args.base_url,
+                    timeout=args.http_timeout,
+                    username=local_auth_username,
+                    password=local_auth_password,
+                    login_path=args.login_path,
+                    require_token_cookie=selected_probes_require_token_cookie(manifest['probes']),
+                )
+                summary['login'] = {
+                    **login_summary,
+                    'username': local_auth_username,
+                    'env_file': str(used_env_file) if used_env_file is not None else None,
+                }
+
+            results = run_probes(
+                manifest=manifest,
                 base_url=args.base_url,
                 timeout=args.http_timeout,
-                username=local_auth_username,
-                password=local_auth_password,
-                login_path=args.login_path,
-                require_token_cookie=selected_probes_require_token_cookie(manifest['probes']),
+                opener=opener,
+                initial_state=initial_state,
             )
-            summary['login'] = {
-                **login_summary,
-                'username': local_auth_username,
-                'env_file': str(used_env_file) if used_env_file is not None else None,
-            }
-
-        results = run_probes(
-            manifest=manifest,
-            base_url=args.base_url,
-            timeout=args.http_timeout,
-            opener=opener,
-        )
 
         summary['mode'] = 'probe'
 
@@ -1501,7 +1753,7 @@ def main() -> int:
 
         write_summary(output_path, summary)
 
-        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        emit_summary_json(summary, stream=sys.stdout)
 
         return 0
 
@@ -1513,7 +1765,7 @@ def main() -> int:
 
         write_summary(output_path, summary)
 
-        print(json.dumps(summary, ensure_ascii=False, indent=2), file=sys.stderr)
+        emit_summary_json(summary, stream=sys.stderr)
 
         return 1
 

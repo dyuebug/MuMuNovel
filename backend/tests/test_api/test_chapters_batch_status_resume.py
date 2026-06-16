@@ -5,6 +5,7 @@ import pytest
 from app.api import chapters as chapters_api
 from app.models.batch_generation_snapshot import BatchGenerationSnapshot
 from app.models.batch_generation_task import BatchGenerationTask
+from app.services import batch_generation_run_wiring_service
 from tests.test_api.chapters_test_support import (
     chapters_client,
     chapters_session_factory,
@@ -311,7 +312,11 @@ async def test_should_resume_failed_batch_task_with_persisted_story_repair_paylo
         captured.update(kwargs)
         return None
 
-    monkeypatch.setattr(chapters_api, "execute_batch_generation_in_order", fake_execute_batch_generation)
+    monkeypatch.setattr(
+        batch_generation_run_wiring_service,
+        "execute_batch_generation_in_order_with_entry_service_seams",
+        fake_execute_batch_generation,
+    )
 
     project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
     await create_chapter(
@@ -594,3 +599,79 @@ async def test_should_require_login_when_listing_active_batch_generation_tasks(
 async def test_should_return_404_when_batch_status_task_missing(chapters_client):
     response = await chapters_client.get("/api/chapters/batch-generate/missing/status")
     assert response.status_code == 404
+
+
+async def test_should_return_404_when_cancelling_missing_batch_task(chapters_client):
+    response = await chapters_client.post("/api/chapters/batch-generate/missing/cancel")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Batch generation task not found"
+
+
+async def test_should_return_400_when_cancelling_terminal_batch_task(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+
+    async with chapters_session_factory() as session:
+        task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=1,
+            chapter_count=1,
+            chapter_ids=["chapter-1"],
+            status="failed",
+            total_chapters=1,
+            completed_chapters=0,
+        )
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+        task_id = task.id
+
+    response = await chapters_client.post(
+        f"/api/chapters/batch-generate/{task_id}/cancel"
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Cannot cancel task in status failed"
+
+
+async def test_should_cancel_running_batch_generation_task(
+    chapters_client,
+    chapters_session_factory,
+    mock_user,
+):
+    project = await create_project(chapters_session_factory, user_id=mock_user.user_id)
+
+    async with chapters_session_factory() as session:
+        task = BatchGenerationTask(
+            project_id=project.id,
+            user_id=mock_user.user_id,
+            start_chapter_number=2,
+            chapter_count=2,
+            chapter_ids=["chapter-2", "chapter-3"],
+            status="running",
+            total_chapters=2,
+            completed_chapters=1,
+        )
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+        task_id = task.id
+
+    response = await chapters_client.post(
+        f"/api/chapters/batch-generate/{task_id}/cancel"
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["message"] == "Batch generation cancelled"
+    assert body["batch_id"] == task_id
+    assert body["completed_chapters"] == 1
+    assert body["total_chapters"] == 2
+
+    async with chapters_session_factory() as session:
+        saved_task = await session.get(BatchGenerationTask, task_id)
+        assert saved_task is not None
+        assert saved_task.status == "cancelled"
+        assert saved_task.completed_at is not None
